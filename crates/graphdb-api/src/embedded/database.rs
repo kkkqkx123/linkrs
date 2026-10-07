@@ -87,7 +87,7 @@ fn create_vector_backend(
                 // unless an explicit directory is configured.
                 (None, None) => return Ok(None),
             };
-            let engine = vector_search::LocalVectorEngine::open(&data_dir).map_err(|e| {
+            let engine = simvec::LocalVectorEngine::open(&data_dir).map_err(|e| {
                 CoreError::Internal(format!("Failed to initialize local vector engine: {}", e))
             })?;
             Ok(Some(VectorBackend::local(engine)))

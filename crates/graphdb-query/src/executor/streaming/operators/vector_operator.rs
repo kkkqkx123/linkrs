@@ -309,24 +309,24 @@ impl VectorOperator {
                                 }
                                 let distance = match distance {
                                     crate::parser::ast::vector::VectorDistance::Cosine => {
-                                        vector_search::DistanceMetric::Cosine
+                                        simvec::DistanceMetric::Cosine
                                     }
                                     crate::parser::ast::vector::VectorDistance::Euclidean => {
-                                        vector_search::DistanceMetric::Euclid
+                                        simvec::DistanceMetric::Euclid
                                     }
                                     crate::parser::ast::vector::VectorDistance::Dot => {
-                                        vector_search::DistanceMetric::Dot
+                                        simvec::DistanceMetric::Dot
                                     }
                                     crate::parser::ast::vector::VectorDistance::Manhattan => {
-                                        vector_search::DistanceMetric::Manhattan
+                                        simvec::DistanceMetric::Manhattan
                                     }
                                 };
                                 // Build CollectionConfig with optional HNSW and quantization
                                 // (mirrors Qdrant scalar/product/binary builders).
                                 let mut config =
-                                    vector_search::CollectionConfig::new(*vector_size, distance);
+                                    simvec::CollectionConfig::new(*vector_size, distance);
                                 if hnsw_m.is_some() || hnsw_ef_construct.is_some() {
-                                    let mut hnsw = vector_search::HnswConfig::default();
+                                    let mut hnsw = simvec::HnswConfig::default();
                                     if let Some(m) = hnsw_m {
                                         hnsw.m = *m;
                                     }
@@ -339,7 +339,7 @@ impl VectorOperator {
                                 if let Some(qkind) = quantization {
                                     let quant_cfg = match qkind {
                                         crate::parser::ast::vector::QuantizationKind::Scalar => {
-                                            let mut cfg = vector_search::QuantizationConfig::scalar(
+                                            let mut cfg = simvec::QuantizationConfig::scalar(
                                                 quantile.unwrap_or(0.99),
                                             );
                                             if let Some(ar) = always_ram {
@@ -349,7 +349,7 @@ impl VectorOperator {
                                         }
                                         crate::parser::ast::vector::QuantizationKind::Binary => {
                                             let mut cfg =
-                                                vector_search::QuantizationConfig::binary();
+                                                simvec::QuantizationConfig::binary();
                                             if let Some(ar) = always_ram {
                                                 cfg = cfg.with_always_ram(*ar);
                                             }
@@ -358,24 +358,24 @@ impl VectorOperator {
                                         crate::parser::ast::vector::QuantizationKind::Product => {
                                             let ratio = match compression {
                                                 Some(crate::parser::ast::vector::CompressionRatioKind::X4) => {
-                                                    vector_search::CompressionRatio::X4
+                                                    simvec::CompressionRatio::X4
                                                 }
                                                 Some(crate::parser::ast::vector::CompressionRatioKind::X8) => {
-                                                    vector_search::CompressionRatio::X8
+                                                    simvec::CompressionRatio::X8
                                                 }
                                                 Some(crate::parser::ast::vector::CompressionRatioKind::X16) => {
-                                                    vector_search::CompressionRatio::X16
+                                                    simvec::CompressionRatio::X16
                                                 }
                                                 Some(crate::parser::ast::vector::CompressionRatioKind::X32) => {
-                                                    vector_search::CompressionRatio::X32
+                                                    simvec::CompressionRatio::X32
                                                 }
                                                 Some(crate::parser::ast::vector::CompressionRatioKind::X64) => {
-                                                    vector_search::CompressionRatio::X64
+                                                    simvec::CompressionRatio::X64
                                                 }
-                                                None => vector_search::CompressionRatio::X4,
+                                                None => simvec::CompressionRatio::X4,
                                             };
                                             let mut cfg =
-                                                vector_search::QuantizationConfig::product(ratio);
+                                                simvec::QuantizationConfig::product(ratio);
                                             if let Some(ar) = always_ram {
                                                 cfg = cfg.with_always_ram(*ar);
                                             }

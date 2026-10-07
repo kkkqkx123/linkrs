@@ -2,7 +2,7 @@
 //!
 //! Two independent samplers coexist:
 //!
-//! - **Local**: reads per-collection [`vector_search::MetricsSnapshot`]
+//! - **Local**: reads per-collection [`simvec::MetricsSnapshot`]
 //!   from [`LocalVectorEngine`] and forwards deltas every 10 s.
 //! - **Remote**: fetches `GET /telemetry` from the Qdrant server, parses
 //!   the per-endpoint operation stats, and forwards deltas.
@@ -27,7 +27,7 @@ use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 
 use graphdb_metrics::MetricType;
-use vector_search::{LocalVectorEngine, MetricsSnapshot};
+use simvec::{LocalVectorEngine, MetricsSnapshot};
 
 use graphdb_metrics::StatsManager;
 
@@ -460,7 +460,7 @@ pub fn spawn_remote_vector_metrics_sampler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vector_search::{CollectionConfig, DistanceMetric, SearchQuery, VectorPoint};
+    use simvec::{CollectionConfig, DistanceMetric, SearchQuery, VectorPoint};
 
     fn point(id: u64, dim: usize) -> VectorPoint {
         VectorPoint::new(

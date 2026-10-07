@@ -793,7 +793,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_vector_manage_s
 }
 
 #[cfg(feature = "vector")]
-pub(in crate::executor::streaming::plan::arena_builder) fn build_vector_search_spec(
+pub(in crate::executor::streaming::plan::arena_builder) fn build_simvec_spec(
     node: &crate::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<VectorSpec, PlanBuildError> {

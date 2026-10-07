@@ -58,7 +58,7 @@ pub(super) fn convert_match_fulltext(
 }
 
 #[cfg(feature = "vector")]
-pub(super) fn convert_vector_search(
+pub(super) fn convert_simvec(
     n: crate::planning::plan::logical::logical_nodes::search::LogicalVectorSearchNode,
 ) -> PlanNodeEnum {
     let mut node = crate::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode::new(

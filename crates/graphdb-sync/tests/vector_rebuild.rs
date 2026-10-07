@@ -21,7 +21,7 @@ use graphdb_sync::{
     SyncManager, VectorBackend, VectorChangeContext, VectorChangeType, VectorDocSource,
     VectorPointData, VectorRebuildDoc, VectorRebuildOptions, VectorSyncCoordinator,
 };
-use vector_search::{DistanceMetric, LocalVectorEngine};
+use simvec::{DistanceMetric, LocalVectorEngine};
 
 fn local_coordinator(directory: &tempfile::TempDir) -> Arc<VectorSyncCoordinator> {
     let engine = Arc::new(

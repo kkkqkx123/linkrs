@@ -168,7 +168,7 @@ async fn case1_vector_ddl_query_roundtrip() {
 
 /// Case 2: WHERE filter + LIMIT reach the local engine (payload filtering).
 #[tokio::test]
-async fn case2_vector_search_filter_and_limit() {
+async fn case2_simvec_filter_and_limit() {
     let env = setup_env().await;
 
     let rows = env

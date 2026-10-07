@@ -9,7 +9,7 @@ use crate::planning::plan::core::nodes::base::plan_node_category::PlanNodeCatego
 use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "vector")]
-pub use vector_search::types::VectorFilter;
+pub use simvec::types::VectorFilter;
 
 #[cfg(not(feature = "vector"))]
 #[derive(Debug, Clone)]

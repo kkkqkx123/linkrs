@@ -275,7 +275,7 @@ impl PlanNodeVisitor for SubqueryHostFinder {
 
     #[cfg(feature = "vector")]
     impl_leaf_check!(
-        visit_vector_search => crate::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode,
+        visit_simvec => crate::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode,
         visit_vector_lookup => crate::planning::plan::core::nodes::search::vector::data_access::VectorLookupNode,
         visit_vector_match => crate::planning::plan::core::nodes::search::vector::data_access::VectorMatchNode,
     );

@@ -101,12 +101,12 @@ pub async fn start_service_with_config_path(
     #[cfg(feature = "vector")]
     let (vector_backend, local_engine_handle): (
         Option<VectorBackend>,
-        Option<Arc<vector_search::LocalVectorEngine>>,
+        Option<Arc<simvec::LocalVectorEngine>>,
     ) = if config.is_vector_enabled() {
         match config.vector_config().engine {
             graphdb_config::VectorEngineKind::Local => {
                 let data_dir = config.vector_data_dir();
-                match vector_search::LocalVectorEngine::open(&data_dir) {
+                match simvec::LocalVectorEngine::open(&data_dir) {
                     Ok(engine) => {
                         if let Some(hnsw) = graphdb_api::vector_config::local_hnsw_config(
                             &config.vector_config().local,

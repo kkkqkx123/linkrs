@@ -20,6 +20,7 @@ pub mod runtime;
 pub mod sqlite_outbox;
 pub mod types;
 pub mod vector_error;
+pub mod vector_type_conv;
 #[cfg(feature = "vector")]
 pub mod vector_index_manager;
 #[cfg(feature = "vector")]
@@ -94,7 +95,7 @@ pub use backend::VectorBackend;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
 pub use rebuild_common::RebuildCommonOptions;
 #[cfg(feature = "vector")]
-pub use vector_search::HealthStatus;
+pub use simvec::HealthStatus;
 
 // Re-export the remote client surface so downstream crates (root integration
 // tests, embedded API) can reference it without a direct vector-client

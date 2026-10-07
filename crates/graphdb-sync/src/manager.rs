@@ -40,7 +40,7 @@ use graphdb_metrics::StatsManager;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 #[cfg(feature = "vector")]
-pub use vector_search::{CollectionConfig, SearchResult};
+pub use simvec::{CollectionConfig, SearchResult};
 
 type JoinHandleGuard = Mutex<Option<tokio::task::JoinHandle<()>>>;
 

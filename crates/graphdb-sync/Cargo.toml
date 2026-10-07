@@ -6,7 +6,7 @@ edition.workspace = true
 [features]
 # Built-in local vector engine. Enables the `vector_sync` module and
 # `VectorBackend::Local`.
-vector = ["dep:vector-search"]
+vector = ["dep:simvec"]
 # Embedding infrastructure, independent of remote backend.
 embedding = ["vector", "dep:graphdb-embedding"]
 # Remote qdrant client on top of the local engine types.
@@ -33,7 +33,7 @@ chrono.workspace = true
 uuid.workspace = true
 rand.workspace = true
 vector-client = { path = "../vector-client", features = ["qdrant-grpc", "qdrant-http"], optional = true }
-vector-search = { path = "../vector-search", optional = true }
+simvec = { path = "../simvec", optional = true }
 tracing.workspace = true
 tokio.workspace = true
 futures.workspace = true

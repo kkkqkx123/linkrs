@@ -749,7 +749,7 @@ impl super::SyncManager {
                             schema_name,
                             field_name,
                             vector_size,
-                            vector_search::DistanceMetric::default(),
+                            simvec::DistanceMetric::default(),
                         )
                         .await
                         .map_err(|error| error.to_string())?;

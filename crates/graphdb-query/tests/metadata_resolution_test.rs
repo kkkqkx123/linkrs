@@ -128,7 +128,7 @@ fn test_match_fulltext_node_metadata_resolution() {
 // ==================== Vector Search Metadata Tests ====================
 
 #[test]
-fn test_vector_search_node_metadata_resolution() {
+fn test_simvec_node_metadata_resolution() {
     let params = VectorSearchParams::new(
         "idx_person_embedding".to_string(),
         1,
@@ -261,7 +261,7 @@ fn test_fulltext_search_metadata_flow() {
 }
 
 #[test]
-fn test_vector_search_metadata_flow() {
+fn test_simvec_metadata_flow() {
     // This test verifies the complete flow from metadata context to executor
     let metadata_context = create_test_metadata_context();
 
@@ -292,7 +292,7 @@ fn test_fulltext_search_missing_index() {
 }
 
 #[test]
-fn test_vector_search_missing_index() {
+fn test_simvec_missing_index() {
     let metadata_context = MetadataContext::new();
 
     // Try to find non-existent vector index

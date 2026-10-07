@@ -99,7 +99,7 @@ impl NodeType for PlanNodeEnum {
             PlanNodeEnum::FulltextLookup(_) => "fulltext_lookup",
             PlanNodeEnum::MatchFulltext(_) => "match_fulltext",
             #[cfg(feature = "vector")]
-            PlanNodeEnum::VectorSearch(_) => "vector_search",
+            PlanNodeEnum::VectorSearch(_) => "simvec",
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorLookup(_) => "vector_lookup",
             #[cfg(feature = "vector")]
@@ -407,7 +407,7 @@ impl NodeTypeMapping for PlanNodeEnum {
             PlanNodeEnum::FulltextLookup(_) => Some("fulltext_lookup"),
             PlanNodeEnum::MatchFulltext(_) => Some("match_fulltext"),
             #[cfg(feature = "vector")]
-            PlanNodeEnum::VectorSearch(_) => Some("vector_search"),
+            PlanNodeEnum::VectorSearch(_) => Some("simvec"),
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorLookup(_) => Some("vector_lookup"),
             #[cfg(feature = "vector")]

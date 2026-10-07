@@ -175,7 +175,7 @@ mod vector {
         }
         setup_test_space(
         &mut db,
-            "e2e_vector_search",
+            "e2e_simvec",
             &["CREATE TAG product_vector(product_id: STRING NOT NULL, name: STRING, embedding: VECTOR(128))"],
             &[],
         ).expect("Failed to setup test space");
@@ -218,7 +218,7 @@ mod vector {
     /// Vector search with filter (requires qdrant feature and running qdrant service)
     #[test]
     #[cfg_attr(not(feature = "vector-qdrant"), ignore)]
-    fn test_filtered_vector_search() {
+    fn test_filtered_simvec() {
         let mut db = create_test_db();
         if !require_vector_coordinator(&db) {
             return;
@@ -438,7 +438,7 @@ mod cleanup {
             "e2e_geography_within",
             "e2e_geography_explain",
             "e2e_vector",
-            "e2e_vector_search",
+            "e2e_simvec",
             "e2e_vector_filtered",
             "e2e_vector_explain",
             "e2e_fulltext",

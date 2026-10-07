@@ -17,8 +17,8 @@ use crate::backend::VectorBackend;
 use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
 use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
 pub use graphdb_fulltext::{IndexEvent, IndexEventCallback};
-pub use vector_search::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
-use vector_search::{
+pub use simvec::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
+use simvec::{
     types::validate_distance_metric, CollectionConfig, FilterCondition, IndexMetadata,
     PayloadSchemaType, VectorFilter,
 };
@@ -266,7 +266,7 @@ impl VectorIndexManager {
         let config = if self.backend.is_local() {
             CollectionConfig::new(vector_size, distance)
         } else {
-            let hnsw_config = vector_search::HnswConfig::new(16, 100).with_payload_m(16);
+            let hnsw_config = simvec::HnswConfig::new(16, 100).with_payload_m(16);
             CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config)
         };
         // Register and compare the effective (stored-equivalent) config:

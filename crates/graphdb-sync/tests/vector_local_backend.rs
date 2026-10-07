@@ -15,7 +15,7 @@ use graphdb_sync::{
     VectorBackend, VectorChangeContext, VectorChangeType, VectorPointData, VectorSyncCoordinator,
 };
 
-use vector_search::{DistanceMetric, LocalVectorEngine, SearchQuery, TxnOp, VectorPoint};
+use simvec::{DistanceMetric, LocalVectorEngine, SearchQuery, TxnOp, VectorPoint};
 
 fn make_engine(root: &Path) -> Arc<LocalVectorEngine> {
     Arc::new(LocalVectorEngine::open(root).unwrap())
@@ -147,7 +147,7 @@ async fn test_engine_replay_is_idempotent_per_txn_id() {
     engine
         .create_collection(
             "space_1",
-            &vector_search::CollectionConfig::new(4, DistanceMetric::Cosine),
+            &simvec::CollectionConfig::new(4, DistanceMetric::Cosine),
         )
         .unwrap();
 

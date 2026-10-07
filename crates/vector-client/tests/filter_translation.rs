@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use vector_client::engine::common::filter::{classify_match_any, ClassifiedMatchAny};
 use vector_client::engine::grpc::filter::filter_to_proto;
 use vector_client::engine::http::filter::convert_filter;
-use vector_search::types::*;
+use simvec::types::*;
 
 // ---- canonical form ------------------------------------------------------
 

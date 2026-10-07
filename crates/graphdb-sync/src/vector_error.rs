@@ -264,69 +264,69 @@ pub type VectorResult<T> = std::result::Result<T, VectorError>;
 pub type VectorCoordinatorResult<T> = std::result::Result<T, VectorCoordinatorError>;
 
 #[cfg(feature = "vector")]
-impl From<vector_search::VectorSearchError> for VectorError {
-    fn from(err: vector_search::VectorSearchError) -> Self {
+impl From<simvec::VectorSearchError> for VectorError {
+    fn from(err: simvec::VectorSearchError) -> Self {
         match err {
-            vector_search::VectorSearchError::CollectionNotFound(name) => {
+            simvec::VectorSearchError::CollectionNotFound(name) => {
                 VectorError::IndexNotFound(name)
             }
-            vector_search::VectorSearchError::CollectionAlreadyExists(name) => {
+            simvec::VectorSearchError::CollectionAlreadyExists(name) => {
                 VectorError::IndexAlreadyExists(name)
             }
-            vector_search::VectorSearchError::CollectionIncomplete { dir, file } => {
+            simvec::VectorSearchError::CollectionIncomplete { dir, file } => {
                 VectorError::IndexCorrupted(format!(
                     "collection incomplete (missing {}): {}",
                     file,
                     dir.display()
                 ))
             }
-            vector_search::VectorSearchError::InvalidCollectionName(name) => {
+            simvec::VectorSearchError::InvalidCollectionName(name) => {
                 VectorError::ConfigError(format!("Invalid collection name: {}", name))
             }
-            vector_search::VectorSearchError::InvalidConfig(msg) => VectorError::ConfigError(msg),
-            vector_search::VectorSearchError::InvalidVectorDimension { expected, actual } => {
+            simvec::VectorSearchError::InvalidConfig(msg) => VectorError::ConfigError(msg),
+            simvec::VectorSearchError::InvalidVectorDimension { expected, actual } => {
                 VectorError::DimensionMismatch { expected, actual }
             }
-            vector_search::VectorSearchError::InvalidPointId(id) => VectorError::InvalidPointId(id),
-            vector_search::VectorSearchError::NonFiniteElement(index) => {
+            simvec::VectorSearchError::InvalidPointId(id) => VectorError::InvalidPointId(id),
+            simvec::VectorSearchError::NonFiniteElement(index) => {
                 VectorError::InvalidVector(format!("non-finite element at index {}", index))
             }
-            vector_search::VectorSearchError::UnsupportedMetric(metric) => {
+            simvec::VectorSearchError::UnsupportedMetric(metric) => {
                 VectorError::ConfigError(format!("metric not supported: {:?}", metric))
             }
-            vector_search::VectorSearchError::Filter(msg) => VectorError::InvalidVector(msg),
-            vector_search::VectorSearchError::CorruptData(msg) => VectorError::IndexCorrupted(msg),
-            vector_search::VectorSearchError::Io(e) => VectorError::Internal(e.to_string()),
-            vector_search::VectorSearchError::Serialization(e) => {
+            simvec::VectorSearchError::Filter(msg) => VectorError::InvalidVector(msg),
+            simvec::VectorSearchError::CorruptData(msg) => VectorError::IndexCorrupted(msg),
+            simvec::VectorSearchError::Io(e) => VectorError::Internal(e.to_string()),
+            simvec::VectorSearchError::Serialization(e) => {
                 VectorError::Internal(e.to_string())
             }
-            vector_search::VectorSearchError::Json(e) => VectorError::Internal(e.to_string()),
-            vector_search::VectorSearchError::Internal(msg) => VectorError::Internal(msg),
+            simvec::VectorSearchError::Json(e) => VectorError::Internal(e.to_string()),
+            simvec::VectorSearchError::Internal(msg) => VectorError::Internal(msg),
         }
     }
 }
 
 #[cfg(feature = "vector")]
-impl From<vector_search::VectorSearchError> for VectorCoordinatorError {
-    fn from(err: vector_search::VectorSearchError) -> Self {
+impl From<simvec::VectorSearchError> for VectorCoordinatorError {
+    fn from(err: simvec::VectorSearchError) -> Self {
         VectorCoordinatorError::Vector(VectorError::from(err))
     }
 }
 
 #[cfg(feature = "vector")]
-impl From<vector_search::VectorEngineError> for VectorCoordinatorError {
-    fn from(err: vector_search::VectorEngineError) -> Self {
+impl From<simvec::VectorEngineError> for VectorCoordinatorError {
+    fn from(err: simvec::VectorEngineError) -> Self {
         match err {
-            vector_search::VectorEngineError::Local(msg) => {
+            simvec::VectorEngineError::Local(msg) => {
                 VectorCoordinatorError::Vector(VectorError::Internal(msg))
             }
-            vector_search::VectorEngineError::Remote(msg) => {
+            simvec::VectorEngineError::Remote(msg) => {
                 VectorCoordinatorError::Vector(VectorError::QdrantError(msg))
             }
-            vector_search::VectorEngineError::Internal(msg) => {
+            simvec::VectorEngineError::Internal(msg) => {
                 VectorCoordinatorError::Vector(VectorError::Internal(msg))
             }
-            vector_search::VectorEngineError::NotSupported(op) => VectorCoordinatorError::Vector(
+            simvec::VectorEngineError::NotSupported(op) => VectorCoordinatorError::Vector(
                 VectorError::ConfigError(format!("Operation not supported: {}", op)),
             ),
         }

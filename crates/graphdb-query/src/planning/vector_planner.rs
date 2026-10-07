@@ -25,7 +25,7 @@ use crate::QueryContext;
 use graphdb_core::types::expr::contextual::ContextualExpression;
 use graphdb_core::types::expr::Expression;
 use graphdb_core::types::operators::{BinaryOperator, UnaryOperator};
-use vector_search::types::{ConditionType, FilterCondition, RangeCondition, VectorFilter};
+use simvec::types::{ConditionType, FilterCondition, RangeCondition, VectorFilter};
 
 /// Vector search planner
 #[derive(Debug, Clone, Default)]
@@ -258,7 +258,7 @@ impl VectorSearchPlanner {
             (String::new(), String::new())
         };
 
-        let node = self.build_vector_search_node(
+        let node = self.build_simvec_node(
             search,
             space_id,
             tag_name,
@@ -352,7 +352,7 @@ impl VectorSearchPlanner {
     }
 
     /// Build VectorSearchNode with common parameters
-    fn build_vector_search_node(
+    fn build_simvec_node(
         &self,
         search: &SearchVectorStatement,
         space_id: u64,
@@ -684,13 +684,13 @@ mod tests {
     use graphdb_core::value::Value;
 
     #[test]
-    fn test_vector_search_planner_new() {
+    fn test_simvec_planner_new() {
         let planner = VectorSearchPlanner::new();
         assert!(planner.metadata_context.is_none());
     }
 
     #[test]
-    fn test_vector_search_planner_with_metadata() {
+    fn test_simvec_planner_with_metadata() {
         let metadata_context = Arc::new(MetadataContext::new());
         let planner = VectorSearchPlanner::with_metadata_context(metadata_context);
         assert!(planner.metadata_context.is_some());
@@ -933,7 +933,7 @@ mod tests {
 
     #[test]
     fn payload_index_hints_classify_must_conditions() {
-        use vector_search::types::ConditionType as CT;
+        use simvec::types::ConditionType as CT;
 
         let filter = VectorFilter::new()
             .must(FilterCondition::new(

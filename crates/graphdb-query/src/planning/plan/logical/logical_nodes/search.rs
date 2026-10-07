@@ -57,7 +57,7 @@ mod vector {
     use crate::define_logical_plan_node;
     use crate::parser::ast::vector::VectorQueryExpr;
     use crate::planning::plan::core::nodes::search::vector::data_access::OutputField;
-    use vector_search::types::VectorFilter;
+    use simvec::types::VectorFilter;
 
     define_logical_plan_node! {
         pub struct LogicalVectorSearchNode {

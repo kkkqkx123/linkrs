@@ -1,6 +1,6 @@
 //! Score and threshold normalization at the Qdrant client boundary.
 //!
-//! Crate-wide contract (shared with the local engine in `vector-search`):
+//! Crate-wide contract (shared with the local engine in `simvec`):
 //! every [`crate::types::SearchResult`] score is a *similarity* — higher is
 //! better — and every `score_threshold` is a *lower bound* on that similarity
 //! (`score >= threshold` keeps a candidate).

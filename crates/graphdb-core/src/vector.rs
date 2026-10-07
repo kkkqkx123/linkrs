@@ -7,22 +7,19 @@
 //! ## Core shared types (`PointId`, `Payload`, `PayloadValue`, `PayloadSchemaType`)
 //! True foundational types used by the wire layer (`graphdb-wire`), the storage
 //! engine, and the query layer. These must remain in `graphdb-core` because
-//! `graphdb-wire` depends on `graphdb-core` but cannot depend on `vector-search`
+//! `graphdb-wire` depends on `graphdb-core` but cannot depend on `simvec`
 //! (it would drag in heavy transitive deps like rayon/memmap2 into a lightweight
 //! wire crate).
 //!
 //! ## Vector filter DSL types (`VectorFilter`, `FilterCondition`, `ConditionType`, etc.)
-//! Query-filter types that conceptually belong to `vector-search`. They remain
-//! in core due to the dependency DAG (`graphdb-core` → `vector-search` is not
-//! allowed; `graphdb-wire` needs `VectorFilter`/`PayloadSelector` for wire DTOs).
-//! The canonical implementations and evaluation logic live in
-//! `vector-search::filter`. These types are re-exported by `vector-search::types`
-//! so downstream crates can import them from either path.
-//!
-//! # Future improvement
-//! A dedicated `graphdb-vector-types` crate could break this coupling. The new
-//! crate would sit at the same level as `graphdb-core` in the DAG, and both
-//! `graphdb-core` and `vector-search` would depend on it.
+//! Transport-semantics copies of the filter types. The index-semantics
+//! canonical definitions live in the `simvec` crate (`simvec::filter_cond`);
+//! this module keeps an identical transport-facing copy because
+//! `graphdb-wire` depends on `graphdb-core` and cannot depend on `simvec`
+//! (it would drag in heavy transitive deps like rayon/memmap2 into a
+//! lightweight wire crate). The two copies are converted mechanically at
+//! the sync-side backend enumeration boundary; keep them in sync when
+//! changing the filter surface.
 
 use std::collections::HashMap;
 
@@ -108,10 +105,10 @@ impl PayloadSchemaType {
 // ---------------------------------------------------------------------------
 // Vector filter DSL types
 //
-// These are logically part of `vector-search` but live in core due to the
+// These are logically part of `simvec` but live in core due to the
 // dependency DAG constraint. The filter evaluation logic is in
-// `vector-search::filter`. Downstream crates may import these from either
-// `graphdb_core::vector` or `vector_search::types`.
+// `simvec::filter`. Downstream crates may import these from either
+// `graphdb_core::vector` or `simvec::types`.
 // ---------------------------------------------------------------------------
 
 /// Geographic point (`lat`, `lon` in degrees).

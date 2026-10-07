@@ -1,7 +1,7 @@
 # Build configuration (SIMD compile options)
 #
 # Baseline is `x86-64` (widest compatibility). Performance comes from runtime
-# dispatch in `crates/vector-search/src/distance/kernel.rs` which selects
+# dispatch in `crates/simvec/src/distance/kernel.rs` which selects
 # the best available kernel at startup:
 #   Avx512 (avx512f) > Avx2+FMA > Neon (aarch64) > Naive, with an optional
 #   `simd_portable` (std::simd) fallback when the feature is enabled.
@@ -19,7 +19,7 @@
 RUST_TEST_THREADS = "1"
 
 # x86-64 targets: baseline `x86-64` with runtime dispatch.
-# The distance kernels in `crates/vector-search/src/distance/` select the
+# The distance kernels in `crates/simvec/src/distance/` select the
 # best available implementation at startup (`kernel::best_available`):
 #   Avx512 (if `avx512f` detected) > Avx2+FMA > Naive.
 # This gives a single portable binary that auto-optimizes on AVX2/AVX512

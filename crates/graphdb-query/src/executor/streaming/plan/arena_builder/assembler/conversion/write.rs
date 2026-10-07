@@ -510,7 +510,7 @@ impl ArenaPlanAssembler {
                     node.id(),
                     SourceSpec::Start,
                 );
-                let spec = build_vector_search_spec(vs_node, exec_ctx)?;
+                let spec = build_simvec_spec(vs_node, exec_ctx)?;
                 Self::push_vector_op(
                     operators,
                     fragments,

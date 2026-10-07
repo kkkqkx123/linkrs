@@ -4,11 +4,11 @@ use crate::parser::ast::vector::VectorDistance;
 
 /// Payload filter type for vector search.
 ///
-/// Mirrors the planning-layer alias: the real `vector_search::VectorFilter`
+/// Mirrors the planning-layer alias: the real `simvec::VectorFilter`
 /// when the vector feature is on, and an uninhabited-in-practice stub
 /// otherwise (vector search itself is feature-gated).
 #[cfg(feature = "vector")]
-pub use vector_search::types::VectorFilter as SpecVectorFilter;
+pub use simvec::types::VectorFilter as SpecVectorFilter;
 
 #[cfg(not(feature = "vector"))]
 #[derive(Debug, Clone)]

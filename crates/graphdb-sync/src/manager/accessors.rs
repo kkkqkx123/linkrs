@@ -237,7 +237,7 @@ impl super::SyncManager {
         tag_name: &str,
         field_name: &str,
         vector_size: usize,
-        distance: vector_search::DistanceMetric,
+        distance: simvec::DistanceMetric,
     ) -> Result<String, SyncError> {
         if let Some(ref vector_coord) = self.vector_coordinator {
             vector_coord

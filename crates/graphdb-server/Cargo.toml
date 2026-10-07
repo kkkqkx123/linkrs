@@ -50,14 +50,14 @@ async-trait.workspace = true
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 vector-client = { path = "../vector-client", optional = true }
-vector-search = { path = "../vector-search", optional = true }
+simvec = { path = "../simvec", optional = true }
 graphdb-embedding = { path = "../graphdb-embedding", optional = true }
 reqwest = { workspace = true, optional = true }
 
 [features]
 grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
 vector = [
-    "dep:vector-search",
+    "dep:simvec",
     "graphdb-config/vector",
     "graphdb-sync/vector",
     "graphdb-query/vector",

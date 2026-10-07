@@ -22,11 +22,11 @@ tracing.workspace = true
 tokio.workspace = true
 parking_lot.workspace = true
 vector-client = { path = "../vector-client", optional = true }
-vector-search = { path = "../vector-search", optional = true }
+simvec = { path = "../simvec", optional = true }
 
 [features]
 vector = [
-    "dep:vector-search",
+    "dep:simvec",
     "graphdb-config/vector",
     "graphdb-sync/vector",
     "graphdb-query/vector",

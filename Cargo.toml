@@ -16,7 +16,7 @@ members = [
     "crates/graphdb-migration",
     "crates/graphdb-embedding",
     "crates/vector-client",
-    "crates/vector-search",
+    "crates/simvec",
     "crates/graphdb-cli",
     "crates/graphdb-migration-cli",
 ]

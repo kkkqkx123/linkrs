@@ -1,3 +1,6 @@
 [submodule "crates/tantivy"]
 	path = crates/tantivy
 	url = https://github.com/kkkqkx123/tantivy.git
+[submodule "crates/simvec"]
+	path = crates/simvec
+	url = https://github.com/kkkqkx123/simvec.git

@@ -9,7 +9,7 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use graphdb_sync::vector_sync::SearchOptions;
-use vector_search::{DistanceMetric, VectorFilter};
+use simvec::{DistanceMetric, VectorFilter};
 
 /// Vector index creation request
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -185,9 +185,9 @@ pub async fn create_index<
             || request.always_ram.is_some()
         {
             let mut config =
-                vector_search::CollectionConfig::new(request.vector_size, request.distance);
+                simvec::CollectionConfig::new(request.vector_size, request.distance);
             if request.hnsw_m.is_some() || request.hnsw_ef_construct.is_some() {
-                let mut hnsw = vector_search::HnswConfig::default();
+                let mut hnsw = simvec::HnswConfig::default();
                 if let Some(m) = request.hnsw_m {
                     hnsw.m = m;
                 }
@@ -201,7 +201,7 @@ pub async fn create_index<
                 let quant_cfg = match q_lower.as_str() {
                     "none" | "disabled" | "off" => None,
                     "scalar" => {
-                        let mut cfg = vector_search::QuantizationConfig::scalar(
+                        let mut cfg = simvec::QuantizationConfig::scalar(
                             request.quantile.unwrap_or(0.99),
                         );
                         if let Some(ar) = request.always_ram {
@@ -210,7 +210,7 @@ pub async fn create_index<
                         Some(cfg)
                     }
                     "binary" => {
-                        let mut cfg = vector_search::QuantizationConfig::binary();
+                        let mut cfg = simvec::QuantizationConfig::binary();
                         if let Some(ar) = request.always_ram {
                             cfg = cfg.with_always_ram(ar);
                         }
@@ -224,11 +224,11 @@ pub async fn create_index<
                             .to_lowercase()
                             .as_str()
                         {
-                            "x4" | "4" => vector_search::CompressionRatio::X4,
-                            "x8" | "8" => vector_search::CompressionRatio::X8,
-                            "x16" | "16" => vector_search::CompressionRatio::X16,
-                            "x32" | "32" => vector_search::CompressionRatio::X32,
-                            "x64" | "64" => vector_search::CompressionRatio::X64,
+                            "x4" | "4" => simvec::CompressionRatio::X4,
+                            "x8" | "8" => simvec::CompressionRatio::X8,
+                            "x16" | "16" => simvec::CompressionRatio::X16,
+                            "x32" | "32" => simvec::CompressionRatio::X32,
+                            "x64" | "64" => simvec::CompressionRatio::X64,
                             other => {
                                 return Err(HttpError::InternalError(format!(
                                     "unknown compression '{}', expected x4/x8/x16/x32/x64",
@@ -236,7 +236,7 @@ pub async fn create_index<
                                 )))
                             }
                         };
-                        let mut cfg = vector_search::QuantizationConfig::product(ratio);
+                        let mut cfg = simvec::QuantizationConfig::product(ratio);
                         if let Some(ar) = request.always_ram {
                             cfg = cfg.with_always_ram(ar);
                         }
@@ -432,7 +432,7 @@ pub async fn list_indexes<
 
 #[utoipa::path(
     post,
-    operation_id = "post_v1_vector_search",
+    operation_id = "post_v1_simvec",
     path = "/v1/vector/search",
     tag = "Vector",
     request_body = VectorSearchRequest,
@@ -711,7 +711,7 @@ pub async fn set_payload<
     let vector_api = graph_service.vector_api();
 
     if let Some(vector_api) = vector_api {
-        let payload: vector_search::types::Payload = request.payload.into_iter().collect();
+        let payload: simvec::types::Payload = request.payload.into_iter().collect();
         let point_ids: Vec<&str> = request.point_ids.iter().map(|s| s.as_str()).collect();
         vector_api
             .set_payload(
@@ -765,7 +765,7 @@ pub async fn set_payload_fields<
     let vector_api = graph_service.vector_api();
 
     if let Some(vector_api) = vector_api {
-        let fields: vector_search::types::Payload = request.payload.into_iter().collect();
+        let fields: simvec::types::Payload = request.payload.into_iter().collect();
         let point_ids: Vec<&str> = request.point_ids.iter().map(|s| s.as_str()).collect();
         vector_api
             .set_payload_fields(

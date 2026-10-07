@@ -333,7 +333,7 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
     }
 
     #[cfg(feature = "vector")]
-    fn visit_vector_search(&mut self, node: &VectorSearchNode) -> Self::Result {
+    fn visit_simvec(&mut self, node: &VectorSearchNode) -> Self::Result {
         Ok(PlanNodeEnum::VectorSearch(node.clone()))
     }
 

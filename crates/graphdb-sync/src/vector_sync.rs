@@ -20,8 +20,8 @@ use graphdb_core::Value;
 
 #[cfg(feature = "embedding")]
 use graphdb_embedding::EmbeddingService;
-pub use vector_search::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
-use vector_search::{CollectionConfig, IndexMetadata, VectorFilter};
+pub use simvec::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
+use simvec::{CollectionConfig, IndexMetadata, VectorFilter};
 
 // ── Types (kept here for backward compatibility) ──────────────────────────
 
@@ -589,7 +589,7 @@ impl VectorSyncCoordinator {
                     now.wrapping_mul(0x9e3779b97f4a7c15)
                         .wrapping_add(contexts.len() as u64)
                 };
-                let mut ops: Vec<vector_search::engine::TxnOp> = Vec::with_capacity(contexts.len());
+                let mut ops: Vec<simvec::engine::TxnOp> = Vec::with_capacity(contexts.len());
                 for ctx in contexts {
                     let collection = collection_override
                         .map(str::to_string)
@@ -615,10 +615,10 @@ impl VectorSyncCoordinator {
                             }
                             let point = VectorPoint::new(point_id, ctx.data.vector)
                                 .with_payload(json_payload);
-                            ops.push(vector_search::engine::TxnOp::Upsert { collection, point });
+                            ops.push(simvec::engine::TxnOp::Upsert { collection, point });
                         }
                         VectorChangeType::Delete => {
-                            ops.push(vector_search::engine::TxnOp::Delete {
+                            ops.push(simvec::engine::TxnOp::Delete {
                                 collection,
                                 point_id,
                             });

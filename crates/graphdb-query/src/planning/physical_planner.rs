@@ -174,7 +174,7 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         LogicalNodeEnum::MatchFulltext(n) => convert_match_fulltext(n),
 
         #[cfg(feature = "vector")]
-        LogicalNodeEnum::VectorSearch(n) => convert_vector_search(n),
+        LogicalNodeEnum::VectorSearch(n) => convert_simvec(n),
 
         #[cfg(feature = "vector")]
         LogicalNodeEnum::VectorLookup(n) => convert_vector_lookup(n),

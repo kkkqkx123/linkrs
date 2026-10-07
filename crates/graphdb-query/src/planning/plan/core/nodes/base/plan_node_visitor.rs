@@ -214,7 +214,7 @@ pub trait PlanNodeVisitor {
 
     #[cfg(feature = "vector")]
     impl_visitor_methods!(
-        VectorSearch, VectorSearchNode, visit_vector_search;
+        VectorSearch, VectorSearchNode, visit_simvec;
         VectorLookup, VectorLookupNode, visit_vector_lookup;
         VectorMatch, VectorMatchNode, visit_vector_match;
     );
@@ -323,7 +323,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::FulltextLookup(node) => visitor.visit_fulltext_lookup(node),
             PlanNodeEnum::MatchFulltext(node) => visitor.visit_match_fulltext(node),
             #[cfg(feature = "vector")]
-            PlanNodeEnum::VectorSearch(node) => visitor.visit_vector_search(node),
+            PlanNodeEnum::VectorSearch(node) => visitor.visit_simvec(node),
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorLookup(node) => visitor.visit_vector_lookup(node),
             #[cfg(feature = "vector")]

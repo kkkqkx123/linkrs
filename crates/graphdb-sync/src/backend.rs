@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::Stream;
-use vector_search::{
+use simvec::{
     CollectionConfig, HealthStatus, IndexMetadata, LocalVectorEngine, Payload, PayloadSchemaType,
     SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
@@ -219,7 +219,7 @@ impl VectorBackend {
     pub async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
         match self {
             VectorBackend::Local(_) => Ok(HealthStatus::healthy(
-                "vector-search",
+                "simvec",
                 env!("CARGO_PKG_VERSION"),
             )),
             #[cfg(feature = "vector-qdrant")]
@@ -266,23 +266,23 @@ impl VectorBackend {
                 let mut effective = config.clone();
                 match effective
                     .index_type
-                    .unwrap_or(vector_search::types::IndexType::HNSW)
+                    .unwrap_or(simvec::types::IndexType::HNSW)
                 {
-                    vector_search::types::IndexType::HNSW => {
+                    simvec::types::IndexType::HNSW => {
                         if effective.hnsw_config.is_none() {
                             effective.hnsw_config = engine
                                 .default_hnsw_config()
-                                .or(Some(vector_search::types::HnswConfig::default()));
+                                .or(Some(simvec::types::HnswConfig::default()));
                         }
                         effective.ivf_config = None;
                     }
-                    vector_search::types::IndexType::IVF => {
+                    simvec::types::IndexType::IVF => {
                         if effective.ivf_config.is_none() {
                             effective.ivf_config = engine.default_ivf_config();
                         }
                         effective.hnsw_config = None;
                     }
-                    vector_search::types::IndexType::FLAT => {
+                    simvec::types::IndexType::FLAT => {
                         effective.hnsw_config = None;
                         effective.ivf_config = None;
                     }
@@ -293,7 +293,7 @@ impl VectorBackend {
                 effective.index_type = Some(
                     effective
                         .index_type
-                        .unwrap_or(vector_search::types::IndexType::HNSW),
+                        .unwrap_or(simvec::types::IndexType::HNSW),
                 );
                 let drop_quantization = effective
                     .quantization_config

@@ -196,7 +196,7 @@ impl<
             let backend = match shared_vector_backend {
                 Some(backend) => backend,
                 None => {
-                    let engine = vector_search::LocalVectorEngine::open(config.vector_data_dir())
+                    let engine = simvec::LocalVectorEngine::open(config.vector_data_dir())
                         .unwrap_or_else(|_| panic!("Failed to open local vector engine"));
                     if let Some(hnsw) =
                         graphdb_api::vector_config::local_hnsw_config(&config.vector_config().local)

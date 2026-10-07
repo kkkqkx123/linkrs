@@ -384,7 +384,7 @@ crate::define_enum_is_methods! {
 #[cfg(feature = "vector")]
 crate::define_enum_is_methods! {
     PlanNodeEnum,
-    (VectorSearch, is_vector_search),
+    (VectorSearch, is_simvec),
     (VectorLookup, is_vector_lookup),
     (VectorMatch, is_vector_match),
 }
@@ -499,7 +499,7 @@ crate::define_enum_as_methods! {
 #[cfg(feature = "vector")]
 crate::define_enum_as_methods! {
     PlanNodeEnum,
-    (VectorSearch, as_vector_search, VectorSearchNode),
+    (VectorSearch, as_simvec, VectorSearchNode),
     (VectorLookup, as_vector_lookup, VectorLookupNode),
     (VectorMatch, as_vector_match, VectorMatchNode),
 }
@@ -613,7 +613,7 @@ crate::define_enum_as_mut_methods! {
 #[cfg(feature = "vector")]
 crate::define_enum_as_mut_methods! {
     PlanNodeEnum,
-    (VectorSearch, as_vector_search_mut, VectorSearchNode),
+    (VectorSearch, as_simvec_mut, VectorSearchNode),
     (VectorLookup, as_vector_lookup_mut, VectorLookupNode),
     (VectorMatch, as_vector_match_mut, VectorMatchNode),
 }
@@ -1045,11 +1045,11 @@ mod tests {
     }
 
     #[test]
-    fn vector_search_nodes_are_feature_gated() {
+    fn simvec_nodes_are_feature_gated() {
         let names = PlanNodeEnum::ALL_VARIANT_NAMES;
         // VectorManage is an always-present management node; the three vector
         // SEARCH nodes are the qdrant-gated ones.
-        let vector_search: Vec<&str> = names
+        let simvec: Vec<&str> = names
             .iter()
             .copied()
             .filter(|n| matches!(*n, "VectorSearch" | "VectorLookup" | "VectorMatch"))
@@ -1057,19 +1057,19 @@ mod tests {
         #[cfg(feature = "vector")]
         {
             assert_eq!(
-                vector_search.len(),
+                simvec.len(),
                 3,
                 "expected 3 vector search nodes under qdrant"
             );
             for n in ["VectorSearch", "VectorLookup", "VectorMatch"] {
-                assert!(vector_search.contains(&n), "missing {n} under qdrant");
+                assert!(simvec.contains(&n), "missing {n} under qdrant");
             }
         }
         #[cfg(not(feature = "vector"))]
         {
             assert!(
-                vector_search.is_empty(),
-                "vector search nodes leaked into the default build: {vector_search:?}"
+                simvec.is_empty(),
+                "vector search nodes leaked into the default build: {simvec:?}"
             );
         }
     }

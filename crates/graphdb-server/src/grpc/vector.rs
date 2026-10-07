@@ -684,8 +684,8 @@ fn vector_http_status(error: crate::http::error::HttpError) -> Status {
 #[cfg(feature = "vector")]
 pub(crate) fn proto_metric_to_distance(
     metric: i32,
-) -> Result<vector_search::DistanceMetric, Status> {
-    use vector_search::DistanceMetric;
+) -> Result<simvec::DistanceMetric, Status> {
+    use simvec::DistanceMetric;
     match metric {
         0 => Ok(DistanceMetric::Cosine),
         1 => Ok(DistanceMetric::Euclid),
@@ -702,8 +702,8 @@ pub(crate) fn proto_metric_to_distance(
 /// The wire enum has no Manhattan variant; it is reported as an
 /// out-of-range sentinel so readers never mistake it for another metric.
 #[cfg(feature = "vector")]
-pub(crate) fn distance_to_proto_metric(metric: vector_search::DistanceMetric) -> i32 {
-    use vector_search::DistanceMetric;
+pub(crate) fn distance_to_proto_metric(metric: simvec::DistanceMetric) -> i32 {
+    use simvec::DistanceMetric;
     match metric {
         DistanceMetric::Cosine => 0,
         DistanceMetric::Euclid => 1,
@@ -739,8 +739,8 @@ where
 #[cfg(feature = "vector")]
 pub(crate) fn grpc_collection_config(
     options: Option<super::proto::VectorIndexOptions>,
-) -> Result<vector_search::CollectionConfig, Status> {
-    use vector_search::{CollectionConfig, CompressionRatio, HnswConfig, IndexType};
+) -> Result<simvec::CollectionConfig, Status> {
+    use simvec::{CollectionConfig, CompressionRatio, HnswConfig, IndexType};
     let opts = options.ok_or_else(|| Status::invalid_argument("index options are required"))?;
     if opts.dimension <= 0 {
         return Err(Status::invalid_argument("dimension must be greater than 0"));
@@ -786,14 +786,14 @@ pub(crate) fn grpc_collection_config(
             "none" | "disabled" | "off" => {}
             "scalar" => {
                 let quantile = parse_optional_param::<f32>(params, "quantile")?.unwrap_or(0.99);
-                let mut cfg = vector_search::QuantizationConfig::scalar(quantile);
+                let mut cfg = simvec::QuantizationConfig::scalar(quantile);
                 if let Some(always_ram) = parse_optional_param::<bool>(params, "always_ram")? {
                     cfg = cfg.with_always_ram(always_ram);
                 }
                 config = config.with_quantization(cfg);
             }
             "binary" => {
-                let mut cfg = vector_search::QuantizationConfig::binary();
+                let mut cfg = simvec::QuantizationConfig::binary();
                 if let Some(always_ram) = parse_optional_param::<bool>(params, "always_ram")? {
                     cfg = cfg.with_always_ram(always_ram);
                 }
@@ -817,7 +817,7 @@ pub(crate) fn grpc_collection_config(
                         )))
                     }
                 };
-                let mut cfg = vector_search::QuantizationConfig::product(ratio);
+                let mut cfg = simvec::QuantizationConfig::product(ratio);
                 if let Some(always_ram) = parse_optional_param::<bool>(params, "always_ram")? {
                     cfg = cfg.with_always_ram(always_ram);
                 }
@@ -836,8 +836,8 @@ pub(crate) fn grpc_collection_config(
 
 /// Render a collection config's index tier with its proto spelling.
 #[cfg(feature = "vector")]
-pub(crate) fn grpc_index_type_name(config: &vector_search::CollectionConfig) -> String {
-    use vector_search::IndexType;
+pub(crate) fn grpc_index_type_name(config: &simvec::CollectionConfig) -> String {
+    use simvec::IndexType;
     match config.index_type {
         Some(IndexType::FLAT) => "FLAT".to_string(),
         Some(IndexType::IVF) => "IVF".to_string(),
@@ -851,7 +851,7 @@ pub(crate) fn grpc_index_info_to_proto(
     space_name: String,
     tag_name: String,
     field_name: String,
-    meta: &vector_search::IndexMetadata,
+    meta: &simvec::IndexMetadata,
 ) -> super::proto::VectorIndexInfo {
     super::proto::VectorIndexInfo {
         space_name,

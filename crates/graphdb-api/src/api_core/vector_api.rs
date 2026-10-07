@@ -6,7 +6,7 @@ use crate::api_core::error::{CoreError, CoreResult};
 use graphdb_sync::backend::VectorBackend;
 use graphdb_sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
 use std::sync::Arc;
-use vector_search::{
+use simvec::{
     types::{validate_distance_metric, IndexMetadata, PointId},
     CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
 };
@@ -177,7 +177,7 @@ impl VectorApi {
             // default for remote Qdrant while letting the local engine keep
             // exact defaults unless explicitly overridden.
             if !self.backend.is_local() && config.hnsw_config.is_none() {
-                config.hnsw_config = Some(vector_search::types::HnswConfig {
+                config.hnsw_config = Some(simvec::types::HnswConfig {
                     m: 16,
                     ef_construct: 100,
                     full_scan_threshold: None,
@@ -186,7 +186,7 @@ impl VectorApi {
                     payload_m: Some(16),
                     ..Default::default()
                 });
-                config.index_type = Some(vector_search::types::IndexType::HNSW);
+                config.index_type = Some(simvec::types::IndexType::HNSW);
             }
             self.backend
                 .create_index(&collection_name, &config)
@@ -197,7 +197,7 @@ impl VectorApi {
                 .create_payload_index(
                     &collection_name,
                     "group_id",
-                    vector_search::types::PayloadSchemaType::Keyword,
+                    simvec::types::PayloadSchemaType::Keyword,
                 )
                 .await;
             Ok(collection_name)
@@ -581,7 +581,7 @@ impl VectorApi {
         tag_name: &str,
         field_name: &str,
         point_ids: Vec<&str>,
-        payload: vector_search::types::Payload,
+        payload: simvec::types::Payload,
     ) -> CoreResult<()> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
@@ -599,7 +599,7 @@ impl VectorApi {
         tag_name: &str,
         field_name: &str,
         point_ids: Vec<&str>,
-        fields: vector_search::types::Payload,
+        fields: simvec::types::Payload,
     ) -> CoreResult<()> {
         let collection_name =
             VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();

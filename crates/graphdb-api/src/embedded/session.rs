@@ -1754,7 +1754,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Returns vector search results on success
     /// - Return error on failure
     #[cfg(feature = "vector")]
-    pub async fn vector_search(
+    pub async fn simvec(
         &self,
         tag_name: &str,
         field_name: &str,
@@ -1803,7 +1803,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
     /// - Returns vector search results on success
     /// - Return error on failure
     #[cfg(feature = "vector")]
-    pub async fn vector_search_with_threshold(
+    pub async fn simvec_with_threshold(
         &self,
         tag_name: &str,
         field_name: &str,
@@ -1858,7 +1858,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
         tag_name: &str,
         field_name: &str,
         vector_size: usize,
-        distance: vector_search::DistanceMetric,
+        distance: simvec::DistanceMetric,
     ) -> CoreResult<String> {
         let space_id = {
             let guard = self.space_id.read();

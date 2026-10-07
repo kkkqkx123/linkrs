@@ -154,7 +154,7 @@ impl DisabledEngine {
 /// Remote vector engine abstraction for the Qdrant service.
 ///
 /// This trait covers the remote collection API only. The built-in local
-/// engine exposes its own interface in `vector-search`; the sync layer
+/// engine exposes its own interface in `simvec`; the sync layer
 /// dispatches between the two through its backend enum.
 #[async_trait]
 pub trait RemoteVectorEngine: Send + Sync + std::fmt::Debug {

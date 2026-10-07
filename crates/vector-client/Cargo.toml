@@ -29,7 +29,7 @@ url.workspace = true
 chrono.workspace = true
 dashmap.workspace = true
 futures.workspace = true
-vector-search = { path = "../vector-search" }
+simvec = { path = "../simvec" }
 graphdb-embedding = { path = "../graphdb-embedding" }
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }

@@ -25,7 +25,7 @@ pub struct CreateVectorIndex {
     pub if_not_exists: bool,
 }
 
-/// Quantization kind for vector index (mirrors `vector_search::QuantizationType` / Qdrant builders)
+/// Quantization kind for vector index (mirrors `simvec::QuantizationType` / Qdrant builders)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QuantizationKind {
@@ -34,7 +34,7 @@ pub enum QuantizationKind {
     Product,
 }
 
-/// Compression ratio for product quantization (mirrors `vector_search::CompressionRatio` / Qdrant)
+/// Compression ratio for product quantization (mirrors `simvec::CompressionRatio` / Qdrant)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CompressionRatioKind {
