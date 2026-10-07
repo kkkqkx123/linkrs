@@ -117,7 +117,7 @@ pub(super) fn execute_user_manage(
                 .get_space_id(space_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             let role = role.parse::<RoleType>().map_err(QueryError::execution)?;
-            StorageAuthOps::grant_role(s, username, space_id, role)
+            StorageAuthOps::grant_role(s, username, space_id as i64, role)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
@@ -128,7 +128,7 @@ pub(super) fn execute_user_manage(
             let space_id = s
                 .get_space_id(space_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            StorageAuthOps::revoke_role(s, username, space_id)
+            StorageAuthOps::revoke_role(s, username, space_id as i64)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),

@@ -7,6 +7,7 @@ use graphdb_metrics::{MetricType, StatsManager};
 use graphdb_query::query_manager::QueryManager;
 
 use crate::auth::Authenticator;
+use crate::permission::GOD_SPACE_ID;
 use crate::query::executor::streaming::transaction_scope::CancelReason;
 use crate::session::{SessionError, SessionResult};
 use crate::storage::{
@@ -14,6 +15,19 @@ use crate::storage::{
 };
 
 use super::GraphService;
+
+/// Detailed user entry combining stored account state with effective role.
+#[derive(Debug, Clone)]
+pub struct UserDetail {
+    pub username: String,
+    pub role: Option<String>,
+    pub status: String,
+    pub last_active: Option<String>,
+}
+
+fn format_last_active(millis: Option<i64>) -> Option<String> {
+    millis.and_then(|ts| chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.to_rfc3339()))
+}
 
 impl<
         S: StorageClient
@@ -41,8 +55,17 @@ impl<
             return Err("More than the maximum number of connections limit".to_string());
         }
 
-        match self.authenticator.authenticate(username, password) {
+        let auth = self.authenticator.clone();
+        let owned_user = username.to_string();
+        let owned_pass = password.to_string();
+        let auth_result =
+            tokio::task::spawn_blocking(move || auth.authenticate(&owned_user, &owned_pass))
+                .await
+                .map_err(|e| format!("authentication failure: blocking join failed: {}", e))?;
+
+        match auth_result {
             Ok(_) => {
+                let _ = self.storage.update_last_login(username);
                 let session = self
                     .session_manager
                     .create_session(username.to_string(), "127.0.0.1".to_string())
@@ -57,6 +80,31 @@ impl<
                 Err(format!("authentication failure: {}", e))
             }
         }
+    }
+
+    /// Whether the login response should prompt a password change.
+    ///
+    /// True when forced rotation is configured and the default seed account
+    /// has never changed its password.
+    pub fn must_change_password(&self, username: &str) -> bool {
+        if !self.authenticator.config().force_change_default_password {
+            return false;
+        }
+        if username != self.authenticator.config().default_username {
+            return false;
+        }
+        match self.storage.get_user(username) {
+            Some(user) => user.password_changed_at <= user.created_at,
+            None => false,
+        }
+    }
+
+    /// Whether the account is currently disabled.
+    pub fn is_user_locked(&self, username: &str) -> bool {
+        self.storage
+            .get_user(username)
+            .map(|user| user.is_locked)
+            .unwrap_or(false)
     }
 
     /// Graceful shutdown of the shared execution infrastructure.
@@ -145,6 +193,235 @@ impl<
                 Ok(())
             }
             Err(e) => Err(SessionError::manager_error(e.to_string())),
+        }
+    }
+
+    fn require_admin(&self, caller: &str) -> Result<(), String> {
+        if self.permission_manager.is_admin(caller) {
+            Ok(())
+        } else {
+            Err("admin permission required".to_string())
+        }
+    }
+
+    fn enabled_admin_count_excluding(&self, exclude: &str) -> usize {
+        self.storage
+            .list_users()
+            .into_iter()
+            .filter(|name| name != exclude)
+            .filter(|name| self.permission_manager.is_admin(name))
+            .filter(|name| {
+                self.storage
+                    .get_user(name)
+                    .map(|user| !user.is_locked)
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
+    /// List users with display role, enablement status and last login time.
+    pub fn list_users_detailed(&self) -> Vec<UserDetail> {
+        let mut details: Vec<UserDetail> = self
+            .storage
+            .list_users()
+            .into_iter()
+            .map(|username| {
+                let stored = self.storage.get_user(&username);
+                let role = self
+                    .permission_manager
+                    .highest_role(&username)
+                    .map(|role| role.to_string());
+                let status = match stored.as_ref() {
+                    Some(user) if user.is_locked => "disabled".to_string(),
+                    _ => "enabled".to_string(),
+                };
+                let last_active = stored.and_then(|user| format_last_active(user.last_login_at));
+                UserDetail {
+                    username,
+                    role,
+                    status,
+                    last_active,
+                }
+            })
+            .collect();
+        details.sort_by(|a, b| a.username.cmp(&b.username));
+        details
+    }
+
+    /// Create a user through the admin channel.
+    pub fn admin_create_user(
+        &self,
+        caller: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<(), String> {
+        self.require_admin(caller)?;
+        if username.is_empty() || password.is_empty() {
+            return Err("username and password cannot be empty".to_string());
+        }
+        if self.storage.user_exists(username) {
+            return Err(format!("user {} already exists", username));
+        }
+        let info = graphdb_core::types::UserInfo::new(username.to_string(), password.to_string())
+            .map_err(|e| e.to_string())?;
+        let mut handle = (*self.storage).clone();
+        handle.create_user(&info).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Reset a password through the admin channel without old-password check.
+    pub fn admin_reset_password(
+        &self,
+        caller: &str,
+        username: &str,
+        new_password: &str,
+    ) -> Result<(), String> {
+        self.require_admin(caller)?;
+        if new_password.is_empty() {
+            return Err("password cannot be empty".to_string());
+        }
+        if !self.storage.user_exists(username) {
+            return Err(format!("user {} not found", username));
+        }
+        let mut alter = graphdb_core::types::UserAlterInfo::new(username.to_string());
+        alter.new_password = Some(new_password.to_string());
+        let mut handle = (*self.storage).clone();
+        handle.alter_user(&alter).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Enable or disable a user; disabling evicts existing sessions.
+    pub async fn admin_set_user_enabled(
+        &self,
+        caller: &str,
+        caller_session_id: Option<i64>,
+        username: &str,
+        enabled: bool,
+    ) -> Result<(), String> {
+        self.require_admin(caller)?;
+        if username == caller && !enabled {
+            return Err("cannot disable self".to_string());
+        }
+        let stored = self
+            .storage
+            .get_user(username)
+            .ok_or_else(|| format!("user {} not found", username))?;
+        if stored.is_locked == !enabled {
+            return Ok(());
+        }
+        if !enabled
+            && self.permission_manager.is_admin(username)
+            && self.enabled_admin_count_excluding(username) == 0
+        {
+            return Err("cannot disable the last available admin".to_string());
+        }
+        let mut alter = graphdb_core::types::UserAlterInfo::new(username.to_string());
+        alter.is_locked = Some(!enabled);
+        let mut handle = (*self.storage).clone();
+        handle.alter_user(&alter).map_err(|e| e.to_string())?;
+        if !enabled {
+            self.session_manager
+                .remove_sessions_by_username(username, caller_session_id)
+                .await;
+        }
+        Ok(())
+    }
+
+    /// Drop a user and clean roles plus sessions.
+    pub async fn admin_drop_user(&self, caller: &str, username: &str) -> Result<(), String> {
+        self.require_admin(caller)?;
+        if username == caller {
+            return Err("cannot drop self".to_string());
+        }
+        if !self.storage.user_exists(username) {
+            return Err(format!("user {} not found", username));
+        }
+        if self.permission_manager.is_admin(username)
+            && self.enabled_admin_count_excluding(username) == 0
+        {
+            return Err("cannot drop the last available admin".to_string());
+        }
+        let mut handle = (*self.storage).clone();
+        handle.drop_user(username).map_err(|e| e.to_string())?;
+        self.permission_manager.remove_user(username);
+        self.session_manager
+            .remove_sessions_by_username(username, None)
+            .await;
+        Ok(())
+    }
+
+    fn resolve_space_id(&self, space: &str) -> Result<i64, String> {
+        let trimmed = space.trim();
+        if trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("global")
+            || trimmed == GOD_SPACE_ID.to_string()
+        {
+            return Ok(GOD_SPACE_ID);
+        }
+        self.storage
+            .get_space_id(trimmed)
+            .map(|id| id as i64)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Grant a role with dual write to storage and permission state.
+    pub fn admin_grant_role(
+        &self,
+        caller: &str,
+        username: &str,
+        space: &str,
+        role_name: &str,
+    ) -> Result<(), String> {
+        self.require_admin(caller)?;
+        if !self.storage.user_exists(username) {
+            return Err(format!("user {} not found", username));
+        }
+        let role: graphdb_core::RoleType = role_name.parse().map_err(|e: String| e)?;
+        let space_id = self.resolve_space_id(space)?;
+        let mut handle = (*self.storage).clone();
+        handle
+            .grant_role(username, space_id, role)
+            .map_err(|e| e.to_string())?;
+        self.permission_manager
+            .grant_role(username, space_id, role)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Revoke a role with dual write to storage and permission state.
+    pub fn admin_revoke_role(
+        &self,
+        caller: &str,
+        username: &str,
+        space: &str,
+    ) -> Result<(), String> {
+        self.require_admin(caller)?;
+        if !self.storage.user_exists(username) {
+            return Err(format!("user {} not found", username));
+        }
+        let space_id = self.resolve_space_id(space)?;
+        let mut handle = (*self.storage).clone();
+        handle
+            .revoke_role(username, space_id)
+            .map_err(|e| e.to_string())?;
+        self.permission_manager
+            .revoke_role(username, space_id)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Sync query-channel role writes into permission state.
+    ///
+    /// Storage remains the source of truth; this keeps the in-memory
+    /// permission map consistent when GRANT/REVOKE arrive via queries.
+    pub fn sync_role_from_storage(&self, username: &str) {
+        let entries = self.storage.list_user_roles(username);
+        if entries.is_empty() {
+            self.permission_manager.remove_user(username);
+            return;
+        }
+        for (space_id, role) in entries {
+            let _ = self.permission_manager.grant_role(username, space_id, role);
         }
     }
 }

@@ -19,7 +19,7 @@ use graphdb_transaction::TransactionManager;
 use super::GraphService;
 use crate::auth::AuthenticatorFactory;
 use crate::config::Config;
-use crate::permission::PermissionManager;
+use crate::permission::{PermissionManager, GOD_SPACE_ID};
 use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
 use crate::query::optimizer::PartitioningConfig;
@@ -295,8 +295,11 @@ impl<
             Self::spawn_startup_statistics_load(query_api.clone(), storage.clone());
         }
 
-        let authenticator = AuthenticatorFactory::create_default(&config.server.auth);
         let permission_manager = Arc::new(PermissionManager::new());
+        Self::ensure_admin_seed_and_rebuild(&storage, &permission_manager, &config);
+
+        let authenticator =
+            AuthenticatorFactory::create_with_storage(&config.server.auth, Arc::clone(&storage));
 
         let sync_api = storage
             .get_sync_manager()
@@ -386,5 +389,43 @@ impl<
                 }
             }
         });
+    }
+
+    /// Seed the default admin on first start and rebuild role mappings.
+    ///
+    /// When the user table is empty, the configured default credentials are
+    /// hashed into a new admin with the global God role; the plaintext
+    /// password is never compared afterwards. Otherwise permission state is
+    /// rebuilt from the persisted role segment so restarts keep grants.
+    fn ensure_admin_seed_and_rebuild(
+        storage: &Arc<S>,
+        permission_manager: &Arc<PermissionManager>,
+        config: &Config,
+    ) {
+        let mut handle = (**storage).clone();
+        if handle.list_users().is_empty() {
+            let username = config.server.auth.default_username.clone();
+            let password = config.server.auth.default_password.clone();
+            if !username.is_empty() && !password.is_empty() {
+                match graphdb_core::types::UserInfo::new(username.clone(), password) {
+                    Ok(info) => {
+                        if let Err(error) = handle.create_user(&info) {
+                            warn!("Admin seed failed for '{}': {}", username, error);
+                        } else if let Err(error) =
+                            handle.grant_role(&username, GOD_SPACE_ID, graphdb_core::RoleType::God)
+                        {
+                            warn!("Admin seed grant failed for '{}': {}", username, error);
+                        } else {
+                            info!("Seeded default admin '{}'", username);
+                        }
+                    }
+                    Err(error) => warn!("Admin seed hashing failed: {}", error),
+                }
+            }
+        }
+        let roles = handle.list_all_user_roles();
+        if !roles.is_empty() {
+            permission_manager.rebuild_from_snapshot(roles);
+        }
     }
 }

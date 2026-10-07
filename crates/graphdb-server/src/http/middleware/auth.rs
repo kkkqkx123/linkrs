@@ -30,13 +30,18 @@ pub async fn auth_middleware<
         .and_then(|s| s.parse::<i64>().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let valid = state
-        .server
-        .get_session_manager()
-        .find_session(session_id)
-        .is_some();
+    let session = state.server.get_session_manager().find_session(session_id);
 
-    if !valid {
+    let session = match session {
+        Some(session) => session,
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    if state
+        .server
+        .get_graph_service()
+        .is_user_locked(&session.user())
+    {
         return Err(StatusCode::UNAUTHORIZED);
     }
 

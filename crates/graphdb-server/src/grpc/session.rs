@@ -48,7 +48,13 @@ impl<
         let session = graph_service
             .authenticate(&req.username, &req.password)
             .await
-            .map_err(Status::unauthenticated)?;
+            .map_err(|message| {
+                if message.to_lowercase().contains("locked") {
+                    Status::permission_denied(message)
+                } else {
+                    Status::unauthenticated(message)
+                }
+            })?;
         if let Some(space) = req.space.filter(|s| !s.is_empty()) {
             attach_session_space(&self.app_state, &session, &space)?;
         }
@@ -85,6 +91,13 @@ impl<
         }
         let session_manager = self.app_state.server.get_session_manager();
         let session = if req.password.is_empty() {
+            let graph_service = self.app_state.server.get_graph_service();
+            if graph_service.is_user_locked(&req.username) {
+                return Err(Status::permission_denied(format!(
+                    "account {} is locked",
+                    req.username
+                )));
+            }
             session_manager
                 .create_session(req.username.clone(), "127.0.0.1".to_string())
                 .await
@@ -94,7 +107,13 @@ impl<
             graph_service
                 .authenticate(&req.username, &req.password)
                 .await
-                .map_err(Status::unauthenticated)?
+                .map_err(|message| {
+                    if message.to_lowercase().contains("locked") {
+                        Status::permission_denied(message)
+                    } else {
+                        Status::unauthenticated(message)
+                    }
+                })?
         };
         if let Some(space) = req.space.filter(|s| !s.is_empty()) {
             attach_session_space(&self.app_state, &session, &space)?;

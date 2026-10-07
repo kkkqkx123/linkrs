@@ -18,7 +18,7 @@ pub enum Permission {
 /// - Dba: Database administrator who can modify the Schema.
 /// - User: Normal user, can read and write data
 /// - Guest: read-only user, can only read data
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum RoleType {
     God = 0x01,
     Admin = 0x02,

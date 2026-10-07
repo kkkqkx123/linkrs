@@ -219,6 +219,7 @@ pub fn openapi_json() -> String {
     static CACHE: OnceLock<String> = OnceLock::new();
     CACHE
         .get_or_init(|| {
+            #[allow(unused_mut)]
             let mut doc = CoreDoc::openapi();
             #[cfg(feature = "vector")]
             {

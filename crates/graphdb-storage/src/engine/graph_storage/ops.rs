@@ -215,7 +215,7 @@ pub(crate) fn alter_user(ctx: &GraphStorageContext, info: &UserAlterInfo) -> Sto
 pub(crate) fn grant_role(
     ctx: &GraphStorageContext,
     username: &str,
-    space_id: u64,
+    space_id: i64,
     role: RoleType,
 ) -> StorageResult<bool> {
     ctx.user_storage().grant_role(username, space_id, role)
@@ -224,7 +224,7 @@ pub(crate) fn grant_role(
 pub(crate) fn revoke_role(
     ctx: &GraphStorageContext,
     username: &str,
-    space_id: u64,
+    space_id: i64,
 ) -> StorageResult<bool> {
     ctx.user_storage().revoke_role(username, space_id)
 }

@@ -28,6 +28,16 @@ pub struct PasswordAuthenticator {
     login_attempts: Arc<DashMap<String, LoginAttempt>>,
 }
 
+impl Clone for PasswordAuthenticator {
+    fn clone(&self) -> Self {
+        Self {
+            user_verifier: Arc::clone(&self.user_verifier),
+            config: self.config.clone(),
+            login_attempts: Arc::clone(&self.login_attempts),
+        }
+    }
+}
+
 impl PasswordAuthenticator {
     pub fn new<F>(user_verifier: F, config: AuthConfig) -> Self
     where
@@ -56,6 +66,35 @@ impl PasswordAuthenticator {
             },
             config,
         )
+    }
+
+    /// Create a storage-backed verifier querying user records.
+    ///
+    /// Unknown users and wrong passwords both report credential failure so
+    /// they stay indistinguishable; locked accounts report a distinct error.
+    /// Password hash verification runs wherever `authenticate` runs, so call
+    /// sites must execute it on a blocking thread.
+    pub fn new_with_storage<S>(storage: Arc<S>, config: AuthConfig) -> Self
+    where
+        S: crate::storage::StorageAuthOps + 'static,
+    {
+        Self::new(
+            move |username: &str, password: &str| {
+                let Some(user) = storage.get_user(username) else {
+                    return Ok(false);
+                };
+                if user.is_locked {
+                    return Err(crate::auth::AuthError::AccountLocked(username.to_string()));
+                }
+                Ok(user.verify_password(password))
+            },
+            config,
+        )
+    }
+
+    /// Auth configuration backing this authenticator.
+    pub fn config(&self) -> &AuthConfig {
+        &self.config
     }
 
     /// Record Login Failure
@@ -146,6 +185,14 @@ impl AuthenticatorFactory {
     /// Creating a default password authenticator
     pub fn create_default(config: &AuthConfig) -> PasswordAuthenticator {
         PasswordAuthenticator::new_default(config.clone())
+    }
+
+    /// Storage-backed authenticator querying user records.
+    pub fn create_with_storage<S>(config: &AuthConfig, storage: Arc<S>) -> PasswordAuthenticator
+    where
+        S: crate::storage::StorageAuthOps + 'static,
+    {
+        PasswordAuthenticator::new_with_storage(storage, config.clone())
     }
 }
 

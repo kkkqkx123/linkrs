@@ -15,13 +15,17 @@ pub trait StorageAuthOps: Send + Sync + std::fmt::Debug {
     fn drop_user(&mut self, username: &str) -> Result<bool, StorageError>;
     fn user_exists(&self, username: &str) -> bool;
     fn list_users(&self) -> Vec<String>;
+    fn get_user(&self, username: &str) -> Option<UserInfo>;
+    fn update_last_login(&self, username: &str) -> Result<bool, StorageError>;
+    fn list_user_roles(&self, username: &str) -> Vec<(i64, RoleType)>;
+    fn list_all_user_roles(&self) -> Vec<(String, Vec<(i64, RoleType)>)>;
     fn grant_role(
         &mut self,
         username: &str,
-        space_id: u64,
+        space_id: i64,
         role: RoleType,
     ) -> Result<bool, StorageError>;
-    fn revoke_role(&mut self, username: &str, space_id: u64) -> Result<bool, StorageError>;
+    fn revoke_role(&mut self, username: &str, space_id: i64) -> Result<bool, StorageError>;
 }
 
 /// Administrative operations: stats, maintenance, optional components.

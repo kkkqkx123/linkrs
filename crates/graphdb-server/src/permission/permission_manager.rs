@@ -51,6 +51,28 @@ impl PermissionManager {
 
     // ==================== Role Management (Basic CRUD) ====================
 
+    /// Drop all role mappings (used for snapshot rebuild).
+    pub fn clear(&self) {
+        self.user_roles.clear();
+    }
+
+    /// Remove every role mapping of a user (used on user drop).
+    pub fn remove_user(&self, username: &str) {
+        self.user_roles.remove(username);
+    }
+
+    /// Rebuild the whole mapping from persisted snapshot roles.
+    pub fn rebuild_from_snapshot(&self, roles: Vec<(String, Vec<(i64, RoleType)>)>) {
+        self.user_roles.clear();
+        for (username, entries) in roles {
+            let mut map = HashMap::new();
+            for (space_id, role) in entries {
+                map.insert(space_id, role);
+            }
+            self.user_roles.insert(username, map);
+        }
+    }
+
     /// Granting roles
     ///
     /// Using the entry API of DashMap, there is no need to explicitly acquire locks.

@@ -15,17 +15,20 @@ use serde::{Deserialize, Serialize};
 
 const USER_STORAGE_FORMAT_VERSION: u32 = 1;
 const USER_STORAGE_FILE_NAME: &str = "users.json";
+const USER_STORAGE_TMP_SUFFIX: &str = "users.json.tmp";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UserStorageSnapshot {
     version: u32,
     users: Vec<UserInfo>,
+    roles: HashMap<String, HashMap<i64, RoleType>>,
 }
 
 /// Manages user accounts and role assignments in memory.
 #[derive(Clone)]
 pub struct UserStorage {
     users: Arc<RwLock<HashMap<String, UserInfo>>>,
+    roles: Arc<RwLock<HashMap<String, HashMap<i64, RoleType>>>>,
 }
 
 impl std::fmt::Debug for UserStorage {
@@ -47,6 +50,7 @@ impl UserStorage {
     pub fn new() -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
+            roles: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -54,15 +58,29 @@ impl UserStorage {
         let mut users: Vec<UserInfo> = self.users.write().values().cloned().collect();
         users.sort_by(|left, right| left.username.cmp(&right.username));
 
+        let roles: HashMap<String, HashMap<i64, RoleType>> = self.roles.read().clone();
+
         UserStorageSnapshot {
             version: USER_STORAGE_FORMAT_VERSION,
             users,
+            roles,
         }
     }
 
     /// Clear all users.
     pub fn clear(&self) {
         self.users.write().clear();
+        self.roles.write().clear();
+    }
+
+    /// Number of users.
+    pub fn len(&self) -> usize {
+        self.users.read().len()
+    }
+
+    /// Whether no user exists (used for admin seeding).
+    pub fn is_empty(&self) -> bool {
+        self.users.read().is_empty()
     }
 
     /// Persist users to a directory snapshot.
@@ -76,9 +94,17 @@ impl UserStorage {
         })?;
 
         let file_path = path.join(USER_STORAGE_FILE_NAME);
-        fs::write(&file_path, content).map_err(|e| {
+        let tmp_path = path.join(USER_STORAGE_TMP_SUFFIX);
+        fs::write(&tmp_path, content).map_err(|e| {
             StorageError::io_error(format!(
-                "Failed to write user storage file {}: {}",
+                "Failed to write user storage tmp file {}: {}",
+                tmp_path.display(),
+                e
+            ))
+        })?;
+        fs::rename(&tmp_path, &file_path).map_err(|e| {
+            StorageError::io_error(format!(
+                "Failed to rename user storage file {}: {}",
                 file_path.display(),
                 e
             ))
@@ -124,6 +150,7 @@ impl UserStorage {
         }
 
         *self.users.write() = users;
+        *self.roles.write() = snapshot.roles;
         Ok(())
     }
 
@@ -197,7 +224,19 @@ impl UserStorage {
     pub fn drop_user(&self, username: &str) -> Result<bool, StorageError> {
         let mut users = self.users.write();
         let existed = users.remove(username).is_some();
+        self.roles.write().remove(username);
         Ok(existed)
+    }
+
+    /// Record a successful login timestamp.
+    pub fn update_last_login(&self, username: &str) -> Result<bool, StorageError> {
+        let mut users = self.users.write();
+        if let Some(user) = users.get_mut(username) {
+            user.last_login_at = Some(chrono::Utc::now().timestamp_millis());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Get user information.
@@ -217,35 +256,56 @@ impl UserStorage {
         names
     }
 
-    /// Grant roles to user (only verifies user existence; actual authorization is handled by PermissionManager).
+    /// Grant roles to user and persist the space to role mapping.
     pub fn grant_role(
         &self,
         username: &str,
-        _space_id: u64,
-        _role: RoleType,
+        space_id: i64,
+        role: RoleType,
     ) -> Result<bool, StorageError> {
         let users = self.users.write();
-        if users.contains_key(username) {
-            Ok(true)
-        } else {
-            Err(StorageError::db_error(format!(
+        if !users.contains_key(username) {
+            return Err(StorageError::db_error(format!(
                 "User {} not found",
                 username
-            )))
+            )));
         }
+        drop(users);
+        self.roles
+            .write()
+            .entry(username.to_string())
+            .or_default()
+            .insert(space_id, role);
+        Ok(true)
     }
 
-    /// Revoke roles from user (only verifies user existence; actual revocation is handled by PermissionManager).
-    pub fn revoke_role(&self, username: &str, _space_id: u64) -> Result<bool, StorageError> {
+    /// Revoke roles from user and drop the persisted mapping.
+    pub fn revoke_role(&self, username: &str, space_id: i64) -> Result<bool, StorageError> {
         let users = self.users.write();
-        if users.contains_key(username) {
-            Ok(true)
-        } else {
-            Err(StorageError::db_error(format!(
+        if !users.contains_key(username) {
+            return Err(StorageError::db_error(format!(
                 "User {} not found",
                 username
-            )))
+            )));
         }
+        drop(users);
+        if let Some(entry) = self.roles.write().get_mut(username) {
+            entry.remove(&space_id);
+            if entry.is_empty() {
+                self.roles.write().remove(username);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Role mapping of a single user.
+    pub fn get_user_roles(&self, username: &str) -> HashMap<i64, RoleType> {
+        self.roles.read().get(username).cloned().unwrap_or_default()
+    }
+
+    /// All persisted role mappings.
+    pub fn list_all_roles(&self) -> HashMap<String, HashMap<i64, RoleType>> {
+        self.roles.read().clone()
     }
 }
 

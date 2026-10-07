@@ -318,6 +318,29 @@ impl GraphSessionManager {
         }
     }
 
+    /// Invalidate all sessions of a user, optionally keeping one session.
+    ///
+    /// Used when a user is disabled or dropped so existing sessions stop
+    /// working immediately. Returns the removed session ids.
+    pub async fn remove_sessions_by_username(
+        &self,
+        username: &str,
+        except_session_id: Option<i64>,
+    ) -> Vec<i64> {
+        let targets: Vec<i64> = self
+            .sessions
+            .iter()
+            .filter(|entry| {
+                entry.value().user() == username && Some(*entry.key()) != except_session_id
+            })
+            .map(|entry| *entry.key())
+            .collect();
+        for session_id in &targets {
+            self.remove_session(*session_id).await;
+        }
+        targets
+    }
+
     /// Gets all sessions from the local cache
     pub fn get_sessions_from_local_cache(&self) -> Vec<Session> {
         // DashMap supports iterators, and no locking is required.

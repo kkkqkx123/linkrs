@@ -20,9 +20,9 @@ fn test_grant_and_revoke_role() {
     storage.create_user(&user).unwrap();
 
     storage
-        .grant_role("role_user", space_id, RoleType::Admin)
+        .grant_role("role_user", space_id as i64, RoleType::Admin)
         .unwrap();
-    storage.revoke_role("role_user", space_id).unwrap();
+    storage.revoke_role("role_user", space_id as i64).unwrap();
 
     storage.drop_user("role_user").unwrap();
 }

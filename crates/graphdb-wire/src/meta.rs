@@ -28,6 +28,8 @@ pub struct LoginResponse {
     pub display_role: Option<String>,
     #[serde(default)]
     pub roles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub must_change_password: Option<bool>,
 }
 
 /// Current user response for role-aware clients.
@@ -65,6 +67,32 @@ pub struct UserListResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LogoutRequest {
     pub session_id: i64,
+}
+
+/// Create user request for the admin channel.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// Reset password request for the admin channel.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ResetPasswordRequest {
+    pub password: String,
+}
+
+/// Grant role request for the admin channel.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct GrantRoleRequest {
+    pub role: String,
+    pub space: String,
+}
+
+/// Revoke role request for the admin channel.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RevokeRoleRequest {
+    pub space: String,
 }
 
 // ── Session ───────────────────────────────────────────────────────────────

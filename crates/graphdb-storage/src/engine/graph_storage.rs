@@ -533,17 +533,46 @@ impl StorageAuthOps for GraphStorage {
         self.ctx.user_storage().list_users()
     }
 
+    fn get_user(&self, username: &str) -> Option<UserInfo> {
+        self.ctx.user_storage().get_user(username)
+    }
+
+    fn update_last_login(&self, username: &str) -> Result<bool, StorageError> {
+        self.ctx.user_storage().update_last_login(username)
+    }
+
+    fn list_user_roles(&self, username: &str) -> Vec<(i64, RoleType)> {
+        self.ctx
+            .user_storage()
+            .get_user_roles(username)
+            .into_iter()
+            .collect()
+    }
+
+    fn list_all_user_roles(&self) -> Vec<(String, Vec<(i64, RoleType)>)> {
+        self.ctx
+            .user_storage()
+            .list_all_roles()
+            .into_iter()
+            .map(|(user, roles)| {
+                let mut entries: Vec<(i64, RoleType)> = roles.into_iter().collect();
+                entries.sort_by_key(|(space_id, _)| *space_id);
+                (user, entries)
+            })
+            .collect()
+    }
+
     fn grant_role(
         &mut self,
         username: &str,
-        space_id: u64,
+        space_id: i64,
         role: RoleType,
     ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
         ops::grant_role(&self.ctx, username, space_id, role)
     }
 
-    fn revoke_role(&mut self, username: &str, space_id: u64) -> Result<bool, StorageError> {
+    fn revoke_role(&mut self, username: &str, space_id: i64) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
         ops::revoke_role(&self.ctx, username, space_id)
     }

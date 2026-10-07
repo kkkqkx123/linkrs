@@ -138,7 +138,49 @@ impl<
         }
 
         self.finish_auto_commit(&session, &mut result);
+        if result.is_ok() && Self::is_user_management_statement(stmt) {
+            self.reconcile_user_state(Some(session_id)).await;
+        }
         result
+    }
+
+    fn is_user_management_statement(stmt: &str) -> bool {
+        let upper = stmt.trim().to_uppercase();
+        upper.starts_with("CREATE USER")
+            || upper.starts_with("DROP USER")
+            || upper.starts_with("ALTER USER")
+            || upper.starts_with("GRANT ")
+            || upper.starts_with("REVOKE ")
+    }
+
+    /// Keep permission state and sessions consistent after query-channel
+    /// user writes. Storage is the source of truth.
+    async fn reconcile_user_state(&self, except_session_id: Option<i64>) {
+        let stored_users = self.storage.list_users();
+        let tracked: Vec<String> = self
+            .permission_manager
+            .list_all_users()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        for name in tracked {
+            if !stored_users.contains(&name) {
+                self.permission_manager.remove_user(&name);
+            }
+        }
+        for username in &stored_users {
+            self.sync_role_from_storage(username);
+            let locked = self
+                .storage
+                .get_user(username)
+                .map(|user| user.is_locked)
+                .unwrap_or(false);
+            if locked {
+                self.session_manager
+                    .remove_sessions_by_username(username, except_session_id)
+                    .await;
+            }
+        }
     }
 
     /// Commit the session-bound transaction when the session runs in

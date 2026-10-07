@@ -36,11 +36,18 @@ pub async fn login<
 ) -> Result<JsonResponse<LoginResponse>, HttpError> {
     // Verify the password through the shared authenticator before creating
     // a session; failures surface as 401 instead of minting a session.
+    // Locked accounts surface as 403 so clients can show a disabled hint.
     let graph_service = state.server.get_graph_service();
     let session = graph_service
         .authenticate(&request.username, &request.password)
         .await
-        .map_err(HttpError::unauthorized)?;
+        .map_err(|message| {
+            if message.to_lowercase().contains("locked") {
+                HttpError::forbidden(message)
+            } else {
+                HttpError::unauthorized(message)
+            }
+        })?;
 
     let session_id = session.id();
     info!(
@@ -57,6 +64,7 @@ pub async fn login<
     let display = permission_manager
         .highest_role(&request.username)
         .map(|role| role.to_string());
+    let must_change = graph_service.must_change_password(&request.username);
 
     Ok(JsonResponse(LoginResponse {
         session_id,
@@ -65,6 +73,7 @@ pub async fn login<
         role: display.clone(),
         display_role: display,
         roles,
+        must_change_password: must_change.then_some(true),
     }))
 }
 

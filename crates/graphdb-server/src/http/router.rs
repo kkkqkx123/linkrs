@@ -82,7 +82,22 @@ pub fn create_router<
     // Routes that require authentication
     let protected_routes = Router::new()
         .route("/auth/me", get(me))
-        .route("/users", get(super::handlers::users::list))
+        .route(
+            "/users",
+            get(super::handlers::users::list).post(super::handlers::users::create),
+        )
+        .route("/users/{name}", delete(super::handlers::users::drop_user))
+        .route(
+            "/users/{name}/password",
+            post(super::handlers::users::reset_password),
+        )
+        .route("/users/{name}/enable", post(super::handlers::users::enable))
+        .route(
+            "/users/{name}/disable",
+            post(super::handlers::users::disable),
+        )
+        .route("/users/{name}/grant", post(super::handlers::users::grant))
+        .route("/users/{name}/revoke", post(super::handlers::users::revoke))
         .route("/sessions", post(create_session))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/query", post(query::execute))

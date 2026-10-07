@@ -34,6 +34,13 @@ pub async fn create<
     State(state): State<AppState<S>>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<JsonResponse<SessionResponse>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    if graph_service.is_user_locked(&request.username) {
+        return Err(HttpError::forbidden(format!(
+            "account {} is locked",
+            request.username
+        )));
+    }
     let session_manager = state.server.get_session_manager();
     let session = session_manager
         .create_session(request.username, request.client_ip)

@@ -12,10 +12,10 @@ impl<S: StorageClient + 'static> StorageAuthOps for SyncWrapper<S> {
         fn grant_role(
             &mut self,
             username: &str,
-            space_id: u64,
+            space_id: i64,
             role: graphdb_core::RoleType,
         ) -> Result<bool, StorageError>;
-        fn revoke_role(&mut self, username: &str, space_id: u64) -> Result<bool, StorageError>;
+        fn revoke_role(&mut self, username: &str, space_id: i64) -> Result<bool, StorageError>;
     );
 
     fn user_exists(&self, username: &str) -> bool {
@@ -24,6 +24,22 @@ impl<S: StorageClient + 'static> StorageAuthOps for SyncWrapper<S> {
 
     fn list_users(&self) -> Vec<String> {
         self.inner.list_users()
+    }
+
+    fn get_user(&self, username: &str) -> Option<graphdb_core::types::UserInfo> {
+        self.inner.get_user(username)
+    }
+
+    fn update_last_login(&self, username: &str) -> Result<bool, StorageError> {
+        self.inner.update_last_login(username)
+    }
+
+    fn list_user_roles(&self, username: &str) -> Vec<(i64, graphdb_core::RoleType)> {
+        self.inner.list_user_roles(username)
+    }
+
+    fn list_all_user_roles(&self) -> Vec<(String, Vec<(i64, graphdb_core::RoleType)>)> {
+        self.inner.list_all_user_roles()
     }
 }
 

@@ -24,6 +24,9 @@ pub enum AuthError {
     #[error("Maximum attempts exceeded")]
     MaxAttemptsExceeded,
 
+    #[error("Account is locked: {0}")]
+    AccountLocked(String),
+
     #[error("Authenticator error: {0}")]
     AuthenticatorError(String),
 }
@@ -39,6 +42,7 @@ impl ToPublicError for AuthError {
             AuthError::EmptyCredentials => ErrorCode::InvalidInput,
             AuthError::InvalidCredentials(_) => ErrorCode::Unauthorized,
             AuthError::MaxAttemptsExceeded => ErrorCode::ResourceExhausted,
+            AuthError::AccountLocked(_) => ErrorCode::Forbidden,
             AuthError::AuthenticatorError(_) => ErrorCode::InternalError,
         }
     }
