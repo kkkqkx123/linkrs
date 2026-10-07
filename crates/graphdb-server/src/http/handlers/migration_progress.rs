@@ -11,7 +11,7 @@ use crate::http::state::AppState;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
-use graphdb_migration::{MigrationEvent, MigrationEventListener};
+use graphdb_migration::MigrationEvent;
 
 type Sender = tokio::sync::broadcast::Sender<MigrationEvent>;
 type Receiver = tokio::sync::broadcast::Receiver<MigrationEvent>;
@@ -49,26 +49,12 @@ pub fn subscribe(space: &str, label: &str, is_edge: bool) -> Receiver {
     get_or_create_sender(space, label, is_edge).subscribe()
 }
 
-pub struct BroadcastEventListener {
-    sender: Sender,
-}
-
-impl BroadcastEventListener {
-    pub fn new(space: &str, label: &str, is_edge: bool) -> Self {
-        Self {
-            sender: get_or_create_sender(space, label, is_edge),
-        }
-    }
-
-    pub fn from_sender(sender: Sender) -> Self {
-        Self { sender }
-    }
-}
-
-impl MigrationEventListener for BroadcastEventListener {
-    fn on_event(&self, event: MigrationEvent) {
-        let _ = self.sender.send(event);
-    }
+/// Adapt a broadcast sender into an `EventSubscriptions` callback so a
+/// running migration fans its lifecycle events out to SSE subscribers.
+pub fn event_bridge(sender: Sender) -> Arc<dyn Fn(&MigrationEvent) + Send + Sync> {
+    Arc::new(move |event: &MigrationEvent| {
+        let _ = sender.send(event.clone());
+    })
 }
 
 fn migration_event_to_sse(event: MigrationEvent) -> Event {

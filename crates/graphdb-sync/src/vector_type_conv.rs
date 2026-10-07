@@ -114,16 +114,14 @@ pub fn condition_to_ix(v: tx::ConditionType) -> ix::ConditionType {
         tx::ConditionType::IsEmpty => ix::ConditionType::IsEmpty,
         tx::ConditionType::IsNull => ix::ConditionType::IsNull,
         tx::ConditionType::HasId { ids } => ix::ConditionType::HasId { ids },
-        tx::ConditionType::Nested { filter } => {
-            ix::ConditionType::Nested { filter: Box::new(vector_filter_to_ix(*filter)) }
-        }
+        tx::ConditionType::Nested { filter } => ix::ConditionType::Nested {
+            filter: Box::new(vector_filter_to_ix(*filter)),
+        },
         tx::ConditionType::GeoRadius(r) => ix::ConditionType::GeoRadius(geo_radius_to_ix(r)),
         tx::ConditionType::GeoBoundingBox(b) => {
             ix::ConditionType::GeoBoundingBox(geo_bounding_box_to_ix(b))
         }
-        tx::ConditionType::ValuesCount(c) => {
-            ix::ConditionType::ValuesCount(values_count_to_ix(c))
-        }
+        tx::ConditionType::ValuesCount(c) => ix::ConditionType::ValuesCount(values_count_to_ix(c)),
         tx::ConditionType::Contains { value } => ix::ConditionType::Contains { value },
     }
 }
@@ -136,16 +134,14 @@ pub fn condition_to_tx(v: ix::ConditionType) -> tx::ConditionType {
         ix::ConditionType::IsEmpty => tx::ConditionType::IsEmpty,
         ix::ConditionType::IsNull => tx::ConditionType::IsNull,
         ix::ConditionType::HasId { ids } => tx::ConditionType::HasId { ids },
-        ix::ConditionType::Nested { filter } => {
-            tx::ConditionType::Nested { filter: Box::new(vector_filter_to_tx(*filter)) }
-        }
+        ix::ConditionType::Nested { filter } => tx::ConditionType::Nested {
+            filter: Box::new(vector_filter_to_tx(*filter)),
+        },
         ix::ConditionType::GeoRadius(r) => tx::ConditionType::GeoRadius(geo_radius_to_tx(r)),
         ix::ConditionType::GeoBoundingBox(b) => {
             tx::ConditionType::GeoBoundingBox(geo_bounding_box_to_tx(b))
         }
-        ix::ConditionType::ValuesCount(c) => {
-            tx::ConditionType::ValuesCount(values_count_to_tx(c))
-        }
+        ix::ConditionType::ValuesCount(c) => tx::ConditionType::ValuesCount(values_count_to_tx(c)),
         ix::ConditionType::Contains { value } => tx::ConditionType::Contains { value },
     }
 }
@@ -166,21 +162,31 @@ pub fn filter_condition_to_tx(v: ix::FilterCondition) -> tx::FilterCondition {
 
 pub fn min_should_to_ix(v: tx::MinShouldCondition) -> ix::MinShouldCondition {
     ix::MinShouldCondition {
-        conditions: v.conditions.into_iter().map(filter_condition_to_ix).collect(),
+        conditions: v
+            .conditions
+            .into_iter()
+            .map(filter_condition_to_ix)
+            .collect(),
         min_count: v.min_count,
     }
 }
 
 pub fn min_should_to_tx(v: ix::MinShouldCondition) -> tx::MinShouldCondition {
     tx::MinShouldCondition {
-        conditions: v.conditions.into_iter().map(filter_condition_to_tx).collect(),
+        conditions: v
+            .conditions
+            .into_iter()
+            .map(filter_condition_to_tx)
+            .collect(),
         min_count: v.min_count,
     }
 }
 
 pub fn vector_filter_to_ix(v: tx::VectorFilter) -> ix::VectorFilter {
     ix::VectorFilter {
-        must: v.must.map(|list| list.into_iter().map(filter_condition_to_ix).collect()),
+        must: v
+            .must
+            .map(|list| list.into_iter().map(filter_condition_to_ix).collect()),
         must_not: v
             .must_not
             .map(|list| list.into_iter().map(filter_condition_to_ix).collect()),
@@ -193,7 +199,9 @@ pub fn vector_filter_to_ix(v: tx::VectorFilter) -> ix::VectorFilter {
 
 pub fn vector_filter_to_tx(v: ix::VectorFilter) -> tx::VectorFilter {
     tx::VectorFilter {
-        must: v.must.map(|list| list.into_iter().map(filter_condition_to_tx).collect()),
+        must: v
+            .must
+            .map(|list| list.into_iter().map(filter_condition_to_tx).collect()),
         must_not: v
             .must_not
             .map(|list| list.into_iter().map(filter_condition_to_tx).collect()),

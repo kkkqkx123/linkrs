@@ -83,16 +83,25 @@ impl<
         let plan: graphdb_migration::MigrationPlan = serde_json::from_str(&req.plan_json)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let listener = crate::http::handlers::migration_progress::BroadcastEventListener::new(
+        let sender = crate::http::handlers::migration_progress::get_or_create_sender(
             &plan.target.space,
             &plan.target.label,
             plan.target.is_edge,
         );
-        let report = graphdb_migration::execute_migration_plan_with_progress(
+        let registry = graphdb_core::event_dispatch::EventSubscriptions::<
+            graphdb_migration::MigrationEvent,
+        >::new();
+        registry.add(crate::http::handlers::migration_progress::event_bridge(
+            sender,
+        ));
+        let registry = std::sync::Arc::new(registry);
+        let report = graphdb_migration::execute_migration_plan_with_options(
             &mut *storage_write,
             &plan,
-            &graphdb_migration::NoopProgress,
-            Some(&listener),
+            graphdb_migration::ExecuteOptions {
+                event_registry: Some(&registry),
+                ..Default::default()
+            },
         );
         let elapsed = start.elapsed().as_millis() as u64;
         match &report {

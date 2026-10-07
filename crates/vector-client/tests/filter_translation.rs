@@ -15,10 +15,10 @@
 #![cfg(all(feature = "qdrant-http", feature = "qdrant-grpc"))]
 
 use serde_json::{json, Value};
+use simvec::types::*;
 use vector_client::engine::common::filter::{classify_match_any, ClassifiedMatchAny};
 use vector_client::engine::grpc::filter::filter_to_proto;
 use vector_client::engine::http::filter::convert_filter;
-use simvec::types::*;
 
 // ---- canonical form ------------------------------------------------------
 

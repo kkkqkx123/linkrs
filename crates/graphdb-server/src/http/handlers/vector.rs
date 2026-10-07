@@ -184,8 +184,7 @@ pub async fn create_index<
             || request.compression.is_some()
             || request.always_ram.is_some()
         {
-            let mut config =
-                simvec::CollectionConfig::new(request.vector_size, request.distance);
+            let mut config = simvec::CollectionConfig::new(request.vector_size, request.distance);
             if request.hnsw_m.is_some() || request.hnsw_ef_construct.is_some() {
                 let mut hnsw = simvec::HnswConfig::default();
                 if let Some(m) = request.hnsw_m {
@@ -201,9 +200,8 @@ pub async fn create_index<
                 let quant_cfg = match q_lower.as_str() {
                     "none" | "disabled" | "off" => None,
                     "scalar" => {
-                        let mut cfg = simvec::QuantizationConfig::scalar(
-                            request.quantile.unwrap_or(0.99),
-                        );
+                        let mut cfg =
+                            simvec::QuantizationConfig::scalar(request.quantile.unwrap_or(0.99));
                         if let Some(ar) = request.always_ram {
                             cfg = cfg.with_always_ram(ar);
                         }

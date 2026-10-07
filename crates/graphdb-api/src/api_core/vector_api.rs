@@ -5,11 +5,11 @@
 use crate::api_core::error::{CoreError, CoreResult};
 use graphdb_sync::backend::VectorBackend;
 use graphdb_sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
-use std::sync::Arc;
 use simvec::{
     types::{validate_distance_metric, IndexMetadata, PointId},
     CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
 };
+use std::sync::Arc;
 
 /// Parameters for paginated vector point scanning.
 pub struct ScrollQuery<'a> {

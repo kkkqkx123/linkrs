@@ -7,6 +7,7 @@ use axum::{
     extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
+use graphdb_core::event_dispatch::EventSubscriptions;
 use graphdb_wire::migration::{
     MigrationExecuteRequest, MigrationExecuteResponse, MigrationHistoryResponse,
     MigrationPlanQuery, MigrationPlanResponse, MigrationRollbackRequest, MigrationStatusResponse,
@@ -18,7 +19,10 @@ use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
-use graphdb_migration::{generate_edge_plan_with_expand, generate_vertex_plan_with_expand};
+use graphdb_migration::{
+    generate_edge_plan_with_expand, generate_vertex_plan_with_expand, ExecuteOptions,
+    MigrationEvent,
+};
 
 // ==================== Migration ====================
 
@@ -153,16 +157,23 @@ pub async fn execute_migration<
         let start = std::time::Instant::now();
         stats.record_migration_start();
         let mut storage_write = storage.write();
-        let listener = crate::http::handlers::migration_progress::BroadcastEventListener::new(
+        let sender = crate::http::handlers::migration_progress::get_or_create_sender(
             &plan.target.space,
             &plan.target.label,
             plan.target.is_edge,
         );
-        let report = graphdb_migration::execute_migration_plan_with_progress(
+        let registry = EventSubscriptions::<MigrationEvent>::new();
+        registry.add(crate::http::handlers::migration_progress::event_bridge(
+            sender,
+        ));
+        let registry = std::sync::Arc::new(registry);
+        let report = graphdb_migration::execute_migration_plan_with_options(
             &mut *storage_write,
             &plan,
-            &graphdb_migration::NoopProgress,
-            Some(&listener),
+            ExecuteOptions {
+                event_registry: Some(&registry),
+                ..Default::default()
+            },
         )
         .map_err(|e| HttpError::InternalError(e.to_string()));
         let elapsed = start.elapsed().as_millis() as u64;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::plan::{MigrationTarget, VersionRange};
+use crate::plan::{MigrationStep, MigrationTarget, VersionRange};
 use graphdb_core::types::{EdgeTypeInfo, Index, SpaceInfo, TagInfo, VertexId};
 use graphdb_core::StorageError;
 use graphdb_core::{DataType, Edge, EdgeDeleteKey, EdgeDirection, Value, Vertex};
@@ -942,14 +942,13 @@ fn test_checkpoint_resume() {
         completed_steps: vec![0],
     };
     cp.save(&plan, tmp.path()).unwrap();
-    let report = execute_migration_plan_with_progress_and_file_lock_and_checkpoint(
+    let report = execute_migration_plan_with_options(
         &mut storage,
         &plan,
-        &crate::progress::NoopProgress,
-        None,
-        None,
-        None,
-        Some(tmp.path()),
+        ExecuteOptions {
+            checkpoint_dir: Some(tmp.path()),
+            ..Default::default()
+        },
     )
     .unwrap();
     assert!(report.success);
@@ -1001,14 +1000,13 @@ fn test_checkpoint_save_per_step() {
         None,
     );
     plan.plan_hash = "ckpt_save_test".to_string();
-    let report = execute_migration_plan_with_progress_and_file_lock_and_checkpoint(
+    let report = execute_migration_plan_with_options(
         &mut storage,
         &plan,
-        &crate::progress::NoopProgress,
-        None,
-        None,
-        None,
-        Some(tmp.path()),
+        ExecuteOptions {
+            checkpoint_dir: Some(tmp.path()),
+            ..Default::default()
+        },
     )
     .unwrap();
     assert!(report.success);

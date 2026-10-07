@@ -20,13 +20,14 @@ pub mod runtime;
 pub mod sqlite_outbox;
 pub mod types;
 pub mod vector_error;
-pub mod vector_type_conv;
 #[cfg(feature = "vector")]
 pub mod vector_index_manager;
 #[cfg(feature = "vector")]
 pub mod vector_rebuild;
 #[cfg(feature = "vector")]
 pub mod vector_sync;
+#[cfg(feature = "vector")]
+pub mod vector_type_conv;
 
 #[cfg(feature = "vector")]
 pub use backend::BackendDeliveryPolicy;

@@ -37,10 +37,10 @@ use crate::vector_sync::VectorSyncCoordinator;
 use dashmap::DashMap;
 use graphdb_core::types::TransactionId;
 use graphdb_metrics::StatsManager;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 #[cfg(feature = "vector")]
 pub use simvec::{CollectionConfig, SearchResult};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 type JoinHandleGuard = Mutex<Option<tokio::task::JoinHandle<()>>>;
 

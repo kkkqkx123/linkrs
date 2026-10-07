@@ -56,9 +56,7 @@ fn test_execute_migration_plan_empty() {
 
 #[test]
 fn test_migration_event_registry_receives_lifecycle() {
-    use graphdb::migration::{
-        execute_migration_plan_with_event_registry, MigrationEvent, NoopProgress,
-    };
+    use graphdb::migration::{execute_migration_plan_with_options, ExecuteOptions, MigrationEvent};
     use graphdb_core::event_dispatch::EventSubscriptions;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -84,14 +82,13 @@ fn test_migration_event_registry_receives_lifecycle() {
     registry.add(Arc::new(move |_| {
         probe.fetch_add(1, Ordering::SeqCst);
     }));
-    let report = execute_migration_plan_with_event_registry(
+    let report = execute_migration_plan_with_options(
         &mut storage,
         &plan,
-        &NoopProgress,
-        None,
-        Some(&registry),
-        None,
-        None,
+        ExecuteOptions {
+            event_registry: Some(&registry),
+            ..Default::default()
+        },
     );
     assert!(report.is_ok());
     assert!(report.unwrap().success);

@@ -561,6 +561,37 @@ pub fn checkpoint_now_millis() -> u64 {
         .as_millis() as u64
 }
 
+/// Human-readable list of the plan's irreversible steps (drops), for
+/// logging and rollback errors. Returns None when every step is reversible.
+pub fn irreversible_guidance(plan: &MigrationPlan) -> Option<String> {
+    let mut items = Vec::new();
+    for step in &plan.steps {
+        match step {
+            MigrationStep::DropColumn { name } => items.push(format!(
+                "column '{}' on {}/{} is permanently removed; restore by re-adding the column and reloading data from a backup",
+                name, plan.target.space, plan.target.label
+            )),
+            MigrationStep::DropLabel { label_name } => items.push(format!(
+                "label '{}' on {} is permanently removed; restore by recreating the label and reloading all its vertices from a backup",
+                label_name, plan.target.space
+            )),
+            MigrationStep::DropEdgeType { edge_type_name } => items.push(format!(
+                "edge type '{}' on {} is permanently removed; restore by recreating the edge type and reloading all its edges from a backup",
+                edge_type_name, plan.target.space
+            )),
+            _ => {}
+        }
+    }
+    if items.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "No automated rollback possible: {}",
+            items.join("; ")
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StepResult {
     Success,
@@ -584,10 +615,7 @@ impl MigrationCheckpoint {
         plan: &MigrationPlan,
         storage_path: &std::path::Path,
     ) -> Result<(), MigrationError> {
-        let checkpoint_file = storage_path.join(format!(
-            "checkpoint_{}_{}_{}.json",
-            plan.target.space, plan.target.label, plan.plan_hash
-        ));
+        let checkpoint_file = storage_path.join(checkpoint_file_name(plan));
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| MigrationError::Checkpoint(format!("serialize checkpoint: {e}")))?;
         std::fs::write(&checkpoint_file, content)
@@ -599,10 +627,7 @@ impl MigrationCheckpoint {
         plan: &MigrationPlan,
         storage_path: &std::path::Path,
     ) -> Result<Option<Self>, MigrationError> {
-        let checkpoint_file = storage_path.join(format!(
-            "checkpoint_{}_{}_{}.json",
-            plan.target.space, plan.target.label, plan.plan_hash
-        ));
+        let checkpoint_file = storage_path.join(checkpoint_file_name(plan));
         if !checkpoint_file.exists() {
             return Ok(None);
         }
@@ -617,14 +642,34 @@ impl MigrationCheckpoint {
         plan: &MigrationPlan,
         storage_path: &std::path::Path,
     ) -> Result<(), MigrationError> {
-        let checkpoint_file = storage_path.join(format!(
-            "checkpoint_{}_{}_{}.json",
-            plan.target.space, plan.target.label, plan.plan_hash
-        ));
+        let checkpoint_file = storage_path.join(checkpoint_file_name(plan));
         if checkpoint_file.exists() {
             std::fs::remove_file(&checkpoint_file)
                 .map_err(|e| MigrationError::Checkpoint(format!("remove checkpoint: {e}")))?;
         }
         Ok(())
     }
+}
+
+/// Checkpoint file name with space/label/hash escaped so the name stays a
+/// single path component. Only `[A-Za-z0-9_]` survive verbatim; every other
+/// byte becomes `%XX`, and `-` separates fields (never produced verbatim by
+/// the escaper, so field boundaries stay unambiguous).
+fn checkpoint_file_name(plan: &MigrationPlan) -> String {
+    fn push_escaped(out: &mut String, s: &str) {
+        for b in s.as_bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' => out.push(*b as char),
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+    }
+    let mut name = String::from("checkpoint_");
+    push_escaped(&mut name, &plan.target.space);
+    name.push('-');
+    push_escaped(&mut name, &plan.target.label);
+    name.push('-');
+    push_escaped(&mut name, &plan.plan_hash);
+    name.push_str(".json");
+    name
 }

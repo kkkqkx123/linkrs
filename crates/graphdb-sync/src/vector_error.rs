@@ -267,9 +267,7 @@ pub type VectorCoordinatorResult<T> = std::result::Result<T, VectorCoordinatorEr
 impl From<simvec::VectorSearchError> for VectorError {
     fn from(err: simvec::VectorSearchError) -> Self {
         match err {
-            simvec::VectorSearchError::CollectionNotFound(name) => {
-                VectorError::IndexNotFound(name)
-            }
+            simvec::VectorSearchError::CollectionNotFound(name) => VectorError::IndexNotFound(name),
             simvec::VectorSearchError::CollectionAlreadyExists(name) => {
                 VectorError::IndexAlreadyExists(name)
             }
@@ -297,9 +295,7 @@ impl From<simvec::VectorSearchError> for VectorError {
             simvec::VectorSearchError::Filter(msg) => VectorError::InvalidVector(msg),
             simvec::VectorSearchError::CorruptData(msg) => VectorError::IndexCorrupted(msg),
             simvec::VectorSearchError::Io(e) => VectorError::Internal(e.to_string()),
-            simvec::VectorSearchError::Serialization(e) => {
-                VectorError::Internal(e.to_string())
-            }
+            simvec::VectorSearchError::Serialization(e) => VectorError::Internal(e.to_string()),
             simvec::VectorSearchError::Json(e) => VectorError::Internal(e.to_string()),
             simvec::VectorSearchError::Internal(msg) => VectorError::Internal(msg),
         }

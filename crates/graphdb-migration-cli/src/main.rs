@@ -1,35 +1,33 @@
 use clap::{Parser, Subcommand};
+use graphdb_core::event_dispatch::EventSubscriptions;
 use graphdb_migration::{
     generate_edge_plan, generate_edge_plan_with_expand, generate_vertex_plan,
-    generate_vertex_plan_with_expand, MigrationEvent, MigrationEventListener, MigrationFileLock,
+    generate_vertex_plan_with_expand, ExecuteOptions, MigrationEvent, MigrationFileLock,
 };
 use graphdb_storage::edge::EdgeStore;
 use graphdb_storage::{GraphStorage, StorageReader};
 use std::path::PathBuf;
+use std::sync::Arc;
 
-struct CliEventListener;
-
-impl MigrationEventListener for CliEventListener {
-    fn on_event(&self, event: MigrationEvent) {
-        match event {
-            MigrationEvent::Started { plan } => {
-                println!("[migration] Starting plan: {}", plan.print_summary());
-            }
-            MigrationEvent::StepStarted { step_idx } => {
-                println!("[migration] Step {} started", step_idx);
-            }
-            MigrationEvent::StepCompleted { step_idx, rows } => {
-                println!("[migration] Step {} completed ({} rows)", step_idx, rows);
-            }
-            MigrationEvent::Completed { report } => {
-                println!("[migration] Completed: {}", report.print_summary());
-            }
-            MigrationEvent::Failed { error } => {
-                eprintln!("[migration] Failed: {}", error);
-            }
-            MigrationEvent::RolledBack { report } => {
-                println!("[migration] Rolled back: {}", report.print_summary());
-            }
+fn print_migration_event(event: &MigrationEvent) {
+    match event {
+        MigrationEvent::Started { plan } => {
+            println!("[migration] Starting plan: {}", plan.print_summary());
+        }
+        MigrationEvent::StepStarted { step_idx } => {
+            println!("[migration] Step {} started", step_idx);
+        }
+        MigrationEvent::StepCompleted { step_idx, rows } => {
+            println!("[migration] Step {} completed ({} rows)", step_idx, rows);
+        }
+        MigrationEvent::Completed { report } => {
+            println!("[migration] Completed: {}", report.print_summary());
+        }
+        MigrationEvent::Failed { error } => {
+            eprintln!("[migration] Failed: {}", error);
+        }
+        MigrationEvent::RolledBack { report } => {
+            println!("[migration] Rolled back: {}", report.print_summary());
         }
     }
 }
@@ -205,12 +203,15 @@ fn main() -> anyhow::Result<()> {
             println!("Executing plan: {}", plan.print_summary());
             let lock_path = cli.db_path.join("migration.lock");
             let _lock = MigrationFileLock::try_acquire(&lock_path)?;
-            let listener = CliEventListener;
-            let report = graphdb_migration::execute_migration_plan_with_progress(
+            let registry = Arc::new(EventSubscriptions::<MigrationEvent>::new());
+            registry.add(Arc::new(print_migration_event));
+            let report = graphdb_migration::execute_migration_plan_with_options(
                 &mut storage,
                 &plan,
-                &graphdb_migration::NoopProgress,
-                Some(&listener),
+                ExecuteOptions {
+                    event_registry: Some(&registry),
+                    ..Default::default()
+                },
             )?;
             if !report.success {
                 std::process::exit(1);

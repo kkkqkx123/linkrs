@@ -56,4 +56,41 @@ mod tests {
             .unwrap()
             .is_none());
     }
+
+    #[test]
+    fn test_checkpoint_name_escapes_path_separators() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut p = crate::plan::MigrationPlan::new(
+            crate::plan::MigrationTarget {
+                space: "../evil".into(),
+                label: "a/b".into(),
+                is_edge: false,
+            },
+            crate::plan::VersionRange { from: 1, to: 2 },
+            vec![],
+            0,
+            crate::plan::SafetyLevel::Safe,
+            None,
+        );
+        p.plan_hash = "h1".to_string();
+        let cp = MigrationCheckpoint {
+            completed_step_index: 0,
+            rows_migrated_before: 0,
+            rows_migrated_after: 3,
+            timestamp: now_millis(),
+            step_result: StepResult::Success,
+            completed_steps: vec![0],
+        };
+        cp.save(&p, tmp.path()).unwrap();
+        // The file stays inside the checkpoint directory: no escape via "/".
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].starts_with("checkpoint_"));
+        assert!(!entries[0].contains('/'));
+        let loaded = MigrationCheckpoint::load(&p, tmp.path()).unwrap().unwrap();
+        assert_eq!(loaded.rows_migrated_after, 3);
+    }
 }

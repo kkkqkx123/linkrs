@@ -18,6 +18,9 @@ pub enum MigrationError {
 
     #[error("checkpoint error: {0}")]
     Checkpoint(String),
+
+    #[error("preflight check failed: {0}")]
+    Preflight(String),
 }
 
 impl From<StorageError> for MigrationError {

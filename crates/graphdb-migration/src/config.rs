@@ -6,6 +6,9 @@ pub struct MigrationConfig {
     pub lock_ttl_secs: u64,
     pub checkpoint_dir: Option<PathBuf>,
     pub lock_path: Option<PathBuf>,
+    /// Minimum free disk space required on the checkpoint directory
+    /// filesystem before execution starts. 0 disables the preflight check.
+    pub min_free_bytes: u64,
 }
 
 impl Default for MigrationConfig {
@@ -15,6 +18,7 @@ impl Default for MigrationConfig {
             lock_ttl_secs: 300,
             checkpoint_dir: None,
             lock_path: None,
+            min_free_bytes: 0,
         }
     }
 }
@@ -41,6 +45,11 @@ impl MigrationConfig {
 
     pub fn with_lock_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.lock_path = Some(path.into());
+        self
+    }
+
+    pub fn with_min_free_bytes(mut self, min_free_bytes: u64) -> Self {
+        self.min_free_bytes = min_free_bytes;
         self
     }
 }

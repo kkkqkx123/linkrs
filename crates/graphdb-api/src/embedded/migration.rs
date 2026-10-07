@@ -1,7 +1,7 @@
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::database::GraphDatabase;
 use crate::storage::GraphStorage;
-use graphdb_migration::{MigrationConfig, MigrationPlan, MigrationReport};
+use graphdb_migration::{ExecuteOptions, MigrationConfig, MigrationPlan, MigrationReport};
 
 impl GraphDatabase<GraphStorage> {
     pub fn generate_vertex_migration_plan(
@@ -95,9 +95,15 @@ impl GraphDatabase<GraphStorage> {
         let mut storage = self.storage_mut();
         let start = std::time::Instant::now();
         self.stats_manager().record_migration_start();
-        let res =
-            graphdb_migration::execute_migration_plan_with_config(&mut *storage, plan, config)
-                .map_err(|e| CoreError::Internal(e.to_string()));
+        let res = graphdb_migration::execute_migration_plan_with_options(
+            &mut *storage,
+            plan,
+            ExecuteOptions {
+                config: Some(config),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| CoreError::Internal(e.to_string()));
         let elapsed = start.elapsed().as_millis() as u64;
         match &res {
             Ok(report) if report.success => {

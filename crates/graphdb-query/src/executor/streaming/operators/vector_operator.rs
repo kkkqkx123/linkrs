@@ -348,8 +348,7 @@ impl VectorOperator {
                                             cfg
                                         }
                                         crate::parser::ast::vector::QuantizationKind::Binary => {
-                                            let mut cfg =
-                                                simvec::QuantizationConfig::binary();
+                                            let mut cfg = simvec::QuantizationConfig::binary();
                                             if let Some(ar) = always_ram {
                                                 cfg = cfg.with_always_ram(*ar);
                                             }

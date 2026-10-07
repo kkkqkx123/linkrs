@@ -218,10 +218,9 @@ impl VectorBackend {
     /// Engine health status. The local engine is always healthy.
     pub async fn health_check(&self) -> VectorCoordinatorResult<HealthStatus> {
         match self {
-            VectorBackend::Local(_) => Ok(HealthStatus::healthy(
-                "simvec",
-                env!("CARGO_PKG_VERSION"),
-            )),
+            VectorBackend::Local(_) => {
+                Ok(HealthStatus::healthy("simvec", env!("CARGO_PKG_VERSION")))
+            }
             #[cfg(feature = "vector-qdrant")]
             VectorBackend::Qdrant(manager) => Ok(manager.engine().health_check().await?),
         }

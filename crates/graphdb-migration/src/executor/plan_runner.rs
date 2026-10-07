@@ -11,7 +11,6 @@ use graphdb_storage::{
 
 use super::data_apply::{apply_step_to_edge, apply_step_to_vertex};
 use crate::error::MigrationError;
-use crate::event::MigrationEventListener;
 use crate::plan::{MigrationPlan, MigrationReport, MigrationStep};
 use crate::progress::MigrationProgress;
 
@@ -129,7 +128,6 @@ pub(super) fn execute_vertex_plan_with_progress<S>(
     plan: &MigrationPlan,
     remaining: &[usize],
     progress: &dyn MigrationProgress,
-    _event_listener: Option<&dyn MigrationEventListener>,
 ) -> Result<MigrationReport, MigrationError>
 where
     S: StorageReader
@@ -153,7 +151,6 @@ pub(super) fn execute_edge_plan_with_progress<S>(
     plan: &MigrationPlan,
     remaining: &[usize],
     progress: &dyn MigrationProgress,
-    _event_listener: Option<&dyn MigrationEventListener>,
 ) -> Result<MigrationReport, MigrationError>
 where
     S: StorageReader

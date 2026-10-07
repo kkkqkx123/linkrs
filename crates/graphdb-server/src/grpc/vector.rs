@@ -682,9 +682,7 @@ fn vector_http_status(error: crate::http::error::HttpError) -> Status {
 /// Only Cosine, L2 and Dot exist on the wire; anything else is rejected so a
 /// caller can never silently create an index with a different metric.
 #[cfg(feature = "vector")]
-pub(crate) fn proto_metric_to_distance(
-    metric: i32,
-) -> Result<simvec::DistanceMetric, Status> {
+pub(crate) fn proto_metric_to_distance(metric: i32) -> Result<simvec::DistanceMetric, Status> {
     use simvec::DistanceMetric;
     match metric {
         0 => Ok(DistanceMetric::Cosine),
