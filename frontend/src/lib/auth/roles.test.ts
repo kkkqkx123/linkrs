@@ -37,17 +37,17 @@ describe('resolveUiRole', () => {
 		assert.equal(resolveUiRole({ roles: ['GUEST', 'ADMIN'] }), 'admin');
 	});
 
-	it('preserves legacy access for single-user backends', () => {
-		assert.equal(resolveUiRole({}, 'root'), 'admin');
-		assert.equal(resolveUiRole({}, 'alice'), 'admin');
+	it('falls back to least privilege without role names', () => {
+		assert.equal(resolveUiRole({}, 'root'), 'viewer');
+		assert.equal(resolveUiRole({}, 'alice'), 'viewer');
 		assert.equal(resolveUiRole({}), null);
 	});
 });
 
 describe('can', () => {
-	it('grants full access without a role', () => {
-		assert.equal(can('manageUsers', null), true);
-		assert.equal(can('write', null), true);
+	it('denies sensitive capabilities without a role', () => {
+		assert.equal(can('manageUsers', null), false);
+		assert.equal(can('write', null), false);
 	});
 
 	it('restricts viewer and operator as designed', () => {
@@ -55,6 +55,9 @@ describe('can', () => {
 		assert.equal(can('manageUsers', 'operator'), false);
 		assert.equal(can('manageUsers', 'admin'), true);
 		assert.equal(can('dropSpace', 'operator'), false);
-		assert.equal(can('alterSchema', 'operator'), true);
+		assert.equal(can('alterSchema', 'operator'), false);
+		assert.equal(can('alterSchema', 'admin'), true);
+		assert.equal(can('manageConfig', 'operator'), false);
+		assert.equal(can('manageConfig', 'admin'), true);
 	});
 });

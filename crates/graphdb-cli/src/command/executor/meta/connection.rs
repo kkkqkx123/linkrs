@@ -38,3 +38,46 @@ pub fn execute_conninfo(
     executor.write_output(&info)?;
     Ok(true)
 }
+
+pub fn execute_whoami(
+    executor: &mut CommandExecutor,
+    session_mgr: &SessionManager,
+) -> Result<bool> {
+    match session_mgr.session() {
+        Some(session) => {
+            let role = session.display_role.as_deref().unwrap_or("(unknown)");
+            executor.write_output(&format!(
+                "{} (session {}, role {})",
+                session.username, session.session_id, role
+            ))?;
+        }
+        None => {
+            executor.write_output("Not connected")?;
+        }
+    }
+    Ok(true)
+}
+
+pub async fn execute_login(
+    executor: &mut CommandExecutor,
+    username: &str,
+    password: Option<String>,
+    session_mgr: &mut SessionManager,
+) -> Result<bool> {
+    if !executor.conditional_stack().is_active() {
+        return Ok(true);
+    }
+    let password = match password {
+        Some(p) => p,
+        None => rpassword::prompt_password("Password: ").map_err(|e| {
+            crate::utils::error::CliError::auth(format!("Failed to read password: {}", e))
+        })?,
+    };
+    session_mgr.connect(username, &password).await?;
+    let info = session_mgr
+        .session()
+        .map(|s| s.conninfo())
+        .unwrap_or_else(|| format!("Logged in as {}", username));
+    executor.write_output(&info)?;
+    Ok(true)
+}

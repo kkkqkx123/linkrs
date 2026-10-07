@@ -7,6 +7,8 @@ pub struct SessionInfo {
     pub username: String,
     pub host: String,
     pub port: u16,
+    pub roles: Vec<String>,
+    pub display_role: Option<String>,
 }
 
 /// Configuration for client connections

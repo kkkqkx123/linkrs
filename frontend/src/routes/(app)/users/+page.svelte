@@ -15,6 +15,9 @@
 	let newPassword = $state('');
 	let resetTarget = $state<string | null>(null);
 	let resetPassword = $state('');
+	let roleTarget = $state<string | null>(null);
+	let roleSpace = $state('');
+	let roleName = $state('USER');
 
 	const filtered = $derived(
 		users.filter((user) =>
@@ -89,6 +92,57 @@
 			await usersService.resetPassword(user.username, resetPassword);
 			resetTarget = null;
 			resetPassword = '';
+			await loadUsers();
+		} catch (err) {
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function submitGrant(user: ManagedUser) {
+		if (!roleSpace.trim() || !roleName.trim()) return;
+		loading = true;
+		error = null;
+		try {
+			await usersService.grant(user.username, roleName.trim(), roleSpace.trim());
+			roleTarget = null;
+			await loadUsers();
+		} catch (err) {
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function submitRevoke(user: ManagedUser) {
+		if (!roleSpace.trim() || !roleName.trim()) return;
+		loading = true;
+		error = null;
+		try {
+			await usersService.revoke(
+				user.username,
+				roleName.trim(),
+				roleSpace.trim(),
+			);
+			roleTarget = null;
+			await loadUsers();
+		} catch (err) {
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function deleteUser(user: ManagedUser) {
+		if (!confirm(t('users.confirmDeleteUser', { name: user.username }))) return;
+		loading = true;
+		error = null;
+		try {
+			await usersService.drop(user.username);
 			await loadUsers();
 		} catch (err) {
 			error =
@@ -216,7 +270,56 @@
 												{t('users.enable')}
 											</button>
 										{/if}
+										<button
+											class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+											onclick={() =>
+												(roleTarget =
+													roleTarget === user.username ? null : user.username)}
+										>
+											{t('users.grant')}
+										</button>
+										<button
+											class="px-2 py-1 text-xs border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 rounded hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer"
+											onclick={() => deleteUser(user)}
+											disabled={loading}
+										>
+											{t('users.deleteUser')}
+										</button>
 									</div>
+									{#if roleTarget === user.username}
+										<div class="mt-2 flex flex-wrap gap-2">
+											<input
+												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333]"
+												placeholder={t('users.space')}
+												bind:value={roleSpace}
+												disabled={loading}
+											/>
+											<input
+												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333]"
+												placeholder={t('users.role')}
+												bind:value={roleName}
+												disabled={loading}
+											/>
+											<button
+												class="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded cursor-pointer"
+												onclick={() => submitGrant(user)}
+												disabled={loading ||
+													!roleSpace.trim() ||
+													!roleName.trim()}
+											>
+												{t('users.grant')}
+											</button>
+											<button
+												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+												onclick={() => submitRevoke(user)}
+												disabled={loading ||
+													!roleSpace.trim() ||
+													!roleName.trim()}
+											>
+												{t('users.revoke')}
+											</button>
+										</div>
+									{/if}
 									{#if resetTarget === user.username}
 										<div class="mt-2 flex gap-2">
 											<input

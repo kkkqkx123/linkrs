@@ -21,6 +21,11 @@ pub enum MetaCommand {
     },
     Disconnect,
     ConnInfo,
+    Login {
+        username: String,
+        password: Option<String>,
+    },
+    WhoAmI,
     ShowSpaces,
     ShowTags {
         pattern: Option<String>,

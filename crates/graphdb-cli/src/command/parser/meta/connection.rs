@@ -9,3 +9,14 @@ pub fn parse(arg: &str) -> Result<MetaCommand, String> {
         })
     }
 }
+
+pub fn parse_login(arg: &str) -> Result<MetaCommand, String> {
+    let mut parts = arg.split_whitespace();
+    match parts.next() {
+        Some(username) if !username.is_empty() => Ok(MetaCommand::Login {
+            username: username.to_string(),
+            password: parts.next().map(|s| s.to_string()),
+        }),
+        _ => Err("Usage: \\login <username> [password]".to_string()),
+    }
+}

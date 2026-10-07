@@ -10,6 +10,8 @@ pub struct Session {
     pub host: String,
     pub port: u16,
     pub connected: bool,
+    pub roles: Vec<String>,
+    pub display_role: Option<String>,
     pub variable_store: VariableStore,
 }
 
@@ -22,8 +24,16 @@ impl Session {
             host,
             port,
             connected: true,
+            roles: Vec::new(),
+            display_role: None,
             variable_store: VariableStore::new(),
         }
+    }
+
+    pub fn with_roles(mut self, roles: Vec<String>, display_role: Option<String>) -> Self {
+        self.roles = roles;
+        self.display_role = display_role;
+        self
     }
 
     pub fn prompt(&self) -> String {
@@ -76,6 +86,13 @@ impl Session {
         let mut info = Vec::new();
         info.push(format!("Host: {}:{}", self.host, self.port));
         info.push(format!("Username: {}", self.username));
+        info.push(format!(
+            "Role: {}",
+            self.display_role.as_deref().unwrap_or("(unknown)")
+        ));
+        if !self.roles.is_empty() {
+            info.push(format!("Roles: {}", self.roles.join(",")));
+        }
         info.push(format!(
             "Space: {}",
             self.current_space.as_deref().unwrap_or("(none)")
@@ -132,7 +149,8 @@ impl SessionManager {
             session_info.username,
             session_info.host,
             session_info.port,
-        );
+        )
+        .with_roles(session_info.roles, session_info.display_role);
 
         self.session = Some(session);
         Ok(())
@@ -158,6 +176,8 @@ impl SessionManager {
         }
 
         self.client.disconnect().await?;
+        self.client.clear_credentials();
+        self.config.password.clear();
         self.session = None;
         Ok(())
     }

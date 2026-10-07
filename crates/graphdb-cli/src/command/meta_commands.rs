@@ -20,7 +20,15 @@ fn show_general_help() -> String {
     output.push_str(&format!("\n{}\n", "Connection".yellow().bold()));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\connect <space>", "Connect to a graph space"
+        "\\login <user> [pass]", "Log in to the server (prompts when omitted)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\whoami", "Display current username, session and role"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\connect <space>", "Switch to a graph space"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",

@@ -108,6 +108,20 @@ function untypedPost(
 	);
 }
 
+function untypedDelete(path: string, params?: Record<string, string>) {
+	const untyped = client as unknown as {
+		DELETE: (
+			path: string,
+			options?: UntypedOptions,
+		) => Promise<{ data?: unknown; error?: unknown; response?: Response }>;
+	};
+	return call<unknown>(
+		params
+			? untyped.DELETE(path, { params: { path: params } })
+			: untyped.DELETE(path),
+	);
+}
+
 export const usersService = {
 	list: async (): Promise<UserListResult> => {
 		try {
@@ -172,6 +186,33 @@ export const usersService = {
 			await runAdminStatement(
 				`GRANT ${normalizedRole} ON ${quoteIdent(space)} TO ${quoteIdent(username)}`,
 			);
+		}
+	},
+
+	revoke: async (
+		username: string,
+		role: string,
+		space: string,
+	): Promise<void> => {
+		const normalizedRole = role.toUpperCase();
+		try {
+			await untypedPost(
+				'/v1/users/{name}/revoke',
+				{ space },
+				{ name: username },
+			);
+		} catch {
+			await runAdminStatement(
+				`REVOKE ${normalizedRole} ON ${quoteIdent(space)} FROM ${quoteIdent(username)}`,
+			);
+		}
+	},
+
+	drop: async (username: string): Promise<void> => {
+		try {
+			await untypedDelete('/v1/users/{name}', { name: username });
+		} catch {
+			await runAdminStatement(`DROP USER ${quoteIdent(username)}`);
 		}
 	},
 };

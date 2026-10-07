@@ -234,6 +234,10 @@ impl CommandExecutor {
                 meta::connection::execute_disconnect(self, session_mgr).await
             }
             MetaCommand::ConnInfo => meta::connection::execute_conninfo(self, session_mgr),
+            MetaCommand::WhoAmI => meta::connection::execute_whoami(self, session_mgr),
+            MetaCommand::Login { username, password } => {
+                meta::connection::execute_login(self, &username, password, session_mgr).await
+            }
             MetaCommand::ShowSpaces => meta::schema::execute_show_spaces(self, session_mgr).await,
             MetaCommand::ShowTags { .. } => {
                 meta::schema::execute_show_tags(self, session_mgr).await

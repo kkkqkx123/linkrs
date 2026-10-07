@@ -27,4 +27,6 @@ export const usersHandlers: MockRegistry = {
 	'POST /v1/users/{name}/enable': { success: true },
 	'POST /v1/users/{name}/disable': { success: true },
 	'POST /v1/users/{name}/grant': { success: true },
+	'POST /v1/users/{name}/revoke': { success: true },
+	'DELETE /v1/users/{name}': { success: true },
 };

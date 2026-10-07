@@ -482,5 +482,11 @@
 	"users.disabled": "已禁用",
 	"users.confirmDisable": "确认禁用“{name}”？重新启用前该用户无法登录。",
 	"users.queryFallback": "用户接口不可用，当前为查询通道受限展示。",
-	"users.loadFailed": "加载用户失败"
+	"users.loadFailed": "加载用户失败",
+	"users.space": "空间",
+	"users.grant": "授权",
+	"users.revoke": "回收角色",
+	"users.deleteUser": "删除用户",
+	"users.confirmDeleteUser": "确认删除用户“{name}”？该操作不可撤销。",
+	"login.mustChangePassword": "默认密码必须修改，请在用户管理中更新。"
 }

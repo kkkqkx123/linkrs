@@ -38,6 +38,8 @@ fn parse_meta_command(input: &str) -> Result<MetaCommand, String> {
         "connect" | "c" => crate::command::parser::meta::connection::parse(arg),
         "disconnect" => Ok(MetaCommand::Disconnect),
         "conninfo" => Ok(MetaCommand::ConnInfo),
+        "login" => crate::command::parser::meta::connection::parse_login(arg),
+        "whoami" => Ok(MetaCommand::WhoAmI),
         "show_spaces" | "l" => Ok(MetaCommand::ShowSpaces),
         "show_tags" | "dt" => crate::command::parser::meta::schema::parse_show_tags(arg),
         "show_edges" | "de" => crate::command::parser::meta::schema::parse_show_edges(arg),

@@ -482,5 +482,11 @@
 	"users.disabled": "Disabled",
 	"users.confirmDisable": "Disable \"{name}\"? The user cannot log in until re-enabled.",
 	"users.queryFallback": "User API unavailable, showing query-channel results with limited fields.",
-	"users.loadFailed": "Failed to load users"
+	"users.loadFailed": "Failed to load users",
+	"users.space": "Space",
+	"users.grant": "Grant role",
+	"users.revoke": "Revoke role",
+	"users.deleteUser": "Delete user",
+	"users.confirmDeleteUser": "Delete user \"{name}\"? This cannot be undone.",
+	"login.mustChangePassword": "Default password must be changed. Update it in User Management."
 }

@@ -78,7 +78,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Err(e) => {
             eprintln!("{}: Failed to connect: {}", "ERROR".red().bold(), e);
-            eprintln!("Starting in offline mode. Use \\connect to connect to a server.");
+            eprintln!("Starting in offline mode. Use \\login <username> to connect to a server.");
         }
     }
 

@@ -5,6 +5,7 @@
 	import { goto } from '$app/navigation';
 	import { connectionStore } from '$stores/connection';
 	import { connectionService } from '$services/connection';
+	import { ApiError } from '$lib/api/client';
 
 	let username = $state('');
 	let password = $state('');
@@ -21,7 +22,7 @@
 		connectionStore.loadSavedConnection();
 		const { connectionInfo, rememberMe: remembered } = get(connectionStore);
 		username = connectionInfo.username;
-		password = connectionInfo.password ?? '';
+		password = '';
 		rememberMe = remembered;
 		void loadServerInfo();
 	});
@@ -49,7 +50,11 @@
 			await connectionStore.login(username, password, rememberMe);
 			goto('/');
 		} catch (err) {
-			errorMsg = err instanceof Error ? err.message : t('login.loginFailed');
+			if (err instanceof ApiError && err.status === 403) {
+				errorMsg = err.message || t('login.loginFailed');
+			} else {
+				errorMsg = err instanceof Error ? err.message : t('login.loginFailed');
+			}
 		} finally {
 			isLoading = false;
 		}

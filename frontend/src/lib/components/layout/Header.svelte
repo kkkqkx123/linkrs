@@ -12,6 +12,7 @@
 		isVerified: false,
 		connectionInfo: { username: '' },
 		role: null as UiRole | null,
+		mustChangePassword: false,
 		isLoading: false,
 	});
 	connectionStore.subscribe((v) => (store = v));
@@ -41,6 +42,13 @@
 		<ThemeToggle />
 		<HealthMonitor />
 		{#if store.isVerified}
+			{#if store.mustChangePassword}
+				<span
+					class="px-2 py-0.5 text-xs rounded-full bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800"
+				>
+					{t('login.mustChangePassword')}
+				</span>
+			{/if}
 			<span class="text-sm text-gray-600 dark:text-gray-400"
 				>👤 {store.connectionInfo.username}</span
 			>

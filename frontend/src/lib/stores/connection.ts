@@ -12,7 +12,6 @@ import { t } from '$i18n';
 
 export interface ConnectionInfo {
 	username: string;
-	password?: string;
 }
 
 interface ConnectionState {
@@ -21,9 +20,19 @@ interface ConnectionState {
 	connectionInfo: ConnectionInfo;
 	sessionId: number | null;
 	role: UiRole | null;
+	mustChangePassword: boolean;
 	rememberMe: boolean;
 	isLoading: boolean;
 	error: string | null;
+}
+
+function mustChangeFromPayload(value: unknown): boolean {
+	if (!value || typeof value !== 'object') return false;
+	const record = value as Record<string, unknown>;
+	return (
+		record.must_change_password === true ||
+		record.mustChangePassword === true
+	);
 }
 
 async function resolveRoleAfterLogin(
@@ -31,10 +40,10 @@ async function resolveRoleAfterLogin(
 	username: string,
 ): Promise<UiRole | null> {
 	const fromLogin = resolveUiRole(result, username);
-	if (fromLogin !== null) return fromLogin;
 	try {
 		const me = await connectionService.me();
-		return resolveUiRole(me, username);
+		const fromMe = resolveUiRole(me, username);
+		return fromMe ?? fromLogin;
 	} catch {
 		return fromLogin;
 	}
@@ -48,15 +57,19 @@ function createConnectionStore() {
 		isVerified: boolean;
 		sessionId: number | null;
 		role: UiRole | null;
+		mustChangePassword: boolean;
 	}>('connection-storage');
 	const { subscribe, set, update } = writable<ConnectionState>({
 		isConnected: saved?.isConnected ?? false,
 		isVerified: saved?.isVerified ?? false,
-		connectionInfo: saved?.connectionInfo ?? {
-			username: DEFAULT_VALUES.USERNAME,
-		},
+		connectionInfo: saved?.connectionInfo
+			? { username: saved.connectionInfo.username || DEFAULT_VALUES.USERNAME }
+			: {
+					username: DEFAULT_VALUES.USERNAME,
+				},
 		sessionId: saved?.sessionId ?? null,
 		role: saved?.role ?? null,
+		mustChangePassword: saved?.mustChangePassword ?? false,
 		rememberMe: saved?.rememberMe ?? false,
 		isLoading: false,
 		error: null,
@@ -64,12 +77,13 @@ function createConnectionStore() {
 
 	const persist = (state: ConnectionState) => {
 		storage.set('connection-storage', {
-			connectionInfo: state.connectionInfo,
+			connectionInfo: { username: state.connectionInfo.username },
 			rememberMe: state.rememberMe,
 			isConnected: state.isConnected,
 			isVerified: state.isVerified,
 			sessionId: state.sessionId,
 			role: state.role,
+			mustChangePassword: state.mustChangePassword,
 		});
 	};
 
@@ -84,17 +98,20 @@ function createConnectionStore() {
 			}));
 			try {
 				const result = await connectionService.login({ username, password });
+				if (result.session_id)
+					localStorage.setItem(
+						STORAGE_KEYS.SESSION_ID,
+						String(result.session_id),
+					);
 				const role = await resolveRoleAfterLogin(result, username);
-				const connectionInfo: ConnectionInfo = {
-					username,
-					password: rememberMe ? password : undefined,
-				};
+				const connectionInfo: ConnectionInfo = { username };
 				const newState = {
 					isConnected: true,
 					isVerified: true,
 					connectionInfo,
 					sessionId: result.session_id,
 					role,
+					mustChangePassword: mustChangeFromPayload(result),
 					rememberMe,
 					isLoading: false,
 					error: null,
@@ -108,19 +125,16 @@ function createConnectionStore() {
 					storage.remove(STORAGE_KEYS.CONNECTION);
 					storage.set(STORAGE_KEYS.REMEMBER_ME, false);
 				}
-				if (result.session_id)
-					localStorage.setItem(
-						STORAGE_KEYS.SESSION_ID,
-						String(result.session_id),
-					);
 			} catch (err: unknown) {
 				const errorMessage =
 					err instanceof Error ? err.message : t('errors.loginFailed');
+				localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
 				set({
 					isConnected: false,
 					isVerified: false,
 					sessionId: null,
 					role: null,
+					mustChangePassword: false,
 					isLoading: false,
 					error: errorMessage,
 					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
@@ -153,6 +167,7 @@ function createConnectionStore() {
 					connectionInfo: { username: '' },
 					sessionId: null,
 					role: null,
+					mustChangePassword: false,
 					rememberMe: false,
 					isLoading: false,
 					error: null,
@@ -171,6 +186,7 @@ function createConnectionStore() {
 					isVerified: false,
 					sessionId: null,
 					role: null,
+					mustChangePassword: false,
 					isLoading: false,
 					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
 					rememberMe: false,
@@ -188,6 +204,7 @@ function createConnectionStore() {
 				connectionInfo: { username: '' },
 				sessionId: null,
 				role: null,
+				mustChangePassword: false,
 				rememberMe: false,
 				isLoading: false,
 				error: null,
@@ -198,24 +215,13 @@ function createConnectionStore() {
 			});
 			if (!currentState.isConnected || !currentState.sessionId) return false;
 			try {
-				const result = await connectionService.health();
-				if (result.status !== 'healthy') {
-					const emptyState = {
-						isConnected: false,
-						isVerified: false,
-						sessionId: null,
-						role: null,
-						connectionInfo: { username: DEFAULT_VALUES.USERNAME },
-						rememberMe: false,
-						isLoading: false,
-						error: t('errors.connectionLost'),
-					};
-					set(emptyState);
-					persist(emptyState);
-					localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
-					return false;
-				}
-				update((s) => ({ ...s, isVerified: true }));
+				const me = await connectionService.me();
+				const role = resolveUiRole(me, me.username);
+				update((s) => {
+					const next = { ...s, isVerified: true, role };
+					persist(next);
+					return next;
+				});
 				return true;
 			} catch {
 				const emptyState = {
@@ -223,10 +229,11 @@ function createConnectionStore() {
 					isVerified: false,
 					sessionId: null,
 					role: null,
+					mustChangePassword: false,
 					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
 					rememberMe: false,
 					isLoading: false,
-					error: t('notification.healthCheckFailed'),
+					error: t('errors.connectionLost'),
 				};
 				set(emptyState);
 				persist(emptyState);
@@ -240,10 +247,10 @@ function createConnectionStore() {
 				STORAGE_KEYS.CONNECTION,
 			);
 			const rememberMe = storage.get<boolean>(STORAGE_KEYS.REMEMBER_ME, false);
-			if (savedConnection && rememberMe) {
+			if (savedConnection && rememberMe && savedConnection.username) {
 				update((s) => ({
 					...s,
-					connectionInfo: savedConnection,
+					connectionInfo: { username: savedConnection.username },
 					rememberMe: true,
 				}));
 			}

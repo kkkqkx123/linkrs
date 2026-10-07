@@ -77,17 +77,37 @@ impl HttpClient {
         self.base_url.clone()
     }
 
+    /// Active session identifier for authenticated requests.
+    pub fn session_id(&self) -> Option<i64> {
+        self.session_info.as_ref().map(|s| s.session_id)
+    }
+
+    /// Attach the session header required by protected routes.
+    fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.session_id() {
+            Some(id) => builder.header("X-Session-ID", id),
+            None => builder,
+        }
+    }
+
+    /// Drop the stored password so it does not linger after disconnect.
+    pub fn clear_credentials(&mut self) {
+        self.config.password.clear();
+    }
+
     /// Connect to the database
     pub async fn connect(&mut self) -> Result<SessionInfo> {
-        let (session_id, username) = self
+        let login = self
             .login(&self.config.username, &self.config.password)
             .await?;
 
         let session_info = SessionInfo {
-            session_id,
-            username: username.clone(),
+            session_id: login.session_id,
+            username: login.username.clone(),
             host: self.config.host.clone(),
             port: self.config.port,
+            roles: login.roles,
+            display_role: login.display_role,
         };
 
         self.session_info = Some(session_info.clone());
@@ -136,7 +156,7 @@ impl HttpClient {
             minimum_lsn: None,
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -171,7 +191,7 @@ impl HttpClient {
             session_variables: std::collections::HashMap::new(),
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -198,7 +218,7 @@ impl HttpClient {
     /// List all available spaces
     pub async fn list_spaces(&self) -> Result<Vec<SpaceInfo>> {
         let url = format!("{}/schema/spaces", self.base_url);
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -221,7 +241,7 @@ impl HttpClient {
     /// Switch to a specific space
     pub async fn switch_space(&self, space: &str) -> Result<()> {
         let url = format!("{}/schema/spaces/{}", self.base_url, space);
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -238,7 +258,7 @@ impl HttpClient {
     /// List all tags in current space
     pub async fn list_tags(&self, space: &str) -> Result<Vec<TagInfo>> {
         let url = format!("{}/schema/spaces/{}/tags", self.base_url, space);
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -261,7 +281,7 @@ impl HttpClient {
     /// List all edge types in current space
     pub async fn list_edge_types(&self, space: &str) -> Result<Vec<EdgeTypeInfo>> {
         let url = format!("{}/schema/spaces/{}/edge-types", self.base_url, space);
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -307,7 +327,7 @@ impl HttpClient {
             comment: comment.map(|s| s.to_string()),
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -325,7 +345,7 @@ impl HttpClient {
     pub async fn drop_space(&self, name: &str) -> Result<()> {
         let url = format!("{}/schema/spaces/{}", self.base_url, name);
 
-        let response = self.inner.delete(&url).send().await?;
+        let response = self.authed(self.inner.delete(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -353,7 +373,7 @@ impl HttpClient {
             properties,
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -381,7 +401,7 @@ impl HttpClient {
             properties,
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -413,7 +433,7 @@ impl HttpClient {
             isolation_level: None,
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -439,7 +459,7 @@ impl HttpClient {
 
         let request = TransactionActionRequest { session_id };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -465,7 +485,7 @@ impl HttpClient {
 
         let request = TransactionActionRequest { session_id };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -496,7 +516,7 @@ impl HttpClient {
             batch_size,
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -517,7 +537,7 @@ impl HttpClient {
 
         let request = AddBatchItemsRequest { items };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -536,7 +556,7 @@ impl HttpClient {
     pub async fn execute_batch(&self, batch_id: &str) -> Result<ExecuteBatchResponse> {
         let url = format!("{}/batch/{}/execute", self.base_url, batch_id);
 
-        let response = self.inner.post(&url).send().await?;
+        let response = self.authed(self.inner.post(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -554,7 +574,7 @@ impl HttpClient {
     pub async fn get_batch_status(&self, batch_id: &str) -> Result<BatchStatusResponse> {
         let url = format!("{}/batch/{}", self.base_url, batch_id);
 
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -572,7 +592,7 @@ impl HttpClient {
     pub async fn cancel_batch(&self, batch_id: &str) -> Result<()> {
         let url = format!("{}/batch/{}/cancel", self.base_url, batch_id);
 
-        let response = self.inner.post(&url).send().await?;
+        let response = self.authed(self.inner.post(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -590,7 +610,7 @@ impl HttpClient {
     pub async fn delete_batch(&self, batch_id: &str) -> Result<()> {
         let url = format!("{}/batch/{}", self.base_url, batch_id);
 
-        let response = self.inner.delete(&url).send().await?;
+        let response = self.authed(self.inner.delete(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -610,7 +630,7 @@ impl HttpClient {
     pub async fn get_session_statistics(&self, session_id: i64) -> Result<SessionStatistics> {
         let url = format!("{}/statistics/sessions/{}", self.base_url, session_id);
 
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -628,7 +648,7 @@ impl HttpClient {
     pub async fn get_query_statistics(&self) -> Result<QueryStatistics> {
         let url = format!("{}/statistics/queries", self.base_url);
 
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -646,7 +666,7 @@ impl HttpClient {
     pub async fn get_database_statistics(&self) -> Result<DatabaseStatistics> {
         let url = format!("{}/statistics/database", self.base_url);
 
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -666,7 +686,7 @@ impl HttpClient {
     pub async fn get_config(&self) -> Result<serde_json::Value> {
         let url = format!("{}/config", self.base_url);
 
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -684,7 +704,7 @@ impl HttpClient {
     pub async fn get_config_key(&self, section: &str, key: &str) -> Result<serde_json::Value> {
         let url = format!("{}/config/{}/{}", self.base_url, section, key);
 
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -708,8 +728,7 @@ impl HttpClient {
         let url = format!("{}/config/{}/{}", self.base_url, section, key);
 
         let response = self
-            .inner
-            .put(&url)
+            .authed(self.inner.put(&url))
             .json(&serde_json::json!({ "value": value }))
             .send()
             .await?;
@@ -730,7 +749,7 @@ impl HttpClient {
     pub async fn reset_config(&self, section: &str, key: &str) -> Result<serde_json::Value> {
         let url = format!("{}/config/{}/{}", self.base_url, section, key);
 
-        let response = self.inner.delete(&url).send().await?;
+        let response = self.authed(self.inner.delete(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -748,7 +767,7 @@ impl HttpClient {
     pub async fn get_system_statistics(&self) -> Result<serde_json::Value> {
         let url = format!("{}/statistics/system", self.base_url);
 
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -766,7 +785,7 @@ impl HttpClient {
     pub async fn get_overview(&self) -> Result<serde_json::Value> {
         let url = format!("{}/statistics/overview", self.base_url);
 
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -797,8 +816,7 @@ impl HttpClient {
         };
 
         let response = self
-            .inner
-            .post(&url)
+            .authed(self.inner.post(&url))
             .header("Accept", "text/event-stream")
             .json(&request)
             .send()
@@ -908,7 +926,7 @@ impl HttpClient {
             query: query.to_string(),
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -938,7 +956,7 @@ impl HttpClient {
             page_size,
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -974,7 +992,7 @@ impl HttpClient {
             cursor_id,
         };
 
-        let response = self.inner.post(&url).json(&request).send().await?;
+        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -995,7 +1013,7 @@ impl HttpClient {
     /// builtins and loaded custom UDFs.
     pub async fn list_functions(&self) -> Result<Vec<String>> {
         let url = format!("{}/functions", self.base_url);
-        let response = self.inner.get(&url).send().await?;
+        let response = self.authed(self.inner.get(&url)).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1026,8 +1044,8 @@ impl HttpClient {
 
     // ── Auth ──
 
-    /// Login and authenticate (low-level API)
-    async fn login(&self, username: &str, password: &str) -> Result<(i64, String)> {
+    /// Login and authenticate (low-level API, public route without session header)
+    async fn login(&self, username: &str, password: &str) -> Result<LoginResponse> {
         let url = format!("{}/auth/login", self.base_url);
         let request = LoginRequest {
             username: username.to_string(),
@@ -1046,6 +1064,6 @@ impl HttpClient {
         }
 
         let login_resp: LoginResponse = response.json().await?;
-        Ok((login_resp.session_id, login_resp.username))
+        Ok(login_resp)
     }
 }

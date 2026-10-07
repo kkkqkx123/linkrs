@@ -2,9 +2,8 @@
  * UI role model and capability gates for login and permission views.
  *
  * The backend keeps five roles while the UI shows three. Missing role
- * information means a legacy single-user backend and grants full access
- * so existing deployments keep working. Explicit unknown values fall
- * back to the read-only role.
+ * information stays unknown and denies sensitive capabilities.
+ * Explicit unknown values fall back to the read-only role.
  */
 
 export type UiRole = 'admin' | 'operator' | 'viewer';
@@ -18,7 +17,7 @@ const RANK: Record<UiRole, number> = {
 	admin: 2,
 };
 
-/** Map one backend role name to a UI role. Null means legacy backend. */
+/** Map one backend role name to a UI role. Null means unknown. */
 export function toUiRole(backendRole?: string | null): UiRole | null {
 	if (backendRole === undefined || backendRole === null) return null;
 	switch (backendRole.toUpperCase()) {
@@ -85,32 +84,31 @@ export function rolesFromPayload(value: unknown): string[] {
 	return out;
 }
 
-/** Resolve the effective UI role. Null preserves legacy full access. */
+/** Resolve the effective UI role. Unknown users get least privilege. */
 export function resolveUiRole(
 	value: unknown,
 	fallbackUsername?: string,
 ): UiRole | null {
 	const names = rolesFromPayload(value);
 	if (names.length > 0) return highestUiRole(names) ?? 'viewer';
-	if (fallbackUsername === 'root') return 'admin';
-	if (fallbackUsername) return 'admin';
+	if (fallbackUsername) return 'viewer';
 	return null;
 }
 
 /** Central capability check used at store action entries. */
 export function can(capability: Capability, role: UiRole | null): boolean {
-	if (role === null) return true;
+	if (role === null) return false;
 	switch (capability) {
 		case 'manageUsers':
 			return role === 'admin';
 		case 'write':
 			return role === 'admin' || role === 'operator';
 		case 'alterSchema':
-			return role === 'admin' || role === 'operator';
+			return role === 'admin';
 		case 'dropSpace':
 			return role === 'admin';
 		case 'manageConfig':
-			return role === 'admin' || role === 'operator';
+			return role === 'admin';
 		default:
 			return false;
 	}
