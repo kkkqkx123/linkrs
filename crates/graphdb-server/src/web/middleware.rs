@@ -32,6 +32,19 @@ pub async fn web_auth_middleware<
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Align with the server-wide auth-disabled contract: skip every check
+    // when enable_authorize = false or single_user_mode = true so the web
+    // console is reachable without a login round-trip on local deployments.
+    if web_state
+        .core_state
+        .server
+        .get_graph_service()
+        .is_auth_disabled()
+    {
+        request.extensions_mut().insert(0i64);
+        return Ok(next.run(request).await);
+    }
+
     let session_id = request
         .headers()
         .get("X-Session-ID")

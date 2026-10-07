@@ -321,6 +321,7 @@ impl<
             query_manager,
             progress_rows_interval: config.monitoring.progress_report_rows_interval,
             next_query_id: std::sync::atomic::AtomicU64::new(1),
+            bootstrap_config: config.server.bootstrap.clone(),
         };
         Arc::new(service)
     }

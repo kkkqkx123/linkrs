@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
-use crate::client::ClientSession;
+use crate::client::{ClientSession, Session};
 use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+
+/// Maximum number of transient sessions we will auto-create during auth-disabled
+/// single-user mode. The background reclaimer will still evict idle ones.
+const AUTH_DISABLED_AUTO_CREATE: bool = true;
 
 pub fn find_session<S>(
     state: &AppState<S>,
@@ -20,6 +24,33 @@ where
         + Sync
         + 'static,
 {
+    // Auth-disabled mode (enable_authorize = false or single_user_mode = true):
+    // treat session_id == 0 as a placeholder for the default identity. We look
+    // up or lazily create the default session so downstream handlers never
+    // see a missing session while still reusing the normal session-lifecycle
+    // machinery.
+    if session_id == 0 {
+        let graph_service = state.server.get_graph_service();
+        if graph_service.is_auth_disabled() && AUTH_DISABLED_AUTO_CREATE {
+            let default_username = graph_service.auth_config().default_username.clone();
+            if let Some(existing) = state
+                .server
+                .get_session_manager()
+                .find_session_from_cache(0)
+            {
+                return Ok(existing);
+            }
+            let session = Session {
+                session_id: 0,
+                user_name: default_username,
+                space_name: None,
+                graph_addr: Some("127.0.0.1".to_string()),
+                timezone: None,
+            };
+            return Ok(ClientSession::new(session));
+        }
+    }
+
     state
         .server
         .get_session_manager()

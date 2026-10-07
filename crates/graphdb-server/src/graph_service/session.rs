@@ -145,6 +145,28 @@ impl<
         )
     }
 
+    /// Whether authentication is globally disabled.
+    ///
+    /// Returns true when either `[server.auth].enable_authorize = false` or
+    /// `[server.bootstrap].single_user_mode = true`. Both flags cause the
+    /// middleware layer to skip session-id verification and fall through to a
+    /// default identity so purely-local deployments can operate without a
+    /// login round-trip.
+    pub fn is_auth_disabled(&self) -> bool {
+        !self.authenticator.config().enable_authorize
+            || self.bootstrap_config.single_user_mode
+    }
+
+    /// Authenticator configuration reference.
+    pub fn auth_config(&self) -> &crate::config::AuthConfig {
+        self.authenticator.config()
+    }
+
+    /// Bootstrap configuration reference.
+    pub fn bootstrap_config(&self) -> &crate::config::BootstrapConfig {
+        &self.bootstrap_config
+    }
+
     pub fn get_storage_space_id(&self, space_name: &str) -> Option<i64> {
         self.storage
             .get_space_id(space_name)

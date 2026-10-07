@@ -24,6 +24,7 @@ use graphdb_query::query_manager::QueryManager;
 use graphdb_transaction::TransactionManager;
 
 use crate::auth::PasswordAuthenticator;
+use crate::config::BootstrapConfig;
 use crate::permission::PermissionManager;
 use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
@@ -55,6 +56,10 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
 
     /// Monotonically increasing query ID counter (server-assigned, not hash-based).
     next_query_id: AtomicU64,
+
+    /// Bootstrap-time configuration used for single-user mode and other
+    /// local-deployment toggles.
+    bootstrap_config: BootstrapConfig,
 }
 
 #[cfg(test)]

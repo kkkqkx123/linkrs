@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::Json as JsonResponse,
 };
-use graphdb_wire::meta::{AuthMeResponse, LoginRequest, LoginResponse, LogoutRequest};
+use graphdb_wire::meta::{AuthMeResponse, LoginRequest, LoginResponse};
 use log::info;
 
 use crate::http::{error::HttpError, state::AppState};
@@ -34,20 +34,35 @@ pub async fn login<
     State(state): State<AppState<S>>,
     Json(request): Json<LoginRequest>,
 ) -> Result<JsonResponse<LoginResponse>, HttpError> {
-    // Verify the password through the shared authenticator before creating
-    // a session; failures surface as 401 instead of minting a session.
-    // Locked accounts surface as 403 so clients can show a disabled hint.
     let graph_service = state.server.get_graph_service();
-    let session = graph_service
-        .authenticate(&request.username, &request.password)
-        .await
-        .map_err(|message| {
-            if message.to_lowercase().contains("locked") {
-                HttpError::forbidden(message)
-            } else {
-                HttpError::unauthorized(message)
-            }
-        })?;
+
+    // Skip password verification when the operator has disabled auth globally.
+    // This keeps purely-local deployments usable without a real password.
+    let session = if graph_service.is_auth_disabled() {
+        if graph_service.is_user_locked(&request.username) {
+            return Err(HttpError::forbidden(format!(
+                "account {} is locked",
+                request.username
+            )));
+        }
+        graph_service
+            .get_session_manager()
+            .create_session(request.username.clone(), "127.0.0.1".to_string())
+            .await
+            .map_err(|e| HttpError::unauthorized(format!("Failed to create session: {}", e)))?
+    } else {
+        let session = graph_service
+            .authenticate(&request.username, &request.password)
+            .await
+            .map_err(|message| {
+                if message.to_lowercase().contains("locked") {
+                    HttpError::forbidden(message)
+                } else {
+                    HttpError::unauthorized(message)
+                }
+            })?;
+        session
+    };
 
     let session_id = session.id();
     info!(
@@ -128,7 +143,6 @@ pub async fn me<
     post,
     path = "/v1/auth/logout",
     tag = "Auth",
-    request_body = LogoutRequest,
     responses(
         (status = 204, description = "Logout succeeded"),
         (status = 500, description = "Internal error")
@@ -145,9 +159,14 @@ pub async fn logout<
         + 'static,
 >(
     State(state): State<AppState<S>>,
-    Json(request): Json<LogoutRequest>,
+    Extension(session_id): Extension<i64>,
 ) -> Result<StatusCode, HttpError> {
-    let session_manager = state.server.get_session_manager();
-    session_manager.remove_session(request.session_id).await;
+    // Extension is 0i64 in auth-disabled mode (see auth_middleware); skip
+    // the session-manager call in that case because there is no real
+    // session to remove.
+    if session_id != 0 {
+        let session_manager = state.server.get_session_manager();
+        session_manager.remove_session(session_id).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
