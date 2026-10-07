@@ -22,14 +22,24 @@ export const connectionHandlers: MockRegistry = {
 				'Invalid username or password (mock fixture)',
 			);
 		}
+		const username = typeof body.username === 'string' ? body.username : 'demo';
 		return {
 			session_id: MOCK_SESSION_ID,
-			username: typeof body.username === 'string' ? body.username : 'demo',
+			username,
 			expires_at: Math.floor(Date.now() / 1000) + 3600,
+			role: username === 'root' ? 'GOD' : 'ADMIN',
+			display_role: username === 'root' ? 'GOD' : 'ADMIN',
 		};
 	}) satisfies MockEntry,
 
 	'POST /v1/auth/logout': { success: true } satisfies MockEntry,
+
+	'GET /v1/auth/me': {
+		username: 'demo',
+		role: 'ADMIN',
+		display_role: 'ADMIN',
+		roles: ['ADMIN'],
+	} satisfies MockEntry,
 
 	'GET /v1/health': {
 		status: 'ok',

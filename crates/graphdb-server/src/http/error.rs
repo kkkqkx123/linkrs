@@ -10,6 +10,7 @@ use std::fmt;
 pub enum HttpError {
     BadRequest(String),
     Unauthorized(String),
+    Forbidden(String),
     NotFound(String),
     Conflict(String),
     InternalError(String),
@@ -20,6 +21,7 @@ impl fmt::Display for HttpError {
         match self {
             HttpError::BadRequest(msg) => write!(f, "Bad Request: {}", msg),
             HttpError::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
+            HttpError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
             HttpError::NotFound(msg) => write!(f, "Not Found: {}", msg),
             HttpError::Conflict(msg) => write!(f, "Conflict: {}", msg),
             HttpError::InternalError(msg) => write!(f, "Internal Error: {}", msg),
@@ -34,6 +36,7 @@ impl IntoResponse for HttpError {
         let (status, message) = match self {
             HttpError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             HttpError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            HttpError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             HttpError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             HttpError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             HttpError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
@@ -62,6 +65,11 @@ impl HttpError {
     /// An “Unauthorized” error was generated.
     pub fn unauthorized<T: Into<String>>(msg: T) -> Self {
         HttpError::Unauthorized(msg.into())
+    }
+
+    /// Generate a Forbidden error for authenticated users lacking permission.
+    pub fn forbidden<T: Into<String>>(msg: T) -> Self {
+        HttpError::Forbidden(msg.into())
     }
 
     /// Generate an InternalError.

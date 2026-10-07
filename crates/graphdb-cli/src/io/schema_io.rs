@@ -61,11 +61,7 @@ impl SchemaExporter {
         Self
     }
 
-    pub async fn export(
-        &self,
-        config: SchemaIoConfig,
-        session: &mut SessionManager,
-    ) -> Result<()> {
+    pub async fn export(&self, config: SchemaIoConfig, session: &mut SessionManager) -> Result<()> {
         let space = if config.space_name.is_empty() {
             session.current_space().unwrap_or_default().to_string()
         } else {
@@ -171,7 +167,11 @@ impl SchemaImporter {
                     comment: None,
                 })
                 .collect();
-            match session.client().create_tag(&space, &tag.name, properties).await {
+            match session
+                .client()
+                .create_tag(&space, &tag.name, properties)
+                .await
+            {
                 Ok(()) => imported_tags.push(tag.name.clone()),
                 Err(e) => {
                     let msg = e.to_string();

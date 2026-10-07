@@ -4,6 +4,7 @@
 	import { t } from '$i18n';
 	import { goto } from '$app/navigation';
 	import { connectionStore } from '$stores/connection';
+	import { connectionService } from '$services/connection';
 
 	let username = $state('');
 	let password = $state('');
@@ -11,6 +12,10 @@
 	let isLoading = $state(false);
 	let errorMsg = $state('');
 	let formValid = $derived(username.trim() && password.trim());
+	let serverService = $state<string | null>(null);
+	let serverVersion = $state<string | null>(null);
+	let serverStatus = $state<string | null>(null);
+	let serverUnreachable = $state(false);
 
 	onMount(() => {
 		connectionStore.loadSavedConnection();
@@ -18,7 +23,22 @@
 		username = connectionInfo.username;
 		password = connectionInfo.password ?? '';
 		rememberMe = remembered;
+		void loadServerInfo();
 	});
+
+	async function loadServerInfo() {
+		try {
+			const health = await connectionService.health();
+			serverService =
+				typeof health.service === 'string' ? health.service : null;
+			serverVersion =
+				typeof health.version === 'string' ? health.version : null;
+			serverStatus = typeof health.status === 'string' ? health.status : null;
+			serverUnreachable = false;
+		} catch {
+			serverUnreachable = true;
+		}
+	}
 
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
@@ -103,5 +123,41 @@
 				{isLoading ? t('common.loading') : t('common.login')}
 			</button>
 		</form>
+		<div
+			class="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400"
+		>
+			<div class="flex items-center justify-between mb-1">
+				<span>{t('common.healthCheck')}</span>
+				{#if serverUnreachable}
+					<span class="text-red-500">{t('common.disconnected')}</span>
+				{:else if serverStatus}
+					<span
+						class={serverStatus === 'healthy'
+							? 'text-green-600 dark:text-green-400'
+							: 'text-yellow-600 dark:text-yellow-400'}
+					>
+						{serverStatus === 'healthy'
+							? t('common.healthy')
+							: t('common.unhealthy')}
+					</span>
+				{:else}
+					<span>{t('common.loading')}</span>
+				{/if}
+			</div>
+			{#if serverService || serverVersion}
+				<div class="flex items-center justify-between">
+					<span>{t('common.service')}</span>
+					<span class="font-mono text-gray-700 dark:text-gray-300"
+						>{serverService ?? '—'}</span
+					>
+				</div>
+				<div class="flex items-center justify-between">
+					<span>{t('common.version')}</span>
+					<span class="font-mono text-gray-700 dark:text-gray-300"
+						>{serverVersion ?? '—'}</span
+					>
+				</div>
+			{/if}
+		</div>
 	</div>
 </div>

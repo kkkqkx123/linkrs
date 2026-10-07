@@ -128,7 +128,8 @@ fn show_general_help() -> String {
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\batch <subcommand>", "Manage server batch tasks (create|add|execute|status|cancel|delete)"
+        "\\batch <subcommand>",
+        "Manage server batch tasks (create|add|execute|status|cancel|delete)"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",

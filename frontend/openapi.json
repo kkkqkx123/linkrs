@@ -1544,6 +1544,32 @@
         }
       }
     },
+    "/v1/auth/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "get_v1_auth_me",
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthMeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
     "/v1/batch": {
       "post": {
         "tags": [
@@ -4497,6 +4523,35 @@
         }
       }
     },
+    "/v1/users": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "get_v1_users",
+        "responses": {
+          "200": {
+            "description": "User list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
     "/v1/vector/indexes": {
       "get": {
         "tags": [
@@ -5615,6 +5670,36 @@
           },
           "success": {
             "type": "boolean"
+          }
+        }
+      },
+      "AuthMeResponse": {
+        "type": "object",
+        "description": "Current user response for role-aware clients.",
+        "required": [
+          "username"
+        ],
+        "properties": {
+          "display_role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "username": {
+            "type": "string"
           }
         }
       },
@@ -7745,6 +7830,12 @@
           "username"
         ],
         "properties": {
+          "display_role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expires_at": {
             "type": [
               "integer",
@@ -7752,6 +7843,18 @@
             ],
             "format": "int64",
             "minimum": 0
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "session_id": {
             "type": "integer",
@@ -9748,6 +9851,48 @@
             ],
             "items": {
               "type": "string"
+            }
+          }
+        }
+      },
+      "UserListItem": {
+        "type": "object",
+        "description": "User list entry for the management view.",
+        "required": [
+          "username"
+        ],
+        "properties": {
+          "last_active": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "UserListResponse": {
+        "type": "object",
+        "description": "User list response for the management view.",
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserListItem"
             }
           }
         }

@@ -25,6 +25,16 @@ export interface CreateSessionParams {
 	clientIp: string;
 }
 
+/** Current user payload; extra role fields stay optional until backends adopt them. */
+export interface AuthMeResponse {
+	username: string;
+	role?: string | null;
+	display_role?: string | null;
+	roles?: Array<string | { role?: string }> | null;
+	space_roles?: Record<string, string> | null;
+	[key: string]: unknown;
+}
+
 /** Session detail; the contract leaves it untyped so the view narrows it. */
 export interface SessionDetail {
 	session_id: number;
@@ -60,6 +70,17 @@ export const connectionService = {
 	},
 
 	health: async (): Promise<HealthResponse> => call(client.GET('/v1/health')),
+
+	me: async (): Promise<AuthMeResponse> => {
+		const untyped = client as unknown as {
+			GET: (path: string) => Promise<{
+				data?: unknown;
+				error?: unknown;
+				response?: Response;
+			}>;
+		};
+		return call(untyped.GET('/v1/auth/me'));
+	},
 
 	sessions: {
 		create: async (params: CreateSessionParams): Promise<SessionResponse> =>

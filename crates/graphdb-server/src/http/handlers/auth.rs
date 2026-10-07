@@ -1,9 +1,9 @@
 use axum::{
-    extract::{Json, State},
+    extract::{Extension, Json, State},
     http::StatusCode,
     response::Json as JsonResponse,
 };
-use graphdb_wire::meta::{LoginRequest, LoginResponse, LogoutRequest};
+use graphdb_wire::meta::{AuthMeResponse, LoginRequest, LoginResponse, LogoutRequest};
 use log::info;
 
 use crate::http::{error::HttpError, state::AppState};
@@ -48,10 +48,70 @@ pub async fn login<
         session_id, request.username
     );
 
+    let permission_manager = graph_service.get_permission_manager();
+    let roles: Vec<String> = permission_manager
+        .list_user_roles(&request.username)
+        .into_iter()
+        .map(|(_, role)| role.to_string())
+        .collect();
+    let display = permission_manager
+        .highest_role(&request.username)
+        .map(|role| role.to_string());
+
     Ok(JsonResponse(LoginResponse {
         session_id,
         username: request.username,
         expires_at: None,
+        role: display.clone(),
+        display_role: display,
+        roles,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    operation_id = "get_v1_auth_me",
+    path = "/v1/auth/me",
+    tag = "Auth",
+    responses(
+        (status = 200, body = AuthMeResponse, description = "Current user"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal error")
+    )
+)]
+pub async fn me<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+) -> Result<JsonResponse<AuthMeResponse>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let session = graph_service
+        .get_session_manager()
+        .find_session(session_id)
+        .ok_or_else(|| HttpError::unauthorized("Session not found"))?;
+    let username = session.user();
+    let permission_manager = graph_service.get_permission_manager();
+    let roles: Vec<String> = permission_manager
+        .list_user_roles(&username)
+        .into_iter()
+        .map(|(_, role)| role.to_string())
+        .collect();
+    let display = permission_manager
+        .highest_role(&username)
+        .map(|role| role.to_string());
+    Ok(JsonResponse(AuthMeResponse {
+        username,
+        role: display.clone(),
+        display_role: display,
+        roles,
     }))
 }
 

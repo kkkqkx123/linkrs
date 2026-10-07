@@ -46,10 +46,8 @@ pub async fn execute_batch(
             file_path,
         } => {
             let content = std::fs::read_to_string(file_path).map_err(CliError::IoError)?;
-            let items: Vec<graphdb_wire::batch::BatchItem> =
-                serde_json::from_str(&content).map_err(|e| {
-                    CliError::InvalidValue(format!("Invalid batch items file: {}", e))
-                })?;
+            let items: Vec<graphdb_wire::batch::BatchItem> = serde_json::from_str(&content)
+                .map_err(|e| CliError::InvalidValue(format!("Invalid batch items file: {}", e)))?;
             let accepted = session_mgr
                 .client()
                 .add_batch_items(batch_id, items)

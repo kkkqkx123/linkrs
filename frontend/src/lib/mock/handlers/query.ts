@@ -21,6 +21,35 @@ function resultRows(): Record<string, unknown>[] {
 
 function queryResponse(query: string): unknown {
 	const trimmed = query.trim().toUpperCase();
+	if (trimmed.startsWith('SHOW USERS')) {
+		return {
+			success: true,
+			data: {
+				columns: ['username', 'role', 'status'],
+				rows: [
+					{ username: 'root', role: 'GOD', status: 'enabled' },
+					{ username: 'demo', role: 'ADMIN', status: 'enabled' },
+				],
+				row_count: 2,
+			},
+			metadata: {
+				execution_time_ms: 3,
+				result_row_count: 2,
+				plan_node_count: 1,
+			},
+		};
+	}
+	if (trimmed.startsWith('CREATE USER') || trimmed.startsWith('ALTER USER')) {
+		return {
+			success: true,
+			data: { columns: [], rows: [], row_count: 0 },
+			metadata: {
+				execution_time_ms: 3,
+				result_row_count: 0,
+				plan_node_count: 1,
+			},
+		};
+	}
 	if (
 		trimmed.startsWith('SELECT') ||
 		trimmed.startsWith('MATCH') ||

@@ -19,7 +19,10 @@ pub fn parse_batch(arg: &str) -> Result<MetaCommand, String> {
                 .parse()
                 .map_err(|_| "Invalid space_id, expected integer".to_string())?;
             let batch_type = parts[2].to_string();
-            let batch_size: usize = parts.get(3).map(|s| s.parse().unwrap_or(1000)).unwrap_or(1000);
+            let batch_size: usize = parts
+                .get(3)
+                .map(|s| s.parse().unwrap_or(1000))
+                .unwrap_or(1000);
             Ok(MetaCommand::Batch {
                 action: BatchAction::Create {
                     space_id,

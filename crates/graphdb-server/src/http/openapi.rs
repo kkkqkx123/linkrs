@@ -29,6 +29,8 @@ use utoipa::OpenApi;
         crate::http::handlers::health::check,
         crate::http::handlers::auth::login,
         crate::http::handlers::auth::logout,
+        crate::http::handlers::auth::me,
+        crate::http::handlers::users::list,
         crate::http::handlers::session::create,
         crate::http::handlers::session::get_session,
         crate::http::handlers::session::delete_session,

@@ -15,6 +15,7 @@ pub mod statistics;
 pub mod stream;
 pub mod sync;
 pub mod transaction;
+pub mod users;
 #[cfg(feature = "vector")]
 pub mod vector;
 

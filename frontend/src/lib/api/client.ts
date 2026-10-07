@@ -33,6 +33,7 @@ import { managementHandlers } from '$lib/mock/handlers/management';
 import { monitoringHandlers } from '$lib/mock/handlers/monitoring';
 import { queryHandlers } from '$lib/mock/handlers/query';
 import { schemaHandlers } from '$lib/mock/handlers/schema';
+import { usersHandlers } from '$lib/mock/handlers/users';
 
 export const BASE_URL = API_BASE_URL;
 
@@ -262,6 +263,7 @@ register({
 	...dataBrowserHandlers,
 	...monitoringHandlers,
 	...managementHandlers,
+	...usersHandlers,
 });
 
 export const client = (

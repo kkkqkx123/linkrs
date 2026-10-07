@@ -20,6 +20,7 @@ fn http_status(error: HttpError) -> Status {
         HttpError::NotFound(message) => Status::not_found(message),
         HttpError::Conflict(message) => Status::already_exists(message),
         HttpError::Unauthorized(message) => Status::unauthenticated(message),
+        HttpError::Forbidden(message) => Status::permission_denied(message),
         HttpError::InternalError(message) => Status::internal(message),
     }
 }

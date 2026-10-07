@@ -167,7 +167,10 @@ pub mod client_ext {
             Self::check_response(resp).await
         }
 
-        pub async fn outbox_degraded_clear(&self, req: &DegradedClearPayload) -> Result<serde_json::Value> {
+        pub async fn outbox_degraded_clear(
+            &self,
+            req: &DegradedClearPayload,
+        ) -> Result<serde_json::Value> {
             let url = format!("{}/sync/outbox/degraded/clear", self.base_url());
             let resp = self
                 .inner()

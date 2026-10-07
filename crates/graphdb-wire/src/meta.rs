@@ -22,6 +22,43 @@ pub struct LoginResponse {
     pub username: String,
     #[serde(default)]
     pub expires_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_role: Option<String>,
+    #[serde(default)]
+    pub roles: Vec<String>,
+}
+
+/// Current user response for role-aware clients.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AuthMeResponse {
+    pub username: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_role: Option<String>,
+    #[serde(default)]
+    pub roles: Vec<String>,
+}
+
+/// User list entry for the management view.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UserListItem {
+    pub username: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active: Option<String>,
+}
+
+/// User list response for the management view.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct UserListResponse {
+    #[serde(default)]
+    pub users: Vec<UserListItem>,
 }
 
 /// Logout request

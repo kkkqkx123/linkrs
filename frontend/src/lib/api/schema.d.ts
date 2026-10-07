@@ -402,6 +402,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_v1_auth_me"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/batch": {
         parameters: {
             query?: never;
@@ -1572,6 +1588,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_v1_users"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/vector/indexes": {
         parameters: {
             query?: never;
@@ -1940,6 +1972,13 @@ export interface components {
             data?: unknown;
             error?: null | components["schemas"]["ApiError"];
             success: boolean;
+        };
+        /** @description Current user response for role-aware clients. */
+        AuthMeResponse: {
+            display_role?: string | null;
+            role?: string | null;
+            roles?: string[];
+            username: string;
         };
         /** @description Batch error data */
         BatchErrorData: {
@@ -2647,8 +2686,11 @@ export interface components {
         };
         /** @description Login response */
         LoginResponse: {
+            display_role?: string | null;
             /** Format: int64 */
             expires_at?: number | null;
+            role?: string | null;
+            roles?: string[];
             /** Format: int64 */
             session_id: number;
             username: string;
@@ -3297,6 +3339,17 @@ export interface components {
         UpdateTagRequest: {
             add_properties?: components["schemas"]["PropertyDef"][] | null;
             drop_properties?: string[] | null;
+        };
+        /** @description User list entry for the management view. */
+        UserListItem: {
+            last_active?: string | null;
+            role?: string | null;
+            status?: string | null;
+            username: string;
+        };
+        /** @description User list response for the management view. */
+        UserListResponse: {
+            users?: components["schemas"]["UserListItem"][];
         };
         /** @description Verify the response. */
         ValidateRequest: {
@@ -4704,6 +4757,40 @@ export interface operations {
         responses: {
             /** @description Logout succeeded */
             204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_v1_auth_me: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current user */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthMeResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7328,6 +7415,47 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_v1_users: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description User list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserListResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Internal error */
             500: {

@@ -558,10 +558,10 @@ impl<
                 .cloned()
                 .ok_or_else(|| Status::unavailable("vector API is not available"))?;
             let payload: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_str(&req.payload_json)
-                    .map_err(|e| Status::invalid_argument(format!("invalid payload_json: {}", e)))?;
-            let point_ids: Vec<&str> =
-                req.point_ids.iter().map(|s| s.as_str()).collect();
+                serde_json::from_str(&req.payload_json).map_err(|e| {
+                    Status::invalid_argument(format!("invalid payload_json: {}", e))
+                })?;
+            let point_ids: Vec<&str> = req.point_ids.iter().map(|s| s.as_str()).collect();
             vector_api
                 .set_payload(
                     req.space_id,
@@ -599,10 +599,10 @@ impl<
                 .cloned()
                 .ok_or_else(|| Status::unavailable("vector API is not available"))?;
             let payload: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_str(&req.payload_json)
-                    .map_err(|e| Status::invalid_argument(format!("invalid payload_json: {}", e)))?;
-            let point_ids: Vec<&str> =
-                req.point_ids.iter().map(|s| s.as_str()).collect();
+                serde_json::from_str(&req.payload_json).map_err(|e| {
+                    Status::invalid_argument(format!("invalid payload_json: {}", e))
+                })?;
+            let point_ids: Vec<&str> = req.point_ids.iter().map(|s| s.as_str()).collect();
             vector_api
                 .set_payload_fields(
                     req.space_id,
@@ -639,8 +639,7 @@ impl<
                 .vector_api()
                 .cloned()
                 .ok_or_else(|| Status::unavailable("vector API is not available"))?;
-            let point_ids: Vec<&str> =
-                req.point_ids.iter().map(|s| s.as_str()).collect();
+            let point_ids: Vec<&str> = req.point_ids.iter().map(|s| s.as_str()).collect();
             let keys: Vec<&str> = req.keys.iter().map(|s| s.as_str()).collect();
             vector_api
                 .delete_payload(
@@ -673,6 +672,7 @@ fn vector_http_status(error: crate::http::error::HttpError) -> Status {
         HttpError::NotFound(message) => Status::not_found(message),
         HttpError::Conflict(message) => Status::already_exists(message),
         HttpError::Unauthorized(message) => Status::unauthenticated(message),
+        HttpError::Forbidden(message) => Status::permission_denied(message),
         HttpError::InternalError(message) => Status::internal(message),
     }
 }

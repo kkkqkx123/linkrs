@@ -34,13 +34,7 @@ pub async fn execute_sync(
             offset,
         } => {
             let value = client
-                .outbox_dead_letters(
-                    target.as_deref(),
-                    *index_id,
-                    *generation,
-                    *limit,
-                    *offset,
-                )
+                .outbox_dead_letters(target.as_deref(), *index_id, *generation, *limit, *offset)
                 .await?;
             executor.write_output(&pretty(&value))?;
         }

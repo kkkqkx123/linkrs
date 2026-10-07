@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { t } from '$i18n';
 	import { connectionStore } from '$stores/connection';
+	import type { UiRole } from '$lib/auth/roles';
 	import { goto } from '$app/navigation';
 	import SpaceSelector from '$components/business/SpaceSelector.svelte';
 	import LanguageSwitcher from '$components/common/LanguageSwitcher.svelte';
@@ -10,9 +11,17 @@
 	let store = $state({
 		isVerified: false,
 		connectionInfo: { username: '' },
+		role: null as UiRole | null,
 		isLoading: false,
 	});
 	connectionStore.subscribe((v) => (store = v));
+
+	function roleLabel(role: UiRole | null): string {
+		if (role === 'admin') return t('auth.role.admin');
+		if (role === 'operator') return t('auth.role.operator');
+		if (role === 'viewer') return t('auth.role.viewer');
+		return '';
+	}
 </script>
 
 <header
@@ -35,6 +44,13 @@
 			<span class="text-sm text-gray-600 dark:text-gray-400"
 				>👤 {store.connectionInfo.username}</span
 			>
+			{#if store.role}
+				<span
+					class="px-2 py-0.5 text-xs rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-800"
+				>
+					{roleLabel(store.role)}
+				</span>
+			{/if}
 			<button
 				class="px-3 py-1 text-sm text-gray-600 dark:text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors cursor-pointer"
 				onclick={async () => {

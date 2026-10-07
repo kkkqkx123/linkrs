@@ -123,6 +123,29 @@ impl PermissionManager {
             .collect()
     }
 
+    /// List all users with their roles in every space.
+    /// Returns Vec<(username, Vec<(space_id, role)>)> covering the whole map.
+    pub fn list_all_users(&self) -> Vec<(String, Vec<(i64, RoleType)>)> {
+        self.user_roles
+            .iter()
+            .map(|entry| {
+                let roles = entry
+                    .value()
+                    .iter()
+                    .map(|(&space_id, &role)| (space_id, role))
+                    .collect();
+                (entry.key().clone(), roles)
+            })
+            .collect()
+    }
+
+    /// Highest privilege role of a user across all spaces, if any.
+    pub fn highest_role(&self, username: &str) -> Option<RoleType> {
+        self.user_roles
+            .get(username)
+            .and_then(|roles| roles.values().copied().min_by_key(|role| role.to_byte()))
+    }
+
     // ==================== Role Query (Basic Query) ====================
 
     /// Check whether the user is the God character.

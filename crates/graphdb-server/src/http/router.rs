@@ -26,7 +26,7 @@ use super::handlers::rebuild as rebuild_handlers;
 
 use super::{
     handlers::{
-        auth::{login, logout},
+        auth::{login, logout, me},
         batch::{
             add_items, cancel as cancel_batch, create as create_batch, delete as delete_batch,
             execute as execute_batch, status as batch_status,
@@ -81,6 +81,8 @@ pub fn create_router<
 
     // Routes that require authentication
     let protected_routes = Router::new()
+        .route("/auth/me", get(me))
+        .route("/users", get(super::handlers::users::list))
         .route("/sessions", post(create_session))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/query", post(query::execute))

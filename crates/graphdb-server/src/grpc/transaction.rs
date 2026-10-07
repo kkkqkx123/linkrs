@@ -248,8 +248,7 @@ impl<
             .check_transaction_owner(req.transaction_id.into(), req.owner.as_deref())
             .map_err(transaction_status)?;
         let txn_api = self.app_state.server.get_txn_api();
-        let handle =
-            graphdb_api::api_core::TransactionHandle::from(req.transaction_id);
+        let handle = graphdb_api::api_core::TransactionHandle::from(req.transaction_id);
         match txn_api.get_savepoints(handle) {
             Ok(savepoints) => Ok(Response::new(ListSavepointsResponse {
                 savepoints: savepoints

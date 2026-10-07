@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { t, type MessageKey } from '$i18n';
+	import { canManageUsers } from '$stores/connection';
+	import { fromStore } from 'svelte/store';
 
 	const path = $derived(page.url.pathname);
+	const managesUsers = fromStore(canManageUsers);
 
 	interface MenuItem {
 		key: string;
 		icon: string;
 		label: MessageKey;
 		route?: string;
+		requiresUsers?: boolean;
 		children?: MenuItem[];
 	}
 
@@ -116,7 +120,18 @@
 			label: 'sidebar.transfer',
 			route: '/transfer',
 		},
+		{
+			key: '/users',
+			icon: '👥',
+			label: 'sidebar.users',
+			route: '/users',
+			requiresUsers: true,
+		},
 	];
+
+	const visibleItems = $derived(
+		menuItems.filter((item) => !item.requiresUsers || managesUsers.current),
+	);
 
 	function isActive(item: MenuItem): boolean {
 		if (item.route && path.startsWith(item.route)) return true;
@@ -133,7 +148,7 @@
 	</div>
 	<nav class="flex-1 p-3">
 		<ul class="space-y-1">
-			{#each menuItems as item (item.key)}
+			{#each visibleItems as item (item.key)}
 				{#if item.children}
 					<li>
 						<details open={item.children.some((c) => path.startsWith(c.key))}>

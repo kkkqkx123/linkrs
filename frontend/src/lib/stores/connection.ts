@@ -2,6 +2,12 @@ import { writable, derived } from 'svelte/store';
 import { storage } from '$utils/storage';
 import { connectionService } from '$services/connection';
 import { STORAGE_KEYS, DEFAULT_VALUES } from '$config/constants';
+import {
+	can,
+	resolveUiRole,
+	type Capability,
+	type UiRole,
+} from '$lib/auth/roles';
 import { t } from '$i18n';
 
 export interface ConnectionInfo {
@@ -14,9 +20,24 @@ interface ConnectionState {
 	isVerified: boolean;
 	connectionInfo: ConnectionInfo;
 	sessionId: number | null;
+	role: UiRole | null;
 	rememberMe: boolean;
 	isLoading: boolean;
 	error: string | null;
+}
+
+async function resolveRoleAfterLogin(
+	result: unknown,
+	username: string,
+): Promise<UiRole | null> {
+	const fromLogin = resolveUiRole(result, username);
+	if (fromLogin !== null) return fromLogin;
+	try {
+		const me = await connectionService.me();
+		return resolveUiRole(me, username);
+	} catch {
+		return fromLogin;
+	}
 }
 
 function createConnectionStore() {
@@ -26,6 +47,7 @@ function createConnectionStore() {
 		isConnected: boolean;
 		isVerified: boolean;
 		sessionId: number | null;
+		role: UiRole | null;
 	}>('connection-storage');
 	const { subscribe, set, update } = writable<ConnectionState>({
 		isConnected: saved?.isConnected ?? false,
@@ -34,6 +56,7 @@ function createConnectionStore() {
 			username: DEFAULT_VALUES.USERNAME,
 		},
 		sessionId: saved?.sessionId ?? null,
+		role: saved?.role ?? null,
 		rememberMe: saved?.rememberMe ?? false,
 		isLoading: false,
 		error: null,
@@ -46,6 +69,7 @@ function createConnectionStore() {
 			isConnected: state.isConnected,
 			isVerified: state.isVerified,
 			sessionId: state.sessionId,
+			role: state.role,
 		});
 	};
 
@@ -60,6 +84,7 @@ function createConnectionStore() {
 			}));
 			try {
 				const result = await connectionService.login({ username, password });
+				const role = await resolveRoleAfterLogin(result, username);
 				const connectionInfo: ConnectionInfo = {
 					username,
 					password: rememberMe ? password : undefined,
@@ -69,6 +94,7 @@ function createConnectionStore() {
 					isVerified: true,
 					connectionInfo,
 					sessionId: result.session_id,
+					role,
 					rememberMe,
 					isLoading: false,
 					error: null,
@@ -94,6 +120,7 @@ function createConnectionStore() {
 					isConnected: false,
 					isVerified: false,
 					sessionId: null,
+					role: null,
 					isLoading: false,
 					error: errorMessage,
 					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
@@ -102,6 +129,21 @@ function createConnectionStore() {
 				throw err;
 			}
 		},
+		refreshRole: async () => {
+			try {
+				const me = await connectionService.me();
+				const role = resolveUiRole(me, me.username);
+				update((s) => {
+					const next = { ...s, role };
+					persist(next);
+					return next;
+				});
+				return role;
+			} catch {
+				return null;
+			}
+		},
+		can: (capability: Capability, role: UiRole | null) => can(capability, role),
 		logout: async () => {
 			update((s) => ({ ...s, isLoading: true }));
 			try {
@@ -110,6 +152,7 @@ function createConnectionStore() {
 					isVerified: false,
 					connectionInfo: { username: '' },
 					sessionId: null,
+					role: null,
 					rememberMe: false,
 					isLoading: false,
 					error: null,
@@ -127,6 +170,7 @@ function createConnectionStore() {
 					isConnected: false,
 					isVerified: false,
 					sessionId: null,
+					role: null,
 					isLoading: false,
 					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
 					rememberMe: false,
@@ -143,6 +187,7 @@ function createConnectionStore() {
 				isVerified: false,
 				connectionInfo: { username: '' },
 				sessionId: null,
+				role: null,
 				rememberMe: false,
 				isLoading: false,
 				error: null,
@@ -159,6 +204,7 @@ function createConnectionStore() {
 						isConnected: false,
 						isVerified: false,
 						sessionId: null,
+						role: null,
 						connectionInfo: { username: DEFAULT_VALUES.USERNAME },
 						rememberMe: false,
 						isLoading: false,
@@ -176,6 +222,7 @@ function createConnectionStore() {
 					isConnected: false,
 					isVerified: false,
 					sessionId: null,
+					role: null,
 					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
 					rememberMe: false,
 					isLoading: false,
@@ -209,3 +256,8 @@ export const isAuthenticated = derived(
 	connectionStore,
 	($s) => $s.isConnected && $s.isVerified,
 );
+export const currentRole = derived(connectionStore, ($s) => $s.role);
+export const canManageUsers = derived(connectionStore, ($s) =>
+	can('manageUsers', $s.role),
+);
+export const canWrite = derived(connectionStore, ($s) => can('write', $s.role));
