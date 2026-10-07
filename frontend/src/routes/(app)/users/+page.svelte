@@ -18,6 +18,9 @@
 	let roleTarget = $state<string | null>(null);
 	let roleSpace = $state('');
 	let roleName = $state('USER');
+	let ownOldPassword = $state('');
+	let ownNewPassword = $state('');
+	let ownConfirmPassword = $state('');
 
 	const filtered = $derived(
 		users.filter((user) =>
@@ -151,6 +154,27 @@
 			loading = false;
 		}
 	}
+
+	async function submitOwnPassword() {
+		if (!ownOldPassword.trim() || !ownNewPassword.trim()) return;
+		if (ownNewPassword !== ownConfirmPassword) {
+			error = t('users.passwordMismatch');
+			return;
+		}
+		loading = true;
+		error = null;
+		try {
+			await usersService.changeOwnPassword(ownOldPassword, ownNewPassword);
+			ownOldPassword = '';
+			ownNewPassword = '';
+			ownConfirmPassword = '';
+		} catch (err) {
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			loading = false;
+		}
+	}
 </script>
 
 <div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
@@ -205,6 +229,44 @@
 				disabled={loading || !newUsername.trim() || !newPassword.trim()}
 			>
 				{t('common.create')}
+			</button>
+		</div>
+	</section>
+
+	<section
+		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+	>
+		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3 text-sm">
+			{t('users.changeOwnPassword')}
+		</h2>
+		<div class="flex flex-wrap gap-2 text-sm">
+			<input
+				type="password"
+				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				placeholder={t('users.oldPassword')}
+				bind:value={ownOldPassword}
+				disabled={loading}
+			/>
+			<input
+				type="password"
+				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				placeholder={t('users.newPassword')}
+				bind:value={ownNewPassword}
+				disabled={loading}
+			/>
+			<input
+				type="password"
+				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				placeholder={t('users.confirmPassword')}
+				bind:value={ownConfirmPassword}
+				disabled={loading}
+			/>
+			<button
+				class="px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 cursor-pointer"
+				onclick={submitOwnPassword}
+				disabled={loading || !ownOldPassword.trim() || !ownNewPassword.trim()}
+			>
+				{t('common.save')}
 			</button>
 		</div>
 	</section>

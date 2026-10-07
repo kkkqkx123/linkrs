@@ -46,6 +46,13 @@ impl RoleContext {
             .values()
             .any(|role| *role == RoleType::Admin || *role == RoleType::God)
     }
+
+    pub fn is_schema_admin(&self) -> bool {
+        self.roles
+            .read()
+            .values()
+            .any(|role| matches!(*role, RoleType::God | RoleType::Admin | RoleType::Dba))
+    }
 }
 
 #[cfg(test)]

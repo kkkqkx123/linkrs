@@ -113,3 +113,18 @@ export function can(capability: Capability, role: UiRole | null): boolean {
 			return false;
 	}
 }
+
+/** Whether raw backend roles carry structure management privilege. */
+export function hasSchemaPrivilege(names: Array<string | null | undefined>): boolean {
+	for (const raw of names) {
+		if (!raw) continue;
+		const upper = raw.toUpperCase();
+		if (upper === 'GOD' || upper === 'ADMIN' || upper === 'DBA') return true;
+	}
+	return false;
+}
+
+/** Schema capability from a login or me payload without typing. */
+export function canAlterSchemaValue(value: unknown): boolean {
+	return hasSchemaPrivilege(rolesFromPayload(value));
+}

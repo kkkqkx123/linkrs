@@ -87,6 +87,10 @@ impl ClientSession {
         self.role_context.is_admin()
     }
 
+    pub fn is_schema_admin(&self) -> bool {
+        self.role_context.is_schema_admin()
+    }
+
     pub fn set_role(&self, space: i64, role: graphdb_core::RoleType) {
         self.role_context.set_role(space, role);
     }

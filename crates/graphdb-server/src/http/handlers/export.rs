@@ -3,7 +3,7 @@
 use axum::body::{Body, Bytes};
 use axum::http::{header, StatusCode};
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     response::Response,
 };
 use serde::Deserialize;
@@ -67,6 +67,7 @@ pub async fn export_data<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Query(params): Query<ExportQuery>,
 ) -> Result<Response, HttpError> {
     let format = params.format.as_deref().unwrap_or("csv");
@@ -88,6 +89,7 @@ pub async fn export_data<
     let session_id = params
         .session_id
         .ok_or_else(|| HttpError::bad_request("Export requires a `session_id` parameter"))?;
+    super::authz::require_session_owner_or_admin(&state, caller_session_id, session_id)?;
 
     let server = state.server.clone();
     let row_limit = result_size_limit(&state);

@@ -19,7 +19,11 @@ struct LoginAttempt {
 /// User Authentication Callback Function Types
 pub type UserVerifier = Arc<dyn Fn(&str, &str) -> AuthResult<bool> + Send + Sync>;
 
-/// Password Authenticator - Supports failed login restrictions and account lockout
+/// Password Authenticator - Supports failed login rate limiting and storage-backed account lockout.
+///
+/// The in-memory failure counter is rate limiting only and never locks the
+/// account. The storage `is_locked` flag is the sole source of truth for
+/// lockout; enabling the account clears it.
 pub struct PasswordAuthenticator {
     /// User Authentication Callbacks
     user_verifier: UserVerifier,

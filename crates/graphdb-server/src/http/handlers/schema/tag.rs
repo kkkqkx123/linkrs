@@ -3,7 +3,7 @@
 //! Handles tag creation and listing within a space.
 
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
 use graphdb_wire::schema::CreateTagRequest;
@@ -43,9 +43,11 @@ pub async fn create_tag<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(space_name): Path<String>,
     Json(request): Json<CreateTagRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::super::authz::require_schema_write_session(&state, session_id, &space_name)?;
     let result = task::spawn_blocking(move || {
         let schema_api = state.server.get_schema_api();
 

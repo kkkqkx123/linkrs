@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::graph_service::GraphService;
 use crate::value::to_json as value_to_json;
 use axum::{
-    extract::{Json, State},
+    extract::{Extension, Json, State},
     response::{sse::Event, Sse},
 };
 use graphdb_wire::query::StreamQueryRequest;
@@ -103,11 +103,13 @@ pub async fn execute_stream<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Json(request): Json<StreamQueryRequest>,
 ) -> Result<
     Sse<impl tokio_stream::Stream<Item = Result<Event, HttpError>> + Send + 'static>,
     HttpError,
 > {
+    super::authz::require_session_owner_or_admin(&state, caller_session_id, request.session_id)?;
     let batch_mode = !request.statements.is_empty();
     if batch_mode && !request.query.trim().is_empty() {
         return Err(HttpError::bad_request(

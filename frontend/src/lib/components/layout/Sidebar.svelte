@@ -127,6 +127,13 @@
 			route: '/users',
 			requiresUsers: true,
 		},
+		{
+			key: '/sessions',
+			icon: '🔌',
+			label: 'sidebar.sessions',
+			route: '/sessions',
+			requiresUsers: true,
+		},
 	];
 
 	const visibleItems = $derived(

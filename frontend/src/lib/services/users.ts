@@ -61,6 +61,22 @@ function quoteIdent(value: string): string {
 	return `"${value.replace(/"/g, '')}"`;
 }
 
+interface UserListPayload {
+	users?: Array<Record<string, unknown>>;
+	data?: Array<Record<string, unknown>>;
+}
+
+async function listViaHttp(): Promise<ManagedUser[]> {
+	const payload = await call<UserListPayload>(client.GET('/v1/users'));
+	const record = asRecord(payload);
+	const raw = Array.isArray(record.users)
+		? (record.users as Array<Record<string, unknown>>)
+		: Array.isArray(record.data)
+			? (record.data as Array<Record<string, unknown>>)
+			: [];
+	return raw.map(normalizeUser);
+}
+
 async function listViaQuery(): Promise<ManagedUser[]> {
 	const response = await queryService.execute({ query: 'SHOW USERS' });
 	if (!response.success || !response.data) {
@@ -76,63 +92,10 @@ async function runAdminStatement(query: string): Promise<void> {
 	}
 }
 
-function untypedGet(path: string) {
-	const untyped = client as unknown as {
-		GET: (
-			path: string,
-		) => Promise<{ data?: unknown; error?: unknown; response?: Response }>;
-	};
-	return call<unknown>(untyped.GET(path));
-}
-
-interface UntypedOptions {
-	body?: unknown;
-	params?: { path?: Record<string, string> };
-}
-
-function untypedPost(
-	path: string,
-	body: unknown,
-	params?: Record<string, string>,
-) {
-	const untyped = client as unknown as {
-		POST: (
-			path: string,
-			options?: UntypedOptions,
-		) => Promise<{ data?: unknown; error?: unknown; response?: Response }>;
-	};
-	return call<unknown>(
-		params
-			? untyped.POST(path, { body, params: { path: params } })
-			: untyped.POST(path, { body }),
-	);
-}
-
-function untypedDelete(path: string, params?: Record<string, string>) {
-	const untyped = client as unknown as {
-		DELETE: (
-			path: string,
-			options?: UntypedOptions,
-		) => Promise<{ data?: unknown; error?: unknown; response?: Response }>;
-	};
-	return call<unknown>(
-		params
-			? untyped.DELETE(path, { params: { path: params } })
-			: untyped.DELETE(path),
-	);
-}
-
 export const usersService = {
 	list: async (): Promise<UserListResult> => {
 		try {
-			const payload = await untypedGet('/v1/users');
-			const record = asRecord(payload);
-			const raw = Array.isArray(record.users)
-				? (record.users as Array<Record<string, unknown>>)
-				: Array.isArray(record.data)
-					? (record.data as Array<Record<string, unknown>>)
-					: [];
-			return { users: raw.map(normalizeUser), fallback: false };
+			return { users: await listViaHttp(), fallback: false };
 		} catch {
 			return { users: await listViaQuery(), fallback: true };
 		}
@@ -140,7 +103,7 @@ export const usersService = {
 
 	create: async (username: string, password: string): Promise<void> => {
 		try {
-			await untypedPost('/v1/users', { username, password });
+			await call(client.POST('/v1/users', { body: { username, password } }));
 		} catch {
 			await runAdminStatement(
 				`CREATE USER ${quoteIdent(username)} WITH PASSWORD ${quoteLiteral(password)}`,
@@ -150,10 +113,11 @@ export const usersService = {
 
 	resetPassword: async (username: string, password: string): Promise<void> => {
 		try {
-			await untypedPost(
-				'/v1/users/{name}/password',
-				{ password },
-				{ name: username },
+			await call(
+				client.POST('/v1/users/{name}/password', {
+					params: { path: { name: username } },
+					body: { password },
+				}),
 			);
 		} catch {
 			await runAdminStatement(
@@ -163,11 +127,19 @@ export const usersService = {
 	},
 
 	setEnabled: async (username: string, enabled: boolean): Promise<void> => {
-		await untypedPost(
-			'/v1/users/{name}/' + (enabled ? 'enable' : 'disable'),
-			{},
-			{ name: username },
-		);
+		if (enabled) {
+			await call(
+				client.POST('/v1/users/{name}/enable', {
+					params: { path: { name: username } },
+				}),
+			);
+		} else {
+			await call(
+				client.POST('/v1/users/{name}/disable', {
+					params: { path: { name: username } },
+				}),
+			);
+		}
 	},
 
 	grant: async (
@@ -177,10 +149,11 @@ export const usersService = {
 	): Promise<void> => {
 		const normalizedRole = role.toUpperCase();
 		try {
-			await untypedPost(
-				'/v1/users/{name}/grant',
-				{ role: normalizedRole, space },
-				{ name: username },
+			await call(
+				client.POST('/v1/users/{name}/grant', {
+					params: { path: { name: username } },
+					body: { role: normalizedRole, space },
+				}),
 			);
 		} catch {
 			await runAdminStatement(
@@ -196,10 +169,11 @@ export const usersService = {
 	): Promise<void> => {
 		const normalizedRole = role.toUpperCase();
 		try {
-			await untypedPost(
-				'/v1/users/{name}/revoke',
-				{ space },
-				{ name: username },
+			await call(
+				client.POST('/v1/users/{name}/revoke', {
+					params: { path: { name: username } },
+					body: { space },
+				}),
 			);
 		} catch {
 			await runAdminStatement(
@@ -210,9 +184,23 @@ export const usersService = {
 
 	drop: async (username: string): Promise<void> => {
 		try {
-			await untypedDelete('/v1/users/{name}', { name: username });
+			await call(
+				client.DELETE('/v1/users/{name}', { params: { path: { name: username } } }),
+			);
 		} catch {
 			await runAdminStatement(`DROP USER ${quoteIdent(username)}`);
+		}
+	},
+
+	changeOwnPassword: async (
+		oldPassword: string,
+		newPassword: string,
+	): Promise<void> => {
+		const response = await queryService.execute({
+			query: `CHANGE PASSWORD ${quoteLiteral(oldPassword)} TO ${quoteLiteral(newPassword)}`,
+		});
+		if (!response.success) {
+			throw new Error(response.error?.message ?? 'Password change failed');
 		}
 	},
 };

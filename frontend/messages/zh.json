@@ -468,6 +468,7 @@
 	"auth.role.operator": "操作员",
 	"auth.role.viewer": "只读用户",
 	"sidebar.users": "用户管理",
+	"sidebar.sessions": "会话管理",
 	"users.title": "用户管理",
 	"users.search": "按名称搜索...",
 	"users.empty": "暂无用户。",
@@ -488,5 +489,15 @@
 	"users.revoke": "回收角色",
 	"users.deleteUser": "删除用户",
 	"users.confirmDeleteUser": "确认删除用户“{name}”？该操作不可撤销。",
+	"users.changeOwnPassword": "修改本人密码",
+	"users.oldPassword": "旧密码",
+	"users.newPassword": "新密码",
+	"users.confirmPassword": "确认密码",
+	"users.passwordMismatch": "两次输入的新密码不一致",
+	"sessions.title": "会话管理",
+	"sessions.empty": "暂无活跃会话。",
+	"sessions.terminate": "终止",
+	"sessions.confirmTerminate": "确认终止会话 {id}？",
+	"sessions.loadFailed": "会话加载失败",
 	"login.mustChangePassword": "默认密码必须修改，请在用户管理中更新。"
 }

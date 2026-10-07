@@ -1,6 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { can, highestUiRole, resolveUiRole, toUiRole } from './roles.ts';
+import {
+	can,
+	canAlterSchemaValue,
+	hasSchemaPrivilege,
+	highestUiRole,
+	resolveUiRole,
+	toUiRole,
+} from './roles.ts';
 
 describe('toUiRole', () => {
 	it('maps backend roles to UI roles', () => {
@@ -59,5 +66,17 @@ describe('can', () => {
 		assert.equal(can('alterSchema', 'admin'), true);
 		assert.equal(can('manageConfig', 'operator'), false);
 		assert.equal(can('manageConfig', 'admin'), true);
+	});
+
+	it('grants structure privilege to DBA without changing display folding', () => {
+		assert.equal(toUiRole('DBA'), 'operator');
+		assert.equal(hasSchemaPrivilege(['DBA']), true);
+		assert.equal(hasSchemaPrivilege(['USER']), false);
+		assert.equal(hasSchemaPrivilege(['GUEST']), false);
+		assert.equal(hasSchemaPrivilege(['ADMIN']), true);
+		assert.equal(hasSchemaPrivilege(['GOD']), true);
+		assert.equal(canAlterSchemaValue({ role: 'DBA' }), true);
+		assert.equal(canAlterSchemaValue({ roles: ['USER'] }), false);
+		assert.equal(canAlterSchemaValue({ roles: ['GOD', 'GUEST'] }), true);
 	});
 });

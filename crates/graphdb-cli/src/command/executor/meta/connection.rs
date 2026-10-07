@@ -81,3 +81,34 @@ pub async fn execute_login(
     executor.write_output(&info)?;
     Ok(true)
 }
+
+pub async fn execute_passwd(
+    executor: &mut CommandExecutor,
+    session_mgr: &mut SessionManager,
+) -> Result<bool> {
+    if !executor.conditional_stack().is_active() {
+        return Ok(true);
+    }
+    let old_password = rpassword::prompt_password("Old password: ").map_err(|e| {
+        crate::utils::error::CliError::auth(format!("Failed to read password: {}", e))
+    })?;
+    let new_password = rpassword::prompt_password("New password: ").map_err(|e| {
+        crate::utils::error::CliError::auth(format!("Failed to read password: {}", e))
+    })?;
+    let confirm = rpassword::prompt_password("Confirm new password: ").map_err(|e| {
+        crate::utils::error::CliError::auth(format!("Failed to read password: {}", e))
+    })?;
+    if new_password != confirm {
+        return Err(crate::utils::error::CliError::auth(
+            "New passwords do not match".to_string(),
+        ));
+    }
+    let query = format!(
+        "CHANGE PASSWORD '{}' TO '{}'",
+        old_password.replace('\'', "''"),
+        new_password.replace('\'', "''")
+    );
+    session_mgr.execute_query(&query).await?;
+    executor.write_output("Password changed.")?;
+    Ok(true)
+}

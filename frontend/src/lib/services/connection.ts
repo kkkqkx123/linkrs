@@ -57,6 +57,35 @@ function asSessionDetail(value: unknown): SessionDetail {
 	};
 }
 
+export interface SessionListItem {
+	session_id: number;
+	username: string;
+	space_name?: string;
+	graph_addr?: string;
+	active_queries?: number;
+}
+
+export interface SessionListResult {
+	sessions: SessionListItem[];
+}
+
+function asSessionList(value: unknown): SessionListItem[] {
+	const record = (value ?? {}) as Record<string, unknown>;
+	const raw = Array.isArray(record.sessions) ? record.sessions : [];
+	return (raw as Array<Record<string, unknown>>).map((entry) => ({
+		session_id: typeof entry.session_id === 'number' ? entry.session_id : 0,
+		username: typeof entry.username === 'string' ? entry.username : '',
+		space_name:
+			typeof entry.space_name === 'string' ? entry.space_name : undefined,
+		graph_addr:
+			typeof entry.graph_addr === 'string' ? entry.graph_addr : undefined,
+		active_queries:
+			typeof entry.active_queries === 'number'
+				? entry.active_queries
+				: undefined,
+	}));
+}
+
 export const connectionService = {
 	login: async (params: LoginParams): Promise<LoginResponse> =>
 		call(client.POST('/v1/auth/login', { body: params as LoginRequest })),
@@ -71,16 +100,8 @@ export const connectionService = {
 
 	health: async (): Promise<HealthResponse> => call(client.GET('/v1/health')),
 
-	me: async (): Promise<AuthMeResponse> => {
-		const untyped = client as unknown as {
-			GET: (path: string) => Promise<{
-				data?: unknown;
-				error?: unknown;
-				response?: Response;
-			}>;
-		};
-		return call(untyped.GET('/v1/auth/me'));
-	},
+	me: async (): Promise<AuthMeResponse> =>
+		call(client.GET('/v1/auth/me')),
 
 	sessions: {
 		create: async (params: CreateSessionParams): Promise<SessionResponse> =>
@@ -92,6 +113,10 @@ export const connectionService = {
 					} as CreateSessionRequest,
 				}),
 			),
+		list: async (): Promise<SessionListResult> =>
+			({
+				sessions: asSessionList(await call<unknown>(client.GET('/v1/sessions'))),
+			}),
 		get: async (id: number): Promise<SessionDetail> =>
 			asSessionDetail(
 				await call<unknown>(
@@ -99,6 +124,11 @@ export const connectionService = {
 				),
 			),
 		delete: async (id: number): Promise<void> => {
+			await call<unknown>(
+				client.DELETE('/v1/sessions/{id}', { params: { path: { id } } }),
+			);
+		},
+		kill: async (id: number): Promise<void> => {
 			await call<unknown>(
 				client.DELETE('/v1/sessions/{id}', { params: { path: { id } } }),
 			);

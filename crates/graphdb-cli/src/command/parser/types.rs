@@ -25,6 +25,7 @@ pub enum MetaCommand {
         username: String,
         password: Option<String>,
     },
+    Passwd,
     WhoAmI,
     ShowSpaces,
     ShowTags {

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -145,8 +145,10 @@ pub async fn create_index<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<CreateVectorIndexRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -311,8 +313,10 @@ pub async fn drop_index<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -360,8 +364,10 @@ pub async fn get_index_info<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
 ) -> Result<JsonResponse<VectorIndexDetailsResponse>, HttpError> {
+    super::authz::require_space_read(&state, session_id, space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -408,6 +414,7 @@ pub async fn list_indexes<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
 ) -> Result<JsonResponse<ListVectorIndexesResponse>, HttpError> {
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
@@ -446,8 +453,10 @@ pub async fn search<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<VectorSearchRequest>,
 ) -> Result<JsonResponse<VectorSearchResponse>, HttpError> {
+    super::authz::require_space_read(&state, session_id, request.space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -544,8 +553,10 @@ pub async fn get_vector<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((space_id, tag_name, field_name, point_id)): Path<(u64, String, String, String)>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_read(&state, session_id, space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -604,8 +615,10 @@ pub async fn count<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_read(&state, session_id, space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -690,8 +703,10 @@ pub async fn set_payload<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<SetPayloadRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -742,8 +757,10 @@ pub async fn set_payload_fields<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<SetPayloadRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -794,8 +811,10 @@ pub async fn delete_payload<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<DeletePayloadRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 
@@ -846,8 +865,10 @@ pub async fn scroll<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<ScrollRequest>,
 ) -> Result<JsonResponse<ScrollResponse>, HttpError> {
+    super::authz::require_space_read(&state, session_id, request.space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 

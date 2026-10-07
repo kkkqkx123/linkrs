@@ -56,6 +56,18 @@ export const connectionHandlers: MockRegistry = {
 		created_at: Math.floor(Date.now() / 1000),
 	} satisfies MockEntry,
 
+	'GET /v1/sessions': {
+		sessions: [
+			{
+				session_id: MOCK_SESSION_ID,
+				username: 'demo',
+				space_name: 'social',
+				graph_addr: 'mock://graph',
+				active_queries: 0,
+			},
+		],
+	} satisfies MockEntry,
+
 	'GET /v1/sessions/{id}': ((ctx) => ({
 		session_id: Number(ctx.path.id ?? MOCK_SESSION_ID),
 		username: 'demo',

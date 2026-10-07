@@ -468,6 +468,7 @@
 	"auth.role.operator": "Operator",
 	"auth.role.viewer": "Viewer",
 	"sidebar.users": "Users",
+	"sidebar.sessions": "Sessions",
 	"users.title": "User Management",
 	"users.search": "Search by name...",
 	"users.empty": "No users found.",
@@ -488,5 +489,15 @@
 	"users.revoke": "Revoke role",
 	"users.deleteUser": "Delete user",
 	"users.confirmDeleteUser": "Delete user \"{name}\"? This cannot be undone.",
+	"users.changeOwnPassword": "Change my password",
+	"users.oldPassword": "Old password",
+	"users.newPassword": "New password",
+	"users.confirmPassword": "Confirm password",
+	"users.passwordMismatch": "New passwords do not match",
+	"sessions.title": "Sessions",
+	"sessions.empty": "No active sessions.",
+	"sessions.terminate": "Terminate",
+	"sessions.confirmTerminate": "Terminate session {id}?",
+	"sessions.loadFailed": "Failed to load sessions",
 	"login.mustChangePassword": "Default password must be changed. Update it in User Management."
 }

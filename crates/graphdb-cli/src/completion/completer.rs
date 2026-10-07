@@ -127,6 +127,7 @@ const META_COMMANDS: &[&str] = &[
     "\\disconnect",
     "\\conninfo",
     "\\login",
+    "\\passwd",
     "\\whoami",
     "\\show_spaces",
     "\\l",

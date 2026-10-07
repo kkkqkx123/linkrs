@@ -238,6 +238,7 @@ impl CommandExecutor {
             MetaCommand::Login { username, password } => {
                 meta::connection::execute_login(self, &username, password, session_mgr).await
             }
+            MetaCommand::Passwd => meta::connection::execute_passwd(self, session_mgr).await,
             MetaCommand::ShowSpaces => meta::schema::execute_show_spaces(self, session_mgr).await,
             MetaCommand::ShowTags { .. } => {
                 meta::schema::execute_show_tags(self, session_mgr).await

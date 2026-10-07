@@ -94,6 +94,21 @@ pub async fn list<
     Ok(JsonResponse(UserListResponse { users }))
 }
 
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_users",
+    path = "/v1/users",
+    tag = "Auth",
+    request_body = CreateUserRequest,
+    responses(
+        (status = 201, description = "User created"),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 409, description = "Conflict"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn create<
     S: StorageClient
         + StorageSchemaContextOps
@@ -117,6 +132,22 @@ pub async fn create<
     Ok(StatusCode::CREATED)
 }
 
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_users_name_password",
+    path = "/v1/users/{name}/password",
+    tag = "Auth",
+    params(("name" = String, Path, description = "Username")),
+    request_body = ResetPasswordRequest,
+    responses(
+        (status = 204, description = "Password reset"),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn reset_password<
     S: StorageClient
         + StorageSchemaContextOps
@@ -141,6 +172,20 @@ pub async fn reset_password<
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_users_name_enable",
+    path = "/v1/users/{name}/enable",
+    tag = "Auth",
+    params(("name" = String, Path, description = "Username")),
+    responses(
+        (status = 204, description = "User enabled"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn enable<
     S: StorageClient
         + StorageSchemaContextOps
@@ -165,6 +210,20 @@ pub async fn enable<
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_users_name_disable",
+    path = "/v1/users/{name}/disable",
+    tag = "Auth",
+    params(("name" = String, Path, description = "Username")),
+    responses(
+        (status = 204, description = "User disabled"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn disable<
     S: StorageClient
         + StorageSchemaContextOps
@@ -189,6 +248,22 @@ pub async fn disable<
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_users_name_grant",
+    path = "/v1/users/{name}/grant",
+    tag = "Auth",
+    params(("name" = String, Path, description = "Username")),
+    request_body = GrantRoleRequest,
+    responses(
+        (status = 204, description = "Role granted"),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn grant<
     S: StorageClient
         + StorageSchemaContextOps
@@ -213,6 +288,22 @@ pub async fn grant<
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_users_name_revoke",
+    path = "/v1/users/{name}/revoke",
+    tag = "Auth",
+    params(("name" = String, Path, description = "Username")),
+    request_body = RevokeRoleRequest,
+    responses(
+        (status = 204, description = "Role revoked"),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn revoke<
     S: StorageClient
         + StorageSchemaContextOps
@@ -237,6 +328,20 @@ pub async fn revoke<
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    delete,
+    operation_id = "delete_v1_users_name",
+    path = "/v1/users/{name}",
+    tag = "Auth",
+    params(("name" = String, Path, description = "Username")),
+    responses(
+        (status = 204, description = "User deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn drop_user<
     S: StorageClient
         + StorageSchemaContextOps

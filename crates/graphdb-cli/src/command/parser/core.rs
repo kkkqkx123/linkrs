@@ -39,6 +39,7 @@ fn parse_meta_command(input: &str) -> Result<MetaCommand, String> {
         "disconnect" => Ok(MetaCommand::Disconnect),
         "conninfo" => Ok(MetaCommand::ConnInfo),
         "login" => crate::command::parser::meta::connection::parse_login(arg),
+        "passwd" | "password" => Ok(MetaCommand::Passwd),
         "whoami" => Ok(MetaCommand::WhoAmI),
         "show_spaces" | "l" => Ok(MetaCommand::ShowSpaces),
         "show_tags" | "dt" => crate::command::parser::meta::schema::parse_show_tags(arg),

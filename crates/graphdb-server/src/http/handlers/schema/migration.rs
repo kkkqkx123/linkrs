@@ -4,7 +4,7 @@
 //! history and status queries.
 
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
 use graphdb_wire::migration::{
@@ -50,6 +50,7 @@ pub async fn create_migration_plan<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((space, label)): Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<MigrationPlanQuery>,
 ) -> Result<JsonResponse<MigrationPlanResponse>, HttpError> {
@@ -60,6 +61,7 @@ pub async fn create_migration_plan<
     let is_edge = query.is_edge.unwrap_or(false);
     let expand_contract = query.expand_contract.unwrap_or(false);
 
+    super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let storage_read = storage.read();
@@ -138,11 +140,13 @@ pub async fn execute_migration<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(req): Json<MigrationExecuteRequest>,
 ) -> Result<JsonResponse<MigrationExecuteResponse>, HttpError> {
     let plan: graphdb_migration::MigrationPlan =
         serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
+    super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let stats = state.server.get_stats_manager();
@@ -203,11 +207,13 @@ pub async fn rollback_migration<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(req): Json<MigrationRollbackRequest>,
 ) -> Result<JsonResponse<MigrationExecuteResponse>, HttpError> {
     let plan: graphdb_migration::MigrationPlan =
         serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
 
+    super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let mut storage_write = storage.write();
@@ -249,12 +255,14 @@ pub async fn dry_run_migration<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(req): Json<MigrationExecuteRequest>,
 ) -> Result<JsonResponse<MigrationExecuteResponse>, HttpError> {
     let mut plan: graphdb_migration::MigrationPlan =
         serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
     plan.dry_run = true;
 
+    super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let mut storage_write = storage.write();
@@ -300,10 +308,12 @@ pub async fn migration_history<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((space, label)): Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<JsonResponse<MigrationHistoryResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
+    super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let storage_read = storage.read();
@@ -356,10 +366,12 @@ pub async fn migration_status<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((space, label)): Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<JsonResponse<MigrationStatusResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
+    super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let storage_read = storage.read();

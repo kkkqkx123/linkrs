@@ -34,7 +34,7 @@ use super::{
         config::{get as get_config, get_key, reset_key, update as update_config, update_key},
         function::{info as function_info, list, register, unregister},
         health, query, schema,
-        session::{create as create_session, delete_session, get_session},
+        session::{create as create_session, delete_session, get_session, list_sessions},
         statistics::{
             database, freeze_stats, overview, queries, query_profile_detail,
             search as search_stats, session, system, trigger_freeze,
@@ -98,7 +98,7 @@ pub fn create_router<
         )
         .route("/users/{name}/grant", post(super::handlers::users::grant))
         .route("/users/{name}/revoke", post(super::handlers::users::revoke))
-        .route("/sessions", post(create_session))
+        .route("/sessions", post(create_session).get(list_sessions))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/query", post(query::execute))
         .route("/query/validate", post(query::validate))

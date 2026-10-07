@@ -1,7 +1,7 @@
 //! Configuration Management HTTP Processor
 
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
 use serde::Deserialize;
@@ -33,7 +33,9 @@ pub async fn get<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let config = state.server.get_config();
 
     Ok(JsonResponse(serde_json::json!({
@@ -112,8 +114,10 @@ pub async fn update<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<serde_json::Value>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let store = state.server.config_store();
     let config_path = state.server.get_config_path();
     let mut updated = Vec::new();
@@ -177,8 +181,10 @@ pub async fn get_key<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((section, key)): Path<(String, String)>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let config = state.server.get_config();
     let value = get_config_value(&config, &section, &key);
 
@@ -215,9 +221,11 @@ pub async fn update_key<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((section, key)): Path<(String, String)>,
     Json(request): Json<UpdateConfigRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let store = state.server.config_store();
     let config_path = state.server.get_config_path();
     let (requires_restart, persisted) = apply_config_update(
@@ -270,8 +278,10 @@ pub async fn reset_key<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path((section, key)): Path<(String, String)>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let default_config = crate::config::Config::default();
     let default_value = get_config_value(&default_config, &section, &key);
     let store = state.server.config_store();

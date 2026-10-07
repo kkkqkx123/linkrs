@@ -1,7 +1,7 @@
 //! Batch processing of HTTP handlers
 
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
 use serde_json;
@@ -38,8 +38,10 @@ pub async fn create<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<CreateBatchRequest>,
 ) -> Result<JsonResponse<CreateBatchResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let batch_manager = state.server.get_batch_manager();
 
     match batch_manager.create_task(request.space_id, request.batch_type, request.batch_size) {
@@ -79,8 +81,10 @@ pub async fn status<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(batch_id): Path<String>,
 ) -> Result<JsonResponse<BatchStatusResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let batch_manager = state.server.get_batch_manager();
 
     match batch_manager.get_task(&batch_id) {
@@ -122,9 +126,11 @@ pub async fn add_items<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(batch_id): Path<String>,
     Json(request): Json<AddBatchItemsRequest>,
 ) -> Result<JsonResponse<AddBatchItemsResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let batch_manager = state.server.get_batch_manager();
 
     match batch_manager.add_items(&batch_id, request.items) {
@@ -170,8 +176,10 @@ pub async fn execute<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(batch_id): Path<String>,
 ) -> Result<JsonResponse<ExecuteBatchResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let batch_manager = state.server.get_batch_manager();
 
     // Retrieve task information in order to obtain the space_id.
@@ -242,8 +250,10 @@ pub async fn cancel<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(batch_id): Path<String>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let batch_manager = state.server.get_batch_manager();
 
     match batch_manager.cancel_task(&batch_id) {
@@ -281,8 +291,10 @@ pub async fn delete<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(batch_id): Path<String>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let batch_manager = state.server.get_batch_manager();
 
     match batch_manager.remove_task(&batch_id) {

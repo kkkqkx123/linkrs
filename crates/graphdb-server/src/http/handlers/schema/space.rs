@@ -3,7 +3,7 @@
 //! Handles space creation, lookup, deletion and listing.
 
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
 use graphdb_wire::schema::CreateSpaceRequest;
@@ -40,8 +40,10 @@ pub async fn create_space<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<CreateSpaceRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let schema_api = state.server.get_schema_api();
 
@@ -129,8 +131,10 @@ pub async fn drop_space<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(name): Path<String>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let schema_api = state.server.get_schema_api();
 

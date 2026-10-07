@@ -3446,6 +3446,28 @@
       }
     },
     "/v1/sessions": {
+      "get": {
+        "tags": [
+          "Session"
+        ],
+        "operationId": "get_v1_sessions",
+        "responses": {
+          "200": {
+            "description": "Session list",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
       "post": {
         "tags": [
           "Session"
@@ -4545,6 +4567,297 @@
           },
           "403": {
             "description": "Forbidden"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "post_v1_users",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "User created"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/users/{name}": {
+      "delete": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "delete_v1_users_name",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "User deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/users/{name}/disable": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "post_v1_users_name_disable",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "User disabled"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/users/{name}/enable": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "post_v1_users_name_enable",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "User enabled"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/users/{name}/grant": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "post_v1_users_name_grant",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Role granted"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/users/{name}/password": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "post_v1_users_name_password",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Password reset"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/users/{name}/revoke": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "post_v1_users_name_revoke",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Username",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Role revoked"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
           },
           "500": {
             "description": "Internal error"
@@ -6716,6 +7029,22 @@
           }
         }
       },
+      "CreateUserRequest": {
+        "type": "object",
+        "description": "Create user request for the admin channel.",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
       "CreateVectorIndexRequest": {
         "type": "object",
         "description": "Vector index creation request",
@@ -7554,6 +7883,22 @@
           }
         }
       },
+      "GrantRoleRequest": {
+        "type": "object",
+        "description": "Grant role request for the admin channel.",
+        "required": [
+          "role",
+          "space"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          }
+        }
+      },
       "HistoryItem": {
         "type": "object",
         "description": "Query history item",
@@ -7843,6 +8188,12 @@
             ],
             "format": "int64",
             "minimum": 0
+          },
+          "must_change_password": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "role": {
             "type": [
@@ -9078,6 +9429,18 @@
           }
         }
       },
+      "ResetPasswordRequest": {
+        "type": "object",
+        "description": "Reset password request for the admin channel.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          }
+        }
+      },
       "RetentionRunRequest": {
         "type": "object",
         "properties": {
@@ -9096,6 +9459,18 @@
             ],
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "RevokeRoleRequest": {
+        "type": "object",
+        "description": "Revoke role request for the admin channel.",
+        "required": [
+          "space"
+        ],
+        "properties": {
+          "space": {
+            "type": "string"
           }
         }
       },

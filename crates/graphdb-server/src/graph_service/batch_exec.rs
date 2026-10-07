@@ -120,18 +120,20 @@ impl<
         space_id: i64,
         batch_statements: &[String],
     ) -> (Vec<String>, Vec<(usize, String)>) {
+        use super::context::QueryExecutionContext;
         let mut denied: Vec<(usize, String)> = Vec::new();
         let mut permitted: Vec<String> = Vec::with_capacity(batch_statements.len());
         for (index, stmt) in batch_statements.iter().enumerate() {
-            if !self.permission_manager.is_admin(username) {
-                let permission = self.extract_permission_from_statement(stmt);
-                if let Err(e) = self
-                    .permission_manager
-                    .check_permission(username, space_id, permission)
-                {
-                    denied.push((index, format!("Permission check failed: {}", e)));
-                    continue;
-                }
+            let context = QueryExecutionContext {
+                stmt,
+                parsed_ast: None,
+                space_id,
+                parameters: None,
+                session_variables: None,
+            };
+            if let Err(e) = self.check_query_permission(username, &context) {
+                denied.push((index, e.message().to_string()));
+                continue;
             }
             permitted.push(stmt.clone());
         }
@@ -203,21 +205,7 @@ impl<
 
         let space_id = session.space().map(|s| s.id as i64).unwrap_or(0);
         let username = session.user();
-        let mut denied: Vec<(usize, String)> = Vec::new();
-        let mut permitted: Vec<String> = Vec::with_capacity(batch_statements.len());
-        for (index, stmt) in batch_statements.iter().enumerate() {
-            if !self.permission_manager.is_admin(&username) {
-                let permission = self.extract_permission_from_statement(stmt);
-                if let Err(e) = self
-                    .permission_manager
-                    .check_permission(&username, space_id, permission)
-                {
-                    denied.push((index, format!("Permission check failed: {}", e)));
-                    continue;
-                }
-            }
-            permitted.push(stmt.clone());
-        }
+        let (permitted, denied) = self.partition_permitted(&username, space_id, &batch_statements);
 
         let query_request = graphdb_api::api_core::QueryRequest {
             isolation_level: None,

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod authz;
 pub mod batch;
 pub mod config;
 pub mod cursor;
@@ -35,7 +36,7 @@ pub use schema::{
     create_edge_type, create_space, create_tag, detect_breaking_changes, drop_space,
     get_schema_changes, get_space, get_version_history, list_edge_types, list_spaces, list_tags,
 };
-pub use session::{create as create_session, delete_session, get_session};
+pub use session::{create as create_session, delete_session, get_session, list_sessions};
 pub use statistics::{database, queries, search as search_stats, session, system};
 pub use stream::execute_stream;
 pub use sync::status;

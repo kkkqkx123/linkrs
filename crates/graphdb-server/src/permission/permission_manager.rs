@@ -27,10 +27,14 @@ pub struct PermissionManager {
     /// The “God” role uses a special space_id: -1 to indicate that it is a global role, which is not associated with a specific Space.
     /// Using DashMap, concurrent read and write operations are supported.
     user_roles: Arc<DashMap<String, HashMap<i64, RoleType>>>,
-    /// space permission mapping：space_id -> {username -> [permissions]}
-    /// Used for fine-grained permission control
-    /// Use DashMap to support async read/write
-    space_permissions: Arc<DashMap<i64, HashMap<String, Vec<Permission>>>>,
+}
+
+impl Clone for PermissionManager {
+    fn clone(&self) -> Self {
+        Self {
+            user_roles: Arc::clone(&self.user_roles),
+        }
+    }
 }
 
 impl PermissionManager {
@@ -45,7 +49,6 @@ impl PermissionManager {
 
         Self {
             user_roles: Arc::new(user_roles),
-            space_permissions: Arc::new(DashMap::new()),
         }
     }
 
@@ -179,6 +182,9 @@ impl PermissionManager {
     }
 
     /// Check whether the user is an administrator (with the God or Admin role).
+    ///
+    /// User management privilege. Structure management additionally accepts
+    /// the Dba role, see `is_schema_admin`.
     pub fn is_admin(&self, username: &str) -> bool {
         self.user_roles
             .get(username)
@@ -186,6 +192,21 @@ impl PermissionManager {
                 roles
                     .values()
                     .any(|&role| matches!(role, RoleType::God | RoleType::Admin))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Check whether the user holds structure management privilege.
+    ///
+    /// True for God, Admin and Dba. Matches the role matrix where Dba carries
+    /// schema permission but not user administration.
+    pub fn is_schema_admin(&self, username: &str) -> bool {
+        self.user_roles
+            .get(username)
+            .map(|roles| {
+                roles
+                    .values()
+                    .any(|&role| matches!(role, RoleType::God | RoleType::Admin | RoleType::Dba))
             })
             .unwrap_or(false)
     }
@@ -236,54 +257,6 @@ impl PermissionManager {
     /// Check whether the user can revoke the assigned role.
     pub fn can_revoke_role(&self, revoker: &str, space_id: i64, target_role: RoleType) -> bool {
         self.can_grant_role(revoker, space_id, target_role)
-    }
-
-    // ==================== Space Permission Management (Fine-Grained Permissions) ====================
-
-    /// Granting specific permissions to users in the space
-    pub fn grant_permission(
-        &self,
-        username: &str,
-        space_id: i64,
-        permission: Permission,
-    ) -> PermissionResult<()> {
-        let mut space_map = self.space_permissions.entry(space_id).or_default();
-
-        let user_permissions = space_map.entry(username.to_string()).or_default();
-
-        if !user_permissions.contains(&permission) {
-            user_permissions.push(permission);
-        }
-        Ok(())
-    }
-
-    /// Revoke a user's specific permissions in the space
-    pub fn revoke_permission(
-        &self,
-        username: &str,
-        space_id: i64,
-        permission: Permission,
-    ) -> PermissionResult<()> {
-        if let Some(mut space_map) = self.space_permissions.get_mut(&space_id) {
-            if let Some(user_permissions) = space_map.get_mut(username) {
-                user_permissions.retain(|&p| p != permission);
-            }
-        }
-        Ok(())
-    }
-
-    /// Obtain a list of specific permissions that a user has in the space.
-    pub fn get_permissions(&self, username: &str, space_id: i64) -> Vec<Permission> {
-        self.space_permissions
-            .get(&space_id)
-            .and_then(|space_map| space_map.get(username).cloned())
-            .unwrap_or_default()
-    }
-
-    /// Checking whether a user has specific privileges in space (fine-grained checking)
-    pub fn has_permission(&self, username: &str, space_id: i64, permission: Permission) -> bool {
-        self.get_permissions(username, space_id)
-            .contains(&permission)
     }
 }
 

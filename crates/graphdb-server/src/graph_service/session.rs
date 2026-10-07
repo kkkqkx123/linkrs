@@ -138,6 +138,20 @@ impl<
         &self.permission_manager
     }
 
+    pub fn permission_checker(&self) -> crate::permission::PermissionChecker {
+        crate::permission::PermissionChecker::new(
+            (*self.permission_manager).clone(),
+            self.authenticator.config().clone(),
+        )
+    }
+
+    pub fn get_storage_space_id(&self, space_name: &str) -> Option<i64> {
+        self.storage
+            .get_space_id(space_name)
+            .map(|id| id as i64)
+            .ok()
+    }
+
     pub fn get_stats_manager(&self) -> &Arc<StatsManager> {
         &self.stats_manager
     }
@@ -168,12 +182,7 @@ impl<
 
     /// Terminate the session (KILL SESSION)
     pub async fn kill_session(&self, session_id: i64, current_user: &str) -> SessionResult<()> {
-        let current_session = self
-            .session_manager
-            .find_session(session_id)
-            .ok_or(SessionError::session_not_found(session_id))?;
-
-        let is_admin = current_session.is_admin();
+        let is_admin = self.permission_manager.is_admin(current_user);
 
         self.session_manager
             .kill_session(session_id, current_user, is_admin)
@@ -372,12 +381,30 @@ impl<
         space: &str,
         role_name: &str,
     ) -> Result<(), String> {
-        self.require_admin(caller)?;
+        if caller == username {
+            return Err("cannot modify own role".to_string());
+        }
         if !self.storage.user_exists(username) {
             return Err(format!("user {} not found", username));
         }
         let role: graphdb_core::RoleType = role_name.parse().map_err(|e: String| e)?;
         let space_id = self.resolve_space_id(space)?;
+        let operator_role = self
+            .permission_manager
+            .get_role(caller, space_id)
+            .or_else(|| self.permission_manager.get_role(caller, GOD_SPACE_ID))
+            .ok_or_else(|| "permission denied: only Admin or God can manage roles".to_string())?;
+        if !matches!(
+            operator_role,
+            graphdb_core::RoleType::God
+                | graphdb_core::RoleType::Admin
+                | graphdb_core::RoleType::Dba
+        ) {
+            return Err("permission denied: only Admin or God can manage roles".to_string());
+        }
+        if !operator_role.can_grant(role) {
+            return Err(format!("permission denied: cannot grant role {}", role));
+        }
         let mut handle = (*self.storage).clone();
         handle
             .grant_role(username, space_id, role)
@@ -395,11 +422,26 @@ impl<
         username: &str,
         space: &str,
     ) -> Result<(), String> {
-        self.require_admin(caller)?;
+        if caller == username {
+            return Err("cannot modify own role".to_string());
+        }
         if !self.storage.user_exists(username) {
             return Err(format!("user {} not found", username));
         }
         let space_id = self.resolve_space_id(space)?;
+        let operator_role = self
+            .permission_manager
+            .get_role(caller, space_id)
+            .or_else(|| self.permission_manager.get_role(caller, GOD_SPACE_ID))
+            .ok_or_else(|| "permission denied: only Admin or God can manage roles".to_string())?;
+        if !matches!(
+            operator_role,
+            graphdb_core::RoleType::God
+                | graphdb_core::RoleType::Admin
+                | graphdb_core::RoleType::Dba
+        ) {
+            return Err("permission denied: only Admin or God can manage roles".to_string());
+        }
         let mut handle = (*self.storage).clone();
         handle
             .revoke_role(username, space_id)

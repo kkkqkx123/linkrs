@@ -1,7 +1,7 @@
 //! Custom function HTTP handler
 
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
 use parking_lot::RwLock;
@@ -136,8 +136,10 @@ pub async fn register<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<RegisterFunctionRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let implementation = match &request.implementation {
         Some(serde_json::Value::String(path)) => path.clone(),
         Some(other) => {
@@ -296,8 +298,10 @@ pub async fn unregister<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(name): Path<String>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let registry = state.server.get_function_registry();
     unregister_udf_by_name(&registry, &name).map_err(op_error_to_http)?;
 

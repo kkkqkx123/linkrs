@@ -24,6 +24,10 @@ fn show_general_help() -> String {
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
+        "\\passwd", "Change own password (prompts interactively)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
         "\\whoami", "Display current username, session and role"
     ));
     output.push_str(&format!(

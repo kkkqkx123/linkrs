@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     response::Json as JsonResponse,
     Json,
 };
@@ -48,7 +48,9 @@ pub async fn status<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
 ) -> Result<JsonResponse<SyncStatusResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service.sync_api();
 
@@ -106,7 +108,9 @@ pub async fn retry_outbox<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
@@ -141,7 +145,9 @@ pub async fn diagnostics<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
@@ -188,8 +194,10 @@ pub async fn dead_letters<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Query(params): Query<DeadLetterQuery>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
@@ -241,8 +249,10 @@ pub async fn requeue<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(payload): Json<RequeueRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
@@ -307,8 +317,10 @@ pub async fn degraded_ranges<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Query(params): Query<DegradedQuery>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
@@ -354,8 +366,10 @@ pub async fn degraded_clear<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(payload): Json<ClearDegradedRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
@@ -401,8 +415,10 @@ pub async fn retention_run<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(payload): Json<RetentionRunRequest>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
@@ -439,7 +455,9 @@ pub async fn retention_status<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()

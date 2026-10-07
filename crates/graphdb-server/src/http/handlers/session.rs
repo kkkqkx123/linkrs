@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Extension, Json, Path, State},
     http::StatusCode,
     response::Json as JsonResponse,
 };
@@ -59,6 +59,47 @@ pub async fn create<
 
 #[utoipa::path(
     get,
+    operation_id = "get_v1_sessions",
+    path = "/v1/sessions",
+    tag = "Session",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Session list"),
+        (status = 403, description = "Forbidden"),
+        (status = 500, description = "Internal error")
+    )
+)]
+pub async fn list_sessions<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
+    let sessions = state.server.get_graph_service().list_sessions().await;
+    let items: Vec<serde_json::Value> = sessions
+        .into_iter()
+        .map(|info| {
+            serde_json::json!({
+                "session_id": info.session_id,
+                "username": info.user_name,
+                "space_name": info.space_name,
+                "graph_addr": info.graph_addr,
+                "active_queries": info.active_queries,
+            })
+        })
+        .collect();
+    Ok(JsonResponse(serde_json::json!({ "sessions": items })))
+}
+
+#[utoipa::path(
+    get,
     path = "/v1/sessions/{id}",
     tag = "Session",
     params(("id" = i64, Path, description = "Session id")),
@@ -79,12 +120,21 @@ pub async fn get_session<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Path(session_id): Path<i64>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let caller = super::authz::find_session(&state, caller_session_id)?;
+    let graph_service = state.server.get_graph_service();
     let session_manager = state.server.get_session_manager();
     let session = session_manager
         .find_session(session_id)
         .ok_or_else(|| HttpError::NotFound("Session not found".to_string()))?;
+    let is_admin = graph_service
+        .get_permission_manager()
+        .is_admin(&caller.user());
+    if !is_admin && session.user() != caller.user() {
+        return Err(HttpError::forbidden("Admin permission required"));
+    }
 
     Ok(JsonResponse(serde_json::json!({
         "session_id": session.id(),
@@ -116,9 +166,24 @@ pub async fn delete_session<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Path(session_id): Path<i64>,
 ) -> Result<StatusCode, HttpError> {
-    let session_manager = state.server.get_session_manager();
-    session_manager.remove_session(session_id).await;
+    let caller = super::authz::find_session(&state, caller_session_id)?;
+    state
+        .server
+        .get_graph_service()
+        .kill_session(session_id, &caller.user())
+        .await
+        .map_err(|e| {
+            let msg = e.to_string().to_lowercase();
+            if msg.contains("not found") {
+                HttpError::NotFound(e.to_string())
+            } else if msg.contains("permission") {
+                HttpError::forbidden(e.to_string())
+            } else {
+                HttpError::BadRequest(e.to_string())
+            }
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -8,7 +8,7 @@
 
 #[cfg(any(feature = "fulltext", feature = "vector"))]
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     response::Json as JsonResponse,
     Json,
 };
@@ -181,8 +181,10 @@ pub async fn rebuild_fulltext<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<graphdb_wire::fulltext::RebuildFulltextIndexRequest>,
 ) -> Result<JsonResponse<graphdb_wire::fulltext::RebuildFulltextIndexResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     use graphdb_api::api_core::rebuild_source::StorageRebuildSource;
 
     let sync_manager = sync_manager_or_error(&state, "fulltext")?;
@@ -264,8 +266,10 @@ pub async fn fulltext_rebuild_status<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(rebuild_id): Path<String>,
 ) -> Result<JsonResponse<graphdb_wire::fulltext::FulltextRebuildStatusResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let record = state
         .server
         .rebuild_tasks()
@@ -329,8 +333,10 @@ pub async fn clear_fulltext<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<graphdb_wire::fulltext::ClearFulltextIndexRequest>,
 ) -> Result<JsonResponse<graphdb_wire::fulltext::ClearFulltextIndexResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     if !request.force {
         return Err(HttpError::BadRequest(
             "Refusing to clear fulltext index without explicit confirmation: retry with force = true"
@@ -392,7 +398,9 @@ pub async fn inconsistent_fulltext<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let sync_manager = sync_manager_or_error(&state, "fulltext")?;
     let inconsistent = sync_manager.inconsistent_fulltext_indexes();
     let count = inconsistent.len() as u64;
@@ -433,8 +441,10 @@ pub async fn rebuild_vector<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<graphdb_wire::vector::RebuildVectorIndexRequest>,
 ) -> Result<JsonResponse<graphdb_wire::vector::RebuildVectorIndexResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     use graphdb_api::api_core::rebuild_source::StorageVectorSource;
 
     let sync_manager = sync_manager_or_error(&state, "vector")?;
@@ -516,8 +526,10 @@ pub async fn vector_rebuild_status<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Path(rebuild_id): Path<String>,
 ) -> Result<JsonResponse<graphdb_wire::vector::VectorRebuildStatusResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     let record = state
         .server
         .rebuild_tasks()
@@ -581,8 +593,10 @@ pub async fn clear_vector<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
     Json(request): Json<graphdb_wire::vector::ClearVectorIndexRequest>,
 ) -> Result<JsonResponse<graphdb_wire::vector::ClearVectorIndexResponse>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
     if !request.force {
         return Err(HttpError::BadRequest(
             "Refusing to clear vector index without explicit confirmation: retry with force = true"

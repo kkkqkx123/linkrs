@@ -102,8 +102,14 @@ impl PermissionChecker {
             OperationType::ReadSpace => self.check_read_space(&username, target_space),
 
             // Space-related operations: CREATE SPACE, DROP SPACE, etc.
-            // Only the God character can perform this action.
-            OperationType::WriteSpace => Err(PermissionError::only_god_can_manage_spaces()),
+            // Space structure requires administrator privilege.
+            OperationType::WriteSpace => {
+                if self.permission_manager.is_admin(&username) {
+                    Ok(())
+                } else {
+                    Err(PermissionError::only_god_can_manage_spaces())
+                }
+            }
 
             // Schema reading operation
             OperationType::ReadSchema => self.check_read_schema(&username, target_space),
@@ -121,7 +127,14 @@ impl PermissionChecker {
             OperationType::ReadUser => self.check_read_user(&username, target_user, session),
 
             // User-written operations
-            OperationType::WriteUser => Err(PermissionError::only_god_can_manage_users()),
+            // Creating, deleting or modifying users requires global or space admin.
+            OperationType::WriteUser => {
+                if self.permission_manager.is_admin(&username) {
+                    Ok(())
+                } else {
+                    Err(PermissionError::only_god_can_manage_users())
+                }
+            }
 
             // Role management operations: GRANT, REVOKE
             OperationType::WriteRole => {
@@ -165,7 +178,7 @@ impl PermissionChecker {
     }
 
     /// Checking Schema Write Permissions
-    /// Business logic: Only God and Admin have the permission to write to the Schema.
+    /// Business logic: God, Admin and Dba hold structure management privilege.
     fn check_write_schema(
         &self,
         username: &str,
@@ -175,8 +188,8 @@ impl PermissionChecker {
 
         let space_id = target_space.ok_or(PermissionError::schema_write_space_id_required())?;
 
-        // Check whether the user is an administrator.
-        if !self.permission_manager.is_admin(username) {
+        // Structure admins include Dba, matching the role matrix.
+        if !self.permission_manager.is_schema_admin(username) {
             return Err(PermissionError::schema_write_permission_denied(
                 space_id,
                 username.to_string(),
@@ -474,6 +487,8 @@ mod tests {
             .expect("Failed to grant role");
         pm.grant_role("admin1", 1, RoleType::Admin)
             .expect("Failed to grant role");
+        pm.grant_role("dba1", 1, RoleType::Dba)
+            .expect("Failed to grant role");
         pm.grant_role("guest1", 1, RoleType::Guest)
             .expect("Failed to grant role");
 
@@ -615,5 +630,74 @@ mod tests {
         assert!(checker
             .can_write_role(&admin_session, 1, "admin2", RoleType::Admin)
             .is_err());
+    }
+
+    #[test]
+    fn test_operation_matrix_space_and_user() {
+        let checker = create_test_checker();
+        let god_session = create_test_session("root", true);
+        let admin_session = create_user_session("admin1", RoleType::Admin, 1);
+        let dba_session = create_user_session("dba1", RoleType::Dba, 1);
+        let user_session = create_user_session("user1", RoleType::User, 1);
+        let guest_session = create_user_session("guest1", RoleType::Guest, 1);
+
+        assert!(checker.can_write_space(&god_session).is_ok());
+        assert!(checker.can_write_space(&admin_session).is_ok());
+        assert!(checker.can_write_space(&dba_session).is_err());
+        assert!(checker.can_write_space(&user_session).is_err());
+        assert!(checker.can_write_space(&guest_session).is_err());
+
+        assert!(checker.can_write_user(&god_session).is_ok());
+        assert!(checker.can_write_user(&admin_session).is_ok());
+        assert!(checker.can_write_user(&dba_session).is_err());
+        assert!(checker.can_write_user(&user_session).is_err());
+        assert!(checker.can_write_user(&guest_session).is_err());
+    }
+
+    #[test]
+    fn test_operation_matrix_schema_includes_dba() {
+        let checker = create_test_checker();
+        let admin_session = create_user_session("admin1", RoleType::Admin, 1);
+        let dba_session = create_user_session("dba1", RoleType::Dba, 1);
+        let user_session = create_user_session("user1", RoleType::User, 1);
+        let guest_session = create_user_session("guest1", RoleType::Guest, 1);
+
+        assert!(checker.can_write_schema(&admin_session, 1).is_ok());
+        assert!(checker.can_write_schema(&dba_session, 1).is_ok());
+        assert!(checker.can_write_schema(&user_session, 1).is_err());
+        assert!(checker.can_write_schema(&guest_session, 1).is_err());
+
+        assert!(checker.can_read_schema(&guest_session, 1).is_ok());
+        assert!(checker.can_read_space(&guest_session, 1).is_ok());
+        assert!(checker.can_read_data(&guest_session, 1).is_ok());
+        assert!(checker.can_show(&guest_session).is_ok());
+    }
+
+    #[test]
+    fn test_operation_matrix_role_and_password() {
+        let checker = create_test_checker();
+        let god_session = create_test_session("root", true);
+        let admin_session = create_user_session("admin1", RoleType::Admin, 1);
+        let dba_session = create_user_session("dba1", RoleType::Dba, 1);
+        let user_session = create_user_session("user1", RoleType::User, 1);
+
+        assert!(checker
+            .can_write_role(&dba_session, 1, "someone", RoleType::User)
+            .is_ok());
+        assert!(checker
+            .can_write_role(&dba_session, 1, "someone", RoleType::Guest)
+            .is_ok());
+        assert!(checker
+            .can_write_role(&dba_session, 1, "someone", RoleType::Admin)
+            .is_err());
+        assert!(checker
+            .can_write_role(&user_session, 1, "someone", RoleType::Guest)
+            .is_err());
+        assert!(checker
+            .can_write_role(&admin_session, 1, "admin1", RoleType::User)
+            .is_err());
+        assert!(checker.can_change_password(&user_session, "user1").is_ok());
+        assert!(checker.can_change_password(&user_session, "other").is_err());
+        assert!(checker.can_change_password(&god_session, "other").is_ok());
     }
 }

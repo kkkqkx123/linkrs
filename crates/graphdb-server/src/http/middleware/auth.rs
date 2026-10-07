@@ -45,6 +45,18 @@ pub async fn auth_middleware<
         return Err(StatusCode::UNAUTHORIZED);
     }
 
+    if state
+        .server
+        .get_graph_service()
+        .must_change_password(&session.user())
+    {
+        let path = request.uri().path();
+        let query_allowed = path == "/v1/query" || path.starts_with("/v1/query/");
+        if !query_allowed {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+
     request.extensions_mut().insert(session_id);
 
     Ok(next.run(request).await)

@@ -169,14 +169,14 @@ impl PermissionError {
     pub fn only_god_can_manage_spaces() -> Self {
         Self::new(
             PermissionErrorKind::OnlyGodCanManageSpaces,
-            "Permission denied: only GOD role can create/delete spaces",
+            "Permission denied: only Admin or God can create/delete spaces",
         )
     }
 
     pub fn only_god_can_manage_users() -> Self {
         Self::new(
             PermissionErrorKind::OnlyGodCanManageUsers,
-            "Permission denied: only GOD role can manage users",
+            "Permission denied: only Admin or God can manage users",
         )
     }
 

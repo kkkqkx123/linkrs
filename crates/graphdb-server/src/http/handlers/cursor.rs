@@ -1,7 +1,7 @@
 //! Forward-only result cursor handlers: open, fetch, close.
 
 use axum::{
-    extract::{Json, State},
+    extract::{Extension, Json, State},
     response::Json as JsonResponse,
 };
 use graphdb_wire::query::{
@@ -52,8 +52,10 @@ pub async fn open_cursor<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Json(request): Json<OpenCursorRequest>,
 ) -> Result<JsonResponse<OpenCursorResponse>, HttpError> {
+    super::authz::require_session_owner_or_admin(&state, caller_session_id, request.session_id)?;
     let (cursor_id, columns) = state
         .server
         .get_graph_service()
@@ -86,8 +88,10 @@ pub async fn fetch_cursor<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Json(request): Json<FetchCursorRequest>,
 ) -> Result<JsonResponse<FetchCursorResponse>, HttpError> {
+    super::authz::require_session_owner_or_admin(&state, caller_session_id, request.session_id)?;
     let trace_id = uuid::Uuid::new_v4().to_string();
     let start = std::time::Instant::now();
     let stats_manager = state.server.get_stats_manager().clone();
@@ -181,8 +185,10 @@ pub async fn close_cursor<
         + 'static,
 >(
     State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Json(request): Json<CloseCursorRequest>,
 ) -> Result<JsonResponse<CloseCursorResponse>, HttpError> {
+    super::authz::require_session_owner_or_admin(&state, caller_session_id, request.session_id)?;
     let closed = state
         .server
         .get_graph_service()
