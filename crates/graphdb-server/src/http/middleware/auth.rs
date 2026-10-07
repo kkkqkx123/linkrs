@@ -23,6 +23,18 @@ pub async fn auth_middleware<
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    let graph_service = state.server.get_graph_service();
+
+    // Skip every session check when the operator has explicitly disabled
+    // authentication (either via enable_authorize = false or single_user_mode = true).
+    // This matches the local-deployment "no login needed" contract. We still
+    // inject a placeholder session_id so downstream handlers never have to
+    // deal with an Option type.
+    if graph_service.is_auth_disabled() {
+        request.extensions_mut().insert(0i64);
+        return Ok(next.run(request).await);
+    }
+
     let session_id = request
         .headers()
         .get("X-Session-ID")

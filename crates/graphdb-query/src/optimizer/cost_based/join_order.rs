@@ -530,7 +530,7 @@ impl JoinOrderOptimizer {
             let mut ids = Vec::new();
             let mut mask = left_set;
             while mask != 0 {
-                let bit = mask.isolate_lowest_one();
+                let bit = mask & mask.wrapping_neg();
                 if let Some(id) = table_id_for_bit(bit) {
                     ids.push(id);
                 }
@@ -542,7 +542,7 @@ impl JoinOrderOptimizer {
             let mut ids = Vec::new();
             let mut mask = right_set;
             while mask != 0 {
-                let bit = mask.isolate_lowest_one();
+                let bit = mask & mask.wrapping_neg();
                 if let Some(id) = table_id_for_bit(bit) {
                     ids.push(id);
                 }

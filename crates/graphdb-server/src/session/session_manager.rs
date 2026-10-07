@@ -3,12 +3,13 @@ use graphdb_core::event_dispatch::{EventFilter, EventSubscriptions, Subscription
 use graphdb_query::{SessionEvent, SessionEventCallback};
 use log::{info, warn};
 use parking_lot::RwLock;
+use rand::RngCore;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::time;
 
 use super::{SessionError, SessionResult};
@@ -16,9 +17,6 @@ use crate::client::{ClientSession, Session};
 
 pub const DEFAULT_MAX_ALLOWED_CONNECTIONS: usize = 100; // Default maximum number of connections (in a single-node scenario)
 pub const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(600); // 10 minutes
-
-/// Global session ID counter, used to generate unique session IDs
-static SESSION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Session information, used to display the list of sessions
 #[derive(Debug, Clone)]
@@ -470,29 +468,19 @@ impl GraphSessionManager {
         self.max_connections
     }
 
-    /// Generate a new unique session ID
+    /// Generate a cryptographically random positive session ID.
     ///
-    /// Generate a unique session ID using a combination of strategies:
-    /// High 48 bits: Current timestamp (in milliseconds)
-    /// Lower 16 bits: An auto-incrementing counter
-    /// Make sure that the IDs generated within the same millisecond are also unique.
+    /// High-entropy 63-bit random values make session IDs unguessable even on
+    /// public deployments, eliminating session-hijacking via brute force.
     fn generate_session_id(&self) -> i64 {
-        let timestamp_millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("System time is before Unix epoch")
-            .as_millis() as u64;
-
-        let counter = SESSION_ID_COUNTER.fetch_add(1, Ordering::SeqCst) & 0xFFFF;
-
-        // Combining timestamps and counters
-        let session_id = ((timestamp_millis & 0xFFFFFFFFFFFF0000) | counter) as i64;
-
-        // Ensure that the generated ID is a positive number and not equal to 0.
-        if session_id <= 0 {
-            // If the generated ID is invalid, use the hash value of the timestamp.
-            ((timestamp_millis.wrapping_mul(0x9E3779B97F4A7C15)) & 0x7FFFFFFFFFFFFFFF) as i64
-        } else {
-            session_id
+        let mut rng = rand::thread_rng();
+        loop {
+            let raw = rng.next_u64();
+            // Keep the sign bit clear so we always emit positive i64 values.
+            let candidate = (raw & 0x7FFF_FFFF_FFFF_FFFF) as i64;
+            if candidate > 0 {
+                return candidate;
+            }
         }
     }
 

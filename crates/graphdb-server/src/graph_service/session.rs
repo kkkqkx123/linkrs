@@ -87,6 +87,9 @@ impl<
     /// True when forced rotation is configured and the default seed account
     /// has never changed its password.
     pub fn must_change_password(&self, username: &str) -> bool {
+        if self.is_auth_disabled() {
+            return false;
+        }
         if !self.authenticator.config().force_change_default_password {
             return false;
         }
@@ -143,6 +146,28 @@ impl<
             (*self.permission_manager).clone(),
             self.authenticator.config().clone(),
         )
+    }
+
+    /// Whether authentication is globally disabled.
+    ///
+    /// Returns true when either `[server.auth].enable_authorize = false` or
+    /// `[server.bootstrap].single_user_mode = true`. Both flags cause the
+    /// middleware layer to skip session-id verification and fall through to a
+    /// default identity so purely-local deployments can operate without a
+    /// login round-trip.
+    pub fn is_auth_disabled(&self) -> bool {
+        !self.authenticator.config().enable_authorize
+            || self.bootstrap_config.single_user_mode
+    }
+
+    /// Authenticator configuration reference.
+    pub fn auth_config(&self) -> &crate::config::AuthConfig {
+        self.authenticator.config()
+    }
+
+    /// Bootstrap configuration reference.
+    pub fn bootstrap_config(&self) -> &crate::config::BootstrapConfig {
+        &self.bootstrap_config
     }
 
     pub fn get_storage_space_id(&self, space_name: &str) -> Option<i64> {

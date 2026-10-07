@@ -77,10 +77,17 @@ pub fn create_router<
     let public_routes = Router::new()
         .route("/health", get(health::check))
         .route("/auth/login", post(login))
-        .route("/auth/logout", post(logout));
+        .route(
+            // POST /sessions verifies credentials itself, so it lives in the
+            // public group — auth is enforced inside the handler, not the
+            // middleware. Sessions GET/DELETE stay protected.
+            "/sessions",
+            post(create_session),
+        );
 
     // Routes that require authentication
     let protected_routes = Router::new()
+        .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
         .route(
             "/users",

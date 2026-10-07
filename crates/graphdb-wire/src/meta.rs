@@ -102,6 +102,10 @@ pub struct RevokeRoleRequest {
 pub struct CreateSessionRequest {
     pub username: String,
     pub client_ip: String,
+    /// Optional password. Required when authentication is enabled;
+    /// omitted or left empty when the server has disabled auth.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 /// Session response

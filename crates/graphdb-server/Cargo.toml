@@ -26,6 +26,7 @@ graphdb-api = { path = "../graphdb-api" }
 serde.workspace = true
 serde_json.workspace = true
 csv.workspace = true
+rand.workspace = true
 thiserror.workspace = true
 log.workspace = true
 tokio.workspace = true

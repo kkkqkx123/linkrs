@@ -457,8 +457,8 @@ fn test_permission_checker_space_operations() {
 
     // Users are not allowed to create new spaces (i.e., to write content into these spaces).
     assert!(checker.can_write_space(&user_session).is_err());
-    // Even the admin cannot write in the “Space” area (only God can do that).
-    assert!(checker.can_write_space(&admin_session).is_err());
+    // God and Admin both manage Space-level structure; Dba/User/Guest cannot.
+    assert!(checker.can_write_space(&admin_session).is_ok()); // Admin co-manages Space-level structure.
 }
 
 #[test]
@@ -523,8 +523,8 @@ fn test_permission_checker_user_operations() {
     assert!(checker.can_write_user(&god_session).is_ok());
     assert!(checker.can_read_user(&god_session, "anyuser").is_ok());
 
-    // Admin can't manage users (only God can)
-    assert!(checker.can_write_user(&admin_session).is_err());
+    // Admin also holds user-management privilege (space-level admin role).
+    assert!(checker.can_write_user(&admin_session).is_ok());
 
     // Admin can read their own information
     assert!(checker.can_read_user(&admin_session, "admin1").is_ok());

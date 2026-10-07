@@ -18,6 +18,8 @@ use crate::storage::{
     request_body = CreateSessionRequest,
     responses(
         (status = 200, body = SessionResponse, description = "Session created"),
+        (status = 401, description = "Invalid credentials"),
+        (status = 403, description = "Account locked"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -35,15 +37,41 @@ pub async fn create<
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<JsonResponse<SessionResponse>, HttpError> {
     let graph_service = state.server.get_graph_service();
+
+    // Verify account is not disabled (checked regardless of auth mode).
     if graph_service.is_user_locked(&request.username) {
         return Err(HttpError::forbidden(format!(
             "account {} is locked",
             request.username
         )));
     }
+
+    // When authentication is active this endpoint must verify the password
+    // before issuing a session — the handler no longer bypasses the
+    // authenticator.
+    if !graph_service.is_auth_disabled() {
+        let password = request
+            .password
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| HttpError::unauthorized("password required"))?;
+
+        let _ = graph_service
+            .authenticate(&request.username, password)
+            .await
+            .map_err(|message| {
+                let lowered = message.to_lowercase();
+                if lowered.contains("locked") {
+                    HttpError::forbidden(message)
+                } else {
+                    HttpError::unauthorized(message)
+                }
+            })?;
+    }
+
     let session_manager = state.server.get_session_manager();
     let session = session_manager
-        .create_session(request.username, request.client_ip)
+        .create_session(request.username.clone(), request.client_ip)
         .await
         .map_err(|e| HttpError::BadRequest(format!("Failed to create session: {}", e)))?;
 
@@ -106,7 +134,7 @@ pub async fn list_sessions<
     responses(
         (status = 200, body = serde_json::Value, description = "Session details"),
         (status = 404, description = "Not found"),
-        (status = 500, description = "Internal error")
+        (status = 500, description = "Not found")
     )
 )]
 pub async fn get_session<
