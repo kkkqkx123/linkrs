@@ -1,3 +1,5 @@
+import { goto } from '$app/navigation';
+import { page } from '$app/state';
 import { SseParser } from '$utils/sseParser';
 import {
 	getApiBaseUrl,
@@ -53,8 +55,20 @@ export interface StreamQueryOutcome {
 /**
  * Streaming exception: the SSE endpoint streams `text/event-stream` frames,
  * which OpenAPI cannot model, so it uses raw fetch with the session helpers
- * and is not covered by codegen.
+ * and is not covered by codegen. Large integers stay precise because the
+ * `SseParser` below parses every frame payload with json-bigint; the raw
+ * fetch body itself is never passed through `JSON.parse`.
  */
+
+function handleStreamUnauthorized(status: number): void {
+	if (status !== 401) return;
+	try {
+		localStorage.removeItem('sessionId');
+	} catch {
+		/* storage unavailable */
+	}
+	if (page.url.pathname !== '/login') void goto('/login');
+}
 
 export function isAbortError(error: unknown): boolean {
 	return error instanceof DOMException && error.name === 'AbortError';
@@ -65,9 +79,6 @@ export async function streamQuery(
 	handlers: StreamRowHandler,
 ): Promise<StreamQueryOutcome> {
 	const sessionId = resolveSessionId(options.sessionId);
-	if (sessionId === undefined) {
-		throw new Error(t('errors.missingSessionStream'));
-	}
 	const parser = new SseParser();
 	const outcome: StreamQueryOutcome = {
 		cancelled: false,
@@ -76,6 +87,13 @@ export async function streamQuery(
 		executionTimeMs: 0,
 		streamError: null,
 	};
+	if (sessionId === undefined) {
+		outcome.streamError = {
+			code: 'NO_SESSION',
+			message: t('errors.missingSessionStream'),
+		};
+		return outcome;
+	}
 	let response: Response;
 	const batchMode = (options.statements?.length ?? 0) > 0;
 	const body: Record<string, unknown> = batchMode
@@ -100,13 +118,20 @@ export async function streamQuery(
 			outcome.cancelled = true;
 			return outcome;
 		}
-		throw error;
+		outcome.streamError = {
+			code: 'STREAM_CONNECTION_ERROR',
+			message: error instanceof Error ? error.message : t('errors.openStream'),
+		};
+		return outcome;
 	}
 	if (!response.ok || !response.body) {
+		handleStreamUnauthorized(response.status);
 		const detail = await response.text().catch(() => '');
-		throw new Error(
-			`Stream request failed with status ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`,
-		);
+		outcome.streamError = {
+			code: 'STREAM_CONNECTION_ERROR',
+			message: `Stream request failed with status ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`,
+		};
+		return outcome;
 	}
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
@@ -160,7 +185,11 @@ export async function streamQuery(
 			outcome.cancelled = true;
 			return outcome;
 		}
-		throw error;
+		outcome.streamError = {
+			code: 'STREAM_CONNECTION_ERROR',
+			message: error instanceof Error ? error.message : t('errors.openStream'),
+		};
+		return outcome;
 	} finally {
 		reader.releaseLock();
 	}

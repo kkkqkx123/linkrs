@@ -23,6 +23,9 @@ pub enum CliError {
     #[error("HTTP request error: {0}")]
     HttpError(#[from] reqwest::Error),
 
+    #[error("HTTP {status}: {message}")]
+    Http { status: u16, message: String },
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
@@ -92,6 +95,13 @@ impl CliError {
 
     pub fn query(msg: impl Into<String>) -> Self {
         CliError::QueryError(msg.into())
+    }
+
+    pub fn http(status: u16, msg: impl Into<String>) -> Self {
+        CliError::Http {
+            status,
+            message: msg.into(),
+        }
     }
 
     pub fn session(msg: impl Into<String>) -> Self {

@@ -1,5 +1,6 @@
 import { call, client } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
+import { asArray, isRecord } from '$utils/parse';
 
 type LoginRequest = components['schemas']['LoginRequest'];
 type LoginResponse = components['schemas']['LoginResponse'];
@@ -45,7 +46,7 @@ export interface SessionDetail {
 }
 
 function asSessionDetail(value: unknown): SessionDetail {
-	const record = (value ?? {}) as Record<string, unknown>;
+	const record = isRecord(value) ? value : {};
 	return {
 		session_id: typeof record.session_id === 'number' ? record.session_id : 0,
 		username: typeof record.username === 'string' ? record.username : '',
@@ -70,9 +71,9 @@ export interface SessionListResult {
 }
 
 function asSessionList(value: unknown): SessionListItem[] {
-	const record = (value ?? {}) as Record<string, unknown>;
+	const record = isRecord(value) ? value : {};
 	const raw = Array.isArray(record.sessions) ? record.sessions : [];
-	return (raw as Array<Record<string, unknown>>).map((entry) => ({
+	return asArray(raw).map((entry) => ({
 		session_id: typeof entry.session_id === 'number' ? entry.session_id : 0,
 		username: typeof entry.username === 'string' ? entry.username : '',
 		space_name:
@@ -124,11 +125,6 @@ export const connectionService = {
 				),
 			),
 		delete: async (id: number): Promise<void> => {
-			await call<unknown>(
-				client.DELETE('/v1/sessions/{id}', { params: { path: { id } } }),
-			);
-		},
-		kill: async (id: number): Promise<void> => {
 			await call<unknown>(
 				client.DELETE('/v1/sessions/{id}', { params: { path: { id } } }),
 			);

@@ -9,7 +9,7 @@
  * `/v1/**` endpoints return the bare payload.
  */
 
-import { mockDelay, scenarioIsEmpty, scenarioWantsError } from './scenario';
+import { mockDelay, scenarioWantsError } from './scenario';
 
 export interface MockContext {
 	path: Record<string, string>;
@@ -42,7 +42,7 @@ export function envelope<T>(data: T): MockEnvelope<T> {
 }
 
 export function emptyEnvelope(): MockEnvelope<null> {
-	return { success: true, data: scenarioIsEmpty() ? null : null };
+	return { success: true, data: null };
 }
 
 /** Typed registry: `"<METHOD> <template>"` -> handler or static payload. */

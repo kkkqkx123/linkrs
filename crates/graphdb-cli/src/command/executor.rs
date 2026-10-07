@@ -5,7 +5,7 @@ use std::io::Write;
 use std::pin::Pin;
 
 use crate::analysis::timing::QueryTimer;
-use crate::command::parser::{Command, HistoryAction, MetaCommand};
+use crate::command::parser::{Command, MetaCommand};
 use crate::command::script::{
     ConditionExpr, ConditionalStack, ScriptExecutionContext, ScriptParser,
 };
@@ -130,34 +130,6 @@ impl CommandExecutor {
                 Command::MetaCommand(meta) => self.execute_meta(meta, session_mgr).await,
             }
         })
-    }
-
-    pub fn execute_meta_sync(
-        &mut self,
-        meta: MetaCommand,
-        session_mgr: &mut SessionManager,
-    ) -> Result<SyncMetaResult> {
-        match &meta {
-            MetaCommand::If { .. }
-            | MetaCommand::Elif { .. }
-            | MetaCommand::Else
-            | MetaCommand::EndIf => {
-                self.handle_conditional(&meta, session_mgr)?;
-                Ok(SyncMetaResult::Continue)
-            }
-            MetaCommand::Edit { .. }
-            | MetaCommand::PrintBuffer
-            | MetaCommand::ResetBuffer
-            | MetaCommand::WriteBuffer { .. } => {
-                self.handle_buffer_command(&meta, session_mgr)?;
-                Ok(SyncMetaResult::Continue)
-            }
-            MetaCommand::History { .. } => {
-                self.handle_history_command(&meta, session_mgr)?;
-                Ok(SyncMetaResult::Continue)
-            }
-            _ => Ok(SyncMetaResult::NeedsAsync(meta)),
-        }
     }
 
     async fn execute_query(
@@ -304,8 +276,13 @@ impl CommandExecutor {
             MetaCommand::PrintBuffer => meta::buffer::execute_print_buffer(self),
             MetaCommand::ResetBuffer => meta::buffer::execute_reset_buffer(self),
             MetaCommand::WriteBuffer { file } => meta::buffer::execute_write_buffer(self, &file),
-            MetaCommand::History { action } => {
-                self.handle_history_action(action, session_mgr)?;
+            MetaCommand::History { .. } => {
+                // Command history lives in the line editor (`InputHandler`);
+                // the executor never sees it, so `\history` only documents
+                // the in-REPL navigation.
+                self.write_output(
+                    "Command history is kept by the REPL line editor; use UP/DOWN arrows to navigate it.",
+                )?;
                 Ok(true)
             }
             MetaCommand::If { condition } => {
@@ -431,23 +408,6 @@ impl CommandExecutor {
         }
     }
 
-    fn handle_conditional(
-        &mut self,
-        meta: &MetaCommand,
-        session_mgr: &mut SessionManager,
-    ) -> Result<()> {
-        match meta {
-            MetaCommand::If { condition } => self.handle_if(condition.clone(), session_mgr)?,
-            MetaCommand::Elif { condition } => self.handle_elif(condition.clone(), session_mgr)?,
-            MetaCommand::Else => self.conditional_stack.push_else(),
-            MetaCommand::EndIf => {
-                self.conditional_stack.pop();
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
     fn handle_if(&mut self, condition: String, session_mgr: &mut SessionManager) -> Result<()> {
         let vars = self.get_all_variables(session_mgr);
         let expr = ConditionExpr::parse(&condition)?;
@@ -478,70 +438,6 @@ impl CommandExecutor {
         }
 
         vars
-    }
-
-    fn handle_buffer_command(
-        &mut self,
-        meta: &MetaCommand,
-        session_mgr: &mut SessionManager,
-    ) -> Result<()> {
-        match meta {
-            MetaCommand::Edit { file, line } => {
-                meta::buffer::execute_edit(self, file.as_deref(), *line, session_mgr)?;
-            }
-            MetaCommand::PrintBuffer => {
-                meta::buffer::execute_print_buffer(self)?;
-            }
-            MetaCommand::ResetBuffer => {
-                meta::buffer::execute_reset_buffer(self)?;
-            }
-            MetaCommand::WriteBuffer { file } => {
-                meta::buffer::execute_write_buffer(self, file)?;
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_history_command(
-        &mut self,
-        meta: &MetaCommand,
-        _session_mgr: &mut SessionManager,
-    ) -> Result<()> {
-        if let MetaCommand::History { action } = meta {
-            self.handle_history_action(action.clone(), _session_mgr)?;
-        }
-        Ok(())
-    }
-
-    fn handle_history_action(
-        &mut self,
-        action: HistoryAction,
-        _session_mgr: &mut SessionManager,
-    ) -> Result<()> {
-        match action {
-            HistoryAction::Show { count } => {
-                self.write_output("History display is handled by the REPL loop.")?;
-                let _ = count;
-            }
-            HistoryAction::Search { pattern } => {
-                self.write_output(&format!(
-                    "History search for '{}' is handled by the REPL loop.",
-                    pattern
-                ))?;
-            }
-            HistoryAction::Clear => {
-                self.write_output("History clear is handled by the REPL loop.")?;
-            }
-            HistoryAction::Exec { id } => {
-                self.write_output(&format!(
-                    "History exec #{} is handled by the REPL loop.",
-                    id
-                ))?;
-                let _ = id;
-            }
-        }
-        Ok(())
     }
 
     async fn execute_script(
@@ -575,16 +471,7 @@ impl CommandExecutor {
                 continue;
             }
 
-            let content = if !raw {
-                let session = session_mgr.session();
-                if let Some(s) = session {
-                    s.substitute_variables(&stmt.content)?
-                } else {
-                    stmt.content.clone()
-                }
-            } else {
-                stmt.content.clone()
-            };
+            let content = Self::substitute_content(session_mgr, &stmt.content, raw)?;
 
             // Batch consecutive pure INSERT statements (auto-commit DML load):
             // they run inside a single server-side auto-commit batch window.
@@ -592,82 +479,9 @@ impl CommandExecutor {
             // size cap breaks the run; the server falls back to per-statement
             // execution inside an explicit transaction.
             if Self::is_insert_statement(&content) {
-                let mut batch = vec![content];
-                let mut end = index + 1;
-                while end < statements.len() && batch.len() < Self::MAX_BATCH_STATEMENTS {
-                    let next = &statements[end];
-                    if !self.conditional_stack.is_active()
-                        && !matches!(
-                            next.kind,
-                            crate::command::script::StatementKind::MetaCommand
-                        )
-                    {
-                        break;
-                    }
-                    if !matches!(next.kind, crate::command::script::StatementKind::Query) {
-                        break;
-                    }
-                    let next_content = if !raw {
-                        let session = session_mgr.session();
-                        if let Some(s) = session {
-                            s.substitute_variables(&next.content)?
-                        } else {
-                            next.content.clone()
-                        }
-                    } else {
-                        next.content.clone()
-                    };
-                    if !Self::is_insert_statement(&next_content) {
-                        break;
-                    }
-                    batch.push(next_content);
-                    end += 1;
-                }
-
-                if self.tx_manager.is_failed() {
-                    let error = self
-                        .tx_manager
-                        .state()
-                        .error_message()
-                        .unwrap_or("Transaction is in failed state")
-                        .to_string();
-                    return Err(CliError::TransactionFailed(error));
-                }
-
-                let outcomes = session_mgr.execute_batch(&batch).await?;
-                let mut stop = false;
-                for (offset, result) in outcomes.iter().enumerate() {
-                    let batch_stmt = &statements[index + offset];
-                    self.tx_manager.record_query();
-                    if result.error.is_none() {
-                        let output = self.formatter.format_result(result);
-                        self.write_output(&output)?;
-                    } else {
-                        let error = result
-                            .error
-                            .as_ref()
-                            .map(|e| format!("{}: {}", e.code, e.message))
-                            .unwrap_or_else(|| "Unknown error".to_string());
-                        let line_info = if batch_stmt.start_line == batch_stmt.end_line {
-                            format!("line {}", batch_stmt.start_line)
-                        } else {
-                            format!("lines {}-{}", batch_stmt.start_line, batch_stmt.end_line)
-                        };
-                        self.write_output(
-                            &self
-                                .formatter
-                                .format_error(&format!("{}: {} (in {})", path, error, line_info)),
-                        )?;
-                        let on_error_stop = session_mgr
-                            .session()
-                            .map(|s| s.variable_store.get_bool("ON_ERROR_STOP"))
-                            .unwrap_or(false);
-                        if on_error_stop && !self.force_mode {
-                            stop = true;
-                            break;
-                        }
-                    }
-                }
+                let (end, stop) = self
+                    .execute_script_batch(path, &statements, index, content, raw, session_mgr)
+                    .await?;
                 index = end;
                 if stop {
                     break;
@@ -683,23 +497,13 @@ impl CommandExecutor {
                     }
                 }
                 Err(e) => {
-                    let line_info = if stmt.start_line == stmt.end_line {
-                        format!("line {}", stmt.start_line)
-                    } else {
-                        format!("lines {}-{}", stmt.start_line, stmt.end_line)
-                    };
-                    self.write_output(
-                        &self
-                            .formatter
-                            .format_error(&format!("{}: {} (in {})", path, e, line_info)),
-                    )?;
-
-                    let on_error_stop = session_mgr
-                        .session()
-                        .map(|s| s.variable_store.get_bool("ON_ERROR_STOP"))
-                        .unwrap_or(false);
-
-                    if on_error_stop && !self.force_mode {
+                    if self.handle_script_error(
+                        path,
+                        stmt.start_line,
+                        stmt.end_line,
+                        &e.to_string(),
+                        session_mgr,
+                    )? {
                         break;
                     }
                 }
@@ -729,6 +533,124 @@ impl CommandExecutor {
         Ok(true)
     }
 
+    /// Substitute `\set` variables in one script statement, unless raw mode.
+    fn substitute_content(
+        session_mgr: &SessionManager,
+        content: &str,
+        raw: bool,
+    ) -> Result<String> {
+        if raw {
+            return Ok(content.to_string());
+        }
+        match session_mgr.session() {
+            Some(s) => s.substitute_variables(content),
+            None => Ok(content.to_string()),
+        }
+    }
+
+    /// Run a consecutive INSERT run inside one server-side auto-commit batch
+    /// window. Returns the first unconsumed statement index plus whether the
+    /// script must stop (`ON_ERROR_STOP` after a failure).
+    async fn execute_script_batch(
+        &mut self,
+        path: &str,
+        statements: &[crate::command::script::ParsedStatement],
+        start: usize,
+        first: String,
+        raw: bool,
+        session_mgr: &mut SessionManager,
+    ) -> Result<(usize, bool)> {
+        let mut batch = vec![first];
+        let mut end = start + 1;
+        while end < statements.len() && batch.len() < Self::MAX_BATCH_STATEMENTS {
+            let next = &statements[end];
+            if !self.conditional_stack.is_active()
+                && !matches!(
+                    next.kind,
+                    crate::command::script::StatementKind::MetaCommand
+                )
+            {
+                break;
+            }
+            if !matches!(next.kind, crate::command::script::StatementKind::Query) {
+                break;
+            }
+            let next_content = Self::substitute_content(session_mgr, &next.content, raw)?;
+            if !Self::is_insert_statement(&next_content) {
+                break;
+            }
+            batch.push(next_content);
+            end += 1;
+        }
+
+        if self.tx_manager.is_failed() {
+            let error = self
+                .tx_manager
+                .state()
+                .error_message()
+                .unwrap_or("Transaction is in failed state")
+                .to_string();
+            return Err(CliError::TransactionFailed(error));
+        }
+
+        let outcomes = session_mgr.execute_batch(&batch).await?;
+        let mut stop = false;
+        for (offset, result) in outcomes.iter().enumerate() {
+            let batch_stmt = &statements[start + offset];
+            self.tx_manager.record_query();
+            if result.error.is_none() {
+                let output = self.formatter.format_result(result);
+                self.write_output(&output)?;
+            } else {
+                let error = result
+                    .error
+                    .as_ref()
+                    .map(|e| format!("{}: {}", e.code, e.message))
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                if self.handle_script_error(
+                    path,
+                    batch_stmt.start_line,
+                    batch_stmt.end_line,
+                    &error,
+                    session_mgr,
+                )? {
+                    stop = true;
+                    break;
+                }
+            }
+        }
+        Ok((end, stop))
+    }
+
+    /// Report one failed script statement. Returns `true` when execution
+    /// must stop (`ON_ERROR_STOP` set without force mode).
+    fn handle_script_error(
+        &mut self,
+        path: &str,
+        start_line: usize,
+        end_line: usize,
+        error: &str,
+        session_mgr: &SessionManager,
+    ) -> Result<bool> {
+        let line_info = if start_line == end_line {
+            format!("line {}", start_line)
+        } else {
+            format!("lines {}-{}", start_line, end_line)
+        };
+        self.write_output(
+            &self
+                .formatter
+                .format_error(&format!("{}: {} (in {})", path, error, line_info)),
+        )?;
+
+        let on_error_stop = session_mgr
+            .session()
+            .map(|s| s.variable_store.get_bool("ON_ERROR_STOP"))
+            .unwrap_or(false);
+
+        Ok(on_error_stop && !self.force_mode)
+    }
+
     pub fn write_output(&mut self, content: &str) -> Result<()> {
         if let Some(ref mut file) = self.output_file {
             file.write_all(content.as_bytes())
@@ -739,9 +661,4 @@ impl CommandExecutor {
         }
         Ok(())
     }
-}
-
-pub enum SyncMetaResult {
-    Continue,
-    NeedsAsync(MetaCommand),
 }

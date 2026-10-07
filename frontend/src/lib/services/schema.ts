@@ -1,6 +1,14 @@
 import { call, client, unwrap } from '$lib/api/client';
 import type { Envelope } from '$lib/api/client';
 import type { components } from '$lib/api/schema';
+import { isRecord, pickList } from '$utils/parse';
+
+/**
+ * Schema endpoints live in two backend namespaces by design, so both
+ * prefixes below are intentional: bare `/v1/schema/**` routes return raw
+ * payloads, while `/api/v1/schema/**` web routes return the standard
+ * `{ success, data, error }` envelope unwrapped with `unwrap()`.
+ */
 import type {
 	Space,
 	Tag,
@@ -18,33 +26,6 @@ type CreateSpaceRequest = Schemas['CreateSpaceRequest'];
 type CreateTagRequest = Schemas['CreateTagRequest'];
 type CreateEdgeTypeRequest = Schemas['CreateEdgeTypeRequest'];
 type CreateIndexRequest = Schemas['CreateIndexRequest'];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null;
-}
-
-function asArray(value: unknown): Record<string, unknown>[] {
-	return Array.isArray(value)
-		? value.filter((item): item is Record<string, unknown> => isRecord(item))
-		: [];
-}
-
-/** Pull a list out of the ad-hoc `{ key: [...] }` shapes of the bare endpoints. */
-function pickList(payload: unknown, keys: string[]): Record<string, unknown>[] {
-	if (Array.isArray(payload)) return asArray(payload);
-	if (!isRecord(payload)) return [];
-	if (isRecord(payload.data)) {
-		for (const key of keys) {
-			if (Array.isArray(payload.data[key])) return asArray(payload.data[key]);
-		}
-		if (Array.isArray((payload.data as Record<string, unknown>).items))
-			return asArray((payload.data as Record<string, unknown>).items);
-	}
-	for (const key of keys) {
-		if (Array.isArray(payload[key])) return asArray(payload[key]);
-	}
-	return [];
-}
 
 function toSpace(row: Record<string, unknown>): Space {
 	return {

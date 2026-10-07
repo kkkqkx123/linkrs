@@ -90,6 +90,23 @@ impl HttpClient {
         }
     }
 
+    /// Reject non-2xx responses with a shared [`CliError::Http`] carrying the
+    /// caller-supplied operation context plus the server body.
+    pub(crate) async fn check_response(
+        response: reqwest::Response,
+        context: impl Into<String>,
+    ) -> Result<reqwest::Response> {
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(CliError::http(
+            status.as_u16(),
+            format!("{} ({}): {}", context.into(), status, body),
+        ))
+    }
+
     /// Drop the stored password so it does not linger after disconnect.
     pub fn clear_credentials(&mut self) {
         self.config.password.clear();
@@ -156,16 +173,13 @@ impl HttpClient {
             minimum_lsn: None,
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Query failed ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Query failed").await?;
 
         let wire: QueryResponse = response.json().await?;
         Ok(QueryResult::from(wire))
@@ -191,16 +205,13 @@ impl HttpClient {
             session_variables: std::collections::HashMap::new(),
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Batch query failed ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Batch query failed").await?;
 
         let batch_resp: BatchQueryResponse = response.json().await?;
         Ok(batch_resp
@@ -220,14 +231,7 @@ impl HttpClient {
         let url = format!("{}/schema/spaces", self.base_url);
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to list spaces ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to list spaces").await?;
 
         let body: serde_json::Value = response.json().await?;
         let spaces = body
@@ -243,14 +247,7 @@ impl HttpClient {
         let url = format!("{}/schema/spaces/{}", self.base_url, space);
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to use space '{}' ({}): {}",
-                space, status, body
-            )));
-        }
+        Self::check_response(response, format!("Failed to use space '{}'", space)).await?;
 
         Ok(())
     }
@@ -260,14 +257,7 @@ impl HttpClient {
         let url = format!("{}/schema/spaces/{}/tags", self.base_url, space);
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to list tags ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to list tags").await?;
 
         let body: serde_json::Value = response.json().await?;
         let tags = body
@@ -283,14 +273,7 @@ impl HttpClient {
         let url = format!("{}/schema/spaces/{}/edge-types", self.base_url, space);
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to list edge types ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to list edge types").await?;
 
         let body: serde_json::Value = response.json().await?;
         let edge_types = body
@@ -327,16 +310,13 @@ impl HttpClient {
             comment: comment.map(|s| s.to_string()),
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to create space ({}): {}",
-                status, body
-            )));
-        }
+        Self::check_response(response, "Failed to create space").await?;
 
         Ok(())
     }
@@ -347,14 +327,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.delete(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to drop space ({}): {}",
-                status, body
-            )));
-        }
+        Self::check_response(response, "Failed to drop space").await?;
 
         Ok(())
     }
@@ -373,16 +346,13 @@ impl HttpClient {
             properties,
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to create tag ({}): {}",
-                status, body
-            )));
-        }
+        Self::check_response(response, "Failed to create tag").await?;
 
         Ok(())
     }
@@ -401,16 +371,13 @@ impl HttpClient {
             properties,
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to create edge type ({}): {}",
-                status, body
-            )));
-        }
+        Self::check_response(response, "Failed to create edge type").await?;
 
         Ok(())
     }
@@ -433,16 +400,13 @@ impl HttpClient {
             isolation_level: None,
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::transaction(format!(
-                "Failed to begin transaction ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to begin transaction").await?;
 
         Ok(response.json().await?)
     }
@@ -459,16 +423,13 @@ impl HttpClient {
 
         let request = TransactionActionRequest { session_id };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::transaction(format!(
-                "Failed to commit transaction ({}): {}",
-                status, body
-            )));
-        }
+        Self::check_response(response, "Failed to commit transaction").await?;
 
         Ok(())
     }
@@ -485,16 +446,13 @@ impl HttpClient {
 
         let request = TransactionActionRequest { session_id };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::transaction(format!(
-                "Failed to rollback transaction ({}): {}",
-                status, body
-            )));
-        }
+        Self::check_response(response, "Failed to rollback transaction").await?;
 
         Ok(())
     }
@@ -516,16 +474,13 @@ impl HttpClient {
             batch_size,
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to create batch ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to create batch").await?;
 
         let batch_resp: CreateBatchResponse = response.json().await?;
         Ok(batch_resp.batch_id)
@@ -537,16 +492,13 @@ impl HttpClient {
 
         let request = AddBatchItemsRequest { items };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to add batch items ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to add batch items").await?;
 
         let add_resp: AddBatchItemsResponse = response.json().await?;
         Ok(add_resp.accepted)
@@ -558,14 +510,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.post(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to execute batch ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to execute batch").await?;
 
         Ok(response.json().await?)
     }
@@ -576,14 +521,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to get batch status ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to get batch status").await?;
 
         Ok(response.json().await?)
     }
@@ -594,14 +532,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.post(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to cancel batch ({}): {}",
-                status, body
-            )));
-        }
+        Self::check_response(response, "Failed to cancel batch").await?;
 
         Ok(())
     }
@@ -612,14 +543,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.delete(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to delete batch ({}): {}",
-                status, body
-            )));
-        }
+        Self::check_response(response, "Failed to delete batch").await?;
 
         Ok(())
     }
@@ -632,14 +556,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to get session statistics ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to get session statistics").await?;
 
         Ok(response.json().await?)
     }
@@ -650,14 +567,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to get query statistics ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to get query statistics").await?;
 
         Ok(response.json().await?)
     }
@@ -668,14 +578,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to get database statistics ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to get database statistics").await?;
 
         Ok(response.json().await?)
     }
@@ -688,14 +591,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to get config ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to get config").await?;
 
         Ok(response.json().await?)
     }
@@ -706,14 +602,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to get config item ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to get config item").await?;
 
         Ok(response.json().await?)
     }
@@ -733,14 +622,7 @@ impl HttpClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to update config ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to update config").await?;
 
         Ok(response.json().await?)
     }
@@ -751,14 +633,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.delete(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to reset config ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to reset config").await?;
 
         Ok(response.json().await?)
     }
@@ -769,14 +644,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to get system statistics ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to get system statistics").await?;
 
         Ok(response.json().await?)
     }
@@ -787,14 +655,7 @@ impl HttpClient {
 
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to get overview ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to get overview").await?;
 
         Ok(response.json().await?)
     }
@@ -822,99 +683,14 @@ impl HttpClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Stream query failed ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Stream query failed").await?;
 
         let text = response.text().await?;
-        let mut columns: Vec<String> = Vec::new();
-        let mut rows: Vec<std::collections::HashMap<String, serde_json::Value>> = Vec::new();
-        let mut execution_time_ms: u64 = 0;
-        let mut rows_scanned: u64 = 0;
-        let mut stream_error: Option<String> = None;
-
-        let mut current_event = String::new();
+        let mut parser = crate::client::sse::SseParser::new();
         for line in text.lines() {
-            if let Some(name) = line.strip_prefix("event:") {
-                current_event = name.trim().to_string();
-                continue;
-            }
-            let Some(payload) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let payload = payload.trim();
-            if payload.is_empty() {
-                continue;
-            }
-            let value: serde_json::Value = match serde_json::from_str(payload) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            match current_event.as_str() {
-                "schema" => {
-                    if let Some(cols) = value.get("columns").and_then(|c| c.as_array()) {
-                        columns = cols
-                            .iter()
-                            .filter_map(|c| c.as_str().map(|s| s.to_string()))
-                            .collect();
-                    } else if let Some(cols) = value.get("schema").and_then(|c| c.as_array()) {
-                        columns = cols
-                            .iter()
-                            .filter_map(|c| c.as_str().map(|s| s.to_string()))
-                            .collect();
-                    }
-                }
-                "row" | "data" => {
-                    let obj = value.get("row").unwrap_or(&value);
-                    if let Some(map) = obj.as_object() {
-                        rows.push(map.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
-                    }
-                }
-                "metadata" | "done" => {
-                    if let Some(ms) = value.get("execution_time_ms").and_then(|v| v.as_u64()) {
-                        execution_time_ms = ms;
-                    }
-                    if let Some(scanned) = value.get("rows_scanned").and_then(|v| v.as_u64()) {
-                        rows_scanned = scanned;
-                    }
-                    if let Some(returned) = value.get("rows_returned").and_then(|v| v.as_u64()) {
-                        let _ = returned;
-                    }
-                }
-                "error" => {
-                    let message = value
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("stream error")
-                        .to_string();
-                    let code = value
-                        .get("code")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("STREAM_ERROR");
-                    stream_error = Some(format!("{}: {}", code, message));
-                }
-                _ => {}
-            }
+            parser.feed_line(line);
         }
-
-        if let Some(error) = stream_error {
-            return Err(CliError::query(error));
-        }
-
-        let row_count = rows.len();
-        Ok(QueryResult {
-            columns,
-            rows,
-            row_count,
-            execution_time_ms,
-            rows_scanned,
-            error: None,
-        })
+        parser.finish()
     }
 
     /// Open a forward-only cursor over a query via `POST /v1/query/cursor/open`.
@@ -926,16 +702,13 @@ impl HttpClient {
             query: query.to_string(),
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Open cursor failed ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Open cursor failed").await?;
 
         let body: OpenCursorResponse = response.json().await?;
         Ok((body.cursor_id, body.columns))
@@ -956,16 +729,13 @@ impl HttpClient {
             page_size,
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Fetch cursor failed ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Fetch cursor failed").await?;
 
         let body: FetchCursorResponse = response.json().await?;
         let has_more = body.has_more;
@@ -992,16 +762,13 @@ impl HttpClient {
             cursor_id,
         };
 
-        let response = self.authed(self.inner.post(&url)).json(&request).send().await?;
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Close cursor failed ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Close cursor failed").await?;
 
         let body: CloseCursorResponse = response.json().await?;
         Ok(body.closed)
@@ -1015,14 +782,7 @@ impl HttpClient {
         let url = format!("{}/functions", self.base_url);
         let response = self.authed(self.inner.get(&url)).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::query(format!(
-                "Failed to list functions ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Failed to list functions").await?;
 
         let body: serde_json::Value = response.json().await?;
         let names = body
@@ -1054,14 +814,7 @@ impl HttpClient {
 
         let response = self.inner.post(&url).json(&request).send().await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(CliError::auth(format!(
-                "Login failed ({}): {}",
-                status, body
-            )));
-        }
+        let response = Self::check_response(response, "Login failed").await?;
 
         let login_resp: LoginResponse = response.json().await?;
         Ok(login_resp)

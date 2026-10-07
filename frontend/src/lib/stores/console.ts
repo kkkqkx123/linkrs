@@ -50,10 +50,12 @@ interface ConsoleState {
 	executionPreference: ExecutionPreference;
 	autoStreamThreshold: number;
 	autoDecision: AutoDecision | null;
+	/** In-flight materialized request; aborted when a new run starts. */
+	materializedAbort: AbortController | null;
 }
 
 function generateId(): string {
-	return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+	return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
 function loadPersisted(): Partial<ConsoleState> {
@@ -115,8 +117,6 @@ function loadBindings(key: string): Record<string, unknown> {
 	return {};
 }
 
-let materializedAbort: AbortController | null = null;
-
 export function createConsoleStore() {
 	const { subscribe, update } = writable<ConsoleState>({
 		editorContent: localStorage.getItem('graphdb_editor_draft') || '',
@@ -136,6 +136,7 @@ export function createConsoleStore() {
 				: DEFAULT_AUTO_STREAM_THRESHOLD,
 		),
 		autoDecision: null,
+		materializedAbort: null,
 	});
 
 	function commit(fn: (s: ConsoleState) => ConsoleState) {
@@ -153,8 +154,11 @@ export function createConsoleStore() {
 		}
 		streamStore.abortActive();
 		await cursorStore.close();
-		materializedAbort?.abort();
-		materializedAbort = new AbortController();
+		update((s) => {
+			s.materializedAbort?.abort();
+			return { ...s, materializedAbort: new AbortController() };
+		});
+		const abortSignal = get({ subscribe }).materializedAbort?.signal;
 		const bindings = {
 			parameters: get({ subscribe }).parameters,
 			sessionVariables: get({ subscribe }).sessionVariables,
@@ -170,7 +174,7 @@ export function createConsoleStore() {
 		try {
 			const response = await queryService.executeBatch(rawScript, {
 				...bindings,
-				signal: materializedAbort.signal,
+				signal: abortSignal,
 			});
 			if (response.results.length === 0) {
 				update((s) => ({
@@ -386,8 +390,10 @@ export function createConsoleStore() {
 			streamStore.cancel();
 		},
 		cancelMaterialized: () => {
-			materializedAbort?.abort();
-			materializedAbort = null;
+			update((s) => {
+				s.materializedAbort?.abort();
+				return { ...s, materializedAbort: null };
+			});
 		},
 		clearResult: () => {
 			streamStore.reset();

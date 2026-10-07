@@ -28,7 +28,7 @@ const MAX_HISTORY = 50;
 const MAX_FAVORITES = 30;
 
 function generateId(): string {
-	return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+	return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
 function loadPersisted(): { history: QueryHistoryItem[]; favorites: QueryFavoriteItem[] } {

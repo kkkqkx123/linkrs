@@ -102,59 +102,79 @@ function toStatementResult(
 	};
 }
 
+/** Shared single-statement POST logic behind `execute` and `explain`. */
+async function runSingle(
+	endpoint: 'query' | 'explain',
+	params: ExecuteQueryParams,
+): Promise<ExecuteQueryResponse> {
+	const resolved = resolveSessionId(params.sessionId);
+	if (resolved === undefined) {
+		return {
+			success: false,
+			error: { code: 'NO_SESSION', message: t('errors.missingSessionQuery') },
+		};
+	}
+	if (!params.query.trim()) {
+		return {
+			success: false,
+			error: { code: 'EMPTY_QUERY', message: t('errors.queryEmpty') },
+		};
+	}
+	try {
+		const startTime = Date.now();
+		// The HTTP layer attaches `X-Session-ID` from storage for auth; the body
+		// carries the statement text plus the session id required by the wire contract.
+		const body: QueryRequest = { query: params.query, session_id: resolved };
+		if (params.parameters !== undefined) body.parameters = params.parameters;
+		if (params.sessionVariables !== undefined)
+			body.session_variables = params.sessionVariables;
+		const response =
+			endpoint === 'query'
+				? await call<QueryResponse>(
+						client.POST('/v1/query', { body, signal: params.signal }),
+					)
+				: await call<QueryResponse>(
+						client.POST('/v1/query/explain', {
+							body: body as ExplainRequest,
+							signal: params.signal,
+						}),
+					);
+		const result = toStatementResult(
+			params.query,
+			response,
+			Date.now() - startTime,
+		);
+		return {
+			success: result.success,
+			data: result.data,
+			error: result.error,
+			executionTime: result.executionTime,
+			traceId: result.traceId,
+			stages: result.stages,
+			planNodeCount: result.planNodeCount,
+		};
+	} catch (error) {
+		if (error instanceof DOMException && error.name === 'AbortError') {
+			return {
+				success: false,
+				error: { code: 'QUERY_CANCELLED', message: t('errors.queryCancelled') },
+			};
+		}
+		return {
+			success: false,
+			error: {
+				code: 'EXECUTION_ERROR',
+				message:
+					error instanceof Error ? error.message : t('errors.executeQuery'),
+			},
+		};
+	}
+}
+
 export const queryService = {
 	execute: async (
 		params: ExecuteQueryParams,
-	): Promise<ExecuteQueryResponse> => {
-		const resolved = resolveSessionId(params.sessionId);
-		if (resolved === undefined) {
-			return {
-				success: false,
-				error: { code: 'NO_SESSION', message: t('errors.missingSessionQuery') },
-			};
-		}
-		try {
-			const startTime = Date.now();
-			// The HTTP layer attaches `X-Session-ID` from storage for auth; the body
-			// carries the statement text plus the session id required by the wire contract.
-			const body: QueryRequest = { query: params.query, session_id: resolved };
-			if (params.parameters !== undefined) body.parameters = params.parameters;
-			if (params.sessionVariables !== undefined)
-				body.session_variables = params.sessionVariables;
-			const response = await call<QueryResponse>(
-				client.POST('/v1/query', { body, signal: params.signal }),
-			);
-			const result = toStatementResult(
-				params.query,
-				response,
-				Date.now() - startTime,
-			);
-			return {
-				success: result.success,
-				data: result.data,
-				error: result.error,
-				executionTime: result.executionTime,
-				traceId: result.traceId,
-				stages: result.stages,
-				planNodeCount: result.planNodeCount,
-			};
-		} catch (error) {
-			if (error instanceof DOMException && error.name === 'AbortError') {
-				return {
-					success: false,
-					error: { code: 'QUERY_CANCELLED', message: t('errors.queryCancelled') },
-				};
-			}
-			return {
-				success: false,
-				error: {
-					code: 'EXECUTION_ERROR',
-					message:
-						error instanceof Error ? error.message : t('errors.executeQuery'),
-				},
-			};
-		}
-	},
+	): Promise<ExecuteQueryResponse> => runSingle('query', params),
 
 	/**
 	 * Run several auto-commit statements through the server-side batch window,
@@ -295,54 +315,7 @@ export const queryService = {
 	 */
 	explain: async (
 		params: ExecuteQueryParams,
-	): Promise<ExecuteQueryResponse> => {
-		const resolved = resolveSessionId(params.sessionId);
-		if (resolved === undefined) {
-			return {
-				success: false,
-				error: { code: 'NO_SESSION', message: t('errors.missingSessionQuery') },
-			};
-		}
-		try {
-			const startTime = Date.now();
-			const body: ExplainRequest = { query: params.query, session_id: resolved };
-			if (params.parameters !== undefined) body.parameters = params.parameters;
-			if (params.sessionVariables !== undefined)
-				body.session_variables = params.sessionVariables;
-			const response = await call<QueryResponse>(
-				client.POST('/v1/query/explain', { body, signal: params.signal }),
-			);
-			const result = toStatementResult(
-				params.query,
-				response,
-				Date.now() - startTime,
-			);
-			return {
-				success: result.success,
-				data: result.data,
-				error: result.error,
-				executionTime: result.executionTime,
-				traceId: result.traceId,
-				stages: result.stages,
-				planNodeCount: result.planNodeCount,
-			};
-		} catch (error) {
-			if (error instanceof DOMException && error.name === 'AbortError') {
-				return {
-					success: false,
-					error: { code: 'QUERY_CANCELLED', message: t('errors.queryCancelled') },
-				};
-			}
-			return {
-				success: false,
-				error: {
-					code: 'EXECUTION_ERROR',
-					message:
-						error instanceof Error ? error.message : t('errors.executeQuery'),
-				},
-			};
-		}
-	},
+	): Promise<ExecuteQueryResponse> => runSingle('explain', params),
 };
 
 export default queryService;

@@ -89,16 +89,20 @@ export const queryHandlers: MockRegistry = {
 	}) satisfies MockEntry,
 
 	'POST /v1/query/batch': ((ctx) => {
-		const body = (ctx.body ?? {}) as { queries?: unknown };
-		const statements = Array.isArray(body.queries) ? body.queries : [];
+		const body = (ctx.body ?? {}) as { statements?: unknown };
+		const statements = Array.isArray(body.statements) ? body.statements : [];
 		return {
 			results: statements.map((q) =>
-				queryResponse(String((q as { query?: string }).query ?? '')),
+				queryResponse(typeof q === 'string' ? q : String((q as { query?: string }).query ?? '')),
 			),
 		};
 	}) satisfies MockEntry,
 
-	'POST /v1/query/validate': { valid: true, errors: [] } satisfies MockEntry,
+	'POST /v1/query/validate': {
+		valid: true,
+		message: 'Mock fixture: valid query',
+		estimated_rows: null,
+	} satisfies MockEntry,
 
 	'POST /v1/query/cursor/open': ((ctx) => {
 		const body = (ctx.body ?? {}) as { query?: unknown };

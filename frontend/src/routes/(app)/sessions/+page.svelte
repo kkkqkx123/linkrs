@@ -39,7 +39,7 @@
 		loading = true;
 		error = null;
 		try {
-			await connectionService.sessions.kill(id);
+			await connectionService.sessions.delete(id);
 			await loadSessions();
 		} catch (err) {
 			error =

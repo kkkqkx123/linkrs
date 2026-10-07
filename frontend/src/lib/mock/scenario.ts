@@ -7,10 +7,7 @@
 
 export type Scenario = 'normal' | 'slow' | 'error' | 'empty';
 
-let cached: Scenario | null = null;
-
 export function currentScenario(): Scenario {
-	if (cached) return cached;
 	let value: string | null = null;
 	try {
 		value = new URLSearchParams(window.location.search).get('scenario');
@@ -22,7 +19,6 @@ export function currentScenario(): Scenario {
 		value === 'slow' || value === 'error' || value === 'empty'
 			? value
 			: 'normal';
-	cached = scenario;
 	return scenario;
 }
 

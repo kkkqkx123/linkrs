@@ -7,6 +7,7 @@
 mod config;
 mod http_client;
 mod schema;
+mod sse;
 mod transaction;
 mod types;
 

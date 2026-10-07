@@ -88,7 +88,7 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to get outbox diagnostics").await
         }
 
         pub async fn outbox_dead_letters(
@@ -120,7 +120,7 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to get outbox dead letters").await
         }
 
         pub async fn outbox_requeue(&self, req: &RequeuePayload) -> Result<serde_json::Value> {
@@ -132,7 +132,7 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to requeue outbox entries").await
         }
 
         pub async fn outbox_degraded_ranges(
@@ -164,7 +164,7 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to get degraded ranges").await
         }
 
         pub async fn outbox_degraded_clear(
@@ -179,7 +179,7 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to clear degraded ranges").await
         }
 
         pub async fn outbox_retry(&self) -> Result<serde_json::Value> {
@@ -190,7 +190,7 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to retry outbox").await
         }
 
         pub async fn sync_status(&self) -> Result<serde_json::Value> {
@@ -201,7 +201,7 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to get sync status").await
         }
 
         pub async fn retention_status(&self) -> Result<serde_json::Value> {
@@ -212,7 +212,7 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to get retention status").await
         }
 
         pub async fn retention_run(
@@ -232,19 +232,17 @@ pub mod client_ext {
                 .send()
                 .await
                 .map_err(|e| CliError::connection(e.to_string()))?;
-            Self::check_response(resp).await
+            Self::check_json_response(resp, "Failed to run retention").await
         }
 
-        async fn check_response(resp: reqwest::Response) -> Result<serde_json::Value> {
-            let status = resp.status();
-            let text = resp
-                .text()
+        async fn check_json_response(
+            resp: reqwest::Response,
+            context: &str,
+        ) -> Result<serde_json::Value> {
+            let resp = Self::check_response(resp, context).await?;
+            resp.json()
                 .await
-                .map_err(|e| CliError::connection(e.to_string()))?;
-            if !status.is_success() {
-                return Err(CliError::connection(format!("HTTP {}: {}", status, text)));
-            }
-            serde_json::from_str(&text).map_err(|e| CliError::connection(e.to_string()))
+                .map_err(|e| CliError::connection(e.to_string()))
         }
     }
 

@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import type {
 	LayoutType,
 	NodeDetail,
@@ -35,6 +35,9 @@ export interface GraphState {
 	filterTags: Set<string>;
 	filterEdgeTypes: Set<string>;
 	simplifiedMode: boolean;
+	/** Deduplication indexes mirroring `graphData`; never persisted. */
+	nodeIndex: Map<string, GraphData['nodes'][number]>;
+	edgeIndex: Map<string, GraphData['edges'][number]>;
 	layoutParams: {
 		nodeRepulsion: number;
 		gravity: number;
@@ -85,14 +88,18 @@ function loadPersisted(): Partial<GraphState> {
 const persisted = loadPersisted();
 
 function persistStyles(state: GraphState) {
-	localStorage.setItem(
-		'graph-storage',
-		JSON.stringify({
-			layout: state.layout,
-			nodeStyles: state.nodeStyles,
-			edgeStyles: state.edgeStyles,
-		}),
-	);
+	try {
+		localStorage.setItem(
+			'graph-storage',
+			JSON.stringify({
+				layout: state.layout,
+				nodeStyles: state.nodeStyles,
+				edgeStyles: state.edgeStyles,
+			}),
+		);
+	} catch {
+		/* storage unavailable */
+	}
 }
 
 function ensureStylesForData(
@@ -137,6 +144,8 @@ function createGraphStore() {
 		filterTags: new Set<string>(),
 		filterEdgeTypes: new Set<string>(),
 		simplifiedMode: false,
+		nodeIndex: new Map(),
+		edgeIndex: new Map(),
 		layoutParams: {
 			nodeRepulsion: 4500,
 			gravity: 0.1,
@@ -144,17 +153,14 @@ function createGraphStore() {
 		},
 	});
 
-	// Use Map for O(1) deduplication during merge operations
-	let nodeMap = new Map<string, GraphData['nodes'][number]>();
-	let edgeMap = new Map<string, GraphData['edges'][number]>();
-
-	function rebuildMaps(data: GraphData | null) {
-		nodeMap = new Map();
-		edgeMap = new Map();
+	function buildIndexes(data: GraphData | null): Pick<GraphState, 'nodeIndex' | 'edgeIndex'> {
+		const nodeIndex = new Map<string, GraphData['nodes'][number]>();
+		const edgeIndex = new Map<string, GraphData['edges'][number]>();
 		if (data) {
-			for (const node of data.nodes) nodeMap.set(node.id, node);
-			for (const edge of data.edges) edgeMap.set(edge.id, edge);
+			for (const node of data.nodes) nodeIndex.set(node.id, node);
+			for (const edge of data.edges) edgeIndex.set(edge.id, edge);
 		}
+		return { nodeIndex, edgeIndex };
 	}
 
 	return {
@@ -166,12 +172,12 @@ function createGraphStore() {
 					s.edgeStyles,
 					data,
 				);
-				rebuildMaps(data);
 				const newState = {
 					...s,
 					graphData: data,
 					nodeStyles,
 					edgeStyles,
+					...buildIndexes(data),
 				};
 				persistStyles(newState);
 				return newState;
@@ -182,20 +188,24 @@ function createGraphStore() {
 				graphData: null,
 				selectedNodes: [],
 				selectedEdges: [],
+				...buildIndexes(null),
 			})),
 		mergeGraphData: (data: GraphData) =>
 			update((s) => {
 				const nodes = [...(s.graphData?.nodes ?? [])];
 				const edges = [...(s.graphData?.edges ?? [])];
+				// Use Map for O(1) deduplication during merge operations
+				const nodeIndex = new Map(s.nodeIndex);
+				const edgeIndex = new Map(s.edgeIndex);
 				for (const node of data.nodes) {
-					if (!nodeMap.has(node.id)) {
-						nodeMap.set(node.id, node);
+					if (!nodeIndex.has(node.id)) {
+						nodeIndex.set(node.id, node);
 						nodes.push(node);
 					}
 				}
 				for (const edge of data.edges) {
-					if (!edgeMap.has(edge.id)) {
-						edgeMap.set(edge.id, edge);
+					if (!edgeIndex.has(edge.id)) {
+						edgeIndex.set(edge.id, edge);
 						edges.push(edge);
 					}
 				}
@@ -210,12 +220,14 @@ function createGraphStore() {
 					graphData: merged,
 					nodeStyles,
 					edgeStyles,
+					nodeIndex,
+					edgeIndex,
 				};
 				persistStyles(newState);
 				return newState;
 			}),
-		hasNode: (id: string): boolean => nodeMap.has(id),
-		hasEdge: (id: string): boolean => edgeMap.has(id),
+		hasNode: (id: string): boolean => get({ subscribe }).nodeIndex.has(id),
+		hasEdge: (id: string): boolean => get({ subscribe }).edgeIndex.has(id),
 		setLayout: (layout: LayoutType) => update((s) => ({ ...s, layout })),
 		setZoom: (zoom: number) => update((s) => ({ ...s, zoom })),
 		selectNode: (id: string, multi = false) =>
