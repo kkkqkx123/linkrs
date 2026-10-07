@@ -8,10 +8,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::event_dispatch::EventSubscriptions;
 use graphdb_storage::{
-    AutoCommitBatchOps, AutoCommitGroupOps, MigrationHistoryRecord, MigrationStatus, StorageReader,
-    StorageSchemaOps, StorageWriter,
+    AutoCommitBatchOps, AutoCommitGroupOps, MigrationHistoryManager, MigrationHistoryRecord,
+    MigrationStatus, StorageReader, StorageSchemaOps, StorageWriter,
 };
 
 use crate::config::MigrationConfig;
@@ -31,6 +32,31 @@ use plan_runner::{
 };
 
 static MIGRATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Write fence held across schema-modifying steps of a migration.
+///
+/// The migration engine never touches transaction internals directly: the
+/// layer that owns the write gate (embedded API, server) supplies an
+/// implementation backed by its own gate, typically a checkpoint drain fence
+/// built from `graphdb_transaction::issue_request_drain`. This keeps the
+/// dependency direction intact while making the online protocol reachable.
+pub trait SchemaWriteFence: Send + Sync {
+    /// Pause new writes and drain in-flight ones before schema steps run.
+    /// A timeout error aborts the migration instead of stretching the stall.
+    fn hold(&self) -> Result<(), MigrationError>;
+    /// Resume writes after schema steps complete or fail. Always called.
+    fn release(&self);
+}
+
+struct SchemaFenceHold<'a> {
+    fence: &'a dyn SchemaWriteFence,
+}
+
+impl Drop for SchemaFenceHold<'_> {
+    fn drop(&mut self) {
+        self.fence.release();
+    }
+}
 
 struct MigrationLockGuard;
 
@@ -64,6 +90,17 @@ pub struct ExecuteOptions<'a> {
     pub event_registry: Option<&'a Arc<EventSubscriptions<MigrationEvent>>>,
     pub lock_path: Option<&'a Path>,
     pub checkpoint_dir: Option<&'a Path>,
+    /// Optional write fence held only across schema-modifying steps so the
+    /// long data backfill phase stays online while the switch window is
+    /// bounded. Ignored for dry runs, which never touch storage.
+    pub schema_fence: Option<&'a dyn SchemaWriteFence>,
+    /// Directory for pre-migration backups of destructive steps. When set
+    /// and the plan drops data, rows are snapshotted before execution so
+    /// rollback can restore them.
+    pub backup_dir: Option<&'a Path>,
+    /// Skip the linear version-chain check. Set for rollback plans, which
+    /// intentionally move against the applied history.
+    pub skip_chain_check: bool,
 }
 
 pub fn execute_migration_plan<S>(
@@ -97,12 +134,14 @@ where
     let mut effective_plan = plan.clone();
     let mut lock_path = options.lock_path;
     let mut checkpoint_dir = options.checkpoint_dir;
+    let mut backup_dir = options.backup_dir;
     if let Some(config) = options.config {
         if config.batch_size != 0 {
             effective_plan.batch_size = config.batch_size;
         }
         lock_path = lock_path.or(config.lock_path.as_deref());
         checkpoint_dir = checkpoint_dir.or(config.checkpoint_dir.as_deref());
+        backup_dir = backup_dir.or(config.backup_dir.as_deref());
     }
 
     if let Some(dir) = checkpoint_dir {
@@ -228,12 +267,95 @@ where
         return Ok(report);
     }
 
-    // Handle schema-modifying steps first.
-    let schema_executed =
-        execute_schema_steps(storage, &effective_plan, &effective_remaining, progress)
-            .inspect_err(|_| {
+    // Enforce the linear version chain: a plan may only start where the
+    // applied history left off, and may not re-apply a target version.
+    // Backends without history support fail open with a warning.
+    // Rollback plans move against history and opt out via skip_chain_check.
+    if !options.skip_chain_check {
+        match storage.get_applied_versions(
+            &effective_plan.target.space,
+            &effective_plan.target.label,
+            effective_plan.target.is_edge,
+        ) {
+            Ok(applied) => {
+                if let Err(e) = MigrationHistoryManager::check_chain(
+                    &applied,
+                    &effective_plan.target.space,
+                    &effective_plan.target.label,
+                    effective_plan.target.is_edge,
+                    effective_plan.version_range.from,
+                    effective_plan.version_range.to,
+                ) {
+                    let err = format!("version chain rejected: {e}");
+                    notify(&MigrationEvent::Failed { error: err.clone() });
+                    global_migration_metrics().record_failure(start.elapsed().as_millis() as u64);
+                    return Err(MigrationError::Plan(err));
+                }
+            }
+            Err(e) if e.kind() == StorageErrorKind::NotSupported => {
+                log::warn!("Migration history not supported; skipping version chain check");
+            }
+            Err(e) => {
+                let err = format!("cannot verify migration chain: {e}");
+                notify(&MigrationEvent::Failed { error: err.clone() });
                 global_migration_metrics().record_failure(start.elapsed().as_millis() as u64);
-            })?;
+                return Err(MigrationError::Plan(err));
+            }
+        }
+    }
+
+    // Snapshot rows before destructive steps run. Without a backup directory
+    // the plan still executes, but rollback of drops stays unavailable.
+    if effective_plan.requires_backup() {
+        match backup_dir {
+            Some(dir) => {
+                match crate::backup::write_backup(&*storage, &effective_plan, dir) {
+                    Ok(rows) => log::info!(
+                        "Backed up {rows} row(s) for destructive migration {}/{}",
+                        effective_plan.target.space,
+                        effective_plan.target.label
+                    ),
+                    Err(e) => {
+                        let err = format!("pre-migration backup failed: {e}");
+                        notify(&MigrationEvent::Failed { error: err.clone() });
+                        global_migration_metrics()
+                            .record_failure(start.elapsed().as_millis() as u64);
+                        return Err(MigrationError::Plan(err));
+                    }
+                }
+            }
+            None => log::warn!(
+                "Destructive migration plan for {}/{} has no backup_dir; drops cannot be rolled back",
+                effective_plan.target.space,
+                effective_plan.target.label
+            ),
+        }
+    }
+
+    // Handle schema-modifying steps first. When the caller supplied a write
+    // fence, hold it only across this bounded switch window; the guard drops
+    // at the end of the block so the data backfill below stays online.
+    let schema_executed = {
+        let needs_fence = effective_remaining
+            .iter()
+            .any(|i| effective_plan.steps[*i].is_schema_modifying());
+        let _fence_hold: Option<SchemaFenceHold<'_>> = if needs_fence {
+            match options.schema_fence {
+                Some(fence) => {
+                    fence.hold()?;
+                    Some(SchemaFenceHold { fence })
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        execute_schema_steps(storage, &effective_plan, &effective_remaining, progress).inspect_err(
+            |_| {
+                global_migration_metrics().record_failure(start.elapsed().as_millis() as u64);
+            },
+        )?
+    };
     let data_remaining: Vec<usize> = effective_remaining
         .into_iter()
         .filter(|idx| {
@@ -436,6 +558,19 @@ where
     Ok(report)
 }
 
+fn no_rollback_error(plan: &MigrationPlan) -> MigrationError {
+    let guidance = irreversible_guidance(plan);
+    match plan.overall_safety {
+        SafetyLevel::Dangerous => {
+            let hint = guidance.unwrap_or_default();
+            MigrationError::Plan(format!(
+                "Cannot rollback a dangerous migration (data loss). {hint}"
+            ))
+        }
+        _ => MigrationError::Plan("No rollback plan available".to_string()),
+    }
+}
+
 /// Verify the checkpoint directory is writable and, when `min_free_bytes` is
 /// set, that its filesystem has enough space for checkpoint files.
 fn preflight_check(checkpoint_dir: &Path, min_free_bytes: u64) -> Result<(), MigrationError> {
@@ -472,20 +607,42 @@ where
         + AutoCommitBatchOps
         + ?Sized,
 {
+    rollback_migration_with_options(storage, plan, None)
+}
+
+/// Rollback with an optional backup directory. Plans without a generated
+/// rollback plan (typically destructive ones) are restored from the
+/// pre-migration backup when one exists.
+pub fn rollback_migration_with_options<S>(
+    storage: &mut S,
+    plan: &MigrationPlan,
+    backup_dir: Option<&Path>,
+) -> Result<MigrationReport, MigrationError>
+where
+    S: StorageReader
+        + StorageWriter
+        + StorageSchemaOps
+        + AutoCommitGroupOps
+        + AutoCommitBatchOps
+        + ?Sized,
+{
     let result = match &plan.rollback_plan {
-        Some(rollback) => execute_migration_plan(storage, rollback),
+        Some(rollback) => execute_migration_plan_with_options(
+            storage,
+            rollback,
+            ExecuteOptions {
+                skip_chain_check: true,
+                ..Default::default()
+            },
+        ),
         None => {
-            let guidance = irreversible_guidance(plan);
-            match plan.overall_safety {
-                SafetyLevel::Dangerous => {
-                    let hint = guidance.unwrap_or_default();
-                    Err(MigrationError::Plan(format!(
-                        "Cannot rollback a dangerous migration (data loss). {hint}"
-                    )))
+            if let Some(dir) = backup_dir {
+                match crate::backup::restore_backup(storage, plan, dir)? {
+                    Some(report) => Ok(report),
+                    None => Err(no_rollback_error(plan)),
                 }
-                _ => Err(MigrationError::Plan(
-                    "No rollback plan available".to_string(),
-                )),
+            } else {
+                Err(no_rollback_error(plan))
             }
         }
     };

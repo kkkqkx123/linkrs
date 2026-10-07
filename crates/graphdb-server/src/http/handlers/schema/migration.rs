@@ -154,6 +154,11 @@ pub async fn execute_migration<
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let stats = state.server.get_stats_manager();
+        // Open the online migration: refuse when another migration holds the
+        // fence, so concurrent schema switches never interleave.
+        if let Err(e) = graphdb_transaction::maintenance::issue_begin_migration(false, false) {
+            return Err::<_, HttpError>(HttpError::InternalError(e.to_string()));
+        }
         let start = std::time::Instant::now();
         stats.record_migration_start();
         let mut storage_write = storage.write();
@@ -167,18 +172,38 @@ pub async fn execute_migration<
             sender,
         ));
         let registry = std::sync::Arc::new(registry);
+        // Writes stall only across schema-modifying steps; the data backfill
+        // stays online. Data-only plans skip the fence entirely.
+        let fence = if plan.has_schema_modifying_steps() {
+            Some(
+                graphdb_api::migration_online::CheckpointGateSchemaFence::new(
+                    state.server.get_txn_manager().checkpoint_gate().clone(),
+                    std::time::Duration::from_secs(5),
+                ),
+            )
+        } else {
+            None
+        };
         let report = graphdb_migration::execute_migration_plan_with_options(
             &mut *storage_write,
             &plan,
             ExecuteOptions {
                 event_registry: Some(&registry),
+                schema_fence: fence
+                    .as_ref()
+                    .map(|f| f as &dyn graphdb_migration::SchemaWriteFence),
                 ..Default::default()
             },
         )
         .map_err(|e| HttpError::InternalError(e.to_string()));
         let elapsed = start.elapsed().as_millis() as u64;
         match &report {
-            Ok(r) if r.success => stats.record_migration_success(r.rows_migrated, elapsed),
+            Ok(r) if r.success => {
+                stats.record_migration_success(r.rows_migrated, elapsed);
+                let (_, audit) =
+                    graphdb_transaction::maintenance::issue_confirm_switch(plan.version_range.to);
+                log::info!("{audit}");
+            }
             Ok(_) => stats.record_migration_failure(elapsed),
             Err(_) => stats.record_migration_failure(elapsed),
         }

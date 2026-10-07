@@ -486,6 +486,34 @@ impl MigrationPlan {
         self.steps.is_empty()
     }
 
+    pub fn has_schema_modifying_steps(&self) -> bool {
+        self.steps.iter().any(|s| s.is_schema_modifying())
+    }
+
+    /// True when the plan destroys data that no step can reconstruct.
+    /// Such plans need a pre-migration backup for rollback to be possible.
+    pub fn requires_backup(&self) -> bool {
+        self.steps.iter().any(|s| {
+            matches!(
+                s,
+                MigrationStep::DropColumn { .. }
+                    | MigrationStep::DropLabel { .. }
+                    | MigrationStep::DropEdgeType { .. }
+            )
+        })
+    }
+
+    /// Names dropped by `DropColumn` steps, for backup/restore merging.
+    pub fn dropped_columns(&self) -> Vec<String> {
+        self.steps
+            .iter()
+            .filter_map(|s| match s {
+                MigrationStep::DropColumn { name } => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn remaining_steps(&self) -> Vec<usize> {
         (0..self.steps.len())
             .filter(|i| !self.completed_steps.contains(i))
@@ -651,25 +679,28 @@ impl MigrationCheckpoint {
     }
 }
 
+/// Escape a path component: only `[A-Za-z0-9_]` survive verbatim; every
+/// other byte becomes `%XX`, so `-` can separate fields unambiguously.
+pub(crate) fn push_escaped_path_component(out: &mut String, s: &str) {
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' => out.push(*b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+}
+
 /// Checkpoint file name with space/label/hash escaped so the name stays a
 /// single path component. Only `[A-Za-z0-9_]` survive verbatim; every other
 /// byte becomes `%XX`, and `-` separates fields (never produced verbatim by
 /// the escaper, so field boundaries stay unambiguous).
 fn checkpoint_file_name(plan: &MigrationPlan) -> String {
-    fn push_escaped(out: &mut String, s: &str) {
-        for b in s.as_bytes() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' => out.push(*b as char),
-                _ => out.push_str(&format!("%{b:02X}")),
-            }
-        }
-    }
     let mut name = String::from("checkpoint_");
-    push_escaped(&mut name, &plan.target.space);
+    push_escaped_path_component(&mut name, &plan.target.space);
     name.push('-');
-    push_escaped(&mut name, &plan.target.label);
+    push_escaped_path_component(&mut name, &plan.target.label);
     name.push('-');
-    push_escaped(&mut name, &plan.plan_hash);
+    push_escaped_path_component(&mut name, &plan.plan_hash);
     name.push_str(".json");
     name
 }

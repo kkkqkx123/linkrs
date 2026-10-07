@@ -1079,6 +1079,7 @@ message MigrationStep {
 
 message MigrateExecuteRequest {
   string plan_json = 1;
+  string session_id = 2;
 }
 
 message MigrateExecuteResponse {
@@ -1091,6 +1092,7 @@ message MigrateExecuteResponse {
 
 message MigrateRollbackRequest {
   string plan_json = 1;
+  string session_id = 2;
 }
 
 message MigrateRollbackResponse {
@@ -1525,6 +1527,7 @@ message GetMigrationStatisticsResponse {
 
 message DryRunMigrationRequest {
   string plan_json = 1;
+  string session_id = 2;
 }
 
 message DryRunMigrationResponse {
@@ -1539,6 +1542,7 @@ message GetMigrationHistoryRequest {
   string space = 1;
   string label = 2;
   bool is_edge = 3;
+  string session_id = 4;
 }
 
 message GetMigrationHistoryResponse {
@@ -1550,6 +1554,7 @@ message GetMigrationStatusRequest {
   string space = 1;
   string label = 2;
   bool is_edge = 3;
+  string session_id = 4;
 }
 
 message GetMigrationStatusResponse {

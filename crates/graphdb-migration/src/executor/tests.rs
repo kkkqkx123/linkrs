@@ -285,11 +285,24 @@ impl StorageReader for TestStorage {
     }
     fn get_applied_versions(
         &self,
-        _space: &str,
-        _label: &str,
-        _is_edge: bool,
+        space: &str,
+        label: &str,
+        is_edge: bool,
     ) -> Result<Vec<u64>, StorageError> {
-        Ok(Vec::new())
+        use graphdb_storage::MigrationStatus;
+        Ok(self
+            .migration_history
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r.space == space
+                    && r.label == label
+                    && r.is_edge == is_edge
+                    && r.status == MigrationStatus::Applied
+            })
+            .map(|r| r.to_version)
+            .collect())
     }
     fn scan_vertices_by_tag_paginated(
         &self,
@@ -737,7 +750,7 @@ fn test_execute_rollback() {
 }
 
 #[test]
-fn test_idempotent_execution() {
+fn test_reapply_same_plan_rejected() {
     let mut storage = TestStorage::new();
     storage.insert_vertex("s", "User", 1, HashMap::new());
     let plan = MigrationPlan::new(
@@ -759,14 +772,14 @@ fn test_idempotent_execution() {
     );
     let r1 = execute_migration_plan(&mut storage, &plan).unwrap();
     assert!(r1.success);
-    let r2 = execute_migration_plan(&mut storage, &plan).unwrap();
-    assert!(r2.success);
+    // Re-applying an applied target is rejected: the version chain is linear.
+    let err = execute_migration_plan(&mut storage, &plan).unwrap_err();
+    assert!(err.to_string().contains("already applied"));
     let vertices = storage.get_vertices("s", "User");
     assert_eq!(
         vertices[0].tag.properties.get("email"),
         Some(&Value::string("x"))
     );
-    // No duplicate history? second execution will attempt to record same to_version -> our mock just pushes, but real manager would reject AlreadyExists. For test we just check no panic.
 }
 
 #[test]
@@ -1012,4 +1025,223 @@ fn test_checkpoint_save_per_step() {
     assert!(report.success);
     // checkpoint should be cleaned up after success, but during execution it was saved per step
     assert!(report.completed_step_indices.len() == 2);
+}
+
+struct CountingFence {
+    holds: std::sync::atomic::AtomicUsize,
+    releases: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingFence {
+    fn new() -> Self {
+        Self {
+            holds: std::sync::atomic::AtomicUsize::new(0),
+            releases: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+impl crate::executor::SchemaWriteFence for CountingFence {
+    fn hold(&self) -> Result<(), crate::error::MigrationError> {
+        self.holds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn release(&self) {
+        self.releases
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn schema_plan() -> MigrationPlan {
+    MigrationPlan::new(
+        MigrationTarget {
+            space: "s".into(),
+            label: "User".into(),
+            is_edge: false,
+        },
+        VersionRange { from: 1, to: 2 },
+        vec![MigrationStep::CreateLabel {
+            label_name: "User".into(),
+        }],
+        0,
+        SafetyLevel::Safe,
+        None,
+    )
+}
+
+#[test]
+fn test_schema_fence_held_for_schema_plan() {
+    let mut storage = TestStorage::new();
+    let fence = CountingFence::new();
+    let report = execute_migration_plan_with_options(
+        &mut storage,
+        &schema_plan(),
+        ExecuteOptions {
+            schema_fence: Some(&fence),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(report.success);
+    assert_eq!(fence.holds.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(fence.releases.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn test_schema_fence_skipped_for_data_only_plan() {
+    let mut storage = TestStorage::new();
+    storage.insert_vertex("s", "User", 1, HashMap::new());
+    let plan = MigrationPlan::new(
+        MigrationTarget {
+            space: "s".into(),
+            label: "User".into(),
+            is_edge: false,
+        },
+        VersionRange { from: 1, to: 2 },
+        vec![MigrationStep::AddColumn {
+            name: "c".into(),
+            data_type: DataType::String,
+            nullable: true,
+            default_value: None,
+        }],
+        1,
+        SafetyLevel::Safe,
+        None,
+    );
+    let fence = CountingFence::new();
+    let report = execute_migration_plan_with_options(
+        &mut storage,
+        &plan,
+        ExecuteOptions {
+            schema_fence: Some(&fence),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(report.success);
+    assert_eq!(fence.holds.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(fence.releases.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+fn chain_plan(from: u64, to: u64) -> MigrationPlan {
+    MigrationPlan::new(
+        MigrationTarget {
+            space: "s".into(),
+            label: "User".into(),
+            is_edge: false,
+        },
+        VersionRange { from, to },
+        vec![MigrationStep::AddColumn {
+            name: format!("c{to}"),
+            data_type: DataType::String,
+            nullable: true,
+            default_value: None,
+        }],
+        1,
+        SafetyLevel::Safe,
+        None,
+    )
+}
+
+#[test]
+fn test_chain_sequential_plans_accepted() {
+    let mut storage = TestStorage::new();
+    storage.insert_vertex("s", "User", 1, HashMap::new());
+    let first = execute_migration_plan(&mut storage, &chain_plan(1, 2)).unwrap();
+    assert!(first.success);
+    let second = execute_migration_plan(&mut storage, &chain_plan(2, 3)).unwrap();
+    assert!(second.success);
+}
+
+#[test]
+fn test_chain_reapply_rejected() {
+    let mut storage = TestStorage::new();
+    storage.insert_vertex("s", "User", 1, HashMap::new());
+    assert!(
+        execute_migration_plan(&mut storage, &chain_plan(1, 2))
+            .unwrap()
+            .success
+    );
+    let err = execute_migration_plan(&mut storage, &chain_plan(1, 2)).unwrap_err();
+    assert!(err.to_string().contains("already applied"));
+}
+
+#[test]
+fn test_chain_gap_rejected() {
+    let mut storage = TestStorage::new();
+    storage.insert_vertex("s", "User", 1, HashMap::new());
+    assert!(
+        execute_migration_plan(&mut storage, &chain_plan(1, 2))
+            .unwrap()
+            .success
+    );
+    let err = execute_migration_plan(&mut storage, &chain_plan(3, 4)).unwrap_err();
+    assert!(err.to_string().contains("chain gap"));
+}
+
+fn drop_column_plan() -> MigrationPlan {
+    MigrationPlan::new(
+        MigrationTarget {
+            space: "s".into(),
+            label: "User".into(),
+            is_edge: false,
+        },
+        VersionRange { from: 1, to: 2 },
+        vec![MigrationStep::DropColumn { name: "a".into() }],
+        1,
+        SafetyLevel::Dangerous,
+        None,
+    )
+}
+
+#[test]
+fn test_drop_column_backup_and_restore() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = TestStorage::new();
+    let mut props: HashMap<Arc<str>, Value> = HashMap::new();
+    props.insert("a".into(), Value::string("keep-me"));
+    props.insert("b".into(), Value::string("other"));
+    storage.insert_vertex("s", "User", 1, props);
+
+    let report = execute_migration_plan_with_options(
+        &mut storage,
+        &drop_column_plan(),
+        ExecuteOptions {
+            backup_dir: Some(tmp.path()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(report.success);
+    let vertices = storage.get_vertices("s", "User");
+    assert!(!vertices[0].tag.properties.contains_key("a"));
+    assert_eq!(
+        vertices[0].tag.properties.get("b"),
+        Some(&Value::string("other"))
+    );
+
+    let rollback =
+        rollback_migration_with_options(&mut storage, &drop_column_plan(), Some(tmp.path()))
+            .unwrap();
+    assert!(rollback.success);
+    assert_eq!(rollback.rows_migrated, 1);
+    let vertices = storage.get_vertices("s", "User");
+    assert_eq!(
+        vertices[0].tag.properties.get("a"),
+        Some(&Value::string("keep-me"))
+    );
+}
+
+#[test]
+fn test_drop_column_rollback_without_backup_fails() {
+    let mut storage = TestStorage::new();
+    storage.insert_vertex("s", "User", 1, HashMap::new());
+    let err = rollback_migration(&mut storage, &drop_column_plan()).unwrap_err();
+    assert!(err.to_string().contains("Cannot rollback"));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let err = rollback_migration_with_options(&mut storage, &drop_column_plan(), Some(tmp.path()))
+        .unwrap_err();
+    assert!(err.to_string().contains("Cannot rollback"));
 }

@@ -401,14 +401,14 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                     "CREATE TAG ... AS: value in column '{vid_col}' cannot be used as a vertex id"
                 ))
             })?;
-            let mut props = std::collections::HashMap::new();
+            let mut props: HashMap<Arc<str>, Value> = std::collections::HashMap::new();
             for col in &prop_cols {
                 if let Some(value) = row.get(col) {
                     ensure_scalar_property(col, value)?;
                     if matches!(value, Value::Null(_) | graphdb_core::Value::Empty) {
                         continue;
                     }
-                    props.insert(col.clone(), value.clone());
+                    props.insert(col.as_str().into(), value.clone());
                 }
             }
             vertices.push(graphdb_core::Vertex::new(
@@ -515,14 +515,14 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::UndoTarget> Session<S
                     "CREATE EDGE ... AS: value in column '{dst_col}' cannot be used as a vertex id"
                 ))
             })?;
-            let mut props = std::collections::HashMap::new();
+            let mut props: HashMap<Arc<str>, Value> = std::collections::HashMap::new();
             for col in &prop_cols {
                 if let Some(value) = row.get(col) {
                     ensure_scalar_property(col, value)?;
                     if matches!(value, Value::Null(_) | graphdb_core::Value::Empty) {
                         continue;
                     }
-                    props.insert(col.clone(), value.clone());
+                    props.insert(col.as_str().into(), value.clone());
                 }
             }
             edges.push(graphdb_core::Edge::new(

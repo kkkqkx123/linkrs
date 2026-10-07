@@ -9,6 +9,11 @@ pub struct MigrationConfig {
     /// Minimum free disk space required on the checkpoint directory
     /// filesystem before execution starts. 0 disables the preflight check.
     pub min_free_bytes: u64,
+    /// Bounded stall for the schema-switch drain window. A timeout aborts
+    /// the migration instead of stretching the write stall.
+    pub drain_timeout_ms: u64,
+    /// Directory for pre-migration backups of destructive steps.
+    pub backup_dir: Option<PathBuf>,
 }
 
 impl Default for MigrationConfig {
@@ -19,6 +24,8 @@ impl Default for MigrationConfig {
             checkpoint_dir: None,
             lock_path: None,
             min_free_bytes: 0,
+            drain_timeout_ms: 5000,
+            backup_dir: None,
         }
     }
 }
@@ -50,6 +57,16 @@ impl MigrationConfig {
 
     pub fn with_min_free_bytes(mut self, min_free_bytes: u64) -> Self {
         self.min_free_bytes = min_free_bytes;
+        self
+    }
+
+    pub fn with_drain_timeout_ms(mut self, drain_timeout_ms: u64) -> Self {
+        self.drain_timeout_ms = drain_timeout_ms;
+        self
+    }
+
+    pub fn with_backup_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.backup_dir = Some(dir.into());
         self
     }
 }

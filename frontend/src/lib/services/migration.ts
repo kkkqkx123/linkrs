@@ -1,5 +1,11 @@
 import { call, client } from '$lib/api/client';
-import { getApiBaseUrl, getSessionHeaders } from '$utils/http';
+import {
+	streamMigrationProgress,
+	type MigrationProgressEvent,
+	type MigrationStreamOutcome,
+} from './migrationStream';
+
+export type { MigrationProgressEvent, MigrationStreamOutcome };
 
 export interface MigrationPlanParams {
 	space: string;
@@ -14,7 +20,7 @@ export interface MigrationPlanParams {
  * Schema migration management: plan, dry-run, execute, rollback,
  * history and status. Progress streams over SSE (`GET
  * /v1/migration/stream/{space}/{label}`), which OpenAPI cannot model,
- * so it uses raw fetch like the query stream.
+ * so it uses raw fetch decoded into typed events (see migrationStream).
  */
 export const migrationService = {
 	plan: async (params: MigrationPlanParams): Promise<unknown> =>
@@ -78,34 +84,13 @@ export const migrationService = {
 	streamProgress: async (
 		space: string,
 		label: string,
-		isEdge: boolean | undefined,
-		onEvent: (data: string) => void,
-		signal?: AbortSignal,
-	): Promise<void> => {
-		const query = isEdge === undefined ? '' : `?is_edge=${isEdge}`;
-		const response = await fetch(
-			`${getApiBaseUrl()}/v1/migration/stream/${encodeURIComponent(space)}/${encodeURIComponent(label)}${query}`,
-			{
-				headers: { ...getSessionHeaders(), Accept: 'text/event-stream' },
-				signal,
-			},
-		);
-		if (!response.ok || !response.body) {
-			throw new Error(`Migration stream failed with status ${response.status}`);
-		}
-		const reader = response.body.getReader();
-		const decoder = new TextDecoder();
-		try {
-			for (;;) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				onEvent(decoder.decode(value, { stream: true }));
-				if (signal?.aborted) break;
-			}
-		} finally {
-			reader.releaseLock();
-		}
-	},
+		options: {
+			isEdge?: boolean;
+			signal?: AbortSignal;
+			onEvent?: (event: MigrationProgressEvent) => void;
+		} = {},
+	): Promise<MigrationStreamOutcome> =>
+		streamMigrationProgress(space, label, options),
 };
 
 export default migrationService;

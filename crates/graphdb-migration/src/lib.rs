@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod checkpoint;
 pub mod config;
 pub mod converter;
@@ -11,13 +12,15 @@ pub mod metrics;
 pub mod plan;
 pub mod progress;
 
+pub use backup::{backup_file_name, restore_backup, write_backup, DestructiveBackup};
 pub use checkpoint::{MigrationCheckpoint, StepResult};
 pub use config::MigrationConfig;
 pub use converter::{convert_value, is_compatible_type};
 pub use error::MigrationError;
 pub use event::MigrationEvent;
 pub use executor::{
-    execute_migration_plan, execute_migration_plan_with_options, rollback_migration, ExecuteOptions,
+    execute_migration_plan, execute_migration_plan_with_options, rollback_migration,
+    rollback_migration_with_options, ExecuteOptions, SchemaWriteFence,
 };
 pub use file_registry::{MigrationFileEntry, MigrationFileRegistry};
 pub use generator::{

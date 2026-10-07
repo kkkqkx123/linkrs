@@ -5,6 +5,9 @@
 
 pub mod api_core;
 
+// Online migration drain fence shared by embedded and server callers.
+pub mod migration_online;
+
 // Transaction-aware session variable store shared by the server and
 // embedded session implementations.
 pub mod session_variables;

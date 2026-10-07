@@ -166,6 +166,61 @@ impl MigrationHistoryManager {
         v
     }
 
+    /// Check a plan's version range against already-applied versions.
+    ///
+    /// Pure function over a sorted applied list so both the storage engine
+    /// and the migration executor share one chain rule: forward-only ranges,
+    /// no re-applying an applied target, and no gaps (a non-empty chain must
+    /// continue exactly where it left off).
+    pub fn check_chain(
+        applied_sorted: &[u64],
+        space: &str,
+        label: &str,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    ) -> StorageResult<()> {
+        if to_version <= from_version {
+            return Err(StorageError::invalid_input(format!(
+                "non-forward migration range v{from_version} -> v{to_version} for {space}/{label}"
+            )));
+        }
+        if applied_sorted.contains(&to_version) {
+            return Err(StorageError::already_exists(format!(
+                "migration target v{to_version} for {space}/{label} is already applied"
+            )));
+        }
+        let mut ascending = applied_sorted.to_vec();
+        ascending.sort_unstable();
+        if let Some(&latest) = ascending.last() {
+            if from_version != latest {
+                return Err(StorageError::invalid_input(format!(
+                    "migration chain gap for {space}/{label} (is_edge={is_edge}): latest applied is v{latest}, plan starts at v{from_version}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Instance form of [`Self::check_chain`] over this manager's records.
+    pub fn validate_version_chain(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    ) -> StorageResult<()> {
+        Self::check_chain(
+            &self.get_applied_versions_sorted(space, label, is_edge),
+            space,
+            label,
+            is_edge,
+            from_version,
+            to_version,
+        )
+    }
+
     pub fn find(
         &self,
         space: &str,
@@ -284,5 +339,53 @@ mod tests {
         let loaded = MigrationHistoryManager::load_from_file(tmp.path()).unwrap();
         assert_eq!(loaded.records.len(), 1);
         assert_eq!(loaded.get_applied_versions("s", "l", false).len(), 1);
+    }
+
+    #[test]
+    fn test_check_chain_fresh_label() {
+        assert!(MigrationHistoryManager::check_chain(&[], "s", "l", false, 1, 2).is_ok());
+    }
+
+    #[test]
+    fn test_check_chain_rejects_non_forward() {
+        assert!(MigrationHistoryManager::check_chain(&[], "s", "l", false, 2, 2).is_err());
+        assert!(MigrationHistoryManager::check_chain(&[], "s", "l", false, 3, 2).is_err());
+    }
+
+    #[test]
+    fn test_check_chain_rejects_reapply() {
+        assert!(MigrationHistoryManager::check_chain(&[2], "s", "l", false, 1, 2).is_err());
+    }
+
+    #[test]
+    fn test_check_chain_rejects_gap() {
+        assert!(MigrationHistoryManager::check_chain(&[2], "s", "l", false, 3, 4).is_err());
+        assert!(MigrationHistoryManager::check_chain(&[1, 2], "s", "l", false, 1, 3).is_err());
+    }
+
+    #[test]
+    fn test_check_chain_accepts_continuation() {
+        assert!(MigrationHistoryManager::check_chain(&[2], "s", "l", false, 2, 3).is_ok());
+        assert!(MigrationHistoryManager::check_chain(&[1, 2], "s", "l", false, 2, 5).is_ok());
+    }
+
+    #[test]
+    fn test_validate_version_chain_instance() {
+        let mut mgr = MigrationHistoryManager::new();
+        mgr.record(MigrationHistoryRecord::new(
+            "s".into(),
+            "l".into(),
+            false,
+            1,
+            2,
+            "h".into(),
+            "SAFE".into(),
+            1,
+            5,
+            MigrationStatus::Applied,
+        ))
+        .unwrap();
+        assert!(mgr.validate_version_chain("s", "l", false, 2, 3).is_ok());
+        assert!(mgr.validate_version_chain("s", "l", false, 1, 3).is_err());
     }
 }

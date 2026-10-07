@@ -529,6 +529,11 @@ impl<S: StorageClient + Clone + 'static> GraphDatabase<S> {
         self.inner.stats_manager.clone()
     }
 
+    /// Get transaction manager for online coordination (drain fences, etc).
+    pub(crate) fn txn_manager(&self) -> Arc<TransactionManager> {
+        self.inner.txn_manager.clone()
+    }
+
     /// Central event-hook facade: one subscription point for schema and
     /// transaction notifications (notification hooks only; the C-API
     /// `commit_hook` veto is separate).

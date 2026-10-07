@@ -7,8 +7,16 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
+use super::error::parse_session_id;
 use super::proto::*;
 use super::service::{GraphDBService, StreamMigrationProgressStream};
+
+fn require_session_id(raw: &str) -> Result<i64, Status> {
+    if raw.is_empty() {
+        return Err(Status::unauthenticated("session_id is required"));
+    }
+    parse_session_id(raw)
+}
 
 impl<
         S: StorageClient
@@ -74,6 +82,9 @@ impl<
         request: Request<MigrateExecuteRequest>,
     ) -> Result<Response<MigrateExecuteResponse>, Status> {
         let req = request.into_inner();
+        let session_id = require_session_id(&req.session_id)?;
+        crate::http::handlers::authz::require_admin_session(&self.app_state, session_id)
+            .map_err(map_http_error)?;
         let storage = self.app_state.server.get_storage();
         let stats = self.app_state.server.get_stats_manager();
         let start = std::time::Instant::now();
@@ -95,17 +106,42 @@ impl<
             sender,
         ));
         let registry = std::sync::Arc::new(registry);
+        if let Err(e) = graphdb_transaction::maintenance::issue_begin_migration(false, false) {
+            return Err(Status::internal(e.to_string()));
+        }
+        let fence = if plan.has_schema_modifying_steps() {
+            Some(
+                graphdb_api::migration_online::CheckpointGateSchemaFence::new(
+                    self.app_state
+                        .server
+                        .get_txn_manager()
+                        .checkpoint_gate()
+                        .clone(),
+                    std::time::Duration::from_secs(5),
+                ),
+            )
+        } else {
+            None
+        };
         let report = graphdb_migration::execute_migration_plan_with_options(
             &mut *storage_write,
             &plan,
             graphdb_migration::ExecuteOptions {
                 event_registry: Some(&registry),
+                schema_fence: fence
+                    .as_ref()
+                    .map(|f| f as &dyn graphdb_migration::SchemaWriteFence),
                 ..Default::default()
             },
         );
         let elapsed = start.elapsed().as_millis() as u64;
         match &report {
-            Ok(r) if r.success => stats.record_migration_success(r.rows_migrated, elapsed),
+            Ok(r) if r.success => {
+                stats.record_migration_success(r.rows_migrated, elapsed);
+                let (_, audit) =
+                    graphdb_transaction::maintenance::issue_confirm_switch(plan.version_range.to);
+                log::info!("{audit}");
+            }
             Ok(_) => stats.record_migration_failure(elapsed),
             Err(_) => stats.record_migration_failure(elapsed),
         }
@@ -125,6 +161,9 @@ impl<
         request: Request<MigrateRollbackRequest>,
     ) -> Result<Response<MigrateRollbackResponse>, Status> {
         let req = request.into_inner();
+        let session_id = require_session_id(&req.session_id)?;
+        crate::http::handlers::authz::require_admin_session(&self.app_state, session_id)
+            .map_err(map_http_error)?;
         let storage = self.app_state.server.get_storage();
         let mut storage_write = storage.write();
 
@@ -148,11 +187,13 @@ impl<
         request: Request<DryRunMigrationRequest>,
     ) -> Result<Response<DryRunMigrationResponse>, Status> {
         let req = request.into_inner();
+        let session_id = require_session_id(&req.session_id)?;
         let wire = graphdb_wire::migration::MigrationExecuteRequest {
             plan_json: req.plan_json,
         };
         match crate::http::handlers::schema::migration::dry_run_migration(
             axum::extract::State(self.app_state.clone()),
+            axum::extract::Extension(session_id),
             axum::Json(wire),
         )
         .await
@@ -173,10 +214,12 @@ impl<
         request: Request<GetMigrationHistoryRequest>,
     ) -> Result<Response<GetMigrationHistoryResponse>, Status> {
         let req = request.into_inner();
+        let session_id = require_session_id(&req.session_id)?;
         let query =
             std::collections::HashMap::from([("is_edge".to_string(), req.is_edge.to_string())]);
         match crate::http::handlers::schema::migration::migration_history(
             axum::extract::State(self.app_state.clone()),
+            axum::extract::Extension(session_id),
             axum::extract::Path((req.space, req.label)),
             axum::extract::Query(query),
         )
@@ -195,10 +238,12 @@ impl<
         request: Request<GetMigrationStatusRequest>,
     ) -> Result<Response<GetMigrationStatusResponse>, Status> {
         let req = request.into_inner();
+        let session_id = require_session_id(&req.session_id)?;
         let query =
             std::collections::HashMap::from([("is_edge".to_string(), req.is_edge.to_string())]);
         match crate::http::handlers::schema::migration::migration_status(
             axum::extract::State(self.app_state.clone()),
+            axum::extract::Extension(session_id),
             axum::extract::Path((req.space, req.label)),
             axum::extract::Query(query),
         )

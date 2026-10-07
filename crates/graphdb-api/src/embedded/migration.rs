@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::database::GraphDatabase;
+use crate::migration_online::CheckpointGateSchemaFence;
 use crate::storage::GraphStorage;
 use graphdb_migration::{ExecuteOptions, MigrationConfig, MigrationPlan, MigrationReport};
 
@@ -109,6 +112,55 @@ impl GraphDatabase<GraphStorage> {
             Ok(report) if report.success => {
                 self.stats_manager()
                     .record_migration_success(report.rows_migrated, elapsed);
+            }
+            Ok(_) | Err(_) => {
+                self.stats_manager().record_migration_failure(elapsed);
+            }
+        }
+        res
+    }
+
+    /// Execute with the online drain protocol: refuse when another migration
+    /// holds the fence, stall writes only across schema-modifying steps, and
+    /// audit the switch on success. Data-only plans skip the fence entirely.
+    pub fn execute_migration_plan_online(
+        &self,
+        plan: &MigrationPlan,
+        config: &MigrationConfig,
+    ) -> CoreResult<MigrationReport> {
+        graphdb_transaction::maintenance::issue_begin_migration(false, false)
+            .map_err(|e| CoreError::Internal(e.to_string()))?;
+        let fence = if plan.has_schema_modifying_steps() {
+            Some(CheckpointGateSchemaFence::new(
+                self.txn_manager().checkpoint_gate().clone(),
+                Duration::from_millis(config.drain_timeout_ms.max(1)),
+            ))
+        } else {
+            None
+        };
+        let mut storage = self.storage_mut();
+        let start = std::time::Instant::now();
+        self.stats_manager().record_migration_start();
+        let res = graphdb_migration::execute_migration_plan_with_options(
+            &mut *storage,
+            plan,
+            ExecuteOptions {
+                config: Some(config),
+                schema_fence: fence
+                    .as_ref()
+                    .map(|f| f as &dyn graphdb_migration::SchemaWriteFence),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| CoreError::Internal(e.to_string()));
+        let elapsed = start.elapsed().as_millis() as u64;
+        match &res {
+            Ok(report) if report.success => {
+                self.stats_manager()
+                    .record_migration_success(report.rows_migrated, elapsed);
+                let (_, audit) =
+                    graphdb_transaction::maintenance::issue_confirm_switch(plan.version_range.to);
+                log::info!("{audit}");
             }
             Ok(_) | Err(_) => {
                 self.stats_manager().record_migration_failure(elapsed);

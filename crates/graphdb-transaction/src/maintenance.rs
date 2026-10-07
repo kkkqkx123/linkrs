@@ -4,6 +4,12 @@
 //! owns directories, manifests, and generations; this module only issues the
 //! three maintenance commands and holds the drain fence. It never touches
 //! shard directories.
+//!
+//! The same drain fence also backs online schema migrations: the migration
+//! engine exposes a `SchemaWriteFence` hook and the layer owning the
+//! [`CheckpointGate`] (embedded API, server) bridges these commands into
+//! that hook, so schema switches run inside a bounded write stall while the
+//! data backfill stays online.
 
 use std::sync::Arc;
 use std::time::Duration;

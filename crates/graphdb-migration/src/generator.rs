@@ -4,6 +4,15 @@ use graphdb_storage::{ChangeDetails, PropertyChange, StorageReader};
 use crate::error::MigrationError;
 use crate::plan::{MigrationPlan, MigrationStep, MigrationTarget, SafetyLevel, VersionRange};
 
+fn check_range(from_version: u64, to_version: u64) -> Result<(), MigrationError> {
+    if to_version <= from_version {
+        return Err(MigrationError::Plan(format!(
+            "non-forward migration range v{from_version} -> v{to_version}"
+        )));
+    }
+    Ok(())
+}
+
 pub fn generate_vertex_plan<R: StorageReader + ?Sized>(
     reader: &R,
     space: &str,
@@ -11,6 +20,7 @@ pub fn generate_vertex_plan<R: StorageReader + ?Sized>(
     from_version: u64,
     to_version: u64,
 ) -> Result<MigrationPlan, MigrationError> {
+    check_range(from_version, to_version)?;
     let changes = reader.get_vertex_schema_changes(space, tag, from_version, to_version)?;
 
     let steps: Vec<MigrationStep> = changes
@@ -70,6 +80,7 @@ pub fn generate_edge_plan<R: StorageReader + ?Sized>(
     from_version: u64,
     to_version: u64,
 ) -> Result<MigrationPlan, MigrationError> {
+    check_range(from_version, to_version)?;
     let changes = reader.get_edge_schema_changes(space, edge_type, from_version, to_version)?;
 
     let steps: Vec<MigrationStep> = changes
@@ -130,6 +141,7 @@ pub fn generate_vertex_plan_with_expand<R: StorageReader + ?Sized>(
     to_version: u64,
     expand_contract: bool,
 ) -> Result<MigrationPlan, MigrationError> {
+    check_range(from_version, to_version)?;
     let changes = reader.get_vertex_schema_changes(space, tag, from_version, to_version)?;
     let steps: Vec<MigrationStep> = changes
         .iter()
@@ -188,6 +200,7 @@ pub fn generate_edge_plan_with_expand<R: StorageReader + ?Sized>(
     to_version: u64,
     expand_contract: bool,
 ) -> Result<MigrationPlan, MigrationError> {
+    check_range(from_version, to_version)?;
     let changes = reader.get_edge_schema_changes(space, edge_type, from_version, to_version)?;
     let steps: Vec<MigrationStep> = changes
         .iter()
@@ -898,5 +911,13 @@ mod tests {
         );
         let plan = generate_vertex_plan(&reader, "s", "User", 1, 2).unwrap();
         assert!(plan.rollback_plan.is_none());
+    }
+
+    #[test]
+    fn test_non_forward_range_rejected() {
+        let reader = MockReader::new();
+        assert!(generate_vertex_plan(&reader, "s", "User", 2, 2).is_err());
+        assert!(generate_vertex_plan(&reader, "s", "User", 3, 2).is_err());
+        assert!(generate_edge_plan(&reader, "s", "knows", 2, 1).is_err());
     }
 }
