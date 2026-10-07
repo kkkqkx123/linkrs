@@ -403,6 +403,15 @@ pub(crate) fn get_config_value(
             }
             _ => serde_json::Value::Null,
         },
+        "migration" => match key {
+            "batch_size" => serde_json::json!(config.common.migration.batch_size),
+            "checkpoint_dir" => serde_json::json!(config.common.migration.checkpoint_dir),
+            "backup_dir" => serde_json::json!(config.common.migration.backup_dir),
+            "lock_path" => serde_json::json!(config.common.migration.lock_path),
+            "drain_timeout_ms" => serde_json::json!(config.common.migration.drain_timeout_ms),
+            "min_free_bytes" => serde_json::json!(config.common.migration.min_free_bytes),
+            _ => serde_json::Value::Null,
+        },
         _ => serde_json::Value::Null,
     }
 }
@@ -423,6 +432,7 @@ fn is_restart_required(section: &str, key: &str) -> bool {
         "bootstrap" => true,
         "optimizer" => true,
         "monitoring" => true,
+        "migration" => false,
         _ => false,
     }
 }
@@ -560,6 +570,33 @@ pub(crate) fn set_config_value(
             }
             "slow_query_threshold_ms" => {
                 config.common.monitoring.slow_query_threshold_ms = parse_value(&full_key, value)?
+            }
+            _ => return Err(format!("unknown configuration key '{full_key}'")),
+        },
+        "migration" => match key {
+            "batch_size" => {
+                config.common.migration.batch_size = parse_value(&full_key, value)?;
+                config
+                    .common
+                    .migration
+                    .validate()
+                    .map_err(|e| format!("invalid value for '{full_key}': {e}"))?;
+            }
+            "checkpoint_dir" => {
+                config.common.migration.checkpoint_dir = parse_value(&full_key, value)?
+            }
+            "backup_dir" => config.common.migration.backup_dir = parse_value(&full_key, value)?,
+            "lock_path" => config.common.migration.lock_path = parse_value(&full_key, value)?,
+            "drain_timeout_ms" => {
+                config.common.migration.drain_timeout_ms = parse_value(&full_key, value)?;
+                config
+                    .common
+                    .migration
+                    .validate()
+                    .map_err(|e| format!("invalid value for '{full_key}': {e}"))?;
+            }
+            "min_free_bytes" => {
+                config.common.migration.min_free_bytes = parse_value(&full_key, value)?
             }
             _ => return Err(format!("unknown configuration key '{full_key}'")),
         },

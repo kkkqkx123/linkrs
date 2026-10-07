@@ -146,6 +146,26 @@ impl<
         Arc::clone(&self.config)
     }
 
+    /// Build the engine-facing migration config from live settings.
+    ///
+    /// Directory fields fall back to `migration/` subdirectories of the
+    /// storage data directory; an empty data directory leaves that
+    /// capability disabled instead of failing.
+    pub fn migration_config(&self) -> graphdb_migration::MigrationConfig {
+        let guard = self.config.read();
+        let settings = &guard.common.migration;
+        let data_dir = guard.common.database.storage_path.as_str();
+        graphdb_migration::MigrationConfig {
+            batch_size: settings.batch_size,
+            lock_ttl_secs: 300,
+            checkpoint_dir: settings.resolved_checkpoint_dir(data_dir),
+            lock_path: settings.resolved_lock_path(data_dir),
+            min_free_bytes: settings.min_free_bytes,
+            drain_timeout_ms: settings.drain_timeout_ms,
+            backup_dir: settings.resolved_backup_dir(data_dir),
+        }
+    }
+
     /// Get function registry
     pub fn get_function_registry(&self) -> Arc<RwLock<FunctionRegistry>> {
         self.function_registry.clone()

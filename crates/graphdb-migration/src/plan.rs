@@ -704,3 +704,94 @@ fn checkpoint_file_name(plan: &MigrationPlan) -> String {
     name.push_str(".json");
     name
 }
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::{checkpoint_now_millis, MigrationCheckpoint, MigrationTarget, StepResult};
+
+    fn make_plan(hash: &str) -> super::MigrationPlan {
+        let mut p = super::MigrationPlan::new(
+            MigrationTarget {
+                space: "s".into(),
+                label: "l".into(),
+                is_edge: false,
+            },
+            super::VersionRange { from: 1, to: 2 },
+            vec![],
+            0,
+            super::SafetyLevel::Safe,
+            None,
+        );
+        p.plan_hash = hash.to_string();
+        p
+    }
+
+    #[test]
+    fn test_checkpoint_save_load_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plan = make_plan("abc123");
+        let cp = MigrationCheckpoint {
+            completed_step_index: 1,
+            rows_migrated_before: 0,
+            rows_migrated_after: 10,
+            timestamp: checkpoint_now_millis(),
+            step_result: StepResult::Success,
+            completed_steps: vec![1],
+        };
+        cp.save(&plan, tmp.path()).unwrap();
+        let loaded = MigrationCheckpoint::load(&plan, tmp.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.completed_step_index, 1);
+        assert_eq!(loaded.rows_migrated_after, 10);
+        MigrationCheckpoint::cleanup(&plan, tmp.path()).unwrap();
+        assert!(MigrationCheckpoint::load(&plan, tmp.path())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_missing_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plan = make_plan("hash2");
+        assert!(MigrationCheckpoint::load(&plan, tmp.path())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_name_escapes_path_separators() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut p = super::MigrationPlan::new(
+            super::MigrationTarget {
+                space: "../evil".into(),
+                label: "a/b".into(),
+                is_edge: false,
+            },
+            super::VersionRange { from: 1, to: 2 },
+            vec![],
+            0,
+            super::SafetyLevel::Safe,
+            None,
+        );
+        p.plan_hash = "h1".to_string();
+        let cp = MigrationCheckpoint {
+            completed_step_index: 0,
+            rows_migrated_before: 0,
+            rows_migrated_after: 3,
+            timestamp: checkpoint_now_millis(),
+            step_result: StepResult::Success,
+            completed_steps: vec![0],
+        };
+        cp.save(&p, tmp.path()).unwrap();
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].starts_with("checkpoint_"));
+        assert!(!entries[0].contains('/'));
+        let loaded = MigrationCheckpoint::load(&p, tmp.path()).unwrap().unwrap();
+        assert_eq!(loaded.rows_migrated_after, 3);
+    }
+}

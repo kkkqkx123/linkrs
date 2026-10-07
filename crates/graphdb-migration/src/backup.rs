@@ -16,7 +16,7 @@ use crate::error::MigrationError;
 use crate::plan::{push_escaped_path_component, MigrationPlan, MigrationReport, MigrationStep};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DestructiveBackup {
+pub(crate) struct DestructiveBackup {
     pub space: String,
     pub label: String,
     pub is_edge: bool,
@@ -28,7 +28,7 @@ pub struct DestructiveBackup {
     pub edges: Vec<Edge>,
 }
 
-pub fn backup_file_name(plan: &MigrationPlan) -> String {
+fn backup_file_name(plan: &MigrationPlan) -> String {
     let hash = if plan.plan_hash.is_empty() {
         plan.compute_hash()
     } else {

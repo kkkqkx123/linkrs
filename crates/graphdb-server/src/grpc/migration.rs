@@ -87,6 +87,13 @@ impl<
             .map_err(map_http_error)?;
         let storage = self.app_state.server.get_storage();
         let stats = self.app_state.server.get_stats_manager();
+        let migration_config = self.app_state.server.migration_config();
+        let gate = self
+            .app_state
+            .server
+            .get_txn_manager()
+            .checkpoint_gate()
+            .clone();
         let start = std::time::Instant::now();
         stats.record_migration_start();
         let mut storage_write = storage.write();
@@ -106,41 +113,17 @@ impl<
             sender,
         ));
         let registry = std::sync::Arc::new(registry);
-        if let Err(e) = graphdb_transaction::maintenance::issue_begin_migration(false, false) {
-            return Err(Status::internal(e.to_string()));
-        }
-        let fence = if plan.has_schema_modifying_steps() {
-            Some(
-                graphdb_api::migration_online::CheckpointGateSchemaFence::new(
-                    self.app_state
-                        .server
-                        .get_txn_manager()
-                        .checkpoint_gate()
-                        .clone(),
-                    std::time::Duration::from_secs(5),
-                ),
-            )
-        } else {
-            None
-        };
-        let report = graphdb_migration::execute_migration_plan_with_options(
+        let report = graphdb_api::migration_online::execute_online_migration(
             &mut *storage_write,
             &plan,
-            graphdb_migration::ExecuteOptions {
-                event_registry: Some(&registry),
-                schema_fence: fence
-                    .as_ref()
-                    .map(|f| f as &dyn graphdb_migration::SchemaWriteFence),
-                ..Default::default()
-            },
+            &migration_config,
+            &gate,
+            Some(&registry),
         );
         let elapsed = start.elapsed().as_millis() as u64;
         match &report {
             Ok(r) if r.success => {
                 stats.record_migration_success(r.rows_migrated, elapsed);
-                let (_, audit) =
-                    graphdb_transaction::maintenance::issue_confirm_switch(plan.version_range.to);
-                log::info!("{audit}");
             }
             Ok(_) => stats.record_migration_failure(elapsed),
             Err(_) => stats.record_migration_failure(elapsed),
@@ -165,13 +148,34 @@ impl<
         crate::http::handlers::authz::require_admin_session(&self.app_state, session_id)
             .map_err(map_http_error)?;
         let storage = self.app_state.server.get_storage();
+        let migration_config = self.app_state.server.migration_config();
         let mut storage_write = storage.write();
 
         let plan: graphdb_migration::MigrationPlan = serde_json::from_str(&req.plan_json)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let report = graphdb_migration::rollback_migration(&mut *storage_write, &plan)
-            .map_err(|e| Status::internal(e.to_string()))?;
+        let sender = crate::http::handlers::migration_progress::get_or_create_sender(
+            &plan.target.space,
+            &plan.target.label,
+            plan.target.is_edge,
+        );
+        let registry = graphdb_core::event_dispatch::EventSubscriptions::<
+            graphdb_migration::MigrationEvent,
+        >::new();
+        registry.add(crate::http::handlers::migration_progress::event_bridge(
+            sender,
+        ));
+        let registry = std::sync::Arc::new(registry);
+        let report = graphdb_migration::rollback_migration_with_options(
+            &mut *storage_write,
+            &plan,
+            graphdb_migration::ExecuteOptions {
+                config: Some(&migration_config),
+                event_registry: Some(&registry),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(MigrateRollbackResponse {
             success: report.success,

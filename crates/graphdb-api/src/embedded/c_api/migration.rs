@@ -17,6 +17,9 @@ pub struct graphdb_migration_report_t {
 
 /// Execute a migration plan given as JSON.
 ///
+/// Runs through the shared online orchestration: writes stall only across
+/// schema-modifying steps while the data backfill stays online.
+///
 /// # Arguments
 /// - `db`: Database handle
 /// - `plan_json`: Null-terminated JSON string of `MigrationPlan`
@@ -58,7 +61,10 @@ pub unsafe extern "C" fn graphdb_migration_execute(
     };
 
     let handle = unsafe { &*(db as *mut GraphDbHandle) };
-    let report = match handle.inner.execute_migration_plan(&plan) {
+    let report = match handle
+        .inner
+        .execute_migration_plan_online(&plan, &graphdb_migration::MigrationConfig::default())
+    {
         Ok(r) => r,
         Err(e) => {
             set_last_error_message(format!("migration failed: {}", e));
@@ -114,6 +120,7 @@ pub unsafe extern "C" fn graphdb_migration_plan_json(
     is_edge: c_int,
     from_version: u64,
     to_version: u64,
+    expand_contract: c_int,
 ) -> *mut c_char {
     if db.is_null() || space.is_null() || label.is_null() {
         set_last_error_message("invalid argument: null pointer".to_string());
@@ -140,14 +147,23 @@ pub unsafe extern "C" fn graphdb_migration_plan_json(
     };
 
     let handle = unsafe { &*(db as *mut GraphDbHandle) };
+    let expand = expand_contract != 0;
     let plan_res = if is_edge != 0 {
-        handle
-            .inner
-            .generate_edge_migration_plan(space_str, label_str, from_version, to_version)
+        handle.inner.generate_edge_migration_plan_with_expand(
+            space_str,
+            label_str,
+            from_version,
+            to_version,
+            expand,
+        )
     } else {
-        handle
-            .inner
-            .generate_vertex_migration_plan(space_str, label_str, from_version, to_version)
+        handle.inner.generate_vertex_migration_plan_with_expand(
+            space_str,
+            label_str,
+            from_version,
+            to_version,
+            expand,
+        )
     };
 
     let plan = match plan_res {
@@ -170,4 +186,74 @@ pub unsafe extern "C" fn graphdb_migration_plan_json(
         Ok(c) => c.into_raw(),
         Err(_) => ptr::null_mut(),
     }
+}
+
+/// Roll back a migration plan given as JSON.
+///
+/// Runs a generated rollback plan when one exists, otherwise restores from
+/// the pre-migration backup when one was taken.
+///
+/// # Arguments
+/// - `db`: Database handle
+/// - `plan_json`: Null-terminated JSON string of `MigrationPlan`
+///
+/// # Returns
+/// - On success: pointer to `graphdb_migration_report_t` (must be freed with `graphdb_migration_report_free`)
+/// - On failure: null pointer (error details via `graphdb_errmsg`)
+///
+/// # Safety
+/// - `db` must be a valid handle from `graphdb_open`
+/// - `plan_json` must be a valid null-terminated UTF-8 string
+/// - Returned pointer must be freed by caller
+#[no_mangle]
+pub unsafe extern "C" fn graphdb_migration_rollback(
+    db: *mut graphdb_t,
+    plan_json: *const c_char,
+) -> *mut graphdb_migration_report_t {
+    if db.is_null() || plan_json.is_null() {
+        set_last_error_message("invalid argument: null pointer".to_string());
+        return ptr::null_mut();
+    }
+
+    let plan_str = unsafe {
+        match CStr::from_ptr(plan_json).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                set_last_error_message("invalid plan_json: not utf8".to_string());
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let plan: graphdb_migration::MigrationPlan = match serde_json::from_str(plan_str) {
+        Ok(p) => p,
+        Err(e) => {
+            set_last_error_message(format!("failed to parse plan json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let handle = unsafe { &*(db as *mut GraphDbHandle) };
+    let report = match handle.inner.rollback_migration(&plan) {
+        Ok(r) => r,
+        Err(e) => {
+            set_last_error_message(format!("rollback failed: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let errors_json = serde_json::to_string(&report.errors).unwrap_or_else(|_| "[]".to_string());
+    let errors_c = match CString::new(errors_json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    };
+
+    let c_report = Box::new(graphdb_migration_report_t {
+        success: if report.success { 1 } else { 0 },
+        steps_completed: report.steps_completed as u64,
+        rows_migrated: report.rows_migrated,
+        errors_json: errors_c,
+    });
+
+    Box::into_raw(c_report)
 }

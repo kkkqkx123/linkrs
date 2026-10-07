@@ -7,6 +7,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use graphdb_core::event_dispatch::EventSubscriptions;
+
 /// [`graphdb_migration::SchemaWriteFence`] backed by the transaction
 /// checkpoint gate.
 pub struct CheckpointGateSchemaFence {
@@ -38,4 +40,54 @@ impl graphdb_migration::SchemaWriteFence for CheckpointGateSchemaFence {
             fence.complete();
         }
     }
+}
+
+/// Single online execution entry shared by embedded, HTTP and gRPC callers.
+///
+/// Holds a drain fence only across schema-modifying steps (data-only plans
+/// skip it entirely), runs the plan, and confirms the switch on success.
+/// Concurrency is guarded by the engine's own per-target lock; no separate
+/// begin guard is needed here. Metric recording and event-registry setup
+/// stay with the callers, which own their respective state sources.
+pub fn execute_online_migration<S>(
+    storage: &mut S,
+    plan: &graphdb_migration::MigrationPlan,
+    config: &graphdb_migration::MigrationConfig,
+    gate: &Arc<graphdb_transaction::CheckpointGate>,
+    event_registry: Option<&Arc<EventSubscriptions<graphdb_migration::MigrationEvent>>>,
+) -> Result<graphdb_migration::MigrationReport, graphdb_migration::MigrationError>
+where
+    S: graphdb_storage::StorageReader
+        + graphdb_storage::StorageWriter
+        + graphdb_storage::StorageSchemaOps
+        + graphdb_storage::AutoCommitGroupOps
+        + graphdb_storage::AutoCommitBatchOps
+        + ?Sized,
+{
+    let fence = if plan.has_schema_modifying_steps() {
+        Some(CheckpointGateSchemaFence::new(
+            Arc::clone(gate),
+            Duration::from_millis(config.drain_timeout_ms.max(1)),
+        ))
+    } else {
+        None
+    };
+    let report = graphdb_migration::execute_migration_plan_with_options(
+        storage,
+        plan,
+        graphdb_migration::ExecuteOptions {
+            config: Some(config),
+            event_registry,
+            schema_fence: fence
+                .as_ref()
+                .map(|f| f as &dyn graphdb_migration::SchemaWriteFence),
+            ..Default::default()
+        },
+    )?;
+    if report.success {
+        let (_, audit) =
+            graphdb_transaction::maintenance::issue_confirm_switch(plan.version_range.to);
+        log::info!("{audit}");
+    }
+    Ok(report)
 }

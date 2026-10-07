@@ -2071,3 +2071,109 @@ int graphdb_txn_rollback_to_savepoint(struct graphdb_txn_t *txn,
  * - After calling this function, the handle is invalid and must not be used again
  */
 void graphdb_txn_free(struct graphdb_txn_t *txn);
+
+/**
+ * Migration report structure.
+ *
+ * Returned by `graphdb_migration_execute` and `graphdb_migration_rollback`.
+ * The `errors_json` field is a null-terminated JSON array of error strings.
+ * Free the whole report with `graphdb_migration_report_free`, which also
+ * releases `errors_json`. Error details for null returns are available via
+ * `graphdb_errmsg` / `graphdb_get_last_error_message`.
+ */
+typedef struct graphdb_migration_report_t {
+  /**
+   * 1 on success, 0 otherwise.
+   */
+  uint8_t success;
+  /**
+   * Number of completed steps.
+   */
+  uint64_t steps_completed;
+  /**
+   * Number of migrated rows.
+   */
+  uint64_t rows_migrated;
+  /**
+   * Null-terminated JSON string of errors array.
+   */
+  char *errors_json;
+} graphdb_migration_report_t;
+
+/**
+ * Execute a migration plan given as JSON.
+ *
+ * Runs through the shared online orchestration: writes stall only across
+ * schema-modifying steps while the data backfill stays online.
+ *
+ * # Parameters
+ * - `db`: Database handle
+ * - `plan_json`: Null-terminated JSON string of `MigrationPlan`
+ *
+ * # Returns
+ * - On success: pointer to `graphdb_migration_report_t` (must be freed with `graphdb_migration_report_free`)
+ * - On failure: null pointer (error details via `graphdb_errmsg`)
+ *
+ * # Safety
+ * - `db` must be a valid handle from `graphdb_open`
+ * - `plan_json` must be a valid null-terminated UTF-8 string
+ * - Returned pointer must be freed by caller
+ */
+struct graphdb_migration_report_t *graphdb_migration_execute(struct graphdb_t *db,
+                                                            const char *plan_json);
+
+/**
+ * Free a migration report returned by `graphdb_migration_execute` or
+ * `graphdb_migration_rollback`.
+ *
+ * # Parameters
+ * - `report`: Report pointer, may be null (no-op)
+ */
+void graphdb_migration_report_free(struct graphdb_migration_report_t *report);
+
+/**
+ * Generate a migration plan and return it as JSON string.
+ *
+ * Caller must free the returned string with `graphdb_free_string`.
+ *
+ * # Parameters
+ * - `db`: Database handle
+ * - `space`: Space name (null-terminated UTF-8 string)
+ * - `label`: Tag or edge type name (null-terminated UTF-8 string)
+ * - `is_edge`: Non-zero when the label is an edge type
+ * - `from_version`: Start schema version
+ * - `to_version`: End schema version
+ * - `expand_contract`: Non-zero to generate an expand-contract plan
+ *
+ * # Returns
+ * - Null-terminated JSON string of the plan, or null on failure
+ */
+char *graphdb_migration_plan_json(struct graphdb_t *db,
+                                  const char *space,
+                                  const char *label,
+                                  int is_edge,
+                                  uint64_t from_version,
+                                  uint64_t to_version,
+                                  int expand_contract);
+
+/**
+ * Roll back a migration plan given as JSON.
+ *
+ * Runs a generated rollback plan when one exists, otherwise restores from
+ * the pre-migration backup when one was taken.
+ *
+ * # Parameters
+ * - `db`: Database handle
+ * - `plan_json`: Null-terminated JSON string of `MigrationPlan`
+ *
+ * # Returns
+ * - On success: pointer to `graphdb_migration_report_t` (must be freed with `graphdb_migration_report_free`)
+ * - On failure: null pointer (error details via `graphdb_errmsg`)
+ *
+ * # Safety
+ * - `db` must be a valid handle from `graphdb_open`
+ * - `plan_json` must be a valid null-terminated UTF-8 string
+ * - Returned pointer must be freed by caller
+ */
+struct graphdb_migration_report_t *graphdb_migration_rollback(struct graphdb_t *db,
+                                                              const char *plan_json);

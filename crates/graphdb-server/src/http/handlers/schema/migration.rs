@@ -20,8 +20,7 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use graphdb_migration::{
-    generate_edge_plan_with_expand, generate_vertex_plan_with_expand, ExecuteOptions,
-    MigrationEvent,
+    generate_edge_plan_with_expand, generate_vertex_plan_with_expand, MigrationEvent,
 };
 
 // ==================== Migration ====================
@@ -154,11 +153,8 @@ pub async fn execute_migration<
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let stats = state.server.get_stats_manager();
-        // Open the online migration: refuse when another migration holds the
-        // fence, so concurrent schema switches never interleave.
-        if let Err(e) = graphdb_transaction::maintenance::issue_begin_migration(false, false) {
-            return Err::<_, HttpError>(HttpError::InternalError(e.to_string()));
-        }
+        let migration_config = state.server.migration_config();
+        let gate = state.server.get_txn_manager().checkpoint_gate().clone();
         let start = std::time::Instant::now();
         stats.record_migration_start();
         let mut storage_write = storage.write();
@@ -172,37 +168,18 @@ pub async fn execute_migration<
             sender,
         ));
         let registry = std::sync::Arc::new(registry);
-        // Writes stall only across schema-modifying steps; the data backfill
-        // stays online. Data-only plans skip the fence entirely.
-        let fence = if plan.has_schema_modifying_steps() {
-            Some(
-                graphdb_api::migration_online::CheckpointGateSchemaFence::new(
-                    state.server.get_txn_manager().checkpoint_gate().clone(),
-                    std::time::Duration::from_secs(5),
-                ),
-            )
-        } else {
-            None
-        };
-        let report = graphdb_migration::execute_migration_plan_with_options(
+        let report = graphdb_api::migration_online::execute_online_migration(
             &mut *storage_write,
             &plan,
-            ExecuteOptions {
-                event_registry: Some(&registry),
-                schema_fence: fence
-                    .as_ref()
-                    .map(|f| f as &dyn graphdb_migration::SchemaWriteFence),
-                ..Default::default()
-            },
+            &migration_config,
+            &gate,
+            Some(&registry),
         )
         .map_err(|e| HttpError::InternalError(e.to_string()));
         let elapsed = start.elapsed().as_millis() as u64;
         match &report {
             Ok(r) if r.success => {
                 stats.record_migration_success(r.rows_migrated, elapsed);
-                let (_, audit) =
-                    graphdb_transaction::maintenance::issue_confirm_switch(plan.version_range.to);
-                log::info!("{audit}");
             }
             Ok(_) => stats.record_migration_failure(elapsed),
             Err(_) => stats.record_migration_failure(elapsed),
@@ -252,9 +229,28 @@ pub async fn rollback_migration<
     super::super::authz::require_admin_session(&state, session_id)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
+        let migration_config = state.server.migration_config();
         let mut storage_write = storage.write();
-        let report = graphdb_migration::rollback_migration(&mut *storage_write, &plan)
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        let sender = crate::http::handlers::migration_progress::get_or_create_sender(
+            &plan.target.space,
+            &plan.target.label,
+            plan.target.is_edge,
+        );
+        let registry = EventSubscriptions::<MigrationEvent>::new();
+        registry.add(crate::http::handlers::migration_progress::event_bridge(
+            sender,
+        ));
+        let registry = std::sync::Arc::new(registry);
+        let report = graphdb_migration::rollback_migration_with_options(
+            &mut *storage_write,
+            &plan,
+            graphdb_migration::ExecuteOptions {
+                config: Some(&migration_config),
+                event_registry: Some(&registry),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
         Ok::<_, HttpError>(MigrationExecuteResponse {
             success: report.success,

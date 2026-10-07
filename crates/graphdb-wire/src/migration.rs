@@ -56,25 +56,6 @@ pub struct MigrationStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct MigrationHistoryEntry {
-    pub id: u64,
-    pub space: String,
-    pub label: String,
-    pub is_edge: bool,
-    pub from_version: u64,
-    pub to_version: u64,
-    pub safety_level: String,
-    pub steps_count: usize,
-    pub rows_migrated: u64,
-    pub status: String,
-    pub applied_at: u64,
-    pub completed_at: Option<u64>,
-    pub error_message: Option<String>,
-    pub file_entry_id: Option<String>,
-    pub file_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct MigrationHistoryResponse {
     pub space: String,
     pub label: String,

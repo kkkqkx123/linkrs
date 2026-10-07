@@ -4,6 +4,7 @@ pub mod database;
 pub mod fulltext;
 pub mod log;
 pub mod logging;
+pub mod migration;
 pub mod monitoring;
 pub mod optimizer;
 pub mod parallel;
@@ -30,6 +31,7 @@ pub use database::*;
 pub use fulltext::*;
 pub use log::*;
 pub use logging::*;
+pub use migration::*;
 pub use monitoring::*;
 pub use optimizer::*;
 pub use parallel::*;
@@ -76,6 +78,8 @@ pub struct CommonConfig {
     #[serde(default)]
     pub monitoring: MonitoringConfig,
     #[serde(default)]
+    pub migration: MigrationConfig,
+    #[serde(default)]
     pub query_resource: QueryResourceConfig,
     #[serde(default)]
     pub columnar: ColumnarConfig,
@@ -94,6 +98,7 @@ impl CommonConfig {
         self.optimizer.validate()?;
         self.parallel.validate()?;
         self.monitoring.validate()?;
+        self.migration.validate()?;
         self.query_resource.validate()?;
         Ok(())
     }
@@ -492,6 +497,8 @@ impl Config {
             Self::resolve_string_path(base_dir, &slow_query_log_file)?;
 
         self.fulltext.index_path = Self::resolve_path_buf(base_dir, &self.fulltext.index_path)?;
+
+        self.common.migration.resolve_relative_paths(base_dir)?;
 
         #[cfg(feature = "vector")]
         {

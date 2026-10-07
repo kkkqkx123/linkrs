@@ -4,9 +4,9 @@
 //! Step-level execution lives in [`plan_runner`]; row-level step application
 //! lives in [`data_apply`].
 
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use graphdb_core::error::storage::StorageErrorKind;
 use graphdb_core::event_dispatch::EventSubscriptions;
@@ -20,7 +20,9 @@ use crate::error::MigrationError;
 use crate::event::MigrationEvent;
 use crate::lock::MigrationFileLock;
 use crate::metrics::global_migration_metrics;
-use crate::plan::{irreversible_guidance, MigrationPlan, MigrationReport, SafetyLevel};
+use crate::plan::{
+    irreversible_guidance, MigrationPlan, MigrationReport, MigrationTarget, SafetyLevel,
+};
 use crate::progress::{MigrationProgress, NoopProgress};
 
 mod data_apply;
@@ -31,7 +33,44 @@ use plan_runner::{
     execute_vertex_plan_with_progress, record_migration_history,
 };
 
-static MIGRATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+fn in_progress_targets() -> &'static Mutex<HashSet<String>> {
+    static TARGETS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    TARGETS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn migration_target_key(target: &MigrationTarget) -> String {
+    format!("{}\0{}\0{}", target.space, target.label, target.is_edge)
+}
+
+#[derive(Debug)]
+struct MigrationLockGuard {
+    key: String,
+}
+
+impl MigrationLockGuard {
+    fn try_acquire(target: &MigrationTarget) -> Result<Self, MigrationError> {
+        let key = migration_target_key(target);
+        let mut held = in_progress_targets()
+            .lock()
+            .map_err(|e| MigrationError::Lock(format!("migration lock poisoned: {e}")))?;
+        if held.contains(&key) {
+            return Err(MigrationError::Lock(format!(
+                "migration in progress for {}/{} (is_edge={})",
+                target.space, target.label, target.is_edge
+            )));
+        }
+        held.insert(key.clone());
+        Ok(Self { key })
+    }
+}
+
+impl Drop for MigrationLockGuard {
+    fn drop(&mut self) {
+        if let Ok(mut held) = in_progress_targets().lock() {
+            held.remove(&self.key);
+        }
+    }
+}
 
 /// Write fence held across schema-modifying steps of a migration.
 ///
@@ -55,26 +94,6 @@ struct SchemaFenceHold<'a> {
 impl Drop for SchemaFenceHold<'_> {
     fn drop(&mut self) {
         self.fence.release();
-    }
-}
-
-struct MigrationLockGuard;
-
-impl MigrationLockGuard {
-    fn try_acquire() -> Result<Self, MigrationError> {
-        if MIGRATION_IN_PROGRESS
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return Err(MigrationError::Lock("migration in progress".to_string()));
-        }
-        Ok(Self)
-    }
-}
-
-impl Drop for MigrationLockGuard {
-    fn drop(&mut self) {
-        MIGRATION_IN_PROGRESS.store(false, Ordering::SeqCst);
     }
 }
 
@@ -152,7 +171,7 @@ where
     let progress = options.progress.unwrap_or(&NoopProgress);
     let registry = options.event_registry;
 
-    let _in_process_lock = MigrationLockGuard::try_acquire()?;
+    let _in_process_lock = MigrationLockGuard::try_acquire(&effective_plan.target)?;
     let _file_lock: Option<MigrationFileLock> = if let Some(path) = lock_path {
         Some(MigrationFileLock::try_acquire(path)?)
     } else {
@@ -607,16 +626,17 @@ where
         + AutoCommitBatchOps
         + ?Sized,
 {
-    rollback_migration_with_options(storage, plan, None)
+    rollback_migration_with_options(storage, plan, ExecuteOptions::default())
 }
 
-/// Rollback with an optional backup directory. Plans without a generated
-/// rollback plan (typically destructive ones) are restored from the
-/// pre-migration backup when one exists.
+/// Rollback reusing [`ExecuteOptions`]: event subscriptions, progress,
+/// config (including `backup_dir` and `checkpoint_dir`) and
+/// `skip_chain_check` flow into the generated rollback plan; the backup
+/// restore branch dispatches `RolledBack` on success and `Failed` on error.
 pub fn rollback_migration_with_options<S>(
     storage: &mut S,
     plan: &MigrationPlan,
-    backup_dir: Option<&Path>,
+    options: ExecuteOptions<'_>,
 ) -> Result<MigrationReport, MigrationError>
 where
     S: StorageReader
@@ -626,23 +646,68 @@ where
         + AutoCommitBatchOps
         + ?Sized,
 {
+    let notify = |event: &MigrationEvent| {
+        if let Some(registry) = options.event_registry {
+            registry.dispatch("migration", event);
+        }
+    };
     let result = match &plan.rollback_plan {
         Some(rollback) => execute_migration_plan_with_options(
             storage,
             rollback,
             ExecuteOptions {
+                config: options.config,
+                progress: options.progress,
+                event_registry: options.event_registry,
+                lock_path: options.lock_path,
+                checkpoint_dir: options.checkpoint_dir,
+                schema_fence: options.schema_fence,
+                backup_dir: options.backup_dir,
                 skip_chain_check: true,
-                ..Default::default()
             },
-        ),
+        )
+        .map(|report| {
+            if report.success {
+                notify(&MigrationEvent::RolledBack {
+                    report: report.clone(),
+                });
+            }
+            report
+        }),
         None => {
+            let backup_dir = options
+                .backup_dir
+                .or_else(|| options.config.and_then(|c| c.backup_dir.as_deref()));
             if let Some(dir) = backup_dir {
-                match crate::backup::restore_backup(storage, plan, dir)? {
-                    Some(report) => Ok(report),
-                    None => Err(no_rollback_error(plan)),
+                let _space_lock = MigrationLockGuard::try_acquire(&plan.target)?;
+                let restore = crate::backup::restore_backup(storage, plan, dir);
+                match restore {
+                    Ok(Some(report)) => {
+                        notify(&MigrationEvent::RolledBack {
+                            report: report.clone(),
+                        });
+                        Ok(report)
+                    }
+                    Ok(None) => {
+                        let err = no_rollback_error(plan);
+                        notify(&MigrationEvent::Failed {
+                            error: err.to_string(),
+                        });
+                        Err(err)
+                    }
+                    Err(e) => {
+                        notify(&MigrationEvent::Failed {
+                            error: e.to_string(),
+                        });
+                        Err(e)
+                    }
                 }
             } else {
-                Err(no_rollback_error(plan))
+                let err = no_rollback_error(plan);
+                notify(&MigrationEvent::Failed {
+                    error: err.to_string(),
+                });
+                Err(err)
             }
         }
     };

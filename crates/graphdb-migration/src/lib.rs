@@ -1,19 +1,16 @@
 pub mod backup;
-pub mod checkpoint;
 pub mod config;
 pub mod converter;
 pub mod error;
 pub mod event;
 pub mod executor;
-pub mod file_registry;
 pub mod generator;
 pub mod lock;
 pub mod metrics;
 pub mod plan;
 pub mod progress;
 
-pub use backup::{backup_file_name, restore_backup, write_backup, DestructiveBackup};
-pub use checkpoint::{MigrationCheckpoint, StepResult};
+pub use backup::{restore_backup, write_backup};
 pub use config::MigrationConfig;
 pub use converter::{convert_value, is_compatible_type};
 pub use error::MigrationError;
@@ -22,7 +19,6 @@ pub use executor::{
     execute_migration_plan, execute_migration_plan_with_options, rollback_migration,
     rollback_migration_with_options, ExecuteOptions, SchemaWriteFence,
 };
-pub use file_registry::{MigrationFileEntry, MigrationFileRegistry};
 pub use generator::{
     generate_edge_plan, generate_edge_plan_with_expand, generate_vertex_plan,
     generate_vertex_plan_with_expand,
@@ -30,6 +26,7 @@ pub use generator::{
 pub use lock::MigrationFileLock;
 pub use metrics::{global_migration_metrics, MigrationMetrics, MigrationMetricsSnapshot};
 pub use plan::{
-    MigrationPlan, MigrationReport, MigrationStep, MigrationTarget, SafetyLevel, VersionRange,
+    MigrationCheckpoint, MigrationPlan, MigrationReport, MigrationStep, MigrationTarget,
+    SafetyLevel, StepResult, VersionRange,
 };
 pub use progress::{MigrationProgress, NoopProgress};

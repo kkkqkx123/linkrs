@@ -1221,9 +1221,15 @@ fn test_drop_column_backup_and_restore() {
         Some(&Value::string("other"))
     );
 
-    let rollback =
-        rollback_migration_with_options(&mut storage, &drop_column_plan(), Some(tmp.path()))
-            .unwrap();
+    let rollback = rollback_migration_with_options(
+        &mut storage,
+        &drop_column_plan(),
+        ExecuteOptions {
+            backup_dir: Some(tmp.path()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(rollback.success);
     assert_eq!(rollback.rows_migrated, 1);
     let vertices = storage.get_vertices("s", "User");
@@ -1241,7 +1247,149 @@ fn test_drop_column_rollback_without_backup_fails() {
     assert!(err.to_string().contains("Cannot rollback"));
 
     let tmp = tempfile::tempdir().unwrap();
-    let err = rollback_migration_with_options(&mut storage, &drop_column_plan(), Some(tmp.path()))
-        .unwrap_err();
+    let err = rollback_migration_with_options(
+        &mut storage,
+        &drop_column_plan(),
+        ExecuteOptions {
+            backup_dir: Some(tmp.path()),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("Cannot rollback"));
+}
+
+#[test]
+fn test_rollback_backup_restore_dispatches_rolled_back() {
+    use crate::event::MigrationEvent;
+    use graphdb_core::event_dispatch::EventSubscriptions;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut storage = TestStorage::new();
+    let mut props: HashMap<Arc<str>, Value> = HashMap::new();
+    props.insert("a".into(), Value::string("keep-me"));
+    storage.insert_vertex("s", "User", 1, props);
+
+    execute_migration_plan_with_options(
+        &mut storage,
+        &drop_column_plan(),
+        ExecuteOptions {
+            backup_dir: Some(tmp.path()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let registry = EventSubscriptions::<MigrationEvent>::new();
+    let probe = Arc::clone(&seen);
+    registry.add(Arc::new(move |event| {
+        let name = match event {
+            MigrationEvent::RolledBack { .. } => "rolled_back",
+            MigrationEvent::Failed { .. } => "failed",
+            MigrationEvent::Completed { .. } => "completed",
+            _ => "other",
+        };
+        probe.lock().unwrap().push(name.to_string());
+    }));
+    let registry = Arc::new(registry);
+    let report = rollback_migration_with_options(
+        &mut storage,
+        &drop_column_plan(),
+        ExecuteOptions {
+            backup_dir: Some(tmp.path()),
+            event_registry: Some(&registry),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(report.success);
+    let events = seen.lock().unwrap().clone();
+    assert!(
+        events.contains(&"rolled_back".to_string()),
+        "backup restore must dispatch RolledBack, got {events:?}"
+    );
+}
+
+#[test]
+fn test_rollback_without_backup_dispatches_failed() {
+    use crate::event::MigrationEvent;
+    use graphdb_core::event_dispatch::EventSubscriptions;
+
+    let mut storage = TestStorage::new();
+    storage.insert_vertex("s", "User", 1, HashMap::new());
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let registry = EventSubscriptions::<MigrationEvent>::new();
+    let probe = Arc::clone(&seen);
+    registry.add(Arc::new(move |event| {
+        let name = match event {
+            MigrationEvent::RolledBack { .. } => "rolled_back",
+            MigrationEvent::Failed { .. } => "failed",
+            _ => "other",
+        };
+        probe.lock().unwrap().push(name.to_string());
+    }));
+    let registry = Arc::new(registry);
+    let err = rollback_migration_with_options(
+        &mut storage,
+        &drop_column_plan(),
+        ExecuteOptions {
+            event_registry: Some(&registry),
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("Cannot rollback"));
+    let events = seen.lock().unwrap().clone();
+    assert!(
+        events.contains(&"failed".to_string()),
+        "failed rollback must dispatch Failed, got {events:?}"
+    );
+}
+
+#[test]
+fn test_space_level_locks_allow_different_labels() {
+    let target_a = MigrationTarget {
+        space: "lock_space".into(),
+        label: "LockA".into(),
+        is_edge: false,
+    };
+    let target_b = MigrationTarget {
+        space: "lock_space".into(),
+        label: "LockB".into(),
+        is_edge: false,
+    };
+    let _held_a = MigrationLockGuard::try_acquire(&target_a).unwrap();
+    let _held_b = MigrationLockGuard::try_acquire(&target_b).unwrap();
+}
+
+#[test]
+fn test_space_level_locks_reject_same_label() {
+    let target = MigrationTarget {
+        space: "lock_space".into(),
+        label: "LockSame".into(),
+        is_edge: false,
+    };
+    let held = MigrationLockGuard::try_acquire(&target).unwrap();
+    let err = MigrationLockGuard::try_acquire(&target).unwrap_err();
+    assert!(err.to_string().contains("migration in progress"));
+    drop(held);
+    let _reacquired = MigrationLockGuard::try_acquire(&target).unwrap();
+}
+
+#[test]
+fn test_space_level_locks_separate_vertex_and_edge() {
+    let vertex = MigrationTarget {
+        space: "lock_space".into(),
+        label: "LockKind".into(),
+        is_edge: false,
+    };
+    let edge = MigrationTarget {
+        space: "lock_space".into(),
+        label: "LockKind".into(),
+        is_edge: true,
+    };
+    let _held_vertex = MigrationLockGuard::try_acquire(&vertex).unwrap();
+    let _held_edge = MigrationLockGuard::try_acquire(&edge).unwrap();
 }

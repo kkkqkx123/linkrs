@@ -1,10 +1,8 @@
-use std::time::Duration;
-
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::database::GraphDatabase;
-use crate::migration_online::CheckpointGateSchemaFence;
+use crate::migration_online::execute_online_migration;
 use crate::storage::GraphStorage;
-use graphdb_migration::{ExecuteOptions, MigrationConfig, MigrationPlan, MigrationReport};
+use graphdb_migration::{MigrationConfig, MigrationPlan, MigrationReport};
 
 impl GraphDatabase<GraphStorage> {
     pub fn generate_vertex_migration_plan(
@@ -90,77 +88,25 @@ impl GraphDatabase<GraphStorage> {
         res
     }
 
-    pub fn execute_migration_plan_with_config(
-        &self,
-        plan: &MigrationPlan,
-        config: &MigrationConfig,
-    ) -> CoreResult<MigrationReport> {
-        let mut storage = self.storage_mut();
-        let start = std::time::Instant::now();
-        self.stats_manager().record_migration_start();
-        let res = graphdb_migration::execute_migration_plan_with_options(
-            &mut *storage,
-            plan,
-            ExecuteOptions {
-                config: Some(config),
-                ..Default::default()
-            },
-        )
-        .map_err(|e| CoreError::Internal(e.to_string()));
-        let elapsed = start.elapsed().as_millis() as u64;
-        match &res {
-            Ok(report) if report.success => {
-                self.stats_manager()
-                    .record_migration_success(report.rows_migrated, elapsed);
-            }
-            Ok(_) | Err(_) => {
-                self.stats_manager().record_migration_failure(elapsed);
-            }
-        }
-        res
-    }
-
-    /// Execute with the online drain protocol: refuse when another migration
-    /// holds the fence, stall writes only across schema-modifying steps, and
-    /// audit the switch on success. Data-only plans skip the fence entirely.
+    /// Execute with the online drain protocol: writes stall only across
+    /// schema-modifying steps while the data backfill stays online, and the
+    /// switch is audited on success. Data-only plans skip the fence entirely.
     pub fn execute_migration_plan_online(
         &self,
         plan: &MigrationPlan,
         config: &MigrationConfig,
     ) -> CoreResult<MigrationReport> {
-        graphdb_transaction::maintenance::issue_begin_migration(false, false)
-            .map_err(|e| CoreError::Internal(e.to_string()))?;
-        let fence = if plan.has_schema_modifying_steps() {
-            Some(CheckpointGateSchemaFence::new(
-                self.txn_manager().checkpoint_gate().clone(),
-                Duration::from_millis(config.drain_timeout_ms.max(1)),
-            ))
-        } else {
-            None
-        };
+        let gate = self.txn_manager().checkpoint_gate().clone();
         let mut storage = self.storage_mut();
         let start = std::time::Instant::now();
         self.stats_manager().record_migration_start();
-        let res = graphdb_migration::execute_migration_plan_with_options(
-            &mut *storage,
-            plan,
-            ExecuteOptions {
-                config: Some(config),
-                schema_fence: fence
-                    .as_ref()
-                    .map(|f| f as &dyn graphdb_migration::SchemaWriteFence),
-                ..Default::default()
-            },
-        )
-        .map_err(|e| CoreError::Internal(e.to_string()));
+        let res = execute_online_migration(&mut *storage, plan, config, &gate, None)
+            .map_err(|e| CoreError::Internal(e.to_string()));
         let elapsed = start.elapsed().as_millis() as u64;
         match &res {
             Ok(report) if report.success => {
                 self.stats_manager()
                     .record_migration_success(report.rows_migrated, elapsed);
-                let (_, audit) =
-                    graphdb_transaction::maintenance::issue_confirm_switch(plan.version_range.to);
-                log::info!("{audit}");
             }
             Ok(_) | Err(_) => {
                 self.stats_manager().record_migration_failure(elapsed);
@@ -173,9 +119,5 @@ impl GraphDatabase<GraphStorage> {
         let mut storage = self.storage_mut();
         graphdb_migration::rollback_migration(&mut *storage, plan)
             .map_err(|e| CoreError::Internal(e.to_string()))
-    }
-
-    pub fn migration_metrics(&self) -> std::collections::HashMap<graphdb_metrics::MetricType, u64> {
-        self.stats_manager().get_migration_metrics()
     }
 }
