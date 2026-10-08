@@ -30,7 +30,7 @@ chrono.workspace = true
 dashmap.workspace = true
 futures.workspace = true
 simvec = { path = "../simvec" }
-graphdb-embedding = { path = "../graphdb-embedding" }
+llm-embedding = { path = "../llm-kit/crates/llm-embedding" }
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }

@@ -19,7 +19,11 @@ use crate::VectorIndexManager;
 use graphdb_core::Value;
 
 #[cfg(feature = "embedding")]
-use graphdb_embedding::EmbeddingService;
+pub type EmbeddingService =
+    llm_embedding::EmbeddingService<llm_embedding::OpenAICompatibleProvider>;
+
+#[cfg(feature = "embedding")]
+pub const EMBEDDING_BATCH_SIZE: usize = 32;
 pub use simvec::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
 use simvec::{CollectionConfig, IndexMetadata, VectorFilter};
 
@@ -850,11 +854,19 @@ impl VectorSyncCoordinator {
     #[cfg(feature = "embedding")]
     pub async fn embed_text(&self, text: &str) -> VectorCoordinatorResult<Vec<f32>> {
         if let Some(embedding) = &self.embedding_service {
-            let vector = embedding
-                .embed(text)
+            let result = embedding
+                .embed_batch(&[text.to_string()])
                 .await
                 .map_err(|e| VectorCoordinatorError::EmbeddingError(e.to_string()))?;
-            Ok(vector)
+            result
+                .embeddings
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    VectorCoordinatorError::EmbeddingError(
+                        "Embedding service returned no vector".to_string(),
+                    )
+                })
         } else {
             Err(VectorCoordinatorError::EmbeddingError(
                 "Embedding service not available".to_string(),
@@ -869,11 +881,12 @@ impl VectorSyncCoordinator {
     #[cfg(feature = "embedding")]
     pub async fn embed_texts(&self, texts: &[&str]) -> VectorCoordinatorResult<Vec<Vec<f32>>> {
         if let Some(embedding) = &self.embedding_service {
-            let vectors = embedding
-                .embed_batch(texts)
+            let owned: Vec<String> = texts.iter().map(|text| text.to_string()).collect();
+            let result = embedding
+                .embed_batch(&owned)
                 .await
                 .map_err(|e| VectorCoordinatorError::EmbeddingError(e.to_string()))?;
-            Ok(vectors)
+            Ok(result.embeddings)
         } else {
             Err(VectorCoordinatorError::EmbeddingError(
                 "Embedding service not available".to_string(),

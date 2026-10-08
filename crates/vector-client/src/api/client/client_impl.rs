@@ -3,6 +3,8 @@ use std::sync::Arc;
 use crate::config::VectorClientConfig;
 use crate::engine::{DisabledEngine, RemoteVectorEngine};
 use crate::error::Result;
+#[cfg(feature = "embedding")]
+use crate::error::VectorClientError;
 use crate::types::*;
 
 use super::core::{
@@ -51,13 +53,14 @@ impl VectorClient {
         &self,
         collection: impl Into<String>,
         text: &str,
-        embedding_config: graphdb_embedding::EmbeddingConfig,
+        embedding_config: llm_embedding::EmbeddingConfig,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        let embedding_service = graphdb_embedding::EmbeddingService::from_config(embedding_config)
+        use llm_embedding::EmbeddingProvider;
+        let provider = llm_embedding::OpenAICompatibleProvider::new(embedding_config)
             .map_err(|e| VectorClientError::InternalError(e.to_string()))?;
-        let vector = embedding_service
-            .embed(text)
+        let vector = provider
+            .embed_one(text)
             .await
             .map_err(|e| VectorClientError::InternalError(e.to_string()))?;
 

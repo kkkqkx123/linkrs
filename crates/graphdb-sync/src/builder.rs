@@ -155,7 +155,7 @@ impl SyncCoordinatorBuilder {
 #[cfg(feature = "vector-qdrant")]
 pub struct VectorCoordinatorBuilder {
     vector_manager: Option<Arc<vector_client::VectorManager>>,
-    embedding_service: Option<Arc<graphdb_embedding::EmbeddingService>>,
+    embedding_service: Option<Arc<crate::vector_sync::EmbeddingService>>,
     runtime_handle: Option<tokio::runtime::Handle>,
 }
 
@@ -183,7 +183,7 @@ impl VectorCoordinatorBuilder {
 
     pub fn with_embedding_service(
         mut self,
-        service: Arc<graphdb_embedding::EmbeddingService>,
+        service: Arc<crate::vector_sync::EmbeddingService>,
     ) -> Self {
         self.embedding_service = Some(service);
         self

@@ -14,7 +14,6 @@ members = [
     "crates/graphdb-api",
     "crates/graphdb-server",
     "crates/graphdb-migration",
-    "crates/graphdb-embedding",
     "crates/vector-client",
     "crates/simvec",
     "crates/graphdb-cli",
@@ -28,6 +27,7 @@ tantivy-tokenizer-api = { path = "crates/tantivy/tokenizer-api" }
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 authors = ["GraphDB Contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/kkkqkx123/graphDB"
@@ -62,7 +62,7 @@ async-trait = "0.1"
 
 # data & time
 chrono = { version = "0.4.38", features = ["serde"] }
-uuid = { version = "1.19.0", features = ["v4"] }
+uuid = { version = "1.27.0", features = ["v4", "v7"] }
 
 # text processing
 regex = "1.11.1"
@@ -109,7 +109,7 @@ fs4 = "0.13"
 bcrypt = "0.18.0"
 
 # HTTP / networking
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 url = "2.5"
 
 # (optional) HTTP server stack
@@ -183,7 +183,6 @@ parking_lot.workspace = true
 tempfile.workspace = true
 rand.workspace = true
 vector-client = { path = "crates/vector-client", optional = true }
-graphdb-embedding = { path = "crates/graphdb-embedding", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
@@ -197,7 +196,7 @@ server = ["graphdb-config/server"]
 fulltext = ["graphdb-api/fulltext", "graphdb-server/fulltext", "graphdb-fulltext/fulltext", "graphdb-sync/fulltext"]
 jieba = ["graphdb-fulltext/jieba"]
 vector = ["graphdb-api/vector", "graphdb-server/vector", "graphdb-config/vector", "graphdb-sync/vector", "graphdb-query/vector"]
-embedding = ["vector", "graphdb-sync/embedding", "dep:graphdb-embedding"]
+embedding = ["vector", "graphdb-sync/embedding"]
 vector-qdrant = ["vector", "embedding", "dep:vector-client", "graphdb-api/vector-qdrant", "graphdb-server/vector-qdrant", "graphdb-config/vector-qdrant", "graphdb-sync/vector-qdrant", "graphdb-query/vector-qdrant"]
 grpc = ["graphdb-server/grpc"]
 embedded = ["graphdb-api/embedded", "graphdb-config/embedded"]
@@ -223,7 +222,7 @@ dashmap.workspace = true
 log = "0.4"
 regex = "1"
 toml = "1.1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 postcard.workspace = true
 graphdb-wire = { path = "crates/graphdb-wire" }
 graphdb-storage = { path = "crates/graphdb-storage", features = ["test-support"] }

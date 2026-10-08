@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "vector-qdrant")]
-use graphdb_embedding::EmbeddingService;
+use llm_embedding::{EmbeddingService, OpenAICompatibleProvider};
 #[cfg(feature = "vector")]
 use log::warn;
 use log::{error, info};
@@ -508,7 +508,13 @@ fn attach_vector_coordinator(
             .embedding
             .as_ref()
             .map(|ec| {
-                EmbeddingService::from_config(ec.clone())
+                OpenAICompatibleProvider::new(ec.clone())
+                    .map(|provider| {
+                        EmbeddingService::new(
+                            provider,
+                            graphdb_sync::vector_sync::EMBEDDING_BATCH_SIZE,
+                        )
+                    })
                     .map_err(|e| format!("Failed to create embedding service: {}", e))
             })
             .transpose();

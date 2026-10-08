@@ -9,7 +9,7 @@
 //! Test cases: TC-VEC-EMB-001 ~ TC-VEC-EMB-005
 
 use super::common::VectorTestContext;
-use graphdb_embedding::EmbeddingProvider;
+use llm_embedding::EmbeddingProvider;
 
 /// TC-VEC-EMB-001: Generate Single Embedding
 #[tokio::test]

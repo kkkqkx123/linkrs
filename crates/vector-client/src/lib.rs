@@ -29,7 +29,7 @@ pub use api::{CollectionApi, PointApi, SearchApi};
 pub use manager::VectorManager;
 
 #[cfg(feature = "embedding")]
-pub use graphdb_embedding::{
-    EmbeddingConfig, EmbeddingError, EmbeddingProvider, EmbeddingService, OpenAICompatibleProvider,
-    PreprocessorConfig, PreprocessorImpl,
+pub use llm_embedding::{
+    EmbeddingConfig, EmbeddingError, EmbeddingProvider, EmbeddingResult, EmbeddingService,
+    OpenAICompatibleProvider, PreprocessorConfig, PreprocessorImpl,
 };

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-use graphdb_embedding::{EmbeddingError, EmbeddingProvider};
+use llm_embedding::{EmbeddingError, EmbeddingProvider, EmbeddingResult};
 use std::sync::RwLock;
 use tempfile::TempDir;
 use vector_client::engine::RemoteVectorEngine;
@@ -739,8 +739,12 @@ impl MockEmbeddingProvider {
 
 #[async_trait]
 impl EmbeddingProvider for MockEmbeddingProvider {
-    async fn embed(&self, texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, EmbeddingError> {
-        Ok(texts.iter().map(|t| self.generate_embedding(t)).collect())
+    async fn embed(&self, texts: &[String]) -> std::result::Result<EmbeddingResult, EmbeddingError> {
+        Ok(EmbeddingResult {
+            embeddings: texts.iter().map(|t| self.generate_embedding(t)).collect(),
+            prompt_tokens: 0,
+            total_tokens: 0,
+        })
     }
 
     fn dimension(&self) -> usize {
@@ -979,19 +983,18 @@ impl VectorTestContext {
 
     pub async fn generate_embedding(&self, text: &str) -> Vec<f32> {
         self.embedding_provider
-            .embed(&[text])
+            .embed_one(text)
             .await
             .expect("Failed to generate embedding")
-            .into_iter()
-            .next()
-            .expect("Expected one embedding")
     }
 
     pub async fn generate_embeddings(&self, texts: &[&str]) -> Vec<Vec<f32>> {
+        let owned: Vec<String> = texts.iter().map(|t| t.to_string()).collect();
         self.embedding_provider
-            .embed(texts)
+            .embed(&owned)
             .await
             .expect("Failed to generate embeddings")
+            .embeddings
     }
 }
 

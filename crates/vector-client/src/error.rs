@@ -1,5 +1,5 @@
 #[cfg(feature = "embedding")]
-use graphdb_embedding::EmbeddingError;
+use llm_embedding::EmbeddingError;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, VectorClientError>;
