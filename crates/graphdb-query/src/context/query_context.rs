@@ -84,6 +84,10 @@ pub struct QueryContext {
     /// concrete arena is owned by the execution context, not by this struct, so
     /// the context stays `Send + Sync`.
     arena_enabled: bool,
+    /// Retained password-history depth applied by user-management operations
+    /// in this query. Injected by the API layer from server configuration;
+    /// zero clears history on rotation.
+    password_history_depth: usize,
 }
 
 /// Builder-supplied context parameters, grouped so the internal constructor
@@ -96,6 +100,7 @@ pub(super) struct ContextParams {
     pub snapshot_ts: Option<Timestamp>,
     pub isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
     pub arena_enabled: bool,
+    pub password_history_depth: usize,
 }
 
 impl QueryContext {
@@ -113,6 +118,7 @@ impl QueryContext {
             snapshot_ts: None,
             isolation_level: None,
             arena_enabled: false,
+            password_history_depth: 0,
         }
     }
 
@@ -143,6 +149,7 @@ impl QueryContext {
             snapshot_ts: params.snapshot_ts,
             isolation_level: params.isolation_level,
             arena_enabled: params.arena_enabled,
+            password_history_depth: params.password_history_depth,
         }
     }
 
@@ -192,6 +199,12 @@ impl QueryContext {
     /// inside an explicit transaction.
     pub fn isolation_level(&self) -> Option<graphdb_core::types::TransactionIsolationLevel> {
         self.isolation_level
+    }
+
+    /// The retained password-history depth for user-management operations
+    /// planned under this context.
+    pub fn password_history_depth(&self) -> usize {
+        self.password_history_depth
     }
 
     /// Generate an ID.

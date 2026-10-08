@@ -48,7 +48,8 @@ pub async fn create<
 
     // When authentication is active this endpoint must verify the password
     // before issuing a session — the handler no longer bypasses the
-    // authenticator.
+    // authenticator. Authentication already creates the session, so it is
+    // reused directly instead of creating a second one.
     if !graph_service.is_auth_disabled() {
         let password = request
             .password
@@ -56,7 +57,7 @@ pub async fn create<
             .filter(|p| !p.is_empty())
             .ok_or_else(|| HttpError::unauthorized("password required"))?;
 
-        let _ = graph_service
+        let session = graph_service
             .authenticate(&request.username, password)
             .await
             .map_err(|message| {
@@ -67,6 +68,14 @@ pub async fn create<
                     HttpError::unauthorized(message)
                 }
             })?;
+        return Ok(JsonResponse(SessionResponse {
+            session_id: session.id(),
+            username: session.user(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("SystemTime before UNIX_EPOCH")
+                .as_secs(),
+        }));
     }
 
     let session_manager = state.server.get_session_manager();

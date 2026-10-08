@@ -21,9 +21,28 @@ interface ConnectionState {
 	sessionId: number | null;
 	role: UiRole | null;
 	mustChangePassword: boolean;
+	expiresAt: number | null;
 	rememberMe: boolean;
 	isLoading: boolean;
 	error: string | null;
+}
+
+function expiresFromPayload(value: unknown): number | null {
+	if (!value || typeof value !== 'object') return null;
+	const record = value as Record<string, unknown>;
+	const raw = record.expires_at ?? record.expiresAt;
+	if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+	if (typeof raw === 'string' && /^\d+$/.test(raw)) return Number(raw);
+	return null;
+}
+
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearExpiryTimer() {
+	if (expiryTimer !== null) {
+		clearTimeout(expiryTimer);
+		expiryTimer = null;
+	}
 }
 
 function mustChangeFromPayload(value: unknown): boolean {
@@ -58,18 +77,22 @@ function createConnectionStore() {
 		sessionId: number | null;
 		role: UiRole | null;
 		mustChangePassword: boolean;
+		expiresAt: number | null;
 	}>('connection-storage');
+	const savedExpired =
+		typeof saved?.expiresAt === 'number' && saved.expiresAt * 1000 <= Date.now();
 	const { subscribe, set, update } = writable<ConnectionState>({
-		isConnected: saved?.isConnected ?? false,
-		isVerified: saved?.isVerified ?? false,
+		isConnected: savedExpired ? false : (saved?.isConnected ?? false),
+		isVerified: savedExpired ? false : (saved?.isVerified ?? false),
 		connectionInfo: saved?.connectionInfo
 			? { username: saved.connectionInfo.username || DEFAULT_VALUES.USERNAME }
 			: {
 					username: DEFAULT_VALUES.USERNAME,
 				},
-		sessionId: saved?.sessionId ?? null,
-		role: saved?.role ?? null,
-		mustChangePassword: saved?.mustChangePassword ?? false,
+		sessionId: savedExpired ? null : (saved?.sessionId ?? null),
+		role: savedExpired ? null : (saved?.role ?? null),
+		mustChangePassword: savedExpired ? false : (saved?.mustChangePassword ?? false),
+		expiresAt: savedExpired ? null : (saved?.expiresAt ?? null),
 		rememberMe: saved?.rememberMe ?? false,
 		isLoading: false,
 		error: null,
@@ -84,8 +107,66 @@ function createConnectionStore() {
 			sessionId: state.sessionId,
 			role: state.role,
 			mustChangePassword: state.mustChangePassword,
+			expiresAt: state.expiresAt,
 		});
 	};
+
+	const scheduleExpiryLogout = (expiresAt: number | null, logout: () => void) => {
+		clearExpiryTimer();
+		if (expiresAt === null) return;
+		const delay = expiresAt * 1000 - Date.now();
+		if (delay <= 0) {
+			void logout();
+			return;
+		}
+		expiryTimer = setTimeout(() => void logout(), Math.min(delay, 2_147_483_647));
+	};
+
+	const doLogout = async () => {
+		clearExpiryTimer();
+		update((s) => ({ ...s, isLoading: true }));
+		try {
+			let currentState: ConnectionState = {
+				isConnected: false,
+				isVerified: false,
+				connectionInfo: { username: '' },
+				sessionId: null,
+				role: null,
+				mustChangePassword: false,
+				expiresAt: null,
+				rememberMe: false,
+				isLoading: false,
+				error: null,
+			};
+			update((s) => {
+				currentState = s;
+				return s;
+			});
+			if (currentState.sessionId) await connectionService.logout();
+		} catch (error) {
+			console.error('Logout error:', error);
+		} finally {
+			const emptyState = {
+				isConnected: false,
+				isVerified: false,
+				sessionId: null,
+				role: null,
+				mustChangePassword: false,
+				expiresAt: null,
+				isLoading: false,
+				connectionInfo: { username: DEFAULT_VALUES.USERNAME },
+				rememberMe: false,
+				error: null,
+			};
+			set(emptyState);
+			persist(emptyState);
+			localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
+		}
+	};
+
+	if (!savedExpired && saved?.sessionId && typeof saved.expiresAt === 'number') {
+		scheduleExpiryLogout(saved.expiresAt, doLogout);
+	}
 
 	return {
 		subscribe,
@@ -105,6 +186,7 @@ function createConnectionStore() {
 					);
 				const role = await resolveRoleAfterLogin(result, username);
 				const connectionInfo: ConnectionInfo = { username };
+				const expiresAt = expiresFromPayload(result);
 				const newState = {
 					isConnected: true,
 					isVerified: true,
@@ -112,12 +194,14 @@ function createConnectionStore() {
 					sessionId: result.session_id,
 					role,
 					mustChangePassword: mustChangeFromPayload(result),
+					expiresAt,
 					rememberMe,
 					isLoading: false,
 					error: null,
 				};
 				set(newState);
 				persist(newState);
+				scheduleExpiryLogout(expiresAt, doLogout);
 				if (rememberMe) {
 					storage.set(STORAGE_KEYS.CONNECTION, connectionInfo);
 					storage.set(STORAGE_KEYS.REMEMBER_ME, true);
@@ -129,12 +213,14 @@ function createConnectionStore() {
 				const errorMessage =
 					err instanceof Error ? err.message : t('errors.loginFailed');
 				localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
+				clearExpiryTimer();
 				set({
 					isConnected: false,
 					isVerified: false,
 					sessionId: null,
 					role: null,
 					mustChangePassword: false,
+					expiresAt: null,
 					isLoading: false,
 					error: errorMessage,
 					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
@@ -158,45 +244,7 @@ function createConnectionStore() {
 			}
 		},
 		can: (capability: Capability, role: UiRole | null) => can(capability, role),
-		logout: async () => {
-			update((s) => ({ ...s, isLoading: true }));
-			try {
-				let currentState: ConnectionState = {
-					isConnected: false,
-					isVerified: false,
-					connectionInfo: { username: '' },
-					sessionId: null,
-					role: null,
-					mustChangePassword: false,
-					rememberMe: false,
-					isLoading: false,
-					error: null,
-				};
-				update((s) => {
-					currentState = s;
-					return s;
-				});
-				if (currentState.sessionId)
-					await connectionService.logout(currentState.sessionId);
-			} catch (error) {
-				console.error('Logout error:', error);
-			} finally {
-				const emptyState = {
-					isConnected: false,
-					isVerified: false,
-					sessionId: null,
-					role: null,
-					mustChangePassword: false,
-					isLoading: false,
-					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
-					rememberMe: false,
-					error: null,
-				};
-				set(emptyState);
-				persist(emptyState);
-				localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
-			}
-		},
+		logout: doLogout,
 		checkHealth: async () => {
 			let currentState: ConnectionState = {
 				isConnected: false,
@@ -205,6 +253,7 @@ function createConnectionStore() {
 				sessionId: null,
 				role: null,
 				mustChangePassword: false,
+				expiresAt: null,
 				rememberMe: false,
 				isLoading: false,
 				error: null,
@@ -230,6 +279,7 @@ function createConnectionStore() {
 					sessionId: null,
 					role: null,
 					mustChangePassword: false,
+					expiresAt: null,
 					connectionInfo: { username: DEFAULT_VALUES.USERNAME },
 					rememberMe: false,
 					isLoading: false,
@@ -237,6 +287,7 @@ function createConnectionStore() {
 				};
 				set(emptyState);
 				persist(emptyState);
+				clearExpiryTimer();
 				localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
 				return false;
 			}

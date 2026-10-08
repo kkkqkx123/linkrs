@@ -68,6 +68,9 @@ impl<
                     .to_string(),
             ));
         }
+        if let Err(reason) = self.enforce_new_password_policy(username, context.stmt) {
+            return Err(reason);
+        }
         if let Some(result) = self.check_user_management_permission(username, context) {
             return result;
         }
@@ -92,7 +95,7 @@ impl<
         stmt.trim().to_uppercase().starts_with("CHANGE PASSWORD")
     }
 
-    fn parse_stmt(stmt: &str) -> Option<crate::query::parser::ast::Stmt> {
+    pub(crate) fn parse_stmt(stmt: &str) -> Option<crate::query::parser::ast::Stmt> {
         let mut parser = crate::query::parser::Parser::new(stmt);
         match parser.parse() {
             Ok(result) if !parser.has_errors() => Some(result.ast.stmt().clone()),

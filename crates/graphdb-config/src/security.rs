@@ -115,6 +115,12 @@ pub struct PasswordPolicyConfig {
     pub history_size: usize,
 }
 
+/// Special characters recognized by the password policy.
+///
+/// Restricted to a common printable-ASCII symbol subset so strength
+/// classification stays unambiguous across Unicode inputs.
+pub const SPECIAL_CHARACTERS: &str = "!@#$%^&*()-_=+[]{}|;:',.<>?/`~\"\\";
+
 impl Default for PasswordPolicyConfig {
     fn default() -> Self {
         Self {
@@ -132,10 +138,40 @@ impl Default for PasswordPolicyConfig {
 impl PasswordPolicyConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
-        if self.min_length < 6 {
-            return Err("Minimum password length must be at least 6".to_string());
+        if self.min_length < 8 {
+            return Err("Minimum password length must be at least 8".to_string());
         }
 
+        Ok(())
+    }
+
+    /// Check a plaintext password against the complexity rules.
+    ///
+    /// Covers length, enabled character classes, and the username-inclusion
+    /// rule. Returns the first unsatisfied requirement so callers can
+    /// surface a single actionable reason.
+    pub fn validate_password(&self, username: &str, password: &str) -> Result<(), String> {
+        if password.chars().count() < self.min_length {
+            return Err(format!(
+                "password must be at least {} characters long",
+                self.min_length
+            ));
+        }
+        if self.require_uppercase && !password.chars().any(|c| c.is_ascii_uppercase()) {
+            return Err("password must contain at least one uppercase letter".to_string());
+        }
+        if self.require_lowercase && !password.chars().any(|c| c.is_ascii_lowercase()) {
+            return Err("password must contain at least one lowercase letter".to_string());
+        }
+        if self.require_digit && !password.chars().any(|c| c.is_ascii_digit()) {
+            return Err("password must contain at least one digit".to_string());
+        }
+        if self.require_special && !password.chars().any(|c| SPECIAL_CHARACTERS.contains(c)) {
+            return Err("password must contain at least one special character".to_string());
+        }
+        if !username.is_empty() && password.to_lowercase().contains(&username.to_lowercase()) {
+            return Err("password must not contain the username".to_string());
+        }
         Ok(())
     }
 
@@ -245,6 +281,37 @@ mod tests {
         assert!(config.has_complexity_requirements());
         assert!(!config.has_expiration());
         assert!(!config.has_history());
+    }
+
+    #[test]
+    fn test_password_policy_min_length_floor() {
+        let weak_floor = PasswordPolicyConfig {
+            min_length: 6,
+            ..Default::default()
+        };
+        assert!(weak_floor.validate().is_err());
+        let floor = PasswordPolicyConfig {
+            min_length: 8,
+            ..Default::default()
+        };
+        assert!(floor.validate().is_ok());
+    }
+
+    #[test]
+    fn test_password_policy_validate_password() {
+        let policy = PasswordPolicyConfig::default();
+        assert!(policy.validate_password("alice", "Str0ngPass").is_ok());
+        assert!(policy.validate_password("alice", "Short1").is_err());
+        assert!(policy.validate_password("alice", "alllowercase1").is_err());
+        assert!(policy.validate_password("alice", "ALLUPPERCASE1").is_err());
+        assert!(policy.validate_password("alice", "NoDigitsHere").is_err());
+        assert!(policy.validate_password("alice", "Alice2024X").is_err());
+        let relaxed = PasswordPolicyConfig {
+            require_special: true,
+            ..Default::default()
+        };
+        assert!(relaxed.validate_password("bob", "Str0ngPass").is_err());
+        assert!(relaxed.validate_password("bob", "Str0ngPass!").is_ok());
     }
 
     #[test]

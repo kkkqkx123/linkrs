@@ -47,7 +47,8 @@ impl Planner for UserManagementPlanner {
                 let mut node = crate::planning::plan::core::nodes::AlterUserNode::new(
                     2,
                     alter.username.clone(),
-                );
+                )
+                .with_password_history_depth(qctx.password_history_depth());
                 if let Some(ref password) = alter.password {
                     node = node.with_password(password.clone());
                 }
@@ -79,7 +80,7 @@ impl Planner for UserManagementPlanner {
     fn transform(
         &mut self,
         validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
+        qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
         let arg_node = ArgumentNode::new(1, "user_management_args");
 
@@ -100,7 +101,8 @@ impl Planner for UserManagementPlanner {
                 let mut node = crate::planning::plan::core::nodes::AlterUserNode::new(
                     2,
                     alter_stmt.username.clone(),
-                );
+                )
+                .with_password_history_depth(qctx.password_history_depth());
                 if let Some(ref password) = alter_stmt.password {
                     node = node.with_password(password.clone());
                 }
@@ -125,6 +127,7 @@ impl Planner for UserManagementPlanner {
                     username: change_stmt.username.clone(),
                     old_password: change_stmt.old_password.clone(),
                     new_password: change_stmt.new_password.clone(),
+                    history_limit: qctx.password_history_depth(),
                 };
 
                 let node =

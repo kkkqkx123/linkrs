@@ -1,7 +1,7 @@
 //! User Management Type Definition
 
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Default bcrypt cost factor for password hashing
 const DEFAULT_BCRYPT_COST: u32 = bcrypt::DEFAULT_COST;
@@ -10,8 +10,11 @@ const MIN_BCRYPT_COST: u32 = 4;
 /// Maximum supported bcrypt cost factor
 const MAX_BCRYPT_COST: u32 = 12;
 
-/// Process-wide bcrypt cost factor, resolved on the first password hash
-static BCRYPT_COST: OnceLock<u32> = OnceLock::new();
+/// Process-wide bcrypt cost factor, fed by the server configuration.
+/// The environment variable is only a fallback while no explicit value
+/// has been installed, so runtime config updates take effect.
+static BCRYPT_COST: AtomicU32 = AtomicU32::new(DEFAULT_BCRYPT_COST);
+static BCRYPT_COST_SET: AtomicBool = AtomicBool::new(false);
 
 /// Resolve the bcrypt cost factor from the `GRAPHDBC_BCRYPT_COST` environment
 /// variable, falling back to the default cost when absent or invalid.
@@ -25,15 +28,28 @@ fn resolve_bcrypt_cost() -> u32 {
 
 /// Effective bcrypt cost factor used for password hashing
 fn bcrypt_cost() -> u32 {
-    *BCRYPT_COST.get_or_init(resolve_bcrypt_cost)
+    if BCRYPT_COST_SET.load(Ordering::Relaxed) {
+        BCRYPT_COST.load(Ordering::Relaxed)
+    } else {
+        resolve_bcrypt_cost()
+    }
 }
 
 /// Override the bcrypt cost factor for password hashing.
 ///
-/// Must be called before the first password hash in the process; later calls
-/// are ignored. The cost is clamped to the supported range [4, 12].
+/// Takes effect immediately for subsequent hashes. The cost is clamped to
+/// the supported range [4, 12].
 pub fn set_bcrypt_cost(cost: u32) {
-    let _ = BCRYPT_COST.set(cost.clamp(MIN_BCRYPT_COST, MAX_BCRYPT_COST));
+    BCRYPT_COST.store(
+        cost.clamp(MIN_BCRYPT_COST, MAX_BCRYPT_COST),
+        Ordering::Relaxed,
+    );
+    BCRYPT_COST_SET.store(true, Ordering::Relaxed);
+}
+
+/// Verify a plaintext password against a stored bcrypt hash.
+pub fn verify_password_hash(password: &str, hash: &str) -> bool {
+    bcrypt::verify(password, hash).unwrap_or(false)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,6 +57,9 @@ pub struct PasswordInfo {
     pub username: Option<String>,
     pub old_password: String,
     pub new_password: String,
+    /// Retained history depth applied on rotation; zero clears history.
+    #[serde(default)]
+    pub history_limit: usize,
 }
 
 /// User information - refer to nebula-graph UserItem implementation
@@ -66,6 +85,9 @@ pub struct UserInfo {
     pub last_login_at: Option<i64>,
     /// Password last modified time
     pub password_changed_at: i64,
+    /// Retained previous password hashes for reuse detection.
+    #[serde(default)]
+    pub password_history: Vec<String>,
 }
 
 impl UserInfo {
@@ -88,19 +110,47 @@ impl UserInfo {
             created_at: now,
             last_login_at: None,
             password_changed_at: now,
+            password_history: Vec::new(),
         })
     }
 
     /// Verify Password
     pub fn verify_password(&self, password: &str) -> bool {
-        bcrypt::verify(password, &self.password_hash).unwrap_or(false)
+        verify_password_hash(password, &self.password_hash)
+    }
+
+    /// Whether a plaintext password matches the current or a retained hash.
+    pub fn reuses_password(&self, password: &str) -> bool {
+        if self.verify_password(password) {
+            return true;
+        }
+        self.password_history
+            .iter()
+            .any(|hash| verify_password_hash(password, hash))
     }
 
     /// change your password
-    pub fn change_password(&mut self, new_password: String) -> Result<(), crate::StorageError> {
-        self.password_hash = bcrypt::hash(new_password, bcrypt_cost()).map_err(|e| {
+    ///
+    /// Change the password while rotating the retained history.
+    ///
+    /// The replaced hash is pushed to the history; a non-zero limit truncates
+    /// to that depth, zero clears the history.
+    pub fn change_password_with_history(
+        &mut self,
+        new_password: String,
+        history_limit: usize,
+    ) -> Result<(), crate::StorageError> {
+        let new_hash = bcrypt::hash(new_password, bcrypt_cost()).map_err(|e| {
             crate::StorageError::db_error(format!("Password encryption failed: {}", e))
         })?;
+        let old_hash = std::mem::replace(&mut self.password_hash, new_hash);
+        if history_limit > 0 {
+            self.password_history.push(old_hash);
+            let excess = self.password_history.len().saturating_sub(history_limit);
+            self.password_history.drain(..excess);
+        } else {
+            self.password_history.clear();
+        }
         self.password_changed_at = chrono::Utc::now().timestamp_millis();
         Ok(())
     }
@@ -138,6 +188,10 @@ pub struct UserAlterInfo {
     pub is_locked: Option<bool>,
     /// New password (plain text, hashed before storage)
     pub new_password: Option<String>,
+    /// Retained history depth applied when the password rotates; zero
+    /// clears the history.
+    #[serde(default)]
+    pub history_limit: usize,
     /// New maximum number of queries per hour
     pub max_queries_per_hour: Option<i32>,
     /// New maximum number of updates per hour
@@ -154,6 +208,7 @@ impl UserAlterInfo {
             username,
             is_locked: None,
             new_password: None,
+            history_limit: 0,
             max_queries_per_hour: None,
             max_updates_per_hour: None,
             max_connections_per_hour: None,

@@ -1,8 +1,9 @@
 //! HTTP materialized query endpoint integration tests.
 //!
 //! Verifies the `/v1/query` response envelope carries the engine's real
-//! execution metadata (rows_scanned / rows_returned / space_id) instead of
-//! the hardcoded zeros of the old ExecutionResult round trip.
+//! execution metadata (rows_returned / space_id) instead of the hardcoded
+//! zeros of the old ExecutionResult round trip; rows_scanned stays zero
+//! by contract (scan volume belongs to executor statistics).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,6 +32,7 @@ fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) -> SpaceSummary {
     let mut space = SpaceInfo::new("test".to_string()).with_vid_type(DataType::BigInt);
     store.create_space(&mut space).unwrap();
     let tag = graphdb::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        graphdb::core::types::PropertyDef::new("id".to_string(), DataType::BigInt),
         graphdb::core::types::PropertyDef::new("name".to_string(), DataType::String),
         graphdb::core::types::PropertyDef::new("age".to_string(), DataType::BigInt),
     ]);
@@ -128,10 +130,12 @@ async fn query_response_carries_real_execution_metadata() {
     assert_eq!(json["success"], true);
     assert_eq!(json["data"]["row_count"], 4);
     assert_eq!(json["data"]["columns"].as_array().unwrap().len(), 2);
-    // Engine metadata is surfaced (rows_scanned / rows_returned match the
-    // materialized row count; they were hardcoded to 0 before the fix).
+    // Engine metadata is surfaced: rows_returned mirrors the materialized
+    // row count (it was a hardcoded zero before). rows_scanned stays zero
+    // by contract — scan volume is owned by executor statistics, not by
+    // the query response.
     let metadata = &json["metadata"];
-    assert_eq!(metadata["rows_scanned"], 4);
+    assert_eq!(metadata["rows_scanned"], 0);
     assert_eq!(metadata["rows_returned"], 4);
     assert_eq!(metadata["space_id"], serde_json::Value::Null);
 }

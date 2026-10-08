@@ -1,15 +1,12 @@
 use axum::{
-    http::StatusCode,
+    http::{HeaderValue, Method, StatusCode},
     middleware,
     routing::{delete, get, post},
     Router,
 };
 use std::time::Duration;
 use tower_http::{
-    cors::{Any, CorsLayer},
-    limit::RequestBodyLimitLayer,
-    timeout::TimeoutLayer,
-    trace::TraceLayer,
+    cors::CorsLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer, trace::TraceLayer,
 };
 
 use crate::storage::UndoTarget;
@@ -258,13 +255,24 @@ pub fn create_router<
         .layer(middleware::from_fn(logging::logging_middleware))
         .layer(middleware::from_fn(error::error_handling_middleware))
         .layer(TraceLayer::new_for_http())
-        .layer(create_cors_layer())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
         ))
         .layer(RequestBodyLimitLayer::new(1024 * 1024 * 10)) // Limit on the request body size: 10 MB
-        .with_state(state);
+        .with_state(state.clone());
+
+    // CORS is driven by the live HTTP config: disabled means no layer at
+    // all, an empty whitelist keeps the permissive local behavior with a
+    // warning, and a non-empty whitelist enforces strict origins.
+    let http_config = state.server.get_config().server.http.clone();
+    let router = match create_cors_layer(&http_config) {
+        Some(cors) => router.layer(cors),
+        None => {
+            log::info!("CORS layer disabled by configuration");
+            router
+        }
+    };
 
     // Add web management routes if web_router is provided
     let mut router = if let Some(wr) = web_router {
@@ -407,14 +415,60 @@ fn add_vector_routes<
     router
 }
 
-/// Create a CORS configuration layer
+/// Create a CORS configuration layer from the live HTTP config.
 ///
-/// The development environment allows all sources; the production environment should be configured with specific sources.
-fn create_cors_layer() -> CorsLayer {
-    // The configuration should be tightened in a production environment.
-    // For example: Access is only allowed from specific domain names.
-    CorsLayer::new()
-        .allow_origin(Any) // Allow all sources; the production environment should be replaced with specific domain names.
-        .allow_methods(Any)
-        .allow_headers(Any)
+/// Returns `None` when CORS is disabled. An enabled switch with an empty
+/// whitelist keeps the permissive local-development combination and logs a
+/// warning; production must set exact origins to get the strict layer.
+/// The session id travels in the `X-Session-ID` header rather than a
+/// cookie, so credential mode stays off and never conflicts with origins.
+fn create_cors_layer(config: &crate::config::HttpServerConfig) -> Option<CorsLayer> {
+    use tower_http::cors::{AllowOrigin, Any};
+
+    if !config.cors_enabled {
+        return None;
+    }
+    if config.cors_allowed_origins.is_empty() {
+        log::warn!(
+            "CORS running in permissive mode (any origin); set server.http.cors_allowed_origins for production"
+        );
+        return Some(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        );
+    }
+    let origins: Vec<HeaderValue> = config
+        .cors_allowed_origins
+        .iter()
+        .filter_map(|origin| match origin.parse() {
+            Ok(value) => Some(value),
+            Err(e) => {
+                log::warn!("Skipping invalid CORS origin '{}': {}", origin, e);
+                None
+            }
+        })
+        .collect();
+    log::info!(
+        "CORS running in strict mode for {} origin(s)",
+        origins.len()
+    );
+    Some(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::HeaderName::from_static("x-session-id"),
+            ])
+            .max_age(Duration::from_secs(600)),
+    )
 }

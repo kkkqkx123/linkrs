@@ -42,6 +42,9 @@ export const isMockMode = USE_MOCK;
 
 const JSONBig = JSONBigint({ storeAsString: true });
 
+/** Backend auth failure codes that invalidate the local session. */
+const SESSION_DEAD_CODES = new Set(['unauthenticated', 'account_locked']);
+
 function handleUnauthorized() {
 	try {
 		localStorage.removeItem('sessionId');
@@ -129,8 +132,12 @@ export async function call<T>(
 			res.error,
 			res.response?.status ?? 0,
 		);
-		if (res.response?.status === 401) handleUnauthorized();
-		throw new ApiError(message, res.response?.status ?? 0, code);
+		const status = res.response?.status ?? 0;
+		// Drop the local session when the backend reports it dead, but keep
+		// it for password_change_required so the user can still rotate it.
+		if (status === 401 || (status === 403 && SESSION_DEAD_CODES.has(code ?? '')))
+			handleUnauthorized();
+		throw new ApiError(message, status, code);
 	}
 	return res.data as T;
 }

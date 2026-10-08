@@ -63,6 +63,7 @@ define_plan_node! {
         new_password: Option<String>,
         new_role: Option<String>,
         is_locked: Option<bool>,
+        password_history_depth: usize,
     }
     manage_enum: UserManageNode::Alter as UserManage
     input: ZeroInputNode
@@ -76,6 +77,7 @@ impl AlterUserNode {
             new_password: None,
             new_role: None,
             is_locked: None,
+            password_history_depth: 0,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -97,6 +99,13 @@ impl AlterUserNode {
         self
     }
 
+    /// Set the retained password-history depth applied when this statement
+    /// rotates the password.
+    pub fn with_password_history_depth(mut self, depth: usize) -> Self {
+        self.password_history_depth = depth;
+        self
+    }
+
     pub fn username(&self) -> &str {
         &self.username
     }
@@ -111,6 +120,10 @@ impl AlterUserNode {
 
     pub fn is_locked(&self) -> Option<bool> {
         self.is_locked
+    }
+
+    pub fn password_history_depth(&self) -> usize {
+        self.password_history_depth
     }
 }
 

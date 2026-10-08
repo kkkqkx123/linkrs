@@ -206,7 +206,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 ### 4.7 bcrypt_cost
 - **类型**: u32
 - **默认值**: `12`
-- **说明**: bcrypt 密码哈希成本因子（范围 4-12），进程启动时生效，需重启后应用
+- **说明**: bcrypt 密码哈希成本因子（范围 4-12），修改后对后续哈希实时生效，无需重启
 - **实际效果**: 
   - 成本越高，密码哈希越安全，但每次创建用户/修改密码耗时越长（成本 12 约 200-300ms）
   - 成本 4-6 约 1ms 级别，适合本地开发与低配置机器
@@ -621,6 +621,56 @@ worker_threads = 4
 
 ---
 
+## 16. HTTP 跨域配置 [http]
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| cors_enabled | bool | true | 是否挂载跨域层；关闭则不处理任何跨域头 |
+| cors_allowed_origins | Vec\<String\> | [] | 来源白名单；为空时保持开发宽松模式（任意来源）并输出警告日志 |
+
+来源条目格式为 `http(s)://host[:port]`，不带路径；非法条目启动失败。
+会话标识走 `X-Session-ID` 请求头而非 Cookie，默认不开启凭证模式。
+
+### 示例（生产严格模式）
+
+```toml
+[http]
+cors_enabled = true
+cors_allowed_origins = ["https://console.example.com"]
+```
+
+生产四项清单：关闭宽松模式、填写精确来源、启用加密传输、前后端来源对齐。
+
+## 17. 口令策略配置 [security.password_policy]
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| min_length | usize | 8 | 最小口令长度（校验下限为 8） |
+| require_uppercase | bool | true | 要求大写字母 |
+| require_lowercase | bool | true | 要求小写字母 |
+| require_digit | bool | true | 要求数字 |
+| require_special | bool | false | 要求特殊字符（`!@#$%^&*()-_=+[]{}|;:',.<>?/`~"\` 常见可打印符号子集） |
+| max_age_days | u64 | 0 | 口令最长存活天数；0 表示不过期，超期后登录标记并阻断非改密请求 |
+| history_size | usize | 0 | 历史口令保留条数；0 表示不检查复用 |
+
+校验收敛在执行路径统一钩子：管理面建用户/重置口令与查询通道建用户/改用户（含新口令）/改密共用同一套规则，前端仅做强度提示。
+种子账号（默认 `root/root`）豁免一次策略校验，靠强制改密流程补偿。
+
+### 示例
+
+```toml
+[security.password_policy]
+min_length = 8
+require_uppercase = true
+require_lowercase = true
+require_digit = true
+require_special = false
+max_age_days = 90
+history_size = 5
+```
+
+---
+
 ## 配置示例
 
 ### 开发环境配置
@@ -722,6 +772,19 @@ bcrypt_cost = 12
 auto_create_default_space = true
 default_space_name = "production"
 single_user_mode = false
+
+[http]
+cors_enabled = true
+cors_allowed_origins = ["https://console.example.com"]
+
+[security.password_policy]
+min_length = 8
+require_uppercase = true
+require_lowercase = true
+require_digit = true
+require_special = false
+max_age_days = 90
+history_size = 5
 
 [query_resource]
 max_concurrent_queries = 100

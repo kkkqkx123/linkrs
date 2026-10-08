@@ -82,13 +82,73 @@ impl<
         }
     }
 
+    /// Password-policy settings snapshotted at startup.
+    pub fn security_config(&self) -> &crate::config::SecurityConfig {
+        &self.security_config
+    }
+
+    /// Validate a new plaintext password against the configured policy.
+    ///
+    /// Applies on every write path, including auth-disabled deployments:
+    /// disabling auth only skips the login step, never weak-password writes.
+    pub fn validate_new_password(&self, username: &str, password: &str) -> Result<(), String> {
+        if password.is_empty() {
+            return Err("password cannot be empty".to_string());
+        }
+        self.security_config
+            .password_policy
+            .validate_password(username, password)
+            .map_err(|reason| format!("password does not meet the password policy: {}", reason))?;
+        self.reject_reused_password(username, password)?;
+        Ok(())
+    }
+
+    /// Whether the account password is past the configured maximum age.
+    pub fn password_expired(&self, username: &str) -> bool {
+        let max_age_days = self.security_config.password_policy.max_age_days;
+        if max_age_days == 0 {
+            return false;
+        }
+        match self.storage.get_user(username) {
+            Some(user) => {
+                let now = chrono::Utc::now().timestamp_millis();
+                let age_millis = now.saturating_sub(user.password_changed_at);
+                age_millis > (max_age_days as i64).saturating_mul(86_400_000)
+            }
+            None => false,
+        }
+    }
+
+    /// Reject a new password that matches the current or a retained history hash.
+    fn reject_reused_password(&self, username: &str, password: &str) -> Result<(), String> {
+        if self.security_config.password_policy.history_size == 0 {
+            return Ok(());
+        }
+        let Some(user) = self.storage.get_user(username) else {
+            return Ok(());
+        };
+        if user.reuses_password(password) {
+            return Err("password must not reuse a recent password".to_string());
+        }
+        Ok(())
+    }
+
+    /// Session idle timeout driving expiry responses and reclamation.
+    pub fn session_idle_timeout(&self) -> std::time::Duration {
+        self.session_manager.idle_timeout()
+    }
+
     /// Whether the login response should prompt a password change.
     ///
     /// True when forced rotation is configured and the default seed account
-    /// has never changed its password.
+    /// has never changed its password, or when the account password is past
+    /// the configured maximum age.
     pub fn must_change_password(&self, username: &str) -> bool {
         if self.is_auth_disabled() {
             return false;
+        }
+        if self.password_expired(username) {
+            return true;
         }
         if !self.authenticator.config().force_change_default_password {
             return false;
@@ -150,14 +210,13 @@ impl<
 
     /// Whether authentication is globally disabled.
     ///
-    /// Returns true when either `[server.auth].enable_authorize = false` or
-    /// `[server.bootstrap].single_user_mode = true`. Both flags cause the
+    /// Returns true when either `[auth].enable_authorize = false` or
+    /// `[bootstrap].single_user_mode = true`. Both flags cause the
     /// middleware layer to skip session-id verification and fall through to a
     /// default identity so purely-local deployments can operate without a
     /// login round-trip.
     pub fn is_auth_disabled(&self) -> bool {
-        !self.authenticator.config().enable_authorize
-            || self.bootstrap_config.single_user_mode
+        !self.authenticator.config().enable_authorize || self.bootstrap_config.single_user_mode
     }
 
     /// Authenticator configuration reference.
@@ -296,6 +355,7 @@ impl<
         if self.storage.user_exists(username) {
             return Err(format!("user {} already exists", username));
         }
+        self.validate_new_password(username, password)?;
         let info = graphdb_core::types::UserInfo::new(username.to_string(), password.to_string())
             .map_err(|e| e.to_string())?;
         let mut handle = (*self.storage).clone();
@@ -304,9 +364,13 @@ impl<
     }
 
     /// Reset a password through the admin channel without old-password check.
-    pub fn admin_reset_password(
+    ///
+    /// `except_session_id` keeps the caller's own session alive while every
+    /// other session of the target account is invalidated.
+    pub async fn admin_reset_password(
         &self,
         caller: &str,
+        caller_session_id: Option<i64>,
         username: &str,
         new_password: &str,
     ) -> Result<(), String> {
@@ -317,10 +381,15 @@ impl<
         if !self.storage.user_exists(username) {
             return Err(format!("user {} not found", username));
         }
+        self.validate_new_password(username, new_password)?;
         let mut alter = graphdb_core::types::UserAlterInfo::new(username.to_string());
         alter.new_password = Some(new_password.to_string());
+        alter.history_limit = self.security_config.password_policy.history_size;
         let mut handle = (*self.storage).clone();
         handle.alter_user(&alter).map_err(|e| e.to_string())?;
+        self.session_manager
+            .remove_sessions_by_username(username, caller_session_id)
+            .await;
         Ok(())
     }
 

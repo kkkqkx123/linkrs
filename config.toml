@@ -9,10 +9,6 @@ max_connections = 100
 default_timeout = 30
 # 最大并发事务数
 max_concurrent_transactions = 1000
-# 是否自动清理过期事务
-auto_cleanup = true
-# 清理任务执行间隔（秒）
-cleanup_interval = 10
 
 [log]
 level = "info"
@@ -44,6 +40,25 @@ auto_create_default_space = true
 default_space_name = "default"
 # 单用户模式（跳过认证，始终使用默认用户，适合个人使用）
 single_user_mode = false
+
+[http]
+# 是否启用跨域（关闭则不挂载跨域层）
+cors_enabled = true
+# 跨域来源白名单（空表示开发宽松模式；生产必须填写精确来源）
+cors_allowed_origins = []
+
+[security.password_policy]
+# 最小口令长度（下限 8）
+min_length = 8
+# 四类字符要求
+require_uppercase = true
+require_lowercase = true
+require_digit = true
+require_special = false
+# 口令最长存活天数（0 表示不过期）
+max_age_days = 0
+# 历史口令保留条数（0 表示不检查复用）
+history_size = 0
 
 [optimizer]
 max_iteration_rounds = 5
@@ -165,14 +180,3 @@ upsert_timeout_secs = 30
 
 # 调试用：在向量查询时自动将文本转为向量
 # 需配合 [vector.embedding] 一起使用
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
-
-[profile.dev]
-opt-level = 0
-debug = true
-codegen-units = 64

@@ -167,7 +167,8 @@ pub async fn reset_password<
     state
         .server
         .get_graph_service()
-        .admin_reset_password(&caller, &name, &request.password)
+        .admin_reset_password(&caller, Some(session_id), &name, &request.password)
+        .await
         .map_err(map_admin_error)?;
     Ok(StatusCode::NO_CONTENT)
 }

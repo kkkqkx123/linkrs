@@ -745,6 +745,7 @@ mod storage_backed {
         let mut space = SpaceInfo::new("test".to_string()).with_vid_type(DataType::BigInt);
         store.create_space(&mut space).unwrap();
         let tag = TagInfo::new("Person".to_string()).with_properties(vec![
+            PropertyDef::new("id".to_string(), DataType::BigInt),
             PropertyDef::new("name".to_string(), DataType::String),
             PropertyDef::new("age".to_string(), DataType::BigInt),
         ]);

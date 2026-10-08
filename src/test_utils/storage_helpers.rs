@@ -41,7 +41,11 @@ pub fn create_edge_type_info(name: &str, properties: Vec<(&str, DataType)>) -> E
 pub fn person_tag_info() -> TagInfo {
     create_tag_info(
         "Person",
-        vec![("name", DataType::String), ("age", DataType::BigInt)],
+        vec![
+            ("id", DataType::BigInt),
+            ("name", DataType::String),
+            ("age", DataType::BigInt),
+        ],
     )
 }
 

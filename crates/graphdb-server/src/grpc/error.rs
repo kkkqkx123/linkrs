@@ -13,6 +13,15 @@ pub(crate) fn parse_session_id(value: &str) -> Result<i64, Status> {
         .map_err(|_| Status::invalid_argument("session_id must be an integer"))
 }
 
+/// Session id is mandatory on every gRPC call that reaches an HTTP handler,
+/// because the HTTP handler performs authorization against that identity.
+pub(crate) fn require_session_id(raw: &str) -> Result<i64, Status> {
+    if raw.is_empty() {
+        return Err(Status::unauthenticated("session_id is required"));
+    }
+    parse_session_id(raw)
+}
+
 #[allow(clippy::result_large_err)]
 pub(crate) fn parse_transaction_id(value: &str) -> Result<TransactionId, Status> {
     value

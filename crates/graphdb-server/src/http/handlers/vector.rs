@@ -414,6 +414,10 @@ pub async fn list_indexes<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
 ) -> Result<JsonResponse<ListVectorIndexesResponse>, HttpError> {
+    // The listing spans every space, so it must not expose index names to
+    // callers without cross-space visibility; create/drop on this route
+    // already require the admin role.
+    super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
 

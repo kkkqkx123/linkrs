@@ -67,7 +67,8 @@ pub async fn login<
     let session_id = session.id();
     info!(
         "Created session {} for user {}",
-        session_id, request.username
+        crate::session::GraphSessionManager::mask_session_id(session_id),
+        request.username
     );
 
     let permission_manager = graph_service.get_permission_manager();
@@ -80,11 +81,18 @@ pub async fn login<
         .highest_role(&request.username)
         .map(|role| role.to_string());
     let must_change = graph_service.must_change_password(&request.username);
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|now| {
+            now.as_secs()
+                .saturating_add(graph_service.session_idle_timeout().as_secs())
+        })
+        .ok();
 
     Ok(JsonResponse(LoginResponse {
         session_id,
         username: request.username,
-        expires_at: None,
+        expires_at,
         role: display.clone(),
         display_role: display,
         roles,

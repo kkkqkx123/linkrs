@@ -7,16 +7,9 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
-use super::error::parse_session_id;
+use super::error::require_session_id;
 use super::proto::*;
 use super::service::{GraphDBService, StreamMigrationProgressStream};
-
-fn require_session_id(raw: &str) -> Result<i64, Status> {
-    if raw.is_empty() {
-        return Err(Status::unauthenticated("session_id is required"));
-    }
-    parse_session_id(raw)
-}
 
 impl<
         S: StorageClient

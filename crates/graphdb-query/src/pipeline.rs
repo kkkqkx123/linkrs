@@ -100,6 +100,9 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     /// Experimental pipeline extensions. Empty by default,
     /// leaving the builtin pipeline untouched.
     pub(crate) extensions: Arc<ExtensionRegistry>,
+    /// Retained password-history depth threaded into every query context so
+    /// user-management plans rotate history uniformly across channels.
+    pub(crate) password_history_depth: usize,
 }
 
 /// Lookup key for one [`DmlPlanMemoEntry`].
@@ -182,6 +185,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
             dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
             extensions: Arc::new(ExtensionRegistry::new()),
+            password_history_depth: 0,
         }
     }
 
@@ -192,6 +196,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
     pub fn with_statistics_min_epoch_delta(mut self, delta: u64) -> Self {
         self.statistics_min_epoch_delta = delta;
+        self
+    }
+
+    /// Set the retained password-history depth for user-management
+    /// operations (assembly-time only).
+    pub fn with_password_history_depth(mut self, depth: usize) -> Self {
+        self.password_history_depth = depth;
         self
     }
 
@@ -447,6 +458,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
             dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
             extensions: Arc::new(ExtensionRegistry::new()),
+            password_history_depth: 0,
         }
     }
 

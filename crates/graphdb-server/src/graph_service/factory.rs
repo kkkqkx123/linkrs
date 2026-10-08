@@ -135,7 +135,8 @@ impl<
             config.common.columnar.column_block_enabled,
         );
 
-        let session_idle_timeout = Duration::from_secs(config.transaction.default_timeout * 10);
+        let session_idle_timeout =
+            Duration::from_secs(config.server.auth.session_idle_timeout_secs.max(1));
         let session_events = Arc::new(EventSubscriptions::<SessionEvent>::new());
         let query_manager = Arc::new(QueryManager::new_with_shared(session_events.clone()));
         let session_manager = GraphSessionManager::new_with_shared(
@@ -235,6 +236,9 @@ impl<
                         .with_space_cost_profiles(
                             &config.common.optimizer.space_cost_profiles,
                             &runtime,
+                        )
+                        .with_password_history_depth(
+                            config.server.security.password_policy.history_size,
                         );
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     api.install_query_manager(Arc::clone(&query_manager));
@@ -254,6 +258,7 @@ impl<
                         &config.common.optimizer,
                         cost_profile,
                         &runtime,
+                        config.server.security.password_policy.history_size,
                     );
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     api.install_query_manager(Arc::clone(&query_manager));
@@ -269,6 +274,7 @@ impl<
                 &config.common.optimizer,
                 cost_profile,
                 &runtime,
+                config.server.security.password_policy.history_size,
             );
             api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
             api.install_query_manager(Arc::clone(&query_manager));
@@ -285,6 +291,7 @@ impl<
                 &config.common.optimizer,
                 cost_profile,
                 &runtime,
+                config.server.security.password_policy.history_size,
             );
             api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
             api.install_query_manager(Arc::clone(&query_manager));
@@ -322,6 +329,7 @@ impl<
             progress_rows_interval: config.monitoring.progress_report_rows_interval,
             next_query_id: std::sync::atomic::AtomicU64::new(1),
             bootstrap_config: config.server.bootstrap.clone(),
+            security_config: config.server.security.clone(),
         };
         Arc::new(service)
     }
@@ -336,6 +344,7 @@ impl<
         optimizer_config: &crate::config::OptimizerConfig,
         cost_profile: crate::config::StorageCostProfile,
         runtime: &crate::config::RuntimeConfig,
+        password_history_depth: usize,
     ) -> QueryApi<S> {
         let inner = Arc::new(RwLock::new((**storage).clone()));
         QueryApi::with_optimizer_engine(
@@ -350,6 +359,7 @@ impl<
         )
         .with_default_cost_profile_label(format!("{cost_profile:?}"))
         .with_space_cost_profiles(&optimizer_config.space_cost_profiles, runtime)
+        .with_password_history_depth(password_history_depth)
     }
 
     /// Map the `[parallel]` config section onto the query optimizer's
@@ -398,6 +408,11 @@ impl<
     /// hashed into a new admin with the global God role; the plaintext
     /// password is never compared afterwards. Otherwise permission state is
     /// rebuilt from the persisted role segment so restarts keep grants.
+    ///
+    /// The seed credentials are intentionally exempt from the password
+    /// policy: the default password is weak by design for local bootstrap
+    /// and the account is forced through the must-change flow on first
+    /// login instead.
     fn ensure_admin_seed_and_rebuild(
         storage: &Arc<S>,
         permission_manager: &Arc<PermissionManager>,

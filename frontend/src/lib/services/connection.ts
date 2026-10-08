@@ -4,7 +4,6 @@ import { asArray, isRecord } from '$utils/parse';
 
 type LoginRequest = components['schemas']['LoginRequest'];
 type LoginResponse = components['schemas']['LoginResponse'];
-type LogoutRequest = components['schemas']['LogoutRequest'];
 type CreateSessionRequest = components['schemas']['CreateSessionRequest'];
 type SessionResponse = components['schemas']['SessionResponse'];
 
@@ -91,12 +90,8 @@ export const connectionService = {
 	login: async (params: LoginParams): Promise<LoginResponse> =>
 		call(client.POST('/v1/auth/login', { body: params as LoginRequest })),
 
-	logout: async (sessionId: number): Promise<void> => {
-		await call<unknown>(
-			client.POST('/v1/auth/logout', {
-				body: { session_id: sessionId } as LogoutRequest,
-			}),
-		);
+	logout: async (): Promise<void> => {
+		await call<unknown>(client.POST('/v1/auth/logout'));
 	},
 
 	health: async (): Promise<HealthResponse> => call(client.GET('/v1/health')),

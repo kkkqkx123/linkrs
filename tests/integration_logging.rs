@@ -120,8 +120,6 @@ max_connections = 10
 [transaction]
 default_timeout = 30
 max_concurrent_transactions = 1000
-auto_cleanup = true
-cleanup_interval = 10
 
 [log]
 level = "debug"

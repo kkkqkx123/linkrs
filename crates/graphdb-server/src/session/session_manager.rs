@@ -152,6 +152,20 @@ impl GraphSessionManager {
         Arc::clone(&self.session_callbacks)
     }
 
+    /// Mask a session id for logs: prefix plus a short hash only.
+    pub fn mask_session_id(session_id: i64) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        session_id.hash(&mut hasher);
+        format!("{:x}..{:04x}", session_id >> 48, hasher.finish() & 0xffff)
+    }
+
+    /// Session idle timeout driving reclamation and expiry responses.
+    pub fn idle_timeout(&self) -> Duration {
+        self.session_idle_timeout
+    }
+
     /// Point this manager at a shared session-event registry.
     ///
     /// The field is an `Arc`, so an already-published instance needs `&mut`
@@ -238,11 +252,18 @@ impl GraphSessionManager {
             return Err("Exceeded maximum allowed connections".to_string());
         }
 
-        // Generate a new session ID
-        let session_id = self.generate_session_id();
+        // Generate a new session ID, retrying on the unlikely event of a
+        // collision with a live session.
+        let session_id = loop {
+            let candidate = self.generate_session_id();
+            if !self.sessions.contains_key(&candidate) {
+                break candidate;
+            }
+        };
         info!(
-            "Generated session ID: {} for user: {}",
-            session_id, user_name
+            "Generated session {} for user: {}",
+            Self::mask_session_id(session_id),
+            user_name
         );
 
         let session = Session {
@@ -271,8 +292,9 @@ impl GraphSessionManager {
         }
 
         info!(
-            "Successfully created session ID: {} for user: {}",
-            session_id, user_name
+            "Successfully created session {} for user: {}",
+            Self::mask_session_id(session_id),
+            user_name
         );
         self.emit_session_event(SessionEvent::SessionCreated {
             session_id,
@@ -294,7 +316,7 @@ impl GraphSessionManager {
 
     /// Removes a session from local cache
     pub async fn remove_session(&self, session_id: i64) {
-        info!("Removing session ID: {}", session_id);
+        info!("Removing session {}", Self::mask_session_id(session_id));
 
         if let Some(entry) = self.sessions.get(&session_id) {
             entry.value().mark_all_queries_killed();
@@ -310,7 +332,10 @@ impl GraphSessionManager {
             create_times.remove(&session_id);
         }
 
-        info!("Successfully removed session ID: {}", session_id);
+        info!(
+            "Successfully removed session {}",
+            Self::mask_session_id(session_id)
+        );
         if existed {
             self.emit_session_event(SessionEvent::SessionDestroyed { session_id });
         }
@@ -395,8 +420,10 @@ impl GraphSessionManager {
         is_admin: bool,
     ) -> SessionResult<()> {
         info!(
-            "Attempting to kill session ID: {} by user: {} (is_admin: {})",
-            session_id, current_user, is_admin
+            "Attempting to kill session {} by user: {} (is_admin: {})",
+            Self::mask_session_id(session_id),
+            current_user,
+            is_admin
         );
 
         // Find the target conversation.
@@ -417,7 +444,7 @@ impl GraphSessionManager {
 
         info!(
             "Killing session {} (user: {}, active queries: {})",
-            session_id,
+            Self::mask_session_id(session_id),
             target_user,
             target_session.active_queries_count()
         );
@@ -427,8 +454,9 @@ impl GraphSessionManager {
         self.remove_session(session_id).await;
 
         info!(
-            "Successfully killed session ID: {} by user: {}",
-            session_id, current_user
+            "Successfully killed session {} by user: {}",
+            Self::mask_session_id(session_id),
+            current_user
         );
         Ok(())
     }
@@ -525,7 +553,10 @@ impl GraphSessionManager {
 
         // Remove expired sessions
         for session_id in expired_sessions {
-            info!("Reclaiming expired session ID: {}", session_id);
+            info!(
+                "Reclaiming expired session {}",
+                Self::mask_session_id(session_id)
+            );
             self.remove_session(session_id).await;
         }
     }

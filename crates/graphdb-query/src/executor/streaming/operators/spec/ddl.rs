@@ -236,6 +236,8 @@ pub enum UserManageCommand {
         new_password: Option<String>,
         new_role: Option<String>,
         is_locked: Option<bool>,
+        /// Retained password-history depth applied on rotation; zero clears.
+        history_limit: usize,
     },
     Drop {
         username: String,

@@ -362,6 +362,37 @@ pub(crate) fn get_config_value(
             "single_user_mode" => serde_json::json!(config.server.bootstrap.single_user_mode),
             _ => serde_json::Value::Null,
         },
+        "http" => match key {
+            "cors_enabled" => serde_json::json!(config.server.http.cors_enabled),
+            "cors_allowed_origins" => {
+                serde_json::json!(config.server.http.cors_allowed_origins)
+            }
+            _ => serde_json::Value::Null,
+        },
+        "security" => match key {
+            "password_min_length" => {
+                serde_json::json!(config.server.security.password_policy.min_length)
+            }
+            "password_require_uppercase" => {
+                serde_json::json!(config.server.security.password_policy.require_uppercase)
+            }
+            "password_require_lowercase" => {
+                serde_json::json!(config.server.security.password_policy.require_lowercase)
+            }
+            "password_require_digit" => {
+                serde_json::json!(config.server.security.password_policy.require_digit)
+            }
+            "password_require_special" => {
+                serde_json::json!(config.server.security.password_policy.require_special)
+            }
+            "password_max_age_days" => {
+                serde_json::json!(config.server.security.password_policy.max_age_days)
+            }
+            "password_history_size" => {
+                serde_json::json!(config.server.security.password_policy.history_size)
+            }
+            _ => serde_json::Value::Null,
+        },
         "optimizer" => match key {
             "max_iteration_rounds" => {
                 serde_json::json!(config.common.optimizer.max_iteration_rounds)
@@ -428,8 +459,10 @@ fn is_restart_required(section: &str, key: &str) -> bool {
         "database" => matches!(key, "host" | "port" | "storage_path" | "max_connections"),
         "transaction" => true,
         "log" => true,
-        "auth" => true,
+        "auth" => key != "bcrypt_cost",
         "bootstrap" => true,
+        "http" => true,
+        "security" => true,
         "optimizer" => true,
         "monitoring" => true,
         "migration" => false,
@@ -503,12 +536,13 @@ pub(crate) fn set_config_value(
             }
             "bcrypt_cost" => {
                 let cost: u32 = parse_value(&full_key, value)?;
-                if !(4..=31).contains(&cost) {
+                if !(4..=12).contains(&cost) {
                     return Err(format!(
-                        "invalid value for '{full_key}': out of range 4..=31"
+                        "invalid value for '{full_key}': out of range 4..=12"
                     ));
                 }
                 config.server.auth.bcrypt_cost = cost;
+                graphdb_core::types::set_bcrypt_cost(cost);
             }
             _ => return Err(format!("unknown configuration key '{full_key}'")),
         },
@@ -521,6 +555,51 @@ pub(crate) fn set_config_value(
             }
             "single_user_mode" => {
                 config.server.bootstrap.single_user_mode = parse_value(&full_key, value)?
+            }
+            _ => return Err(format!("unknown configuration key '{full_key}'")),
+        },
+        "http" => match key {
+            "cors_enabled" => config.server.http.cors_enabled = parse_value(&full_key, value)?,
+            "cors_allowed_origins" => {
+                config.server.http.cors_allowed_origins = parse_value(&full_key, value)?;
+                config
+                    .server
+                    .http
+                    .validate()
+                    .map_err(|e| format!("invalid value for '{full_key}': {e}"))?;
+            }
+            _ => return Err(format!("unknown configuration key '{full_key}'")),
+        },
+        "security" => match key {
+            "password_min_length" => {
+                config.server.security.password_policy.min_length = parse_value(&full_key, value)?;
+                config
+                    .server
+                    .security
+                    .validate()
+                    .map_err(|e| format!("invalid value for '{full_key}': {e}"))?;
+            }
+            "password_require_uppercase" => {
+                config.server.security.password_policy.require_uppercase =
+                    parse_value(&full_key, value)?
+            }
+            "password_require_lowercase" => {
+                config.server.security.password_policy.require_lowercase =
+                    parse_value(&full_key, value)?
+            }
+            "password_require_digit" => {
+                config.server.security.password_policy.require_digit =
+                    parse_value(&full_key, value)?
+            }
+            "password_require_special" => {
+                config.server.security.password_policy.require_special =
+                    parse_value(&full_key, value)?
+            }
+            "password_max_age_days" => {
+                config.server.security.password_policy.max_age_days = parse_value(&full_key, value)?
+            }
+            "password_history_size" => {
+                config.server.security.password_policy.history_size = parse_value(&full_key, value)?
             }
             _ => return Err(format!("unknown configuration key '{full_key}'")),
         },
@@ -638,6 +717,8 @@ pub(crate) const CONFIG_SECTIONS: &[&str] = &[
     "log",
     "auth",
     "bootstrap",
+    "http",
+    "security",
     "optimizer",
     "monitoring",
 ];
@@ -664,6 +745,16 @@ pub(crate) fn section_keys(section: &str) -> Option<&'static [&'static str]> {
             "auto_create_default_space",
             "default_space_name",
             "single_user_mode",
+        ]),
+        "http" => Some(&["cors_enabled", "cors_allowed_origins"]),
+        "security" => Some(&[
+            "password_min_length",
+            "password_require_uppercase",
+            "password_require_lowercase",
+            "password_require_digit",
+            "password_require_special",
+            "password_max_age_days",
+            "password_history_size",
         ]),
         "optimizer" => Some(&[
             "max_iteration_rounds",

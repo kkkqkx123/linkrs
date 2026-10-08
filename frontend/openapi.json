@@ -1524,16 +1524,6 @@
           "Auth"
         ],
         "operationId": "logout",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LogoutRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "204": {
             "description": "Logout succeeded"
@@ -3494,6 +3484,12 @@
               }
             }
           },
+          "401": {
+            "description": "Invalid credentials"
+          },
+          "403": {
+            "description": "Account locked"
+          },
           "500": {
             "description": "Internal error"
           }
@@ -3531,7 +3527,7 @@
             "description": "Not found"
           },
           "500": {
-            "description": "Internal error"
+            "description": "Not found"
           }
         }
       },
@@ -5273,7 +5269,7 @@
           "Vector"
         ],
         "summary": "Search vectors",
-        "operationId": "post_v1_vector_search",
+        "operationId": "post_v1_simvec",
         "requestBody": {
           "content": {
             "application/json": {
@@ -6982,6 +6978,13 @@
           "client_ip": {
             "type": "string"
           },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional password. Required when authentication is enabled;\nomitted or left empty when the server has disabled auth."
+          },
           "username": {
             "type": "string"
           }
@@ -8213,19 +8216,6 @@
           },
           "username": {
             "type": "string"
-          }
-        }
-      },
-      "LogoutRequest": {
-        "type": "object",
-        "description": "Logout request",
-        "required": [
-          "session_id"
-        ],
-        "properties": {
-          "session_id": {
-            "type": "integer",
-            "format": "int64"
           }
         }
       },

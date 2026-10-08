@@ -49,6 +49,7 @@ pub struct QueryContextBuilder {
     snapshot_ts: Option<Timestamp>,
     isolation_level: Option<graphdb_core::types::TransactionIsolationLevel>,
     arena_enabled: bool,
+    password_history_depth: usize,
 }
 
 impl QueryContextBuilder {
@@ -62,6 +63,7 @@ impl QueryContextBuilder {
             snapshot_ts: None,
             isolation_level: None,
             arena_enabled: false,
+            password_history_depth: 0,
         }
     }
 
@@ -78,6 +80,7 @@ impl QueryContextBuilder {
             snapshot_ts: None,
             isolation_level: None,
             arena_enabled: false,
+            password_history_depth: 0,
         }
     }
 
@@ -137,6 +140,13 @@ impl QueryContextBuilder {
         self.isolation_level
     }
 
+    /// Set the retained password-history depth applied by user-management
+    /// operations planned under this context.
+    pub fn with_password_history_depth(mut self, depth: usize) -> Self {
+        self.password_history_depth = depth;
+        self
+    }
+
     /// Build the QueryContext.
     ///
     /// # Panics
@@ -156,6 +166,7 @@ impl QueryContextBuilder {
                 snapshot_ts: self.snapshot_ts,
                 isolation_level: self.isolation_level,
                 arena_enabled: self.arena_enabled,
+                password_history_depth: self.password_history_depth,
             },
         )
     }

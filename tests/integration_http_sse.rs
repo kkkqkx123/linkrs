@@ -72,6 +72,7 @@ fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) -> SpaceSummary {
     let mut space = SpaceInfo::new("test".to_string()).with_vid_type(DataType::BigInt);
     store.create_space(&mut space).unwrap();
     let tag = graphdb::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        graphdb::core::types::PropertyDef::new("id".to_string(), DataType::BigInt),
         graphdb::core::types::PropertyDef::new("name".to_string(), DataType::String),
         graphdb::core::types::PropertyDef::new("age".to_string(), DataType::BigInt),
     ]);
@@ -97,9 +98,11 @@ fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) -> SpaceSummary {
 
 /// Build a test axum router with the SSE streaming endpoint.
 ///
-/// Sets up in-memory storage, test data, session, and full server stack
-/// (minus auth middleware).  Returns (router, session_id, storage) so
-/// the caller can make requests and inspect storage.
+/// Sets up in-memory storage, test data, session, and the full server
+/// stack including the auth middleware (the stream handler resolves the
+/// caller identity from the session extension it injects). Returns
+/// (router, session_id, storage) so the caller can make requests and
+/// inspect storage.
 async fn build_sse_app() -> (Router, i64, Arc<RwLock<GraphStorage>>) {
     // 1. In-memory storage
     let storage = Arc::new(
@@ -115,10 +118,13 @@ async fn build_sse_app() -> (Router, i64, Arc<RwLock<GraphStorage>>) {
     let graph_service: Arc<GraphService<GraphStorage>> =
         GraphService::new_for_test(config.clone(), storage.clone()).await;
 
-    // 4. Create a session so execute_stream() can find it
+    // 4. Create a session so execute_stream() can find it. The admin user
+    // is used so the owner-or-admin check admits requests that target
+    // another (invalid) session id, letting the engine surface the failure
+    // as an SSE error event instead of an HTTP 403.
     let session = graph_service
         .get_session_manager()
-        .create_session("test_user".to_string(), "127.0.0.1".to_string())
+        .create_session("root".to_string(), "127.0.0.1".to_string())
         .await
         .expect("session creation");
     let session_id = session.id();
@@ -139,9 +145,13 @@ async fn build_sse_app() -> (Router, i64, Arc<RwLock<GraphStorage>>) {
     // 7. AppState
     let state = AppState::new(http_server);
 
-    // 8. Minimal router – just the SSE endpoint, no auth middleware
+    // 8. Router – SSE endpoint behind the production auth middleware
     let app = Router::new()
         .route("/v1/query/stream", post(execute_stream::<GraphStorage>))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            graphdb_server::http::middleware::auth::auth_middleware,
+        ))
         .with_state(state);
 
     (app, session_id, storage_rwlock)
@@ -164,6 +174,7 @@ async fn test_sse_successful_query_schema_before_data_and_done() {
         .uri("/v1/query/stream")
         .method(Method::POST)
         .header("content-type", "application/json")
+        .header("X-Session-ID", session_id.to_string())
         .body(Body::from(body))
         .unwrap();
 
@@ -249,6 +260,7 @@ async fn test_sse_error_query_reports_error_and_done() {
         .uri("/v1/query/stream")
         .method(Method::POST)
         .header("content-type", "application/json")
+        .header("X-Session-ID", session_id.to_string())
         .body(Body::from(body))
         .unwrap();
 
@@ -293,7 +305,7 @@ async fn test_sse_error_query_reports_error_and_done() {
 
 #[tokio::test]
 async fn test_sse_invalid_session_returns_error_and_done() {
-    let (app, _session_id, _storage) = build_sse_app().await;
+    let (app, session_id, _storage) = build_sse_app().await;
 
     // Use a session_id that does not exist
     let body = serde_json::json!({
@@ -307,6 +319,7 @@ async fn test_sse_invalid_session_returns_error_and_done() {
         .uri("/v1/query/stream")
         .method(Method::POST)
         .header("content-type", "application/json")
+        .header("X-Session-ID", session_id.to_string())
         .body(Body::from(body))
         .unwrap();
 
@@ -361,6 +374,7 @@ async fn test_sse_row_indices_are_sequential() {
         .uri("/v1/query/stream")
         .method(Method::POST)
         .header("content-type", "application/json")
+        .header("X-Session-ID", session_id.to_string())
         .body(Body::from(body))
         .unwrap();
 
@@ -413,6 +427,7 @@ async fn test_sse_schema_not_sent_for_ddl_statements() {
         .uri("/v1/query/stream")
         .method(Method::POST)
         .header("content-type", "application/json")
+        .header("X-Session-ID", session_id.to_string())
         .body(Body::from(body))
         .unwrap();
 

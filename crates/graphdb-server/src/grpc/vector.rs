@@ -332,6 +332,7 @@ impl<
         #[cfg(feature = "vector")]
         {
             let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
             if req.tag_name.is_empty() || req.field_name.is_empty() {
                 return Err(Status::invalid_argument(
                     "tag_name and field_name are required",
@@ -348,6 +349,7 @@ impl<
             };
             match crate::http::handlers::vector::scroll(
                 axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
                 axum::Json(wire),
             )
             .await
@@ -373,8 +375,10 @@ impl<
         #[cfg(feature = "vector")]
         {
             let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
             match crate::http::handlers::vector::count(
                 axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
                 axum::extract::Path((req.space_id, req.tag_name, req.field_name)),
             )
             .await
@@ -403,6 +407,7 @@ impl<
         #[cfg(feature = "vector")]
         {
             let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
             let wire = graphdb_wire::vector::RebuildVectorIndexRequest {
                 space_id: req.space_id,
                 tag_name: req.tag_name,
@@ -410,6 +415,7 @@ impl<
             };
             match crate::http::handlers::rebuild::rebuild_vector(
                 axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
                 axum::Json(wire),
             )
             .await
@@ -436,8 +442,10 @@ impl<
         #[cfg(feature = "vector")]
         {
             let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
             match crate::http::handlers::rebuild::vector_rebuild_status(
                 axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
                 axum::extract::Path(req.rebuild_id.clone()),
             )
             .await
@@ -469,6 +477,7 @@ impl<
         #[cfg(feature = "vector")]
         {
             let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
             if !req.force {
                 return Err(Status::invalid_argument(
                     "Clearing a vector index is destructive and requires force=true",
@@ -482,6 +491,7 @@ impl<
             };
             match crate::http::handlers::rebuild::clear_vector(
                 axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
                 axum::Json(wire),
             )
             .await

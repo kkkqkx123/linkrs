@@ -505,7 +505,9 @@ pub use self::schema_change::{
     SchemaFieldChange,
 };
 pub use self::space::CharsetInfo;
-pub use self::user::{set_bcrypt_cost, PasswordInfo, UserAlterInfo, UserInfo};
+pub use self::user::{
+    set_bcrypt_cost, verify_password_hash, PasswordInfo, UserAlterInfo, UserInfo,
+};
 
 pub use self::expr::{
     ContextualExpression, Expression, ExpressionMeta, SerializableExpression,

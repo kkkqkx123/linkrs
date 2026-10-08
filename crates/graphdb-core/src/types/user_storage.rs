@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-const USER_STORAGE_FORMAT_VERSION: u32 = 1;
+const USER_STORAGE_FORMAT_VERSION: u32 = 2;
 const USER_STORAGE_FILE_NAME: &str = "users.json";
 const USER_STORAGE_TMP_SUFFIX: &str = "users.json.tmp";
 
@@ -133,7 +133,7 @@ impl UserStorage {
             StorageError::deserialize_error(format!("Failed to deserialize user storage: {}", e))
         })?;
 
-        if snapshot.version != USER_STORAGE_FORMAT_VERSION {
+        if snapshot.version != USER_STORAGE_FORMAT_VERSION && snapshot.version != 1 {
             return Err(StorageError::deserialize_error(format!(
                 "Unsupported user storage version: {}",
                 snapshot.version
@@ -169,7 +169,7 @@ impl UserStorage {
                 ));
             }
             // Change to new password
-            user.change_password(info.new_password.clone())?;
+            user.change_password_with_history(info.new_password.clone(), info.history_limit)?;
             Ok(true)
         } else {
             Err(StorageError::db_error(format!(
@@ -194,7 +194,7 @@ impl UserStorage {
         let mut users = self.users.write();
         if let Some(user) = users.get_mut(&info.username) {
             if let Some(new_password) = &info.new_password {
-                user.change_password(new_password.clone())?;
+                user.change_password_with_history(new_password.clone(), info.history_limit)?;
             }
             if let Some(is_locked) = info.is_locked {
                 user.is_locked = is_locked;
@@ -289,11 +289,16 @@ impl UserStorage {
             )));
         }
         drop(users);
-        if let Some(entry) = self.roles.write().get_mut(username) {
-            entry.remove(&space_id);
-            if entry.is_empty() {
-                self.roles.write().remove(username);
-            }
+        let mut roles = self.roles.write();
+        let vacant = roles
+            .get_mut(username)
+            .map(|entry| {
+                entry.remove(&space_id);
+                entry.is_empty()
+            })
+            .unwrap_or(false);
+        if vacant {
+            roles.remove(username);
         }
         Ok(true)
     }
@@ -328,6 +333,7 @@ mod tests {
             created_at: 0,
             last_login_at: None,
             password_changed_at: 0,
+            password_history: Vec::new(),
         };
 
         assert!(storage
@@ -350,6 +356,7 @@ mod tests {
             created_at: 0,
             last_login_at: None,
             password_changed_at: 0,
+            password_history: Vec::new(),
         };
 
         storage
@@ -373,6 +380,7 @@ mod tests {
             created_at: 0,
             last_login_at: None,
             password_changed_at: 0,
+            password_history: Vec::new(),
         };
 
         storage
@@ -398,6 +406,7 @@ mod tests {
             created_at: 0,
             last_login_at: None,
             password_changed_at: 0,
+            password_history: Vec::new(),
         };
 
         storage
@@ -408,6 +417,7 @@ mod tests {
             username: "test_user".to_string(),
             new_password: None,
             is_locked: Some(true),
+            history_limit: 0,
             max_queries_per_hour: Some(100),
             max_updates_per_hour: None,
             max_connections_per_hour: None,
@@ -437,6 +447,34 @@ mod tests {
         let storage = UserStorage::new();
         let result = storage.revoke_role("nonexistent", 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_revoke_role_removes_sole_mapping() {
+        let storage = UserStorage::new();
+        let user = UserInfo {
+            username: "alice".to_string(),
+            password_hash: "hash".to_string(),
+            is_locked: false,
+            max_queries_per_hour: 0,
+            max_updates_per_hour: 0,
+            max_connections_per_hour: 0,
+            max_user_connections: 0,
+            created_at: 0,
+            last_login_at: None,
+            password_changed_at: 0,
+            password_history: Vec::new(),
+        };
+        storage.create_user(&user).expect("create should succeed");
+        storage
+            .grant_role("alice", 7, RoleType::Admin)
+            .expect("grant should succeed");
+
+        assert!(storage
+            .revoke_role("alice", 7)
+            .expect("revoke should succeed"));
+        assert!(storage.get_user_roles("alice").is_empty());
+        assert!(storage.list_all_roles().get("alice").is_none());
     }
 
     #[test]

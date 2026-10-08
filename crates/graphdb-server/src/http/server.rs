@@ -67,7 +67,8 @@ impl<
         let stats_manager = graph_service.get_stats_manager().clone();
         Self {
             graph_service: graph_service.clone(),
-            query_api: QueryApi::new(storage.clone(), stats_manager),
+            query_api: QueryApi::new(storage.clone(), stats_manager)
+                .with_password_history_depth(config.server.security.password_policy.history_size),
             txn_manager: txn_manager.clone(),
             txn_api: TransactionApi::new(txn_manager),
             schema_api: SchemaApi::new(storage.clone()),

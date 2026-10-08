@@ -68,6 +68,7 @@ pub(super) fn execute_user_manage(
             new_password,
             new_role,
             is_locked,
+            history_limit,
         } => super::exec_auth(storage, |s| {
             if let Some(role) = new_role {
                 if role.parse::<RoleType>().is_err() {
@@ -78,6 +79,7 @@ pub(super) fn execute_user_manage(
                 }
             }
             let mut alter_info = UserAlterInfo::new(username.clone());
+            alter_info.history_limit = *history_limit;
             if let Some(password) = new_password {
                 alter_info.new_password = Some(password.clone());
             }

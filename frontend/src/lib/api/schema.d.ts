@@ -1865,7 +1865,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Search vectors */
-        post: operations["post_v1_vector_search"];
+        post: operations["post_v1_simvec"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2399,6 +2399,11 @@ export interface components {
         /** @description Create session request */
         CreateSessionRequest: {
             client_ip: string;
+            /**
+             * @description Optional password. Required when authentication is enabled;
+             *     omitted or left empty when the server has disabled auth.
+             */
+            password?: string | null;
             username: string;
         };
         /** @description Create space request */
@@ -2801,11 +2806,6 @@ export interface components {
             /** Format: int64 */
             session_id: number;
             username: string;
-        };
-        /** @description Logout request */
-        LogoutRequest: {
-            /** Format: int64 */
-            session_id: number;
         };
         /** @description Memory usage block shared by system responses. */
         MemoryUsage: {
@@ -4864,11 +4864,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LogoutRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Logout succeeded */
             204: {
@@ -6599,6 +6595,20 @@ export interface operations {
                     "application/json": components["schemas"]["SessionResponse"];
                 };
             };
+            /** @description Invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Account locked */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Internal error */
             500: {
                 headers: {
@@ -6636,7 +6646,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Internal error */
+            /** @description Not found */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -8362,7 +8372,7 @@ export interface operations {
             };
         };
     };
-    post_v1_vector_search: {
+    post_v1_simvec: {
         parameters: {
             query?: never;
             header?: never;

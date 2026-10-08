@@ -1443,6 +1443,7 @@ message ScrollVectorRequest {
   string field_name = 3;
   optional uint64 limit = 4;
   optional string offset = 5;
+  string session_id = 6;
 }
 
 message ScrollVectorResponse {
@@ -1454,6 +1455,7 @@ message GetVectorCountRequest {
   uint64 space_id = 1;
   string tag_name = 2;
   string field_name = 3;
+  string session_id = 4;
 }
 
 message GetVectorCountResponse {
@@ -1465,6 +1467,7 @@ message RebuildVectorIndexRequest {
   uint64 space_id = 1;
   string tag_name = 2;
   string field_name = 3;
+  string session_id = 4;
 }
 
 message RebuildVectorIndexResponse {
@@ -1475,6 +1478,7 @@ message RebuildVectorIndexResponse {
 
 message GetVectorRebuildStatusRequest {
   string rebuild_id = 1;
+  string session_id = 2;
 }
 
 message GetVectorRebuildStatusResponse {
@@ -1489,6 +1493,7 @@ message ClearVectorIndexRequest {
   string tag_name = 2;
   string field_name = 3;
   bool force = 4;
+  string session_id = 5;
 }
 
 message ClearVectorIndexResponse {

@@ -140,6 +140,8 @@ impl<
         self.finish_auto_commit(&session, &mut result);
         if result.is_ok() && Self::is_user_management_statement(stmt) {
             self.reconcile_user_state(Some(session_id)).await;
+            self.evict_stale_user_sessions(&session, session_id, stmt)
+                .await;
         }
         result
     }
@@ -149,8 +151,73 @@ impl<
         upper.starts_with("CREATE USER")
             || upper.starts_with("DROP USER")
             || upper.starts_with("ALTER USER")
+            || upper.starts_with("CHANGE PASSWORD")
             || upper.starts_with("GRANT ")
             || upper.starts_with("REVOKE ")
+    }
+
+    /// Enforce the password policy on query-channel password writes.
+    ///
+    /// Single hook on the execution path covering user creation, admin
+    /// alteration carrying a new password, and self-service password
+    /// changes. History reuse is checked against stored hashes.
+    pub(crate) fn enforce_new_password_policy(
+        &self,
+        caller: &str,
+        stmt: &str,
+    ) -> Result<(), GraphServiceError> {
+        let Some(parsed) = Self::parse_stmt(stmt) else {
+            return Ok(());
+        };
+        use crate::query::parser::ast::Stmt as Parsed;
+        let invalid =
+            |reason: String| GraphServiceError::new(format!("invalid password: {}", reason));
+        match parsed {
+            Parsed::CreateUser(create) => self
+                .validate_new_password(&create.username, &create.password)
+                .map_err(invalid),
+            Parsed::AlterUser(alter) => match alter.password {
+                Some(password) => self
+                    .validate_new_password(&alter.username, &password)
+                    .map_err(invalid),
+                None => Ok(()),
+            },
+            Parsed::ChangePassword(change) => {
+                let target = change.username.as_deref().unwrap_or(caller);
+                self.validate_new_password(target, &change.new_password)
+                    .map_err(invalid)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Target account of a query-channel password write, if any.
+    ///
+    /// After a successful rotation or drop, every other session of the
+    /// target account is invalidated, matching the admin channel.
+    async fn evict_stale_user_sessions(
+        &self,
+        session: &Arc<ClientSession>,
+        session_id: i64,
+        stmt: &str,
+    ) {
+        let Some(parsed) = Self::parse_stmt(stmt) else {
+            return;
+        };
+        use crate::query::parser::ast::Stmt as Parsed;
+        let target = match parsed {
+            Parsed::AlterUser(alter) if alter.password.is_some() => Some(alter.username),
+            Parsed::ChangePassword(change) => {
+                Some(change.username.unwrap_or_else(|| session.user()))
+            }
+            Parsed::DropUser(drop) => Some(drop.username),
+            _ => None,
+        };
+        if let Some(target) = target {
+            self.session_manager
+                .remove_sessions_by_username(&target, Some(session_id))
+                .await;
+        }
     }
 
     /// Keep permission state and sessions consistent after query-channel

@@ -168,7 +168,7 @@ pub struct Config {
     pub common: CommonConfig,
 
     #[cfg(feature = "server")]
-    #[serde(default)]
+    #[serde(flatten)]
     pub server: ServerConfig,
 
     #[cfg(feature = "embedded")]
@@ -835,6 +835,64 @@ max_memory_per_query = 1073741824
         );
         assert_eq!(config.common.storage.compression_level, 5);
         assert_eq!(config.common.query_resource.max_concurrent_queries, 50);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_flat_server_sections_load() {
+        let config_content = r#"
+[auth]
+enable_authorize = false
+session_idle_timeout_secs = 120
+bcrypt_cost = 6
+
+[http]
+enabled = true
+port = 8081
+cors_enabled = true
+cors_allowed_origins = ["https://a.example"]
+
+[security.password_policy]
+min_length = 10
+max_age_days = 30
+history_size = 5
+
+[bootstrap]
+single_user_mode = true
+
+[grpc]
+enabled = false
+"#;
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        temp_file
+            .write_all(config_content.as_bytes())
+            .expect("Failed to write config file");
+        let config = Config::load(temp_file.path()).expect("Failed to load config");
+        assert!(!config.server.auth.enable_authorize);
+        assert_eq!(config.server.auth.session_idle_timeout_secs, 120);
+        assert_eq!(config.server.auth.bcrypt_cost, 6);
+        assert_eq!(config.server.http.port, 8081);
+        assert!(config.server.http.cors_enabled);
+        assert_eq!(
+            config.server.http.cors_allowed_origins,
+            vec!["https://a.example".to_string()]
+        );
+        assert_eq!(config.server.security.password_policy.min_length, 10);
+        assert_eq!(config.server.security.password_policy.max_age_days, 30);
+        assert_eq!(config.server.security.password_policy.history_size, 5);
+        assert!(config.server.bootstrap.single_user_mode);
+        assert!(!config.server.grpc.enabled);
+
+        let serialized =
+            toml::to_string_pretty(&config).expect("Failed to serialize config to TOML");
+        assert!(
+            !serialized.contains("[server."),
+            "server config must persist in flat form, got:\n{serialized}"
+        );
+        let reloaded: Config =
+            toml::from_str(&serialized).expect("Serialized config must round-trip");
+        assert_eq!(reloaded.server.http.port, 8081);
+        assert_eq!(reloaded.server.auth.bcrypt_cost, 6);
     }
 
     #[test]

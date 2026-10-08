@@ -192,6 +192,19 @@ pub(crate) fn build_config_map(
             "default_space_name": config.server.bootstrap.default_space_name,
             "single_user_mode": config.server.bootstrap.single_user_mode,
         },
+        "http": {
+            "cors_enabled": config.server.http.cors_enabled,
+            "cors_allowed_origins": config.server.http.cors_allowed_origins,
+        },
+        "security": {
+            "password_min_length": config.server.security.password_policy.min_length,
+            "password_require_uppercase": config.server.security.password_policy.require_uppercase,
+            "password_require_lowercase": config.server.security.password_policy.require_lowercase,
+            "password_require_digit": config.server.security.password_policy.require_digit,
+            "password_require_special": config.server.security.password_policy.require_special,
+            "password_max_age_days": config.server.security.password_policy.max_age_days,
+            "password_history_size": config.server.security.password_policy.history_size,
+        },
         "optimizer": {
             "max_iteration_rounds": config.common.optimizer.max_iteration_rounds,
             "max_exploration_rounds": config.common.optimizer.max_exploration_rounds,

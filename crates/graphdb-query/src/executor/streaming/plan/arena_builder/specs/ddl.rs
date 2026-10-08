@@ -533,6 +533,7 @@ fn user_manage_to_command(
             new_password: n.new_password().cloned(),
             new_role: n.new_role().cloned(),
             is_locked: n.is_locked(),
+            history_limit: n.password_history_depth(),
         },
         Drop(n) => UserManageCommand::Drop {
             username: n.username().to_string(),

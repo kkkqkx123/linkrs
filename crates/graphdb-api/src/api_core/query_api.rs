@@ -197,6 +197,13 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         self.pipeline_manager.statistics_sample_limit()
     }
 
+    /// Set the retained password-history depth applied by user-management
+    /// operations (assembly-time only).
+    pub fn with_password_history_depth(mut self, depth: usize) -> Self {
+        self.pipeline_manager = self.pipeline_manager.with_password_history_depth(depth);
+        self
+    }
+
     /// Effective statistics refresh epoch delta currently in force.
     pub fn statistics_min_epoch_delta(&self) -> u64 {
         self.pipeline_manager.statistics_min_epoch_delta()

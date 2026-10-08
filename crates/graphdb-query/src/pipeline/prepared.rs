@@ -275,6 +275,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         if let Some(level) = isolation_level {
             builder = builder.with_isolation_level(level);
         }
+        builder = builder.with_password_history_depth(self.password_history_depth);
         let mut query_context = builder.build();
         if let Some(space) = space_info {
             query_context.set_space_info(space.clone());

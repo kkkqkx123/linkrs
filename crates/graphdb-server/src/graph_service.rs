@@ -25,6 +25,7 @@ use graphdb_transaction::TransactionManager;
 
 use crate::auth::PasswordAuthenticator;
 use crate::config::BootstrapConfig;
+use crate::config::SecurityConfig;
 use crate::permission::PermissionManager;
 use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
@@ -60,6 +61,10 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
     /// Bootstrap-time configuration used for single-user mode and other
     /// local-deployment toggles.
     bootstrap_config: BootstrapConfig,
+
+    /// Password-policy and related security settings snapshotted at
+    /// startup. All plaintext-password write paths validate against it.
+    security_config: SecurityConfig,
 }
 
 #[cfg(test)]
