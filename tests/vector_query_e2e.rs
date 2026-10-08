@@ -16,11 +16,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphdb::config::{Config, VectorEngineKind};
-use graphdb::storage::{GraphStorage, PropertyGraphConfig};
-use graphdb::sync::vector_sync::{PointId, VectorPoint};
-use graphdb_api::api_core::vector_api::VectorApi;
-use graphdb_server::GraphService;
+use linkrs::config::{Config, VectorEngineKind};
+use linkrs::storage::{GraphStorage, PropertyGraphConfig};
+use linkrs::sync::vector_sync::{PointId, VectorPoint};
+use linkrs_api::api_core::vector_api::VectorApi;
+use linkrs_server::GraphService;
 
 type Service = Arc<GraphService<GraphStorage>>;
 
@@ -119,7 +119,7 @@ async fn setup_env() -> TestEnv {
 }
 
 impl TestEnv {
-    async fn exec(&self, sql: &str) -> Result<Vec<Vec<graphdb::core::Value>>, String> {
+    async fn exec(&self, sql: &str) -> Result<Vec<Vec<linkrs::core::Value>>, String> {
         self.service
             .execute(self.session_id, sql)
             .await
@@ -138,11 +138,11 @@ async fn case1_vector_ddl_query_roundtrip() {
         .await
         .expect("SEARCH VECTOR should succeed");
     assert_eq!(rows.len(), 2, "LIMIT 2 returns two rows");
-    assert_eq!(rows[0][0], graphdb::core::Value::string("1"));
-    assert_eq!(rows[1][0], graphdb::core::Value::string("3"));
+    assert_eq!(rows[0][0], linkrs::core::Value::string("1"));
+    assert_eq!(rows[1][0], linkrs::core::Value::string("3"));
 
     // Score assertion: exact-match vector scores ~1.0.
-    if let graphdb::core::Value::Double(score) = rows[0][1] {
+    if let linkrs::core::Value::Double(score) = rows[0][1] {
         assert!(score >= 0.9999, "exact match score ~1.0, got {score}");
     } else {
         panic!("expected Double score, got {:?}", rows[0][1]);
@@ -156,7 +156,7 @@ async fn case1_vector_ddl_query_roundtrip() {
     let ids: Vec<&str> = rows
         .iter()
         .map(|r| match &r[0] {
-            graphdb::core::Value::String(s) => s.as_str(),
+            linkrs::core::Value::String(s) => s.as_str(),
             other => panic!("expected string id, got {other:?}"),
         })
         .collect();
@@ -176,7 +176,7 @@ async fn case2_simvec_filter_and_limit() {
         .await
         .expect("filtered SEARCH VECTOR should succeed");
     assert_eq!(rows.len(), 1, "only point 1 carries name 'a', got {rows:?}");
-    assert_eq!(rows[0][0], graphdb::core::Value::string("1"));
+    assert_eq!(rows[0][0], linkrs::core::Value::string("1"));
 
     // OFFSET skips the best candidate.
     let rows = env
@@ -186,7 +186,7 @@ async fn case2_simvec_filter_and_limit() {
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0][0],
-        graphdb::core::Value::string("3"),
+        linkrs::core::Value::string("3"),
         "OFFSET 1 must skip the top hit"
     );
 }
@@ -211,7 +211,7 @@ async fn case3_vector_delete_visibility() {
     let ids: Vec<&str> = rows
         .iter()
         .map(|r| match &r[0] {
-            graphdb::core::Value::String(s) => s.as_str(),
+            linkrs::core::Value::String(s) => s.as_str(),
             other => panic!("expected string id, got {other:?}"),
         })
         .collect();
@@ -236,10 +236,10 @@ async fn case4_vector_drop_index_semantics() {
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0][0],
-        graphdb::core::Value::string("drop_vector_index")
+        linkrs::core::Value::string("drop_vector_index")
     );
-    assert_eq!(rows[0][1], graphdb::core::Value::string("idx_item_vec"));
-    assert_eq!(rows[0][2], graphdb::core::Value::string("dropped"));
+    assert_eq!(rows[0][1], linkrs::core::Value::string("idx_item_vec"));
+    assert_eq!(rows[0][2], linkrs::core::Value::string("dropped"));
 
     // Searching through the dropped index now fails explicitly.
     let err = env
@@ -263,7 +263,7 @@ async fn case4_vector_drop_index_semantics() {
         .exec("DROP VECTOR INDEX IF EXISTS idx_missing")
         .await
         .expect("IF EXISTS drop should succeed");
-    assert_eq!(rows[0][2], graphdb::core::Value::string("not_exists"));
+    assert_eq!(rows[0][2], linkrs::core::Value::string("not_exists"));
 }
 
 /// LOOKUP VECTOR resolves through the same search path as SEARCH VECTOR.
@@ -276,5 +276,5 @@ async fn vector_lookup_uses_search_path() {
         .await
         .expect("LOOKUP VECTOR should succeed");
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0][0], graphdb::core::Value::string("1"));
+    assert_eq!(rows[0][0], linkrs::core::Value::string("1"));
 }

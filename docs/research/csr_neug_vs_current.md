@@ -3,7 +3,7 @@
 > 范围：只对比“边邻接 CSR 变体”子系统，不含查询、事务、列存属性等外层。
 > 源码依据：`ref/neug/include/neug/storages/csr/`（`csr_base.h`、`immutable_csr.h`、
 > `mutable_csr.h`、`nbr.h`、`generic_view.h`）与 `ref/neug/src/storages/csr/`
-> （`immutable_csr.cc`、`mutable_csr.cc`）；当前项目 `crates/graphdb-storage/src/edge/`
+> （`immutable_csr.cc`、`mutable_csr.cc`）；当前项目 `crates/linkrs-storage/src/edge/`
 > （`csr_variant.rs`、`csr_trait.rs`、`csr_shared.rs`、`mutable_csr.rs`、
 > `single_mutable_csr.rs`、`pure_csr.rs`、`bundled_csr.rs`、`immutable_csr.rs`、
 > `edge_table/checkpoint/snapshot.rs`、`node_group/freeze.rs`、`immutable_csr/pack.rs`）。

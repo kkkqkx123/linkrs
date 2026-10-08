@@ -1,9 +1,9 @@
 #[cfg(feature = "server")]
 mod server_main {
     use clap::Parser;
-    use graphdb::config::logging;
-    use graphdb::config::Config;
-    use graphdb_server::{execute_query, start_service_with_config_path};
+    use linkrs::config::logging;
+    use linkrs::config::Config;
+    use linkrs_server::{execute_query, start_service_with_config_path};
 
     #[derive(Parser)]
     #[clap(version = "0.1.0", author = "GraphDB Contributors")]

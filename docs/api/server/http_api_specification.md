@@ -1,10 +1,10 @@
-# GraphDB HTTP API Specification
+# Linkrs HTTP API Specification
 
-This document describes all HTTP APIs provided by the GraphDB server in `src/api/server`.
+This document describes all HTTP APIs provided by the Linkrs server in `src/api/server`.
 
 ## Overview
 
-The GraphDB HTTP API is organized into the following categories:
+The Linkrs HTTP API is organized into the following categories:
 
 - **Public APIs**: Health check and authentication (no authentication required)
 - **Core APIs**: Query execution, session management, transactions (authentication required)
@@ -35,7 +35,7 @@ Base URL: `http://{host}:{port}/v1`
 ```json
 {
   "status": "healthy",
-  "service": "graphdb",
+  "service": "linkrs",
   "version": "0.1.0"
 }
 ```
@@ -1257,7 +1257,7 @@ Base URL: `http://{host}:{port}/v1`
   "log": {
     "level": "info",
     "dir": "./logs",
-    "file": "graphdb.log",
+    "file": "linkrs.log",
     "max_file_size": 104857600,
     "max_files": 5
   },

@@ -8,13 +8,13 @@
 //! Run with:
 //!   cargo bench --bench traversal_perf_bench
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::query::optimizer::{OptimizerEngine, PartitioningConfig};
-use graphdb::query::pipeline::QueryPipelineManager;
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
-use graphdb_metrics::StatsManager;
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::query::optimizer::{OptimizerEngine, PartitioningConfig};
+use linkrs::query::pipeline::QueryPipelineManager;
+use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -137,7 +137,7 @@ fn run(pipeline: &mut QueryPipelineManager<GraphStorage>, query: &str, space: &S
 }
 
 fn explain(pipeline: &mut QueryPipelineManager<GraphStorage>, query: &str, space: &SpaceInfo) {
-    if let Ok(graphdb::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+    if let Ok(linkrs::query::executor::base::ExecutionResult::DataSet { data, .. }) =
         pipeline.execute_query_with_space(&format!("EXPLAIN ANALYZE {query}"), Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::{
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::{
     GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 
@@ -135,7 +135,7 @@ fn repro_matrix() {
     }
     // Two commits + two checkpoints, second commit uses fresh pairs.
     {
-        use graphdb::storage::StorageWriter;
+        use linkrs::storage::StorageWriter;
         let dir = tempfile::TempDir::new().expect("tempdir");
         let path = dir.path().to_path_buf();
         build_chunked(path.clone(), 2000, 10000, true, 10000);

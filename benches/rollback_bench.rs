@@ -17,12 +17,12 @@ use std::time::Instant;
 
 use tempfile::TempDir;
 
-use graphdb::core::types::{
+use linkrs::core::types::{
     EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, TransactionId, VertexId,
 };
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::{
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::{
     GraphStorage, StorageCommitOps, StorageOperationContext, StorageOperationContextOps,
     StorageSchemaOps, StorageWriter,
 };

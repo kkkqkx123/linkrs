@@ -1,4 +1,4 @@
-# GraphDB 基准测试分析功能集成 - 实施完成报告
+# Linkrs 基准测试分析功能集成 - 实施完成报告
 
 **完成日期**: 2026-06-18  
 **状态**: ✅ 代码框架完成，可立即使用
@@ -7,7 +7,7 @@
 
 ## 📋 总结
 
-已成功创建了完整的性能分析框架，可将 GraphDB 的 EXPLAIN/PROFILE 功能集成到基准测试中。框架包括：
+已成功创建了完整的性能分析框架，可将 Linkrs 的 EXPLAIN/PROFILE 功能集成到基准测试中。框架包括：
 
 - **3 个核心分析模块** (metrics, bottleneck_detector, performance_analyzer)
 - **250+ 行可复用代码** (包含完整的类型定义和实现)
@@ -186,7 +186,7 @@ fn test_parse_memory() { ... }
 use benches::PerformanceAnalyzer;
 
 // 1. 获取 EXPLAIN ANALYZE 输出
-let explain_output = "..."; // 来自 GraphDB
+let explain_output = "..."; // 来自 Linkrs
 
 // 2. 解析指标
 let metrics = PerformanceAnalyzer::parse_explain_analyze_output(explain_output)?;
@@ -448,9 +448,9 @@ save_metrics(&format!("{}_analysis.json", bench_name), &metrics)?;
 
 ## 📚 相关资源
 
-### GraphDB 代码
-- EXPLAIN: `/crates/graphdb-query/src/query/executor/explain/`
-- 执行统计: `/crates/graphdb-core/src/core/stats/`
+### Linkrs 代码
+- EXPLAIN: `/crates/linkrs-query/src/query/executor/explain/`
+- 执行统计: `/crates/linkrs-core/src/core/stats/`
 - 测试用例: `tests/e2e/social_network.rs`
 
 ### 文档

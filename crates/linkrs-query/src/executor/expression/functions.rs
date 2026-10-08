@@ -1,0 +1,790 @@
+//! Expression Function Module
+//!
+//! Provide the function definitions and implementations during the evaluation of expressions, including both built-in functions and custom functions.
+//!
+//! ## Module Structure
+//!
+//! - `signature.rs` - type signature system
+//! - `registry.rs` - function registry
+//! - `builtin/` – Implementation of built-in functions
+//! - `custom.rs` - custom function definitions
+//! - `table.rs` - table function definitions
+//!
+//! ## How to use it
+//!
+//! ```rust
+//! use linkrs_core::value::Value;
+//! use linkrs_query::executor::expression::functions::{BuiltinFunction, MathFunction};
+//!
+//! let func = BuiltinFunction::Math(MathFunction::Abs);
+//! let result = func.execute(&[Value::Int(-5)]).expect("abs should succeed");
+//! assert_eq!(result, Value::Int(5));
+//! ```
+
+pub mod builtin;
+pub mod registry;
+pub mod signature;
+pub mod udf;
+
+mod custom;
+mod table;
+
+pub use custom::{
+    AggregateFinalCallback, AggregateStepCallback, CFunctionContext, CustomFunction,
+    CustomFunctionImpl, ScalarFunctionCallback,
+};
+pub use table::{BuiltinTableFunction, TableFunction};
+
+// Full-text search functions
+pub mod fulltext;
+pub use fulltext::{FulltextExecutionContext, FulltextFunction};
+
+// Vector functions (re-export from builtin)
+pub use builtin::vector::VectorFunction;
+
+// Sequence functions (re-export from builtin)
+pub use builtin::sequence::SequenceFunction;
+
+pub use registry::{global_registry, global_registry_ref, FunctionRegistry};
+pub use signature::ValueType;
+pub use udf::{SharedPlugin, UdfError, UdfPlugin};
+
+// Reexport the function types from the built-in submodule.
+pub use builtin::container::ContainerFunction;
+pub use builtin::conversion::ConversionFunction;
+pub use builtin::datetime::DateTimeFunction;
+pub use builtin::geography::GeographyFunction;
+pub use builtin::graph::GraphFunction;
+pub use builtin::math::MathFunction;
+pub use builtin::path::PathFunction;
+pub use builtin::regex::RegexFunction;
+pub use builtin::string::StringFunction;
+pub use builtin::utility::UtilityFunction;
+
+use crate::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
+use crate::executor::expression::{ExpressionError, ExpressionErrorType};
+use linkrs_core::types::operators::AggregateFunction;
+use linkrs_core::Value;
+
+/// Function reference enumeration, used to reference functions in expressions
+#[derive(Debug, Clone)]
+pub enum FunctionRef<'a> {
+    /// Reference to built-in functions
+    Builtin(&'a BuiltinFunction),
+    /// Reference to a custom function
+    Custom(&'a CustomFunction),
+}
+
+/// A function reference that possesses ownership
+#[derive(Debug, Clone)]
+pub enum OwnedFunctionRef {
+    /// Reference to an internal function (with ownership)
+    Builtin(BuiltinFunction),
+    /// Reference to a custom function (with ownership)
+    Custom(CustomFunction),
+}
+
+impl<'a> From<FunctionRef<'a>> for OwnedFunctionRef {
+    fn from(func_ref: FunctionRef<'a>) -> Self {
+        match func_ref {
+            FunctionRef::Builtin(f) => OwnedFunctionRef::Builtin(f.clone()),
+            FunctionRef::Custom(f) => OwnedFunctionRef::Custom(f.clone()),
+        }
+    }
+}
+
+impl OwnedFunctionRef {
+    pub fn name(&self) -> &str {
+        match self {
+            OwnedFunctionRef::Builtin(f) => f.name(),
+            OwnedFunctionRef::Custom(f) => f.name(),
+        }
+    }
+
+    pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        match self {
+            OwnedFunctionRef::Builtin(f) => f.execute(args),
+            OwnedFunctionRef::Custom(f) => f.execute(args),
+        }
+    }
+
+    pub fn execute_with_storage(
+        &self,
+        args: &[Value],
+        storage: &GraphStorageRef,
+    ) -> Result<Value, ExpressionError> {
+        match self {
+            OwnedFunctionRef::Builtin(f) => f.execute_with_storage(args, storage),
+            OwnedFunctionRef::Custom(f) => f.execute(args),
+        }
+    }
+
+    pub fn execute_with_cache(
+        &self,
+        args: &[Value],
+        _cache: &mut (),
+    ) -> Result<Value, ExpressionError> {
+        match self {
+            OwnedFunctionRef::Builtin(f) => f.execute_with_cache(args, _cache),
+            OwnedFunctionRef::Custom(f) => f.execute(args), // Custom functions don't have cache
+        }
+    }
+}
+
+/// Expression function characteristics
+pub trait ExpressionFunction: Send + Sync {
+    /// Obtain the function name
+    fn name(&self) -> &str;
+
+    /// Determine the number of parameters
+    fn arity(&self) -> usize;
+
+    /// Check whether variable parameters are accepted.
+    fn is_variadic(&self) -> bool;
+
+    /// Execute the function
+    fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError>;
+
+    /// Obtain the function description
+    fn description(&self) -> &str;
+}
+
+/// Built-in function types to avoid dynamic distribution.
+#[derive(Debug, Clone)]
+pub enum BuiltinFunction {
+    /// Mathematical functions
+    Math(MathFunction),
+    /// String functions
+    String(StringFunction),
+    /// Regular Expression Functions
+    Regex(RegexFunction),
+    /// Aggregate functions
+    Aggregate(AggregateFunction),
+    /// Type conversion functions
+    Conversion(ConversionFunction),
+    /// Date and time functions
+    DateTime(DateTimeFunction),
+    /// Geospatial functions
+    Geography(GeographyFunction),
+    /// Practical functions
+    Utility(UtilityFunction),
+    /// Graph-related functions
+    Graph(GraphFunction),
+    /// Container operation functions
+    Container(ContainerFunction),
+    /// Path function
+    Path(PathFunction),
+    /// Full-text search functions
+    Fulltext(FulltextFunction),
+    /// Vector functions
+    Vector(VectorFunction),
+    /// Window functions
+    Window(crate::executor::expression::functions::builtin::window::WindowFunction),
+    /// Sequence functions (curr_val, next_val)
+    Sequence(SequenceFunction),
+}
+
+impl BuiltinFunction {
+    /// Get function name
+    pub fn name(&self) -> &str {
+        match self {
+            BuiltinFunction::Math(f) => f.name(),
+            BuiltinFunction::String(f) => f.name(),
+            BuiltinFunction::Regex(f) => f.name(),
+            BuiltinFunction::Aggregate(f) => f.name(),
+            BuiltinFunction::Conversion(f) => f.name(),
+            BuiltinFunction::DateTime(f) => f.name(),
+            BuiltinFunction::Geography(f) => f.name(),
+            BuiltinFunction::Utility(f) => f.name(),
+            BuiltinFunction::Graph(f) => f.name(),
+            BuiltinFunction::Container(f) => f.name(),
+            BuiltinFunction::Path(f) => f.name(),
+            BuiltinFunction::Fulltext(f) => f.name(),
+            BuiltinFunction::Vector(f) => f.name(),
+            BuiltinFunction::Window(f) => f.name(),
+            BuiltinFunction::Sequence(f) => f.name(),
+        }
+    }
+
+    /// Get the number of parameters
+    pub fn arity(&self) -> usize {
+        match self {
+            BuiltinFunction::Math(f) => f.arity(),
+            BuiltinFunction::String(f) => f.arity(),
+            BuiltinFunction::Regex(f) => f.arity(),
+            BuiltinFunction::Aggregate(f) => f.arity(),
+            BuiltinFunction::Conversion(f) => f.arity(),
+            BuiltinFunction::DateTime(f) => f.arity(),
+            BuiltinFunction::Geography(f) => f.arity(),
+            BuiltinFunction::Utility(f) => f.arity(),
+            BuiltinFunction::Graph(f) => f.arity(),
+            BuiltinFunction::Container(f) => f.arity(),
+            BuiltinFunction::Path(f) => f.arity(),
+            BuiltinFunction::Fulltext(f) => f.arity(),
+            BuiltinFunction::Vector(f) => f.arity(),
+            BuiltinFunction::Window(f) => f.arity(),
+            BuiltinFunction::Sequence(f) => f.arity(),
+        }
+    }
+
+    /// Check if variable parameters are accepted
+    pub fn is_variadic(&self) -> bool {
+        match self {
+            BuiltinFunction::Math(f) => f.is_variadic(),
+            BuiltinFunction::String(f) => f.is_variadic(),
+            BuiltinFunction::Regex(f) => f.is_variadic(),
+            BuiltinFunction::Aggregate(f) => f.is_variadic(),
+            BuiltinFunction::Conversion(f) => f.is_variadic(),
+            BuiltinFunction::DateTime(f) => f.is_variadic(),
+            BuiltinFunction::Geography(f) => f.is_variadic(),
+            BuiltinFunction::Utility(f) => f.is_variadic(),
+            BuiltinFunction::Graph(f) => f.is_variadic(),
+            BuiltinFunction::Container(f) => f.is_variadic(),
+            BuiltinFunction::Path(f) => f.is_variadic(),
+            BuiltinFunction::Fulltext(f) => f.is_variadic(),
+            BuiltinFunction::Vector(f) => f.is_variadic(),
+            BuiltinFunction::Window(f) => f.is_variadic(),
+            BuiltinFunction::Sequence(f) => f.is_variadic(),
+        }
+    }
+
+    /// Whether the function is deterministic and free of side effects.
+    ///
+    /// Purity gates constant folding: a function classified as pure may be
+    /// evaluated once at plan time and its result baked into the plan as a
+    /// literal. Classifying a non-deterministic or context-dependent
+    /// function as pure would fold a stale result into a (possibly cached)
+    /// plan, so the classification is a **whitelist**: categories that are
+    /// pure for every variant return `true`; mixed categories enumerate the
+    /// pure variants explicitly; anything not listed — including future
+    /// variants — defaults to `false`.
+    ///
+    /// Never folded:
+    /// - non-deterministic: `rand*`, `now`, `timestamp`, `current_date`,
+    ///   `current_timestamp`, `gen_random_uuid`
+    /// - session-dependent: `current_user`, `current_database` (currently
+    ///   stubbed, but conceptually per-session)
+    /// - need row-group / storage / index context: aggregates, window
+    ///   functions, graph functions, fulltext search, vector functions
+    pub fn is_pure(&self) -> bool {
+        match self {
+            // Every variant of these categories is a deterministic
+            // value-level operator.
+            BuiltinFunction::String(_)
+            | BuiltinFunction::Regex(_)
+            | BuiltinFunction::Conversion(_)
+            | BuiltinFunction::Geography(_)
+            | BuiltinFunction::Container(_)
+            | BuiltinFunction::Path(_)
+            | BuiltinFunction::Vector(_) => true,
+
+            // Mixed categories: whitelist the pure variants; anything not
+            // listed (including future variants) is conservatively non-pure.
+            BuiltinFunction::Math(f) => Self::pure_math(f),
+            BuiltinFunction::DateTime(f) => Self::pure_datetime(f),
+            BuiltinFunction::Utility(f) => Self::pure_utility(f),
+
+            // Need row-group / storage / index / session context: never fold.
+            BuiltinFunction::Aggregate(_)
+            | BuiltinFunction::Graph(_)
+            | BuiltinFunction::Fulltext(_)
+            | BuiltinFunction::Window(_)
+            | BuiltinFunction::Sequence(_) => false,
+        }
+    }
+
+    /// Whitelist of deterministic math functions.
+    ///
+    /// `rand*` and future variants are not listed and therefore never fold.
+    fn pure_math(f: &MathFunction) -> bool {
+        matches!(
+            f,
+            MathFunction::Abs
+                | MathFunction::Sqrt
+                | MathFunction::Pow
+                | MathFunction::Log
+                | MathFunction::Log10
+                | MathFunction::Sin
+                | MathFunction::Cos
+                | MathFunction::Tan
+                | MathFunction::Round
+                | MathFunction::Ceil
+                | MathFunction::Floor
+                | MathFunction::Asin
+                | MathFunction::Acos
+                | MathFunction::Atan
+                | MathFunction::Cbrt
+                | MathFunction::Hypot
+                | MathFunction::Sign
+                | MathFunction::E
+                | MathFunction::Pi
+                | MathFunction::Exp2
+                | MathFunction::Log2
+                | MathFunction::Radians
+                | MathFunction::BitAnd
+                | MathFunction::BitOr
+                | MathFunction::BitXor
+                | MathFunction::Atan2
+                | MathFunction::Sinh
+                | MathFunction::Cosh
+                | MathFunction::Tanh
+                | MathFunction::Degrees
+                | MathFunction::Gcd
+                | MathFunction::Lcm
+                | MathFunction::Factorial
+                | MathFunction::Gamma
+                | MathFunction::Lgamma
+                | MathFunction::Negate
+                | MathFunction::Even
+                | MathFunction::BitShiftLeft
+                | MathFunction::BitShiftRight
+        )
+    }
+
+    /// Whitelist of deterministic date/time functions.
+    ///
+    /// `now`, `timestamp`, `current_date`, `current_timestamp` and future
+    /// variants are not listed and therefore never fold.
+    fn pure_datetime(f: &DateTimeFunction) -> bool {
+        matches!(
+            f,
+            DateTimeFunction::Date
+                | DateTimeFunction::Time
+                | DateTimeFunction::DateTime
+                | DateTimeFunction::Year
+                | DateTimeFunction::Month
+                | DateTimeFunction::Day
+                | DateTimeFunction::Hour
+                | DateTimeFunction::Minute
+                | DateTimeFunction::Second
+                | DateTimeFunction::DateAdd
+                | DateTimeFunction::DateSub
+                | DateTimeFunction::DateDiff
+                | DateTimeFunction::DateTrunc
+                | DateTimeFunction::ToChar
+                | DateTimeFunction::ToDate
+                | DateTimeFunction::Age
+                | DateTimeFunction::LastDay
+                | DateTimeFunction::GenerateSeries
+                | DateTimeFunction::ToYears
+                | DateTimeFunction::ToMonths
+                | DateTimeFunction::ToDays
+                | DateTimeFunction::ToHours
+                | DateTimeFunction::ToMinutes
+                | DateTimeFunction::ToSeconds
+                | DateTimeFunction::ToMilliseconds
+                | DateTimeFunction::ToMicroseconds
+                | DateTimeFunction::Century
+                | DateTimeFunction::EpochMs
+                | DateTimeFunction::ToTimestamp
+                | DateTimeFunction::ToEpochMs
+                | DateTimeFunction::DatePart
+                | DateTimeFunction::DayName
+                | DateTimeFunction::MonthName
+        )
+    }
+
+    /// Whitelist of deterministic utility functions.
+    ///
+    /// `gen_random_uuid` is non-deterministic; `current_user` /
+    /// `current_database` depend on session state (even though the current
+    /// implementation stubs them); future variants are not listed and
+    /// therefore never fold.
+    fn pure_utility(f: &UtilityFunction) -> bool {
+        matches!(
+            f,
+            UtilityFunction::Coalesce
+                | UtilityFunction::Hash
+                | UtilityFunction::JsonExtract
+                | UtilityFunction::JsonBuildObject
+                | UtilityFunction::JsonBuildArray
+                | UtilityFunction::JsonObjectKeys
+                | UtilityFunction::NullIf
+                | UtilityFunction::Greatest
+                | UtilityFunction::Least
+                | UtilityFunction::JsonEach
+                | UtilityFunction::JsonTypeOf
+                | UtilityFunction::JsonStripNulls
+                | UtilityFunction::IfNull
+                | UtilityFunction::TypeOf
+                | UtilityFunction::Version
+                | UtilityFunction::Corr
+                | UtilityFunction::CovarPop
+                | UtilityFunction::CovarSamp
+                | UtilityFunction::OctetLength
+                | UtilityFunction::Encode
+                | UtilityFunction::Decode
+                | UtilityFunction::UnionValue
+                | UtilityFunction::UnionTag
+                | UtilityFunction::UnionExtract
+        )
+    }
+
+    /// Get function description
+    pub fn description(&self) -> &str {
+        match self {
+            BuiltinFunction::Math(f) => f.description(),
+            BuiltinFunction::String(f) => f.description(),
+            BuiltinFunction::Regex(f) => f.description(),
+            BuiltinFunction::Aggregate(f) => f.description(),
+            BuiltinFunction::Conversion(f) => f.description(),
+            BuiltinFunction::DateTime(f) => f.description(),
+            BuiltinFunction::Geography(f) => f.description(),
+            BuiltinFunction::Utility(f) => f.description(),
+            BuiltinFunction::Graph(f) => f.description(),
+            BuiltinFunction::Container(f) => f.description(),
+            BuiltinFunction::Path(f) => f.description(),
+            BuiltinFunction::Fulltext(f) => f.description(),
+            BuiltinFunction::Vector(f) => f.description(),
+            BuiltinFunction::Window(f) => f.description(),
+            BuiltinFunction::Sequence(f) => f.description(),
+        }
+    }
+
+    /// executable function
+    pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        if !self.is_variadic() && args.len() != self.arity() {
+            return Err(ExpressionError::invalid_arity(
+                self.name(),
+                self.arity(),
+                args.len(),
+            ));
+        }
+        match self {
+            BuiltinFunction::Math(f) => f.execute(args),
+            BuiltinFunction::String(f) => f.execute(args),
+            BuiltinFunction::Regex(f) => f.execute(args),
+            BuiltinFunction::Aggregate(_) => Err(ExpressionError::new(
+                ExpressionErrorType::InvalidOperation,
+                "Aggregation functions need to be executed within the aggregation context"
+                    .to_string(),
+            )),
+            BuiltinFunction::Conversion(f) => f.execute(args),
+            BuiltinFunction::DateTime(f) => f.execute(args),
+            BuiltinFunction::Geography(f) => f.execute(args),
+            BuiltinFunction::Utility(f) => f.execute(args),
+            BuiltinFunction::Graph(f) => f.execute(args),
+            BuiltinFunction::Container(f) => f.execute(args),
+            BuiltinFunction::Path(f) => f.execute(args),
+            BuiltinFunction::Fulltext(_f) => {
+                // Fulltext functions require execution context
+                // This is a placeholder - actual execution happens in the executor
+                Err(ExpressionError::new(
+                    ExpressionErrorType::InvalidOperation,
+                    "The full-text search function needs to be executed within the context of full-text search".to_string(),
+                ))
+            }
+            BuiltinFunction::Vector(f) => f.execute(args),
+            BuiltinFunction::Window(f) => f.execute(args),
+            BuiltinFunction::Sequence(f) => f.execute(args),
+        }
+    }
+
+    /// Execute function with graph storage access.
+    /// Graph functions use this to perform storage-backed operations.
+    pub fn execute_with_storage(
+        &self,
+        args: &[Value],
+        storage: &GraphStorageRef,
+    ) -> Result<Value, ExpressionError> {
+        match self {
+            BuiltinFunction::Graph(f) => f.execute_with_storage(args, storage),
+            _ => self.execute(args),
+        }
+    }
+
+    /// Execution function (with cache)
+    ///
+    /// The caching function has been removed; this method directly calls `execute`.
+    pub fn execute_with_cache(
+        &self,
+        args: &[Value],
+        _cache: &mut (),
+    ) -> Result<Value, ExpressionError> {
+        self.execute(args)
+    }
+}
+
+impl ExpressionFunction for BuiltinFunction {
+    fn name(&self) -> &str {
+        self.name()
+    }
+
+    fn arity(&self) -> usize {
+        self.arity()
+    }
+
+    fn is_variadic(&self) -> bool {
+        self.is_variadic()
+    }
+
+    fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
+        self.execute(args)
+    }
+
+    fn description(&self) -> &str {
+        self.description()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// All explicitly known non-deterministic / context-dependent functions
+    /// must be classified as non-pure (never constant-folded).
+    #[test]
+    fn test_is_pure_impure_functions_never_fold() {
+        let registry = global_registry();
+        for name in [
+            "rand",
+            "rand32",
+            "rand64",
+            "now",
+            "timestamp",
+            "current_date",
+            "current_timestamp",
+            "gen_random_uuid",
+            "current_user",
+            "current_database",
+        ] {
+            let f = registry
+                .get_builtin(name)
+                .unwrap_or_else(|| panic!("function `{name}` must be registered"));
+            assert!(!f.is_pure(), "`{name}` is non-pure and must never fold");
+        }
+    }
+
+    /// Representative deterministic value operators must be foldable.
+    #[test]
+    fn test_is_pure_representative_pure_functions() {
+        let registry = global_registry();
+        for name in [
+            "abs",
+            "sqrt",
+            "pow",
+            "upper",
+            "length",
+            "regex_match",
+            "to_string",
+            "to_int",
+            "year",
+            "to_char",
+            "st_distance",
+            "coalesce",
+            "json_extract",
+            "version",
+            "keys",
+            "nodes",
+            "cosine_similarity",
+        ] {
+            let f = registry
+                .get_builtin(name)
+                .unwrap_or_else(|| panic!("function `{name}` must be registered"));
+            assert!(f.is_pure(), "`{name}` is a deterministic value operator");
+        }
+    }
+
+    /// Every registered builtin function must be consciously classified.
+    ///
+    /// The non-pure set is exactly {context-bound categories} ∪ {explicitly
+    /// listed non-pure variants}. Adding a function without updating either
+    /// `is_pure` or this table fails the test, so new functions can never
+    /// silently inherit a wrong purity default.
+    #[test]
+    fn test_is_pure_classification_is_explicit_for_all_registered() {
+        let registry = global_registry();
+        for name in registry.function_names() {
+            let f = registry
+                .get_builtin(name)
+                .unwrap_or_else(|| panic!("function `{name}` must be registered"));
+            let impure_by_category = matches!(
+                f,
+                BuiltinFunction::Aggregate(_)
+                    | BuiltinFunction::Graph(_)
+                    | BuiltinFunction::Fulltext(_)
+                    | BuiltinFunction::Window(_)
+                    | BuiltinFunction::Sequence(_)
+            );
+            let impure_by_variant = matches!(
+                f,
+                BuiltinFunction::Math(f)
+                    if matches!(f, MathFunction::Rand | MathFunction::Rand32 | MathFunction::Rand64 | MathFunction::SetSeed)
+            ) || matches!(
+                f,
+                BuiltinFunction::DateTime(f)
+                    if matches!(
+                        f,
+                        DateTimeFunction::Now
+                            | DateTimeFunction::TimeStamp
+                            | DateTimeFunction::CurrentDate
+                            | DateTimeFunction::CurrentTimestamp
+                    )
+            ) || matches!(
+                f,
+                BuiltinFunction::Utility(f)
+                    if matches!(
+                        f,
+                        UtilityFunction::GenRandomUuid
+                            | UtilityFunction::CurrentUser
+                            | UtilityFunction::CurrentDatabase
+                    )
+            );
+            assert_eq!(
+                f.is_pure(),
+                !(impure_by_category || impure_by_variant),
+                "function `{name}` is not explicitly classified as pure or non-pure"
+            );
+        }
+    }
+
+    /// Fixed-arity functions reject wrong argument counts at the central
+    /// `BuiltinFunction::execute` entry with a unified error.
+    #[test]
+    fn test_central_arity_fixed_functions() {
+        let registry = global_registry();
+        // Correct calls still succeed.
+        assert!(registry.execute("length", &[Value::string("hi")]).is_ok());
+        assert!(registry
+            .execute(
+                "substring",
+                &[Value::string("hi"), Value::Int(0), Value::Int(1)]
+            )
+            .is_ok());
+        // One sample per category: too few and too many arguments.
+        let cases: &[(&str, Vec<Value>, Vec<Value>)] = &[
+            ("length", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("size", vec![], vec![Value::Int(1), Value::Int(2)]),
+            (
+                "upper",
+                vec![],
+                vec![Value::string("a"), Value::string("b")],
+            ),
+            (
+                "substring",
+                vec![Value::string("a")],
+                vec![
+                    Value::string("a"),
+                    Value::Int(0),
+                    Value::Int(1),
+                    Value::Int(2),
+                ],
+            ),
+            ("abs", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("pow", vec![Value::Int(1)], vec![Value::Int(1); 3]),
+            ("head", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("id", vec![], vec![Value::Int(1), Value::Int(2)]),
+            (
+                "row_number",
+                vec![Value::Int(1)],
+                vec![Value::Int(1), Value::Int(2)],
+            ),
+            (
+                "regex_match",
+                vec![Value::string("a")],
+                vec![Value::string("a"); 3],
+            ),
+            (
+                "cosine_similarity",
+                vec![Value::string("a")],
+                vec![Value::string("a"); 3],
+            ),
+            ("to_string", vec![], vec![Value::Int(1), Value::Int(2)]),
+            ("year", vec![], vec![Value::Int(1), Value::Int(2)]),
+            (
+                "octet_length",
+                vec![],
+                vec![Value::string("a"), Value::string("b")],
+            ),
+            (
+                "curr_val",
+                vec![],
+                vec![Value::string("a"), Value::string("b")],
+            ),
+            ("lead", vec![Value::Int(1)], vec![Value::Int(1); 3]),
+        ];
+        for (name, too_few, too_many) in cases {
+            for args in [too_few, too_many] {
+                let err = registry.execute(name, args).unwrap_err();
+                assert_eq!(
+                    err.error_type,
+                    ExpressionErrorType::InvalidArgumentCount,
+                    "`{name}` with wrong arity must report InvalidArgumentCount"
+                );
+                assert!(
+                    err.message.contains(*name),
+                    "`{name}` arity error must name the function"
+                );
+            }
+        }
+    }
+
+    /// The unified arity error carries the function name and both counts.
+    #[test]
+    fn test_central_arity_error_format() {
+        let registry = global_registry();
+        let err = registry.execute("length", &[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        assert_eq!(
+            err.message,
+            "function 'length' expects 1 argument(s), got 0"
+        );
+        let err = registry
+            .execute("substring", &[Value::string("a"), Value::Int(0)])
+            .unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        assert!(err.message.contains("'substring'"));
+        assert!(err.message.contains("3"));
+        assert!(err.message.contains("2"));
+    }
+
+    /// Variadic functions skip central validation; their own range checks stay.
+    #[test]
+    fn test_central_arity_variadic_boundaries() {
+        let registry = global_registry();
+        // Zero-argument calls that handlers accept.
+        assert!(registry.execute("concat", &[]).is_ok());
+        assert!(registry.execute("coalesce", &[]).is_ok());
+        assert!(registry.execute("date", &[]).is_ok());
+        assert!(registry.execute("rand32", &[]).is_ok());
+        assert!(registry
+            .execute("rand32", &[Value::Int(1), Value::Int(5)])
+            .is_ok());
+        // Handler-level range checks still fire.
+        assert!(registry.execute("range", &[Value::Int(1)]).is_err());
+        assert!(registry
+            .execute("concat_ws", &[Value::string(",")])
+            .is_err());
+        assert!(registry.execute("format", &[Value::string("{0}")]).is_err());
+        assert!(registry.execute("list_concat", &[Value::Int(1)]).is_err());
+        assert!(registry
+            .execute("struct_pack", &[Value::string("k")])
+            .is_err());
+        assert!(registry
+            .execute("rand32", &[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .is_err());
+        assert!(registry
+            .execute(
+                "range",
+                &[Value::Int(1), Value::Int(5), Value::Int(1), Value::Int(2)]
+            )
+            .is_err());
+    }
+
+    /// Arity errors take precedence over context errors for aggregate and
+    /// fulltext functions.
+    #[test]
+    fn test_central_arity_before_context_interception() {
+        let count = BuiltinFunction::Aggregate(AggregateFunction::Count);
+        let err = count.execute(&[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        let err = count.execute(&[Value::Int(1)]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidOperation);
+
+        let score = BuiltinFunction::Fulltext(FulltextFunction::Score);
+        let err = score.execute(&[Value::Int(1)]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
+        let err = score.execute(&[]).unwrap_err();
+        assert_eq!(err.error_type, ExpressionErrorType::InvalidOperation);
+    }
+}

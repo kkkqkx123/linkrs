@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-本文档研究了主流数据库系统中 MVCC (Multi-Version Concurrency Control) 的垃圾回收实现方式，并基于研究结果提出 GraphDB 索引模块的优化方案。
+本文档研究了主流数据库系统中 MVCC (Multi-Version Concurrency Control) 的垃圾回收实现方式，并基于研究结果提出 Linkrs 索引模块的优化方案。
 
 ## 2. 主流数据库 MVCC 实现分析
 
@@ -252,7 +252,7 @@ GC 过程:
 | FoundationDB | 版本化存储，定期清理 |
 | RocksDB | Compaction 时清理，支持 TTL |
 
-## 4. GraphDB 当前实现分析
+## 4. Linkrs 当前实现分析
 
 ### 4.1 当前设计
 

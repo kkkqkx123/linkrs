@@ -14,12 +14,12 @@ use std::time::Instant;
 
 use tempfile::TempDir;
 
-use graphdb::core::types::{EdgeId, EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::edge::edge_table::config::EdgeTableConfig;
-use graphdb::storage::edge::{EdgeSchema, EdgeStore, MutableCsr, Nbr};
-use graphdb::storage::{
+use linkrs::core::types::{EdgeId, EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::edge::edge_table::config::EdgeTableConfig;
+use linkrs::storage::edge::{EdgeSchema, EdgeStore, MutableCsr, Nbr};
+use linkrs::storage::{
     GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 
@@ -402,8 +402,8 @@ fn bench_b3() {
 const B4_EDGES: usize = 5000;
 
 fn table_schema(out_only: bool) -> EdgeSchema {
-    use graphdb::core::types::EdgeStrategy;
-    use graphdb::storage::edge::RecordForm;
+    use linkrs::core::types::EdgeStrategy;
+    use linkrs::storage::edge::RecordForm;
     EdgeSchema {
         label_id: 0,
         label_name: "bench".to_string(),
@@ -716,9 +716,9 @@ const B7_EDGES: usize = 10_000;
 
 fn bench_b7() {
     println!("\n## B7: per-edge byte split (narrow-row candidacy)");
-    use graphdb::core::types::EdgeStrategy;
-    use graphdb::storage::edge::RecordForm;
-    use graphdb::storage::StoragePropertyDef;
+    use linkrs::core::types::EdgeStrategy;
+    use linkrs::storage::edge::RecordForm;
+    use linkrs::storage::StoragePropertyDef;
     let flat_schema = EdgeSchema {
         label_id: 0,
         label_name: "flat".to_string(),

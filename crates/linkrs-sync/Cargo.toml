@@ -1,0 +1,48 @@
+[package]
+name = "linkrs-sync"
+version.workspace = true
+edition.workspace = true
+description = "Synchronization primitives for Linkrs"
+license.workspace = true
+
+[features]
+# Built-in local vector engine. Enables the `vector_sync` module and
+# `VectorBackend::Local`.
+vector = ["dep:simvec"]
+# Embedding infrastructure, independent of remote backend.
+embedding = ["vector", "dep:llm-embedding"]
+# Remote qdrant client on top of the local engine types.
+vector-qdrant = ["vector", "embedding", "dep:vector-client", "linkrs-config/vector-qdrant"]
+# Transport-layer sub-features for the remote client. They are additive on
+# top of `vector-qdrant`; enabling both compiles in HTTP + gRPC.
+vector-http = ["vector-qdrant", "vector-client/qdrant-http"]
+vector-grpc = ["vector-qdrant", "vector-client/qdrant-grpc"]
+fulltext = ["linkrs-fulltext/fulltext"]
+
+[dependencies]
+linkrs-core = { path = "../linkrs-core" }
+linkrs-metrics = { path = "../linkrs-metrics" }
+linkrs-fulltext = { path = "../linkrs-fulltext" }
+linkrs-config = { path = "../linkrs-config" }
+llm-embedding = { path = "../llm-suite/crates/llm-embedding", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+dashmap.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+rand.workspace = true
+vector-client = { path = "../vector-client", features = ["qdrant-grpc", "qdrant-http"], optional = true }
+simvec = { path = "../simvec", optional = true }
+tracing.workspace = true
+tokio.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+sqlx.workspace = true
+postcard.workspace = true
+crc32fast.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -4,7 +4,7 @@
 
 ### 1.1 目标
 
-为 GraphDB CLI 提供完善的命令历史管理功能，包括持久化存储、增量搜索、历史导航、去重和限制，参考 psql 和 rustyline 的最佳实践。
+为 Linkrs CLI 提供完善的命令历史管理功能，包括持久化存储、增量搜索、历史导航、去重和限制，参考 psql 和 rustyline 的最佳实践。
 
 ### 1.2 参考实现
 
@@ -50,7 +50,7 @@ pub fn save_history(&mut self) {
 #### 3.1.1 存储位置
 
 ```
-~/.graphdb/
+~/.linkrs/
 ├── cli_history          # 全局历史文件
 ├── cli_history.lock     # 文件锁（多实例互斥）
 └── history/
@@ -269,7 +269,7 @@ pub struct HistoryManager {
 
 ```rust
 pub struct InputHandler {
-    editor: Editor<GraphDBCompleter, DefaultHistory>,
+    editor: Editor<LinkrsCompleter, DefaultHistory>,
     history_mgr: HistoryManager,
 }
 
@@ -279,7 +279,7 @@ impl InputHandler {
         history_mgr.load()?;
 
         let mut editor = Editor::new()?;
-        editor.set_helper(Some(GraphDBCompleter::new()));
+        editor.set_helper(Some(LinkrsCompleter::new()));
         editor.set_auto_add_history(false); // 改为手动管理
 
         // 加载历史到 editor
@@ -310,7 +310,7 @@ impl InputHandler {
 
 ```toml
 [history]
-file = "~/.graphdb/cli_history"     # 历史文件路径
+file = "~/.linkrs/cli_history"     # 历史文件路径
 max_size = 5000                      # 最大历史条数
 dedup = "consecutive"                # 去重策略: none, consecutive, global
 save_policy = "incremental"          # 保存策略: on_exit, incremental, timed

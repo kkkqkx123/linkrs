@@ -3,7 +3,7 @@
 > 范围：三方各自"边属性存储"子系统的架构、功能、性能差异，不含 CSR 邻接结构本身（见 `docs/analysis/csr_comparison_neug_ladybug_linkrs.md`）。
 > 源码依据：`ref/neug/include+src/neug/storages/graph/edge_table.*`、`ref/neug/include/neug/storages/csr/{nbr,generic_view}*`、`ref/neug/include+src/neug/utils/property/{table,column}*`；
 > `ref/ladybug/src/include/storage/table/{rel_table,rel_table_data,csr_node_group,csr_chunked_node_group,column_chunk*,column,chunked_node_group}*`；
-> `crates/graphdb-storage/src/edge/{csr_with_properties*,bundled_csr*,pure_csr*,property_schema,edge_table/*}`。
+> `crates/linkrs-storage/src/edge/{csr_with_properties*,bundled_csr*,pure_csr*,property_schema,edge_table/*}`。
 > 本文档使用中文，代码标识保持英文原文。只收录对比分析结论，不收录针对当前项目的局部修改建议。
 
 ## 1. 一览对比

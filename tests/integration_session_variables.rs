@@ -4,11 +4,11 @@
 //! variables into subsequent statements, and the transaction overlay
 //! (ROLLBACK / ROLLBACK TO SAVEPOINT restore previous values).
 
-use graphdb::config::Config;
-use graphdb::query::DataSet;
-use graphdb::storage::{GraphStorage, SyncWrapper};
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig};
-use graphdb_server::graph_service::GraphService;
+use linkrs::config::Config;
+use linkrs::query::DataSet;
+use linkrs::storage::{GraphStorage, SyncWrapper};
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig};
+use linkrs_server::graph_service::GraphService;
 use std::sync::Arc;
 
 async fn setup() -> (Arc<GraphService<SyncWrapper<GraphStorage>>>, i64) {
@@ -75,7 +75,7 @@ async fn exec_err(
         .expect_err(&format!("statement `{}` should fail", stmt))
 }
 
-fn first_scalar(data: &DataSet) -> graphdb::core::Value {
+fn first_scalar(data: &DataSet) -> linkrs::core::Value {
     data.rows
         .first()
         .expect("expected at least one row")
@@ -94,14 +94,14 @@ async fn test_session_variable_let_and_reference() {
     let data = exec(&service, sid, "RETURN $x").await;
     assert_eq!(
         first_scalar(&data),
-        graphdb::core::Value::Int(3),
+        linkrs::core::Value::Int(3),
         "$x should resolve to 1 + 2"
     );
 
     // String value.
     exec(&service, sid, "LET $name = 'Alice'").await;
     let data = exec(&service, sid, "RETURN $name").await;
-    assert_eq!(first_scalar(&data), graphdb::core::Value::string("Alice"));
+    assert_eq!(first_scalar(&data), linkrs::core::Value::string("Alice"));
 
     // Variable references resolve inside DML.
     exec(
@@ -117,16 +117,16 @@ async fn test_session_variable_let_and_reference() {
         .and_then(|row| row.first())
         .expect("FETCH should return the inserted vertex");
     match vertex {
-        graphdb::core::Value::Vertex(v) => {
+        linkrs::core::Value::Vertex(v) => {
             let props = v.properties();
             assert_eq!(
                 props.get("name"),
-                Some(&graphdb::core::Value::string("Alice")),
+                Some(&linkrs::core::Value::string("Alice")),
                 "inserted vertex should carry the $name value"
             );
             assert_eq!(
                 props.get("age"),
-                Some(&graphdb::core::Value::Int(3)),
+                Some(&linkrs::core::Value::Int(3)),
                 "inserted vertex should carry the $x value"
             );
         }
@@ -136,7 +136,7 @@ async fn test_session_variable_let_and_reference() {
     // Variable-to-variable assignment.
     exec(&service, sid, "LET $y = $x + 10").await;
     let data = exec(&service, sid, "RETURN $y").await;
-    assert_eq!(first_scalar(&data), graphdb::core::Value::Int(13));
+    assert_eq!(first_scalar(&data), linkrs::core::Value::Int(13));
 }
 
 /// Assignments inside a transaction are rolled back with the transaction.
@@ -154,7 +154,7 @@ async fn test_session_variable_transaction_rollback_restores() {
     let data = exec(&service, sid, "RETURN $x").await;
     assert_eq!(
         first_scalar(&data),
-        graphdb::core::Value::Int(1),
+        linkrs::core::Value::Int(1),
         "ROLLBACK restores the pre-transaction variable"
     );
     let err = exec_err(&service, sid, "RETURN $y").await;
@@ -178,7 +178,7 @@ async fn test_session_variable_transaction_commit_merges() {
     let data = exec(&service, sid, "RETURN $x").await;
     assert_eq!(
         first_scalar(&data),
-        graphdb::core::Value::Int(5),
+        linkrs::core::Value::Int(5),
         "COMMIT keeps the in-transaction assignment"
     );
 }
@@ -200,7 +200,7 @@ async fn test_session_variable_rollback_to_savepoint() {
     let data = exec(&service, sid, "RETURN $x").await;
     assert_eq!(
         first_scalar(&data),
-        graphdb::core::Value::Int(2),
+        linkrs::core::Value::Int(2),
         "ROLLBACK TO SAVEPOINT restores the value at the savepoint"
     );
     let err = exec_err(&service, sid, "RETURN $z").await;
@@ -212,7 +212,7 @@ async fn test_session_variable_rollback_to_savepoint() {
 
     exec(&service, sid, "COMMIT").await;
     let data = exec(&service, sid, "RETURN $x").await;
-    assert_eq!(first_scalar(&data), graphdb::core::Value::Int(2));
+    assert_eq!(first_scalar(&data), linkrs::core::Value::Int(2));
 }
 
 /// Malformed LET statements fail with a clear error.
@@ -257,7 +257,7 @@ async fn test_explain_shows_session_variable_reference() {
         .iter()
         .flat_map(|row| row.iter())
         .filter_map(|v| match v {
-            graphdb::core::Value::String(s) => Some(s.to_string()),
+            linkrs::core::Value::String(s) => Some(s.to_string()),
             _ => None,
         })
         .collect::<Vec<_>>()

@@ -1,10 +1,10 @@
-# GraphDB CLI 客户端设计方案
+# Linkrs CLI 客户端设计方案
 
 ## 1. 概述
 
 ### 1.1 设计目标
 
-为 GraphDB 设计一个类似 PostgreSQL `psql` 的命令行交互式客户端工具，提供以下核心能力：
+为 Linkrs 设计一个类似 PostgreSQL `psql` 的命令行交互式客户端工具，提供以下核心能力：
 
 - 交互式图查询语言（GQL）执行
 - 数据库管理和元数据查看
@@ -18,7 +18,7 @@
 2. **功能完整**：覆盖数据库管理、查询执行、结果查看等核心场景
 3. **扩展性强**：模块化设计，便于添加新功能
 4. **性能优先**：快速响应，支持大数据集展示
-5. **兼容性**：与现有 GraphDB API 层无缝集成
+5. **兼容性**：与现有 Linkrs API 层无缝集成
 
 ## 2. 架构设计
 
@@ -26,7 +26,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      GraphDB CLI Client                      │
+│                      Linkrs CLI Client                      │
 ├─────────────────────────────────────────────────────────────┤
 │                                                               │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
@@ -48,7 +48,7 @@
 └────────────────────────────┼──────────────────────────────────┘
                              │
                     ┌────────▼────────┐
-                    │  GraphDB Server │
+                    │  Linkrs Server │
                     │   (HTTP API)    │
                     └─────────────────┘
 ```
@@ -234,7 +234,7 @@ pub trait SessionManager {
 #### 2.2.5 API 客户端模块（API Client）
 
 **职责**：
-- 与 GraphDB 服务器通信
+- 与 Linkrs 服务器通信
 - 支持多种连接方式（HTTP、Embedded）
 - 处理请求和响应
 - 错误处理和重试
@@ -258,7 +258,7 @@ pub enum ConnectionMode {
     Embedded { data_path: String },
 }
 
-pub trait GraphDBClient {
+pub trait LinkrsClient {
     async fn execute_query(&self, query: &str, session: &Session) -> Result<QueryResult>;
     async fn execute_batch(&self, queries: Vec<&str>, session: &Session) -> Result<Vec<QueryResult>>;
     async fn get_schema(&self, space: &str) -> Result<SchemaInfo>;
@@ -302,7 +302,7 @@ impl rustyline::completion::Completer for Completer {
 
 **命令行参数**：
 ```bash
-graphdb-cli [options] [space_name]
+linkrs-cli [options] [space_name]
 
 Options:
   -h, --host <host>          Server host (default: 127.0.0.1)
@@ -321,16 +321,16 @@ Options:
 **示例**：
 ```bash
 # 交互式连接
-graphdb-cli -h 192.168.1.100 -p 8080 -u admin -W
+linkrs-cli -h 192.168.1.100 -p 8080 -u admin -W
 
 # 执行单个查询
-graphdb-cli -c "MATCH (p:Person) RETURN p.name LIMIT 10"
+linkrs-cli -c "MATCH (p:Person) RETURN p.name LIMIT 10"
 
 # 执行脚本文件
-graphdb-cli -f queries.gql
+linkrs-cli -f queries.gql
 
 # 指定输出格式
-graphdb-cli --format json -c "SHOW SPACES"
+linkrs-cli --format json -c "SHOW SPACES"
 ```
 
 #### 3.1.2 会话内连接
@@ -355,19 +355,19 @@ graphdb-cli --format json -c "SHOW SPACES"
 **提示符设计**：
 ```
 # 未连接状态
-graphdb=#
+linkrs=#
 
 # 已连接但未选择 Space
-graphdb(admin)=#
+linkrs(admin)=#
 
 # 已选择 Space
-graphdb(admin:mygraph)=#
+linkrs(admin:mygraph)=#
 
 # 多行输入模式
-graphdb(admin:mygraph)->
+linkrs(admin:mygraph)->
 
 # 事务模式
-graphdb(admin:mygraph[txn])=#
+linkrs(admin:mygraph[txn])=#
 ```
 
 #### 3.2.2 多行查询
@@ -378,11 +378,11 @@ graphdb(admin:mygraph[txn])=#
 
 **示例**：
 ```
-graphdb(admin:mygraph)=# MATCH (p:Person)
-graphdb(admin:mygraph)-# WHERE p.age > 25
-graphdb(admin:mygraph)-# RETURN p.name, p.age
-graphdb(admin:mygraph)-# ORDER BY p.age DESC
-graphdb(admin:mygraph)-# LIMIT 10;
+linkrs(admin:mygraph)=# MATCH (p:Person)
+linkrs(admin:mygraph)-# WHERE p.age > 25
+linkrs(admin:mygraph)-# RETURN p.name, p.age
+linkrs(admin:mygraph)-# ORDER BY p.age DESC
+linkrs(admin:mygraph)-# LIMIT 10;
 ```
 
 #### 3.2.3 查询结果处理
@@ -415,7 +415,7 @@ Cache hit: true
 
 **示例输出**：
 ```
-graphdb(admin:mygraph)=# \show_tags
+linkrs(admin:mygraph)=# \show_tags
 
 ┌─────────────┬──────────┬─────────────┐
 │ Tag Name    │ Fields   │ Comment     │
@@ -425,7 +425,7 @@ graphdb(admin:mygraph)=# \show_tags
 │ comment     │ 2        │ Comment tag │
 └─────────────┴──────────┴─────────────┘
 
-graphdb(admin:mygraph)=# \describe person
+linkrs(admin:mygraph)=# \describe person
 
 Tag: person
 ┌─────────────┬──────────┬─────────┬─────────┐
@@ -457,8 +457,8 @@ Tag: person
 
 **变量使用**：
 ```
-graphdb(admin:mygraph)=# \set limit 10
-graphdb(admin:mygraph)=# MATCH (p:Person) RETURN p.name LIMIT :limit;
+linkrs(admin:mygraph)=# \set limit 10
+linkrs(admin:mygraph)=# MATCH (p:Person) RETURN p.name LIMIT :limit;
 ```
 
 #### 3.3.4 脚本执行命令
@@ -498,12 +498,12 @@ graphdb(admin:mygraph)=# MATCH (p:Person) RETURN p.name LIMIT :limit;
 
 **手动提交模式**：
 ```
-graphdb(admin:mygraph)=# \begin
-graphdb(admin:mygraph[txn])=# INSERT VERTEX person(name, age) VALUES "p1":("Alice", 30);
-graphdb(admin:mygraph[txn])=# INSERT EDGE follow(degree) VALUES "p1"->"p2":(90);
-graphdb(admin:mygraph[txn])=# \commit
+linkrs(admin:mygraph)=# \begin
+linkrs(admin:mygraph[txn])=# INSERT VERTEX person(name, age) VALUES "p1":("Alice", 30);
+linkrs(admin:mygraph[txn])=# INSERT EDGE follow(degree) VALUES "p1"->"p2":(90);
+linkrs(admin:mygraph[txn])=# \commit
 Transaction committed successfully.
-graphdb(admin:mygraph)=#
+linkrs(admin:mygraph)=#
 ```
 
 ### 3.5 性能分析
@@ -511,7 +511,7 @@ graphdb(admin:mygraph)=#
 #### 3.5.1 执行计划查看
 
 ```
-graphdb(admin:mygraph)=# EXPLAIN MATCH (p:Person)-[:FRIEND]->(f) RETURN p, f;
+linkrs(admin:mygraph)=# EXPLAIN MATCH (p:Person)-[:FRIEND]->(f) RETURN p, f;
 
 Query Plan:
 ┌─────────────────────────────────────────────────────────────┐
@@ -535,7 +535,7 @@ Query Plan:
 
 #### 3.6.1 配置文件
 
-**位置**：`~/.graphdb/cli.toml`
+**位置**：`~/.linkrs/cli.toml`
 
 **配置项**：
 ```toml
@@ -555,7 +555,7 @@ command = "vim"
 line_number_arg = "+"
 
 [history]
-file = "~/.graphdb/history"
+file = "~/.linkrs/history"
 max_size = 1000
 ```
 
@@ -595,7 +595,7 @@ max_size = 1000
 ### 4.2 项目结构
 
 ```
-crates/graphdb-cli/
+crates/linkrs-cli/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs                 # 入口点
@@ -710,12 +710,12 @@ impl Repl {
 ```rust
 use rustyline::completion::{Completer, Pair};
 
-pub struct GraphDBCompleter {
+pub struct LinkrsCompleter {
     keywords: Vec<String>,
     schema_cache: Arc<RwLock<SchemaCache>>,
 }
 
-impl Completer for GraphDBCompleter {
+impl Completer for LinkrsCompleter {
     type Candidate = Pair;
 
     fn complete(&self, line: &str, pos: usize) -> Result<(usize, Vec<Pair>)> {
@@ -734,7 +734,7 @@ impl Completer for GraphDBCompleter {
     }
 }
 
-impl GraphDBCompleter {
+impl LinkrsCompleter {
     fn complete_keyword(&self, line: &str) -> Result<(usize, Vec<Pair>)> {
         let last_word = get_last_word(line);
         let completions: Vec<Pair> = self.keywords

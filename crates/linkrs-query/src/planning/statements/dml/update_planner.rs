@@ -1,0 +1,511 @@
+//! Update Operation Planner
+//!
+//! Query planning for processing UPDATE VERTEX/EDGE statements
+//!
+//! Migrated to generate a native LogicalNodeEnum tree; `from_logical_root`
+//! performs the one-shot logical → physical lowering so the optimizer sees
+//! the logical mirror.
+
+use crate::binder::BoundStatement;
+use crate::parser::ast::{Stmt, UpdateStmt, UpdateTarget};
+use crate::planning::plan::core::node_id_generator::next_node_id;
+use crate::planning::plan::core::nodes::{
+    EdgeUpdateInfo, UpdateNode, UpdateTargetType, VertexUpdateInfo,
+};
+use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+use crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
+use crate::planning::plan::{PlanNodeEnum, SubPlan};
+use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::clauses::exists_planner;
+use crate::QueryContext;
+use linkrs_core::types::{ContextualExpression, ExpressionMeta};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Update Operation Planner
+/// Responsible for converting UPDATE statements into execution plans.
+#[derive(Debug, Clone)]
+pub struct UpdatePlanner;
+
+/// Standalone UPDATE has no row scope, so its vid can only be a literal,
+/// a query parameter or a session variable. Anything else (bare query
+/// variable or compound expression) cannot be evaluated by the single-row
+/// source and must fail here with a precise planning error instead of a
+/// generic execution-time evaluation failure.
+fn validate_bound_standalone_vid(
+    vid: &crate::binder::bound::BoundExpression,
+) -> Result<(), PlannerError> {
+    match vid {
+        crate::binder::bound::BoundExpression::Literal(..)
+        | crate::binder::bound::BoundExpression::ParameterRef(..)
+        | crate::binder::bound::BoundExpression::SessionVariable(..) => Ok(()),
+        crate::binder::bound::BoundExpression::Variable(name, _) => {
+            Err(PlannerError::PlanGenerationFailed(format!(
+                "Standalone UPDATE vid does not support query variable '{name}': use a literal, a parameter (@p) or a session variable ($v)"
+            )))
+        }
+        _ => Err(PlannerError::PlanGenerationFailed(
+            "Standalone UPDATE vid must be a literal, a parameter (@p) or a session variable ($v)".to_string(),
+        )),
+    }
+}
+
+/// Legacy-path counterpart of [`validate_bound_standalone_vid`]: the AST
+/// pipeline carries vid as a `ContextualExpression`, so the morphology
+/// check runs on the inner `Expression`.
+fn validate_ast_standalone_vid(vid: &ContextualExpression) -> Result<(), PlannerError> {
+    match vid.expression().map(|meta| meta.inner().clone()) {
+        Some(linkrs_core::Expression::Literal(_))
+        | Some(linkrs_core::Expression::Parameter(_))
+        | Some(linkrs_core::Expression::SessionVariable(_)) => Ok(()),
+        Some(linkrs_core::Expression::Variable(name)) => {
+            Err(PlannerError::PlanGenerationFailed(format!(
+                "Standalone UPDATE vid does not support query variable '{name}': use a literal, a parameter (@p) or a session variable ($v)"
+            )))
+        }
+        _ => Err(PlannerError::PlanGenerationFailed(
+            "Standalone UPDATE vid must be a literal, a parameter (@p) or a session variable ($v)".to_string(),
+        )),
+    }
+}
+
+impl UpdatePlanner {
+    /// Create a new update planner.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Extract the UpdateStmt from the Stmt.
+    fn extract_update_stmt(&self, stmt: &Stmt) -> Result<UpdateStmt, PlannerError> {
+        match stmt {
+            Stmt::Update(update_stmt) => Ok(update_stmt.clone()),
+            _ => Err(PlannerError::PlanGenerationFailed(
+                "Statement does not contain UPDATE".to_string(),
+            )),
+        }
+    }
+
+    /// Build edge update info from UPDATE statement
+    fn build_edge_update_info(
+        &self,
+        update_stmt: &UpdateStmt,
+        src: ContextualExpression,
+        dst: ContextualExpression,
+        edge_type: Option<String>,
+        rank: Option<ContextualExpression>,
+        space_name: String,
+    ) -> Result<EdgeUpdateInfo, PlannerError> {
+        // Convert assignments to properties HashMap
+        let mut properties = HashMap::new();
+        for assignment in &update_stmt.set_clause.assignments {
+            properties.insert(assignment.property.clone(), assignment.value.clone());
+        }
+
+        Ok(EdgeUpdateInfo {
+            space_name,
+            src,
+            dst,
+            edge_type,
+            rank,
+            properties,
+            condition: update_stmt.where_clause.clone(),
+            is_upsert: update_stmt.is_upsert,
+            replace_properties: update_stmt
+                .set_clause
+                .assignments
+                .iter()
+                .any(|a| a.is_map_overwrite),
+        })
+    }
+}
+
+impl Planner for UpdatePlanner {
+    fn plan_bound(
+        &mut self,
+        ctx: &crate::planning::context::PlanContext<'_>,
+    ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
+        let update = match bound {
+            BoundStatement::Update(u) => u,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "Statement does not contain UPDATE".to_string(),
+                ));
+            }
+        };
+
+        // Unified entry for expression-level EXISTS / IN (mirrors
+        // `transform`): the bound path must also reject subqueries in
+        // UPDATE SET values or the UPDATE WHERE condition at planning time
+        // with the precise error.
+        let update_stmt = self.extract_update_stmt(validated.stmt())?;
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        for assignment in &update_stmt.set_clause.assignments {
+            if let Some(expr_meta) = assignment.value.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+        if let Some(where_cond) = &update_stmt.where_clause {
+            if let Some(expr_meta) = where_cond.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+
+        let space_name = qctx
+            .space_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "default".to_string());
+
+        let expr_ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+
+        let update_target = match &update.target {
+            crate::binder::bound::BoundUpdateTarget::Vertex(_) => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "UPDATE vertex requires a tag qualifier (use UPDATE TAG <tag> ... WHERE ...)"
+                        .to_string(),
+                ));
+            }
+            crate::binder::bound::BoundUpdateTarget::Edge(edge) => {
+                let crate::binder::bound::BoundEdgeUpdateTarget {
+                    src,
+                    dst,
+                    edge_type,
+                    rank,
+                } = &**edge;
+                let src_ctx =
+                    crate::binder::expr_converter::bound_expr_to_contextual(src, &expr_ctx)
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+                let dst_ctx =
+                    crate::binder::expr_converter::bound_expr_to_contextual(dst, &expr_ctx)
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+                let rank_ctx = rank
+                    .as_ref()
+                    .map(|r| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(r, &expr_ctx)
+                            .map_err(PlannerError::PlanGenerationFailed)
+                    })
+                    .transpose()?;
+
+                let mut properties = HashMap::new();
+                for assignment in &update.assignments {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(PlannerError::PlanGenerationFailed)?;
+                    properties.insert(assignment.property.clone(), value);
+                }
+
+                let condition = update
+                    .where_clause
+                    .as_ref()
+                    .map(|wc| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
+                            .map_err(PlannerError::PlanGenerationFailed)
+                    })
+                    .transpose()?;
+
+                let edge_info = EdgeUpdateInfo {
+                    space_name,
+                    src: src_ctx,
+                    dst: dst_ctx,
+                    edge_type: edge_type.clone(),
+                    rank: rank_ctx,
+                    properties,
+                    condition,
+                    is_upsert: update.is_upsert,
+                    replace_properties: update.assignments.iter().any(|a| a.is_map_overwrite),
+                };
+                UpdateTargetType::Edge(edge_info)
+            }
+            crate::binder::bound::BoundUpdateTarget::Tag(tag_name) => {
+                let mut properties = HashMap::new();
+                for assignment in &update.assignments {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(PlannerError::PlanGenerationFailed)?;
+                    properties.insert(assignment.property.clone(), value);
+                }
+
+                let placeholder_meta = ExpressionMeta::new(linkrs_core::Expression::Variable(
+                    "_tag_placeholder".to_string(),
+                ));
+                let placeholder_id = expr_ctx.register_expression(placeholder_meta);
+
+                let vertex_info = VertexUpdateInfo {
+                    space_name: space_name.clone(),
+                    vertex_id: ContextualExpression::new(placeholder_id, expr_ctx.clone()),
+                    tag_name: Some(tag_name.clone()),
+                    properties,
+                    condition: None,
+                    is_upsert: update.is_upsert,
+                    replace_properties: update.assignments.iter().any(|a| a.is_map_overwrite),
+                };
+
+                let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                    id: next_node_id(),
+                    space_id: 0,
+                    space_name: space_name.clone(),
+                    tag: Some(tag_name.clone()),
+                    expression: None,
+                    limit: None,
+                    projected_properties: vec![],
+                    index_hint: None,
+                    estimated_cardinality: None,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                });
+
+                let mut sub_plan = SubPlan::from_logical_root(logical_scan);
+                let physical_update = PlanNodeEnum::Update(UpdateNode::new(
+                    next_node_id(),
+                    UpdateTargetType::Vertex(vertex_info),
+                ));
+                sub_plan.set_tail(physical_update);
+                return Ok(sub_plan);
+            }
+            crate::binder::bound::BoundUpdateTarget::TagOnVertex { vid, tag_name } => {
+                validate_bound_standalone_vid(vid)?;
+                let vid_ctx =
+                    crate::binder::expr_converter::bound_expr_to_contextual(vid, &expr_ctx)
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+
+                let mut properties = HashMap::new();
+                for assignment in &update.assignments {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(PlannerError::PlanGenerationFailed)?;
+                    properties.insert(assignment.property.clone(), value);
+                }
+
+                let condition = update
+                    .where_clause
+                    .as_ref()
+                    .map(|wc| {
+                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
+                            .map_err(PlannerError::PlanGenerationFailed)
+                    })
+                    .transpose()?;
+
+                let vertex_info = VertexUpdateInfo {
+                    space_name,
+                    vertex_id: vid_ctx,
+                    tag_name: Some(tag_name.clone()),
+                    properties,
+                    condition,
+                    is_upsert: update.is_upsert,
+                    replace_properties: update.assignments.iter().any(|a| a.is_map_overwrite),
+                };
+                UpdateTargetType::Vertex(vertex_info)
+            }
+        };
+
+        let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
+            id: next_node_id(),
+            info: update_target,
+            output_var: None,
+            col_names: vec!["updated".to_string()],
+            column_types: vec![],
+        });
+        let mut sub_plan = SubPlan::from_logical_root(logical_root);
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "update_input");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+        Ok(sub_plan)
+    }
+
+    fn transform(
+        &mut self,
+        validated: &ValidatedStatement,
+        qctx: Arc<QueryContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        let update_stmt = self.extract_update_stmt(validated.stmt())?;
+
+        // Unified entry for expression-level EXISTS / IN: subqueries in
+        // UPDATE SET values or the UPDATE WHERE condition are rejected at
+        // planning time with a precise error.
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        for assignment in &update_stmt.set_clause.assignments {
+            if let Some(expr_meta) = assignment.value.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+        if let Some(where_cond) = &update_stmt.where_clause {
+            if let Some(expr_meta) = where_cond.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+
+        // Get current space name from query context
+        let space_name = qctx
+            .space_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "default".to_string());
+
+        // Build update target based on the update statement target
+        let update_target = match &update_stmt.target {
+            UpdateTarget::Vertex(_) => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "UPDATE vertex requires a tag qualifier (use UPDATE TAG <tag> ... WHERE ...)"
+                        .to_string(),
+                ));
+            }
+            UpdateTarget::Edge {
+                src,
+                dst,
+                edge_type,
+                rank,
+            } => {
+                let edge_info = self.build_edge_update_info(
+                    &update_stmt,
+                    src.clone(),
+                    dst.clone(),
+                    edge_type.clone(),
+                    rank.clone(),
+                    space_name,
+                )?;
+                UpdateTargetType::Edge(edge_info)
+            }
+            UpdateTarget::Tag(tag_name) => {
+                let mut properties = HashMap::new();
+                for assignment in &update_stmt.set_clause.assignments {
+                    properties.insert(assignment.property.clone(), assignment.value.clone());
+                }
+
+                let mut scan_node =
+                    crate::planning::plan::core::nodes::ScanVerticesNode::new(0, &space_name);
+                scan_node.set_tag(tag_name);
+
+                let vertex_info = VertexUpdateInfo {
+                    space_name: space_name.clone(),
+                    vertex_id: ContextualExpression::new(
+                        linkrs_core::types::expr::ExpressionId::new(0),
+                        validated.ast.expr_context().clone(),
+                    ),
+                    tag_name: Some(tag_name.clone()),
+                    properties,
+                    condition: update_stmt.where_clause.clone(),
+                    is_upsert: update_stmt.is_upsert,
+                    replace_properties: update_stmt
+                        .set_clause
+                        .assignments
+                        .iter()
+                        .any(|a| a.is_map_overwrite),
+                };
+
+                let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                    id: next_node_id(),
+                    space_id: 0,
+                    space_name: space_name.clone(),
+                    tag: Some(tag_name.clone()),
+                    expression: None,
+                    limit: None,
+                    projected_properties: vec![],
+                    index_hint: None,
+                    estimated_cardinality: None,
+                    output_var: None,
+                    col_names: vec![],
+                    column_types: vec![],
+                });
+
+                let mut sub_plan = SubPlan::from_logical_root(logical_scan);
+                let physical_update = PlanNodeEnum::Update(UpdateNode::new(
+                    next_node_id(),
+                    UpdateTargetType::Vertex(vertex_info),
+                ));
+                sub_plan.set_tail(physical_update);
+                return Ok(sub_plan);
+            }
+            UpdateTarget::TagOnVertex { vid, tag_name } => {
+                // Update specific tag on a specific vertex
+                validate_ast_standalone_vid(vid)?;
+                let mut properties = HashMap::new();
+                for assignment in &update_stmt.set_clause.assignments {
+                    properties.insert(assignment.property.clone(), assignment.value.clone());
+                }
+
+                let vertex_info = VertexUpdateInfo {
+                    space_name,
+                    vertex_id: *vid.clone(),
+                    tag_name: Some(tag_name.clone()),
+                    properties,
+                    condition: update_stmt.where_clause.clone(),
+                    is_upsert: update_stmt.is_upsert,
+                    replace_properties: update_stmt
+                        .set_clause
+                        .assignments
+                        .iter()
+                        .any(|a| a.is_map_overwrite),
+                };
+                UpdateTargetType::Vertex(vertex_info)
+            }
+        };
+
+        // Create the UpdateNode
+        let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
+            id: next_node_id(),
+            info: update_target,
+            output_var: None,
+            col_names: vec!["updated".to_string()],
+            column_types: vec![],
+        });
+
+        // Create a SubPlan with the update node as the final node
+        let mut sub_plan = SubPlan::from_logical_root(logical_root);
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "update_input");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+
+        Ok(sub_plan)
+    }
+
+    fn match_planner(&self, stmt: &Stmt) -> bool {
+        matches!(stmt, Stmt::Update(_))
+    }
+}
+
+impl Default for UpdatePlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}

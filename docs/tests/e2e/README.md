@@ -1,6 +1,6 @@
-# GraphDB E2E 测试文档
+# Linkrs E2E 测试文档
 
-本文档描述了 GraphDB 端到端 (E2E) 测试的完整方案，包括测试架构、执行流程和扩展方法。
+本文档描述了 Linkrs 端到端 (E2E) 测试的完整方案，包括测试架构、执行流程和扩展方法。
 
 ## 目录
 
@@ -26,7 +26,7 @@
 │  ├── Test Suite: Optimizer                                   │
 │  └── Test Suite: Extended Types                              │
 ├─────────────────────────────────────────────────────────────┤
-│  GraphDB Client (graphdb_client.py)                          │
+│  Linkrs Client (linkrs_client.py)                          │
 │  ├── HTTP API Wrapper                                        │
 │  ├── Connection Management                                   │
 │  └── Result Parsing                                          │
@@ -42,7 +42,7 @@
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                     GraphDB Server                           │
+│                     Linkrs Server                           │
 │  (HTTP API on port 9758)                                     │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -50,7 +50,7 @@
 ### 测试流程
 
 ```
-1. 启动 GraphDB 服务器
+1. 启动 Linkrs 服务器
         │
         ▼
 2. 生成测试数据 (可选)
@@ -75,12 +75,12 @@
 graphDB/
 ├── scripts/
 │   ├── generate_e2e_data.py      # 测试数据生成脚本
-│   └── graphdb.ps1               # 服务管理脚本
+│   └── linkrs.ps1               # 服务管理脚本
 │
 ├── tests/
 │   └── e2e/
 │       ├── __init__.py
-│       ├── graphdb_client.py     # GraphDB HTTP 客户端
+│       ├── linkrs_client.py     # Linkrs HTTP 客户端
 │       ├── run_tests.py          # 测试运行主入口
 │       ├── test_social_network.py    # 社交网络测试套件
 │       ├── test_optimizer.py         # 优化器测试套件
@@ -109,17 +109,17 @@ graphDB/
 
 ### 前置条件
 
-1. 编译 GraphDB:
+1. 编译 Linkrs:
 ```powershell
 # 使用 VS 环境编译
 & 'D:\softwares\Visual Studio\Common7\Tools\Launch-VsDevShell.ps1'
 cargo build --release
 ```
 
-2. 启动 GraphDB 服务器:
+2. 启动 Linkrs 服务器:
 ```powershell
 # 方式1: 使用 PowerShell 脚本
-.\scripts\graphdb.ps1 start
+.\scripts\linkrs.ps1 start
 
 # 方式2: 直接运行
 cargo run --release
@@ -384,12 +384,12 @@ class MyScenarioGenerator(TestDataGenerator):
 # tests/e2e/test_myscenario.py
 
 import unittest
-from graphdb_client import GraphDBClient
+from linkrs_client import LinkrsClient
 
 class TestMyScenario(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.client = GraphDBClient()
+        cls.client = LinkrsClient()
         cls.client.connect()
         # setup data
 
@@ -460,7 +460,7 @@ Error: Request timeout
 解决方案:
 ```python
 # 增加客户端超时时间
-client = GraphDBClient(timeout=60)  # 默认 30 秒
+client = LinkrsClient(timeout=60)  # 默认 30 秒
 
 # 或者在测试中添加延迟
 import time
@@ -483,8 +483,8 @@ ls tests\e2e\data\
 
 # 3. 手动加载测试数据
 python -c "
-from graphdb_client import GraphDBClient, TestDataLoader
-client = GraphDBClient()
+from linkrs_client import LinkrsClient, TestDataLoader
+client = LinkrsClient()
 client.connect()
 loader = TestDataLoader(client)
 loader.load_from_file('tests/e2e/data/social_network_data.gql')
@@ -536,7 +536,7 @@ print(json.dumps(result.data, indent=2))
 @classmethod
 def setUpClass(cls):
     import pdb; pdb.set_trace()  # 设置断点
-    cls.client = GraphDBClient()
+    cls.client = LinkrsClient()
     cls.client.connect()
 ```
 
@@ -560,7 +560,7 @@ for batch in chunks(statements, 10):
 
 ```python
 # 对于大数据集测试，增加超时
-client = GraphDBClient(timeout=120)
+client = LinkrsClient(timeout=120)
 ```
 
 #### 3. 并行执行测试
@@ -577,8 +577,8 @@ pytest tests/e2e -n auto
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| GRAPHDB_HOST | GraphDB 服务器地址 | 127.0.0.1 |
-| GRAPHDB_PORT | GraphDB 服务器端口 | 9758 |
+| GRAPHDB_HOST | Linkrs 服务器地址 | 127.0.0.1 |
+| GRAPHDB_PORT | Linkrs 服务器端口 | 9758 |
 
 ### 命令行参数
 

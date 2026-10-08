@@ -7,9 +7,9 @@
 //! - Transaction isolation - repeatable read
 //! - Read committed data only
 
-use graphdb::core::Value;
-use graphdb::test_utils::test_scenario::TestScenario;
-use graphdb::transaction::{
+use linkrs::core::Value;
+use linkrs::test_utils::test_scenario::TestScenario;
+use linkrs::transaction::{
     ConcurrencyMode, TransactionErrorKind, TransactionManager, TransactionManagerConfig,
     TransactionOptions,
 };
@@ -89,7 +89,7 @@ async fn test_concurrent_readonly_transactions() {
 #[test]
 fn test_write_transaction_exclusivity() {
     let config = TransactionManagerConfig {
-        txn_config: graphdb::transaction::TransactionConfig::default()
+        txn_config: linkrs::transaction::TransactionConfig::default()
             .with_concurrency_mode(ConcurrencyMode::SingleWriter),
         ..Default::default()
     };

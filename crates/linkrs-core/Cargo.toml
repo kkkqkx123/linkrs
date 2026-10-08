@@ -1,0 +1,27 @@
+[package]
+name = "linkrs-core"
+version.workspace = true
+edition.workspace = true
+description = "Core data structures, types, and errors for Linkrs"
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["rc"] }
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+regex.workspace = true
+rand.workspace = true
+dec.workspace = true
+bumpalo.workspace = true
+compact_str.workspace = true
+crc32fast.workspace = true
+zstd.workspace = true
+bitvec.workspace = true
+postcard.workspace = true
+bcrypt.workspace = true
+utoipa = { workspace = true }

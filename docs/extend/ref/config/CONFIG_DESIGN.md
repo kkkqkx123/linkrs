@@ -1,4 +1,4 @@
-# GraphDB 扩展配置管理设计文档（务实版）
+# Linkrs 扩展配置管理设计文档（务实版）
 
 ## 1. 核心结论
 
@@ -115,12 +115,12 @@ pub struct EmbeddedConfig {
 ## 4. 配置文件示例
 
 ```toml
-# graphdb.toml
+# linkrs.toml
 
 [database]
 host = "127.0.0.1"
 port = 9758
-storage_path = "data/graphdb"
+storage_path = "data/linkrs"
 
 # 向量检索配置
 [vector]
@@ -177,9 +177,9 @@ let vector_client = VectorClient::new(&config.vector)?;
 vim config.toml
 
 # 2. 重启服务
-systemctl restart graphdb
+systemctl restart linkrs
 # 或
-./graphdb-server restart
+./linkrs-server restart
 ```
 
 ## 6. 为什么不需要热重载
@@ -231,4 +231,4 @@ systemctl restart graphdb
 - **零成本抽象**：不引入不必要的运行时开销
 - **解决实际问题**：只改进真正需要改进的地方
 
-对于 GraphDB 这样的单机图数据库，**简单重启比复杂的配置热重载更可靠、更易维护**。
+对于 Linkrs 这样的单机图数据库，**简单重启比复杂的配置热重载更可靠、更易维护**。

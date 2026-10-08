@@ -7,9 +7,9 @@ use bench_group::create_benchmark_group;
 const SAMPLE_SIZE: usize = 100;
 
 fn bench_json_serialization(c: &mut Criterion) {
-    use graphdb_core::types::VertexId;
-    use graphdb_core::vertex_edge_path::Tag;
-    use graphdb_core::{Value, Vertex};
+    use linkrs_core::types::VertexId;
+    use linkrs_core::vertex_edge_path::Tag;
+    use linkrs_core::{Value, Vertex};
 
     let mut group = create_benchmark_group(c, "json_serialization", SAMPLE_SIZE);
 
@@ -60,9 +60,9 @@ fn bench_json_serialization(c: &mut Criterion) {
 }
 
 fn bench_json_deserialization(c: &mut Criterion) {
-    use graphdb_core::types::VertexId;
-    use graphdb_core::vertex_edge_path::Tag;
-    use graphdb_core::{Value, Vertex};
+    use linkrs_core::types::VertexId;
+    use linkrs_core::vertex_edge_path::Tag;
+    use linkrs_core::{Value, Vertex};
 
     let mut group = create_benchmark_group(c, "json_deserialization", SAMPLE_SIZE);
 

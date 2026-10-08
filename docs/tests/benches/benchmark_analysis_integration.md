@@ -1,4 +1,4 @@
-# GraphDB 基准测试分析功能集成指南
+# Linkrs 基准测试分析功能集成指南
 
 **完成日期**: 2026-06-18  
 **目的**: 指导如何在性能基准测试中集成 EXPLAIN/PROFILE 分析功能，获取详细的性能指标
@@ -7,7 +7,7 @@
 
 ## 📋 执行总结
 
-GraphDB 项目已有完整的 EXPLAIN/PROFILE 功能支持，包括：
+Linkrs 项目已有完整的 EXPLAIN/PROFILE 功能支持，包括：
 
 - **EXPLAIN 语句**: 仅生成执行计划（不执行）
 - **EXPLAIN ANALYZE**: 执行查询并收集统计信息
@@ -65,15 +65,15 @@ pub struct GlobalExecutionStats {
 
 | 执行器 | 位置 | 功能 |
 |-------|------|------|
-| `ExplainExecutor` | `/crates/graphdb-query/src/query/executor/explain/explain_executor.rs` | 执行 EXPLAIN 和 EXPLAIN ANALYZE |
-| `ProfileExecutor` | `/crates/graphdb-query/src/query/executor/explain/profile_executor.rs` | 执行 PROFILE 语句，返回详细统计 |
-| `InstrumentedExecutor` | `/crates/graphdb-query/src/query/executor/explain/instrumented_executor.rs` | 包装执行器，收集细粒度统计 |
-| `ExecutionStatsContext` | `/crates/graphdb-query/src/query/executor/explain/execution_stats_context.rs` | 全局统计管理 |
+| `ExplainExecutor` | `/crates/linkrs-query/src/query/executor/explain/explain_executor.rs` | 执行 EXPLAIN 和 EXPLAIN ANALYZE |
+| `ProfileExecutor` | `/crates/linkrs-query/src/query/executor/explain/profile_executor.rs` | 执行 PROFILE 语句，返回详细统计 |
+| `InstrumentedExecutor` | `/crates/linkrs-query/src/query/executor/explain/instrumented_executor.rs` | 包装执行器，收集细粒度统计 |
+| `ExecutionStatsContext` | `/crates/linkrs-query/src/query/executor/explain/execution_stats_context.rs` | 全局统计管理 |
 
 ### 3. 输出格式
 
 ```
-位置: /crates/graphdb-query/src/query/executor/explain/format.rs
+位置: /crates/linkrs-query/src/query/executor/explain/format.rs
 
 支持格式:
 - Table:   人类可读的表格格式
@@ -97,7 +97,7 @@ pub struct GlobalExecutionStats {
 ```
 目标: 通过 EXPLAIN ANALYZE 获取执行计划和统计信息
 实现: benches/analysis_bench.rs
-使用工具: GraphDB EXPLAIN ANALYZE
+使用工具: Linkrs EXPLAIN ANALYZE
 指标: 规划时间、执行时间、行数、内存
 ```
 
@@ -105,7 +105,7 @@ pub struct GlobalExecutionStats {
 ```
 目标: 通过 PROFILE 语句进行深度性能分析
 实现: benches/profile_bench.rs
-使用工具: GraphDB PROFILE 语句
+使用工具: Linkrs PROFILE 语句
 指标: 节点级统计、缓存命中率、启动时间
 ```
 
@@ -157,7 +157,7 @@ pub struct GlobalExecutionStats {
 
 ```rust
 use criterion::{criterion_group, criterion_main, Criterion};
-use graphdb::api::client::GraphDBClient;
+use linkrs::api::client::LinkrsClient;
 use std::time::Duration;
 
 fn analyze_storage_operations(c: &mut Criterion) {
@@ -241,7 +241,7 @@ criterion_main!(benches);
 创建 `benches/analyzer/performance_analyzer.rs`，提供可复用的分析工具：
 
 ```rust
-use graphdb::api::client::GraphDBClient;
+use linkrs::api::client::LinkrsClient;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,11 +311,11 @@ pub enum BottleneckSeverity {
 }
 
 pub struct PerformanceAnalyzer {
-    client: GraphDBClient,
+    client: LinkrsClient,
 }
 
 impl PerformanceAnalyzer {
-    pub fn new(client: GraphDBClient) -> Self {
+    pub fn new(client: LinkrsClient) -> Self {
         Self { client }
     }
     
@@ -950,7 +950,7 @@ python3 scripts/generate_analysis_report.py \
 cat > scripts/generate_markdown_report.sh << 'EOF'
 #!/bin/bash
 
-echo "# GraphDB Performance Analysis Report" > analysis_report.md
+echo "# Linkrs Performance Analysis Report" > analysis_report.md
 echo "Generated: $(date)" >> analysis_report.md
 echo "" >> analysis_report.md
 
@@ -967,7 +967,7 @@ EOF
 
 ## ✅ 验收标准
 
-- [x] GraphDB 已支持 EXPLAIN ANALYZE 和 PROFILE
+- [x] Linkrs 已支持 EXPLAIN ANALYZE 和 PROFILE
 - [x] 执行统计结构已定义（ExecutorStats, NodeExecutionStats, GlobalExecutionStats）
 - [x] 分析型基准测试设计完成
 - [x] 性能分析器框架设计完成
@@ -1004,11 +1004,11 @@ EOF
 
 ## 🔗 相关资源
 
-### GraphDB 代码位置
-- EXPLAIN 执行器: `/crates/graphdb-query/src/query/executor/explain/explain_executor.rs`
-- PROFILE 执行器: `/crates/graphdb-query/src/query/executor/explain/profile_executor.rs`
-- 执行统计: `/crates/graphdb-core/src/core/stats/executor_stats.rs`
-- 格式化: `/crates/graphdb-query/src/query/executor/explain/format.rs`
+### Linkrs 代码位置
+- EXPLAIN 执行器: `/crates/linkrs-query/src/query/executor/explain/explain_executor.rs`
+- PROFILE 执行器: `/crates/linkrs-query/src/query/executor/explain/profile_executor.rs`
+- 执行统计: `/crates/linkrs-core/src/core/stats/executor_stats.rs`
+- 格式化: `/crates/linkrs-query/src/query/executor/explain/format.rs`
 
 ### 现有文档
 - `docs/tests/benches/performance_benchmark_plan.md` - 性能规划

@@ -1,0 +1,759 @@
+use crate::engine::data_store::EdgeTableKey;
+use linkrs_core::metadata::IndexMetadataManager;
+use linkrs_core::types::LabelId;
+use linkrs_core::StorageResult;
+use rayon::prelude::*;
+use std::path::Path;
+use std::sync::Arc;
+
+use super::GraphStorageContext;
+
+impl GraphStorageContext {
+    /// Monotonic checkpoint epoch for table commit manifests. Sourced from
+    /// the published checkpoint sequence (the scheduler's single-flight
+    /// order), so table commits share one global order without a new clock.
+    pub(crate) fn checkpoint_epoch_hint(&self) -> u64 {
+        if let Some(scheduler) = self.checkpoint_scheduler.lock().as_ref() {
+            return scheduler.epoch_hint();
+        }
+        let next = self
+            .persistent
+            .persistence
+            .as_ref()
+            .and_then(|p| {
+                p.read()
+                    .manifest_manager
+                    .load_latest()
+                    .ok()
+                    .flatten()
+                    .map(|m| m.checkpoint_id.saturating_add(1))
+            })
+            .unwrap_or(1);
+        next.max(1)
+    }
+
+    pub(crate) fn register_loaded_native_indexes(&self) -> StorageResult<()> {
+        let spaces = self.persistent.schema_manager.list_spaces()?;
+        let index_manager = self.persistent.index_data_manager.write();
+        for space in spaces {
+            for index in self
+                .persistent
+                .index_metadata_manager
+                .list_tag_indexes(space.space_id)?
+            {
+                index_manager.register_native_index(space.space_id, &index)?;
+            }
+            for index in self
+                .persistent
+                .index_metadata_manager
+                .list_edge_indexes(space.space_id)?
+            {
+                index_manager.register_native_index(space.space_id, &index)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn flush_tables_to_dir(&self, data_dir: &Path) -> StorageResult<()> {
+        use std::fs;
+
+        match self.trigger_background_maintenance() {
+            Ok(()) => {
+                if let Some(stats) = self.get_freeze_stats() {
+                    if stats.freeze_count > 0 {
+                        log::info!(
+                            "Pre-flush freeze: {} edges frozen in {} operations",
+                            stats.total_frozen_edges,
+                            stats.freeze_count
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                log::warn!("Pre-flush freeze failed: {}", err);
+            }
+        }
+
+        let compression = self.persistent.config.flush_config.compression;
+        let vertex_dir = data_dir.join("vertices");
+        fs::create_dir_all(&vertex_dir)?;
+
+        // One watermark capture shared by the vertex fold below and the edge
+        // flush that follows. Checkpoints persist current values only, so
+        // folding here keeps chains from surviving the checkpoint even when
+        // no background compaction ran recently.
+        let gc = self.gc_coordinator();
+        let wm = gc.capture_watermarks();
+        let margin = self.persistent.config.gc_safety_margin;
+        let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
+        let folded: usize = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.fold_version_chains(cleanup_ts))
+                .sum()
+        });
+        if folded > 0 {
+            log::debug!(
+                "Pre-flush vertex fold: {} version entries folded (cleanup_ts={})",
+                folded,
+                cleanup_ts
+            );
+        }
+
+        // Vertex table flush. Scatter-gather: collect table references under a
+        // brief catalog READ lock, then flush each table under its own shard
+        // locks outside the catalog lock. Previously the whole flush (disk IO,
+        // compression, serialization) ran inside the catalog WRITE lock,
+        // freezing every transaction begin and DDL for the entire database.
+        let vertex_tables: Vec<(
+            LabelId,
+            Arc<crate::vertex::vertex_table::ShardedVertexTable>,
+        )> = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .iter()
+                .map(|(label_id, table)| (*label_id, table.clone()))
+                .collect()
+        });
+        self.runtime.thread_pool.install(|| -> StorageResult<()> {
+            vertex_tables.par_iter().try_for_each(|(label_id, table)| {
+                let table_dir = vertex_dir.join(format!("label_{}", label_id));
+                table.flush(&table_dir, compression)
+            })?;
+            Ok(())
+        })?;
+
+        let edge_dir = data_dir.join("edges");
+        fs::create_dir_all(&edge_dir)?;
+
+        {
+            // Reuses the shared watermark captured before the vertex fold so
+            // every table in this flush observes the same cutoff.
+            let edge_tables: Vec<(
+                EdgeTableKey,
+                Arc<parking_lot::RwLock<crate::edge::EdgeStore>>,
+            )> = self.persistent.data_store.with_edge_tables(|tables| {
+                tables
+                    .iter()
+                    .map(|(key, arc)| (*key, arc.clone()))
+                    .collect()
+            });
+            self.runtime.thread_pool.install(|| -> StorageResult<()> {
+                edge_tables
+                    .par_iter()
+                    .try_for_each(|(key, edge_table)| -> StorageResult<()> {
+                        let table_dir = edge_dir.join(format!(
+                            "{}_{}_{}",
+                            key.src_label, key.dst_label, key.edge_label
+                        ));
+                        let mut table = edge_table.write();
+                        table.maybe_compact_for_flush_with_watermarks(
+                            &wm,
+                            margin,
+                            crate::edge::GROUP_FRAGMENTATION_THRESHOLD,
+                        );
+                        let kind = table.flush(&table_dir, compression)?;
+                        log::info!(
+                            "Edge flush {}_{}_{} kind={:?}",
+                            key.src_label,
+                            key.dst_label,
+                            key.edge_label,
+                            kind
+                        );
+                        if let Some(stats) = self.persistent.stats_manager.as_ref() {
+                            stats.record_checkpoint_strategy_by_name(match kind {
+                                crate::edge::EdgeCheckpointKind::AppendOnly => "edge-append-only",
+                                crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
+                            });
+                        }
+                        Ok(())
+                    })?;
+                Ok(())
+            })?;
+        }
+
+        let index_dir = data_dir.join("indexes");
+        fs::create_dir_all(&index_dir)?;
+        self.persistent
+            .index_data_manager
+            .read()
+            .flush(&index_dir)?;
+
+        if let Some(persistence) = self.persistent.persistence.as_ref() {
+            persistence
+                .read()
+                .wal_manager()
+                .and_then(|w| w.read().sync().ok());
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn flush_tables_to_checkpoint(&self, data_dir: &Path) -> StorageResult<()> {
+        use std::fs;
+
+        match self.trigger_background_maintenance() {
+            Ok(()) => {
+                if let Some(stats) = self.get_freeze_stats() {
+                    if stats.freeze_count > 0 {
+                        log::info!(
+                            "Pre-flush freeze: {} edges frozen in {} operations",
+                            stats.total_frozen_edges,
+                            stats.freeze_count
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                log::warn!("Pre-flush freeze failed: {}", err);
+            }
+        }
+
+        let compression = self.persistent.config.flush_config.compression;
+        let vertex_dir = data_dir.join("vertices");
+        fs::create_dir_all(&vertex_dir)?;
+
+        // Shared watermark for the vertex fold below and the edge flush that
+        // follows; checkpoints persist current values only.
+        let gc = self.gc_coordinator();
+        let wm = gc.capture_watermarks();
+        let margin = self.persistent.config.gc_safety_margin;
+        let cleanup_ts = wm.safe_gc_timestamp_with_margin(margin);
+        let folded: usize = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.fold_version_chains(cleanup_ts))
+                .sum()
+        });
+        if folded > 0 {
+            log::debug!(
+                "Pre-flush vertex fold: {} version entries folded (cleanup_ts={})",
+                folded,
+                cleanup_ts
+            );
+        }
+
+        // Compute global dirty ratio to decide incremental vs full flush.
+        let (global_dirty_ratio, global_total_dirty, global_total_pages) = {
+            let vertex_tables = self.persistent.data_store.with_vertex_tables(|tables| {
+                tables
+                    .iter()
+                    .map(|(label_id, table)| (*label_id, table.clone()))
+                    .collect::<Vec<_>>()
+            });
+            if vertex_tables.is_empty() {
+                (0.0, 0usize, 0usize)
+            } else {
+                let mut total_dirty = 0usize;
+                let mut total_pages = 0usize;
+                for (_, table) in &vertex_tables {
+                    total_dirty += table.total_dirty_pages();
+                    total_pages += table.total_pages();
+                }
+                let ratio = if total_pages == 0 {
+                    0.0
+                } else {
+                    total_dirty as f64 / total_pages as f64
+                };
+                (ratio, total_dirty, total_pages)
+            }
+        };
+        let strategy =
+            crate::persistence::dirty_page::select_checkpoint_strategy(global_dirty_ratio);
+        if let Some(stats) = self.persistent.stats_manager.as_ref() {
+            stats.record_dirty_pages(global_total_dirty as u64, global_total_pages as u64);
+            stats.record_checkpoint_strategy_by_name(strategy.as_str());
+        }
+        log::info!(
+            "Flush strategy selected: {:?} (dirty_ratio={:.3})",
+            strategy,
+            global_dirty_ratio
+        );
+
+        let vertex_tables: Vec<(
+            LabelId,
+            Arc<crate::vertex::vertex_table::ShardedVertexTable>,
+        )> = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .iter()
+                .map(|(label_id, table)| (*label_id, table.clone()))
+                .collect()
+        });
+        // Whole-checkpoint flush-kind policy: per-table verdicts plus
+        // reason counts select exactly one global kind. Any table overdue
+        // for a baseline escalates the whole checkpoint to full; the flush
+        // loop below publishes that kind for every table and refuses a
+        // table that flips to full underneath a globally incremental
+        // checkpoint instead of silently upgrading it.
+        let verdicts: Vec<crate::vertex::vertex_table::flush_trigger::FlushPlan> = vertex_tables
+            .iter()
+            .map(|(_, table)| table.flush_plan())
+            .collect();
+        for ((_, table), plan) in vertex_tables.iter().zip(verdicts.iter()) {
+            if plan.kind == crate::vertex::vertex_table::flush_trigger::FlushKind::Full {
+                log::info!(
+                    "vertex table '{}' overdue for a full baseline: reason={}",
+                    table.label_name(),
+                    plan.reason.as_str(),
+                );
+            }
+        }
+        let (verdict_kind, reason_counts) =
+            crate::vertex::vertex_table::flush_trigger::select_whole_db_kind(&verdicts);
+        {
+            let distribution = reason_counts
+                .iter()
+                .map(|(reason, count)| format!("{}={}", reason.as_str(), count))
+                .collect::<Vec<_>>()
+                .join(" ");
+            log::info!(
+                "flush policy selected: whole_db_kind={:?} {distribution}",
+                verdict_kind,
+            );
+        }
+        let mut use_incremental = matches!(
+            strategy,
+            crate::persistence::dirty_page::CheckpointStrategy::Incremental
+        ) && global_dirty_ratio < 0.1
+            && global_dirty_ratio > 0.0;
+        if verdict_kind == crate::vertex::vertex_table::flush_trigger::FlushKind::Full {
+            use_incremental = false;
+        }
+
+        // Collect dirty pages for incremental meta
+        let (all_dirty_pages, total_pages) = {
+            use std::collections::HashSet;
+            let mut seen = HashSet::new();
+            let mut pages = Vec::new();
+            let mut total = 0usize;
+            for (_, table) in &vertex_tables {
+                total += table.total_pages();
+                for id in table.collect_dirty_pages() {
+                    if seen.insert(id) {
+                        pages.push(id);
+                    }
+                }
+            }
+            (pages, total)
+        };
+
+        self.runtime.thread_pool.install(|| -> StorageResult<()> {
+            vertex_tables.par_iter().try_for_each(|(label_id, table)| {
+                let table_dir = vertex_dir.join(format!("label_{}", label_id));
+                if use_incremental {
+                    // A table that flipped to a full verdict after policy
+                    // selection must error, never silently upgrade inside a
+                    // globally incremental checkpoint.
+                    let plan = table.flush_plan();
+                    crate::vertex::vertex_table::flush_trigger::check_single_table_kind(
+                        table.label_name(),
+                        plan.kind,
+                        crate::vertex::vertex_table::flush_trigger::FlushKind::Incremental,
+                        plan.reason,
+                    )?;
+                    let epoch = self.checkpoint_epoch_hint();
+                    let base = self.persistent.persistence.as_ref().and_then(|p| {
+                        p.read()
+                            .manifest_manager
+                            .load_latest()
+                            .ok()
+                            .flatten()
+                            .map(|m| m.checkpoint_id)
+                    });
+                    table.flush_incremental_with_epoch(&table_dir, compression, epoch, base)
+                } else {
+                    let epoch = self.checkpoint_epoch_hint();
+                    table.flush_with_epoch(
+                        &table_dir,
+                        compression,
+                        epoch,
+                        crate::vertex::vertex_table::CommitKind::Full,
+                        None,
+                    )
+                }
+            })?;
+            Ok(())
+        })?;
+
+        // Persist incremental checkpoint meta if incremental selected.
+        // Written via shadow file so a crash cannot leave a half-written
+        // meta next to a fully renamed data tree.
+        if use_incremental {
+            // base checkpoint is latest published sequence
+            let base_checkpoint_id = self.persistent.persistence.as_ref().and_then(|p| {
+                p.read()
+                    .manifest_manager
+                    .load_latest()
+                    .ok()
+                    .flatten()
+                    .map(|m| m.checkpoint_id)
+            });
+            let meta = crate::persistence::dirty_page::IncrementalCheckpointMeta {
+                base_checkpoint_id,
+                dirty_pages: all_dirty_pages.clone(),
+                page_checksums: std::collections::HashMap::new(),
+                total_pages,
+                dirty_ratio: global_dirty_ratio,
+                strategy,
+            };
+            // Write incremental.meta alongside data_dir (checkpoint root = data_dir parent)
+            if let Some(parent) = data_dir.parent() {
+                let meta_path = parent.join("incremental.meta");
+                if let Ok(json) = serde_json::to_string_pretty(&meta) {
+                    if let Err(e) =
+                        crate::compression::write_shadow_file(&meta_path, json.as_bytes())
+                    {
+                        log::warn!(
+                            "failed to publish incremental.meta {}: {}",
+                            meta_path.display(),
+                            e
+                        );
+                    }
+                }
+                // Also clear global dirty after successful incremental persist
+                // (per-table clear already done in flush_incremental, but ensure)
+                for (_, table) in &vertex_tables {
+                    table.clear_dirty();
+                }
+            }
+            if let Some(stats) = self.persistent.stats_manager.as_ref() {
+                stats.record_incremental_checkpoint(
+                    std::time::Duration::from_micros(all_dirty_pages.len() as u64 * 100),
+                    total_pages as u64,
+                );
+            }
+        } else if let Some(stats) = self.persistent.stats_manager.as_ref() {
+            // Full/Hybrid still records ratio
+            stats.record_incremental_checkpoint(std::time::Duration::ZERO, total_pages as u64);
+        }
+
+        let edge_dir = data_dir.join("edges");
+        fs::create_dir_all(&edge_dir)?;
+
+        {
+            // Reuses the shared watermark captured before the vertex fold so
+            // every table in this checkpoint observes the same cutoff.
+            let edge_tables: Vec<(
+                EdgeTableKey,
+                Arc<parking_lot::RwLock<crate::edge::EdgeStore>>,
+            )> = self.persistent.data_store.with_edge_tables(|tables| {
+                tables
+                    .iter()
+                    .map(|(key, arc)| (*key, arc.clone()))
+                    .collect()
+            });
+            self.runtime.thread_pool.install(|| -> StorageResult<()> {
+                edge_tables
+                    .par_iter()
+                    .try_for_each(|(key, edge_table)| -> StorageResult<()> {
+                        let table_dir = edge_dir.join(format!(
+                            "{}_{}_{}",
+                            key.src_label, key.dst_label, key.edge_label
+                        ));
+                        let mut table = edge_table.write();
+                        table.maybe_compact_for_flush_with_watermarks(
+                            &wm,
+                            margin,
+                            crate::edge::GROUP_FRAGMENTATION_THRESHOLD,
+                        );
+                        let kind = table.flush(&table_dir, compression)?;
+                        log::info!(
+                            "Edge flush {}_{}_{} kind={:?}",
+                            key.src_label,
+                            key.dst_label,
+                            key.edge_label,
+                            kind
+                        );
+                        if let Some(stats) = self.persistent.stats_manager.as_ref() {
+                            stats.record_checkpoint_strategy_by_name(match kind {
+                                crate::edge::EdgeCheckpointKind::AppendOnly => "edge-append-only",
+                                crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
+                            });
+                        }
+                        Ok(())
+                    })?;
+                Ok(())
+            })?;
+        }
+
+        let index_dir = data_dir.join("indexes");
+        fs::create_dir_all(&index_dir)?;
+        self.persistent
+            .index_data_manager
+            .read()
+            .flush(&index_dir)?;
+
+        if let Some(persistence) = self.persistent.persistence.as_ref() {
+            persistence
+                .read()
+                .wal_manager()
+                .and_then(|w| w.read().sync().ok());
+        }
+
+        Ok(())
+    }
+
+    fn parse_base_checkpoint_id(dir: &Path) -> Option<u64> {
+        use std::fs::File;
+        use std::io::{BufRead, BufReader};
+        let meta = dir.join("checkpoint.meta");
+        let file = File::open(meta).ok()?;
+        let reader = BufReader::new(file);
+        for line in reader.lines().map_while(Result::ok) {
+            if let Some(val) = line.strip_prefix("base_checkpoint_id=") {
+                if let Ok(id) = val.parse::<u64>() {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    }
+
+    pub(crate) fn restore_from_checkpoint(&self, checkpoint_dir: &Path) -> StorageResult<()> {
+        use std::fs;
+
+        // Incremental chain with a unified commit order: the leaf is only
+        // valid on top of its baseline epoch. A missing link never degrades
+        // to a partial overlay; it refuses so the caller falls back to the
+        // last complete baseline instead of mixing old and new files.
+        if let Some(base_id) = Self::parse_base_checkpoint_id(checkpoint_dir) {
+            if let Some(parent) = checkpoint_dir.parent() {
+                let base_path = parent.join(format!("checkpoint_{}", base_id));
+                if base_path == *checkpoint_dir || !base_path.exists() {
+                    return Err(linkrs_core::StorageError::deserialize_error(format!(
+                        "incremental checkpoint {} references missing baseline epoch {} at {}",
+                        checkpoint_dir.display(),
+                        base_id,
+                        base_path.display(),
+                    )));
+                }
+                self.restore_from_checkpoint(&base_path)?;
+                // Base restored; overlay this epoch strictly. Commit-manifest
+                // covered files propagate corruption instead of warn-skip.
+                let checkpoint_paths = crate::engine::paths::StoragePaths::new(checkpoint_dir);
+                let vertex_dir = checkpoint_paths.vertices_dir();
+                if vertex_dir.exists() {
+                    // Orphan staging/shadow files are tolerated and cleared;
+                    // manifest-listed content below is strict.
+                    for entry in fs::read_dir(&vertex_dir)?.flatten() {
+                        let p = entry.path();
+                        if p.is_dir() {
+                            crate::vertex::vertex_table::ShardedVertexTable::cleanup_orphans(&p);
+                        }
+                    }
+                    self.persistent.data_store.with_vertex_tables_mut(
+                        |vertex_tables| {
+                            for entry in fs::read_dir(&vertex_dir)? {
+                                let entry = entry?;
+                                let path = entry.path();
+                                if path.is_dir() {
+                                    if let Some(dir_name) = path.file_name() {
+                                        if let Some(name_str) = dir_name.to_str() {
+                                            if let Some(label_str) =
+                                                name_str.strip_prefix("label_")
+                                            {
+                                                if let Ok(label_id) =
+                                                    label_str.parse::<LabelId>()
+                                                {
+                                                    if let Some(table) =
+                                                        vertex_tables.get(&label_id)
+                                                    {
+                                                        table.apply_delta_pages(&path).map_err(|err| {
+                                                            linkrs_core::StorageError::deserialize_error(format!(
+                                                                "incremental epoch {} label {} delta at {}: {}",
+                                                                base_id,
+                                                                label_id,
+                                                                path.display(),
+                                                                err
+                                                            ))
+                                                        })?;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Ok::<(), linkrs_core::StorageError>(())
+                        },
+                    )?;
+                }
+                let edge_dir = checkpoint_paths.edges_dir();
+                if edge_dir.exists() {
+                    for entry in fs::read_dir(&edge_dir)? {
+                        let entry = entry?;
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(dir_name) = path.file_name() {
+                                if let Some(name_str) = dir_name.to_str() {
+                                    let parts: Vec<&str> = name_str.splitn(3, '_').collect();
+                                    if parts.len() == 3 {
+                                        if let (Ok(src_label), Ok(dst_label), Ok(edge_label)) = (
+                                            parts[0].parse::<LabelId>(),
+                                            parts[1].parse::<LabelId>(),
+                                            parts[2].parse::<LabelId>(),
+                                        ) {
+                                            let key =
+                                                EdgeTableKey::new(src_label, dst_label, edge_label);
+                                            let data_store = &self.persistent.data_store;
+                                            if let Some(arc) =
+                                                data_store.try_get_edge_table_mut(&key)
+                                            {
+                                                let mut table = arc.write();
+                                                if let Err(err) = table.load(&path) {
+                                                    log::warn!(
+                                                        "Failed to load edge table for incremental checkpoint {}: {}",
+                                                        path.display(),
+                                                        err
+                                                    );
+                                                } else if let Some(stats) =
+                                                    &self.persistent.stats_manager
+                                                {
+                                                    table.set_stats_manager(stats.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let index_dir = checkpoint_paths.data_dir().join("indexes");
+                if index_dir.exists() {
+                    if let Err(e) = self.persistent.index_data_manager.write().load(&index_dir) {
+                        log::warn!(
+                            "Failed to load indexes for incremental checkpoint {}: {}",
+                            checkpoint_dir.display(),
+                            e
+                        );
+                    }
+                }
+                if let Err(e) = self.register_loaded_native_indexes() {
+                    log::warn!(
+                        "Failed to register indexes after incremental restore {}: {}",
+                        checkpoint_dir.display(),
+                        e
+                    );
+                }
+                self.rebuild_vertex_id_domains();
+                return Ok(());
+            }
+        }
+
+        let checkpoint_paths = crate::engine::paths::StoragePaths::new(checkpoint_dir);
+
+        let vertex_dir = checkpoint_paths.vertices_dir();
+        if vertex_dir.exists() {
+            for entry in fs::read_dir(&vertex_dir)?.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    crate::vertex::vertex_table::ShardedVertexTable::cleanup_orphans(&p);
+                }
+            }
+            self.persistent
+                .data_store
+                .with_vertex_tables_mut(|vertex_tables| {
+                    for entry in fs::read_dir(&vertex_dir)? {
+                        let entry = entry?;
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(dir_name) = path.file_name() {
+                                if let Some(name_str) = dir_name.to_str() {
+                                    if let Some(label_str) = name_str.strip_prefix("label_") {
+                                        if let Ok(label_id) = label_str.parse::<LabelId>() {
+                                            if let Some(table) =
+                                                vertex_tables.get(&label_id).cloned()
+                                            {
+                                                // The persisted lineage owns the
+                                                // identifier decoding: adopt the
+                                                // manifest layout and generation
+                                                // when they differ from the running
+                                                // configuration (which only governs
+                                                // new tables). Layout, router, or
+                                                // generation mismatches refuse the
+                                                // open with a rebuild directive
+                                                // instead of mis-decoding.
+                                                if let Some(lineage) =
+                                                    crate::vertex::vertex_table::ShardedVertexTable::manifest_layout(&path)?
+                                                {
+                                                    if lineage.layout != table.layout()
+                                                        || lineage.generation != table.generation()
+                                                    {
+                                                        let rebuilt = std::sync::Arc::new(
+                                                            crate::vertex::vertex_table::ShardedVertexTable::open_at(
+                                                                label_id,
+                                                                table.label_name().to_string(),
+                                                                table.schema(),
+                                                                &path,
+                                                            )?,
+                                                        );
+                                                        vertex_tables.insert(label_id, rebuilt);
+                                                    } else {
+                                                        table.as_ref().load(&path)?;
+                                                    }
+                                                } else {
+                                                    table.as_ref().load(&path)?;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok::<(), linkrs_core::StorageError>(())
+                })?;
+        }
+
+        let edge_dir = checkpoint_paths.edges_dir();
+        if edge_dir.exists() {
+            for entry in fs::read_dir(&edge_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(dir_name) = path.file_name() {
+                        if let Some(name_str) = dir_name.to_str() {
+                            let parts: Vec<&str> = name_str.splitn(3, '_').collect();
+                            if parts.len() == 3 {
+                                if let (Ok(src_label), Ok(dst_label), Ok(edge_label)) = (
+                                    parts[0].parse::<LabelId>(),
+                                    parts[1].parse::<LabelId>(),
+                                    parts[2].parse::<LabelId>(),
+                                ) {
+                                    let key = EdgeTableKey::new(src_label, dst_label, edge_label);
+                                    let data_store = &self.persistent.data_store;
+                                    if let Some(arc) = data_store.try_get_edge_table_mut(&key) {
+                                        let mut table = arc.write();
+                                        table.load(&path)?;
+                                        if let Some(stats) = &self.persistent.stats_manager {
+                                            table.set_stats_manager(stats.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Checkpoints place native index files below data/ because they are
+        // flushed together with the table snapshot.
+        let index_dir = checkpoint_paths.data_dir().join("indexes");
+        if index_dir.exists() {
+            self.persistent
+                .index_data_manager
+                .write()
+                .load(&index_dir)?;
+        }
+
+        self.register_loaded_native_indexes()?;
+
+        // Restored tables bypass the write-path domain accumulator; rebuild
+        // the self-proven vertex-id evidence and bump the layout version so
+        // cached plans that assumed an older layout are invalidated.
+        self.rebuild_vertex_id_domains();
+
+        Ok(())
+    }
+}

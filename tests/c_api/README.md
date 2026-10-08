@@ -1,6 +1,6 @@
-# GraphDB C API integration testing
+# Linkrs C API integration testing
 
-This directory contains integration tests for GraphDB C API.
+This directory contains integration tests for Linkrs C API.
 
 ##Directory structure
 
@@ -14,9 +14,9 @@ tests/c_api/
 
 ##Preconditions
 
-1. **Rust Toolchain **: Used to compile GraphDB library
+1. **Rust Toolchain **: Used to compile Linkrs library
 2. **MSVC Compiler **: Windows platform recommends using Visual Studio's MSVC toolchain
-3. **GraphDB library compiled **: Run `cargo build --lib` to generate library file
+3. **Linkrs library compiled **: Run `cargo build --lib` to generate library file
 
 ##Construction method
 
@@ -62,7 +62,7 @@ ctest --verbose
 ###Method 3: Manual compilation (MSVC)
 
 ```cmd
-cl.exe /W4 /I../../include /Febuild\bin\graphdb_c_api_tests.exe tests.c /link /LIBPATH:../../target/debug graphdb.dll.lib ws2_32.lib
+cl.exe /W4 /I../../include /Febuild\bin\linkrs_c_api_tests.exe tests.c /link /LIBPATH:../../target/debug linkrs.dll.lib ws2_32.lib
 ```
 
 ##Test coverage
@@ -104,9 +104,9 @@ cl.exe /W4 /I../../include /Febuild\bin\graphdb_c_api_tests.exe tests.c /link /L
 
 ##Frequently Asked Questions
 
-### 1. GraphDB library not found
+### 1. Linkrs library not found
 
-** Solution **: Compile GraphDB project first
+** Solution **: Compile Linkrs project first
 ```bash
 cargo build --lib
 ```
@@ -122,7 +122,7 @@ $env:PATH = "target\debug;$env:PATH"
 
 ** Cause **: Empty structure exists in header file
 
-** Resolution **: Ensure that the struct definition in `include/graphdb.h` contains `_dummy` members
+** Resolution **: Ensure that the struct definition in `include/linkrs.h` contains `_dummy` members
 
 ##Notes
 

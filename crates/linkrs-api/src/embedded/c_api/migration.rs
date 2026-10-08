@@ -1,0 +1,259 @@
+use std::ffi::{c_char, c_int, CStr, CString};
+use std::ptr;
+
+use crate::embedded::c_api::database::GraphDbHandle;
+use crate::embedded::c_api::error::set_last_error_message;
+use crate::embedded::c_api::types::linkrs_t;
+
+/// C representation of a migration report.
+#[repr(C)]
+pub struct linkrs_migration_report_t {
+    pub success: u8,
+    pub steps_completed: u64,
+    pub rows_migrated: u64,
+    /// Null-terminated JSON string of errors array; caller must free via `linkrs_free_string`.
+    pub errors_json: *mut c_char,
+}
+
+/// Execute a migration plan given as JSON.
+///
+/// Runs through the shared online orchestration: writes stall only across
+/// schema-modifying steps while the data backfill stays online.
+///
+/// # Arguments
+/// - `db`: Database handle
+/// - `plan_json`: Null-terminated JSON string of `MigrationPlan`
+///
+/// # Returns
+/// - On success: pointer to `linkrs_migration_report_t` (must be freed with `linkrs_migration_report_free`)
+/// - On failure: null pointer (error details via `linkrs_errmsg`)
+///
+/// # Safety
+/// - `db` must be a valid handle from `linkrs_open`
+/// - `plan_json` must be a valid null-terminated UTF-8 string
+/// - Returned pointer must be freed by caller
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_migration_execute(
+    db: *mut linkrs_t,
+    plan_json: *const c_char,
+) -> *mut linkrs_migration_report_t {
+    if db.is_null() || plan_json.is_null() {
+        set_last_error_message("invalid argument: null pointer".to_string());
+        return ptr::null_mut();
+    }
+
+    let plan_str = unsafe {
+        match CStr::from_ptr(plan_json).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                set_last_error_message("invalid plan_json: not utf8".to_string());
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let plan: linkrs_migration::MigrationPlan = match serde_json::from_str(plan_str) {
+        Ok(p) => p,
+        Err(e) => {
+            set_last_error_message(format!("failed to parse plan json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let handle = unsafe { &*(db as *mut GraphDbHandle) };
+    let report = match handle
+        .inner
+        .execute_migration_plan_online(&plan, &linkrs_migration::MigrationConfig::default())
+    {
+        Ok(r) => r,
+        Err(e) => {
+            set_last_error_message(format!("migration failed: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let errors_json = serde_json::to_string(&report.errors).unwrap_or_else(|_| "[]".to_string());
+    let errors_c = match CString::new(errors_json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    };
+
+    let c_report = Box::new(linkrs_migration_report_t {
+        success: if report.success { 1 } else { 0 },
+        steps_completed: report.steps_completed as u64,
+        rows_migrated: report.rows_migrated,
+        errors_json: errors_c,
+    });
+
+    Box::into_raw(c_report)
+}
+
+/// Free a migration report returned by `linkrs_migration_execute`.
+///
+/// # Safety
+/// - `report` must be a valid pointer from `linkrs_migration_execute` or null
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_migration_report_free(report: *mut linkrs_migration_report_t) {
+    if report.is_null() {
+        return;
+    }
+    unsafe {
+        let r = Box::from_raw(report);
+        if !r.errors_json.is_null() {
+            let _ = CString::from_raw(r.errors_json);
+        }
+    }
+}
+
+/// Generate a migration plan and return it as JSON string.
+///
+/// Caller must free the returned string with `linkrs_free_string`.
+///
+/// # Safety
+/// - `db` must be valid
+/// - `space`, `label` must be valid null-terminated strings
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_migration_plan_json(
+    db: *mut linkrs_t,
+    space: *const c_char,
+    label: *const c_char,
+    is_edge: c_int,
+    from_version: u64,
+    to_version: u64,
+    expand_contract: c_int,
+) -> *mut c_char {
+    if db.is_null() || space.is_null() || label.is_null() {
+        set_last_error_message("invalid argument: null pointer".to_string());
+        return ptr::null_mut();
+    }
+
+    let space_str = unsafe {
+        match CStr::from_ptr(space).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                set_last_error_message("invalid space".to_string());
+                return ptr::null_mut();
+            }
+        }
+    };
+    let label_str = unsafe {
+        match CStr::from_ptr(label).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                set_last_error_message("invalid label".to_string());
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let handle = unsafe { &*(db as *mut GraphDbHandle) };
+    let expand = expand_contract != 0;
+    let plan_res = if is_edge != 0 {
+        handle.inner.generate_edge_migration_plan_with_expand(
+            space_str,
+            label_str,
+            from_version,
+            to_version,
+            expand,
+        )
+    } else {
+        handle.inner.generate_vertex_migration_plan_with_expand(
+            space_str,
+            label_str,
+            from_version,
+            to_version,
+            expand,
+        )
+    };
+
+    let plan = match plan_res {
+        Ok(p) => p,
+        Err(e) => {
+            set_last_error_message(format!("failed to generate plan: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let json = match serde_json::to_string(&plan) {
+        Ok(j) => j,
+        Err(e) => {
+            set_last_error_message(format!("failed to serialize plan: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match CString::new(json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Roll back a migration plan given as JSON.
+///
+/// Runs a generated rollback plan when one exists, otherwise restores from
+/// the pre-migration backup when one was taken.
+///
+/// # Arguments
+/// - `db`: Database handle
+/// - `plan_json`: Null-terminated JSON string of `MigrationPlan`
+///
+/// # Returns
+/// - On success: pointer to `linkrs_migration_report_t` (must be freed with `linkrs_migration_report_free`)
+/// - On failure: null pointer (error details via `linkrs_errmsg`)
+///
+/// # Safety
+/// - `db` must be a valid handle from `linkrs_open`
+/// - `plan_json` must be a valid null-terminated UTF-8 string
+/// - Returned pointer must be freed by caller
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_migration_rollback(
+    db: *mut linkrs_t,
+    plan_json: *const c_char,
+) -> *mut linkrs_migration_report_t {
+    if db.is_null() || plan_json.is_null() {
+        set_last_error_message("invalid argument: null pointer".to_string());
+        return ptr::null_mut();
+    }
+
+    let plan_str = unsafe {
+        match CStr::from_ptr(plan_json).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                set_last_error_message("invalid plan_json: not utf8".to_string());
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let plan: linkrs_migration::MigrationPlan = match serde_json::from_str(plan_str) {
+        Ok(p) => p,
+        Err(e) => {
+            set_last_error_message(format!("failed to parse plan json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let handle = unsafe { &*(db as *mut GraphDbHandle) };
+    let report = match handle.inner.rollback_migration(&plan) {
+        Ok(r) => r,
+        Err(e) => {
+            set_last_error_message(format!("rollback failed: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let errors_json = serde_json::to_string(&report.errors).unwrap_or_else(|_| "[]".to_string());
+    let errors_c = match CString::new(errors_json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    };
+
+    let c_report = Box::new(linkrs_migration_report_t {
+        success: if report.success { 1 } else { 0 },
+        steps_completed: report.steps_completed as u64,
+        rows_migrated: report.rows_migrated,
+        errors_json: errors_c,
+    });
+
+    Box::into_raw(c_report)
+}

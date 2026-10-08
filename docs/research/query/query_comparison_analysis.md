@@ -1,7 +1,7 @@
 # 查询语句对比分析：当前项目 vs ladybug vs neug
 
 > 对比对象：
-> - **当前项目**（linkrs，Rust，Nebula 语句 + Cypher 混合方言）—— 依据 `crates/graphdb-query/**` 与 `docs/release/0x_*.md`
+> - **当前项目**（linkrs，Rust，Nebula 语句 + Cypher 混合方言）—— 依据 `crates/linkrs-query/**` 与 `docs/release/0x_*.md`
 > - **ladybug**（`ref/ladybug`，Kùzu 衍生 openCypher）—— 详见 [ladybug_query_statements.md](./ladybug_query_statements.md)
 > - **neug**（`ref/neug`，openCypher）—— 详见 [neug_query_statements.md](./neug_query_statements.md)
 
@@ -12,7 +12,7 @@
 | 方言基础 | Nebula Graph 语句（GO/FETCH/LOOKUP/管道 `\|`）+ openCypher（MATCH/RETURN/MERGE）混合 | 纯 openCypher + `iC_` 扩展 | 纯 openCypher + `nEUG_` 扩展 |
 | 语法定义 | 手写词法/递归下降（`parser/lexing`、`parser/parsing`） | ANTLR4 `Cypher.g4`（925 行） | ANTLR4 `Cypher.g4`（895 行） |
 | 查询组合 | **管道 `\|` 为主**，另有 UNION/INTERSECT/MINUS、多语句封装 | `UNION [ALL]` + `WITH` 多段查询 | `UNION [ALL]` + `WITH` 多段查询，另有 `CALL (args) {union}` 共享作用域扩展 |
-| 测试佐证 | `crates/graphdb-query/tests/**`、`tests/e2e/**` | 591 个 `.test` 文件（含 TCK） | **无测试**（仅语法与注释示例） |
+| 测试佐证 | `crates/linkrs-query/tests/**`、`tests/e2e/**` | 591 个 `.test` 文件（含 TCK） | **无测试**（仅语法与注释示例） |
 
 三者在"读-投影-更新"的核心骨架上一致（MATCH/WHERE/RETURN/WITH/CREATE/MERGE/SET/DELETE），差异主要在**方言语句族、连接提示形态、索引/搜索语句化程度**。
 

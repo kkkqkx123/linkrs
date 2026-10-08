@@ -5,10 +5,10 @@
 //! Run with:
 //!   cargo bench --bench storage_read_baseline
 
-use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Value, Vertex};
-use graphdb::storage::{GraphStorage, ScanOptions, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Value, Vertex};
+use linkrs::storage::{GraphStorage, ScanOptions, StorageReader, StorageSchemaOps, StorageWriter};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;

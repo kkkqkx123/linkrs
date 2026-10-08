@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use std::time::{Duration, Instant};
 
-use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Value, Vertex};
-use graphdb::storage::{GraphStorage, StorageOperationContextOps, StorageSchemaOps, StorageWriter};
+use linkrs::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Value, Vertex};
+use linkrs::storage::{GraphStorage, StorageOperationContextOps, StorageSchemaOps, StorageWriter};
 
 const SPACE: &str = "b2";
 const TAG: &str = "Node";

@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档详细分析了 GraphDB 项目中全文检索功能与存储层的集成方案，包括架构设计、API 接口、集成模式和最佳实践。
+本文档详细分析了 Linkrs 项目中全文检索功能与存储层的集成方案，包括架构设计、API 接口、集成模式和最佳实践。
 
 ## 目录
 
@@ -515,7 +515,7 @@ coordinator.on_vertex_inserted(...);
 在测试文件中导入 `StorageClient` trait：
 
 ```rust
-use graphdb::storage::storage_client::StorageClient;
+use linkrs::storage::storage_client::StorageClient;
 ```
 
 **完整导入列表**：
@@ -526,7 +526,7 @@ use common::{
     storage_helpers::{create_test_space, get_storage, person_tag_info},
     TestStorage,
 };
-use graphdb::storage::storage_client::StorageClient;
+use linkrs::storage::storage_client::StorageClient;
 ```
 
 ### 问题 3：MutexGuard 生命周期
@@ -592,8 +592,8 @@ use parking_lot::{Mutex, MutexGuard};
 use std::sync::Arc;
 
 pub fn get_storage(
-    storage: &Arc<Mutex<graphdb::storage::redb_storage::RedbStorage>>,
-) -> MutexGuard<'_, graphdb::storage::redb_storage::RedbStorage> {
+    storage: &Arc<Mutex<linkrs::storage::redb_storage::RedbStorage>>,
+) -> MutexGuard<'_, linkrs::storage::redb_storage::RedbStorage> {
     storage.lock()
 }
 ```
@@ -662,4 +662,4 @@ pub fn get_storage(
 
 **文档创建日期**: 2026-04-07  
 **版本**: v1.0  
-**适用 GraphDB 版本**: 0.1.0
+**适用 Linkrs 版本**: 0.1.0

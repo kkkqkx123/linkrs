@@ -5,7 +5,7 @@
 /// TC-220: Index key structure
 #[test]
 fn test_index_key_structure() {
-    use graphdb::sync::IndexOpKey;
+    use linkrs::sync::IndexOpKey;
 
     let key = IndexOpKey::new(42, "Person", "name");
 
@@ -23,8 +23,8 @@ fn test_index_key_structure() {
 /// TC-221: Index operation types
 #[test]
 fn test_index_operation_types() {
-    use graphdb::sync::types::{ChangeType, IndexData, IndexType};
-    use graphdb::sync::{IndexOpKey, IndexOperation};
+    use linkrs::sync::types::{ChangeType, IndexData, IndexType};
+    use linkrs::sync::{IndexOpKey, IndexOperation};
 
     let insert_op = IndexOperation {
         key: IndexOpKey::new(1, "tag", "field"),
@@ -62,7 +62,7 @@ fn test_index_operation_types() {
 #[cfg(feature = "fulltext")]
 #[test]
 fn test_fulltext_error_types() {
-    use graphdb::sync::coordinator::FulltextError;
+    use linkrs::sync::coordinator::FulltextError;
 
     let not_found = FulltextError::IndexNotFound("my_index".to_string());
     assert!(matches!(not_found, FulltextError::IndexNotFound(_)));
@@ -77,7 +77,7 @@ fn test_fulltext_error_types() {
 /// TC-225: Vector error types
 #[test]
 fn test_vector_error_types() {
-    use graphdb::sync::vector_error::VectorError;
+    use linkrs::sync::vector_error::VectorError;
 
     let not_found = VectorError::IndexNotFound("index".to_string());
     assert!(matches!(not_found, VectorError::IndexNotFound(_)));
@@ -102,8 +102,8 @@ fn test_vector_error_types() {
 #[cfg(feature = "fulltext")]
 #[test]
 fn test_coordinator_error_types() {
-    use graphdb::sync::coordinator::{CoordinatorError, FulltextError};
-    use graphdb::sync::vector_error::{VectorCoordinatorError, VectorError};
+    use linkrs::sync::coordinator::{CoordinatorError, FulltextError};
+    use linkrs::sync::vector_error::{VectorCoordinatorError, VectorError};
 
     let fulltext_coord_err = CoordinatorError::Fulltext(FulltextError::Timeout);
     assert!(matches!(fulltext_coord_err, CoordinatorError::Fulltext(_)));
@@ -115,11 +115,11 @@ fn test_coordinator_error_types() {
 /// TC-227: Dead letter entry creation
 #[test]
 fn test_dead_letter_entry() {
-    use graphdb::sync::dead_letter_queue::{
+    use linkrs::sync::dead_letter_queue::{
         DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig,
     };
-    use graphdb::sync::types::{ChangeType, IndexData, IndexType};
-    use graphdb::sync::{IndexOpKey, IndexOperation};
+    use linkrs::sync::types::{ChangeType, IndexData, IndexType};
+    use linkrs::sync::{IndexOpKey, IndexOperation};
 
     let dlq = DeadLetterQueue::new(DeadLetterQueueConfig::default());
 
@@ -145,8 +145,8 @@ fn test_dead_letter_entry() {
 #[cfg(feature = "fulltext")]
 #[test]
 fn test_change_type_conversion() {
-    use graphdb::sync::coordinator::ChangeType;
-    use graphdb::sync::VectorChangeType;
+    use linkrs::sync::coordinator::ChangeType;
+    use linkrs::sync::VectorChangeType;
 
     let vt: VectorChangeType = ChangeType::Insert.into();
     assert!(matches!(vt, VectorChangeType::Insert));
@@ -162,7 +162,7 @@ fn test_change_type_conversion() {
 #[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_vector_index_location_tc229() {
-    use graphdb::sync::VectorIndexLocation;
+    use linkrs::sync::VectorIndexLocation;
 
     let loc = VectorIndexLocation::new(1, "tag", "field");
     assert_eq!(loc.to_collection_name(), format!("space_{}", 1));

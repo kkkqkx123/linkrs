@@ -39,7 +39,7 @@ crates/
 │   │   └── config/    # 配置管理
 │   └── Cargo.toml
 │
-└── graphdb/           # 主项目（计划中）
+└── linkrs/           # 主项目（计划中）
     └── src/
         ├── vector/    # 向量模块
         └── ...
@@ -232,7 +232,7 @@ pub trait VectorEngine: Send + Sync {
 ### 方案A: 集成到主项目
 
 ```
-graphdb/
+linkrs/
 └── src/
     └── vector/
         ├── mod.rs
@@ -295,7 +295,7 @@ crates/
     │   └── error.rs
     └── Cargo.toml
 
-graphdb/
+linkrs/
 └── src/
     └── vector/
         ├── mod.rs
@@ -445,7 +445,7 @@ pub trait VectorEngine: Send + Sync + std::fmt::Debug {
 ### 6.5 与主项目的集成
 
 ```rust
-// graphdb/src/vector/mod.rs
+// linkrs/src/vector/mod.rs
 pub use vector_client::{
     VectorEngine, VectorPoint, SearchResult, CollectionConfig, VectorFilter,
 };

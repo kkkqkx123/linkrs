@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档详细分析了 GraphDB 项目中查询模块的 Join 操作，包括其语义、类型、实现架构、算法流程和优化策略。
+本文档详细分析了 Linkrs 项目中查询模块的 Join 操作，包括其语义、类型、实现架构、算法流程和优化策略。
 本文档与 2026-08-16 代码现状对齐。
 
 ---
@@ -22,7 +22,7 @@
 
 ### 2.1 `JoinType` 枚举（连接语义类型）
 
-**文件路径**: `crates/graphdb-core/src/core/types/graph_schema.rs`
+**文件路径**: `crates/linkrs-core/src/core/types/graph_schema.rs`
 
 ```rust
 pub enum JoinType {
@@ -40,7 +40,7 @@ pub enum JoinType {
 
 ### 2.2 逻辑层 Join 节点（6 种，`define_join_node!` 宏）
 
-**文件路径**: `crates/graphdb-query/src/query/planning/plan/core/nodes/join/join_node.rs`
+**文件路径**: `crates/linkrs-query/src/query/planning/plan/core/nodes/join/join_node.rs`
 
 逻辑层使用 `define_join_node!` 宏定义 6 种 Join 节点，全部实现 `BinaryInputNode`（left/right 两个输入）
 与 `JoinNode`（`hash_keys` / `probe_keys` 统一接口）：
@@ -59,7 +59,7 @@ pub enum JoinType {
 
 ### 2.3 物理层 `JoinSpec`（9 种，物理执行算法）
 
-**文件路径**: `crates/graphdb-query/src/query/executor/streaming/operators/spec.rs`
+**文件路径**: `crates/linkrs-query/src/query/executor/streaming/operators/spec.rs`
 
 ```rust
 pub enum JoinSpec {
@@ -91,7 +91,7 @@ pub enum JoinSpec {
 
 ### 3.1 逻辑层 Join 节点结构
 
-**文件路径**: `crates/graphdb-query/src/query/planning/plan/core/nodes/join/join_node.rs`
+**文件路径**: `crates/linkrs-query/src/query/planning/plan/core/nodes/join/join_node.rs`
 
 所有 Join 节点共享以下核心字段（由 `define_join_node!` 宏生成）：
 
@@ -130,7 +130,7 @@ pub enum BuildSide {
 
 ### 4.1 目录结构
 
-**文件路径**: `crates/graphdb-query/src/query/executor/streaming/operators/join_operator/`
+**文件路径**: `crates/linkrs-query/src/query/executor/streaming/operators/join_operator/`
 
 ```
 join_operator/
@@ -198,7 +198,7 @@ join_operator/
 
 #### 规划器创建 Join 节点
 
-**文件路径**: `crates/graphdb-query/src/query/planning/connector.rs`
+**文件路径**: `crates/linkrs-query/src/query/planning/connector.rs`
 
 ```rust
 pub fn inner_join(
@@ -217,8 +217,8 @@ pub fn inner_join(
 
 #### 物理映射：逻辑 JoinNode → JoinSpec
 
-**文件路径**: `crates/graphdb-query/src/query/planning/physical_planner.rs`（约 :303 处 InnerJoin）+
-`crates/graphdb-query/src/query/executor/streaming/plan/arena_builder/specs.rs`
+**文件路径**: `crates/linkrs-query/src/query/planning/physical_planner.rs`（约 :303 处 InnerJoin）+
+`crates/linkrs-query/src/query/executor/streaming/plan/arena_builder/specs.rs`
 
 ```rust
 pub(super) fn build_join_with_keys(
@@ -268,19 +268,19 @@ pub(super) fn build_join_with_keys(
 
 | 类别 | 文件路径 |
 |------|----------|
-| **JoinType 枚举** | `crates/graphdb-core/src/core/types/graph_schema.rs` |
-| **逻辑 Join 节点** | `crates/graphdb-query/src/query/planning/plan/core/nodes/join/join_node.rs` |
-| **Join 宏** | `crates/graphdb-query/src/query/planning/plan/core/nodes/base/macros/binary_input.rs`（`define_join_node!`） |
-| **连接器** | `crates/graphdb-query/src/query/planning/connector.rs` |
-| **物理 JoinSpec** | `crates/graphdb-query/src/query/executor/streaming/operators/spec.rs` |
-| **Join 执行器模块** | `crates/graphdb-query/src/query/executor/streaming/operators/join_operator/` |
+| **JoinType 枚举** | `crates/linkrs-core/src/core/types/graph_schema.rs` |
+| **逻辑 Join 节点** | `crates/linkrs-query/src/query/planning/plan/core/nodes/join/join_node.rs` |
+| **Join 宏** | `crates/linkrs-query/src/query/planning/plan/core/nodes/base/macros/binary_input.rs`（`define_join_node!`） |
+| **连接器** | `crates/linkrs-query/src/query/planning/connector.rs` |
+| **物理 JoinSpec** | `crates/linkrs-query/src/query/executor/streaming/operators/spec.rs` |
+| **Join 执行器模块** | `crates/linkrs-query/src/query/executor/streaming/operators/join_operator/` |
 | **哈希连接** | `.../join_operator/hash_join.rs` |
 | **归并连接** | `.../join_operator/merge_join.rs` |
 | **嵌套循环** | `.../join_operator/nested_loop_join.rs` |
 | **交叉连接** | `.../join_operator/cross_join.rs` |
 | **半连接** | `.../join_operator/semi_join.rs` |
 | **物理映射（等值键 → Hash）** | `.../streaming/plan/arena_builder/specs.rs` |
-| **物理规划器** | `crates/graphdb-query/src/query/planning/physical_planner.rs` |
+| **物理规划器** | `crates/linkrs-query/src/query/planning/physical_planner.rs` |
 | **连接重排（启发式）** | `.../optimizer/heuristic/join_optimization/join_reorder.rs` |
 | **连接重排（CBO）** | `.../optimizer/cost_based/join_order.rs` |
 | **子查询去关联** | `.../optimizer/cost_based/subquery_unnesting.rs`、`.../optimizer/heuristic/decorrelation.rs` |
@@ -296,7 +296,7 @@ pub(super) fn build_join_with_keys(
 
 ## 八、总结
 
-该 GraphDB 项目的 Join 实现具有以下特点：
+该 Linkrs 项目的 Join 实现具有以下特点：
 
 1. **逻辑/物理分离**：逻辑层 6 种 Join 节点（`InnerJoinNode` 等）与物理层 `JoinSpec`（
    `HashJoin`/`HashLeftJoin`/`NestedLoopJoin`/`CrossJoin`/`SemiJoin` 等）解耦，等值连接默认映射到 Hash Join；
@@ -340,4 +340,4 @@ RETURN a.name, b.name
 ---
 
 **文档更新日期**: 2026-08-16  
-**分析基于项目版本**: GraphDB Rust 实现（linkrs）
+**分析基于项目版本**: Linkrs Rust 实现（linkrs）

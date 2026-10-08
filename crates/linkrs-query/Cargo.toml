@@ -1,0 +1,45 @@
+[package]
+name = "linkrs-query"
+version.workspace = true
+edition.workspace = true
+description = "Query engine, parser, and executor for Linkrs"
+license.workspace = true
+
+[dependencies]
+linkrs-core = { path = "../linkrs-core" }
+linkrs-metrics = { path = "../linkrs-metrics" }
+linkrs-storage = { path = "../linkrs-storage" }
+linkrs-migration = { path = "../linkrs-migration" }
+linkrs-fulltext = { path = "../linkrs-fulltext" }
+linkrs-sync = { path = "../linkrs-sync" }
+serde.workspace = true
+serde_json.workspace = true
+postcard.workspace = true
+zstd.workspace = true
+thiserror.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+regex.workspace = true
+rand.workspace = true
+rayon.workspace = true
+csv.workspace = true
+glob.workspace = true
+libloading = "0.8"
+dashmap.workspace = true
+bitvec.workspace = true
+futures.workspace = true
+tokio.workspace = true
+moka.workspace = true
+simvec = { path = "../simvec", optional = true }
+
+[features]
+vector = ["dep:simvec", "linkrs-sync/vector"]
+vector-qdrant = ["vector", "linkrs-sync/vector-qdrant"]
+embedding = ["linkrs-sync/embedding"]
+fulltext = ["linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
+
+[dev-dependencies]
+linkrs-storage = { path = "../linkrs-storage", features = ["test-support"] }
+tempfile.workspace = true

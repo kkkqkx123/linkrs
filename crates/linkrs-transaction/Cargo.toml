@@ -1,0 +1,28 @@
+[package]
+name = "linkrs-transaction"
+version.workspace = true
+edition.workspace = true
+description = "Transaction management for Linkrs"
+license.workspace = true
+
+[dependencies]
+linkrs-core = { path = "../linkrs-core" }
+linkrs-metrics = { path = "../linkrs-metrics" }
+linkrs-sync = { path = "../linkrs-sync" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+crossbeam-utils.workspace = true
+postcard.workspace = true
+crc32fast.workspace = true
+num_cpus.workspace = true
+zstd.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,54 @@
+[package]
+name = "linkrs-api"
+version.workspace = true
+edition.workspace = true
+description = "Transport-independent core API for Linkrs"
+license.workspace = true
+
+[dependencies]
+linkrs-core = { path = "../linkrs-core" }
+linkrs-config = { path = "../linkrs-config" }
+linkrs-storage = { path = "../linkrs-storage" }
+linkrs-query = { path = "../linkrs-query" }
+linkrs-transaction = { path = "../linkrs-transaction" }
+linkrs-sync = { path = "../linkrs-sync" }
+linkrs-fulltext = { path = "../linkrs-fulltext" }
+linkrs-migration = { path = "../linkrs-migration" }
+linkrs-metrics = { path = "../linkrs-metrics" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+log.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+parking_lot.workspace = true
+vector-client = { path = "../vector-client", optional = true }
+simvec = { path = "../simvec", optional = true }
+
+[features]
+vector = [
+    "dep:simvec",
+    "linkrs-config/vector",
+    "linkrs-sync/vector",
+    "linkrs-query/vector",
+]
+vector-qdrant = [
+    "vector",
+    "dep:vector-client",
+    "linkrs-config/vector-qdrant",
+    "linkrs-sync/vector-qdrant",
+    "linkrs-query/vector-qdrant",
+]
+fulltext = [
+    "linkrs-fulltext/fulltext",
+    "linkrs-sync/fulltext",
+    "linkrs-query/fulltext",
+]
+c_api = []
+embedded = []
+
+[dev-dependencies]
+linkrs-storage = { path = "../linkrs-storage", features = ["test-support"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

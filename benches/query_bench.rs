@@ -1,18 +1,18 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::query::executor::streaming::runtime::{
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::query::executor::streaming::runtime::{
     ColumnarStatsSnapshot, D1_EVAL_THRESHOLD, D1_TYPED_RATE_THRESHOLD,
 };
-use graphdb::query::optimizer::OptimizerEngine;
-use graphdb::query::pipeline::QueryPipelineManager;
-use graphdb::query::QueryRequestContext;
-use graphdb::storage::{
+use linkrs::query::optimizer::OptimizerEngine;
+use linkrs::query::pipeline::QueryPipelineManager;
+use linkrs::query::QueryRequestContext;
+use linkrs::storage::{
     GraphStorage, ScanOptions, StorageReader, StorageSchemaContextOps, StorageSchemaOps,
     StorageWriter,
 };
-use graphdb_metrics::StatsManager;
+use linkrs_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -329,7 +329,7 @@ fn bench_large_edge_density(c: &mut Criterion) {
                     .get_node_edges(
                         &space_name,
                         &VertexId::try_from_int64(0).expect("valid vertex id"),
-                        graphdb_core::EdgeDirection::Out,
+                        linkrs_core::EdgeDirection::Out,
                         &[],
                     )
                     .expect("get edges");

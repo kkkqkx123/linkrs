@@ -1,0 +1,471 @@
+mod bind_ddl;
+mod bind_dml;
+mod bind_expressions;
+mod bind_fetch;
+mod bind_go;
+mod bind_lookup;
+mod bind_match;
+mod bind_path;
+mod bind_return;
+mod bind_subgraph;
+
+use std::sync::Arc;
+
+use crate::parser::ast::stmt::Ast;
+use crate::parser::ast::Stmt;
+use linkrs_core::metadata::{MacroManager, SchemaManager};
+use linkrs_core::types::expr::Expression;
+use linkrs_core::DBResult;
+
+use super::bound::BoundStatement;
+use super::scope::BinderScope;
+
+use crate::executor::streaming::interner::StrInterner;
+
+/// The Binder transforms a parsed AST into a fully resolved BoundStatement.
+pub struct Binder {
+    scope: BinderScope,
+    schema_manager: Option<Arc<SchemaManager>>,
+    pub(crate) macro_manager: Option<Arc<MacroManager>>,
+    space_name: Option<String>,
+    space_id: u64,
+    interner: StrInterner,
+    /// Stack of macro names currently being expanded (recursion guard).
+    pub(crate) expanding: Vec<String>,
+    /// Stack of enclosing CTE names whose working tables are visible to
+    /// patterns (recursive-step binding). Innermost last.
+    pub(crate) cte_stack: Vec<String>,
+}
+
+impl Binder {
+    pub fn new() -> Self {
+        Self {
+            scope: BinderScope::new(),
+            schema_manager: None,
+            macro_manager: None,
+            space_name: None,
+            space_id: 0,
+            interner: StrInterner::new(),
+            expanding: Vec::new(),
+            cte_stack: Vec::new(),
+        }
+    }
+
+    pub fn with_schema_manager(mut self, sm: Arc<SchemaManager>) -> Self {
+        self.schema_manager = Some(sm);
+        self
+    }
+
+    pub fn with_space(mut self, space_name: Option<String>, space_id: u64) -> Self {
+        self.space_name = space_name;
+        self.space_id = space_id;
+        self
+    }
+
+    /// Bind an AST into a fully resolved BoundStatement.
+    pub fn bind(mut self, ast: Arc<Ast>) -> DBResult<BoundStatement> {
+        let bound = self.bind_stmt(&ast.stmt)?;
+        Ok(bound)
+    }
+
+    // ── Statement dispatch ────────────────────────────────────────────────
+
+    fn bind_stmt(&mut self, stmt: &Stmt) -> DBResult<BoundStatement> {
+        match stmt {
+            Stmt::Match(m) => self.bind_match(m),
+            Stmt::Go(g) => self.bind_go(g),
+            Stmt::Lookup(l) => self.bind_lookup(l),
+            Stmt::Fetch(f) => self.bind_fetch(f),
+            Stmt::FindPath(p) => self.bind_find_path(p),
+            Stmt::Subgraph(s) => self.bind_subgraph(s),
+            Stmt::Return(r) => self.bind_return(r),
+            Stmt::With(w) => self.bind_with(w),
+            Stmt::Unwind(u) => self.bind_unwind(u),
+            Stmt::Pipe(p) => self.bind_pipe(p),
+            Stmt::SetOperation(s) => self.bind_set_operation(s),
+            Stmt::GroupBy(g) => self.bind_group_by(g),
+            Stmt::Insert(s) => self.bind_insert(s),
+            Stmt::Update(s) => self.bind_update(s),
+            Stmt::Delete(s) => self.bind_delete(s),
+            Stmt::Merge(s) => self.bind_merge(s),
+            Stmt::Set(s) => self.bind_set(s),
+            Stmt::Remove(s) => self.bind_remove(s),
+            Stmt::Copy(s) => self.bind_copy(s),
+            Stmt::Create(s) => self.bind_create(s),
+            Stmt::Drop(s) => self.bind_drop(s),
+            Stmt::Alter(s) => self.bind_alter(s),
+            Stmt::Desc(s) => self.bind_desc(s),
+            Stmt::Show(s) => self.bind_show(s),
+            Stmt::ShowCreate(s) => self.bind_show_create(s),
+            Stmt::ClearSpace(s) => self.bind_clear_space(s),
+            Stmt::BeginTransaction(s) => self.bind_begin_transaction(s),
+            Stmt::CommitTransaction(s) => self.bind_commit(s),
+            Stmt::RollbackTransaction(s) => self.bind_rollback(s),
+            Stmt::Savepoint(s) => self.bind_savepoint(s),
+            Stmt::ReleaseSavepoint(s) => self.bind_release_savepoint(s),
+            Stmt::Use(s) => self.bind_use(s),
+            Stmt::Assignment(s) => self.bind_assignment_statement(s),
+            Stmt::AssignVariable(s) => self.bind_assign_variable(s),
+            Stmt::Filter(s) => self.bind_filter(s),
+            Stmt::Yield(s) => self.bind_yield(s),
+            Stmt::Collect(s) => self.bind_collect(s),
+            Stmt::Explain(s) => self.bind_explain(s),
+            Stmt::Profile(s) => self.bind_profile(s),
+            Stmt::CreateUser(s) => self.bind_create_user(s),
+            Stmt::DropUser(s) => self.bind_drop_user(s),
+            Stmt::AlterUser(s) => self.bind_alter_user(s),
+            Stmt::CreateFulltextIndex(s) => self.bind_create_fulltext_index(s),
+            Stmt::CreateVectorIndex(s) => self.bind_create_vector_index(s),
+            Stmt::CommentOn(_)
+            | Stmt::Checkpoint(_)
+            | Stmt::LoadFrom(_)
+            | Stmt::InQueryCall(_)
+            | Stmt::ExportDatabase(_)
+            | Stmt::ImportDatabase(_) => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
+            _ => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
+        }
+    }
+
+    /// Wrap a raw expression into a contextual expression for binding.
+    fn plain_expression(expr: Expression) -> linkrs_core::types::ContextualExpression {
+        let ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let id = ctx.register_expression(linkrs_core::types::expr::ExpressionMeta::new(expr));
+        linkrs_core::types::ContextualExpression::new(id, ctx)
+    }
+}
+
+impl Default for Binder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::binder::bound::BoundExpression;
+    use linkrs_core::error::DBError;
+
+    fn bind_query(query: &str) -> DBResult<BoundStatement> {
+        let mut parser = crate::parser::Parser::new(query);
+        let result = parser
+            .parse()
+            .map_err(|e| DBError::from(linkrs_core::error::QueryError::pipeline_parse_error(e)))?;
+        Binder::new().with_space(None, 0).bind(result.ast)
+    }
+
+    #[test]
+    fn test_bind_exists_subquery() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.age > 30 } RETURN t.name",
+        )
+        .expect("EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query, .. } => {
+                let sub = query.as_match().expect("subquery should be a Match");
+                assert!(sub.where_clause.is_some(), "subquery WHERE must be bound");
+                assert_eq!(sub.query_graph.nodes.len(), 1);
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_exists_bare_pattern() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { p:person-[:knows]->q:person } RETURN t.name",
+        )
+        .expect("bare-pattern EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query, .. } => {
+                let sub = query.as_match().expect("subquery should be a Match");
+                assert_eq!(sub.query_graph.nodes.len(), 2, "two nodes in pattern");
+                assert_eq!(sub.query_graph.edges.len(), 1, "one edge in pattern");
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_in_subquery() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE t.name IN { MATCH (p:person) RETURN p.name } RETURN t.name",
+        )
+        .expect("IN query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::In {
+                negated, subquery, ..
+            } => {
+                assert!(!negated);
+                assert!(subquery.as_match().is_some());
+            }
+            other => panic!("expected BoundExpression::In, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_correlated_subquery_resolves_outer_variable() {
+        // `t` is defined by the outer MATCH and referenced inside the
+        // subquery WHERE; binding must succeed via the parent scope.
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) WHERE p.name = t.name } RETURN t.name",
+        )
+        .expect("correlated EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        assert!(stmt.where_clause.is_some());
+    }
+
+    #[test]
+    fn test_bind_named_path_registers_path_variables() {
+        let bound = bind_query("MATCH p = (a:person)-[e:knows]->(b:person) RETURN a")
+            .expect("named path query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        assert_eq!(stmt.query_graph.nodes.len(), 2);
+        assert_eq!(stmt.query_graph.edges.len(), 1);
+    }
+
+    #[test]
+    fn test_bind_named_path_rejects_duplicate_variable() {
+        let err = bind_query("MATCH p = (p:person)-[e:knows]->(b:person) RETURN p")
+            .expect_err("path name colliding with a node variable must fail");
+        assert!(
+            err.to_string().contains("Duplicate variable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_bind_inline_pattern_predicate_matches_exists() {
+        // The inline form must bind exactly like the explicit EXISTS form:
+        // a correlated existence check over the same pattern.
+        let bound = bind_query("MATCH (t:person) WHERE (t)-[:knows]->(p:person) RETURN t.name")
+            .expect("inline pattern predicate should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query, .. } => {
+                let sub = query.as_match().expect("subquery should be a Match");
+                assert_eq!(sub.query_graph.nodes.len(), 2);
+                assert_eq!(sub.query_graph.edges.len(), 1);
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_using_join_binary_hint() {
+        let bound = bind_query(
+            "MATCH (a)-[e1:knows]->(b), (a)-[e2:knows]->(c) USING JOIN BINARY(e1, e2) RETURN a",
+        )
+        .expect("hint query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let hint = stmt.join_hint.expect("hint must be bound");
+        assert_eq!(hint.variables(), vec!["e1", "e2"]);
+    }
+
+    #[test]
+    fn test_bind_using_join_multiway_hint() {
+        let bound = bind_query(
+            "MATCH (a)-[e1:knows]->(b), (a)-[e2:knows]->(c) USING JOIN MULTIWAY(e1, e2) RETURN a",
+        )
+        .expect("hint query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        match stmt.join_hint.expect("hint must be bound") {
+            crate::binder::bound::BoundJoinHint::Multiway { probe, builds } => {
+                assert_eq!(probe, "e1");
+                assert_eq!(builds, vec!["e2".to_string()]);
+            }
+            other => panic!("expected multiway, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bind_using_join_unknown_variable_is_error() {
+        let err = bind_query("MATCH (a)-[e1:knows]->(b) USING JOIN BINARY(e1, zzz) RETURN a")
+            .expect_err("unknown hint variable must fail");
+        assert!(err.to_string().contains("zzz"), "error: {err}");
+    }
+
+    #[test]
+    fn test_bind_match_without_hint_has_none() {
+        let bound = bind_query("MATCH (a)-[e1]->(b) RETURN a").expect("must bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        assert!(stmt.join_hint.is_none());
+    }
+
+    #[test]
+    fn test_bind_nested_exists() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE EXISTS { MATCH (p:person) \
+             WHERE EXISTS { MATCH (q:person) WHERE q.age > p.age } } RETURN t.name",
+        )
+        .expect("nested EXISTS query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::Exists { query, .. } => {
+                let sub = query.as_match().expect("outer subquery");
+                let sub_where = sub.where_clause.as_ref().expect("inner WHERE");
+                assert!(matches!(
+                    sub_where.condition,
+                    BoundExpression::Exists { .. }
+                ));
+            }
+            other => panic!("expected BoundExpression::Exists, got {:?}", other),
+        }
+    }
+
+    fn bind_query_with_macros(
+        query: &str,
+        manager: Arc<linkrs_core::metadata::MacroManager>,
+    ) -> DBResult<BoundStatement> {
+        let mut parser = crate::parser::Parser::new(query);
+        let result = parser
+            .parse()
+            .map_err(|e| DBError::from(linkrs_core::error::QueryError::pipeline_parse_error(e)))?;
+        Binder::new()
+            .with_space(None, 0)
+            .with_macro_manager(manager)
+            .bind(result.ast)
+    }
+
+    fn double_macro() -> linkrs_core::metadata::MacroDef {
+        use linkrs_core::types::expr::Expression;
+        use linkrs_core::types::operators::BinaryOperator;
+        linkrs_core::metadata::MacroDef::new(
+            "double".to_string(),
+            vec![linkrs_core::metadata::MacroParamDef {
+                name: "x".to_string(),
+                default: None,
+            }],
+            Expression::Binary {
+                left: Box::new(Expression::variable("x")),
+                op: BinaryOperator::Multiply,
+                right: Box::new(Expression::literal(linkrs_core::Value::Int(2))),
+            },
+        )
+    }
+
+    #[test]
+    fn test_bind_macro_expansion() {
+        let manager = Arc::new(linkrs_core::metadata::MacroManager::new());
+        manager.create_macro(double_macro()).unwrap();
+        let bound =
+            bind_query_with_macros("RETURN double(21)", manager).expect("macro call should expand");
+        match bound {
+            BoundStatement::Return(ret) => {
+                assert_eq!(ret.items.len(), 1);
+                assert!(
+                    matches!(ret.items[0].expression, BoundExpression::BinaryOp { .. }),
+                    "macro body must expand to a binary expression"
+                );
+            }
+            other => panic!("expected Return, got {:?}", other.kind()),
+        }
+    }
+
+    #[test]
+    fn test_bind_macro_missing_arg() {
+        let manager = Arc::new(linkrs_core::metadata::MacroManager::new());
+        manager.create_macro(double_macro()).unwrap();
+        let err = bind_query_with_macros("RETURN double()", manager).unwrap_err();
+        assert!(
+            err.to_string().contains("missing required argument"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_bind_macro_recursion_rejected() {
+        use linkrs_core::types::expr::Expression;
+        let manager = Arc::new(linkrs_core::metadata::MacroManager::new());
+        manager
+            .create_macro(linkrs_core::metadata::MacroDef::new(
+                "loopm".to_string(),
+                vec![linkrs_core::metadata::MacroParamDef {
+                    name: "x".to_string(),
+                    default: None,
+                }],
+                Expression::Function {
+                    name: "loopm".to_string(),
+                    args: vec![linkrs_core::types::expr::FunctionArg::positional(
+                        Expression::variable("x"),
+                    )],
+                },
+            ))
+            .unwrap();
+        let err = bind_query_with_macros("RETURN loopm(1)", manager).unwrap_err();
+        assert!(
+            err.to_string().contains("Recursive macro"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_bind_scalar_subquery() {
+        let bound = bind_query(
+            "MATCH (t:person) WHERE t.age > SUBQUERY { MATCH (p:person) RETURN p.age } RETURN t.name",
+        )
+        .expect("scalar subquery should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let where_clause = stmt.where_clause.expect("where clause expected");
+        match where_clause.condition {
+            BoundExpression::BinaryOp { right, .. } => {
+                assert!(
+                    matches!(
+                        right.as_ref(),
+                        BoundExpression::Subquery {
+                            original_body: Some(_),
+                            ..
+                        }
+                    ),
+                    "scalar subquery must keep its original body"
+                );
+            }
+            other => panic!("expected BinaryOp, got {:?}", other),
+        }
+    }
+}

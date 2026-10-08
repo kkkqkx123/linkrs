@@ -1,4 +1,4 @@
-# GraphDB Rust 嵌入式 API 详细文档
+# Linkrs Rust 嵌入式 API 详细文档
 
 ## GraphDatabase
 
@@ -7,7 +7,7 @@
 ### 创建数据库
 
 ```rust
-use graphdb::api::embedded::{GraphDatabase, DatabaseConfig};
+use linkrs::api::embedded::{GraphDatabase, DatabaseConfig};
 use std::time::Duration;
 
 // 打开文件数据库
@@ -143,7 +143,7 @@ pub fn execute_with_params(
 
 ```rust
 use std::collections::HashMap;
-use graphdb::core::Value;
+use linkrs::core::Value;
 
 let mut params = HashMap::new();
 params.insert("id".to_string(), Value::Int(1));
@@ -242,7 +242,7 @@ pub fn create_space(
 ```
 
 ```rust
-use graphdb::api::core::SpaceConfig;
+use linkrs::api::core::SpaceConfig;
 
 let config = SpaceConfig::default();
 session.create_space("my_space", config)?;
@@ -272,7 +272,7 @@ pub fn batch_inserter(&self, batch_size: usize) -> BatchInserter<'_, S>
 ```
 
 ```rust
-use graphdb::core::{Vertex, Value};
+use linkrs::core::{Vertex, Value};
 
 let mut inserter = session.batch_inserter(100);
 
@@ -886,8 +886,8 @@ pub struct BatchConfig {
 ### 基本 CRUD 操作
 
 ```rust
-use graphdb::api::embedded::{GraphDatabase, DatabaseConfig};
-use graphdb::core::Value;
+use linkrs::api::embedded::{GraphDatabase, DatabaseConfig};
+use linkrs::core::Value;
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -936,7 +936,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 事务使用示例
 
 ```rust
-use graphdb::api::embedded::{GraphDatabase, TransactionConfig};
+use linkrs::api::embedded::{GraphDatabase, TransactionConfig};
 use std::time::Duration;
 
 fn transaction_example() -> Result<(), Box<dyn std::error::Error>> {
@@ -980,8 +980,8 @@ fn transaction_example() -> Result<(), Box<dyn std::error::Error>> {
 ### 批量插入示例
 
 ```rust
-use graphdb::api::embedded::GraphDatabase;
-use graphdb::core::{Vertex, Edge, Value};
+use linkrs::api::embedded::GraphDatabase;
+use linkrs::core::{Vertex, Edge, Value};
 use std::collections::HashMap;
 
 fn batch_insert_example() -> Result<(), Box<dyn std::error::Error>> {
@@ -999,7 +999,7 @@ fn batch_insert_example() -> Result<(), Box<dyn std::error::Error>> {
         props.insert("name".to_string(), Value::String(format!("User{}", i)));
         props.insert("age".to_string(), Value::Int(20 + (i % 50) as i64));
 
-        let tag = graphdb::core::vertex_edge_path::Tag::new(
+        let tag = linkrs::core::vertex_edge_path::Tag::new(
             "user".to_string(),
             props
         );
@@ -1039,8 +1039,8 @@ fn batch_insert_example() -> Result<(), Box<dyn std::error::Error>> {
 ### 预编译语句示例
 
 ```rust
-use graphdb::api::embedded::GraphDatabase;
-use graphdb::core::Value;
+use linkrs::api::embedded::GraphDatabase;
+use linkrs::core::Value;
 use std::collections::HashMap;
 
 fn prepared_statement_example() -> Result<(), Box<dyn std::error::Error>> {

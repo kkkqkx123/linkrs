@@ -60,25 +60,25 @@ fn test_insert_and_read_struct_array() {
         .iter()
         .position(|c| c == "p.coords")
         .expect("p.coords column");
-    assert_eq!(row.get(id_idx), Some(&graphdb::core::Value::BigInt(1)));
+    assert_eq!(row.get(id_idx), Some(&linkrs::core::Value::BigInt(1)));
     match row.get(addr_idx) {
-        Some(graphdb::core::Value::Struct(s)) => {
+        Some(linkrs::core::Value::Struct(s)) => {
             assert_eq!(
                 s.fields[0],
-                ("city".to_string(), graphdb::core::Value::string("shanghai"))
+                ("city".to_string(), linkrs::core::Value::string("shanghai"))
             );
-            assert!(matches!(s.fields[2].1, graphdb::core::Value::Struct(_)));
+            assert!(matches!(s.fields[2].1, linkrs::core::Value::Struct(_)));
         }
         other => panic!("expected STRUCT value, got {:?}", other),
     }
     match row.get(coords_idx) {
-        Some(graphdb::core::Value::Array(a)) => {
+        Some(linkrs::core::Value::Array(a)) => {
             assert_eq!(
                 a.values,
                 vec![
-                    graphdb::core::Value::Double(1.0),
-                    graphdb::core::Value::Double(2.0),
-                    graphdb::core::Value::Double(3.0),
+                    linkrs::core::Value::Double(1.0),
+                    linkrs::core::Value::Double(2.0),
+                    linkrs::core::Value::Double(3.0),
                 ]
             );
         }
@@ -118,10 +118,10 @@ fn test_struct_field_access() {
         .expect("lon column");
     assert_eq!(
         row.get(city_idx),
-        Some(&graphdb::core::Value::string("shanghai"))
+        Some(&linkrs::core::Value::string("shanghai"))
     );
-    assert_eq!(row.get(lat_idx), Some(&graphdb::core::Value::Double(31.2)));
-    assert_eq!(row.get(lon_idx), Some(&graphdb::core::Value::Double(121.5)));
+    assert_eq!(row.get(lat_idx), Some(&linkrs::core::Value::Double(31.2)));
+    assert_eq!(row.get(lon_idx), Some(&linkrs::core::Value::Double(121.5)));
 
     // Missing field yields NULL (not an error).
     let result = db.execute_query("MATCH (p:Person) RETURN p.addr.missing");

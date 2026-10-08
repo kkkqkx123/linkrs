@@ -1,8 +1,8 @@
-# GraphDB 嵌入式 API 文档
+# Linkrs 嵌入式 API 文档
 
 ## 概述
 
-GraphDB 的嵌入式 API 允许开发者把数据库直接嵌入到应用程序中使用，适合单机应用、桌面工具和测试环境。
+Linkrs 的嵌入式 API 允许开发者把数据库直接嵌入到应用程序中使用，适合单机应用、桌面工具和测试环境。
 
 当前仓库只保留 Rust 嵌入式 API，不再维护独立的 C API 实现。
 
@@ -47,7 +47,7 @@ cargo build --features embedded
 ## 使用示例
 
 ```rust
-use graphdb::api::embedded::{DatabaseConfig, GraphDatabase};
+use linkrs::api::embedded::{DatabaseConfig, GraphDatabase};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = GraphDatabase::open("my_database")?;

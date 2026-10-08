@@ -35,7 +35,7 @@
 | `None` | 占位 | 该方向不存边 |
 
 `EdgeStrategy` 只有 `Multiple` / `Single` / `None` 三种取值
-（定义在 `graphdb-core` 的 `types/edge.rs`）。
+（定义在 `linkrs-core` 的 `types/edge.rs`）。
 自动推导在建表时锁定并持久化，加载不再重推；
 破坏前置条件的模式变更走迁移（`migration_plan` /
 `migrate_record_form` / `switch_record_form_online`）并随后检查点。
@@ -109,7 +109,7 @@ Nbr { endpoint: u32, rank: i64, edge_id: EdgeId, delete_ts: Timestamp }
 ## 文件组织
 
 ```
-crates/graphdb-storage/src/edge/
+crates/linkrs-storage/src/edge/
 ├── edge.rs                     # Nbr/HotNbr/ColdStamps、EdgeSchema、RecordForm
 ├── csr_shared.rs               # 删除状态机、顶点容量增长、溢出表、VertexBookkeeping
 ├── csr_trait.rs                # CsrBase、MutableCsrTrait

@@ -1,0 +1,914 @@
+use axum::{
+    extract::{Extension, Json, Path, State},
+    response::Json as JsonResponse,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::http::{error::HttpError, state::AppState};
+use crate::storage::{
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
+};
+use linkrs_sync::vector_sync::SearchOptions;
+use simvec::{DistanceMetric, VectorFilter};
+
+/// Vector index creation request
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct CreateVectorIndexRequest {
+    pub space_id: u64,
+    /// Vertex tag name. Vector indexes are vertex-only; edge type names are
+    /// rejected.
+    pub tag_name: String,
+    pub field_name: String,
+    pub vector_size: usize,
+    #[serde(default = "default_distance")]
+    pub distance: DistanceMetric,
+    /// HNSW overrides
+    pub hnsw_m: Option<usize>,
+    pub hnsw_ef_construct: Option<usize>,
+    /// Quantization: scalar/binary/product/none (case-insensitive). None = disabled.
+    pub quantization: Option<String>,
+    /// Scalar only: quantile in (0,1]
+    pub quantile: Option<f32>,
+    /// Product only: x4/x8/x16/x32/x64 or integer 4/8/16/32/64
+    pub compression: Option<String>,
+    /// Keep quantized vectors in RAM
+    pub always_ram: Option<bool>,
+}
+
+fn default_distance() -> DistanceMetric {
+    DistanceMetric::Cosine
+}
+
+/// Vector index information
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct VectorIndexInfo {
+    pub name: String,
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub vector_size: usize,
+    pub distance: String,
+    pub points_count: u64,
+}
+
+/// Vector search request
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct VectorSearchRequest {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub query_vector: Vec<f32>,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    pub threshold: Option<f32>,
+    pub filter: Option<VectorFilter>,
+    /// Consistency level: "eventual" (default) or "read_your_writes"
+    #[serde(default)]
+    pub consistency: Option<String>,
+    /// Timeout in milliseconds when consistency is read_your_writes
+    pub consistency_timeout_ms: Option<u64>,
+    /// Minimum LSN to wait for (when RYW)
+    pub minimum_lsn: Option<u64>,
+}
+
+fn default_limit() -> usize {
+    10
+}
+
+/// Parse the gRPC `SearchFilter.expression` wire string.
+///
+/// The wire carries a JSON-encoded `VectorFilter` with the same shape as the
+/// HTTP search filter. There is no expression language; arbitrary strings
+/// fail with the underlying JSON error.
+#[allow(dead_code)]
+pub(crate) fn parse_vector_filter_expression(expression: &str) -> Result<VectorFilter, String> {
+    serde_json::from_str(expression).map_err(|e| {
+        format!("filter.expression must be a JSON VectorFilter with the same shape as the HTTP search filter: {e}")
+    })
+}
+
+/// Vector search result
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct VectorSearchResponse {
+    pub results: Vec<VectorSearchResult>,
+    pub count: usize,
+}
+
+/// Single vector search result
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct VectorSearchResult {
+    pub id: String,
+    pub score: f32,
+    pub vector: Option<Vec<f32>>,
+    pub payload: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// List of vector indexes response
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ListVectorIndexesResponse {
+    pub indexes: Vec<String>,
+    pub count: usize,
+}
+
+/// Vector index details response
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct VectorIndexDetailsResponse {
+    pub collection_name: String,
+    pub status: String,
+    pub vectors_count: u64,
+    pub points_count: u64,
+    pub indexed_vectors_count: u64,
+    pub vector_size: usize,
+    pub distance: String,
+}
+
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_vector_indexes",
+    path = "/v1/vector/indexes",
+    tag = "Vector",
+    request_body = CreateVectorIndexRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Vector index created"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Create a vector index
+pub async fn create_index<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Json(request): Json<CreateVectorIndexRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        // Vector indexes are vertex-only: point IDs, payloads, and rebuild
+        // sources are all modeled per vertex. Reject edge type names up
+        // front instead of creating an index that can never receive data.
+        {
+            let storage = state.server.get_storage();
+            let storage = storage.read();
+            let space_name = storage
+                .get_space_by_id(request.space_id)
+                .map_err(|error| HttpError::InternalError(error.to_string()))?
+                .map(|info| info.space_name)
+                .ok_or_else(|| {
+                    HttpError::NotFound(format!("space id {} not found", request.space_id))
+                })?;
+            let is_edge_type = storage
+                .get_edge_type(&space_name, &request.tag_name)
+                .map_err(|error| HttpError::InternalError(error.to_string()))?
+                .is_some();
+            if is_edge_type {
+                return Err(HttpError::BadRequest(format!(
+                    "Vector indexes are vertex-only: '{}' is an edge type, create the index on a vertex tag instead",
+                    request.tag_name
+                )));
+            }
+        }
+        let collection_name = if request.quantization.is_some()
+            || request.hnsw_m.is_some()
+            || request.hnsw_ef_construct.is_some()
+            || request.quantile.is_some()
+            || request.compression.is_some()
+            || request.always_ram.is_some()
+        {
+            let mut config = simvec::CollectionConfig::new(request.vector_size, request.distance);
+            if request.hnsw_m.is_some() || request.hnsw_ef_construct.is_some() {
+                let mut hnsw = simvec::HnswConfig::default();
+                if let Some(m) = request.hnsw_m {
+                    hnsw.m = m;
+                }
+                if let Some(ef) = request.hnsw_ef_construct {
+                    hnsw.ef_construct = ef;
+                }
+                config = config.with_hnsw(hnsw);
+            }
+            if let Some(ref q) = request.quantization {
+                let q_lower = q.to_lowercase();
+                let quant_cfg = match q_lower.as_str() {
+                    "none" | "disabled" | "off" => None,
+                    "scalar" => {
+                        let mut cfg =
+                            simvec::QuantizationConfig::scalar(request.quantile.unwrap_or(0.99));
+                        if let Some(ar) = request.always_ram {
+                            cfg = cfg.with_always_ram(ar);
+                        }
+                        Some(cfg)
+                    }
+                    "binary" => {
+                        let mut cfg = simvec::QuantizationConfig::binary();
+                        if let Some(ar) = request.always_ram {
+                            cfg = cfg.with_always_ram(ar);
+                        }
+                        Some(cfg)
+                    }
+                    "product" | "pq" => {
+                        let ratio = match request
+                            .compression
+                            .as_deref()
+                            .unwrap_or("x4")
+                            .to_lowercase()
+                            .as_str()
+                        {
+                            "x4" | "4" => simvec::CompressionRatio::X4,
+                            "x8" | "8" => simvec::CompressionRatio::X8,
+                            "x16" | "16" => simvec::CompressionRatio::X16,
+                            "x32" | "32" => simvec::CompressionRatio::X32,
+                            "x64" | "64" => simvec::CompressionRatio::X64,
+                            other => {
+                                return Err(HttpError::InternalError(format!(
+                                    "unknown compression '{}', expected x4/x8/x16/x32/x64",
+                                    other
+                                )))
+                            }
+                        };
+                        let mut cfg = simvec::QuantizationConfig::product(ratio);
+                        if let Some(ar) = request.always_ram {
+                            cfg = cfg.with_always_ram(ar);
+                        }
+                        Some(cfg)
+                    }
+                    other => {
+                        return Err(HttpError::InternalError(format!(
+                            "unknown quantization '{}', expected scalar/binary/product/none",
+                            other
+                        )))
+                    }
+                };
+                if let Some(qc) = quant_cfg {
+                    config = config.with_quantization(qc);
+                }
+            }
+            vector_api
+                .create_index_with_config(
+                    request.space_id,
+                    &request.tag_name,
+                    &request.field_name,
+                    config,
+                )
+                .await
+                .map_err(|e| HttpError::InternalError(e.to_string()))?
+        } else {
+            vector_api
+                .create_index(
+                    request.space_id,
+                    &request.tag_name,
+                    &request.field_name,
+                    request.vector_size,
+                    request.distance,
+                )
+                .await
+                .map_err(|e| HttpError::InternalError(e.to_string()))?
+        };
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "message": "Vector index created successfully",
+            "collection_name": collection_name
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/vector/indexes/{space_id}/{tag_name}/{field_name}",
+    tag = "Vector",
+    params(
+        ("space_id" = u64, Path, description = "Space id"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("field_name" = String, Path, description = "Vector field name")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Vector index dropped"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Drop a vector index
+pub async fn drop_index<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        vector_api
+            .drop_index(space_id, &tag_name, &field_name)
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "message": "Vector index dropped successfully"
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/vector/indexes/{space_id}/{tag_name}/{field_name}",
+    tag = "Vector",
+    params(
+        ("space_id" = u64, Path, description = "Space id"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("field_name" = String, Path, description = "Vector field name")
+    ),
+    responses(
+        (status = 200, body = VectorIndexDetailsResponse, description = "Vector index details"),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Get vector index info
+pub async fn get_index_info<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
+) -> Result<JsonResponse<VectorIndexDetailsResponse>, HttpError> {
+    super::authz::require_space_read(&state, session_id, space_id as i64)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        match vector_api.get_index_info(space_id, &tag_name, &field_name) {
+            Ok(Some(info)) => Ok(JsonResponse(VectorIndexDetailsResponse {
+                collection_name: format!("space_{}_{}_{}", space_id, tag_name, field_name),
+                status: "green".to_string(),
+                vectors_count: info.vector_count,
+                points_count: 0,
+                indexed_vectors_count: 0,
+                vector_size: info.config.vector_size,
+                distance: format!("{:?}", info.config.distance),
+            })),
+            Ok(None) => Err(HttpError::NotFound("Vector index not found".to_string())),
+            Err(e) => Err(HttpError::InternalError(e.to_string())),
+        }
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    get,
+    operation_id = "get_v1_vector_indexes",
+    path = "/v1/vector/indexes",
+    tag = "Vector",
+    responses(
+        (status = 200, body = ListVectorIndexesResponse, description = "Vector index list"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// List all vector indexes
+pub async fn list_indexes<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+) -> Result<JsonResponse<ListVectorIndexesResponse>, HttpError> {
+    // The listing spans every space, so it must not expose index names to
+    // callers without cross-space visibility; create/drop on this route
+    // already require the admin role.
+    super::authz::require_admin_session(&state, session_id)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let indexes = vector_api.list_indexes();
+        let count = indexes.len();
+        Ok(JsonResponse(ListVectorIndexesResponse { indexes, count }))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_simvec",
+    path = "/v1/vector/search",
+    tag = "Vector",
+    request_body = VectorSearchRequest,
+    responses(
+        (status = 200, body = VectorSearchResponse, description = "Vector search results"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Search vectors
+pub async fn search<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Json(request): Json<VectorSearchRequest>,
+) -> Result<JsonResponse<VectorSearchResponse>, HttpError> {
+    super::authz::require_space_read(&state, session_id, request.space_id as i64)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let mut options = SearchOptions::new(
+            request.space_id,
+            &request.tag_name,
+            &request.field_name,
+            request.query_vector,
+            request.limit,
+        );
+
+        if let Some(threshold) = request.threshold {
+            options = options.with_threshold(threshold);
+        }
+
+        if let Some(filter) = request.filter {
+            options = options.with_filter(filter);
+        }
+        if let Some(cons) = request.consistency.as_deref() {
+            let is_ryw = cons.eq_ignore_ascii_case("read_your_writes")
+                || cons.eq_ignore_ascii_case("ryw")
+                || cons.eq_ignore_ascii_case("read-your-writes");
+            if is_ryw {
+                let timeout = request.consistency_timeout_ms.unwrap_or(2000);
+                options.consistency =
+                    linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
+                        timeout_ms: timeout,
+                    };
+                if let Some(lsn) = request.minimum_lsn {
+                    options.minimum_lsn = Some(linkrs_core::types::CommitLsn::new(lsn));
+                }
+            }
+        } else if let Some(timeout) = request.consistency_timeout_ms {
+            options.consistency = linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
+                timeout_ms: timeout,
+            };
+            if let Some(lsn) = request.minimum_lsn {
+                options.minimum_lsn = Some(linkrs_core::types::CommitLsn::new(lsn));
+            }
+        }
+
+        let results = vector_api
+            .search_with_options(options)
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        let count = results.len();
+        let search_results: Vec<VectorSearchResult> = results
+            .into_iter()
+            .map(|r| VectorSearchResult {
+                id: r.id.to_string(),
+                score: r.score,
+                vector: r.vector.map(|v| v.to_vec()),
+                payload: r.payload.map(|p| p.into_iter().collect()),
+            })
+            .collect();
+
+        Ok(JsonResponse(VectorSearchResponse {
+            results: search_results,
+            count,
+        }))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/vector/{space_id}/{tag_name}/{field_name}/{point_id}",
+    tag = "Vector",
+    params(
+        ("space_id" = u64, Path, description = "Space id"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("field_name" = String, Path, description = "Vector field name"),
+        ("point_id" = String, Path, description = "Vector point id")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Vector point"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Get vector point by ID
+pub async fn get_vector<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Path((space_id, tag_name, field_name, point_id)): Path<(u64, String, String, String)>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_read(&state, session_id, space_id as i64)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let point = vector_api
+            .get_vector(space_id, &tag_name, &field_name, &point_id)
+            .await
+            .map_err(|e: linkrs_api::api_core::error::CoreError| {
+                HttpError::InternalError(e.to_string())
+            })?;
+
+        match point {
+            Some(p) => Ok(JsonResponse(serde_json::json!({
+                "success": true,
+                "point": {
+                    "id": p.id,
+                    "vector": p.vector,
+                    "payload": p.payload.map(|payload| serde_json::to_value(payload).unwrap_or(serde_json::Value::Null))
+                }
+            }))),
+            None => Ok(JsonResponse(serde_json::json!({
+                "success": false,
+                "message": "Vector point not found"
+            }))),
+        }
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/vector/{space_id}/{tag_name}/{field_name}/count",
+    tag = "Vector",
+    params(
+        ("space_id" = u64, Path, description = "Space id"),
+        ("tag_name" = String, Path, description = "Tag name"),
+        ("field_name" = String, Path, description = "Vector field name")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Vector point count"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Get vector index count
+pub async fn count<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_read(&state, session_id, space_id as i64)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let count = vector_api
+            .count(space_id, &tag_name, &field_name)
+            .await
+            .map_err(|e: linkrs_api::api_core::error::CoreError| {
+                HttpError::InternalError(e.to_string())
+            })?;
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "count": count
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+/// Set payload request
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct SetPayloadRequest {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub point_ids: Vec<String>,
+    pub payload: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Delete payload request
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct DeletePayloadRequest {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub point_ids: Vec<String>,
+    pub keys: Vec<String>,
+}
+
+/// Scroll request
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct ScrollRequest {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    pub offset: Option<String>,
+    pub with_payload: Option<bool>,
+    pub with_vector: Option<bool>,
+}
+
+/// Scroll response
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ScrollResponse {
+    pub points: Vec<VectorSearchResult>,
+    pub next_offset: Option<String>,
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/vector/payload",
+    tag = "Vector",
+    request_body = SetPayloadRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Payload set"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Set payload for vector points
+pub async fn set_payload<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Json(request): Json<SetPayloadRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let payload: simvec::types::Payload = request.payload.into_iter().collect();
+        let point_ids: Vec<&str> = request.point_ids.iter().map(|s| s.as_str()).collect();
+        vector_api
+            .set_payload(
+                request.space_id,
+                &request.tag_name,
+                &request.field_name,
+                point_ids,
+                payload,
+            )
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "message": "Payload set successfully"
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/vector/payload/fields",
+    tag = "Vector",
+    request_body = SetPayloadRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Payload fields merged"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Merge fields into payload for vector points
+pub async fn set_payload_fields<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Json(request): Json<SetPayloadRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let fields: simvec::types::Payload = request.payload.into_iter().collect();
+        let point_ids: Vec<&str> = request.point_ids.iter().map(|s| s.as_str()).collect();
+        vector_api
+            .set_payload_fields(
+                request.space_id,
+                &request.tag_name,
+                &request.field_name,
+                point_ids,
+                fields,
+            )
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "message": "Payload fields merged successfully"
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/vector/payload/delete",
+    tag = "Vector",
+    request_body = DeletePayloadRequest,
+    responses(
+        (status = 200, body = serde_json::Value, description = "Payload keys deleted"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Delete payload keys from vector points
+pub async fn delete_payload<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Json(request): Json<DeletePayloadRequest>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let point_ids: Vec<&str> = request.point_ids.iter().map(|s| s.as_str()).collect();
+        let keys: Vec<&str> = request.keys.iter().map(|s| s.as_str()).collect();
+        vector_api
+            .delete_payload(
+                request.space_id,
+                &request.tag_name,
+                &request.field_name,
+                point_ids,
+                keys,
+            )
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        Ok(JsonResponse(serde_json::json!({
+            "success": true,
+            "message": "Payload keys deleted successfully"
+        })))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/vector/scroll",
+    tag = "Vector",
+    request_body = ScrollRequest,
+    responses(
+        (status = 200, body = ScrollResponse, description = "Scrolled vector points"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Paginated scroll over vector points
+pub async fn scroll<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Json(request): Json<ScrollRequest>,
+) -> Result<JsonResponse<ScrollResponse>, HttpError> {
+    super::authz::require_space_read(&state, session_id, request.space_id as i64)?;
+    let graph_service = state.server.get_graph_service();
+    let vector_api = graph_service.vector_api();
+
+    if let Some(vector_api) = vector_api {
+        let (points, next_offset) = vector_api
+            .scroll(linkrs_api::api_core::vector_api::ScrollQuery {
+                space_id: request.space_id,
+                tag_name: &request.tag_name,
+                field_name: &request.field_name,
+                limit: request.limit,
+                offset: request.offset.as_deref(),
+                with_payload: request.with_payload,
+                with_vector: request.with_vector,
+            })
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+
+        let results: Vec<VectorSearchResult> = points
+            .into_iter()
+            .map(|p| VectorSearchResult {
+                id: p.id.to_string(),
+                score: 0.0,
+                vector: if request.with_vector.unwrap_or(false) {
+                    Some(p.vector)
+                } else {
+                    None
+                },
+                payload: p.payload.map(|pay| pay.into_iter().collect()),
+            })
+            .collect();
+
+        Ok(JsonResponse(ScrollResponse {
+            points: results,
+            next_offset,
+        }))
+    } else {
+        Err(HttpError::InternalError(
+            "Vector API is not available".to_string(),
+        ))
+    }
+}

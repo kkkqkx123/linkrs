@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{DataType, Edge, Value, Vertex};
-use graphdb_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 
 #[path = "bench_group.rs"]
 mod bench_group;

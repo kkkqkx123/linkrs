@@ -1,0 +1,556 @@
+//! Persistence operations: serialization and deserialization to/from disk.
+//!
+//! Node-group sharded layout:
+//! - `meta.bin`: header section only (label ids, label name, schema, next
+//!   edge id), with the manifest commit tail appended so metadata and
+//!   manifest share one atomic unit.
+//! - `groups_manifest.bin`: address width plus existing out/in group id lists.
+//! - `out_g{gid}.bin` / `in_g{gid}.bin`: header + one `CsrVariant` dump per
+//!   existing group, written only for dirty groups; multi-edge topology
+//!   columns use the single integer column layout (marker 8) with
+//!   per-column encoding. Missing groups read as empty and never produce
+//!   files.
+//! - `ts_g{gid}.bin`: authoritative timestamps for the owning group's edges,
+//!   falling with the same dirt as the group.
+//! - `props_g{gid}.bin`: property rows for the owning group's edges,
+//!   falling with the same dirt as the group.
+//! - `segment_stats.bin`: per-group segment statistics for scan pruning,
+//!   collected at each checkpoint.
+//!
+//! A torn manifest file falls back to the embedded tail, and
+//! trailing bytes after any payload fail loudly instead of loading partially.
+//!
+//! # Persistence layout
+//!
+//! Every persisted file carries structural validation (magic, section,
+//! lengths, CRC); the table below is the single contract. Corrupt markers
+//! fail closed; new capability lands on the current layout only.
+//!
+//! | File | Layout | Version |
+//! |------|---------|---------|
+//! | `meta.bin` | header only | no version, header section validated |
+//! | `groups_manifest.bin` | address width plus existing group id lists | no version |
+//! | `out_g/in_g` group dumps | integer column path per column, marker 8 | single live write mode 8; loads accept 8 and reject anything else |
+//! | frozen group dumps | integer column path per column plus trailing CRC32 | no format version, trailing bytes rejected |
+//! | single group dumps | edge-count header plus columns plus trailing CRC32 | no format version, trailing bytes rejected |
+//! | pure group dumps | endpoints plus edge ids plus trailing CRC32 | no format version |
+//! | bundled group dumps | topology payload plus value columns plus valid bits plus CRC32 | no format version, trailing bytes rejected |
+//! | `*.snapshot` sidecars | flat columns, trailing CRC32; magic only, no format version; a bad cache is discarded and rebuilt from authority | cache only, never authority |
+//! | `*.append` sidecars | address width plus op sections | no version, decode fails closed |
+//! | property shards | page-framed visibility plus current values (page layer carries per-page CRC32); duplicate names/ids and unknown encoding tags rejected | no version, encoding tags validated |
+//! | `edge_wal.bin` | length-prefixed postcard ops; torn tails fail the load, repairable offline by truncating at the last valid entry | no version |
+//! | `CsrVariant` tag | 0=None, 1=Multiple, 2=Single, 3=Frozen, 4=Pure, 5=Bundled; unknown tags rejected | dispatch tag, not a format version |
+
+use super::super::{CsrBase, CsrVariant};
+use super::mvcc::EdgeTimestamps;
+use crate::edge::CsrWithProperties;
+use crate::edge::EdgeSchema;
+use crate::persistence::{read_header, write_header_to, HEADER_SIZE};
+use linkrs_core::types::EdgeId;
+use linkrs_core::{StorageError, StorageResult};
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+
+/// Deserialized edge table metadata returned by [`load_metadata`].
+/// Carries the header only; authoritative timestamps live in
+/// per-group timestamp shards and are merged on load.
+pub(crate) struct EdgeMetadata {
+    pub label: u32,
+    pub src_label: u32,
+    pub dst_label: u32,
+    pub label_name: String,
+    pub is_open: bool,
+    pub schema: EdgeSchema,
+    pub next_edge_id: EdgeId,
+}
+
+/// Serialize edge table metadata to a buffer.
+///
+/// Layout: header section only (label ids, label name, openness,
+/// schema, next edge id). Timestamps are sharded per owner group in
+/// `ts_g{gid}.bin` files falling with the same dirt as their topology group;
+/// `meta.bin` never carries timestamps. The caller appends the manifest
+/// commit tail after the header so metadata and manifest share one atomic
+/// unit.
+#[allow(clippy::too_many_arguments)]
+pub fn flush_metadata(
+    buf: &mut Vec<u8>,
+    label: u32,
+    src_label: u32,
+    dst_label: u32,
+    label_name: &str,
+    is_open: bool,
+    schema: &EdgeSchema,
+    next_edge_id: EdgeId,
+) -> StorageResult<()> {
+    write_metadata_header(
+        buf, label, src_label, dst_label, label_name, is_open, schema,
+    )?;
+    write_metadata_next_edge_id(buf, next_edge_id);
+    Ok(())
+}
+
+/// Header section: label identity, openness, schema and the edge-id counter.
+/// Timestamps live in per-group shards and never in this header.
+#[allow(clippy::too_many_arguments)]
+fn write_metadata_header(
+    buf: &mut Vec<u8>,
+    label: u32,
+    src_label: u32,
+    dst_label: u32,
+    label_name: &str,
+    is_open: bool,
+    schema: &EdgeSchema,
+) -> StorageResult<()> {
+    buf.extend_from_slice(&label.to_le_bytes());
+    buf.extend_from_slice(&src_label.to_le_bytes());
+    buf.extend_from_slice(&dst_label.to_le_bytes());
+
+    let label_name_bytes = label_name.as_bytes();
+    buf.extend_from_slice(&(label_name_bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(label_name_bytes);
+
+    let is_open_flag: u8 = if is_open { 1 } else { 0 };
+    buf.extend_from_slice(&is_open_flag.to_le_bytes());
+
+    let schema_json =
+        serde_json::to_string(schema).map_err(|e| StorageError::serialize_error(e.to_string()))?;
+    let schema_bytes = schema_json.as_bytes();
+    buf.extend_from_slice(&(schema_bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(schema_bytes);
+    Ok(())
+}
+
+fn write_metadata_next_edge_id(buf: &mut Vec<u8>, next_edge_id: EdgeId) {
+    buf.extend_from_slice(&next_edge_id.0.to_le_bytes());
+}
+
+/// Timestamp shard payload: authoritative stamps for one owner group.
+/// Serialized as count plus `(edge_id, create_ts, delete_ts)` triples.
+pub fn serialize_timestamp_shard(
+    entries: &[(EdgeId, EdgeTimestamps)],
+    section_id: u32,
+    buf: &mut Vec<u8>,
+) -> StorageResult<()> {
+    write_header_to(buf, section_id)
+        .map_err(|e| StorageError::io_error(format!("Failed to write ts shard header: {}", e)))?;
+    buf.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+    for (edge_id, ts) in entries {
+        buf.extend_from_slice(&edge_id.0.to_le_bytes());
+        buf.extend_from_slice(&ts.create_ts.to_le_bytes());
+        buf.extend_from_slice(&ts.delete_ts.to_le_bytes());
+    }
+    Ok(())
+}
+
+/// Load one timestamp shard payload, failing closed on section, length or
+/// trailing-byte mismatches.
+pub fn load_timestamp_shard(
+    path: &Path,
+    expected_section: u32,
+) -> StorageResult<Vec<(EdgeId, EdgeTimestamps)>> {
+    let (raw_data, _) = read_pages_from_file(path)?;
+    let mut cursor = &raw_data[..];
+    let mut header_buf = [0u8; HEADER_SIZE];
+    cursor.read_exact(&mut header_buf)?;
+    {
+        let mut slice = &header_buf[..];
+        let sid = read_header(&mut slice)?;
+        if sid != expected_section {
+            return Err(StorageError::deserialize_error(format!(
+                "unexpected section id in ts shard: expected {:#06x}, got {:#06x}",
+                expected_section, sid
+            )));
+        }
+    }
+    let mut len_bytes = [0u8; 8];
+    cursor.read_exact(&mut len_bytes)?;
+    let len = u64::from_le_bytes(len_bytes) as usize;
+    let mut out = Vec::with_capacity(len);
+    for _ in 0..len {
+        let mut edge_id_bytes = [0u8; 8];
+        cursor.read_exact(&mut edge_id_bytes)?;
+        let mut create_bytes = [0u8; 8];
+        cursor.read_exact(&mut create_bytes)?;
+        let mut delete_bytes = [0u8; 8];
+        cursor.read_exact(&mut delete_bytes)?;
+        out.push((
+            EdgeId(u64::from_le_bytes(edge_id_bytes)),
+            EdgeTimestamps {
+                create_ts: u64::from_le_bytes(create_bytes),
+                delete_ts: u64::from_le_bytes(delete_bytes),
+            },
+        ));
+    }
+    if !cursor.is_empty() {
+        return Err(StorageError::deserialize_error(
+            "unexpected trailing data in ts shard".to_string(),
+        ));
+    }
+    Ok(out)
+}
+
+/// Serialize one sharded property payload with an explicit section id.
+/// The payload is a `CsrWithProperties` dump for the owning group's edges
+/// only; column encoding and statistics travel with the shard and are
+/// recomputed globally after the merge on load.
+pub fn serialize_property_shard(
+    properties: &CsrWithProperties,
+    section_id: u32,
+    buf: &mut Vec<u8>,
+) -> StorageResult<()> {
+    write_header_to(buf, section_id).map_err(|e| {
+        StorageError::io_error(format!("Failed to write props shard header: {}", e))
+    })?;
+    let data = properties.dump();
+    buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    buf.extend_from_slice(&data);
+    Ok(())
+}
+
+/// Serialize one sharded CSR to a buffer
+pub fn serialize_csr(csr: &CsrVariant, section_id: u32, buf: &mut Vec<u8>) -> StorageResult<()> {
+    write_header_to(buf, section_id)
+        .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
+
+    let len_pos = buf.len();
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    let start = buf.len();
+    csr.dump_into(buf);
+    let len = (buf.len() - start) as u64;
+    buf[len_pos..len_pos + 8].copy_from_slice(&len.to_le_bytes());
+
+    Ok(())
+}
+
+/// Serialize one sharded CSR reusing caller-owned column buffers.
+///
+/// Same bytes as `serialize_csr`; group-set flushes share one scratch so a
+/// checkpoint over many groups pays one allocation per column.
+pub fn serialize_csr_with_scratch(
+    csr: &CsrVariant,
+    section_id: u32,
+    buf: &mut Vec<u8>,
+    scratch: &mut crate::edge::mutable_csr::persistence::CsrDumpScratch,
+) -> StorageResult<()> {
+    write_header_to(buf, section_id)
+        .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
+
+    let len_pos = buf.len();
+    buf.extend_from_slice(&0u64.to_le_bytes());
+    let start = buf.len();
+    csr.dump_into_with_scratch(buf, scratch);
+    let len = (buf.len() - start) as u64;
+    buf[len_pos..len_pos + 8].copy_from_slice(&len.to_le_bytes());
+
+    Ok(())
+}
+
+/// Load metadata from file cursor
+pub(crate) fn load_metadata(cursor: &mut &[u8]) -> StorageResult<EdgeMetadata> {
+    let mut label_bytes = [0u8; 4];
+    cursor.read_exact(&mut label_bytes)?;
+    let label = u32::from_le_bytes(label_bytes);
+
+    let mut src_label_bytes = [0u8; 4];
+    cursor.read_exact(&mut src_label_bytes)?;
+    let src_label = u32::from_le_bytes(src_label_bytes);
+
+    let mut dst_label_bytes = [0u8; 4];
+    cursor.read_exact(&mut dst_label_bytes)?;
+    let dst_label = u32::from_le_bytes(dst_label_bytes);
+
+    let mut label_name_len_bytes = [0u8; 4];
+    cursor.read_exact(&mut label_name_len_bytes)?;
+    let label_name_len = u32::from_le_bytes(label_name_len_bytes) as usize;
+
+    let mut label_name_bytes = vec![0u8; label_name_len];
+    cursor.read_exact(&mut label_name_bytes)?;
+    let label_name = String::from_utf8(label_name_bytes)
+        .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
+
+    let mut is_open_bytes = [0u8; 1];
+    cursor.read_exact(&mut is_open_bytes)?;
+    let is_open = is_open_bytes[0] != 0;
+
+    let mut schema_len_bytes = [0u8; 4];
+    cursor.read_exact(&mut schema_len_bytes)?;
+    let schema_len = u32::from_le_bytes(schema_len_bytes) as usize;
+    let mut schema_bytes = vec![0u8; schema_len];
+    cursor.read_exact(&mut schema_bytes)?;
+    let schema_json = String::from_utf8(schema_bytes)
+        .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
+    let schema = serde_json::from_str(&schema_json)
+        .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
+
+    let mut next_edge_id_bytes = [0u8; 8];
+    cursor.read_exact(&mut next_edge_id_bytes)?;
+    let next_edge_id = EdgeId(u64::from_le_bytes(next_edge_id_bytes));
+
+    Ok(EdgeMetadata {
+        label,
+        src_label,
+        dst_label,
+        label_name,
+        is_open,
+        schema,
+        next_edge_id,
+    })
+}
+
+/// Load one sharded CSR from file. Trailing bytes are rejected so old
+/// multi-segment payloads fail loudly instead of loading partially.
+/// `expected_section` must match the file section id; out/in files are not
+/// interchangeable.
+pub fn load_csr(path: &Path, csr: &mut CsrVariant, expected_section: u32) -> StorageResult<()> {
+    let (raw_data, total_rows) = read_pages_from_file(path)?;
+    let mut cursor = &raw_data[..];
+    let mut header_buf = [0u8; HEADER_SIZE];
+    cursor.read_exact(&mut header_buf)?;
+    {
+        let mut slice = &header_buf[..];
+        let sid = read_header(&mut slice)?;
+        if sid != expected_section {
+            return Err(StorageError::deserialize_error(format!(
+                "unexpected section id in edge CSR: expected {:#06x}, got {:#06x}",
+                expected_section, sid
+            )));
+        }
+    }
+
+    let mut len_bytes = [0u8; 8];
+    cursor.read_exact(&mut len_bytes)?;
+    let len = u64::from_le_bytes(len_bytes) as usize;
+
+    let mut data = vec![0u8; len];
+    cursor.read_exact(&mut data)?;
+
+    csr.load(&data)?;
+
+    if !cursor.is_empty() {
+        return Err(StorageError::deserialize_error(
+            "unexpected trailing data in edge CSR: old multi-segment format is not supported, rebuild the edge table from source instead of relying on automatic migration"
+                .to_string(),
+        ));
+    }
+
+    let loaded_edge_count = csr.edge_count() as u32;
+    if total_rows > 0 && total_rows != loaded_edge_count {
+        return Err(StorageError::deserialize_error(format!(
+            "CSR total_rows mismatch: header={}, actual={}",
+            total_rows, loaded_edge_count
+        )));
+    }
+
+    Ok(())
+}
+
+/// Write payload to file using page-level compression with shadow file atomic writes
+pub fn write_pages_to_file(
+    path: &Path,
+    payload: &[u8],
+    page_size: usize,
+    level: i32,
+    total_rows: u32,
+) -> StorageResult<()> {
+    let final_buf = encode_pages_to_file_buffer(payload, page_size, level, total_rows)?;
+    crate::compression::write_shadow_file(path, &final_buf)
+}
+
+/// Encode the page-compressed file image without touching the filesystem.
+///
+/// Batch flush paths persist many per-group shards before a single directory
+/// sync, so they encode first, rename through the no-sync shadow helper, and
+/// sync the directory once for the whole batch.
+pub fn encode_pages_to_file_buffer(
+    payload: &[u8],
+    page_size: usize,
+    level: i32,
+    total_rows: u32,
+) -> StorageResult<Vec<u8>> {
+    let mut pages_buf = Vec::new();
+    let mut writer = crate::compression::PageWriter::new(page_size, level);
+    writer.write_all(&mut pages_buf, payload)?;
+
+    let mut final_buf = Vec::new();
+    let header = crate::compression::ColumnFileHeader {
+        page_size,
+        page_count: writer.page_count(),
+        total_rows,
+    };
+    header.serialize(&mut final_buf)?;
+    final_buf.extend_from_slice(&pages_buf);
+    Ok(final_buf)
+}
+
+/// Write one page-compressed payload through the no-sync shadow helper.
+///
+/// The caller owns directory durability and must sync the directory once the
+/// batch of data files is durable, before publishing metadata and manifest.
+pub fn write_pages_to_file_without_dir_sync(
+    path: &Path,
+    payload: &[u8],
+    page_size: usize,
+    level: i32,
+    total_rows: u32,
+) -> StorageResult<()> {
+    let final_buf = encode_pages_to_file_buffer(payload, page_size, level, total_rows)?;
+    crate::compression::write_shadow_file_without_dir_sync(path, &final_buf)
+}
+
+/// Read pages from a page-compressed file.
+/// Returns (decompressed_data, total_rows_from_header).
+pub fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
+    let file = File::open(path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
+    let mut reader = std::io::BufReader::new(file);
+    let header = crate::compression::ColumnFileHeader::deserialize(&mut reader)?;
+    let total_rows = header.total_rows;
+    let page_reader = crate::compression::PageReader::new(header.page_size);
+    let data = page_reader.read_all(&mut reader, header.page_count)?;
+    Ok((data, total_rows))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::*;
+    use crate::edge::edge_table::config::EdgeTableConfig;
+    use crate::edge::edge_table::core::EdgeStore;
+    use linkrs_core::Value;
+
+    fn create_edge_table() -> EdgeStore {
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "knows".into(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![crate::types::StoragePropertyDef::new(
+                "weight".into(),
+                linkrs_core::types::DataType::Double,
+            )],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        };
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+    }
+
+    #[test]
+    fn test_flush_load_roundtrip() {
+        let mut table = create_edge_table();
+
+        let ts = 100u64;
+        table
+            .insert_edge(1, 2, 0, &[("weight".into(), Value::Double(1.5))], ts)
+            .unwrap();
+        table
+            .insert_edge(1, 3, 0, &[("weight".into(), Value::Double(2.5))], ts)
+            .unwrap();
+        table
+            .insert_edge(2, 3, 0, &[("weight".into(), Value::Double(3.5))], ts)
+            .unwrap();
+
+        let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
+
+        table
+            .flush(
+                temp_dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let mut loaded_table = create_edge_table();
+        loaded_table
+            .load(temp_dir.path())
+            .expect("load should succeed");
+
+        assert_eq!(loaded_table.out_edges(1, ts).len(), 2);
+        assert_eq!(loaded_table.out_edges(2, ts).len(), 1);
+        assert!(loaded_table.has_edge(1, 2, 0, ts));
+
+        let deleted = loaded_table
+            .delete_edge(1, 3, 0, ts + 1)
+            .expect("delete_edge should work after load");
+        assert!(deleted);
+        assert!(!loaded_table.has_edge(1, 3, 0, ts + 1));
+    }
+
+    #[test]
+    fn test_flush_load_preserves_deletions() {
+        let mut table = create_edge_table();
+
+        table
+            .insert_edge(1, 2, 0, &[("weight".into(), Value::Double(1.5))], 100)
+            .unwrap();
+        table
+            .insert_edge(1, 3, 0, &[("weight".into(), Value::Double(2.5))], 110)
+            .unwrap();
+        table.delete_edge(1, 2, 0, 200).unwrap();
+
+        let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
+
+        table
+            .flush(
+                temp_dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let mut loaded_table = create_edge_table();
+        loaded_table
+            .load(temp_dir.path())
+            .expect("load should succeed");
+
+        assert!(loaded_table.has_edge(1, 2, 0, 150));
+        assert!(!loaded_table.has_edge(1, 2, 0, 250));
+        assert!(loaded_table.has_edge(1, 3, 0, 250));
+    }
+
+    #[test]
+    fn test_flush_load_preserves_edge_timestamps() {
+        let mut table = create_edge_table();
+
+        table
+            .insert_edge(1, 2, 0, &[("weight".into(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(1, 3, 0, &[("weight".into(), Value::Double(2.0))], 200)
+            .unwrap();
+        table
+            .insert_edge(2, 3, 0, &[("weight".into(), Value::Double(3.0))], 300)
+            .unwrap();
+
+        // Verify edge_timestamps are populated before flush
+        assert!(table.mvcc.edge_timestamps.len() >= 3);
+
+        let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
+        table
+            .flush(
+                temp_dir.path(),
+                crate::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
+
+        let mut loaded = create_edge_table();
+        loaded.load(temp_dir.path()).expect("load should succeed");
+
+        // edge_timestamps restored from metadata: MVCCManager is the
+        // single visibility authority, so timestamps are asserted there
+        // rather than through CSR row replicas.
+        assert!(loaded.mvcc.edge_timestamps.len() >= 3);
+        assert_eq!(
+            loaded.mvcc.creation_ts_of(linkrs_core::types::EdgeId(0)),
+            Some(100)
+        );
+        assert_eq!(
+            loaded.mvcc.creation_ts_of(linkrs_core::types::EdgeId(1)),
+            Some(200)
+        );
+        assert_eq!(
+            loaded.mvcc.creation_ts_of(linkrs_core::types::EdgeId(2)),
+            Some(300)
+        );
+    }
+}

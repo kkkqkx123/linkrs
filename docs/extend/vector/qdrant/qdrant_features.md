@@ -456,9 +456,9 @@ GET http://localhost:6333/telemetry?details_level=1
 /qdrant.Points/Query
 ```
 
-### 7.3 端点名到 GraphDB 指标的映射
+### 7.3 端点名到 Linkrs 指标的映射
 
-| Qdrant REST 端点 | Qdrant gRPC 端点 | GraphDB `MetricType` |
+| Qdrant REST 端点 | Qdrant gRPC 端点 | Linkrs `MetricType` |
 |---|---|---|
 | `POST .../points/search` | `/qdrant.Points/Search` | `VectorSearchOps`, `VectorSearchErrors`, `VectorSearchLatencyMs` |
 | `PUT .../points` | `/qdrant.Points/Upsert` | `VectorUpsertOps`, `VectorUpsertErrors`, `VectorUpsertLatencyMs` |
@@ -471,14 +471,14 @@ GET http://localhost:6333/telemetry?details_level=1
 
 ### 7.4 集成方式
 
-GraphDB 通过 `VectorMetricsSampler` 每 10 秒调用 `GET /telemetry` 获取全局统计数据，
+Linkrs 通过 `VectorMetricsSampler` 每 10 秒调用 `GET /telemetry` 获取全局统计数据，
 将 `rest.responses` 和 `grpc.responses` 中的 `count`/`fail_count`/`total_duration_micros`
 差分后写入 `StatsManager`。Embedding 指标由 `EmbeddingService` 自行记录，
 不属于 Qdrant 服务端指标范围。
 
 ---
 
-## 与GraphDB集成要点
+## 与Linkrs集成要点
 
 1. **集合命名规范**: 使用 `space_{space_id}_{tag}_{field}` 格式
 2. **Payload设计**: 存储顶点ID、标签、属性引用

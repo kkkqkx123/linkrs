@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::{
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::{
     GraphStorage, PersistenceConfig, StoragePersistenceOps, StorageReader, StorageSchemaOps,
     StorageWriter,
 };

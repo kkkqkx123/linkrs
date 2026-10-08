@@ -1,8 +1,8 @@
 # 保留关键字列表
 
-本文档列出了 GraphDB 查询语言中所有保留关键字。保留关键字不能用作**属性名**、**标签名**、**边类型名**或**标识符**。
+本文档列出了 Linkrs 查询语言中所有保留关键字。保留关键字不能用作**属性名**、**标签名**、**边类型名**或**标识符**。
 
-> 关键字表来源：词法器 `lookup_keyword`（`crates/graphdb-query/src/parser/lexing/lexer.rs`），与代码一一对应。
+> 关键字表来源：词法器 `lookup_keyword`（`crates/linkrs-query/src/parser/lexing/lexer.rs`），与代码一一对应。
 
 ---
 

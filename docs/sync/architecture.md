@@ -4,7 +4,7 @@
 
 ## 概述
 
-GraphDB 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 + 异步投递** 的 Transactional Outbox 模式。全图数据（顶点/边/索引 DDL）与向量/全文索引最终一致，无跨存储 2PC/XA。
+Linkrs 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 + 异步投递** 的 Transactional Outbox 模式。全图数据（顶点/边/索引 DDL）与向量/全文索引最终一致，无跨存储 2PC/XA。
 
 - 图提交经单一 WAL fence 决定可见性（MVCC `commit_lsn` 立即可读）。
 - 索引变更以 `OutboxIntent` 随图 redo 原子落盘（`WAL_SYNC_WIRE_VERSION=1`，`WalOpType=21`），再经 SQLite 投递到 `LocalVectorEngine` 或 `Qdrant` 与 `Tantivy`。
@@ -76,7 +76,7 @@ GraphDB 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 +
 
 ### 1. SyncWrapper
 
-**位置**：`crates/graphdb-storage/src/storage/engine/sync_wrapper.rs:25`
+**位置**：`crates/linkrs-storage/src/storage/engine/sync_wrapper.rs:25`
 
 - 包装 `StorageClient`，在存储操作时自动同步到索引。
 - 写链路：`sync_insert_vertex` → `SyncManager::on_vertex_change_with_txn` → `stage_intent(txn_id, OutboxPayload::Vertex{...})`。`payload_to_intent` 为每个需要的 `target` 生成 `OutboxIntent`（`index_id = stable_hash("{target}:{space}:{index}")`，`ordering_key = "{target}:{space}:{index}:{entity}"` 按实体序列化，见 §8.2 R5 修复）。
@@ -86,7 +86,7 @@ GraphDB 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 +
 
 ### 2. SyncManager
 
-**位置**：`crates/graphdb-sync/src/sync/manager.rs:52`
+**位置**：`crates/linkrs-sync/src/sync/manager.rs:52`
 
 - `pending_intents: DashMap<TransactionId, Vec<OutboxIntent>>` 内存暂存；`sqlite_outbox / vector_coordinator / vector_receiver / outbox_consumer{batch=128,lease=30s,max_retries=16}`。
 - `stage_intent` 按负载内容与 `index_exists` 预过滤 `target`，避免 `vector+fulltext` 各克隆一份的写放大（`ChangeType::Delete` 空属性时扇出全量逻辑索引判断）。
@@ -98,7 +98,7 @@ GraphDB 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 +
 
 ### 3. SqliteOutbox
 
-**位置**：`crates/graphdb-sync/src/sync/sqlite_outbox.rs:23`
+**位置**：`crates/linkrs-sync/src/sync/sqlite_outbox.rs:23`
 
 - `pool(8)` + `WAL+FULL`；表：`events/commit_targets/projection_state/target_state/generation_state/index_frontier/dead_letters/degraded_ranges`。
 - `claim_next`：`target,status,next_attempt_at_ms,lease` + `generation_state='active'` + `NOT EXISTS ordering_key` 围栏，`ORDER BY commit_lsn,intent_sequence`。
@@ -117,7 +117,7 @@ GraphDB 的索引同步采用 **图 WAL 单真源 + SQLite Outbox 持久队列 +
 
 ### 5. VectorApi（传输无关）
 
-**位置**：`crates/graphdb-api/src/api/core/vector_api.rs:53`
+**位置**：`crates/linkrs-api/src/api/core/vector_api.rs:53`
 
 - 直写旁路收敛：`insert_vector/batch` 新增 `VectorWriteMode::Direct | Transactional{txn_id,space,tag,field}`。`Direct` 保留直调 `backend.upsert`（非事务），`Transactional` 走 `SyncManager::stage_intent` 入 outbox，可回滚并享 `RYW` 一致性。
 - `search_with_options` 透传 `SearchConsistency::Eventual | ReadYourWrites{timeout_ms}` 与 `minimum_lsn`，`RYW` 时调 `outbox.wait_for_minimum_lsn`，`degraded` 抛错，超时返回 `Timeout`。

@@ -71,20 +71,20 @@ VectorQueryType::Parameter => Err(PlanBuildError::CapabilityUnavailable { ... })
 
 ### 4.1 docs/archive/vector_query_expr_integration_design.md（本文件）
 
-### 4.2 crates/graphdb-query/src/executor/streaming/plan/arena_builder/specs/ddl.rs
+### 4.2 crates/linkrs-query/src/executor/streaming/plan/arena_builder/specs/ddl.rs
 
 - `vector_query_to_vec` 签名增加 `exec_ctx: &ExecutionContext` 参数
 - 3 个调用点（`build_vector_search_spec`、`build_vector_lookup_spec`、`build_vector_match_spec`）传入 exec_ctx
 - `VectorQueryType::Parameter` 分支实现解析逻辑
 - `VectorQueryType::Text` 返回空 `Vec<f32>` 占位 + `query_text` 标记
 
-### 4.3 crates/graphdb-query/src/executor/streaming/operators/spec.rs
+### 4.3 crates/linkrs-query/src/executor/streaming/operators/spec.rs
 
 - `VectorSpec::VectorSearch` 增加 `query_text: Option<String>` 字段
 - `VectorSpec::VectorLookup` 增加 `query_text: Option<String>` 字段
 - `VectorSpec::VectorMatch` 增加 `query_text: Option<String>` 字段
 
-### 4.4 crates/graphdb-query/src/executor/streaming/operators/vector_operator.rs
+### 4.4 crates/linkrs-query/src/executor/streaming/operators/vector_operator.rs
 
 - `VectorOperatorKind::VectorSearch` 增加 `query_text: Option<String>` 字段
 - `VectorOperatorKind::VectorLookup` 增加 `query_text: Option<String>` 字段

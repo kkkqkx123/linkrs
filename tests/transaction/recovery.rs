@@ -6,7 +6,7 @@
 //! - Fault injection at WAL stages
 //! - Timeout/shutdown resource cleanup completeness
 
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
 use std::sync::Arc;
 use std::time::Duration;

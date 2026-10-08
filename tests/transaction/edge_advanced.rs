@@ -12,7 +12,7 @@
 //! - Edge existence checks
 //! - Edge type constraints
 
-use graphdb::test_utils::test_scenario::TestScenario;
+use linkrs::test_utils::test_scenario::TestScenario;
 
 /// Test multiple edges of different types between same vertices
 #[test]

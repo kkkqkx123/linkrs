@@ -1,0 +1,200 @@
+use linkrs_core::types::{LabelId, Timestamp};
+use linkrs_core::StorageResult;
+
+use super::GraphStorageContext;
+
+impl GraphStorageContext {
+    pub fn scan_vertices(
+        &self,
+        label: LabelId,
+        ts: Timestamp,
+    ) -> Option<Vec<crate::vertex::VertexRecord>> {
+        if !self
+            .persistent
+            .is_open
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return None;
+        }
+        let guard = self.visibility_guard(ts);
+        self.persistent
+            .data_store
+            .catalog_read_snapshot()
+            .with_vertex_tables(|tables| {
+                let table = tables.get(&label)?;
+                let merge = self.staged_scan_merge(label, table, &guard);
+                let mut records = table.scan(&guard);
+                records.retain(|record| !merge.dropped_ids.contains(&record.internal_id));
+                records.extend(
+                    merge
+                        .rows
+                        .into_iter()
+                        .map(|row| crate::vertex::VertexRecord {
+                            internal_id: row.id,
+                            vid: row.vid,
+                            properties: row.properties,
+                        }),
+                );
+                Some(records)
+            })
+    }
+
+    /// Allocated vertex slots across all tables, including deleted but not
+    /// yet reclaimed entries. Storage scale for stats and checkpoints, not
+    /// a live count; exact live counts come from
+    /// `approximate_id_hole_stats`. The `approximate_` prefix marks the
+    /// cross-shard inconsistency: shards are read without a global lock.
+    pub fn total_vertex_count(&self) -> usize {
+        self.persistent
+            .data_store
+            .catalog_read_snapshot()
+            .with_vertex_tables(|tables| {
+                tables
+                    .values()
+                    .map(|table| table.approximate_total_count())
+                    .sum()
+            })
+    }
+
+    /// Live edge count on the stored leg. Unlike `total_vertex_count`,
+    /// tombstoned edges are not included.
+    ///
+    /// Physical counter for storage stats and checkpoint metadata: it takes
+    /// no read timestamp, so snapshot reads must use the gate-filtered
+    /// per-type count (`count_edges_by_type`) instead.
+    pub fn total_edge_count(&self) -> usize {
+        self.persistent
+            .data_store
+            .catalog_read_snapshot()
+            .with_edge_tables(|tables| {
+                tables
+                    .values()
+                    .map(|arc| arc.read().edge_count() as usize)
+                    .sum()
+            })
+    }
+
+    pub fn collect_all_edge_records(
+        &self,
+        ts: Timestamp,
+    ) -> Vec<(LabelId, LabelId, LabelId, crate::edge::EdgeRecord)> {
+        use crate::engine::data_store::EdgeTableKey;
+        let arcs: Vec<(
+            EdgeTableKey,
+            std::sync::Arc<parking_lot::RwLock<crate::edge::EdgeStore>>,
+        )> = self
+            .persistent
+            .data_store
+            .catalog_read_snapshot()
+            .with_edge_tables(|tables| {
+                tables
+                    .iter()
+                    .map(|(key, arc)| (*key, arc.clone()))
+                    .collect()
+            });
+        // Scatter-gather: collect the partition handles under a brief catalog
+        // read lock, then scan each partition in parallel under its own read
+        // lock. Results preserve partition order (indexed rayon collect).
+        use rayon::prelude::*;
+        let version_manager = self.persistent.version_manager.clone();
+        let own_write = self
+            .operation_context
+            .as_ref()
+            .and_then(|context| context.write_timestamp);
+        arcs.par_iter()
+            .flat_map(|(key, arc)| {
+                let table = arc.read();
+                let gate = crate::mvcc_visibility::PendingGate::new(&version_manager, own_write);
+                table
+                    .scan_with_gate_projected(ts, &gate, Some(&[]))
+                    .into_iter()
+                    .map(|edge_record| (key.src_label, key.dst_label, key.edge_label, edge_record))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    // ── Edge Property Index ──
+
+    pub fn enable_edge_property_index(
+        &self,
+        src_label: LabelId,
+        dst_label: LabelId,
+        edge_label: LabelId,
+        pool_capacity: u64,
+    ) -> StorageResult<()> {
+        use crate::engine::data_store::EdgeTableKey;
+        self.persistent.data_store.with_single_edge_table_mut(
+            &EdgeTableKey::new(src_label, dst_label, edge_label),
+            |table| table.enable_property_index(pool_capacity),
+        )
+    }
+
+    pub fn has_edge_property_index(
+        &self,
+        src_label: LabelId,
+        dst_label: LabelId,
+        edge_label: LabelId,
+    ) -> bool {
+        use crate::engine::data_store::EdgeTableKey;
+        self.persistent
+            .data_store
+            .catalog_read_snapshot()
+            .with_edge_tables(|tables| {
+                tables
+                    .get(&EdgeTableKey::new(src_label, dst_label, edge_label))
+                    .map(|arc| arc.read().has_property_index())
+                    .unwrap_or(false)
+            })
+    }
+
+    pub fn disable_edge_property_index(
+        &self,
+        src_label: LabelId,
+        dst_label: LabelId,
+        edge_label: LabelId,
+    ) -> StorageResult<()> {
+        use crate::engine::data_store::EdgeTableKey;
+        self.persistent.data_store.with_single_edge_table_mut(
+            &EdgeTableKey::new(src_label, dst_label, edge_label),
+            |table| {
+                table.disable_property_index();
+                Ok(())
+            },
+        )
+    }
+
+    /// Look up edges whose `prop_name` value falls in `[value_lower, value_upper)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn lookup_edges_by_property_range(
+        &self,
+        src_label: LabelId,
+        dst_label: LabelId,
+        edge_label: LabelId,
+        prop_name: &str,
+        value_lower: &[u8],
+        value_upper: &[u8],
+        ts: Timestamp,
+    ) -> Vec<crate::edge::EdgeRecord> {
+        use crate::engine::data_store::EdgeTableKey;
+        let gate = self.pending_gate();
+        self.persistent
+            .data_store
+            .catalog_read_snapshot()
+            .with_edge_tables(|tables| {
+                tables
+                    .get(&EdgeTableKey::new(src_label, dst_label, edge_label))
+                    .map(|arc| {
+                        let table = arc.read();
+                        table
+                            .lookup_edges_by_property_range(prop_name, value_lower, value_upper)
+                            .into_iter()
+                            .filter_map(|(src, dst, rank)| {
+                                table.get_edge_with_gate(src, dst, rank, ts, &gate)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+    }
+}

@@ -24,7 +24,7 @@ pub struct EdgePropertyIndexScanNode {
 }
 ```
 
-可复用的位置：`crates/graphdb-query/src/query/planning/plan/core/nodes/access/`，在 `EdgeIndexScanNode` 基础上添加过滤字段。
+可复用的位置：`crates/linkrs-query/src/query/planning/plan/core/nodes/access/`，在 `EdgeIndexScanNode` 基础上添加过滤字段。
 
 ### 2. SourceSpec
 

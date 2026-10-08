@@ -8,10 +8,10 @@
 //! Run with:
 //!   cargo bench --bench neighbor_batch_bench
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -116,7 +116,7 @@ fn main() {
         let start = Instant::now();
         for seed in &seeds {
             let _ =
-                storage.get_node_edges(SPACE, seed, graphdb::core::EdgeDirection::Out, &no_types);
+                storage.get_node_edges(SPACE, seed, linkrs::core::EdgeDirection::Out, &no_types);
         }
         per_vertex_us.push(start.elapsed().as_micros() as u64 * 1_000 / seeds.len() as u64);
     }
@@ -129,7 +129,7 @@ fn main() {
         let result = storage.neighbor_dst_ids_batch(
             SPACE,
             &seeds,
-            graphdb::core::EdgeDirection::Out,
+            linkrs::core::EdgeDirection::Out,
             &no_types,
         );
         let total: usize = result.map(|r| r.iter().map(Vec::len).sum()).unwrap_or(0);
@@ -143,7 +143,7 @@ fn main() {
     for _ in 0..iterations {
         let start = Instant::now();
         let degrees =
-            storage.out_degree_batch(SPACE, &seeds, graphdb::core::EdgeDirection::Out, &no_types);
+            storage.out_degree_batch(SPACE, &seeds, linkrs::core::EdgeDirection::Out, &no_types);
         assert_eq!(
             degrees.map(|d| d.iter().sum::<usize>()).unwrap_or(0),
             seeds.len() * EDGES_PER_VERTEX as usize

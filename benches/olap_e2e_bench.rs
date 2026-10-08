@@ -21,16 +21,16 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use parking_lot::RwLock;
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::query::optimizer::OptimizerEngine;
-use graphdb::query::pipeline::QueryPipelineManager;
-use graphdb::query::QueryRequestContext;
-use graphdb::storage::{
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::query::optimizer::OptimizerEngine;
+use linkrs::query::pipeline::QueryPipelineManager;
+use linkrs::query::QueryRequestContext;
+use linkrs::storage::{
     GraphStorage, StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
 };
-use graphdb_metrics::StatsManager;
+use linkrs_metrics::StatsManager;
 
 const SPACE: &str = "olap_e2e";
 const TAG: &str = "Person";

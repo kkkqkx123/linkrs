@@ -4,7 +4,7 @@
 
 ### 1.1 目标
 
-为 GraphDB CLI 提供事务管理功能，支持显式事务控制、自动提交模式切换、事务状态提示，确保数据操作的原子性和一致性。
+为 Linkrs CLI 提供事务管理功能，支持显式事务控制、自动提交模式切换、事务状态提示，确保数据操作的原子性和一致性。
 
 ### 1.2 参考实现
 
@@ -308,7 +308,7 @@ impl Session {
     pub fn prompt(&self, tx_manager: &TransactionManager) -> String {
         let mut prompt = String::new();
         
-        prompt.push_str("graphdb");
+        prompt.push_str("linkrs");
         
         if let Some(space) = &self.current_space {
             prompt.push_str(&format!("({})", space));
@@ -332,11 +332,11 @@ impl Session {
 
 | 状态                           | 提示符                |
 | ------------------------------ | --------------------- |
-| 无事务，自动提交               | `graphdb(test)=# `    |
-| 事务激活                       | `graphdb(test)*=# `   |
-| 非自动提交模式                 | `graphdb(test)!=# `   |
-| 事务激活且非自动提交           | `graphdb(test)*!=# `  |
-| 事务失败                       | `graphdb(test)!># `   |
+| 无事务，自动提交               | `linkrs(test)=# `    |
+| 事务激活                       | `linkrs(test)*=# `   |
+| 非自动提交模式                 | `linkrs(test)!=# `   |
+| 事务激活且非自动提交           | `linkrs(test)*!=# `  |
+| 事务失败                       | `linkrs(test)!># `   |
 
 ## 5. 自动提交模式
 
@@ -639,7 +639,7 @@ async fn execute_query(&mut self, query: &str, session_mgr: &mut SessionManager)
 ### 10.1 事务 API
 
 ```rust
-impl GraphDBHttpClient {
+impl LinkrsHttpClient {
     pub async fn begin_transaction(
         &self,
         session_id: i64,

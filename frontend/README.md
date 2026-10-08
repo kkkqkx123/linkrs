@@ -1,6 +1,6 @@
-# graphdb-studio
+# linkrs-studio
 
-Web UI for GraphDB: query console, schema browser, graph visualization, data
+Web UI for Linkrs: query console, schema browser, graph visualization, data
 browser and monitoring.
 
 ## Stack

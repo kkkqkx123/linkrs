@@ -1,6 +1,6 @@
-# GraphDB Performance Benchmarks
+# Linkrs Performance Benchmarks
 
-Performance benchmark suite for GraphDB using Criterion.rs
+Performance benchmark suite for Linkrs using Criterion.rs
 
 ## Directory Structure
 
@@ -384,4 +384,4 @@ When adding new benchmarks:
 ---
 
 **Last Updated**: 2026-10-06  
-**Maintained By**: GraphDB Team
+**Maintained By**: Linkrs Team

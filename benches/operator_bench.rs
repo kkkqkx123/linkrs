@@ -1,9 +1,9 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use graphdb_core::types::expr::Expression;
-use graphdb_core::types::operators::BinaryOperator;
-use graphdb_core::Value;
-use graphdb_query::executor::streaming::chunk::DataChunk;
-use graphdb_query::executor::streaming::slot::SlotLayout;
+use linkrs_core::types::expr::Expression;
+use linkrs_core::types::operators::BinaryOperator;
+use linkrs_core::Value;
+use linkrs_query::executor::streaming::chunk::DataChunk;
+use linkrs_query::executor::streaming::slot::SlotLayout;
 use std::sync::Arc;
 
 fn create_chunk(size: usize) -> DataChunk {

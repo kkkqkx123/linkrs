@@ -17,10 +17,10 @@ use std::time::Instant;
 use parking_lot::RwLock;
 use rayon::ThreadPoolBuilder;
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 
 const SPACE: &str = "b1";
 const EDGE: &str = "Link";

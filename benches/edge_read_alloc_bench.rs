@@ -7,10 +7,10 @@
 //! on the read path. Small dataset, debug-mode friendly.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

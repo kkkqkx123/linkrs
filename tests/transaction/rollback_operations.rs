@@ -9,8 +9,8 @@
 //! - Multiple operations rollback - verify correct order of rollback
 //! - Savepoint with operation rollback - integration test
 
-use graphdb::core::Value;
-use graphdb::test_utils::test_scenario::TestScenario;
+use linkrs::core::Value;
+use linkrs::test_utils::test_scenario::TestScenario;
 use std::collections::HashMap;
 
 /// Test InsertVertex rollback via savepoint - verify inserted vertex is removed after rollback

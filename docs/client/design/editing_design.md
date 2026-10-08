@@ -4,7 +4,7 @@
 
 ### 1.1 目标
 
-为 GraphDB CLI 提供完善的多行编辑支持，包括语句完整性检测、续行提示符、外部编辑器集成和查询缓冲区管理，参考 psql 的编辑体验。
+为 Linkrs CLI 提供完善的多行编辑支持，包括语句完整性检测、续行提示符、外部编辑器集成和查询缓冲区管理，参考 psql 的编辑体验。
 
 ### 1.2 参考实现
 
@@ -267,7 +267,7 @@ pub fn get_editor_command() -> String {
 pub fn edit_in_external_editor(buffer: &mut QueryBuffer) -> Result<bool> {
     let editor = get_editor_command();
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join("graphdb_query.gql");
+    let temp_file = temp_dir.join("linkrs_query.gql");
 
     // 写入临时文件
     std::fs::write(&temp_file, buffer.content())?;
@@ -326,7 +326,7 @@ fn parse_editor_args(arg: &str) -> (Option<String>, Option<usize>) {
 #### 3.4.1 基于 rustyline Highlighter
 
 ```rust
-impl Highlighter for GraphDBCompleter {
+impl Highlighter for LinkrsCompleter {
     fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
         // 简单的关键字高亮
         let mut result = String::new();
@@ -390,17 +390,17 @@ pub fn continuation_prompt(&self, buffer: &QueryBuffer) -> String {
     if content.chars().filter(|&c| c == '(').count()
         > content.chars().filter(|&c| c == ')').count()
     {
-        return "graphdb(> ".to_string();  // 未闭合圆括号
+        return "linkrs(> ".to_string();  // 未闭合圆括号
     }
 
     if content.chars().filter(|&c| c == '{').count()
         > content.chars().filter(|&c| c == '}').count()
     {
-        return "graphdb{> ".to_string();  // 未闭合花括号
+        return "linkrs{> ".to_string();  // 未闭合花括号
     }
 
     // 默认续行提示符
-    "graphdb-> ".to_string()
+    "linkrs-> ".to_string()
 }
 ```
 
@@ -408,10 +408,10 @@ pub fn continuation_prompt(&self, buffer: &QueryBuffer) -> String {
 
 | 提示符 | 含义 | 示例 |
 |--------|------|------|
-| `graphdb(user:space)=# ` | 主提示符，等待新命令 | |
-| `graphdb(user:space)-> ` | 续行提示符，语句未结束 | |
-| `graphdb(user:space)(> ` | 圆括号内续行 | `MATCH (p:person` |
-| `graphdb(user:space){> ` | 花括号内续行 | `SET p = {name: "Alice"` |
+| `linkrs(user:space)=# ` | 主提示符，等待新命令 | |
+| `linkrs(user:space)-> ` | 续行提示符，语句未结束 | |
+| `linkrs(user:space)(> ` | 圆括号内续行 | `MATCH (p:person` |
+| `linkrs(user:space){> ` | 花括号内续行 | `SET p = {name: "Alice"` |
 
 ## 4. 模块结构
 
@@ -520,6 +520,6 @@ pub enum MetaCommand {
 
 | 输入 | 提示符 |
 |------|--------|
-| `MATCH (p:person)` | `graphdb(> ` |
-| `SET p = {name: "Alice"` | `graphdb{> ` |
-| `MATCH (p:person)` + Enter | `graphdb-> ` |
+| `MATCH (p:person)` | `linkrs(> ` |
+| `SET p = {name: "Alice"` | `linkrs{> ` |
+| `MATCH (p:person)` + Enter | `linkrs-> ` |

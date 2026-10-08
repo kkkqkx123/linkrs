@@ -1,4 +1,4 @@
-use graphdb::config::Config;
+use linkrs::config::Config;
 use std::env;
 use std::fs;
 use tempfile::TempDir;
@@ -9,12 +9,12 @@ fn config_load_uses_config_file_directory_for_relative_paths() {
     let config_dir = temp_dir.path().join("config");
     fs::create_dir_all(&config_dir).expect("Failed to create config directory");
 
-    let config_path = config_dir.join("graphdb.toml");
+    let config_path = config_dir.join("linkrs.toml");
     fs::write(
         &config_path,
         r#"
 [database]
-storage_path = "data/graphdb"
+storage_path = "data/linkrs"
 "#,
     )
     .expect("Failed to write config file");
@@ -22,14 +22,14 @@ storage_path = "data/graphdb"
     let config = Config::load(&config_path).expect("Failed to load config");
     assert_eq!(
         config.common.database.storage_path,
-        config_dir.join("data/graphdb").to_string_lossy()
+        config_dir.join("data/linkrs").to_string_lossy()
     );
 }
 
 #[test]
-fn user_config_loading_uses_graphdb_config_dir() {
+fn user_config_loading_uses_linkrs_config_dir() {
     let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-    let config_dir = temp_dir.path().join("graphdb-user-config");
+    let config_dir = temp_dir.path().join("linkrs-user-config");
     fs::create_dir_all(&config_dir).expect("Failed to create config directory");
 
     fs::write(

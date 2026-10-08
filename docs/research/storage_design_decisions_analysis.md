@@ -90,7 +90,7 @@
 | **属性访问** | 按 CSR 偏移直接访问属性列 | 按 `EdgeId` 索引独立列式属性存储 |
 | **拓扑条目是否含属性定位** | 否 | **否** |
 
-> **更正**：早期版本称当前项目的 `Nbr` 携带 `prop_offset`、属"一体化设计"。实际代码相反：`Nbr` 只有 `endpoint / rank / edge_id / delete_ts` 四个字段，结构体文档注释明确写着"Edge properties are stored in a separate columnar store indexed by `EdgeId` — **no `prop_offset` indirection is stored per edge**"（`crates/graphdb-storage/src/edge.rs:610-621`）。
+> **更正**：早期版本称当前项目的 `Nbr` 携带 `prop_offset`、属"一体化设计"。实际代码相反：`Nbr` 只有 `endpoint / rank / edge_id / delete_ts` 四个字段，结构体文档注释明确写着"Edge properties are stored in a separate columnar store indexed by `EdgeId` — **no `prop_offset` indirection is stored per edge**"（`crates/linkrs-storage/src/edge.rs:610-621`）。
 
 因此**这一维度上两方取向一致**：拓扑条目只承载定位信息，属性延迟到需要时按 id 取。真正的差异在寻址方式——Ladybug 用"CSR 偏移即属性行号"（零额外存储但要求拓扑与属性行一一对应、重排时联动），当前项目用显式 `EdgeId`（多存一个 id，换来边属性存储可独立组织与回收）。
 
@@ -106,7 +106,7 @@
 
 **Ladybug 的简单策略**：删除仅标记，空间在检查点通过重写释放；`FreeSpaceManager` 回收的是**页**而非行槽。哈希索引里还留有一条未解决的 TODO："We should vacuum the index during checkpoint"（`ref/ladybug/src/storage/index/hash_index.cpp:84`）。
 
-**当前项目**：`csr_with_properties` 维护 `free_list` 复用空闲属性槽位（`crates/graphdb-storage/src/edge/csr_with_properties/persistence.rs:29`，序列化时一并落盘）。
+**当前项目**：`csr_with_properties` 维护 `free_list` 复用空闲属性槽位（`crates/linkrs-storage/src/edge/csr_with_properties/persistence.rs:29`，序列化时一并落盘）。
 
 > **更正**：早期版本提到的 `TieredTombstoneManager` 分层墓碑管理器在代码中不存在。实际的墓碑由 CSR 侧的 `delete_ts` 与删除模型承担（`edge/mutable_csr/`），不存在热/冷分层结构。
 
@@ -196,7 +196,7 @@
 
 ### 验证
 
-新增列级用例（混合布局的产生与可读性、镜像下 raw 片的值保真）与一个 flush/reload 端到端用例（`chunk_capacity` 8、前片 ALP 可编码、后片例外率超阈值）。`graphdb-storage` lib 1233 项全通过，`graphdb-query`/`graphdb-transaction`/`graphdb-api` 无回归。
+新增列级用例（混合布局的产生与可读性、镜像下 raw 片的值保真）与一个 flush/reload 端到端用例（`chunk_capacity` 8、前片 ALP 可编码、后片例外率超阈值）。`linkrs-storage` lib 1233 项全通过，`linkrs-query`/`linkrs-transaction`/`linkrs-api` 无回归。
 
 ### 遗留观察
 

@@ -33,7 +33,7 @@
 
 要点：
 
-- PoC 门槛（≥1.5x）达标；`VertexTable`/`ColumnStore` 列式布局已存在（`graphdb-storage/src/storage/vertex/vertex_table/core.rs`），收益来自既有列式存储的投影路径
+- PoC 门槛（≥1.5x）达标；`VertexTable`/`ColumnStore` 列式布局已存在（`linkrs-storage/src/storage/vertex/vertex_table/core.rs`），收益来自既有列式存储的投影路径
 - 批 4096 反而慢于批 256（全扫 100k 宽表 245k vs 352k rows/s）：行解码/物化成本主导，非批大小主导
 
 ## 2. P3.1 端到端存储读占比 R

@@ -7,15 +7,15 @@
 //! - Index queries (exact queries, range queries)
 //! - index cache
 
-use graphdb::core::types::{Index, IndexField, IndexStatus, IndexType, VertexId};
+use linkrs::core::types::{Index, IndexField, IndexStatus, IndexType, VertexId};
 #[cfg(feature = "vector-qdrant")]
-use graphdb::core::Edge;
-use graphdb::core::{Value, Vertex};
-use graphdb::query::planning::plan::{IndexLimit, ScanType};
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs::core::Edge;
+use linkrs::core::{Value, Vertex};
+use linkrs::query::planning::plan::{IndexLimit, ScanType};
+use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 #[cfg(feature = "vector-qdrant")]
-use graphdb::test_utils::storage_helpers::knows_edge_type_info;
-use graphdb::test_utils::{
+use linkrs::test_utils::storage_helpers::knows_edge_type_info;
+use linkrs::test_utils::{
     assertions::{assert_count, assert_none, assert_ok, assert_some},
     storage_helpers::{create_test_space, person_tag_info},
     TestStorage,
@@ -42,7 +42,7 @@ fn test_create_tag_index_metadata() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -84,7 +84,7 @@ fn test_create_tag_index_duplicate() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -119,7 +119,7 @@ fn test_drop_tag_index_metadata() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -158,7 +158,7 @@ fn test_list_tag_indexes() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index1 = Index::new(graphdb::core::types::IndexConfig {
+    let index1 = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -175,7 +175,7 @@ fn test_list_tag_indexes() {
         partial_condition: None,
     });
 
-    let index2 = Index::new(graphdb::core::types::IndexConfig {
+    let index2 = Index::new(linkrs::core::types::IndexConfig {
         id: 2,
         name: "person_age_idx".to_string(),
         space_id: 0,
@@ -217,7 +217,7 @@ fn test_drop_tag_indexes_by_tag() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index1 = Index::new(graphdb::core::types::IndexConfig {
+    let index1 = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -234,7 +234,7 @@ fn test_drop_tag_indexes_by_tag() {
         partial_condition: None,
     });
 
-    let index2 = Index::new(graphdb::core::types::IndexConfig {
+    let index2 = Index::new(linkrs::core::types::IndexConfig {
         id: 2,
         name: "person_age_idx".to_string(),
         space_id: 0,
@@ -277,7 +277,7 @@ fn test_create_edge_index_metadata() {
     let edge_info = knows_edge_type_info();
     assert_ok(get_storage(&storage).create_edge_type("test_space", &edge_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "knows_since_idx".to_string(),
         space_id: 0,
@@ -320,7 +320,7 @@ fn test_drop_edge_index_metadata() {
     let edge_info = knows_edge_type_info();
     assert_ok(get_storage(&storage).create_edge_type("test_space", &edge_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "knows_since_idx".to_string(),
         space_id: 0,
@@ -360,7 +360,7 @@ fn test_list_edge_indexes() {
     let edge_info = knows_edge_type_info();
     assert_ok(get_storage(&storage).create_edge_type("test_space", &edge_info));
 
-    let index1 = Index::new(graphdb::core::types::IndexConfig {
+    let index1 = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "knows_since_idx".to_string(),
         space_id: 0,
@@ -377,7 +377,7 @@ fn test_list_edge_indexes() {
         partial_condition: None,
     });
 
-    let index2 = Index::new(graphdb::core::types::IndexConfig {
+    let index2 = Index::new(linkrs::core::types::IndexConfig {
         id: 2,
         name: "knows_weight_idx".to_string(),
         space_id: 0,
@@ -425,7 +425,7 @@ fn test_update_vertex_indexes() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -448,7 +448,7 @@ fn test_update_vertex_indexes() {
     let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
         std::collections::HashMap::new();
     props.insert(std::sync::Arc::from("name"), Value::string("Alice"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
     let vertex = Vertex::new(vertex_id, tag);
 
     get_storage(&storage)
@@ -493,7 +493,7 @@ fn test_delete_edge_indexes() {
     let edge_info = knows_edge_type_info();
     assert_ok(get_storage(&storage).create_edge_type("test_space", &edge_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "knows_since_idx".to_string(),
         space_id: 0,
@@ -518,7 +518,7 @@ fn test_delete_edge_indexes() {
     // Create vertices first
     let src = VertexId::try_from_int64(1).expect("test vertex id");
     let dst = VertexId::try_from_int64(2).expect("test vertex id");
-    let tag = graphdb::core::vertex_edge_path::Tag::new(
+    let tag = linkrs::core::vertex_edge_path::Tag::new(
         "Person".to_string(),
         std::collections::HashMap::new(),
     );
@@ -562,7 +562,7 @@ fn test_index_exact_query() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -600,7 +600,7 @@ fn test_index_exact_query() {
         let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
             std::collections::HashMap::new();
         props.insert(std::sync::Arc::from("name"), name.clone());
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
@@ -630,7 +630,7 @@ fn test_index_query_multiple_matches() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_age_idx".to_string(),
         space_id: 0,
@@ -664,7 +664,7 @@ fn test_index_query_multiple_matches() {
         let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
             std::collections::HashMap::new();
         props.insert(std::sync::Arc::from("age"), age.clone());
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
@@ -694,7 +694,7 @@ fn test_index_query_no_match() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -717,7 +717,7 @@ fn test_index_query_no_match() {
     let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
         std::collections::HashMap::new();
     props.insert(std::sync::Arc::from("name"), Value::string("Alice"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
     let vertex = Vertex::new(vertex_id, tag);
 
     assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
@@ -741,7 +741,7 @@ fn test_index_status_active() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -783,7 +783,7 @@ fn test_unique_index() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_unique_idx".to_string(),
         space_id: 0,
@@ -824,7 +824,7 @@ fn test_composite_index() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_age_idx".to_string(),
         space_id: 0,
@@ -865,7 +865,7 @@ fn test_composite_index() {
             std::collections::HashMap::new();
         props.insert(std::sync::Arc::from("name"), name.clone());
         props.insert(std::sync::Arc::from("age"), age.clone());
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
@@ -891,9 +891,9 @@ fn test_composite_index() {
 // Note: This test is temporarily disabled because it uses a non-existent API
 // #[test]
 // fn test_index_selector_chooses_optimal_index() {
-//     use graphdb::core::types::operators::BinaryOperator;
-//     use graphdb::core::Expression;
-//     use graphdb::query::optimizer::IndexSelector;
+//     use linkrs::core::types::operators::BinaryOperator;
+//     use linkrs::core::Expression;
+//     use linkrs::query::optimizer::IndexSelector;
 //
 //     let test_storage = TestStorage::new().expect("创建测试存储失败");
 //     let storage = test_storage.storage();
@@ -974,7 +974,7 @@ fn test_index_range_query_with_boundaries() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_age_idx".to_string(),
         space_id: 0,
@@ -1017,7 +1017,7 @@ fn test_index_range_query_with_boundaries() {
         let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
             std::collections::HashMap::new();
         props.insert(std::sync::Arc::from("age"), age.clone());
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
@@ -1025,7 +1025,7 @@ fn test_index_range_query_with_boundaries() {
     // Test >= (with boundaries): age >= 25, should return 25, 30, 35, 40
     let _limit = IndexLimit {
         column: "age".to_string(),
-        begin_value: Some(graphdb::core::Value::string("25")),
+        begin_value: Some(linkrs::core::Value::string("25")),
         end_value: None,
         include_begin: true,
         include_end: false,
@@ -1061,7 +1061,7 @@ fn test_scan_type_unique() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -1100,7 +1100,7 @@ fn test_scan_type_unique() {
         let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
             std::collections::HashMap::new();
         props.insert(std::sync::Arc::from("name"), name.clone());
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(*vid, tag);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));
     }
@@ -1134,7 +1134,7 @@ fn test_scan_type_range() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_age_idx".to_string(),
         space_id: 0,
@@ -1154,7 +1154,7 @@ fn test_scan_type_range() {
         let mut props: std::collections::HashMap<std::sync::Arc<str>, Value> =
             std::collections::HashMap::new();
         props.insert(std::sync::Arc::from("age"), Value::Int(age));
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(
             VertexId::try_from_int64(age as i64).expect("test vertex id"),
             tag,
@@ -1183,7 +1183,7 @@ fn test_scan_type_full() {
     let tag_info = person_tag_info();
     assert_ok(get_storage(&storage).create_tag("test_space", &tag_info));
 
-    let index = Index::new(graphdb::core::types::IndexConfig {
+    let index = Index::new(linkrs::core::types::IndexConfig {
         id: 1,
         name: "person_name_idx".to_string(),
         space_id: 0,
@@ -1210,7 +1210,7 @@ fn test_scan_type_full() {
             std::sync::Arc::from("name"),
             Value::string(format!("Person{}", i)),
         );
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(
             VertexId::try_from_int64(i as i64).expect("test vertex id"),
             tag,

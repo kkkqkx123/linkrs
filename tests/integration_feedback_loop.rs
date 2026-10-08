@@ -4,14 +4,14 @@
 //! feedback is recorded into the optimizer engine's shared
 //! `QueryFeedbackHistory`.
 
-use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Value, Vertex};
-use graphdb::query::optimizer::OptimizerEngine;
-use graphdb::query::QueryPipelineManager;
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
-use graphdb::test_utils::TestStorage;
-use graphdb_metrics::StatsManager;
+use linkrs::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Value, Vertex};
+use linkrs::query::optimizer::OptimizerEngine;
+use linkrs::query::QueryPipelineManager;
+use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs::test_utils::TestStorage;
+use linkrs_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

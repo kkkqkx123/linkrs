@@ -1,4 +1,4 @@
-# GraphDB 基准测试分析功能集成 - 快速参考
+# Linkrs 基准测试分析功能集成 - 快速参考
 
 **日期**: 2026-06-18  
 **目的**: 快速概览如何集成 EXPLAIN/PROFILE 分析功能到基准测试
@@ -9,7 +9,7 @@
 
 **问题**: 如何在性能基准测试中集成分析功能（如 EXPLAIN 语句），获取详细的性能指标？
 
-**答案**: GraphDB 已具有完整的 EXPLAIN ANALYZE 和 PROFILE 功能，只需在基准测试中调用，提取指标即可。
+**答案**: Linkrs 已具有完整的 EXPLAIN ANALYZE 和 PROFILE 功能，只需在基准测试中调用，提取指标即可。
 
 ---
 
@@ -376,7 +376,7 @@ PROFILE:
   ✅ 专为性能分析设计
   ✅ 返回结构化数据
   ✅ 完整的节点级统计
-  ⚠️ GraphDB 特定格式
+  ⚠️ Linkrs 特定格式
 ```
 
 **建议**: 开始使用 EXPLAIN ANALYZE，后续可迁移到 PROFILE
@@ -507,7 +507,7 @@ A: 是，保存每个版本的基线 JSON，使用差异工具对比。
 
 - 查看完整设计文档: `docs/tests/benches/benchmark_analysis_integration.md`
 - 查看现有基准: `benches/{storage,query,transaction,search,api,end_to_end}_bench.rs`
-- 查看 EXPLAIN 实现: `/crates/graphdb-query/src/query/executor/explain/`
+- 查看 EXPLAIN 实现: `/crates/linkrs-query/src/query/executor/explain/`
 - 查看示例查询: `tests/e2e/data/*.gql`
 
 ---

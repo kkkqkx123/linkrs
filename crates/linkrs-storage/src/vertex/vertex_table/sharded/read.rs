@@ -1,0 +1,775 @@
+use super::super::core::VertexTable;
+use super::ShardedVertexTable;
+use crate::cursor::ColumnValues;
+use crate::mvcc_visibility::VisibilityGuard;
+use crate::vertex::{IdKey, PkLookup, VertexRecord};
+use linkrs_core::types::{DataType, Timestamp, VertexId};
+use linkrs_core::StorageResult;
+use std::sync::Arc;
+
+/// Decode an ID-index key into the external vertex ID.
+///
+/// Keys are length-checked at insert, so a decode failure surfaces as a
+/// missing row under the existing absence contract.
+fn vertex_id_of(key: IdKey) -> Option<VertexId> {
+    match key {
+        IdKey::Int(i) => VertexId::try_from_int64(i).ok(),
+        IdKey::Text(s) => VertexId::try_from_string(&s).ok(),
+    }
+}
+
+impl ShardedVertexTable {
+    // ── Plain timestamp primitives ──
+    //
+    // These apply the timestamp predicate only and take no visibility guard,
+    // so they can read a version a guard would hide. They stay crate-private
+    // and exist for the offline/startup paths that run with no transaction in
+    // flight (WAL replay, reshard). Every entry point that hands row identity
+    // or row data to a consumer takes a [`VisibilityGuard`] instead.
+
+    pub(crate) fn get_by_internal_id_offline(
+        &self,
+        global_id: u32,
+        ts: Timestamp,
+    ) -> Option<VertexRecord> {
+        let (idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[idx].read();
+        table
+            .get_by_internal_id_offline(local_id, ts)
+            .map(|mut record| {
+                record.internal_id = global_id;
+                record
+            })
+    }
+
+    /// Row survival stamps for visibility rechecks (shard-decoded).
+    pub(crate) fn row_timestamps(&self, global_id: u32) -> Option<(Timestamp, Option<Timestamp>)> {
+        let (idx, local_id) = self.decode_id(global_id);
+        self.shards[idx].read().row_timestamps(local_id)
+    }
+
+    /// Per-column covering version stamps for visibility rechecks.
+    pub(crate) fn row_picked_starts(&self, global_id: u32, ts: Timestamp) -> Vec<Timestamp> {
+        let (idx, local_id) = self.decode_id(global_id);
+        self.shards[idx].read().row_picked_starts(local_id, ts)
+    }
+
+    pub(crate) fn get_external_id(&self, global_id: u32, ts: Timestamp) -> Option<IdKey> {
+        let (idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[idx].read();
+        table.get_external_id(local_id, ts)
+    }
+
+    // ── Guarded reads ──
+
+    /// Whether one shard row is live for `guard` at its snapshot.
+    ///
+    /// Vertex rows reach the main table only at their transaction's commit
+    /// application (or through offline paths with no transaction in flight),
+    /// so the guard's liveness check at the snapshot is the full resolution:
+    /// there is no uncommitted version chain to walk below. The pending
+    /// check also covers a writer interleaving between the identity read and
+    /// the segment read, so point reads need no stamp revalidation loop.
+    fn shard_row_visible(table: &VertexTable, local_id: u32, guard: &VisibilityGuard<'_>) -> bool {
+        table
+            .row_timestamps(local_id)
+            .is_some_and(|(create_ts, delete_ts)| guard.is_row_visible(create_ts, delete_ts))
+    }
+
+    /// Guarded full point read, with the fences describing the version read:
+    /// creation stamp, per-column covering stamps and the read stamp. The
+    /// record cache fences on these.
+    pub(crate) fn resolve_vertex(
+        &self,
+        global_id: u32,
+        guard: &VisibilityGuard<'_>,
+    ) -> Option<(VertexRecord, Timestamp, Vec<Timestamp>, Timestamp)> {
+        let (shard_idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[shard_idx].read();
+        let (create_ts, delete_ts) = table.row_timestamps(local_id)?;
+        if !guard.is_row_visible(create_ts, delete_ts) {
+            return None;
+        }
+        let snapshot = guard.snapshot();
+        let (mut record, starts) = table.get_projected_with_stamps(local_id, snapshot, None)?;
+        record.internal_id = global_id;
+        Some((record, create_ts, starts, snapshot))
+    }
+
+    /// Guarded projected point read. Decodes the projection at the snapshot.
+    pub fn resolve_projected(
+        &self,
+        global_id: u32,
+        guard: &VisibilityGuard<'_>,
+        projection: Option<&[Arc<str>]>,
+    ) -> Option<VertexRecord> {
+        let (shard_idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[shard_idx].read();
+        if !Self::shard_row_visible(&table, local_id, guard) {
+            return None;
+        }
+        table
+            .get_projected_by_internal_id(local_id, guard.snapshot(), projection)
+            .map(|mut record| {
+                record.internal_id = global_id;
+                record
+            })
+    }
+
+    /// Batch variant of [`Self::resolve_projected`] with fail-closed decode.
+    ///
+    /// Input ids are grouped by shard, resolved with one lock acquisition per
+    /// shard and decoded in one column-major batch. The output is aligned with
+    /// the input order; rows with no visible version yield `None`. Corrupt
+    /// payloads or below-floor history abort the batch instead of reading
+    /// as missing, matching the edge cursor strict-decode contract.
+    pub fn resolve_projected_batch(
+        &self,
+        global_ids: &[u32],
+        guard: &VisibilityGuard<'_>,
+        projection: Option<&[Arc<str>]>,
+    ) -> StorageResult<Vec<Option<VertexRecord>>> {
+        let snapshot = guard.snapshot();
+        let mut out: Vec<Option<VertexRecord>> = global_ids.iter().map(|_| None).collect();
+        for (shard_idx, group) in self.group_by_shard(global_ids) {
+            if group.is_empty() {
+                continue;
+            }
+            let table = self.shards[shard_idx].read();
+            let visible: Vec<(usize, u32)> = group
+                .into_iter()
+                .filter(|&(_, local_id)| Self::shard_row_visible(&table, local_id, guard))
+                .collect();
+            let locals: Vec<u32> = visible.iter().map(|&(_, local)| local).collect();
+            let records = table.try_get_projected_batch(&locals, snapshot, projection)?;
+            for ((slot, _), record) in visible.into_iter().zip(records) {
+                out[slot] = record.map(|mut record| {
+                    record.internal_id = self.encode_id(shard_idx, record.internal_id);
+                    record
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Full cross-shard scan at the guard's snapshot.
+    ///
+    /// Each shard is scanned under its own read lock; per-shard runs are
+    /// already sorted by global id and merged here with a k-way heap into
+    /// one globally ordered stream. Empty shards (no live rows at the
+    /// snapshot) contribute no run and never build an iterator. Concurrent
+    /// writes may still be observed inconsistently across shards; point
+    /// lookups stay shard-consistent.
+    ///
+    /// Eager and materializing: every per-shard run is held at once, so
+    /// large tables should use the paginated path (`live_ids` plus
+    /// `scan_columns`) instead. Predicate pruning is not applied here;
+    /// filtered scans prune through `zone_prune_mask` in the cursor layer
+    /// before decoding.
+    pub fn scan(&self, guard: &VisibilityGuard<'_>) -> Vec<VertexRecord> {
+        use rayon::prelude::*;
+        let snapshot = guard.snapshot();
+        let per_shard: Vec<Vec<VertexRecord>> = self
+            .shards
+            .par_iter()
+            .enumerate()
+            .map(|(shard_idx, shard)| {
+                let table = shard.read();
+                if table.total_count() == 0 {
+                    return Vec::new();
+                }
+                let mut records: Vec<VertexRecord> = table
+                    .scan(snapshot)
+                    .filter_map(|mut record| {
+                        let local_id = record.internal_id;
+                        if !Self::shard_row_visible(&table, local_id, guard) {
+                            return None;
+                        }
+                        record.internal_id = self.encode_id(shard_idx, local_id);
+                        Some(record)
+                    })
+                    .collect();
+                records.sort_by_key(|record| record.internal_id);
+                records
+            })
+            .collect();
+        // Shards are independent read domains: parallel scan is safe, and
+        // the sorted per-shard runs merge into global id order for stable
+        // pagination without caller-side fan-out.
+        Self::merge_sorted_records(per_shard)
+    }
+
+    /// Candidate id enumeration for paginated scans: rows the guard considers
+    /// visible at its snapshot, in global id order.
+    ///
+    /// Shards are read without a global lock, so concurrent writes may be
+    /// observed inconsistently across shards. Shards decode in parallel and
+    /// merge in global id order, matching [`Self::scan`].
+    pub fn live_ids(&self, guard: &VisibilityGuard<'_>) -> Vec<u32> {
+        use rayon::prelude::*;
+        let snapshot = guard.snapshot();
+        let per_shard: Vec<Vec<u32>> = self
+            .shards
+            .par_iter()
+            .enumerate()
+            .map(|(shard_idx, shard)| {
+                let table = shard.read();
+                if table.total_count() == 0 {
+                    return Vec::new();
+                }
+                let mut shard_ids: Vec<u32> = table
+                    .live_ids(snapshot)
+                    .into_iter()
+                    .filter(|&local_id| Self::shard_row_visible(&table, local_id, guard))
+                    .map(|local_id| self.encode_id(shard_idx, local_id))
+                    .collect();
+                shard_ids.sort_unstable();
+                shard_ids
+            })
+            .collect();
+        Self::merge_sorted_ids(per_shard)
+    }
+
+    /// Column-major batch decode for paginated scans.
+    ///
+    /// Filters candidates by guard visibility, decodes the requested columns
+    /// at the snapshot (a full decode when `names` is empty) and compacts the
+    /// result. The returned ids, external vertex ids and columns are aligned;
+    /// rows with no visible version are dropped.
+    pub fn scan_columns(
+        &self,
+        global_ids: &[u32],
+        guard: &VisibilityGuard<'_>,
+        names: &[std::sync::Arc<str>],
+    ) -> (
+        Vec<u32>,
+        Vec<VertexId>,
+        Vec<(std::sync::Arc<str>, ColumnValues)>,
+    ) {
+        if let Err(error) = self.verify_shard_schema_uniform() {
+            log::error!(
+                "scan_columns proceeding under shard schema divergence: {}",
+                error
+            );
+        }
+        let snapshot = guard.snapshot();
+        let (resolved_names, types) = self.column_layout(names);
+        let mut merged: Vec<(Arc<str>, ColumnValues)> = resolved_names
+            .iter()
+            .zip(types.iter())
+            .map(|(name, data_type)| {
+                (
+                    name.clone(),
+                    empty_typed_column(data_type.as_ref(), global_ids.len()),
+                )
+            })
+            .collect();
+
+        let mut vids: Vec<Option<VertexId>> = vec![None; global_ids.len()];
+        for (shard_idx, group) in self.group_by_shard(global_ids) {
+            if group.is_empty() {
+                continue;
+            }
+            let table = self.shards[shard_idx].read();
+            let mut visible: Vec<(usize, u32)> = Vec::new();
+            for (slot, local_id) in group {
+                if !Self::shard_row_visible(&table, local_id, guard) {
+                    continue;
+                }
+                let Some(vid) = table.get_external_id_raw(local_id).and_then(vertex_id_of) else {
+                    continue;
+                };
+                vids[slot] = Some(vid);
+                visible.push((slot, local_id));
+            }
+            if visible.is_empty() {
+                continue;
+            }
+            let locals: Vec<u32> = visible.iter().map(|&(_, local)| local).collect();
+            for (name, column) in
+                table.get_projected_columns_offline(&locals, snapshot, &resolved_names)
+            {
+                if let Some((_, target)) = merged.iter_mut().find(|(n, _)| *n == name) {
+                    column.scatter(target, &visible);
+                }
+            }
+        }
+
+        // Compact to the surviving rows: the decode was pre-sized to the
+        // candidate count, which includes rows the guard hid.
+        let mut kept_ids = Vec::new();
+        let mut kept_vids = Vec::new();
+        let mut selection = Vec::new();
+        for (slot, vid) in vids.into_iter().enumerate() {
+            let Some(vid) = vid else { continue };
+            kept_ids.push(global_ids[slot]);
+            kept_vids.push(vid);
+            selection.push(slot);
+        }
+        if selection.len() != global_ids.len() {
+            for (_, column) in merged.iter_mut() {
+                column.select(&selection);
+            }
+        }
+
+        // Already-typed merges skip the box-and-retype roundtrip; only
+        // `General` columns (unknown type or cross-shard kind mismatch)
+        // attempt recovery through the declared type.
+        for (index, data_type) in types.into_iter().enumerate() {
+            if !matches!(merged[index].1, ColumnValues::General(_)) {
+                continue;
+            }
+            if let Some(data_type) = data_type {
+                let general = merged[index].1.to_general();
+                if let Some(typed) = ColumnValues::from_general_with_type(general, &data_type) {
+                    merged[index].1 = typed;
+                }
+            }
+        }
+        (kept_ids, kept_vids, merged)
+    }
+
+    /// Group input slots by shard so each shard is locked once per batch.
+    ///
+    /// The result is indexed by shard order; the tuple pairs the output slot
+    /// with the shard-local id.
+    fn group_by_shard(&self, global_ids: &[u32]) -> Vec<(usize, Vec<(usize, u32)>)> {
+        let mut by_shard: Vec<Vec<(usize, u32)>> = vec![Vec::new(); self.layout.num_shards];
+        let estimate = global_ids
+            .len()
+            .div_ceil(self.layout.num_shards.max(1))
+            .max(1);
+        for group in by_shard.iter_mut() {
+            group.reserve(estimate);
+        }
+        for (slot, &global_id) in global_ids.iter().enumerate() {
+            match self.try_decode_global_id(global_id) {
+                Ok((shard_idx, local_id)) => {
+                    if let Some(group) = by_shard.get_mut(shard_idx) {
+                        group.push((slot, local_id));
+                    } else {
+                        log::warn!(
+                            "skipping global id {} with out-of-range shard {}",
+                            global_id,
+                            shard_idx
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::warn!("skipping malformed global id {}: {}", global_id, e);
+                }
+            }
+        }
+        by_shard.into_iter().enumerate().collect()
+    }
+
+    /// Column names and declared types for a decode request. An empty request
+    /// means every column of the table.
+    fn column_layout(&self, names: &[Arc<str>]) -> (Vec<Arc<str>>, Vec<Option<DataType>>) {
+        let table = self.shards[0].read();
+        let resolved_names: Vec<Arc<str>> = if names.is_empty() {
+            table
+                .schema()
+                .properties
+                .iter()
+                .map(|p| p.name.clone())
+                .collect()
+        } else {
+            names.to_vec()
+        };
+        let types = resolved_names
+            .iter()
+            .map(|name| table.data_type_of(name))
+            .collect();
+        (resolved_names, types)
+    }
+
+    /// Zone-map pruning mask over `ids` (global internal ids).
+    ///
+    /// `mask[i] == false` means the row's zone-map chunk provably cannot
+    /// contain values matching any of `ranges`, so the id can be skipped
+    /// before decoding. Unknown columns and chunks without bounds keep the
+    /// id (conservative). Complex equality probes first prune on the
+    /// per-chunk length summary, then fall back to whole-value ordering.
+    /// A shard whose merged aggregate bounds already miss a range skips
+    /// every row without per-chunk work.
+    pub fn zone_prune_mask(
+        &self,
+        ids: &[u32],
+        ranges: &[crate::cursor::PredicateRange],
+    ) -> Vec<bool> {
+        let mut mask = vec![true; ids.len()];
+        if ranges.is_empty() {
+            return mask;
+        }
+        for (shard_idx, group) in self.group_by_shard(ids) {
+            if group.is_empty() {
+                continue;
+            }
+            let table = self.shards[shard_idx].read();
+            if Self::shard_wholly_pruned(&table, ranges) {
+                for (slot, _) in group {
+                    mask[slot] = false;
+                }
+                continue;
+            }
+            for (slot, local_id) in group {
+                let chunk = local_id as usize / crate::vertex::column_store::ZONE_MAP_CHUNK_ROWS;
+                for range in ranges {
+                    if !table.columns.zone_prunes_in_borrowed(chunk, range) {
+                        mask[slot] = false;
+                        break;
+                    }
+                }
+            }
+        }
+        mask
+    }
+
+    /// Whether no row of one shard can match `ranges` from merged aggregate
+    /// bounds alone. True only when a range's column has recorded bounds on
+    /// this shard and the merged interval misses the range; unknown columns
+    /// or bound-less shards stay conservative.
+    fn shard_wholly_pruned(table: &VertexTable, ranges: &[crate::cursor::PredicateRange]) -> bool {
+        for range in ranges {
+            let Some(bounds) = table.columns.aggregate_zone_bounds(&range.column) else {
+                continue;
+            };
+            let (Some(min), Some(max)) = (bounds.min.as_ref(), bounds.max.as_ref()) else {
+                continue;
+            };
+            if !range.overlaps(min, max) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// K-way heap merge of sorted id runs into global id order. Each input
+    /// run is already sorted; the heap holds one head per non-empty run.
+    fn merge_sorted_ids(mut runs: Vec<Vec<u32>>) -> Vec<u32> {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let total: usize = runs.iter().map(|r| r.len()).sum();
+        let mut heap: BinaryHeap<(Reverse<u32>, usize, usize)> = BinaryHeap::new();
+        for (run_idx, run) in runs.iter().enumerate() {
+            if let Some(&first) = run.first() {
+                heap.push((Reverse(first), run_idx, 0));
+            }
+        }
+        let mut out = Vec::with_capacity(total);
+        while let Some((Reverse(value), run_idx, pos)) = heap.pop() {
+            out.push(value);
+            let next = pos + 1;
+            if next < runs[run_idx].len() {
+                heap.push((Reverse(runs[run_idx][next]), run_idx, next));
+            }
+        }
+        // Release per-shard buffers eagerly; the merged order is the only
+        // retained allocation.
+        runs.clear();
+        out
+    }
+
+    /// K-way heap merge of sorted record runs into global id order.
+    fn merge_sorted_records(runs: Vec<Vec<VertexRecord>>) -> Vec<VertexRecord> {
+        use std::cmp::Reverse;
+        use std::collections::{BinaryHeap, VecDeque};
+        let total: usize = runs.iter().map(|r| r.len()).sum();
+        let mut queues: Vec<VecDeque<VertexRecord>> =
+            runs.into_iter().map(VecDeque::from).collect();
+        let mut heap: BinaryHeap<(Reverse<u32>, usize)> = BinaryHeap::new();
+        for (run_idx, queue) in queues.iter().enumerate() {
+            if let Some(first) = queue.front() {
+                heap.push((Reverse(first.internal_id), run_idx));
+            }
+        }
+        let mut out = Vec::with_capacity(total);
+        while let Some((_, run_idx)) = heap.pop() {
+            let Some(record) = queues[run_idx].pop_front() else {
+                continue;
+            };
+            if let Some(next) = queues[run_idx].front() {
+                heap.push((Reverse(next.internal_id), run_idx));
+            }
+            out.push(record);
+        }
+        out
+    }
+
+    /// Aggregate optimizer-facing statistics for one property column across
+    /// all shards. Zone-map bounds are merged with the numeric-aware
+    /// comparison used by pushed predicates; null/distinct counts come from
+    /// the persisted column stats meta when available. Returns `None` when
+    /// the column is unknown or no shard has any recorded information.
+    ///
+    /// `row_count` is the live row estimate at `ts`, not the allocated
+    /// slot total: deleted-but-unreclaimed rows must not inflate the
+    /// optimizer's cardinality.
+    pub fn column_stats_snapshot_at(
+        &self,
+        column: &str,
+        ts: Timestamp,
+    ) -> Option<crate::stats_reader::ColumnStatsSnapshot> {
+        use crate::stats_reader::ColumnStatsSnapshot;
+
+        let mut min: Option<linkrs_core::Value> = None;
+        let mut max: Option<linkrs_core::Value> = None;
+        let mut null_count: Option<u64> = None;
+        let mut merged_hll: Option<crate::stats::HyperLogLog> = None;
+        let mut any_info = false;
+
+        for shard in &self.shards {
+            let table = shard.read();
+            if let Some(bounds) = table.columns.aggregate_zone_bounds(column) {
+                any_info = true;
+                crate::stats_reader::merge_min(&mut min, bounds.min);
+                crate::stats_reader::merge_max(&mut max, bounds.max);
+            }
+            if let Some(stats) = table.columns.get_column(column).and_then(|c| c.stats()) {
+                any_info = true;
+                *null_count.get_or_insert(0) += stats.null_count;
+                if let Some(h) = &stats.hll {
+                    if let Some(ref mut acc) = merged_hll {
+                        acc.merge(h);
+                    } else {
+                        merged_hll = Some(h.clone());
+                    }
+                }
+            }
+        }
+
+        if !any_info {
+            return None;
+        }
+        let (hll, distinct_count) = match merged_hll {
+            Some(h) => {
+                let est = h.estimate();
+                (Some(h), Some(est))
+            }
+            None => (None, None),
+        };
+        Some(ColumnStatsSnapshot {
+            row_count: self.approximate_id_hole_stats(ts).0 as u64,
+            null_count,
+            distinct_count,
+            hll,
+            min_value: min,
+            max_value: max,
+        })
+    }
+
+    /// Table-level cardinality snapshot for the optimizer.
+    ///
+    /// Wraps [`Self::approximate_id_hole_stats`] in the shared
+    /// [`crate::stats_reader::TableCardinalitySnapshot`] shape so the query
+    /// layer no longer reassembles live versus allocated counts itself.
+    /// Shard-inconsistent like the underlying counts; for sizing and plan
+    /// costing only.
+    pub fn table_cardinality_at(
+        &self,
+        ts: Timestamp,
+    ) -> crate::stats_reader::TableCardinalitySnapshot {
+        let (live, allocated) = self.approximate_id_hole_stats(ts);
+        crate::stats_reader::TableCardinalitySnapshot {
+            live_rows: live as u64,
+            allocated_slots: allocated as u64,
+            shard_count: self.layout.num_shards,
+        }
+    }
+
+    // ── Identity and sizing ──
+    //
+    // These resolve row identity or counts rather than row content, so they
+    // keep the plain timestamp predicate.
+
+    pub fn get_internal_id(&self, external_id: &str, ts: Timestamp) -> Option<u32> {
+        self.lookup_pk(external_id, ts).visible_id()
+    }
+
+    pub fn get_internal_id_by_i64(&self, external_id: i64, ts: Timestamp) -> Option<u32> {
+        self.lookup_pk_by_i64(external_id, ts).visible_id()
+    }
+
+    /// Visibility-aware primary-key lookup with global ids. Read-locked:
+    /// committed bindings invisible at `ts` resolve as missing, so callers
+    /// need no secondary timestamp filtering.
+    pub fn lookup_pk(&self, external_id: &str, ts: Timestamp) -> PkLookup {
+        let idx = self.shard_index_by_str(external_id);
+        let table = self.shards[idx].read();
+        match table.lookup_internal_id(&IdKey::Text(external_id.to_string()), ts) {
+            PkLookup::Visible(local_id) => PkLookup::Visible(self.encode_id(idx, local_id)),
+            PkLookup::Missing => PkLookup::Missing,
+        }
+    }
+
+    /// Integer-keyed lookup. Same contract as [`lookup_pk`](Self::lookup_pk).
+    pub fn lookup_pk_by_i64(&self, external_id: i64, ts: Timestamp) -> PkLookup {
+        let idx = self.shard_index_by_i64(external_id);
+        let table = self.shards[idx].read();
+        match table.lookup_internal_id(&IdKey::Int(external_id), ts) {
+            PkLookup::Visible(local_id) => PkLookup::Visible(self.encode_id(idx, local_id)),
+            PkLookup::Missing => PkLookup::Missing,
+        }
+    }
+
+    pub fn get_internal_id_raw(&self, external_id: &str) -> Option<u32> {
+        let idx = self.shard_index_by_str(external_id);
+        let table = self.shards[idx].read();
+        let local_id = table.get_internal_id_raw(external_id)?;
+        Some(self.encode_id(idx, local_id))
+    }
+
+    pub fn get_internal_id_by_i64_raw(&self, external_id: i64) -> Option<u32> {
+        let idx = self.shard_index_by_i64(external_id);
+        let table = self.shards[idx].read();
+        let local_id = table.get_internal_id_by_i64_raw(external_id)?;
+        Some(self.encode_id(idx, local_id))
+    }
+
+    pub fn get_external_id_raw(&self, global_id: u32) -> Option<IdKey> {
+        let (idx, local_id) = self.decode_id(global_id);
+        let table = self.shards[idx].read();
+        table.get_external_id_raw(local_id)
+    }
+
+    /// Total allocated vertex slots across all shards, including deleted but
+    /// not yet reclaimed entries.
+    ///
+    /// Shards are read without a global lock, so concurrent inserts and
+    /// deletes may be observed inconsistently across shards. Use it for sizing
+    /// and statistics, not for exact live accounting. Exact live counts come
+    /// from `approximate_id_hole_stats`. The `approximate_` prefix marks the
+    /// cross-shard inconsistency in the name so callers cannot mistake it for
+    /// a strongly consistent count.
+    pub fn approximate_total_count(&self) -> usize {
+        let mut total = 0;
+        for shard in &self.shards {
+            total += shard.read().total_count();
+        }
+        total
+    }
+
+    /// Live vertex count at `ts` and total allocated local IDs across all
+    /// shards.
+    ///
+    /// The difference (`allocated - live`) is the number of deleted-but-
+    /// unreclaimed vertex slots. Edge CSR row space stays at the allocated
+    /// high-water mark until compaction reclaims it, so a large gap is the
+    /// trigger signal for automatic background compaction.
+    ///
+    /// Shards are read without a global lock, so the two numbers may come
+    /// from different instants under concurrent writes. The `approximate_`
+    /// prefix marks this cross-shard inconsistency; use the result for
+    /// sizing and compaction signals, never as a strongly consistent census.
+    pub fn approximate_id_hole_stats(&self, ts: Timestamp) -> (usize, usize) {
+        let mut live = 0;
+        let mut allocated = 0;
+        for shard in &self.shards {
+            let (l, a) = shard.read().id_hole_stats(ts);
+            live += l;
+            allocated += a;
+        }
+        (live, allocated)
+    }
+
+    /// External vertex-id keys of every live row, across all shards.
+    ///
+    /// Used to rebuild the self-proven vertex-id domain evidence after a
+    /// restore (the write-path accumulator is not populated by disk loads).
+    pub fn external_id_keys(&self) -> Vec<IdKey> {
+        let mut keys = Vec::new();
+        for shard in &self.shards {
+            let table = shard.read();
+            keys.extend(table.id_indexer.iter().into_iter().map(|(key, _)| key));
+        }
+        keys
+    }
+
+    /// One-pass storage health combining index holes, overwrite buffers,
+    /// version chains and residency so live, allocated, holes, overlay and
+    /// version counts can be compared in a single snapshot.
+    ///
+    /// Shards are read without a global lock, so the fields may come from
+    /// different instants under concurrent writes. Use the result for sizing
+    /// and maintenance signals, never as a strongly consistent census.
+    #[allow(dead_code)]
+    pub fn storage_snapshot(&self, ts: Timestamp) -> VertexStorageSnapshot {
+        let mut snapshot = VertexStorageSnapshot::default();
+        for shard in &self.shards {
+            let table = shard.read();
+            let (live, allocated) = table.id_hole_stats(ts);
+            snapshot.live += live;
+            snapshot.allocated += allocated;
+            snapshot.pk_reuses = snapshot
+                .pk_reuses
+                .saturating_add(table.id_indexer.reuse_count());
+            snapshot.pk_free_depth += table.id_indexer.free_depth();
+            let breakdown = table.id_indexer.memory_breakdown();
+            snapshot.pk_memory_bytes += breakdown.total_bytes;
+            snapshot.pk_hole_bytes += breakdown.hole_bytes;
+            let versions = table.columns.version_chain_stats();
+            snapshot.version_entries += versions.total_entries;
+            snapshot.version_memory_bytes += versions.memory_bytes;
+            snapshot.overlay_entries += table.columns.overlay_entry_count();
+            let ledger = table.columns.buffer_ledger();
+            snapshot.resident_chunks += ledger.resident_chunks;
+            snapshot.evicted_chunks += ledger.evicted_chunks;
+        }
+        snapshot.holes = snapshot.allocated.saturating_sub(snapshot.live);
+        snapshot
+    }
+}
+
+/// Combined index, overwrite-buffer, version-chain and residency counters
+/// for one vertex label. All counters are approximate cross-shard sums.
+/// Column deleted-row bytes stay resident until reclamation and remain part
+/// of the version and buffer totals rather than a separate hole-bytes field.
+#[derive(Debug, Clone, Copy, Default)]
+#[allow(dead_code)]
+pub struct VertexStorageSnapshot {
+    pub live: usize,
+    pub allocated: usize,
+    pub holes: usize,
+    pub pk_reuses: u64,
+    pub pk_free_depth: usize,
+    pub pk_memory_bytes: usize,
+    pub pk_hole_bytes: usize,
+    pub version_entries: usize,
+    pub version_memory_bytes: usize,
+    pub overlay_entries: usize,
+    pub resident_chunks: usize,
+    pub evicted_chunks: usize,
+}
+
+/// Pre-sized all-null column of the declared type for sharded merges, so
+/// same-kind per-shard decodes scatter directly into a typed target.
+fn empty_typed_column(data_type: Option<&DataType>, len: usize) -> ColumnValues {
+    match data_type {
+        Some(DataType::BigInt) => ColumnValues::I64 {
+            values: vec![0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::Double) => ColumnValues::F64 {
+            values: vec![0.0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::Int) => ColumnValues::I32 {
+            values: vec![0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::Bool) => ColumnValues::Bool {
+            values: vec![0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::SmallInt) => ColumnValues::I16 {
+            values: vec![0; len],
+            valid: vec![0; len],
+        },
+        Some(DataType::Float) => ColumnValues::F32 {
+            values: vec![0.0; len],
+            valid: vec![0; len],
+        },
+        _ => ColumnValues::General(vec![None; len]),
+    }
+}

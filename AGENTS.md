@@ -1,4 +1,4 @@
-# GraphDB Project Context
+# Linkrs Project Context
 
 **No-backward-compatible**
 At present, the project is in the development stage and there is no need to specifically consider backward compatibility. It is important to maintain a reasonable architecture.
@@ -20,24 +20,24 @@ A lightweight single-node graph database reimplemented in Rust, focusing on loca
 
 Workspace with 12 sub-crates under `crates/`:
 
-- `graphdb-metrics` - observability primitives: StatsManager, MetricType registry, latency histograms, error/slow-query stats (base of the DAG)
-- `graphdb-core` - core data structures, types, errors
-- `graphdb-config` - configuration management
-- `graphdb-fulltext` - fulltext search (BM25)
-- `graphdb-sync` - synchronization primitives
-- `graphdb-transaction` - transaction management
-- `graphdb-storage` - storage engine (CSR, memory-mapped containers)
-- `graphdb-query` - query engine, parser, executor
-- `graphdb-api` - transport-independent core API + embedded/C-API
-- `graphdb-server` - network service layer (HTTP/gRPC/web management)
-- `graphdb-wire` - wire DTOs shared between server and CLI
-- `graphdb-migration` - schema/data migration
+- `linkrs-metrics` - observability primitives: StatsManager, MetricType registry, latency histograms, error/slow-query stats (base of the DAG)
+- `linkrs-core` - core data structures, types, errors
+- `linkrs-config` - configuration management
+- `linkrs-fulltext` - fulltext search (BM25)
+- `linkrs-sync` - synchronization primitives
+- `linkrs-transaction` - transaction management
+- `linkrs-storage` - storage engine (CSR, memory-mapped containers)
+- `linkrs-query` - query engine, parser, executor
+- `linkrs-api` - transport-independent core API + embedded/C-API
+- `linkrs-server` - network service layer (HTTP/gRPC/web management)
+- `linkrs-wire` - wire DTOs shared between server and CLI
+- `linkrs-migration` - schema/data migration
 
 Root `src/` has `lib.rs`, `main.rs`, `c_api.rs` with `pub use dep_crate::api as api` re-exports.
 
-Dependency DAG: metrics → core → config → fulltext → sync → transaction → storage → query → api → server. `graphdb-core` re-exports `graphdb-metrics` under `core::stats` for compatibility; new code should depend on `graphdb-metrics` directly.
+Dependency DAG: metrics → core → config → fulltext → sync → transaction → storage → query → api → server. `linkrs-core` re-exports `linkrs-metrics` under `core::stats` for compatibility; new code should depend on `linkrs-metrics` directly.
 
-Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/graphdb-cli`, `crates/tantivy`
+Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/linkrs-cli`, `crates/tantivy`
 
 ## Key Directories
 

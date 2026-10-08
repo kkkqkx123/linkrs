@@ -1,4 +1,4 @@
-# GraphDB 性能基准测试计划
+# Linkrs 性能基准测试计划
 
 **文档版本**: v1.0  
 **更新日期**: 2026-06-18  
@@ -725,7 +725,7 @@ fn bench_concurrent_read(b: &mut Bencher) {
 ### 8.1 基线报告
 
 ```markdown
-# GraphDB 性能基线报告
+# Linkrs 性能基线报告
 
 **报告日期**: 2026-06-18  
 **系统配置**: 
@@ -848,7 +848,7 @@ cargo bench --bench '*' -- --baseline=v1.0
 
 ### 10.3 相关文档
 
-- GraphDB 架构设计: `docs/architecture/`
+- Linkrs 架构设计: `docs/architecture/`
 - 存储层文档: `docs/storage/`
 - 查询层文档: `docs/query/`
 
@@ -892,7 +892,7 @@ open flamegraph.svg
 
 ```bash
 # 使用 valgrind 分析内存
-valgrind --tool=massif ./target/release/graphdb-bench
+valgrind --tool=massif ./target/release/linkrs-bench
 
 # 查看内存使用情况
 ms_print massif.out.<pid>
@@ -902,4 +902,4 @@ ms_print massif.out.<pid>
 
 **文档完成度**: 100%  
 **最后更新**: 2026-06-18  
-**维护者**: GraphDB Team
+**维护者**: Linkrs Team

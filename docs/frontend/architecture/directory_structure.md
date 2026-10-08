@@ -1,4 +1,4 @@
-# GraphDB 前端目录结构设计
+# Linkrs 前端目录结构设计
 
 **文档版本**: v3.0  
 **创建日期**: 2026-03-29  
@@ -407,7 +407,7 @@ import GraphPreviewControls from '$components/business/GraphPreviewControls.svel
 
 ## 6. 与 nebula-studio 的目录对比
 
-| nebula-studio | GraphDB（现状） | 说明 |
+| nebula-studio | Linkrs（现状） | 说明 |
 |---------------|----------------|------|
 | `app/components/` | `src/lib/components/` | 结构一致，组件改为 `.svelte` 单文件 |
 | `app/pages/` | `src/routes/` | 改为文件路由，页面文件名统一为 `+page.svelte` |

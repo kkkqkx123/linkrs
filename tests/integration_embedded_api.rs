@@ -14,14 +14,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use graphdb::api::api_core::SpaceConfig;
-use graphdb::api::embedded::{
+use linkrs::api::api_core::SpaceConfig;
+use linkrs::api::embedded::{
     BatchConfig, BatchError, BatchItemType, BatchResult, DatabaseConfig, GraphDatabase,
     QueryResult, ResultMetadata, Row, SyncMode, TransactionConfig,
 };
-use graphdb::core::types::{DataSet, VertexId};
-use graphdb::core::{Edge, Value, Vertex};
-use graphdb::storage::GraphStorage;
+use linkrs::core::types::{DataSet, VertexId};
+use linkrs::core::{Edge, Value, Vertex};
+use linkrs::storage::GraphStorage;
 
 /// Test the database wrapper to keep the temporary catalog valid
 struct TestDatabase {
@@ -230,7 +230,7 @@ fn test_session_text_transaction_commands() {
     let value = count.rows().first().expect("count row").get("c");
     assert_eq!(
         value,
-        Some(&graphdb::core::Value::BigInt(0)),
+        Some(&linkrs::core::Value::BigInt(0)),
         "ROLLBACK must undo the in-transaction INSERT"
     );
 
@@ -254,7 +254,7 @@ fn test_session_text_transaction_commands() {
     let value = count.rows().first().expect("count row").get("c");
     assert_eq!(
         value,
-        Some(&graphdb::core::Value::BigInt(1)),
+        Some(&linkrs::core::Value::BigInt(1)),
         "ROLLBACK TO must undo post-savepoint writes only"
     );
 
@@ -263,7 +263,7 @@ fn test_session_text_transaction_commands() {
         .execute("MATCH (p:person) RETURN count(p) AS c")
         .expect("MATCH should succeed");
     let value = count.rows().first().expect("count row").get("c");
-    assert_eq!(value, Some(&graphdb::core::Value::BigInt(1)));
+    assert_eq!(value, Some(&linkrs::core::Value::BigInt(1)));
 
     // COMMIT without an active transaction fails clearly.
     assert!(session.execute("COMMIT").is_err());
@@ -271,7 +271,7 @@ fn test_session_text_transaction_commands() {
     // LET assigns session variables in embedded sessions.
     let result = session.execute("LET $x = 1").expect("LET should succeed");
     let value = result.rows().first().expect("let row").get("x");
-    assert_eq!(value, Some(&graphdb::core::Value::BigInt(1)));
+    assert_eq!(value, Some(&linkrs::core::Value::BigInt(1)));
 }
 
 #[test]
@@ -433,7 +433,7 @@ fn test_transaction_config_default() {
     assert!(config.timeout.is_none());
     assert_eq!(
         config.durability,
-        graphdb::transaction::DurabilityLevel::Sync
+        linkrs::transaction::DurabilityLevel::Sync
     );
 }
 
@@ -442,13 +442,13 @@ fn test_transaction_config_builder() {
     let config = TransactionConfig::new()
         .read_only()
         .with_timeout(Duration::from_secs(60))
-        .with_durability(graphdb::transaction::DurabilityLevel::None);
+        .with_durability(linkrs::transaction::DurabilityLevel::None);
 
     assert!(config.read_only);
     assert_eq!(config.timeout, Some(Duration::from_secs(60)));
     assert_eq!(
         config.durability,
-        graphdb::transaction::DurabilityLevel::None
+        linkrs::transaction::DurabilityLevel::None
     );
 }
 
@@ -561,7 +561,7 @@ fn test_session_with_transaction() {
     let session = db.session().expect("创建会话失败");
 
     let result = session
-        .with_transaction(|_txn| Ok::<_, graphdb::api::api_core::CoreError>(42))
+        .with_transaction(|_txn| Ok::<_, linkrs::api::api_core::CoreError>(42))
         .expect("事务执行失败");
 
     assert_eq!(result, 42);
@@ -573,8 +573,8 @@ fn test_session_with_transaction_rollback_on_error() {
     let db = &test_db.db;
     let session = db.session().expect("创建会话失败");
 
-    let result: Result<i32, graphdb::api::CoreError> = session.with_transaction(|_txn| {
-        Err::<i32, _>(graphdb::api::api_core::CoreError::Internal(
+    let result: Result<i32, linkrs::api::CoreError> = session.with_transaction(|_txn| {
+        Err::<i32, _>(linkrs::api::api_core::CoreError::Internal(
             "测试错误".to_string(),
         ))
     });
@@ -685,7 +685,7 @@ fn test_batch_inserter_add_vertex() {
     let mut inserter = session.batch_inserter(100);
     let vertex = Vertex::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
-        graphdb::core::Tag::new("Person".to_string(), HashMap::new()),
+        linkrs::core::Tag::new("Person".to_string(), HashMap::new()),
     );
     inserter.add_vertex(vertex);
 
@@ -725,11 +725,11 @@ fn test_batch_error_create() {
 
 #[test]
 fn test_query_result_empty() {
-    let core_result = graphdb::api::api_core::QueryResult::new(
-        graphdb::query::executor::base::ExecutionResult::DataSet {
+    let core_result = linkrs::api::api_core::QueryResult::new(
+        linkrs::query::executor::base::ExecutionResult::DataSet {
             data: DataSet::new(),
         },
-        graphdb::api::api_core::ExecutionMetadata {
+        linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 0,
@@ -747,9 +747,9 @@ fn test_query_result_empty() {
 fn test_query_result_columns() {
     let columns = vec!["id".to_string(), "name".to_string()];
     let data = DataSet::with_columns(columns.clone());
-    let core_result = graphdb::api::api_core::QueryResult::new(
-        graphdb::query::executor::base::ExecutionResult::DataSet { data },
-        graphdb::api::api_core::ExecutionMetadata {
+    let core_result = linkrs::api::api_core::QueryResult::new(
+        linkrs::query::executor::base::ExecutionResult::DataSet { data },
+        linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 0,
@@ -766,9 +766,9 @@ fn test_query_result_metadata() {
     let mut data = DataSet::with_columns(columns.clone());
     data.add_row(vec![Value::Int(1)]);
     data.add_row(vec![Value::Int(2)]);
-    let core_result = graphdb::api::api_core::QueryResult::new(
-        graphdb::query::executor::base::ExecutionResult::DataSet { data },
-        graphdb::api::api_core::ExecutionMetadata {
+    let core_result = linkrs::api::api_core::QueryResult::new(
+        linkrs::query::executor::base::ExecutionResult::DataSet { data },
+        linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 100,
             rows_scanned: 100,
             rows_returned: 10,
@@ -786,9 +786,9 @@ fn test_query_result_iterator() {
     let columns = vec!["id".to_string()];
     let mut data = DataSet::with_columns(columns.clone());
     data.add_row(vec![Value::Int(1)]);
-    let core_result = graphdb::api::api_core::QueryResult::new(
-        graphdb::query::executor::base::ExecutionResult::DataSet { data },
-        graphdb::api::api_core::ExecutionMetadata {
+    let core_result = linkrs::api::api_core::QueryResult::new(
+        linkrs::query::executor::base::ExecutionResult::DataSet { data },
+        linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 1,
@@ -807,9 +807,9 @@ fn test_query_result_into_iterator() {
     let columns = vec!["id".to_string()];
     let mut data = DataSet::with_columns(columns.clone());
     data.add_row(vec![Value::Int(1)]);
-    let core_result = graphdb::api::api_core::QueryResult::new(
-        graphdb::query::executor::base::ExecutionResult::DataSet { data },
-        graphdb::api::api_core::ExecutionMetadata {
+    let core_result = linkrs::api::api_core::QueryResult::new(
+        linkrs::query::executor::base::ExecutionResult::DataSet { data },
+        linkrs::api::api_core::ExecutionMetadata {
             execution_time_ms: 0,
             rows_scanned: 0,
             rows_returned: 1,
@@ -900,7 +900,7 @@ fn test_row_get_bool() {
 fn test_row_get_vertex() {
     let vertex = Vertex::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
-        graphdb::core::Tag::new("Person".to_string(), HashMap::new()),
+        linkrs::core::Tag::new("Person".to_string(), HashMap::new()),
     );
     let row = Row::from_columns(&["v".to_string()], &[Value::Vertex(Box::new(vertex))]);
 
@@ -982,7 +982,7 @@ fn test_multiple_sessions() {
 // ==================== Phase 4: ALTER ADD/DROP FROM ====================
 
 fn setup_phase4_graph(
-    session: &mut graphdb::api::embedded::Session<graphdb::storage::GraphStorage>,
+    session: &mut linkrs::api::embedded::Session<linkrs::storage::GraphStorage>,
 ) {
     session
         .create_space("phase4", SpaceConfig::default())
@@ -1008,7 +1008,7 @@ fn setup_phase4_graph(
         .expect("insert edge");
 }
 
-fn desc_default_for(result: &graphdb::api::embedded::QueryResult, field: &str) -> Option<String> {
+fn desc_default_for(result: &linkrs::api::embedded::QueryResult, field: &str) -> Option<String> {
     result.rows().iter().find_map(|row| {
         let is_field = matches!(row.get("Field"), Some(Value::String(s)) if s.as_str() == field);
         if !is_field {

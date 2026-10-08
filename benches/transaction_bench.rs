@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use graphdb::core::types::VertexId;
-use graphdb::transaction::manager::TransactionManager;
-use graphdb::transaction::mvcc::VersionManager;
-use graphdb::transaction::types::*;
+use linkrs::core::types::VertexId;
+use linkrs::transaction::manager::TransactionManager;
+use linkrs::transaction::mvcc::VersionManager;
+use linkrs::transaction::types::*;
 
 fn bench_transaction_create_commit(c: &mut Criterion) {
     let manager = TransactionManager::new(TransactionManagerConfig::default());
@@ -180,7 +180,7 @@ fn bench_certification_fast_paths(c: &mut Criterion) {
     group.bench_function("certification_single_writer", |b| {
         let mut cfg = TransactionManagerConfig::default();
         cfg.txn_config.concurrency_mode =
-            graphdb::transaction::types::ConcurrencyMode::SingleWriter;
+            linkrs::transaction::types::ConcurrencyMode::SingleWriter;
         let sw_manager = TransactionManager::new(cfg);
         b.iter(|| {
             let txn_id = sw_manager
@@ -207,7 +207,7 @@ fn bench_certification_fast_paths(c: &mut Criterion) {
 }
 
 fn bench_snapshot_tracker(c: &mut Criterion) {
-    use graphdb::transaction::SnapshotTracker;
+    use linkrs::transaction::SnapshotTracker;
     let mut group = c.benchmark_group("snapshot_tracker");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(100);

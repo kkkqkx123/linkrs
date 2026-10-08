@@ -10,15 +10,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use graphdb::core::types::VertexId;
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{Value, Vertex};
-use graphdb::search::{
+use linkrs::core::types::VertexId;
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{Value, Vertex};
+use linkrs::search::{
     EngineType, FulltextConfig, FulltextIndexManager, TantivyConfig, TokenizerKind,
 };
-use graphdb::sync::batch::BatchConfig;
-use graphdb::sync::coordinator::{ChangeType, SyncCoordinator};
-use graphdb::sync::manager::SyncManager;
+use linkrs::sync::batch::BatchConfig;
+use linkrs::sync::coordinator::{ChangeType, SyncCoordinator};
+use linkrs::sync::manager::SyncManager;
 use tempfile::TempDir;
 use tokio::time::sleep;
 
@@ -41,7 +41,7 @@ impl SyncTestContext {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
             default_engine: EngineType::Bm25,
-            sync: graphdb::search::SyncConfig::default(),
+            sync: linkrs::search::SyncConfig::default(),
             tantivy,
             cache_size: 100,
             max_result_cache: 1000,
@@ -73,7 +73,7 @@ impl SyncTestContext {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
             default_engine: EngineType::Bm25,
-            sync: graphdb::search::SyncConfig::default(),
+            sync: linkrs::search::SyncConfig::default(),
             tantivy,
             cache_size: 100,
             max_result_cache: 1000,
@@ -170,7 +170,7 @@ async fn test_sync_batch_processing() {
         max_buffer_size: 100,
         enable_persistence: false,
         persistence_path: None,
-        failure_policy: graphdb::search::SyncFailurePolicy::FailOpen,
+        failure_policy: linkrs::search::SyncFailurePolicy::FailOpen,
     };
 
     let ctx = SyncTestContext::with_batch_config(batch_config);
@@ -389,7 +389,7 @@ async fn test_custom_batch_size() {
         max_buffer_size: 10,
         enable_persistence: false,
         persistence_path: None,
-        failure_policy: graphdb::search::SyncFailurePolicy::FailOpen,
+        failure_policy: linkrs::search::SyncFailurePolicy::FailOpen,
     };
 
     let ctx = SyncTestContext::with_batch_config(batch_config);

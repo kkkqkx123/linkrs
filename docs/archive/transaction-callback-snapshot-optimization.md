@@ -84,7 +84,7 @@ fn emit_commit_event(&self, event: TransactionEvent) {
 
 ## 影响范围
 
-- 仅修改 `crates/graphdb-transaction/src/transaction/manager.rs` 中存储类型、构造、
+- 仅修改 `crates/linkrs-transaction/src/transaction/manager.rs` 中存储类型、构造、
   注册、派发四个位置。
 - 所有现有测试（含 `lifecycle_callbacks_observe_terminal_events`、
   `checkpoint_transaction_is_monitored_and_emits_commit`）通过。

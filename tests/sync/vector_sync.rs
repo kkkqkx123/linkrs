@@ -10,8 +10,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphdb::core::Value;
-use graphdb::sync::{
+use linkrs::core::Value;
+use linkrs::sync::{
     VectorBackend, VectorChangeContext, VectorChangeType, VectorClientConfig, VectorIndexLocation,
     VectorManager, VectorPointData, VectorSyncCoordinator,
 };
@@ -33,7 +33,7 @@ async fn disabled_engine_reports_disabled_state() {
     let coordinator = disabled_coordinator().await;
     assert_eq!(
         coordinator.engine_state(),
-        graphdb::sync::VectorEngineState::Disabled
+        linkrs::sync::VectorEngineState::Disabled
     );
 }
 
@@ -49,7 +49,7 @@ async fn disabled_engine_skips_delivery_and_fails_searches() {
             "docs",
             "embedding",
             3,
-            graphdb::sync::vector_sync::DistanceMetric::Cosine,
+            linkrs::sync::vector_sync::DistanceMetric::Cosine,
         )
         .await
         .unwrap();
@@ -94,7 +94,7 @@ async fn disabled_engine_skips_delivery_and_fails_searches() {
     // Query plane: loud typed error instead of an empty set that would be
     // indistinguishable from "no matching data".
     let error = coordinator
-        .search_with_options(graphdb::sync::vector_sync::SearchOptions::new(
+        .search_with_options(linkrs::sync::vector_sync::SearchOptions::new(
             1,
             "docs",
             "embedding",

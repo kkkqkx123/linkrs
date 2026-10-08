@@ -3,33 +3,33 @@
 //! Uses the QueryApi with schema manager for proper initialization.
 //! This is the recommended way to create test databases for E2E tests.
 
-use graphdb::api::api_core::query_api::QueryApi;
-use graphdb::api::api_core::types::QueryResult;
-use graphdb::api::api_core::CoreResult;
-use graphdb::core::metadata::SchemaManager;
-use graphdb::core::Value;
-use graphdb::query::executor::streaming::StreamingQueryResult;
-use graphdb::storage::{
+use linkrs::api::api_core::query_api::QueryApi;
+use linkrs::api::api_core::types::QueryResult;
+use linkrs::api::api_core::CoreResult;
+use linkrs::core::metadata::SchemaManager;
+use linkrs::core::Value;
+use linkrs::query::executor::streaming::StreamingQueryResult;
+use linkrs::storage::{
     GraphStorage, StorageOperationContextOps, StorageSchemaContextOps, SyncWrapper,
 };
-use graphdb::sync::SyncManager;
-use graphdb::transaction::{
+use linkrs::sync::SyncManager;
+use linkrs::transaction::{
     TransactionId, TransactionManager, TransactionManagerConfig, TransactionOptions,
 };
-use graphdb_metrics::StatsManager;
+use linkrs_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tempfile::TempDir;
 
 #[cfg(feature = "fulltext")]
-use graphdb::search::{FulltextConfig, FulltextIndexManager};
+use linkrs::search::{FulltextConfig, FulltextIndexManager};
 #[cfg(feature = "fulltext")]
-use graphdb::sync::SyncConfig;
+use linkrs::sync::SyncConfig;
 
 #[cfg(feature = "vector-qdrant")]
-use graphdb::sync::HealthStatus;
+use linkrs::sync::HealthStatus;
 #[cfg(feature = "vector-qdrant")]
-use graphdb::sync::{VectorClientConfig, VectorManager};
+use linkrs::sync::{VectorClientConfig, VectorManager};
 
 /// Test database wrapper with proper schema manager initialization
 pub struct TestDb {
@@ -66,8 +66,8 @@ fn create_sync_manager() -> Arc<SyncManager> {
         // (Tantivy lock files must remain accessible for the duration of all tests)
         std::mem::forget(fulltext_temp_dir);
         let sync_config = SyncConfig::default();
-        let batch_config = graphdb::sync::batch::BatchConfig::from(sync_config.clone());
-        let sync_coordinator = Arc::new(graphdb::sync::coordinator::SyncCoordinator::new(
+        let batch_config = linkrs::sync::batch::BatchConfig::from(sync_config.clone());
+        let sync_coordinator = Arc::new(linkrs::sync::coordinator::SyncCoordinator::new(
             manager,
             batch_config,
         ));
@@ -91,8 +91,8 @@ fn create_sync_manager() -> Arc<SyncManager> {
                     });
                 if health.is_healthy {
                     let vector_coordinator = Arc::new(
-                        graphdb::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-                            graphdb::sync::VectorBackend::qdrant(Arc::new(vector_manager)),
+                        linkrs::sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+                            linkrs::sync::VectorBackend::qdrant(Arc::new(vector_manager)),
                             rt.handle().clone(),
                         ),
                     );
@@ -250,7 +250,7 @@ impl TestDb {
         let trimmed = query.trim().to_uppercase();
         if trimmed.starts_with("BEGIN") || trimmed.starts_with("START TRANSACTION") {
             if self.current_transaction.is_some() {
-                return Err(graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                return Err(linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "A transaction is already active".to_string(),
                 ));
             }
@@ -264,7 +264,7 @@ impl TestDb {
                 .transaction_manager
                 .begin_transaction(options)
                 .map_err(|e| {
-                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;
             self.current_transaction = Some(txn_id);
             return Ok(empty_query_result());
@@ -272,12 +272,12 @@ impl TestDb {
         if trimmed.starts_with("SAVEPOINT") {
             let name = query["SAVEPOINT".len()..].trim().to_string();
             if name.is_empty() {
-                return Err(graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                return Err(linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "Savepoint name cannot be empty".to_string(),
                 ));
             }
             let txn_id = self.current_transaction.ok_or_else(|| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "No active transaction, cannot create savepoint".to_string(),
                 )
             })?;
@@ -285,32 +285,32 @@ impl TestDb {
             // so ROLLBACK TO can rewind rows staged after it.
             let staged_mark = {
                 let storage = self.storage.read();
-                graphdb::storage::UndoTarget::staged_write_mark(&*storage, txn_id)
+                linkrs::storage::UndoTarget::staged_write_mark(&*storage, txn_id)
             };
             self.transaction_manager
                 .create_savepoint(txn_id, Some(name), staged_mark)
                 .map_err(|e| {
-                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;
             return Ok(empty_query_result());
         }
         if trimmed.starts_with("RELEASE SAVEPOINT") {
             let name = query["RELEASE SAVEPOINT".len()..].trim().to_string();
             if name.is_empty() {
-                return Err(graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                return Err(linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "Savepoint name cannot be empty".to_string(),
                 ));
             }
             let txn_id = self.current_transaction.ok_or_else(|| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "No active transaction, cannot release savepoint".to_string(),
                 )
             })?;
             let context = self.transaction_manager.get_context(txn_id).map_err(|e| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
             })?;
             let savepoint = context.find_savepoint_by_name(&name).ok_or_else(|| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(format!(
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(format!(
                     "Savepoint '{}' does not exist",
                     name
                 ))
@@ -318,27 +318,27 @@ impl TestDb {
             self.transaction_manager
                 .release_savepoint(txn_id, savepoint.id)
                 .map_err(|e| {
-                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;
             return Ok(empty_query_result());
         }
         if trimmed.starts_with("ROLLBACK TO") {
             let name = query["ROLLBACK TO".len()..].trim().to_string();
             if name.is_empty() {
-                return Err(graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                return Err(linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "Savepoint name cannot be empty".to_string(),
                 ));
             }
             let txn_id = self.current_transaction.ok_or_else(|| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "No active transaction, cannot rollback to savepoint".to_string(),
                 )
             })?;
             let context = self.transaction_manager.get_context(txn_id).map_err(|e| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
             })?;
             let savepoint = context.find_savepoint_by_name(&name).ok_or_else(|| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(format!(
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(format!(
                     "Savepoint '{}' does not exist",
                     name
                 ))
@@ -347,34 +347,34 @@ impl TestDb {
             self.transaction_manager
                 .rollback_to_savepoint(txn_id, savepoint.id, &*storage)
                 .map_err(|e| {
-                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;
             return Ok(empty_query_result());
         }
         if trimmed.starts_with("COMMIT") {
             let txn_id = self.current_transaction.ok_or_else(|| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "No active transaction to commit".to_string(),
                 )
             })?;
             self.transaction_manager
                 .commit_transaction(txn_id)
                 .map_err(|e| {
-                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;
             self.current_transaction = None;
             return Ok(empty_query_result());
         }
         if trimmed.starts_with("ROLLBACK") {
             let txn_id = self.current_transaction.ok_or_else(|| {
-                graphdb::api::api_core::CoreError::QueryExecutionFailed(
+                linkrs::api::api_core::CoreError::QueryExecutionFailed(
                     "No active transaction to roll back".to_string(),
                 )
             })?;
             self.transaction_manager
                 .abort_transaction(txn_id)
                 .map_err(|e| {
-                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;
             self.current_transaction = None;
             return Ok(empty_query_result());
@@ -388,15 +388,15 @@ impl TestDb {
                 self.transaction_manager
                     .begin_statement(txn_id)
                     .map_err(|e| {
-                        graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                        linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                     })?;
             let execution = self
                 .transaction_manager
                 .create_execution(txn_id, false)
                 .map_err(|e| {
-                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;
-            let txn_ctx = graphdb::api::api_core::types::QueryRequest {
+            let txn_ctx = linkrs::api::api_core::types::QueryRequest {
                 space_id: self.current_space_id,
                 space_name: self.current_space_name.clone(),
                 auto_commit: false,
@@ -414,11 +414,11 @@ impl TestDb {
             self.transaction_manager
                 .finish_statement(&ctx, statement_start)
                 .map_err(|e| {
-                    graphdb::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
+                    linkrs::api::api_core::CoreError::QueryExecutionFailed(e.to_string())
                 })?;
             result
         } else {
-            let ctx = graphdb::api::api_core::types::QueryRequest {
+            let ctx = linkrs::api::api_core::types::QueryRequest {
                 space_id: self.current_space_id,
                 space_name: self.current_space_name.clone(),
                 auto_commit: true,
@@ -447,7 +447,7 @@ impl TestDb {
     /// Routes through `QueryApi::execute_stream` so the streaming plan-cache
     /// path is exercised (as opposed to `execute_query`, which materializes).
     pub fn execute_stream_query(&mut self, query: &str) -> CoreResult<StreamingQueryResult> {
-        let ctx = graphdb::api::api_core::types::QueryRequest {
+        let ctx = linkrs::api::api_core::types::QueryRequest {
             space_id: self.current_space_id,
             space_name: self.current_space_name.clone(),
             auto_commit: true,
@@ -468,7 +468,7 @@ impl TestDb {
     /// any session transaction tracked by this handle (simulates a second
     /// client). Transaction control statements are NOT handled here.
     pub fn execute_external(&mut self, query: &str) -> CoreResult<QueryResult> {
-        let ctx = graphdb::api::api_core::types::QueryRequest {
+        let ctx = linkrs::api::api_core::types::QueryRequest {
             space_id: self.current_space_id,
             space_name: self.current_space_name.clone(),
             auto_commit: true,
@@ -492,7 +492,7 @@ impl TestDb {
     /// statement aborts the load (later statements were still executed by the
     /// window but their results are discarded).
     pub fn execute_batch(&mut self, statements: &[String]) -> CoreResult<Vec<QueryResult>> {
-        let ctx = graphdb::api::api_core::types::QueryRequest {
+        let ctx = linkrs::api::api_core::types::QueryRequest {
             space_id: self.current_space_id,
             space_name: self.current_space_name.clone(),
             auto_commit: true,
@@ -522,7 +522,7 @@ impl TestDb {
         statements: &[String],
         group_size: usize,
     ) -> CoreResult<Vec<QueryResult>> {
-        let ctx = graphdb::api::api_core::types::QueryRequest {
+        let ctx = linkrs::api::api_core::types::QueryRequest {
             space_id: self.current_space_id,
             space_name: self.current_space_name.clone(),
             auto_commit: true,
@@ -555,7 +555,7 @@ impl TestDb {
         self.storage
             .read()
             .bind_auto_commit_context()
-            .map_err(|e| graphdb::api::api_core::CoreError::StorageError(e.to_string()))
+            .map_err(|e| linkrs::api::api_core::CoreError::StorageError(e.to_string()))
     }
 
     fn track_space_from_result(&mut self, result: &QueryResult) {
@@ -602,7 +602,7 @@ fn parse_begin_access_mode(stmt: &str) -> CoreResult<Option<bool>> {
     if suffix.starts_with("READ WRITE") {
         return Ok(Some(false));
     }
-    Err(graphdb::api::api_core::CoreError::QueryExecutionFailed(
+    Err(linkrs::api::api_core::CoreError::QueryExecutionFailed(
         "Invalid BEGIN access mode, expected READ ONLY or READ WRITE".to_string(),
     ))
 }
@@ -673,7 +673,7 @@ pub fn assert_query_err<T: std::fmt::Debug>(result: CoreResult<T>, context: &str
 /// runs statement-by-statement via `execute_query`.
 pub fn load_gql_file(db: &mut TestDb, path: &str) -> CoreResult<()> {
     let content = std::fs::read_to_string(path).map_err(|e| {
-        graphdb::api::api_core::CoreError::Internal(format!("Failed to read {}: {}", path, e))
+        linkrs::api::api_core::CoreError::Internal(format!("Failed to read {}: {}", path, e))
     })?;
 
     let mut statements: Vec<String> = Vec::new();
@@ -724,7 +724,7 @@ pub fn load_gql_file(db: &mut TestDb, path: &str) -> CoreResult<()> {
 /// windows. Non-INSERT statements execute individually.
 pub fn load_gql_file_grouped(db: &mut TestDb, path: &str, group_size: usize) -> CoreResult<()> {
     let content = std::fs::read_to_string(path).map_err(|e| {
-        graphdb::api::api_core::CoreError::Internal(format!("Failed to read {}: {}", path, e))
+        linkrs::api::api_core::CoreError::Internal(format!("Failed to read {}: {}", path, e))
     })?;
 
     let mut statements: Vec<String> = Vec::new();

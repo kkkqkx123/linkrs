@@ -2,7 +2,7 @@
 
 ## 一、概述
 
-本文档定义 GraphDB 项目全文检索功能的测试架构和测试用例设计，覆盖单元测试、集成测试两个层次，确保全文检索功能的正确性、性能和可靠性。
+本文档定义 Linkrs 项目全文检索功能的测试架构和测试用例设计，覆盖单元测试、集成测试两个层次，确保全文检索功能的正确性、性能和可靠性。
 
 ## 二、测试范围
 
@@ -522,8 +522,8 @@ async fn test_memory_limit() {
 **文件**: `tests/common/fulltext_helpers.rs`
 
 ```rust
-use graphdb::search::{FulltextConfig, FulltextIndexManager, EngineType};
-use graphdb::sync::{SyncCoordinator, BatchConfig};
+use linkrs::search::{FulltextConfig, FulltextIndexManager, EngineType};
+use linkrs::sync::{SyncCoordinator, BatchConfig};
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -589,7 +589,7 @@ impl FulltextTestContext {
         doc_id: &str,
         content: &str,
     ) -> Result<(), SearchError> {
-        use graphdb::search::engine::SearchEngine;
+        use linkrs::search::engine::SearchEngine;
         if let Some(engine) = self.manager.get_engine(space_id, tag_name, field_name) {
             engine.index(doc_id, content).await?;
         }

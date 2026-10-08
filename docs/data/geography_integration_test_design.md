@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档设计了 GraphDB 地理空间功能的集成测试架构,参考 `tests/fulltext` 目录和 `tests/integration_fulltext.rs` 的组织方式,为地理功能提供完整的测试覆盖。
+本文档设计了 Linkrs 地理空间功能的集成测试架构,参考 `tests/fulltext` 目录和 `tests/integration_fulltext.rs` 的组织方式,为地理功能提供完整的测试覆盖。
 
 ## 测试架构
 
@@ -79,11 +79,11 @@ mod concurrent;
 ```rust
 //! Common test utilities for geography tests
 
-use graphdb::core::value::geography::{
+use linkrs::core::value::geography::{
     Geography, GeographyValue, LineStringValue, PolygonValue,
     MultiPointValue, MultiLineStringValue, MultiPolygonValue,
 };
-use graphdb::core::Value;
+use linkrs::core::Value;
 
 /// Geography Test Context
 pub struct GeographyTestContext {

@@ -2,7 +2,7 @@
 //!
 //! Tests for circuit breaker integration with external clients
 
-use graphdb::sync::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+use linkrs::sync::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -218,7 +218,7 @@ fn test_circuit_breaker_trip() {
 /// TC-259: Circuit breaker with async operation
 #[tokio::test]
 async fn test_circuit_breaker_async_operation() {
-    use graphdb::sync::circuit_breaker::with_circuit_breaker;
+    use linkrs::sync::circuit_breaker::with_circuit_breaker;
 
     let config = CircuitBreakerConfig::default();
     let breaker = Arc::new(CircuitBreaker::new("async_test", config));

@@ -6,7 +6,7 @@
 //! - Savepoint rollback only undoes post-savepoint operations
 //! - Out-of-order commit does not expose lower-timestamp writes
 
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
 /// Verify that after a full rollback, the transaction's write timestamp is released
 /// and the data it wrote is not visible through a new read transaction.

@@ -1,6 +1,6 @@
 # Vector Type Operations Analysis
 
-This document describes all operations supported by the vector type in GraphDB.
+This document describes all operations supported by the vector type in Linkrs.
 
 ## 1. Core Vector Value Operations
 
@@ -121,7 +121,7 @@ Vector functions can be used in SQL queries for vector computation and transform
 
 ### 4.3 Embedding-Aware Text Search
 
-When `[vector.embedding]` is configured in `config.toml`, GraphDB will automatically:
+When `[vector.embedding]` is configured in `config.toml`, Linkrs will automatically:
 1. Detect text queries in `SEARCH VECTOR` statements
 2. Call the embedding service to convert text to vector
 3. Use the resulting vector for similarity search

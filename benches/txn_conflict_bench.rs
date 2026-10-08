@@ -6,9 +6,9 @@
 //! scan hotspots in certify.rs. Debug-mode friendly.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use graphdb::core::types::VertexId;
-use graphdb::transaction::manager::TransactionManager;
-use graphdb::transaction::types::*;
+use linkrs::core::types::VertexId;
+use linkrs::transaction::manager::TransactionManager;
+use linkrs::transaction::types::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

@@ -1,10 +1,10 @@
-# GraphDB CLI 与 psql 功能对比
+# Linkrs CLI 与 psql 功能对比
 
 ## 1. 功能映射表
 
 ### 1.1 连接管理
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 连接数据库 | `\c [dbname]` | `\connect [space]`或`\c [space]` | 连接到指定数据库/图空间 |
 | 显示连接信息 | `\conninfo` | `\conninfo` | 显示当前连接信息 |
@@ -12,7 +12,7 @@
 
 ### 1.2 对象查看
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 列出数据库 | `\l` | `\show_spaces` 或 `\l` | 列出所有数据库/图空间 |
 | 列出表 | `\dt` | `\show_tags` 或 `\dt` | 列出所有表/Tag |
@@ -23,7 +23,7 @@
 
 ### 1.3 查询执行
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 执行查询 | 直接输入 SQL | 直接输入 GQL | 执行查询语句 |
 | 执行脚本 | `\i <file>` | `\i <file>` | 执行脚本文件 |
@@ -32,7 +32,7 @@
 
 ### 1.4 输出格式
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 表格格式 | 默认 | 默认 | 对齐的表格格式 |
 | 扩展格式 | `\x` | `\x` | 垂直显示格式 |
@@ -43,7 +43,7 @@
 
 ### 1.5 变量和参数
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 设置变量 | `\set name value` | `\set name value` | 设置变量 |
 | 使用变量 | `:name` | `:name` | 在查询中使用变量 |
@@ -52,7 +52,7 @@
 
 ### 1.6 编辑和历史
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 编辑器编辑 | `\e` | `\e` | 使用编辑器编辑查询 |
 | 编辑函数 | `\ef [func]` | `\ef [func]` | 编辑函数 |
@@ -61,7 +61,7 @@
 
 ### 1.7 事务管理
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 开始事务 | `BEGIN` | `\begin` 或 `BEGIN` | 开始事务 |
 | 提交事务 | `COMMIT` | `\commit` 或 `COMMIT` | 提交事务 |
@@ -69,7 +69,7 @@
 
 ### 1.8 性能分析
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 显示执行时间 | `\timing` | `\timing` | 显示查询执行时间 |
 | 执行计划 | `EXPLAIN` | `EXPLAIN` | 显示查询执行计划 |
@@ -77,14 +77,14 @@
 
 ### 1.9 帮助和信息
 
-| 功能 | psql | GraphDB CLI | 说明 |
+| 功能 | psql | Linkrs CLI | 说明 |
 |------|------|-------------|------|
 | 元命令帮助 | `\?` | `\?` | 显示元命令帮助 |
 | SQL 帮助 | `\help [command]` | `\help [command]` | 显示 SQL/GQL 命令帮助 |
 | 版本信息 | `SELECT version()` | `\version` | 显示版本信息 |
 | 版权信息 | `\copyright` | `\copyright` | 显示版权信息 |
 
-## 2. GraphDB CLI 特有功能
+## 2. Linkrs CLI 特有功能
 
 ### 2.1 图数据库特有命令
 
@@ -185,7 +185,7 @@
 
 ### 4.1 查询语言
 
-| 特性 | psql (SQL) | GraphDB CLI (GQL) |
+| 特性 | psql (SQL) | Linkrs CLI (GQL) |
 |------|-----------|-------------------|
 | 数据模型 | 关系表 | 图（节点和边） |
 | 查询模式 | 声明式 | 声明式 + 模式匹配 |
@@ -195,7 +195,7 @@
 
 ### 4.2 结果类型
 
-| 类型 | psql | GraphDB CLI |
+| 类型 | psql | Linkrs CLI |
 |------|------|-------------|
 | 基本类型 | 行、列 | 行、列 |
 | 复杂类型 | 数组、JSON | 顶点、边、路径 |
@@ -203,7 +203,7 @@
 
 ### 4.3 元数据管理
 
-| 特性 | psql | GraphDB CLI |
+| 特性 | psql | Linkrs CLI |
 |------|------|-------------|
 | 系统表 | pg_catalog | 内部元数据 |
 | 信息模式 | information_schema | Schema API |
@@ -211,11 +211,11 @@
 
 ## 5. 用户迁移指南
 
-### 5.1 从 psql 迁移到 GraphDB CLI
+### 5.1 从 psql 迁移到 Linkrs CLI
 
 #### 5.1.1 概念映射
 
-| PostgreSQL 概念 | GraphDB 概念 | 说明 |
+| PostgreSQL 概念 | Linkrs 概念 | 说明 |
 |----------------|-------------|------|
 | Database | Space | 数据库 → 图空间 |
 | Table | Tag | 表 → Tag（节点类型） |
@@ -236,7 +236,7 @@ CREATE TABLE person (
 ```
 
 ```cypher
-// GraphDB
+// Linkrs
 CREATE TAG person (
     name STRING,
     age INT
@@ -250,7 +250,7 @@ INSERT INTO person (name, age) VALUES ('Alice', 30);
 ```
 
 ```cypher
-// GraphDB
+// Linkrs
 INSERT VERTEX person(name, age) VALUES "p1":("Alice", 30);
 ```
 
@@ -261,7 +261,7 @@ SELECT * FROM person WHERE age > 25;
 ```
 
 ```cypher
-// GraphDB
+// Linkrs
 MATCH (p:person) WHERE p.age > 25 RETURN p;
 ```
 
@@ -275,7 +275,7 @@ JOIN person p2 ON f.friend_id = p2.id;
 ```
 
 ```cypher
-// GraphDB
+// Linkrs
 MATCH (p1:person)-[:friend]->(p2:person)
 RETURN p1.name, p2.name;
 ```
@@ -290,7 +290,7 @@ RETURN p1.name, p2.name;
 
 ## 6. 总结
 
-GraphDB CLI 在设计上参考了 psql 的优秀实践，同时针对图数据库的特点进行了优化和扩展。主要差异体现在：
+Linkrs CLI 在设计上参考了 psql 的优秀实践，同时针对图数据库的特点进行了优化和扩展。主要差异体现在：
 
 1. **查询语言**：从 SQL 到 GQL，更符合图数据的查询模式
 2. **对象模型**：从表和行到 Tag、Edge 和 Vertex

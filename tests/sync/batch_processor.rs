@@ -2,9 +2,9 @@
 //!
 //! Tests for batch processor edge cases
 
-use graphdb::core::Value;
-use graphdb::storage::StorageWriter;
-use graphdb::test_utils::sync_helpers::SyncTestHarness;
+use linkrs::core::Value;
+use linkrs::storage::StorageWriter;
+use linkrs::test_utils::sync_helpers::SyncTestHarness;
 
 /// TC-240: Empty batch handling
 #[test]
@@ -41,7 +41,7 @@ fn test_batch_flush_on_timeout() {
         .create_tag_with_fulltext(
             "test_space",
             "Document",
-            vec![("name", graphdb::core::types::DataType::String)],
+            vec![("name", linkrs::core::types::DataType::String)],
             vec!["name"],
         )
         .expect("Failed to create tag");
@@ -49,9 +49,9 @@ fn test_batch_flush_on_timeout() {
     // Insert single vertex (below batch size)
     let mut properties = std::collections::HashMap::new();
     properties.insert("name".to_string(), Value::string("Timeout Test"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
         tag,
     );
 
@@ -88,7 +88,7 @@ fn test_batch_flush_on_size_trigger() {
         .create_tag_with_fulltext(
             "test_space",
             "Document",
-            vec![("name", graphdb::core::types::DataType::String)],
+            vec![("name", linkrs::core::types::DataType::String)],
             vec!["name"],
         )
         .expect("Failed to create tag");
@@ -96,9 +96,9 @@ fn test_batch_flush_on_size_trigger() {
     for i in 0..100 {
         let mut properties = std::collections::HashMap::new();
         properties.insert("name".to_string(), Value::string(format!("Doc{}", i)));
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-        let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+        let vertex = linkrs::core::Vertex::new(
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
             tag,
         );
 
@@ -149,7 +149,7 @@ fn test_large_batch_processing() {
         .create_tag_with_fulltext(
             "test_space",
             "Document",
-            vec![("name", graphdb::core::types::DataType::String)],
+            vec![("name", linkrs::core::types::DataType::String)],
             vec!["name"],
         )
         .expect("Failed to create tag");
@@ -160,9 +160,9 @@ fn test_large_batch_processing() {
             "name".to_string(),
             Value::string(format!("LargeBatch{}", i)),
         );
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-        let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+        let vertex = linkrs::core::Vertex::new(
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
             tag,
         );
 
@@ -213,7 +213,7 @@ fn test_mixed_operation_types_in_batch() {
         .create_tag_with_fulltext(
             "test_space",
             "Document",
-            vec![("name", graphdb::core::types::DataType::String)],
+            vec![("name", linkrs::core::types::DataType::String)],
             vec!["name"],
         )
         .expect("Failed to create tag");
@@ -221,9 +221,9 @@ fn test_mixed_operation_types_in_batch() {
     for i in 0..5 {
         let mut properties = std::collections::HashMap::new();
         properties.insert("name".to_string(), Value::string(format!("Initial{}", i)));
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-        let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+        let vertex = linkrs::core::Vertex::new(
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
             tag,
         );
 
@@ -237,9 +237,9 @@ fn test_mixed_operation_types_in_batch() {
     for i in 0..3 {
         let mut properties = std::collections::HashMap::new();
         properties.insert("name".to_string(), Value::string(format!("Updated{}", i)));
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-        let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+        let vertex = linkrs::core::Vertex::new(
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
             tag,
         );
 
@@ -273,7 +273,7 @@ fn test_rapid_successive_commits() {
         .create_tag_with_fulltext(
             "test_space",
             "Document",
-            vec![("name", graphdb::core::types::DataType::String)],
+            vec![("name", linkrs::core::types::DataType::String)],
             vec!["name"],
         )
         .expect("Failed to create tag");
@@ -281,9 +281,9 @@ fn test_rapid_successive_commits() {
     for i in 0..10 {
         let mut properties = std::collections::HashMap::new();
         properties.insert("name".to_string(), Value::string(format!("Rapid{}", i)));
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-        let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+        let vertex = linkrs::core::Vertex::new(
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
             tag,
         );
 

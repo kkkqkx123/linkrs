@@ -1,0 +1,29 @@
+[package]
+name = "linkrs-config"
+version.workspace = true
+edition.workspace = true
+description = "Configuration management for Linkrs"
+license.workspace = true
+
+[dependencies]
+linkrs-core = { path = "../linkrs-core" }
+linkrs-metrics = { path = "../linkrs-metrics" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+log.workspace = true
+dirs.workspace = true
+vector-client = { path = "../vector-client", optional = true }
+flexi_logger.workspace = true
+parking_lot.workspace = true
+
+[features]
+server = []
+embedded = []
+vector = []
+vector-qdrant = ["vector", "dep:vector-client"]
+
+[dev-dependencies]
+tempfile.workspace = true
+serial_test.workspace = true

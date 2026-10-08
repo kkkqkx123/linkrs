@@ -1,7 +1,7 @@
 [database]
 host = "127.0.0.1"
 port = 9758
-storage_path = "D:/项目/database/graphDB/data/graphdb"
+storage_path = "D:/项目/database/graphDB/data/linkrs"
 max_connections = 100
 
 [transaction]
@@ -13,7 +13,7 @@ max_concurrent_transactions = 1000
 [log]
 level = "info"
 dir = "D:/项目/database/graphDB/logs"
-file = "graphdb"
+file = "linkrs"
 max_file_size = 104857600  # 100MB
 max_files = 5
 

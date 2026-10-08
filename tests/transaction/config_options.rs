@@ -10,7 +10,7 @@
 //! - Timeout configurations
 //! - Auto-cleanup functionality
 
-use graphdb::transaction::{
+use linkrs::transaction::{
     DurabilityLevel, IsolationLevel, RetryConfig, TransactionConfig, TransactionManager,
     TransactionManagerConfig, TransactionOptions,
 };

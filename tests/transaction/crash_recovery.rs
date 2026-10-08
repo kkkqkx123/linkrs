@@ -3,12 +3,12 @@
 //! Uses the WAL RecoveryManager directly to simulate crash/recovery cycles.
 //! Verifies that committed WAL entries are replayed and uncommitted ones are discarded.
 
-use graphdb::core::Value;
-use graphdb::storage::StorageError;
-use graphdb::transaction::wal::recovery::{RecoveryApplier, RecoveryConfig, RecoveryManager};
-use graphdb::transaction::wal::writer::{LocalWalWriter, WalWriter};
-use graphdb::transaction::wal::WalRecoveryMode;
-use graphdb::transaction::wal::{
+use linkrs::core::Value;
+use linkrs::storage::StorageError;
+use linkrs::transaction::wal::recovery::{RecoveryApplier, RecoveryConfig, RecoveryManager};
+use linkrs::transaction::wal::writer::{LocalWalWriter, WalWriter};
+use linkrs::transaction::wal::WalRecoveryMode;
+use linkrs::transaction::wal::{
     InsertVertexRedo, LabelId, Timestamp, TransactionWalEntry, VertexId, WalOpType,
 };
 use postcard::to_allocvec;
@@ -55,7 +55,7 @@ impl RecoveryApplier for RecordingApplier {
 
     fn replay_insert_edge(
         &self,
-        _redo: &graphdb::transaction::wal::InsertEdgeRedo,
+        _redo: &linkrs::transaction::wal::InsertEdgeRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
@@ -72,7 +72,7 @@ impl RecoveryApplier for RecordingApplier {
     }
     fn replay_update_edge_prop(
         &self,
-        _redo: &graphdb::transaction::wal::UpdateEdgePropRedo,
+        _redo: &linkrs::transaction::wal::UpdateEdgePropRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
@@ -87,147 +87,147 @@ impl RecoveryApplier for RecordingApplier {
     }
     fn replay_delete_edge(
         &self,
-        _redo: &graphdb::transaction::wal::DeleteEdgeRedo,
+        _redo: &linkrs::transaction::wal::DeleteEdgeRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_create_space(
         &self,
-        _redo: &graphdb::transaction::wal::CreateSpaceRedo,
+        _redo: &linkrs::transaction::wal::CreateSpaceRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_drop_space(
         &self,
-        _redo: &graphdb::transaction::wal::DropSpaceRedo,
+        _redo: &linkrs::transaction::wal::DropSpaceRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_clear_space(
         &self,
-        _redo: &graphdb::transaction::wal::ClearSpaceRedo,
+        _redo: &linkrs::transaction::wal::ClearSpaceRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_alter_space_comment(
         &self,
-        _redo: &graphdb::transaction::wal::AlterSpaceCommentRedo,
+        _redo: &linkrs::transaction::wal::AlterSpaceCommentRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_create_vertex_type(
         &self,
-        _redo: &graphdb::transaction::wal::CreateVertexTypeRedo,
+        _redo: &linkrs::transaction::wal::CreateVertexTypeRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_create_edge_type(
         &self,
-        _redo: &graphdb::transaction::wal::CreateEdgeTypeRedo,
+        _redo: &linkrs::transaction::wal::CreateEdgeTypeRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_delete_vertex_type(
         &self,
-        _redo: &graphdb::transaction::wal::DeleteVertexTypeRedo,
+        _redo: &linkrs::transaction::wal::DeleteVertexTypeRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_delete_edge_type(
         &self,
-        _redo: &graphdb::transaction::wal::DeleteEdgeTypeRedo,
+        _redo: &linkrs::transaction::wal::DeleteEdgeTypeRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_add_vertex_prop(
         &self,
-        _redo: &graphdb::transaction::wal::AddVertexPropRedo,
+        _redo: &linkrs::transaction::wal::AddVertexPropRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_add_edge_prop(
         &self,
-        _redo: &graphdb::transaction::wal::AddEdgePropRedo,
+        _redo: &linkrs::transaction::wal::AddEdgePropRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_delete_vertex_prop(
         &self,
-        _redo: &graphdb::transaction::wal::DeleteVertexPropRedo,
+        _redo: &linkrs::transaction::wal::DeleteVertexPropRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_delete_edge_prop(
         &self,
-        _redo: &graphdb::transaction::wal::DeleteEdgePropRedo,
+        _redo: &linkrs::transaction::wal::DeleteEdgePropRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_rename_vertex_prop(
         &self,
-        _redo: &graphdb::transaction::wal::RenameVertexPropRedo,
+        _redo: &linkrs::transaction::wal::RenameVertexPropRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_rename_edge_prop(
         &self,
-        _redo: &graphdb::transaction::wal::RenameEdgePropRedo,
+        _redo: &linkrs::transaction::wal::RenameEdgePropRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_rename_tag(
         &self,
-        _redo: &graphdb::transaction::wal::RenameTagRedo,
+        _redo: &linkrs::transaction::wal::RenameTagRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_rename_edge_type(
         &self,
-        _redo: &graphdb::transaction::wal::RenameEdgeTypeRedo,
+        _redo: &linkrs::transaction::wal::RenameEdgeTypeRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_create_tag_index(
         &self,
-        _redo: &graphdb::transaction::wal::CreateTagIndexRedo,
+        _redo: &linkrs::transaction::wal::CreateTagIndexRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_drop_tag_index(
         &self,
-        _redo: &graphdb::transaction::wal::DropTagIndexRedo,
+        _redo: &linkrs::transaction::wal::DropTagIndexRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_create_edge_index(
         &self,
-        _redo: &graphdb::transaction::wal::CreateEdgeIndexRedo,
+        _redo: &linkrs::transaction::wal::CreateEdgeIndexRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
     }
     fn replay_drop_edge_index(
         &self,
-        _redo: &graphdb::transaction::wal::DropEdgeIndexRedo,
+        _redo: &linkrs::transaction::wal::DropEdgeIndexRedo,
         _ts: Timestamp,
     ) -> Result<(), StorageError> {
         Ok(())
@@ -250,7 +250,7 @@ fn write_wal_entries(
         };
         let payload = to_allocvec(&redo)?;
         writer.append_transaction_batch(
-            graphdb::core::types::TransactionId::new(ts),
+            linkrs::core::types::TransactionId::new(ts),
             vec![TransactionWalEntry::new(
                 WalOpType::InsertVertex,
                 ts,
@@ -379,7 +379,7 @@ fn test_vertex_properties_preserved_after_recovery() {
     let payload = to_allocvec(&redo).unwrap();
     writer
         .append_transaction_batch(
-            graphdb::core::types::TransactionId::new(1),
+            linkrs::core::types::TransactionId::new(1),
             vec![TransactionWalEntry::new(
                 WalOpType::InsertVertex,
                 1,

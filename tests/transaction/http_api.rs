@@ -11,8 +11,8 @@
 //! These tests specifically verify the fix for the deadlock issue caused by
 //! calling block_on inside spawn_blocking contexts.
 
-use graphdb::test_utils::test_scenario::TestScenario;
-use graphdb_wire::query::{QueryData, QueryMetadata, QueryRequest, QueryResponse};
+use linkrs::test_utils::test_scenario::TestScenario;
+use linkrs_wire::query::{QueryData, QueryMetadata, QueryRequest, QueryResponse};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -478,7 +478,7 @@ async fn test_http_streaming_transaction() {
 /// Ensures consistency between different access patterns
 #[tokio::test]
 async fn test_mixed_api_transaction_consistency() {
-    use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+    use linkrs::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
     use std::sync::Arc;
 
     let manager = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));

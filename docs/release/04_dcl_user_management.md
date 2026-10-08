@@ -1,4 +1,4 @@
-# GraphDB 数据控制语言 (DCL)
+# Linkrs 数据控制语言 (DCL)
 
 ## 概述
 

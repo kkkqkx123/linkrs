@@ -14,16 +14,16 @@ use axum::{
     routing::post,
     Router,
 };
-use graphdb::config::Config;
-use graphdb::core::types::{SpaceInfo, SpaceSummary, VertexId};
-use graphdb::core::vertex_edge_path::{Tag, Vertex};
-use graphdb::core::{DataType, Value};
-use graphdb::storage::{GraphStorage, PropertyGraphConfig, StorageSchemaOps, StorageWriter};
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig};
-use graphdb_server::http::handlers::execute;
-use graphdb_server::http::server::HttpServer;
-use graphdb_server::http::state::AppState;
-use graphdb_server::GraphService;
+use linkrs::config::Config;
+use linkrs::core::types::{SpaceInfo, SpaceSummary, VertexId};
+use linkrs::core::vertex_edge_path::{Tag, Vertex};
+use linkrs::core::{DataType, Value};
+use linkrs::storage::{GraphStorage, PropertyGraphConfig, StorageSchemaOps, StorageWriter};
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig};
+use linkrs_server::http::handlers::execute;
+use linkrs_server::http::server::HttpServer;
+use linkrs_server::http::state::AppState;
+use linkrs_server::GraphService;
 use parking_lot::RwLock;
 use tower::ServiceExt;
 
@@ -31,10 +31,10 @@ fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) -> SpaceSummary {
     let mut store = storage.write();
     let mut space = SpaceInfo::new("test".to_string()).with_vid_type(DataType::BigInt);
     store.create_space(&mut space).unwrap();
-    let tag = graphdb::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
-        graphdb::core::types::PropertyDef::new("id".to_string(), DataType::BigInt),
-        graphdb::core::types::PropertyDef::new("name".to_string(), DataType::String),
-        graphdb::core::types::PropertyDef::new("age".to_string(), DataType::BigInt),
+    let tag = linkrs::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        linkrs::core::types::PropertyDef::new("id".to_string(), DataType::BigInt),
+        linkrs::core::types::PropertyDef::new("name".to_string(), DataType::String),
+        linkrs::core::types::PropertyDef::new("age".to_string(), DataType::BigInt),
     ]);
     store.create_tag("test", &tag).unwrap();
     for (i, (name, age)) in [

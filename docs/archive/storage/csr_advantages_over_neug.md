@@ -5,7 +5,7 @@
 
 ## 一、冷热分离的扫描友好布局
 
-位置：`crates/graphdb-storage/src/edge.rs` 的热端与冷端记录定义，`edge/mutable_csr/` 的读写分离路径。
+位置：`crates/linkrs-storage/src/edge.rs` 的热端与冷端记录定义，`edge/mutable_csr/` 的读写分离路径。
 
 热端只放遍历需要的端点、排序键与边标识，冷端只放删除时间戳，拓扑扫描不拉冷端缓存行。创建时间戳由版本权威持有，不占用行内宽度。
 

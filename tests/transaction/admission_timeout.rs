@@ -8,7 +8,7 @@
 //! - Transaction context cleanup on query failure
 //! - StorageInner lock ordering consistency
 
-use graphdb::transaction::{
+use linkrs::transaction::{
     ConcurrencyMode, TransactionManager, TransactionManagerConfig, TransactionOptions,
 };
 use std::sync::Arc;
@@ -34,7 +34,7 @@ fn test_write_lock_acquired_successfully() {
 #[test]
 fn test_write_conflict_does_not_block_indefinitely() {
     let config = TransactionManagerConfig {
-        txn_config: graphdb::transaction::TransactionConfig::default()
+        txn_config: linkrs::transaction::TransactionConfig::default()
             .with_concurrency_mode(ConcurrencyMode::SingleWriter),
         ..Default::default()
     };
@@ -225,7 +225,7 @@ async fn test_concurrent_read_only_transactions() {
 #[test]
 fn test_write_rejected_quickly_when_active() {
     let config = TransactionManagerConfig {
-        txn_config: graphdb::transaction::TransactionConfig::default()
+        txn_config: linkrs::transaction::TransactionConfig::default()
             .with_concurrency_mode(ConcurrencyMode::SingleWriter),
         ..Default::default()
     };

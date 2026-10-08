@@ -1,4 +1,4 @@
-# GraphDB 基准测试实施指南
+# Linkrs 基准测试实施指南
 
 **文档版本**: v1.0  
 **更新日期**: 2026-06-18  
@@ -49,7 +49,7 @@ graphDB/
 ```rust
 // benches/common/data_generator.rs
 
-use graphdb_core::{Vertex, Edge, Property, Value};
+use linkrs_core::{Vertex, Edge, Property, Value};
 use uuid::Uuid;
 use std::collections::HashMap;
 
@@ -206,7 +206,7 @@ impl PerformanceComparison {
 ```rust
 // benches/common/test_context.rs
 
-use graphdb::storage::Storage;
+use linkrs::storage::Storage;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -222,7 +222,7 @@ impl StorageBenchContext {
         let temp_dir = TempDir::new()?;
         let db_path = temp_dir.path().join("test.db");
         
-        let config = graphdb::config::StorageConfig {
+        let config = linkrs::config::StorageConfig {
             data_dir: db_path.clone(),
             cache_size_mb: 100,
             compression_enabled: true,
@@ -368,7 +368,7 @@ fn bench_property_operations(c: &mut Criterion) {
     // 更新属性
     group.bench_function("update_property", |b| {
         b.iter(|| {
-            let new_value = graphdb::value::Value::String("new_value".to_string());
+            let new_value = linkrs::value::Value::String("new_value".to_string());
             black_box(ctx.storage.set_property(1, "prop_0", new_value).unwrap());
         });
     });
@@ -381,7 +381,7 @@ fn bench_property_operations(c: &mut Criterion) {
                 ctx.storage.set_property(
                     1,
                     "large_prop",
-                    graphdb::value::Value::String(large_value.clone()),
+                    linkrs::value::Value::String(large_value.clone()),
                 ).unwrap()
             );
         });
@@ -624,7 +624,7 @@ def generate_html_report(results):
     <!DOCTYPE html>
     <html>
     <head>
-        <title>GraphDB 性能基准报告</title>
+        <title>Linkrs 性能基准报告</title>
         <style>
             table { border-collapse: collapse; width: 100%; }
             th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
@@ -634,7 +634,7 @@ def generate_html_report(results):
         </style>
     </head>
     <body>
-        <h1>GraphDB 性能基准报告</h1>
+        <h1>Linkrs 性能基准报告</h1>
         <table>
             <tr>
                 <th>基准测试</th>
@@ -841,4 +841,4 @@ open target/criterion/report/index.html
 
 **文档完成度**: 100%  
 **最后更新**: 2026-06-18  
-**维护者**: GraphDB Team
+**维护者**: Linkrs Team

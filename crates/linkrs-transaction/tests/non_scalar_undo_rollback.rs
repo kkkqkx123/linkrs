@@ -1,0 +1,352 @@
+//! Integration tests: non-scalar property values survive the undo path.
+//!
+//! Regression tests for the silent `PropertyValue` -> `Value` lossy conversion:
+//! undo log entries must preserve the exact old value of non-scalar properties
+//! (Decimal128, Date, DateTime, List, Map, Vector, ...) through postcard
+//! serialization and rollback, restoring the original value instead of Null.
+
+use linkrs_core::types::storage_ids::{EdgeIdentifier, VertexIdentifier};
+use linkrs_core::types::StagedWriteMark;
+use linkrs_core::value::date_time::{DateTimeValue, DateValue};
+use linkrs_core::value::decimal128::Decimal128Value;
+use linkrs_core::value::null::NullType;
+use linkrs_core::value::uuid::UuidValue;
+use linkrs_core::value::List;
+use linkrs_core::Value;
+use linkrs_transaction::undo_log::{
+    UndoLogEntry, UndoLogError, UndoLogResult, UndoTarget, UpdateEdgePropUndo,
+};
+use linkrs_transaction::wal::{ColumnId, LabelId, Timestamp, VertexId};
+use linkrs_transaction::TransactionId;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+struct RecordingUndoTarget {
+    restored: Mutex<Vec<Value>>,
+}
+
+impl RecordingUndoTarget {
+    fn new() -> Self {
+        Self {
+            restored: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn restored(&self) -> Vec<Value> {
+        self.restored.lock().expect("poisoned").clone()
+    }
+}
+
+impl UndoTarget for RecordingUndoTarget {
+    fn delete_vertex_type(&self, _label: LabelId) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn delete_edge_type(&self, _edge_key: linkrs_core::types::EdgeKey) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn delete_vertex(&self, _vertex: VertexIdentifier, _ts: Timestamp) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn delete_edge(
+        &self,
+        _edge_ctx: linkrs_core::types::EdgeDeletionContext,
+    ) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn undo_update_edge_property(
+        &self,
+        _edge_id: EdgeIdentifier,
+        _col_id: ColumnId,
+        value: Value,
+        _ts: Timestamp,
+    ) -> UndoLogResult<()> {
+        self.restored.lock().expect("poisoned").push(value);
+        Ok(())
+    }
+
+    fn revert_delete_edge(
+        &self,
+        _edge_ctx: linkrs_core::types::EdgeDeletionContext,
+    ) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn revert_delete_vertex_properties(
+        &self,
+        _label_name: &str,
+        _prop_names: &[Arc<str>],
+    ) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn revert_delete_edge_properties(
+        &self,
+        _src_label: &str,
+        _dst_label: &str,
+        _edge_label: &str,
+        _prop_names: &[Arc<str>],
+    ) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn revert_delete_vertex_label(&self, _label_name: &str) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn revert_delete_edge_label(
+        &self,
+        _src_label: &str,
+        _dst_label: &str,
+        _edge_label: &str,
+    ) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn revert_rename_vertex_properties(
+        &self,
+        _label_name: &str,
+        _current_names: &[Arc<str>],
+        _original_names: &[Arc<str>],
+    ) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn revert_rename_edge_properties(
+        &self,
+        _src_label: &str,
+        _dst_label: &str,
+        _edge_label: &str,
+        _current_names: &[Arc<str>],
+        _original_names: &[Arc<str>],
+    ) -> UndoLogResult<()> {
+        Ok(())
+    }
+
+    fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+        None
+    }
+
+    fn rollback_staged_writes(
+        &self,
+        _txn_id: TransactionId,
+        mark: StagedWriteMark,
+    ) -> UndoLogResult<()> {
+        if mark.is_empty() {
+            Ok(())
+        } else {
+            Err(UndoLogError::UndoFailed(
+                "mock undo target holds no staged writes".to_string(),
+            ))
+        }
+    }
+}
+
+fn sample_values() -> Vec<Value> {
+    let mut list = List::new();
+    list.push(Value::Int(1));
+    list.push(Value::string("two"));
+
+    let mut map = HashMap::new();
+    map.insert(Value::string("key"), Value::Double(3.5));
+    // Non-string map keys survive the serde single-track roundtrip.
+    map.insert(Value::Int(7), Value::Bool(true));
+
+    vec![
+        Value::Decimal128(Decimal128Value::from_i64(12345)),
+        Value::Date(DateValue {
+            year: 2026,
+            month: 8,
+            day: 15,
+        }),
+        Value::DateTime(DateTimeValue {
+            year: 2026,
+            month: 8,
+            day: 15,
+            hour: 10,
+            minute: 30,
+            sec: 45,
+            microsec: 123456,
+        }),
+        Value::list(list),
+        Value::map(map),
+        Value::vector(vec![1.0, 2.0, 3.0]),
+        Value::Uuid(UuidValue([7u8; 16])),
+        Value::string("restore-me"),
+        Value::Null(NullType::Null),
+        Value::struct_(vec![
+            ("city".to_string(), Value::string("shanghai")),
+            (
+                "geo".to_string(),
+                Value::struct_(vec![("lat".to_string(), Value::Double(31.2))]),
+            ),
+        ]),
+        Value::array(vec![Value::Double(1.0), Value::Double(2.0)]),
+    ]
+}
+
+fn edge_undo(value: Value) -> UndoLogEntry {
+    UndoLogEntry::UpdateEdgeProp(UpdateEdgePropUndo {
+        src_label: 1u32,
+        src_vid: VertexId::try_from_int64(42).expect("test vertex id"),
+        dst_label: 1u32,
+        dst_vid: VertexId::try_from_int64(43).expect("test vertex id"),
+        edge_label: 2u32,
+        rank: 0,
+        col_id: ColumnId(0),
+        old_value: value,
+    })
+}
+
+#[test]
+fn undo_roundtrip_restores_original_value() {
+    let target = RecordingUndoTarget::new();
+    let target = Arc::new(target);
+
+    for value in sample_values() {
+        let target = Arc::clone(&target);
+        let entry = edge_undo(value.clone());
+        let encoded = postcard::to_allocvec(&entry).expect("encode undo entry");
+        let decoded: UndoLogEntry = postcard::from_bytes(&encoded).expect("decode undo entry");
+        decoded.undo(&*target, 99).expect("undo should succeed");
+    }
+
+    let restored = target.restored();
+    let expected: Vec<Value> = sample_values();
+    assert_eq!(restored.len(), expected.len());
+    for (restored, original) in restored.iter().zip(expected.iter()) {
+        assert_eq!(
+            restored, original,
+            "undo must restore the original value, got: {:?}",
+            restored
+        );
+    }
+}
+
+#[test]
+fn undo_entry_old_value_is_never_silently_null() {
+    for value in sample_values() {
+        if value.is_null() {
+            continue;
+        }
+        let entry = edge_undo(value.clone());
+        let decoded: UndoLogEntry =
+            postcard::from_bytes(&postcard::to_allocvec(&entry).expect("encode")).expect("decode");
+        let UndoLogEntry::UpdateEdgeProp(undo) = decoded else {
+            panic!("expected UpdateEdgeProp");
+        };
+        assert!(
+            !undo.old_value.is_null(),
+            "old_value must not degrade to Null: original {:?}",
+            value
+        );
+    }
+}
+
+#[test]
+fn failing_undo_returns_error() {
+    struct FailingTarget;
+
+    impl UndoTarget for FailingTarget {
+        fn undo_update_edge_property(
+            &self,
+            _edge_id: EdgeIdentifier,
+            _col_id: ColumnId,
+            _value: Value,
+            _ts: Timestamp,
+        ) -> UndoLogResult<()> {
+            Err(UndoLogError::UndoFailed("simulated failure".to_string()))
+        }
+
+        fn delete_vertex_type(&self, _label: LabelId) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn delete_edge_type(&self, _edge_key: linkrs_core::types::EdgeKey) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn delete_vertex(&self, _vertex: VertexIdentifier, _ts: Timestamp) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn delete_edge(
+            &self,
+            _edge_ctx: linkrs_core::types::EdgeDeletionContext,
+        ) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn revert_delete_edge(
+            &self,
+            _edge_ctx: linkrs_core::types::EdgeDeletionContext,
+        ) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn revert_delete_vertex_properties(
+            &self,
+            _label_name: &str,
+            _prop_names: &[Arc<str>],
+        ) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn revert_delete_edge_properties(
+            &self,
+            _src_label: &str,
+            _dst_label: &str,
+            _edge_label: &str,
+            _prop_names: &[Arc<str>],
+        ) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn revert_delete_vertex_label(&self, _label_name: &str) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn revert_delete_edge_label(
+            &self,
+            _src_label: &str,
+            _dst_label: &str,
+            _edge_label: &str,
+        ) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn revert_rename_vertex_properties(
+            &self,
+            _label_name: &str,
+            _current_names: &[Arc<str>],
+            _original_names: &[Arc<str>],
+        ) -> UndoLogResult<()> {
+            Ok(())
+        }
+        fn revert_rename_edge_properties(
+            &self,
+            _src_label: &str,
+            _dst_label: &str,
+            _edge_label: &str,
+            _current_names: &[Arc<str>],
+            _original_names: &[Arc<str>],
+        ) -> UndoLogResult<()> {
+            Ok(())
+        }
+
+        fn staged_write_mark(&self, _txn_id: TransactionId) -> Option<StagedWriteMark> {
+            None
+        }
+
+        fn rollback_staged_writes(
+            &self,
+            _txn_id: TransactionId,
+            mark: StagedWriteMark,
+        ) -> UndoLogResult<()> {
+            if mark.is_empty() {
+                Ok(())
+            } else {
+                Err(UndoLogError::UndoFailed(
+                    "mock undo target holds no staged writes".to_string(),
+                ))
+            }
+        }
+    }
+
+    let entry = edge_undo(Value::vector(vec![9.0]));
+    assert!(entry.undo(&FailingTarget, 1).is_err());
+}

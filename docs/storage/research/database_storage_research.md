@@ -2,7 +2,7 @@
 
 ## 一、调查概述
 
-本报告调研了主流数据库的存储架构实现，包括 RocksDB、DuckDB、SQLite、Neo4j 和 Apache Arrow，为 GraphDB 的节点存储优化提供参考。
+本报告调研了主流数据库的存储架构实现，包括 RocksDB、DuckDB、SQLite、Neo4j 和 Apache Arrow，为 Linkrs 的节点存储优化提供参考。
 
 ---
 
@@ -481,7 +481,7 @@ Parquet File Structure:
 
 | 数据库 | NULL 表示方式 | 内存开销 |
 |--------|---------------|----------|
-| GraphDB (当前) | `Vec<bool>` | 1 byte/值 |
+| Linkrs (当前) | `Vec<bool>` | 1 byte/值 |
 | DuckDB | Validity Bitmap | 1 bit/值 |
 | SQLite | Serial Type 0 | 0 byte |
 | Arrow | Validity Bitmap | 1 bit/值 |
@@ -491,7 +491,7 @@ Parquet File Structure:
 
 | 数据库 | 字符串存储方式 | 特点 |
 |--------|----------------|------|
-| GraphDB (当前) | 长度前缀 + 原始数据 | 简单，无压缩 |
+| Linkrs (当前) | 长度前缀 + 原始数据 | 简单，无压缩 |
 | DuckDB | Dictionary/RLE/FSST | 自动选择最优压缩 |
 | SQLite | Serial Type + UTF-8 | Varint 编码长度 |
 | Arrow | Offsets + Data | 支持字典编码 |
@@ -500,14 +500,14 @@ Parquet File Structure:
 
 | 数据库 | ID 映射方式 | 查找复杂度 |
 |--------|-------------|------------|
-| GraphDB (当前) | HashMap<String, u32> | O(1) 平均 |
+| Linkrs (当前) | HashMap<String, u32> | O(1) 平均 |
 | Neo4j | 固定偏移量 | O(1) |
 | RocksDB | Bloom Filter + SST | O(log N) |
 | SQLite | B-Tree | O(log N) |
 
 ---
 
-## 四、对 GraphDB 的启示
+## 四、对 Linkrs 的启示
 
 ### 4.1 可借鉴的设计
 
@@ -529,7 +529,7 @@ Parquet File Structure:
 ### 4.2 不适合的设计
 
 1. **LSM-Tree** (RocksDB)
-   - GraphDB 是单机场景，LSM-Tree 的复杂性不必要
+   - Linkrs 是单机场景，LSM-Tree 的复杂性不必要
 
 2. **固定大小记录** (Neo4j)
    - 属性数量可变，固定大小会浪费空间
@@ -544,5 +544,5 @@ Parquet File Structure:
 - [RocksDB Wiki](https://github.com/facebook/rocksdb/wiki)
 - [DuckDB Internals](https://duckdb.org/docs/current/internals/overview)
 - [SQLite File Format](https://www.sqlite.org/fileformat.html)
-- [Neo4j Graph Database Concepts](https://neo4j.com/docs/getting-started/appendix/graphdb-concepts/)
+- [Neo4j Graph Database Concepts](https://neo4j.com/docs/getting-started/appendix/linkrs-concepts/)
 - [Apache Arrow Columnar Format](https://arrow.apache.org/docs/format/Columnar.html)

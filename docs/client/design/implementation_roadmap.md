@@ -1,4 +1,4 @@
-# GraphDB CLI 实现路线图
+# Linkrs CLI 实现路线图
 
 ## 1. 项目阶段划分
 
@@ -26,14 +26,14 @@ Phase 1: MVP (最小可用产品) ────────> Phase 2: 用户体�
 
 - [ ] 创建项目结构
   ```bash
-  cargo new graphdb-cli --name graphdb_cli
-  cd graphdb-cli
+  cargo new linkrs-cli --name linkrs_cli
+  cd linkrs-cli
   ```
 
 - [ ] 配置 Cargo.toml
   ```toml
   [package]
-  name = "graphdb-cli"
+  name = "linkrs-cli"
   version = "0.1.0"
   edition = "2021"
 
@@ -73,7 +73,7 @@ Phase 1: MVP (最小可用产品) ────────> Phase 2: 用户体�
   use clap::Parser;
 
   #[derive(Parser)]
-  #[clap(version = "0.1.0", author = "GraphDB Contributors")]
+  #[clap(version = "0.1.0", author = "Linkrs Contributors")]
   struct Cli {
       #[clap(short, long, default_value = "127.0.0.1")]
       host: String,
@@ -337,7 +337,7 @@ Phase 1: MVP (最小可用产品) ────────> Phase 2: 用户体�
       "AND", "OR", "NOT", "IN", "AS",
   ];
 
-  impl Completer for GraphDBCompleter {
+  impl Completer for LinkrsCompleter {
       fn complete(&self, line: &str, pos: usize) -> Result<(usize, Vec<Pair>)> {
           let last_word = get_last_word(&line[..pos]);
           let completions = KEYWORDS.iter()
@@ -629,7 +629,7 @@ Phase 1: MVP (最小可用产品) ────────> Phase 2: 用户体�
 ### 5.3 端到端测试
 
 **测试流程**：
-1. 启动 GraphDB 服务器
+1. 启动 Linkrs 服务器
 2. 启动 CLI 客户端
 3. 执行完整的用户操作流程
 4. 验证结果

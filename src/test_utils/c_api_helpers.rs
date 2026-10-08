@@ -9,7 +9,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 
-use crate::api::embedded::c_api::error::graphdb_error_code_t;
+use crate::api::embedded::c_api::error::linkrs_error_code_t;
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -17,7 +17,7 @@ static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 ///
 /// Use the RAII (Resource Acquisition Is Initialization) pattern to manage the database lifecycle, ensuring that resources are properly cleaned up after testing.
 pub struct CApiTestDatabase {
-    db: *mut crate::api::embedded::c_api::types::graphdb_t,
+    db: *mut crate::api::embedded::c_api::types::linkrs_t,
     temp_dir: TempDir,
 }
 
@@ -39,15 +39,15 @@ impl CApiTestDatabase {
         let path_cstring =
             CString::new(db_path.to_str().expect("Failed to convert path to string"))
                 .expect("Failed to create CString");
-        let mut db: *mut crate::api::embedded::c_api::types::graphdb_t = ptr::null_mut();
+        let mut db: *mut crate::api::embedded::c_api::types::linkrs_t = ptr::null_mut();
 
         let rc = unsafe {
-            crate::api::embedded::c_api::database::graphdb_open(path_cstring.as_ptr(), &mut db)
+            crate::api::embedded::c_api::database::linkrs_open(path_cstring.as_ptr(), &mut db)
         };
 
         assert_eq!(
             rc,
-            graphdb_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::GRAPHDB_OK as i32,
             "Failed to open database, error code: {}, path: {:?}",
             rc,
             db_path
@@ -58,7 +58,7 @@ impl CApiTestDatabase {
     }
 
     /// Obtaining a database handle
-    pub fn handle(&self) -> *mut crate::api::embedded::c_api::types::graphdb_t {
+    pub fn handle(&self) -> *mut crate::api::embedded::c_api::types::linkrs_t {
         self.db
     }
 }
@@ -67,7 +67,7 @@ impl Drop for CApiTestDatabase {
     fn drop(&mut self) {
         if !self.db.is_null() {
             unsafe {
-                crate::api::embedded::c_api::database::graphdb_close(self.db);
+                crate::api::embedded::c_api::database::linkrs_close(self.db);
             }
         }
     }
@@ -77,22 +77,22 @@ impl Drop for CApiTestDatabase {
 ///
 /// Managing the session lifecycle using the RAII (Resource Acquisition Is Initialization) pattern
 pub struct CApiTestSession {
-    session: *mut crate::api::embedded::c_api::types::graphdb_session_t,
+    session: *mut crate::api::embedded::c_api::types::linkrs_session_t,
 }
 
 impl CApiTestSession {
     /// Create a session from the database.
     pub fn from_db(db: &CApiTestDatabase) -> Self {
-        let mut session: *mut crate::api::embedded::c_api::types::graphdb_session_t =
+        let mut session: *mut crate::api::embedded::c_api::types::linkrs_session_t =
             ptr::null_mut();
 
         let rc = unsafe {
-            crate::api::embedded::c_api::session::graphdb_session_create(db.handle(), &mut session)
+            crate::api::embedded::c_api::session::linkrs_session_create(db.handle(), &mut session)
         };
 
         assert_eq!(
             rc,
-            graphdb_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::GRAPHDB_OK as i32,
             "Failed to create a session."
         );
         assert!(
@@ -104,7 +104,7 @@ impl CApiTestSession {
     }
 
     /// Obtaining the session handle
-    pub fn handle(&self) -> *mut crate::api::embedded::c_api::types::graphdb_session_t {
+    pub fn handle(&self) -> *mut crate::api::embedded::c_api::types::linkrs_session_t {
         self.session
     }
 }
@@ -113,7 +113,7 @@ impl Drop for CApiTestSession {
     fn drop(&mut self) {
         if !self.session.is_null() {
             unsafe {
-                crate::api::embedded::c_api::session::graphdb_session_close(self.session);
+                crate::api::embedded::c_api::session::linkrs_session_close(self.session);
             }
         }
     }
@@ -123,21 +123,21 @@ impl Drop for CApiTestSession {
 ///
 /// Managing the transaction lifecycle using the RAII pattern
 pub struct CApiTestTransaction {
-    txn: *mut crate::api::embedded::c_api::types::graphdb_txn_t,
+    txn: *mut crate::api::embedded::c_api::types::linkrs_txn_t,
 }
 
 impl CApiTestTransaction {
     /// Create a transaction from the session
     pub fn from_session(session: &CApiTestSession) -> Self {
-        let mut txn: *mut crate::api::embedded::c_api::types::graphdb_txn_t = ptr::null_mut();
+        let mut txn: *mut crate::api::embedded::c_api::types::linkrs_txn_t = ptr::null_mut();
 
         let rc = unsafe {
-            crate::api::embedded::c_api::transaction::graphdb_txn_begin(session.handle(), &mut txn)
+            crate::api::embedded::c_api::transaction::linkrs_txn_begin(session.handle(), &mut txn)
         };
 
         assert_eq!(
             rc,
-            graphdb_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::GRAPHDB_OK as i32,
             "Failed to start the transaction."
         );
         assert!(
@@ -149,16 +149,16 @@ impl CApiTestTransaction {
     }
 
     /// Obtaining the transaction handle
-    pub fn handle(&self) -> *mut crate::api::embedded::c_api::types::graphdb_txn_t {
+    pub fn handle(&self) -> *mut crate::api::embedded::c_api::types::linkrs_txn_t {
         self.txn
     }
 
     /// Commit a transaction
     pub fn commit(self) {
-        let rc = unsafe { crate::api::embedded::c_api::transaction::graphdb_txn_commit(self.txn) };
+        let rc = unsafe { crate::api::embedded::c_api::transaction::linkrs_txn_commit(self.txn) };
         assert_eq!(
             rc,
-            graphdb_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::GRAPHDB_OK as i32,
             "The transaction failed to be committed."
         );
         // Prevent the component from being released again when the “Drop” event occurs.
@@ -168,10 +168,10 @@ impl CApiTestTransaction {
     /// Roll back a transaction
     pub fn rollback(self) {
         let rc =
-            unsafe { crate::api::embedded::c_api::transaction::graphdb_txn_rollback(self.txn) };
+            unsafe { crate::api::embedded::c_api::transaction::linkrs_txn_rollback(self.txn) };
         assert_eq!(
             rc,
-            graphdb_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::GRAPHDB_OK as i32,
             "Rolling back the transaction failed."
         );
         // Prevent the object from being released again when the “Drop” event occurs.
@@ -183,7 +183,7 @@ impl Drop for CApiTestTransaction {
     fn drop(&mut self) {
         if !self.txn.is_null() {
             unsafe {
-                crate::api::embedded::c_api::transaction::graphdb_txn_free(self.txn);
+                crate::api::embedded::c_api::transaction::linkrs_txn_free(self.txn);
             }
         }
     }
@@ -193,17 +193,17 @@ impl Drop for CApiTestTransaction {
 ///
 /// Manage the lifecycle of result sets using the RAII (Resource Acquisition Is Initialization) pattern.
 pub struct CApiTestResult {
-    result: *mut crate::api::embedded::c_api::types::graphdb_result_t,
+    result: *mut crate::api::embedded::c_api::types::linkrs_result_t,
 }
 
 impl CApiTestResult {
     /// Create results from executing queries within the conversation.
     pub fn from_query(session: &CApiTestSession, query: &str) -> Self {
         let query_cstring = CString::new(query).expect("Invalid query string");
-        let mut result: *mut crate::api::embedded::c_api::types::graphdb_result_t = ptr::null_mut();
+        let mut result: *mut crate::api::embedded::c_api::types::linkrs_result_t = ptr::null_mut();
 
         let rc = unsafe {
-            crate::api::embedded::c_api::query::graphdb_execute(
+            crate::api::embedded::c_api::query::linkrs_execute(
                 session.handle(),
                 query_cstring.as_ptr(),
                 &mut result,
@@ -212,7 +212,7 @@ impl CApiTestResult {
 
         assert_eq!(
             rc,
-            graphdb_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::GRAPHDB_OK as i32,
             "The query failed to be executed."
         );
         assert!(!result.is_null(), "The result handle should not be empty.");
@@ -222,12 +222,12 @@ impl CApiTestResult {
 
     /// Get the number of columns
     pub fn column_count(&self) -> i32 {
-        unsafe { crate::api::embedded::c_api::result::graphdb_column_count(self.result) }
+        unsafe { crate::api::embedded::c_api::result::linkrs_column_count(self.result) }
     }
 
     /// Get the number of rows
     pub fn row_count(&self) -> i32 {
-        unsafe { crate::api::embedded::c_api::result::graphdb_row_count(self.result) }
+        unsafe { crate::api::embedded::c_api::result::linkrs_row_count(self.result) }
     }
 }
 
@@ -235,7 +235,7 @@ impl Drop for CApiTestResult {
     fn drop(&mut self) {
         if !self.result.is_null() {
             unsafe {
-                crate::api::embedded::c_api::result::graphdb_result_free(self.result);
+                crate::api::embedded::c_api::result::linkrs_result_free(self.result);
             }
         }
     }
@@ -245,16 +245,16 @@ impl Drop for CApiTestResult {
 ///
 /// Using the RAII (Resource Acquisition Is Initialization) pattern to manage the lifecycle of batch operations
 pub struct CApiTestBatch {
-    batch: *mut crate::api::embedded::c_api::types::graphdb_batch_t,
+    batch: *mut crate::api::embedded::c_api::types::linkrs_batch_t,
 }
 
 impl CApiTestBatch {
     /// Create a batch inserter from the session
     pub fn from_session(session: &CApiTestSession, batch_size: i32) -> Self {
-        let mut batch: *mut crate::api::embedded::c_api::types::graphdb_batch_t = ptr::null_mut();
+        let mut batch: *mut crate::api::embedded::c_api::types::linkrs_batch_t = ptr::null_mut();
 
         let rc = unsafe {
-            crate::api::embedded::c_api::batch::graphdb_batch_inserter_create(
+            crate::api::embedded::c_api::batch::linkrs_batch_inserter_create(
                 session.handle(),
                 batch_size,
                 &mut batch,
@@ -263,7 +263,7 @@ impl CApiTestBatch {
 
         assert_eq!(
             rc,
-            graphdb_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::GRAPHDB_OK as i32,
             "Failed to create the batch inserter."
         );
         assert!(
@@ -275,7 +275,7 @@ impl CApiTestBatch {
     }
 
     /// Obtain batch operation handles
-    pub fn handle(&self) -> *mut crate::api::embedded::c_api::types::graphdb_batch_t {
+    pub fn handle(&self) -> *mut crate::api::embedded::c_api::types::linkrs_batch_t {
         self.batch
     }
 }
@@ -284,7 +284,7 @@ impl Drop for CApiTestBatch {
     fn drop(&mut self) {
         if !self.batch.is_null() {
             unsafe {
-                crate::api::embedded::c_api::batch::graphdb_batch_free(self.batch);
+                crate::api::embedded::c_api::batch::linkrs_batch_free(self.batch);
             }
         }
     }

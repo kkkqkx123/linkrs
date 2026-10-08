@@ -6,7 +6,7 @@
 //! rows for correlated and uncorrelated subqueries.
 
 use crate::common::{create_test_db, setup_test_space};
-use graphdb::core::Value;
+use linkrs::core::Value;
 
 fn setup_person_graph(db: &mut crate::common::TestDb) {
     setup_test_space(

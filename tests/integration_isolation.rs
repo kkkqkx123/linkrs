@@ -6,10 +6,10 @@
 //! - Space deletion with index cleanup
 //! - Cross-space isolation verification
 
-use graphdb::core::types::{IsolationLevel, SpaceInfo};
+use linkrs::core::types::{IsolationLevel, SpaceInfo};
 #[cfg(feature = "fulltext")]
-use graphdb::search::FulltextIndexManager;
-use graphdb::search::{EngineType, FulltextConfig};
+use linkrs::search::FulltextIndexManager;
+use linkrs::search::{EngineType, FulltextConfig};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -38,7 +38,7 @@ fn test_create_space_with_directory_isolation() {
 /// Test creating space with Device isolation level and custom path
 #[test]
 fn test_create_space_with_device_isolation() {
-    let custom_path = PathBuf::from("/mnt/fastdisk/graphdb");
+    let custom_path = PathBuf::from("/mnt/fastdisk/linkrs");
     let space =
         SpaceInfo::new("device_space".to_string()).with_storage_path(Some(custom_path.clone()));
 
@@ -50,12 +50,12 @@ fn test_create_space_with_device_isolation() {
 #[test]
 fn test_space_info_builder_pattern() {
     let space = SpaceInfo::new("test_space".to_string())
-        .with_vid_type(graphdb::core::types::DataType::BigInt)
+        .with_vid_type(linkrs::core::types::DataType::BigInt)
         .with_comment(Some("Test comment".to_string()))
         .with_isolation_level(IsolationLevel::Directory);
 
     assert_eq!(space.space_name, "test_space");
-    assert_eq!(space.vid_type, graphdb::core::types::DataType::BigInt);
+    assert_eq!(space.vid_type, linkrs::core::types::DataType::BigInt);
     assert_eq!(space.comment, Some("Test comment".to_string()));
     assert_eq!(space.isolation_level, IsolationLevel::Directory);
 }
@@ -65,7 +65,7 @@ fn test_space_info_builder_pattern() {
 /// Test fulltext index ID format compliance
 #[test]
 fn test_fulltext_index_id_format() {
-    use graphdb::search::IndexKey;
+    use linkrs::search::IndexKey;
 
     let test_cases = vec![
         (1, "Article", "content", "space_ft_1_Article_content"),
@@ -93,7 +93,7 @@ fn test_fulltext_index_id_format() {
 #[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_vector_collection_name_format() {
-    use graphdb::sync::vector_sync::VectorIndexLocation;
+    use linkrs::sync::vector_sync::VectorIndexLocation;
 
     let test_cases = vec![
         (1, "Article", "content", "space_1"),
@@ -116,8 +116,8 @@ fn test_vector_collection_name_format() {
 #[cfg(feature = "vector-qdrant")]
 #[test]
 fn test_naming_consistency_vector_fulltext() {
-    use graphdb::search::IndexKey;
-    use graphdb::sync::vector_sync::VectorIndexLocation;
+    use linkrs::search::IndexKey;
+    use linkrs::sync::vector_sync::VectorIndexLocation;
 
     let space_id = 123;
     let tag = "Document";
@@ -323,7 +323,7 @@ async fn test_drop_space_isolation() {
 /// Test index creation with special characters in names
 #[test]
 fn test_index_naming_with_special_chars() {
-    use graphdb::search::IndexKey;
+    use linkrs::search::IndexKey;
 
     let test_cases = vec![
         (1, "User_Profile", "email_address"),
@@ -351,7 +351,7 @@ fn test_index_naming_with_special_chars() {
 /// Test space with zero ID
 #[test]
 fn test_space_with_zero_id() {
-    use graphdb::search::IndexKey;
+    use linkrs::search::IndexKey;
 
     let key = IndexKey::new(0, "Test", "field");
     let index_id = key.to_index_id();

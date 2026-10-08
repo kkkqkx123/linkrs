@@ -1,4 +1,4 @@
-# GraphDB 数据查询语言 (DQL)
+# Linkrs 数据查询语言 (DQL)
 
 ## 概述
 

@@ -2,14 +2,14 @@
 //!
 //! Tests for dead letter queue, compensation, and recovery mechanisms
 
-use graphdb::core::types::DataType;
-use graphdb::core::Value;
-use graphdb::search::SyncFailurePolicy;
-use graphdb::sync::batch::BatchConfig;
-use graphdb::sync::coordinator::SyncCoordinator;
-use graphdb::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-use graphdb::sync::types::{ChangeType, IndexData, IndexType};
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
+use linkrs::core::types::DataType;
+use linkrs::core::Value;
+use linkrs::search::SyncFailurePolicy;
+use linkrs::sync::batch::BatchConfig;
+use linkrs::sync::coordinator::SyncCoordinator;
+use linkrs::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
+use linkrs::sync::types::{ChangeType, IndexData, IndexType};
+use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::sync::Arc;
 
 /// TC-060: Failed sync to dead letter queue
@@ -86,8 +86,8 @@ fn test_dead_letter_queue_recovery() {
     // Add entries up to limit
     for i in 0..15 {
         let entry = DeadLetterEntry::new(
-            graphdb::sync::IndexOperation {
-                key: graphdb::sync::IndexOpKey::new(1, "Person", "name"),
+            linkrs::sync::IndexOperation {
+                key: linkrs::sync::IndexOpKey::new(1, "Person", "name"),
                 index_type: IndexType::Fulltext,
                 change_type: ChangeType::Insert,
                 id: format!("test_id_{}", i),
@@ -421,21 +421,21 @@ fn test_failure_policy_configuration() {
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let index_path = temp_dir.path().join("index");
 
-    let fulltext_config = graphdb::search::FulltextConfig {
+    let fulltext_config = linkrs::search::FulltextConfig {
         enabled: true,
         index_path,
-        default_engine: graphdb::search::EngineType::Bm25,
-        sync: graphdb::search::SyncConfig::default(),
+        default_engine: linkrs::search::EngineType::Bm25,
+        sync: linkrs::search::SyncConfig::default(),
         cache_size: 100,
         max_result_cache: 1000,
         result_cache_ttl_secs: 60,
-        tantivy: graphdb::search::TantivyConfig {
-            tokenizer: graphdb::search::TokenizerKind::Default,
+        tantivy: linkrs::search::TantivyConfig {
+            tokenizer: linkrs::search::TokenizerKind::Default,
             ..Default::default()
         },
     };
     let fulltext_manager = Arc::new(
-        graphdb::search::FulltextIndexManager::new(fulltext_config)
+        linkrs::search::FulltextIndexManager::new(fulltext_config)
             .expect("Failed to create fulltext manager"),
     );
 

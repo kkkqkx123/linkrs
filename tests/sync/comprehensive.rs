@@ -3,9 +3,9 @@
 //! Tests covering remaining paths not covered by sync_2pc_protocol,
 //! sync_fault_tolerance, or sync_transaction_basic.
 
-use graphdb::core::types::DataType;
-use graphdb::core::Value;
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
+use linkrs::core::types::DataType;
+use linkrs::core::Value;
+use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 
 /// TC-100: Non-transactional direct path (on_vertex_change → BatchBuffer → commit)
 ///

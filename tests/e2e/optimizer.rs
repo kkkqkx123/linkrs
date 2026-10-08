@@ -154,7 +154,7 @@ mod wco {
             .map(|row| {
                 row.iter()
                     .map(|v| match v {
-                        graphdb::core::Value::String(s) => s.to_string(),
+                        linkrs::core::Value::String(s) => s.to_string(),
                         other => format!("{:?}", other),
                     })
                     .collect()
@@ -172,7 +172,7 @@ mod wco {
             .map(|row| {
                 row.iter()
                     .map(|v| match v {
-                        graphdb::core::Value::String(s) => s.to_string(),
+                        linkrs::core::Value::String(s) => s.to_string(),
                         other => format!("{:?}", other),
                     })
                     .collect()
@@ -196,7 +196,7 @@ mod wco {
             .map(|row| {
                 row.iter()
                     .map(|v| match v {
-                        graphdb::core::Value::String(s) => s.to_string(),
+                        linkrs::core::Value::String(s) => s.to_string(),
                         other => format!("{:?}", other),
                     })
                     .collect()

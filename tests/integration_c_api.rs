@@ -15,9 +15,9 @@
 use std::ffi::CString;
 use std::ptr;
 
-use graphdb::api::embedded::c_api::error::graphdb_error_code_t;
+use linkrs::api::embedded::c_api::error::linkrs_error_code_t;
 
-use graphdb::test_utils::c_api_helpers::{
+use linkrs::test_utils::c_api_helpers::{
     CApiTestBatch, CApiTestDatabase, CApiTestResult, CApiTestSession, CApiTestTransaction,
 };
 
@@ -36,7 +36,7 @@ fn test_c_api_database_open_close() {
 #[test]
 fn test_c_api_libversion() {
     let version = unsafe {
-        std::ffi::CStr::from_ptr(graphdb::api::embedded::c_api::database::graphdb_libversion())
+        std::ffi::CStr::from_ptr(linkrs::api::embedded::c_api::database::linkrs_libversion())
     };
 
     let version_str = version.to_str().expect("版本字符串无效");
@@ -46,9 +46,9 @@ fn test_c_api_libversion() {
 #[test]
 fn test_c_api_database_null_params() {
     let rc = unsafe {
-        graphdb::api::embedded::c_api::database::graphdb_open(ptr::null(), ptr::null_mut())
+        linkrs::api::embedded::c_api::database::linkrs_open(ptr::null(), ptr::null_mut())
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
 }
 
 #[test]
@@ -80,21 +80,21 @@ fn test_c_api_session_autocommit() {
 
     // Default automatic submission
     let autocommit = unsafe {
-        graphdb::api::embedded::c_api::session::graphdb_session_get_autocommit(session.handle())
+        linkrs::api::embedded::c_api::session::linkrs_session_get_autocommit(session.handle())
     };
     assert!(autocommit);
 
     // Turn off automatic submission.
     let rc = unsafe {
-        graphdb::api::embedded::c_api::session::graphdb_session_set_autocommit(
+        linkrs::api::embedded::c_api::session::linkrs_session_set_autocommit(
             session.handle(),
             false,
         )
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
 
     let autocommit = unsafe {
-        graphdb::api::embedded::c_api::session::graphdb_session_get_autocommit(session.handle())
+        linkrs::api::embedded::c_api::session::linkrs_session_get_autocommit(session.handle())
     };
     assert!(!autocommit);
 }
@@ -102,12 +102,12 @@ fn test_c_api_session_autocommit() {
 #[test]
 fn test_c_api_session_null_params() {
     let rc = unsafe {
-        graphdb::api::embedded::c_api::session::graphdb_session_create(
+        linkrs::api::embedded::c_api::session::linkrs_session_create(
             ptr::null_mut(),
             ptr::null_mut(),
         )
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
 }
 
 #[test]
@@ -128,10 +128,10 @@ fn test_c_api_execute_simple_query() {
     let session = CApiTestSession::from_db(&test_db);
 
     let query = CString::new("SHOW SPACES").expect("创建CString失败");
-    let mut result: *mut graphdb::api::embedded::c_api::types::graphdb_result_t = ptr::null_mut();
+    let mut result: *mut linkrs::api::embedded::c_api::types::linkrs_result_t = ptr::null_mut();
 
     let rc = unsafe {
-        graphdb::api::embedded::c_api::query::graphdb_execute(
+        linkrs::api::embedded::c_api::query::linkrs_execute(
             session.handle(),
             query.as_ptr(),
             &mut result,
@@ -139,8 +139,8 @@ fn test_c_api_execute_simple_query() {
     };
 
     // Printing error messages is used for debugging purposes.
-    if rc != graphdb_error_code_t::GRAPHDB_OK as i32 {
-        let error_msg = graphdb::api::embedded::c_api::error::graphdb_get_last_error_message();
+    if rc != linkrs_error_code_t::GRAPHDB_OK as i32 {
+        let error_msg = linkrs::api::embedded::c_api::error::linkrs_get_last_error_message();
         if !error_msg.is_null() {
             let _msg = unsafe {
                 std::ffi::CStr::from_ptr(error_msg)
@@ -150,12 +150,12 @@ fn test_c_api_execute_simple_query() {
         }
     }
 
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
     assert!(!result.is_null());
 
     // Cleanup results
     unsafe {
-        graphdb::api::embedded::c_api::result::graphdb_result_free(result);
+        linkrs::api::embedded::c_api::result::linkrs_result_free(result);
     }
 }
 
@@ -173,13 +173,13 @@ fn test_c_api_execute_with_wrapper() {
 #[test]
 fn test_c_api_execute_null_params() {
     let rc = unsafe {
-        graphdb::api::embedded::c_api::query::graphdb_execute(
+        linkrs::api::embedded::c_api::query::linkrs_execute(
             ptr::null_mut(),
             ptr::null(),
             ptr::null_mut(),
         )
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
 }
 
 // ==================== Result Processing Test ====================
@@ -190,28 +190,28 @@ fn test_c_api_result_metadata() {
     let session = CApiTestSession::from_db(&test_db);
 
     let query = CString::new("SHOW SPACES").expect("创建CString失败");
-    let mut result: *mut graphdb::api::embedded::c_api::types::graphdb_result_t = ptr::null_mut();
+    let mut result: *mut linkrs::api::embedded::c_api::types::linkrs_result_t = ptr::null_mut();
 
     let rc = unsafe {
-        graphdb::api::embedded::c_api::query::graphdb_execute(
+        linkrs::api::embedded::c_api::query::linkrs_execute(
             session.handle(),
             query.as_ptr(),
             &mut result,
         )
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
 
     // Get the number of columns
-    let col_count = unsafe { graphdb::api::embedded::c_api::result::graphdb_column_count(result) };
+    let col_count = unsafe { linkrs::api::embedded::c_api::result::linkrs_column_count(result) };
     assert!(col_count >= 0);
 
     // Get the number of rows
-    let row_count = unsafe { graphdb::api::embedded::c_api::result::graphdb_row_count(result) };
+    let row_count = unsafe { linkrs::api::embedded::c_api::result::linkrs_row_count(result) };
     assert!(row_count >= 0);
 
     // Cleanup results
     unsafe {
-        graphdb::api::embedded::c_api::result::graphdb_result_free(result);
+        linkrs::api::embedded::c_api::result::linkrs_result_free(result);
     }
 }
 
@@ -221,24 +221,24 @@ fn test_c_api_result_column_name() {
     let session = CApiTestSession::from_db(&test_db);
 
     let query = CString::new("SHOW SPACES").expect("创建CString失败");
-    let mut result: *mut graphdb::api::embedded::c_api::types::graphdb_result_t = ptr::null_mut();
+    let mut result: *mut linkrs::api::embedded::c_api::types::linkrs_result_t = ptr::null_mut();
 
     let rc = unsafe {
-        graphdb::api::embedded::c_api::query::graphdb_execute(
+        linkrs::api::embedded::c_api::query::linkrs_execute(
             session.handle(),
             query.as_ptr(),
             &mut result,
         )
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
 
     // Get the number of columns
-    let col_count = unsafe { graphdb::api::embedded::c_api::result::graphdb_column_count(result) };
+    let col_count = unsafe { linkrs::api::embedded::c_api::result::linkrs_column_count(result) };
 
     if col_count > 0 {
         // Get the name of the first column.
         let col_name =
-            unsafe { graphdb::api::embedded::c_api::result::graphdb_column_name(result, 0) };
+            unsafe { linkrs::api::embedded::c_api::result::linkrs_column_name(result, 0) };
 
         if !col_name.is_null() {
             let name = unsafe { std::ffi::CStr::from_ptr(col_name) };
@@ -247,29 +247,29 @@ fn test_c_api_result_column_name() {
 
             // Release the column name string.
             unsafe {
-                graphdb::api::embedded::c_api::database::graphdb_free_string(col_name);
+                linkrs::api::embedded::c_api::database::linkrs_free_string(col_name);
             }
         }
     }
 
     // Clean-up results
     unsafe {
-        graphdb::api::embedded::c_api::result::graphdb_result_free(result);
+        linkrs::api::embedded::c_api::result::linkrs_result_free(result);
     }
 }
 
 #[test]
 fn test_c_api_result_null_params() {
     let count =
-        unsafe { graphdb::api::embedded::c_api::result::graphdb_column_count(ptr::null_mut()) };
+        unsafe { linkrs::api::embedded::c_api::result::linkrs_column_count(ptr::null_mut()) };
     assert_eq!(count, -1);
 
     let count =
-        unsafe { graphdb::api::embedded::c_api::result::graphdb_row_count(ptr::null_mut()) };
+        unsafe { linkrs::api::embedded::c_api::result::linkrs_row_count(ptr::null_mut()) };
     assert_eq!(count, -1);
 
     let name =
-        unsafe { graphdb::api::embedded::c_api::result::graphdb_column_name(ptr::null_mut(), 0) };
+        unsafe { linkrs::api::embedded::c_api::result::linkrs_column_name(ptr::null_mut(), 0) };
     assert!(name.is_null());
 }
 
@@ -280,21 +280,21 @@ fn test_c_api_transaction_begin_commit() {
     let test_db = CApiTestDatabase::new();
     let session = CApiTestSession::from_db(&test_db);
 
-    let mut txn: *mut graphdb::api::embedded::c_api::types::graphdb_txn_t = ptr::null_mut();
+    let mut txn: *mut linkrs::api::embedded::c_api::types::linkrs_txn_t = ptr::null_mut();
 
     // Start a transaction
     let rc = unsafe {
-        graphdb::api::embedded::c_api::transaction::graphdb_txn_begin(session.handle(), &mut txn)
+        linkrs::api::embedded::c_api::transaction::linkrs_txn_begin(session.handle(), &mut txn)
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
     assert!(!txn.is_null());
 
     // Submit the transaction
-    let rc = unsafe { graphdb::api::embedded::c_api::transaction::graphdb_txn_commit(txn) };
+    let rc = unsafe { linkrs::api::embedded::c_api::transaction::linkrs_txn_commit(txn) };
 
     // Printing error messages is used for debugging.
-    if rc != graphdb_error_code_t::GRAPHDB_OK as i32 {
-        let error_msg = graphdb::api::embedded::c_api::error::graphdb_get_last_error_message();
+    if rc != linkrs_error_code_t::GRAPHDB_OK as i32 {
+        let error_msg = linkrs::api::embedded::c_api::error::linkrs_get_last_error_message();
         if !error_msg.is_null() {
             let _msg = unsafe {
                 std::ffi::CStr::from_ptr(error_msg)
@@ -304,11 +304,11 @@ fn test_c_api_transaction_begin_commit() {
         }
     }
 
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
 
     // Clean up transaction handlers
     unsafe {
-        graphdb::api::embedded::c_api::transaction::graphdb_txn_free(txn);
+        linkrs::api::embedded::c_api::transaction::linkrs_txn_free(txn);
     }
 }
 
@@ -317,22 +317,22 @@ fn test_c_api_transaction_begin_rollback() {
     let test_db = CApiTestDatabase::new();
     let session = CApiTestSession::from_db(&test_db);
 
-    let mut txn: *mut graphdb::api::embedded::c_api::types::graphdb_txn_t = ptr::null_mut();
+    let mut txn: *mut linkrs::api::embedded::c_api::types::linkrs_txn_t = ptr::null_mut();
 
     // Start a transaction
     let rc = unsafe {
-        graphdb::api::embedded::c_api::transaction::graphdb_txn_begin(session.handle(), &mut txn)
+        linkrs::api::embedded::c_api::transaction::linkrs_txn_begin(session.handle(), &mut txn)
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
     assert!(!txn.is_null());
 
     // Roll back a transaction
-    let rc = unsafe { graphdb::api::embedded::c_api::transaction::graphdb_txn_rollback(txn) };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    let rc = unsafe { linkrs::api::embedded::c_api::transaction::linkrs_txn_rollback(txn) };
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
 
     // Clean up transaction handlers
     unsafe {
-        graphdb::api::embedded::c_api::transaction::graphdb_txn_free(txn);
+        linkrs::api::embedded::c_api::transaction::linkrs_txn_free(txn);
     }
 }
 
@@ -363,12 +363,12 @@ fn test_c_api_transaction_rollback_with_wrapper() {
 #[test]
 fn test_c_api_transaction_null_params() {
     let rc = unsafe {
-        graphdb::api::embedded::c_api::transaction::graphdb_txn_begin(
+        linkrs::api::embedded::c_api::transaction::linkrs_txn_begin(
             ptr::null_mut(),
             ptr::null_mut(),
         )
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
 }
 
 // ==================== Batch Operation Testing ====================
@@ -378,22 +378,22 @@ fn test_c_api_batch_inserter_create_free() {
     let test_db = CApiTestDatabase::new();
     let session = CApiTestSession::from_db(&test_db);
 
-    let mut batch: *mut graphdb::api::embedded::c_api::types::graphdb_batch_t = ptr::null_mut();
+    let mut batch: *mut linkrs::api::embedded::c_api::types::linkrs_batch_t = ptr::null_mut();
 
     // Create a batch inserter
     let rc = unsafe {
-        graphdb::api::embedded::c_api::batch::graphdb_batch_inserter_create(
+        linkrs::api::embedded::c_api::batch::linkrs_batch_inserter_create(
             session.handle(),
             100,
             &mut batch,
         )
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
     assert!(!batch.is_null());
 
     // Release the batch inserter.
-    let rc = unsafe { graphdb::api::embedded::c_api::batch::graphdb_batch_free(batch) };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_OK as i32);
+    let rc = unsafe { linkrs::api::embedded::c_api::batch::linkrs_batch_free(batch) };
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
 }
 
 #[test]
@@ -408,24 +408,24 @@ fn test_c_api_batch_with_wrapper() {
 #[test]
 fn test_c_api_batch_null_params() {
     let rc = unsafe {
-        graphdb::api::embedded::c_api::batch::graphdb_batch_inserter_create(
+        linkrs::api::embedded::c_api::batch::linkrs_batch_inserter_create(
             ptr::null_mut(),
             100,
             ptr::null_mut(),
         )
     };
-    assert_eq!(rc, graphdb_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
 }
 
 #[test]
 fn test_c_api_batch_buffered_counts_null() {
     let count = unsafe {
-        graphdb::api::embedded::c_api::batch::graphdb_batch_buffered_vertices(ptr::null_mut())
+        linkrs::api::embedded::c_api::batch::linkrs_batch_buffered_vertices(ptr::null_mut())
     };
     assert_eq!(count, -1);
 
     let count = unsafe {
-        graphdb::api::embedded::c_api::batch::graphdb_batch_buffered_edges(ptr::null_mut())
+        linkrs::api::embedded::c_api::batch::linkrs_batch_buffered_edges(ptr::null_mut())
     };
     assert_eq!(count, -1);
 }
@@ -435,8 +435,8 @@ fn test_c_api_batch_buffered_counts_null() {
 #[test]
 fn test_c_api_error_string() {
     let error_str = unsafe {
-        std::ffi::CStr::from_ptr(graphdb::api::embedded::c_api::error::graphdb_error_string(
-            graphdb_error_code_t::GRAPHDB_OK as i32,
+        std::ffi::CStr::from_ptr(linkrs::api::embedded::c_api::error::linkrs_error_string(
+            linkrs_error_code_t::GRAPHDB_OK as i32,
         ))
     };
 
@@ -447,21 +447,21 @@ fn test_c_api_error_string() {
 #[test]
 fn test_c_api_error_codes() {
     let test_cases = vec![
-        (graphdb_error_code_t::GRAPHDB_OK as i32, "OK"),
-        (graphdb_error_code_t::GRAPHDB_ERROR as i32, "General error"),
-        (graphdb_error_code_t::GRAPHDB_MISUSE as i32, "Misuse"),
-        (graphdb_error_code_t::GRAPHDB_NOTFOUND as i32, "Not found"),
-        (graphdb_error_code_t::GRAPHDB_IOERR as i32, "IO error"),
+        (linkrs_error_code_t::GRAPHDB_OK as i32, "OK"),
+        (linkrs_error_code_t::GRAPHDB_ERROR as i32, "General error"),
+        (linkrs_error_code_t::GRAPHDB_MISUSE as i32, "Misuse"),
+        (linkrs_error_code_t::GRAPHDB_NOTFOUND as i32, "Not found"),
+        (linkrs_error_code_t::GRAPHDB_IOERR as i32, "IO error"),
         (
-            graphdb_error_code_t::GRAPHDB_CORRUPT as i32,
+            linkrs_error_code_t::GRAPHDB_CORRUPT as i32,
             "Data corruption",
         ),
-        (graphdb_error_code_t::GRAPHDB_NOMEM as i32, "Out of memory"),
+        (linkrs_error_code_t::GRAPHDB_NOMEM as i32, "Out of memory"),
     ];
 
     for (code, expected_desc) in test_cases {
         let error_str = unsafe {
-            std::ffi::CStr::from_ptr(graphdb::api::embedded::c_api::error::graphdb_error_string(
+            std::ffi::CStr::from_ptr(linkrs::api::embedded::c_api::error::linkrs_error_string(
                 code,
             ))
         };
@@ -479,7 +479,7 @@ fn test_c_api_error_codes() {
 fn test_c_api_errmsg() {
     let mut buffer = [0i8; 256];
     let len = unsafe {
-        graphdb::api::embedded::c_api::error::graphdb_errmsg(buffer.as_mut_ptr(), buffer.len())
+        linkrs::api::embedded::c_api::error::linkrs_errmsg(buffer.as_mut_ptr(), buffer.len())
     };
 
     // Verify that the returned length is reasonable.
@@ -498,7 +498,7 @@ fn test_c_api_free_string() {
 
     // Release the string
     unsafe {
-        graphdb::api::embedded::c_api::database::graphdb_free_string(ptr);
+        linkrs::api::embedded::c_api::database::linkrs_free_string(ptr);
     }
 }
 
@@ -511,7 +511,7 @@ fn test_c_api_free() {
 
     // Free up memory
     unsafe {
-        graphdb::api::embedded::c_api::database::graphdb_free(ptr);
+        linkrs::api::embedded::c_api::database::linkrs_free(ptr);
     }
 }
 

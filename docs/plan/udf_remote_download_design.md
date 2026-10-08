@@ -29,11 +29,11 @@ SQL: INSTALL EXTENSION <name> FROM '<source>'
 
 ### 1.2 硬约束
 
-1. **依赖 DAG 不可破坏**：`graphdb-query` 位于底层，
+1. **依赖 DAG 不可破坏**：`linkrs-query` 位于底层，
    `query -> api -> server`。`reqwest` 目前只在
-   `graphdb-server / vector-client / graphdb-cli / graphdb-embedding` 中使用，
-   `graphdb-query` 没有网络依赖。把重型 HTTP 客户端直接塞进
-   `graphdb-query` 会污染核心查询路径的编译体积与攻击面，应避免。
+   `linkrs-server / vector-client / linkrs-cli / linkrs-embedding` 中使用，
+   `linkrs-query` 没有网络依赖。把重型 HTTP 客户端直接塞进
+   `linkrs-query` 会污染核心查询路径的编译体积与攻击面，应避免。
 2. **Session 执行是同步的**：`execute_extension` 返回
    `CoreResult<QueryResult>`，跑在调用线程上。下载是阻塞 IO，
    必须有超时与大小上限，不能无界阻塞。
@@ -53,7 +53,7 @@ SQL: INSTALL EXTENSION <name> FROM '<source>'
 
 - 工作区已有 `reqwest 0.12`、`url`、`sha2`、`tempfile`（根依赖与 dev 依赖）、
   `tokio`（含 `time`，可做超时）、`log`。
-  `graphdb-migration/src/plan.rs` 已有 `sha2::Sha256` 使用先例。
+  `linkrs-migration/src/plan.rs` 已有 `sha2::Sha256` 使用先例。
 - `UdfError` 为 `thiserror` 枚举，扩展变体成本低；
   `to_expression_error()` 与 `CoreError::InvalidParameter` 映射链路已通。
 
@@ -81,7 +81,7 @@ SQL: INSTALL EXTENSION <name> FROM '<source>'
 ```text
 Session::install_extension(source, options)
   │
-  ├─ 1. Source 分类（loader 层，graphdb-query，无网络依赖）
+  ├─ 1. Source 分类（loader 层，linkrs-query，无网络依赖）
   │     本地路径 -> 直接 UdfLoader::load
   │     http(s)  -> 走 Repository 链路
   │
@@ -100,16 +100,16 @@ Session::install_extension(source, options)
 
 | 层次 | 放置内容 | 依赖 |
 |------|----------|------|
-| `graphdb-query`（udf 模块） | `Source` 分类、`ExtensionPolicy`（纯逻辑）、`Verifier`（sha256）、`Manifest` 解析、`UdfError` 新变体、溯源字段 | 新增 `url` + `sha2`（轻量，无网络）。**不引入 `reqwest`** |
-| `graphdb-query`（udf 模块） | `RepositoryFetcher` trait（`fetch(url) -> Vec<u8>/TempFile`） | 仅 trait，无实现 |
-| `graphdb-api` | `HttpRepositoryFetcher`（reqwest 实现）、`install_extension` 编排（锁外抓取 + 锁内提交） | `reqwest`（工作区已有） |
-| `graphdb-config` | `[extension]` 配置节（见第 6 节） | 既有 config 机制 |
-| `graphdb-server`（可选后置） | 异步卸载、审计日志落盘、metrics 暴露 | 既有 server 能力 |
+| `linkrs-query`（udf 模块） | `Source` 分类、`ExtensionPolicy`（纯逻辑）、`Verifier`（sha256）、`Manifest` 解析、`UdfError` 新变体、溯源字段 | 新增 `url` + `sha2`（轻量，无网络）。**不引入 `reqwest`** |
+| `linkrs-query`（udf 模块） | `RepositoryFetcher` trait（`fetch(url) -> Vec<u8>/TempFile`） | 仅 trait，无实现 |
+| `linkrs-api` | `HttpRepositoryFetcher`（reqwest 实现）、`install_extension` 编排（锁外抓取 + 锁内提交） | `reqwest`（工作区已有） |
+| `linkrs-config` | `[extension]` 配置节（见第 6 节） | 既有 config 机制 |
+| `linkrs-server`（可选后置） | 异步卸载、审计日志落盘、metrics 暴露 | 既有 server 能力 |
 
-这样 `graphdb-query` 保持可独立测试（用内存假 Fetcher），
-真正的网络实现只活在 `graphdb-api` 及以上层次，DAG 与编译隔离都成立。
+这样 `linkrs-query` 保持可独立测试（用内存假 Fetcher），
+真正的网络实现只活在 `linkrs-api` 及以上层次，DAG 与编译隔离都成立。
 
-被否决的备选：直接在 `graphdb-query` 加 `reqwest` 依赖。
+被否决的备选：直接在 `linkrs-query` 加 `reqwest` 依赖。
 否决理由：查询核心路径引入重型异步 HTTP 栈，编译时间、特性蔓延、
 安全审计面都不划算；且嵌入式用户可能根本不需要远程能力。
 
@@ -178,14 +178,14 @@ URL 直接指向动态库文件。调用方通过 `WITH (CHECKSUM ...)` 或配�
 
 ## 6. 配置设计
 
-在 `graphdb-config` 新增 `[extension]` 节（全部有安全默认值）：
+在 `linkrs-config` 新增 `[extension]` 节（全部有安全默认值）：
 
 ```toml
 [extension]
 # 总开关：关闭则 http(s) 源一律返回 RepoDownloadUnsupported（即现状行为）
 allow_remote = false
 # 扩展落盘目录；缺省为 <storage_path>/extensions
-extension_dir = "data/graphdb/extensions"
+extension_dir = "data/linkrs/extensions"
 # 域名白名单；为空表示拒绝所有远程源
 allowed_hosts = ["example.com"]
 # 是否允许 http 明文（默认 false，只允许 https；内网测试可显式打开）
@@ -210,7 +210,7 @@ signature_policy = "off"
 
 ## 7. 详细流程
 
-### 7.1 阶段一：分类与策略（锁外，`graphdb-query`）
+### 7.1 阶段一：分类与策略（锁外，`linkrs-query`）
 
 1. `install_from_source` 按 scheme 分类：
    - 本地路径 → 现有 `UdfLoader::load`。
@@ -225,7 +225,7 @@ signature_policy = "off"
    必须与加载后 `plugin.name()` 按 `to_uppercase()` 相等（沿用现有归一化），
    不一致则卸载已落盘文件并返回明确错误（防止“挂羊头卖狗肉”）。
 
-### 7.2 阶段二：下载（锁外，`graphdb-api` 的 Fetcher 实现）
+### 7.2 阶段二：下载（锁外，`linkrs-api` 的 Fetcher 实现）
 
 1. `reqwest::Client` 单例（复用连接池），配置：
    - `timeout(fetch_timeout_secs)`；

@@ -1,0 +1,294 @@
+//! Explicit freeze and unfreeze of edge-table groups per direction.
+//!
+//! Freezing packs one direction's group into the frozen form through the
+//! shard-set freeze, promoting reclaimed deletions into the visibility
+//! authority exactly like the group compaction path. Unfreezing rebuilds the
+//! mutable variant with the same logical content and no authority traffic.
+
+use super::core::EdgeStore;
+use crate::edge::FreezeFeasibility;
+use linkrs_core::types::{EdgeId, Timestamp};
+use linkrs_core::StorageResult;
+
+impl EdgeStore {
+    /// Read-only freeze outcome for one group of one direction.
+    ///
+    /// `outgoing` selects the out or in shard set. Runs the same gate
+    /// `freeze_group` enforces without touching state.
+    pub fn freeze_feasibility(&self, outgoing: bool, gid: usize) -> FreezeFeasibility {
+        if outgoing {
+            self.out_csr.freeze_feasibility(gid)
+        } else {
+            self.in_csr.freeze_feasibility(gid)
+        }
+    }
+
+    /// Freeze one group of one direction, returning its packed live count.
+    ///
+    /// `outgoing` selects the out or in shard set. Reclaimable tombstones
+    /// below `cutoff` are dropped first and reported into the visibility
+    /// authority; a maximum cutoff packs verbatim. The frozen group rejects
+    /// writes until explicitly unfrozen.
+    pub fn freeze_group(
+        &mut self,
+        outgoing: bool,
+        gid: usize,
+        cutoff: Timestamp,
+        reserve_ratio: f32,
+    ) -> StorageResult<u64> {
+        let packed = if outgoing {
+            let shards = &mut self.out_csr;
+            let mvcc = &mut self.mvcc;
+            shards.freeze_group(
+                gid,
+                cutoff,
+                reserve_ratio,
+                &mut |edge_id: EdgeId, delete_ts: Timestamp| {
+                    mvcc.record_deletion(edge_id, delete_ts);
+                },
+            )?
+        } else {
+            let shards = &mut self.in_csr;
+            let mvcc = &mut self.mvcc;
+            shards.freeze_group(
+                gid,
+                cutoff,
+                reserve_ratio,
+                &mut |edge_id: EdgeId, delete_ts: Timestamp| {
+                    mvcc.record_deletion(edge_id, delete_ts);
+                },
+            )?
+        };
+        let drift = self.audit_copy_drift();
+        if !drift.is_empty() {
+            return Err(linkrs_core::StorageError::data_corruption(format!(
+                "freeze_group drift after pack: {}",
+                drift.join("; ")
+            )));
+        }
+        Ok(packed)
+    }
+
+    /// Unfreeze one group of one direction, returning its restored live count.
+    pub fn unfreeze_group(&mut self, outgoing: bool, gid: usize) -> StorageResult<u64> {
+        if outgoing {
+            self.out_csr.unfreeze_group(gid)
+        } else {
+            self.in_csr.unfreeze_group(gid)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::edge::{EdgeRecord, EdgeSchema, EdgeStrategy, RecordForm};
+    use crate::types::StoragePropertyDef;
+    use linkrs_core::types::{DataType, Timestamp, VertexId};
+    use linkrs_core::Value;
+
+    use super::super::config::EdgeTableConfig;
+
+    fn frozen_test_schema() -> EdgeSchema {
+        EdgeSchema {
+            label_id: 0,
+            label_name: "knows".into(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![StoragePropertyDef {
+                name: "weight".into(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        }
+    }
+
+    fn sample_table() -> EdgeStore {
+        let mut table =
+            EdgeStore::with_config(frozen_test_schema(), EdgeTableConfig::default()).unwrap();
+        for src in 0..8u32 {
+            for k in 0..2u32 {
+                table
+                    .insert_edge(
+                        src,
+                        src + k + 1,
+                        0,
+                        &[("weight".into(), Value::Double(1.0))],
+                        100,
+                    )
+                    .unwrap();
+            }
+        }
+        assert!(table.delete_edge(0, 1, 0, 200).unwrap());
+        table
+    }
+
+    fn snapshot(table: &EdgeStore, ts: Timestamp) -> Vec<Vec<VertexId>> {
+        (0..8u32)
+            .map(|src| {
+                table
+                    .out_edges(src, ts)
+                    .into_iter()
+                    .map(|edge| edge.dst_vid)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn freeze_keeps_reads_and_rejects_writes() {
+        let mut table = sample_table();
+        let before_freeze = snapshot(&table, 300);
+        let before_old = snapshot(&table, 150);
+
+        let out_packed = table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+        let in_packed = table.freeze_group(false, 0, Timestamp::MAX, 0.0).unwrap();
+        assert_eq!(out_packed, 15);
+        assert_eq!(in_packed, 15);
+
+        assert_eq!(snapshot(&table, 300), before_freeze);
+        assert_eq!(snapshot(&table, 150), before_old);
+        assert!(table.has_edge(0, 2, 0, 300));
+        assert!(!table.has_edge(0, 1, 0, 300));
+        assert!(table.has_edge(0, 1, 0, 150));
+
+        assert!(table.insert_edge(1, 9, 0, &[], 400).is_err());
+        assert!(table.delete_edge(1, 2, 0, 400).is_err());
+
+        assert_eq!(table.unfreeze_group(true, 0).unwrap(), 15);
+        assert_eq!(table.unfreeze_group(false, 0).unwrap(), 15);
+        assert_eq!(snapshot(&table, 300), before_freeze);
+        table.insert_edge(1, 9, 0, &[], 400).unwrap();
+        assert!(table.has_edge(1, 9, 0, 400));
+    }
+
+    #[test]
+    fn freeze_guards_bad_states() {
+        let mut table = sample_table();
+        assert!(table.freeze_group(true, 41, Timestamp::MAX, 0.0).is_err());
+        assert!(table.unfreeze_group(true, 0).is_err());
+        table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+        assert!(table.freeze_group(true, 0, Timestamp::MAX, 0.0).is_err());
+    }
+
+    #[test]
+    fn valued_bundled_freeze_preserves_values() {
+        use crate::edge::RecordFormPreference;
+        let config = EdgeTableConfig {
+            record_form: RecordFormPreference::Bundled,
+            ..Default::default()
+        };
+        let mut bundled =
+            EdgeStore::with_config(frozen_test_schema(), config).expect("bundled table builds");
+        assert_eq!(bundled.schema().record_form, RecordForm::Bundled);
+        bundled
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.0))], 100)
+            .expect("valued insert");
+        assert!(bundled.freeze_feasibility(true, 0).is_ready());
+        assert!(bundled.freeze_feasibility(false, 0).is_ready());
+
+        let before: Vec<EdgeRecord> =
+            crate::edge::edge_table::iterator::EdgeTableScanIterator::new(&bundled, 200).collect();
+        assert_eq!(before.len(), 1);
+        bundled.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+        bundled.freeze_group(false, 0, Timestamp::MAX, 0.0).unwrap();
+        assert!(bundled.out_csr.is_frozen(0));
+        assert!(bundled.in_csr.is_frozen(0));
+
+        // Frozen reads serve the carried inline value on both legs.
+        let frozen: Vec<EdgeRecord> =
+            crate::edge::edge_table::iterator::EdgeTableScanIterator::new(&bundled, 200).collect();
+        assert_eq!(frozen.len(), 1);
+        assert_eq!(frozen[0].properties, before[0].properties);
+        assert_eq!(
+            bundled
+                .get_edge(0, 1, 0, 200)
+                .expect("frozen edge readable")
+                .properties,
+            vec![("weight".into(), Value::Double(1.0))]
+        );
+
+        // Writes stay rejected while frozen; unfreezing restores the live
+        // bundled group with values intact and writes working again.
+        assert!(bundled.insert_edge(1, 9, 0, &[], 400).is_err());
+        bundled.unfreeze_group(true, 0).unwrap();
+        bundled.unfreeze_group(false, 0).unwrap();
+        let after: Vec<EdgeRecord> =
+            crate::edge::edge_table::iterator::EdgeTableScanIterator::new(&bundled, 200).collect();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].properties, before[0].properties);
+        bundled
+            .insert_edge(1, 9, 0, &[("weight".into(), Value::Double(2.0))], 400)
+            .expect("writes resume after unfreeze");
+        assert_eq!(
+            bundled
+                .get_edge(1, 9, 0, 500)
+                .expect("new edge readable")
+                .properties,
+            vec![("weight".into(), Value::Double(2.0))]
+        );
+    }
+
+    #[test]
+    fn row_ordering_contract_mutable_unordered_frozen_sorted() {
+        use crate::edge::{EdgeSchema, EdgeStrategy, RecordForm};
+        use crate::types::StoragePropertyDef;
+        use linkrs_core::types::DataType;
+
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "ordered".into(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![StoragePropertyDef {
+                name: "weight".into(),
+                data_type: DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        };
+        let mut table = EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+        for dst in [3u32, 1, 2] {
+            table
+                .insert_edge(0, dst, 0, &[], 100)
+                .expect("insert out of key order");
+        }
+        // Mutable rows promise no order: insertion order is observed but the
+        // query layer must not depend on it.
+        let mutable_order: Vec<i64> = table
+            .out_edges(0, 200)
+            .iter()
+            .map(|e| e.dst_vid.as_int64().unwrap_or(-1))
+            .collect();
+        assert_eq!(mutable_order, vec![3, 1, 2]);
+
+        // Frozen rows promise (endpoint, rank, edge_id) order.
+        table.freeze_group(true, 0, Timestamp::MAX, 0.0).unwrap();
+        let frozen_order: Vec<i64> = table
+            .out_edges(0, 200)
+            .iter()
+            .map(|e| e.dst_vid.as_int64().unwrap_or(-1))
+            .collect();
+        assert_eq!(frozen_order, vec![1, 2, 3]);
+
+        // Unfrozen rows promise no order again: only the content set is
+        // pinned, never the sequence.
+        table.unfreeze_group(true, 0).unwrap();
+        let mut restored: Vec<i64> = table
+            .out_edges(0, 200)
+            .iter()
+            .map(|e| e.dst_vid.as_int64().unwrap_or(-1))
+            .collect();
+        restored.sort_unstable();
+        assert_eq!(restored, vec![1, 2, 3]);
+    }
+}

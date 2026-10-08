@@ -1,0 +1,248 @@
+use crate::parser::ast::pattern::Pattern;
+use crate::parser::ast::types::DataType;
+use linkrs_core::types::expr::contextual::ContextualExpression;
+use linkrs_core::types::{EdgeDirection, PropertyDef, Span};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateStmt {
+    pub span: Span,
+    pub target: CreateTarget,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CreateTarget {
+    Node {
+        variable: Option<String>,
+        labels: Vec<String>,
+        properties: Option<ContextualExpression>,
+    },
+    Edge {
+        variable: Option<String>,
+        edge_type: String,
+        src: ContextualExpression,
+        dst: ContextualExpression,
+        properties: Option<ContextualExpression>,
+        direction: EdgeDirection,
+    },
+    Path {
+        patterns: Vec<Pattern>,
+    },
+    Tag {
+        name: String,
+        properties: Vec<PropertyDef>,
+        ttl_duration: Option<i64>,
+        ttl_col: Option<String>,
+    },
+    EdgeType {
+        name: String,
+        properties: Vec<PropertyDef>,
+        ttl_duration: Option<i64>,
+        ttl_col: Option<String>,
+        src_tag: Option<String>,
+        dst_tag: Option<String>,
+    },
+    Space {
+        name: String,
+        vid_type: String,
+        comment: Option<String>,
+    },
+    Index {
+        index_type: IndexType,
+        name: String,
+        on: String,
+        properties: Vec<String>,
+    },
+    Sequence {
+        name: String,
+        start: Option<i64>,
+        increment: Option<i64>,
+        min_value: Option<i64>,
+        max_value: Option<i64>,
+        cycle: bool,
+    },
+    TagAsQuery {
+        name: String,
+        query_text: String,
+    },
+    EdgeAsQuery {
+        name: String,
+        query_text: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IndexType {
+    Tag,
+    Edge,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropStmt {
+    pub span: Span,
+    pub target: DropTarget,
+    pub if_exists: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DropTarget {
+    Space(String),
+    Tags(Vec<String>),
+    Edges(Vec<String>),
+    TagIndex {
+        space_name: String,
+        index_name: String,
+    },
+    EdgeIndex {
+        space_name: String,
+        index_name: String,
+    },
+    Sequence(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DescStmt {
+    pub span: Span,
+    pub target: DescTarget,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DescTarget {
+    Space(String),
+    Tag {
+        space_name: String,
+        tag_name: String,
+    },
+    Edge {
+        space_name: String,
+        edge_name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlterStmt {
+    pub span: Span,
+    pub target: AlterTarget,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyChange {
+    pub old_name: String,
+    pub new_name: String,
+    pub data_type: DataType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AlterTarget {
+    Tag {
+        tag_name: String,
+        additions: Vec<PropertyDef>,
+        deletions: Vec<String>,
+        changes: Vec<PropertyChange>,
+    },
+    Edge {
+        edge_name: String,
+        additions: Vec<PropertyDef>,
+        deletions: Vec<String>,
+        changes: Vec<PropertyChange>,
+    },
+    Space {
+        space_name: String,
+        comment: Option<String>,
+    },
+    Sequence {
+        name: String,
+        increment: Option<i64>,
+        min_value: Option<i64>,
+        max_value: Option<i64>,
+        cycle: Option<bool>,
+    },
+    RenameTag {
+        old_name: String,
+        new_name: String,
+    },
+    RenameEdge {
+        old_name: String,
+        new_name: String,
+    },
+    /// `ALTER EDGE <name> ADD FROM <src_tag> TO <dst_tag>` — add a src->dst
+    /// endpoint pair constraint to an existing edge type.
+    AddFrom {
+        edge_name: String,
+        src_tag: String,
+        dst_tag: String,
+    },
+    /// `ALTER EDGE <name> DROP FROM <src_tag> TO <dst_tag>` — remove a
+    /// previously declared src->dst endpoint pair constraint.
+    DropFrom {
+        edge_name: String,
+        src_tag: String,
+        dst_tag: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClearSpaceStmt {
+    pub span: Span,
+    pub space_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShowCreateStmt {
+    pub span: Span,
+    pub target: ShowCreateTarget,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShowCreateTarget {
+    Space(String),
+    Tag(String),
+    Edge(String),
+    Index(String),
+}
+
+/// `CREATE MACRO <name>(<params>) AS <body>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateMacroStmt {
+    pub span: Span,
+    pub name: String,
+    pub params: Vec<MacroParam>,
+    pub body: ContextualExpression,
+    pub if_not_exists: bool,
+}
+
+/// Parameter definition for a macro.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroParam {
+    pub name: String,
+    pub default_value: Option<ContextualExpression>,
+}
+
+/// `DROP MACRO <name>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropMacroStmt {
+    pub span: Span,
+    pub name: String,
+    pub if_exists: bool,
+}
+
+/// `CREATE TYPE <name> AS <type>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateTypeStmt {
+    pub span: Span,
+    pub name: String,
+    /// Parsed underlying type. `DataType::Unknown` when the underlying type
+    /// is an alias reference resolved later (plan time) via the type catalog.
+    pub underlying_type: DataType,
+    /// Raw underlying type text as written (builtin spelling or alias name).
+    pub underlying_type_text: String,
+    pub if_not_exists: bool,
+}
+
+/// `DROP TYPE <name>` statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropTypeStmt {
+    pub span: Span,
+    pub name: String,
+    pub if_exists: bool,
+}

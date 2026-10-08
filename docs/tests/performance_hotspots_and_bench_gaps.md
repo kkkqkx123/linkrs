@@ -1,7 +1,7 @@
 # 性能热点与基准测试覆盖缺口分析
 
 **日期**: 2026-10-02
-**范围**: 全工作区（graphdb-storage / graphdb-transaction / graphdb-query / graphdb-fulltext / vector-search / graphdb-server）
+**范围**: 全工作区（linkrs-storage / linkrs-transaction / linkrs-query / linkrs-fulltext / vector-search / linkrs-server）
 **说明**: 本文档基于当前代码库的静态排查，给出性能开销较大的环节定位与对应需要补充的基准测试。与 `docs/tests/benches/` 下早期路线图文档互补，不重复其内容。
 
 > **状态提示**: 本文记录的是 2026-10-02 的排查快照。随后多轮优化已落地，第一、三、四节中边属性读路径、提交临界区、WAL 同步三处均已改造（结论见 `docs/plan/performance_optimization_remaining_plan.md` 第六节）。下文保留原始定位与行号以便追溯，引用时请先核对当前代码。
@@ -16,10 +16,10 @@
 
 | 位置 | 问题 |
 |---|---|
-| `crates/graphdb-storage/src/edge/csr_with_properties/read.rs:92-152, 267-286` | 点读主路径 `get_projected_physical_by_edge_id`/批量版与 `read_properties_by_edge_id` 对每条边的每个非空属性克隆 schema 列名 `String`，并深拷贝 `Value`；遍历 expand 后逐边取属性时形成 O(列数 × 边数) 次堆分配 |
-| `crates/graphdb-storage/src/edge/csr_with_properties/transfer.rs:12-25` | `export_row`/`import_row` 克隆整行所有列名 + Value |
-| `crates/graphdb-storage/src/edge/csr_with_properties/mapping.rs:89-105` | 插入路径 `allocate_row` 每条边深拷贝完整属性值集 |
-| `crates/graphdb-storage/src/edge/csr_with_properties/encoding.rs:132-155, 166-199` | `auto_encode_properties`/`adapt_encodings_for_checkpoint` 将整列物化为 `Vec<Option<Value>>`，O(列大小) 克隆，且与持久化统计（min/max/HLL）冗余 |
+| `crates/linkrs-storage/src/edge/csr_with_properties/read.rs:92-152, 267-286` | 点读主路径 `get_projected_physical_by_edge_id`/批量版与 `read_properties_by_edge_id` 对每条边的每个非空属性克隆 schema 列名 `String`，并深拷贝 `Value`；遍历 expand 后逐边取属性时形成 O(列数 × 边数) 次堆分配 |
+| `crates/linkrs-storage/src/edge/csr_with_properties/transfer.rs:12-25` | `export_row`/`import_row` 克隆整行所有列名 + Value |
+| `crates/linkrs-storage/src/edge/csr_with_properties/mapping.rs:89-105` | 插入路径 `allocate_row` 每条边深拷贝完整属性值集 |
+| `crates/linkrs-storage/src/edge/csr_with_properties/encoding.rs:132-155, 166-199` | `auto_encode_properties`/`adapt_encodings_for_checkpoint` 将整列物化为 `Vec<Option<Value>>`，O(列大小) 克隆，且与持久化统计（min/max/HLL）冗余 |
 
 **方向**: 属性名改用 `Arc<str>`/借用投影；编码选择复用 `ColumnStatsSnapshot`。
 
@@ -38,11 +38,11 @@
 
 | 位置 | 问题 |
 |---|---|
-| `crates/graphdb-transaction/src/certify.rs:130-133` | 全局 `commit_lock: Mutex<()>`，所有并发写事务在 check-then-publish 临界区串行化（WAL fsync 已在锁外，但临界区本身不分片） |
-| `crates/graphdb-transaction/src/certify.rs:414-417, 537` | Serializable 路径对 `committed_write_sets: Mutex<Vec<...>>` 做 O(N) 线性扫描；应改为按 commit_ts 排序的 BTreeMap 范围查询 |
-| `crates/graphdb-transaction/src/recovery.rs:221-224` | `take_pending` 用 `position` + `remove` 在 pending Vec 中 O(n) 扫描 |
-| `crates/graphdb-transaction/src/mvcc.rs:502-518` | `reap_expired_write_states` 持锁全量遍历 write_states |
-| `crates/graphdb-transaction/src/wal/parser.rs:760-762` | `get_entry_by_lsn` 对全部 WAL 条目线性查找，应改 BTreeMap |
+| `crates/linkrs-transaction/src/certify.rs:130-133` | 全局 `commit_lock: Mutex<()>`，所有并发写事务在 check-then-publish 临界区串行化（WAL fsync 已在锁外，但临界区本身不分片） |
+| `crates/linkrs-transaction/src/certify.rs:414-417, 537` | Serializable 路径对 `committed_write_sets: Mutex<Vec<...>>` 做 O(N) 线性扫描；应改为按 commit_ts 排序的 BTreeMap 范围查询 |
+| `crates/linkrs-transaction/src/recovery.rs:221-224` | `take_pending` 用 `position` + `remove` 在 pending Vec 中 O(n) 扫描 |
+| `crates/linkrs-transaction/src/mvcc.rs:502-518` | `reap_expired_write_states` 持锁全量遍历 write_states |
+| `crates/linkrs-transaction/src/wal/parser.rs:760-762` | `get_entry_by_lsn` 对全部 WAL 条目线性查找，应改 BTreeMap |
 
 ### 4. 每次写入同步 fsync（存储层 WAL）
 
@@ -50,39 +50,39 @@
 
 | 位置 | 问题 |
 |---|---|
-| `crates/graphdb-storage/src/edge/edge_table/wal.rs:112-138` | `append_ops` 每次追加后 `sync_all()`，无组提交 |
-| `crates/graphdb-storage/src/index/wal.rs:209-217` | 索引 WAL 每次追加 flush + `sync_all()` |
-| `crates/graphdb-storage/src/persistence.rs:91-105` | 原子写临时文件 + 父目录双 `sync_all()`，频繁元数据路径开销大 |
+| `crates/linkrs-storage/src/edge/edge_table/wal.rs:112-138` | `append_ops` 每次追加后 `sync_all()`，无组提交 |
+| `crates/linkrs-storage/src/index/wal.rs:209-217` | 索引 WAL 每次追加 flush + `sync_all()` |
+| `crates/linkrs-storage/src/persistence.rs:91-105` | 原子写临时文件 + 父目录双 `sync_all()`，频繁元数据路径开销大 |
 
-**对照**: 主引擎 `crates/graphdb-storage/src/engine/wal_manager.rs:220-242` 已实现组提交（写锁先释放再做持久化等待），上述 WAL 未采用该模式——这是明确可复制到同层的现成方案。
+**对照**: 主引擎 `crates/linkrs-storage/src/engine/wal_manager.rs:220-242` 已实现组提交（写锁先释放再做持久化等待），上述 WAL 未采用该模式——这是明确可复制到同层的现成方案。
 
 ### 5. 全文检索管理器的全局锁（fulltext）
 
 | 位置 | 问题 |
 |---|---|
-| `crates/graphdb-fulltext/src/manager.rs:32, 544-552` | 每次搜索读取 `Mutex<Option<Arc<StatsManager>>>`，全局互斥锁只读操作，应改 `RwLock`/`OnceLock`/`ArcSwap` |
-| `crates/graphdb-fulltext/src/manager.rs:34-38` | 单索引 publish fence：投递路径持读锁应用批次，重建发布持写锁跨越"最终追赶回放 + 引擎切换"长 I/O+计算段，阻塞该索引全部并发投递 |
+| `crates/linkrs-fulltext/src/manager.rs:32, 544-552` | 每次搜索读取 `Mutex<Option<Arc<StatsManager>>>`，全局互斥锁只读操作，应改 `RwLock`/`OnceLock`/`ArcSwap` |
+| `crates/linkrs-fulltext/src/manager.rs:34-38` | 单索引 publish fence：投递路径持读锁应用批次，重建发布持写锁跨越"最终追赶回放 + 引擎切换"长 I/O+计算段，阻塞该索引全部并发投递 |
 
 ### 6. 查询执行器逐项分配（query）
 
 | 位置 | 问题 |
 |---|---|
-| `crates/graphdb-query/src/executor/streaming/chunk/core.rs:293-296` | `DataChunk::from_batch` 每批做行列转置物化（代码注释自述"在 chunk 列式化前仍需转置"），下游为列式时白费 |
-| `crates/graphdb-query/src/executor/streaming/chunk/eval.rs:128-133` | 每个表达式每次求值克隆 selection 向量 |
-| `crates/graphdb-query/src/executor/streaming/helpers/accumulator_states.rs:614-636` | percentile/median 每组 `to_vec()` + 全排序，O(n log n)/组 |
-| `crates/graphdb-query/src/executor/expression/evaluator/operations.rs:480, 515, 522`、`utility.rs:267-280, 539-544` | JSON 路径访问/拼接逐行 `serde_json::to_string` 往返 |
-| `crates/graphdb-core/src/value/geography.rs:1164-1166` | `to_geojson_string` 每次调用序列化，位于属性读取路径 |
+| `crates/linkrs-query/src/executor/streaming/chunk/core.rs:293-296` | `DataChunk::from_batch` 每批做行列转置物化（代码注释自述"在 chunk 列式化前仍需转置"），下游为列式时白费 |
+| `crates/linkrs-query/src/executor/streaming/chunk/eval.rs:128-133` | 每个表达式每次求值克隆 selection 向量 |
+| `crates/linkrs-query/src/executor/streaming/helpers/accumulator_states.rs:614-636` | percentile/median 每组 `to_vec()` + 全排序，O(n log n)/组 |
+| `crates/linkrs-query/src/executor/expression/evaluator/operations.rs:480, 515, 522`、`utility.rs:267-280, 539-544` | JSON 路径访问/拼接逐行 `serde_json::to_string` 往返 |
+| `crates/linkrs-core/src/value/geography.rs:1164-1166` | `to_geojson_string` 每次调用序列化，位于属性读取路径 |
 
 ### 7. 服务端（较轻）
 
-- `crates/graphdb-server/src/http/handlers/rebuild.rs:189, 441`：请求路径持读锁克隆 storage handle（若为 Arc 则廉价，但模式待确认）。
-- `crates/graphdb-api/src/embedded/result.rs:110-123`：结果转换用 `to_string_pretty`，嵌入式 API 每次调用 pretty-print。
+- `crates/linkrs-server/src/http/handlers/rebuild.rs:189, 441`：请求路径持读锁克隆 storage handle（若为 Arc 则廉价，但模式待确认）。
+- `crates/linkrs-api/src/embedded/result.rs:110-123`：结果转换用 `to_string_pretty`，嵌入式 API 每次调用 pretty-print。
 - HTTP 热点处理器本身较薄（axum Json），主要 JSON 开销在查询执行器（§6）。
 
 ### 8. 其他次要项
 
-- `crates/graphdb-storage/src/edge/pure_csr/maintenance.rs:74`：排序校验克隆整个活跃邻接切片，可单趟判断有序性。
-- `crates/graphdb-storage/src/index/shard_runtime/shard.rs:469`：分片 WAL 缓冲单互斥锁，追加与 checkpoint 争用。
+- `crates/linkrs-storage/src/edge/pure_csr/maintenance.rs:74`：排序校验克隆整个活跃邻接切片，可单趟判断有序性。
+- `crates/linkrs-storage/src/index/shard_runtime/shard.rs:469`：分片 WAL 缓冲单互斥锁，追加与 checkpoint 争用。
 
 ---
 

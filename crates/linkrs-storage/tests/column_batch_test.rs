@@ -1,0 +1,471 @@
+//! A1 column-block path correctness: `next_column_batch` must produce rows
+//! identical to the row-based `next_flat_batch` path across projections,
+//! nulls, pushed predicates, and partition ranges.
+
+use std::sync::Arc;
+
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, StorageError, Value, Vertex};
+use linkrs_storage::{
+    open_edge_scan, open_vertex_scan, GraphStorage, RequiredProperty, ScanOptions, ScanPredicate,
+    StorageSchemaOps, StorageWriter, VertexColumnBatch,
+};
+use parking_lot::RwLock;
+
+fn setup_storage(nullable: bool) -> Arc<RwLock<GraphStorage>> {
+    let mut storage = GraphStorage::new().expect("storage init");
+    let mut space = SpaceInfo::new("t".to_string()).with_vid_type(DataType::BigInt);
+    storage.create_space(&mut space).unwrap();
+    storage
+        .create_tag(
+            "t",
+            &TagInfo::new("Node".to_string()).with_properties(vec![
+                PropertyDef::new("value".into(), DataType::BigInt).with_nullable(nullable),
+                PropertyDef::new("group".into(), DataType::BigInt).with_nullable(nullable),
+                PropertyDef::new("name".into(), DataType::String).with_nullable(nullable),
+            ]),
+        )
+        .unwrap();
+    storage
+        .create_edge_type(
+            "t",
+            &EdgeTypeInfo::new("Link".to_string())
+                .with_src_tag("Node".to_string())
+                .with_dst_tag("Node".to_string()),
+        )
+        .unwrap();
+    let mut vertices = Vec::new();
+    for i in 0..500i64 {
+        let mut props: Vec<(Arc<str>, Value)> = vec![
+            (Arc::from("value"), Value::BigInt(i)),
+            (Arc::from("group"), Value::BigInt(i % 7)),
+            (Arc::from("name"), Value::string(format!("node_{i}"))),
+        ];
+        // The primary key column (`value`) must mirror the vertex id and can
+        // never be null, so the nullable path is exercised on `group`.
+        if nullable && i % 3 == 0 {
+            props[1] = (
+                Arc::from("group"),
+                Value::Null(linkrs_core::value::NullType::Null),
+            );
+        }
+        vertices.push(Vertex::new(
+            VertexId::try_from_int64(i).expect("test vertex id"),
+            Tag::new("Node".into(), props.into_iter().collect()),
+        ));
+    }
+    storage.batch_insert_vertices("t", vertices).unwrap();
+    Arc::new(RwLock::new(storage))
+}
+
+fn options(projection: Vec<&str>, range: Option<std::ops::Range<i64>>) -> ScanOptions {
+    let mut opts = ScanOptions::new();
+    if !projection.is_empty() {
+        opts.projection = Some(
+            projection
+                .into_iter()
+                .map(|n| RequiredProperty::new(n.to_string()))
+                .collect(),
+        );
+    }
+    if let Some(r) = range {
+        opts.vertex_id_range = Some(r);
+    }
+    opts.column_block_mode = true;
+    opts
+}
+
+fn drain_columns(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec<Vec<Value>> {
+    let prop_names: Vec<Arc<str>> = opts
+        .projection
+        .as_ref()
+        .map(|p| p.iter().map(|rp| Arc::from(&*rp.name)).collect())
+        .unwrap_or_default();
+    let mut cursor = open_vertex_scan(storage, "t", opts).expect("open cursor");
+    let mut out = Vec::new();
+    loop {
+        let batch = cursor
+            .next_column_batch(&prop_names, 128)
+            .expect("column batch");
+        if batch.is_empty() {
+            break;
+        }
+        for row in 0..batch.len() {
+            let mut rec = vec![Value::from(batch.vids[row])];
+            for col in &batch.columns {
+                rec.push(
+                    col.values
+                        .value_at(row)
+                        .unwrap_or(Value::Null(linkrs_core::value::NullType::Null)),
+                );
+            }
+            out.push(rec);
+        }
+    }
+    out
+}
+
+fn drain_rows(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec<Vec<Value>> {
+    // Canonical column order for normalization (matches the schema).
+    let all_columns = [Arc::from("value"), Arc::from("group"), Arc::from("name")];
+    let columns: Vec<Arc<str>> = match opts.projection.as_ref() {
+        Some(projection) => projection.iter().map(|rp| rp.name.clone()).collect(),
+        None => all_columns.to_vec(),
+    };
+    let mut cursor = open_vertex_scan(storage, "t", opts).expect("open cursor");
+    let mut out = Vec::new();
+    loop {
+        let batch = cursor.next_flat_batch(128).expect("flat batch");
+        if batch.is_empty() {
+            break;
+        }
+        for rec in batch {
+            let mut row = vec![Value::from(rec.vid)];
+            for name in &columns {
+                row.push(
+                    rec.props
+                        .iter()
+                        .find(|(n, _)| n == name)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or(Value::Null(linkrs_core::value::NullType::Null)),
+                );
+            }
+            out.push(row);
+        }
+    }
+    out
+}
+
+#[test]
+fn column_batch_matches_row_path_all_columns() {
+    let storage = setup_storage(false);
+    let opts = options(vec![], None);
+    assert_eq!(drain_columns(&storage, &opts), drain_rows(&storage, &opts));
+}
+
+#[test]
+fn column_batch_matches_row_path_projection() {
+    let storage = setup_storage(false);
+    let opts = options(vec!["value", "name"], None);
+    assert_eq!(drain_columns(&storage, &opts), drain_rows(&storage, &opts));
+}
+
+#[test]
+fn column_batch_matches_row_path_with_nulls() {
+    let storage = setup_storage(true);
+    let opts = options(vec![], None);
+    assert_eq!(drain_columns(&storage, &opts), drain_rows(&storage, &opts));
+}
+
+#[test]
+fn column_batch_matches_row_path_with_range() {
+    let storage = setup_storage(false);
+    let opts = options(vec![], Some(100..300));
+    assert_eq!(drain_columns(&storage, &opts), drain_rows(&storage, &opts));
+}
+
+#[test]
+fn column_batch_matches_row_path_with_predicate() {
+    let storage = setup_storage(false);
+    let mut opts = options(vec![], None);
+    opts.predicate = Some(vec![ScanPredicate::ColumnRange {
+        column: "value".into(),
+        lower: None,
+        upper: Some(Value::BigInt(200)),
+        include_lower: false,
+        include_upper: false,
+    }]);
+    assert_eq!(drain_columns(&storage, &opts), drain_rows(&storage, &opts));
+}
+
+#[test]
+fn column_batch_selective_predicate_does_not_end_scan_early() {
+    // Very selective predicate: most rows are filtered, and some windows are
+    // entirely filtered out. The scan must still return every matching row.
+    let storage = setup_storage(false);
+    let mut opts = options(vec![], None);
+    opts.predicate = Some(vec![ScanPredicate::ColumnEqual {
+        column: "value".into(),
+        value: Value::BigInt(7),
+    }]);
+    let columns = drain_columns(&storage, &opts);
+    assert_eq!(columns.len(), 1);
+    assert_eq!(
+        columns[0][0],
+        Value::from(VertexId::try_from_int64(7).expect("test vertex id"))
+    );
+}
+
+#[test]
+fn column_batch_limit_with_predicate() {
+    // Limit applies to the returned (predicate-filtered) rows, so a window
+    // whose rows are all filtered does not consume the limit budget.
+    let storage = setup_storage(false);
+    let mut opts = options(vec![], None);
+    opts.predicate = Some(vec![ScanPredicate::ColumnRange {
+        column: "value".into(),
+        lower: Some(Value::BigInt(10)),
+        upper: Some(Value::BigInt(500)),
+        include_lower: true,
+        include_upper: false,
+    }]);
+    opts.limit = Some(20);
+    let mut cursor = open_vertex_scan(&storage, "t", &opts).expect("open cursor");
+    let mut total = 0usize;
+    loop {
+        let batch = cursor.next_column_batch(&[], 128).expect("batch");
+        if batch.is_empty() {
+            break;
+        }
+        total += batch.len();
+    }
+    assert_eq!(total, 20);
+}
+
+#[test]
+fn column_batch_typed_columns_are_scalar() {
+    let storage = setup_storage(false);
+    let opts = options(vec!["value", "group"], None);
+    let mut cursor = open_vertex_scan(&storage, "t", &opts).expect("open cursor");
+    let batch = cursor
+        .next_column_batch(&[Arc::from("value"), Arc::from("group")], 64)
+        .expect("batch");
+    assert_eq!(batch.len(), 64);
+    assert_eq!(batch.columns.len(), 2);
+    assert!(matches!(
+        batch.columns[0].values,
+        linkrs_storage::ColumnValues::I64 { .. }
+    ));
+    assert!(matches!(
+        batch.columns[1].values,
+        linkrs_storage::ColumnValues::I64 { .. }
+    ));
+    let _ = batch;
+}
+
+#[test]
+fn column_batch_exhaustion_and_limit() {
+    let storage = setup_storage(false);
+    let mut opts = options(vec![], None);
+    opts.limit = Some(250);
+    let mut cursor = open_vertex_scan(&storage, "t", &opts).expect("open cursor");
+    let mut total = 0usize;
+    loop {
+        let batch = cursor.next_column_batch(&[], 128).expect("batch");
+        if batch.is_empty() {
+            break;
+        }
+        total += batch.len();
+    }
+    assert_eq!(total, 250);
+}
+
+#[allow(dead_code)]
+fn _silence_unused() -> Option<StorageError> {
+    None
+}
+
+#[allow(dead_code)]
+fn _unused(_: VertexColumnBatch) {}
+
+fn setup_edge_storage() -> Arc<RwLock<GraphStorage>> {
+    use linkrs_core::Edge;
+    let mut storage = GraphStorage::new().expect("storage init");
+    let mut space = SpaceInfo::new("t".to_string()).with_vid_type(DataType::BigInt);
+    storage.create_space(&mut space).unwrap();
+    storage
+        .create_tag(
+            "t",
+            &TagInfo::new("Node".to_string()).with_properties(vec![PropertyDef::new(
+                "value".to_string(),
+                DataType::BigInt,
+            )]),
+        )
+        .unwrap();
+    storage
+        .create_edge_type(
+            "t",
+            &EdgeTypeInfo::new("Link".to_string())
+                .with_src_tag("Node".to_string())
+                .with_dst_tag("Node".to_string())
+                .with_properties(vec![
+                    PropertyDef::new("weight".into(), DataType::Double),
+                    PropertyDef::new("label".into(), DataType::String),
+                ]),
+        )
+        .unwrap();
+    let vertices: Vec<Vertex> = (0..10i64)
+        .map(|i| {
+            Vertex::new(
+                VertexId::try_from_int64(i).expect("test vertex id"),
+                Tag::new(
+                    "Node".to_string(),
+                    vec![("value".into(), Value::BigInt(i))]
+                        .into_iter()
+                        .collect(),
+                ),
+            )
+        })
+        .collect();
+    storage.batch_insert_vertices("t", vertices).unwrap();
+    let mut edges = Vec::new();
+    for i in 0..8i64 {
+        let mut edge = Edge::new_empty(
+            VertexId::try_from_int64(i).expect("test vertex id"),
+            VertexId::try_from_int64((i + 1) % 10).expect("test vertex id"),
+            "Link".to_string(),
+            0,
+        );
+        edge.set_property("weight".into(), Value::Double(i as f64 * 1.5));
+        edge.set_property("label".into(), Value::string(format!("e{i}")));
+        edges.push(edge);
+    }
+    storage.batch_insert_edges("t", edges).unwrap();
+    Arc::new(RwLock::new(storage))
+}
+
+fn edge_options() -> ScanOptions {
+    let mut opts = ScanOptions::new();
+    opts.edge_type = Some("Link".to_string());
+    opts.column_block_mode = true;
+    opts
+}
+
+fn drain_edge_columns(
+    storage: &Arc<RwLock<GraphStorage>>,
+    opts: &ScanOptions,
+    prop_names: &[Arc<str>],
+) -> Vec<Vec<Value>> {
+    let mut cursor = open_edge_scan(storage, "t", opts).expect("open edge cursor");
+    let mut out = Vec::new();
+    loop {
+        let batch = cursor
+            .next_column_batch(prop_names, 4)
+            .expect("edge column batch");
+        if batch.is_empty() {
+            break;
+        }
+        for row in 0..batch.len() {
+            let mut rec = vec![Value::from(batch.srcs[row]), Value::from(batch.dsts[row])];
+            for col in &batch.columns {
+                rec.push(
+                    col.values
+                        .value_at(row)
+                        .unwrap_or(Value::Null(linkrs_core::value::NullType::Null)),
+                );
+            }
+            out.push(rec);
+        }
+    }
+    out.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    out
+}
+
+fn drain_edge_rows(storage: &Arc<RwLock<GraphStorage>>, opts: &ScanOptions) -> Vec<Vec<Value>> {
+    let prop_names: Vec<Arc<str>> = opts
+        .projection
+        .as_ref()
+        .map(|p| p.iter().map(|rp| Arc::from(&*rp.name)).collect())
+        .unwrap_or_else(|| vec![Arc::from("weight"), Arc::from("label")]);
+    let mut cursor = open_edge_scan(storage, "t", opts).expect("open edge cursor");
+    let mut out = Vec::new();
+    loop {
+        let batch = cursor.next_batch(4).expect("edge batch");
+        if batch.is_empty() {
+            break;
+        }
+        for edge in batch {
+            let mut rec = vec![Value::from(edge.src), Value::from(edge.dst)];
+            for name in &prop_names {
+                rec.push(
+                    edge.props
+                        .get(name)
+                        .cloned()
+                        .unwrap_or(Value::Null(linkrs_core::value::NullType::Null)),
+                );
+            }
+            out.push(rec);
+        }
+    }
+    out.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    out
+}
+
+#[test]
+fn edge_column_batch_matches_row_path() {
+    let storage = setup_edge_storage();
+    let mut opts = edge_options();
+    opts.projection = Some(
+        vec![Arc::from("weight"), Arc::from("label")]
+            .into_iter()
+            .map(RequiredProperty::new)
+            .collect(),
+    );
+    let prop_names = vec![Arc::from("weight"), Arc::from("label")];
+    assert_eq!(
+        drain_edge_columns(&storage, &opts, &prop_names),
+        drain_edge_rows(&storage, &opts)
+    );
+}
+
+#[test]
+fn edge_column_batch_predicate_matches_row_path() {
+    let storage = setup_edge_storage();
+    {
+        let mut guard = storage.write();
+        guard
+            .delete_edge(
+                "t",
+                &VertexId::try_from_int64(0).expect("test vertex id"),
+                &VertexId::try_from_int64(1).expect("test vertex id"),
+                "Link",
+                0,
+            )
+            .expect("delete");
+    }
+    let mut opts = edge_options();
+    opts.projection = Some(
+        vec![Arc::from("weight")]
+            .into_iter()
+            .map(RequiredProperty::new)
+            .collect(),
+    );
+    opts.predicate = Some(vec![ScanPredicate::ColumnRange {
+        column: "weight".into(),
+        lower: Some(Value::Double(3.0)),
+        upper: None,
+        include_lower: true,
+        include_upper: true,
+    }]);
+    let prop_names = vec![Arc::from("weight")];
+    assert_eq!(
+        drain_edge_columns(&storage, &opts, &prop_names),
+        drain_edge_rows(&storage, &opts)
+    );
+}
+
+#[test]
+fn edge_column_batch_string_fallback_matches_row_path() {
+    let storage = setup_edge_storage();
+    let mut opts = edge_options();
+    opts.projection = Some(
+        vec![Arc::from("label")]
+            .into_iter()
+            .map(RequiredProperty::new)
+            .collect(),
+    );
+    let prop_names = vec![Arc::from("label")];
+    let columns = drain_edge_columns(&storage, &opts, &prop_names);
+    let rows = drain_edge_rows(&storage, &opts);
+    assert_eq!(columns, rows);
+    let mut cursor = open_edge_scan(&storage, "t", &opts).expect("open edge cursor");
+    let batch = cursor
+        .next_column_batch(&prop_names, 8)
+        .expect("edge batch");
+    assert!(!batch.is_empty());
+    assert!(matches!(
+        batch.columns[0].values,
+        linkrs_storage::ColumnValues::General(_)
+    ));
+}

@@ -2,10 +2,10 @@
 //!
 //! Tests for basic transaction synchronization functionality
 
-use graphdb::core::types::{DataType, VertexId};
-use graphdb::core::Value;
-use graphdb::storage::{StorageReader, StorageSchemaOps, StorageWriter};
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
+use linkrs::core::types::{DataType, VertexId};
+use linkrs::core::Value;
+use linkrs::storage::{StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::collections::HashMap;
 
 /// TC-001: Transaction vertex insert sync
@@ -65,7 +65,7 @@ fn test_transaction_vertex_insert_sync() {
     assert!(!results.is_empty(), "Fulltext index should be synced");
     // Results may contain multiple matches for the same document (different fields)
     // Check that we have at least one result with the correct doc_id
-    use graphdb::core::Value;
+    use linkrs::core::Value;
     let unique_docs: std::collections::HashSet<_> = results.iter().map(|r| &r.doc_id).collect();
     assert_eq!(unique_docs.len(), 1, "Should find exactly one document");
     assert!(
@@ -395,7 +395,7 @@ fn test_transaction_edge_insert_sync() {
         .expect("Failed to create tag");
 
     // Create edge type
-    let edge_info = graphdb::core::types::EdgeTypeInfo::new("KNOWS".to_string());
+    let edge_info = linkrs::core::types::EdgeTypeInfo::new("KNOWS".to_string());
     harness
         .storage
         .create_edge_type("test_space", &edge_info)
@@ -416,7 +416,7 @@ fn test_transaction_edge_insert_sync() {
         .begin_transaction()
         .expect("Failed to begin transaction");
 
-    let edge = graphdb::core::Edge::new(
+    let edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
@@ -473,10 +473,10 @@ fn test_transaction_edge_with_properties_sync() {
         .expect("Failed to create Company tag");
 
     // Create edge type with properties
-    let edge_info = graphdb::core::types::EdgeTypeInfo::new("WORKS_AT".to_string())
+    let edge_info = linkrs::core::types::EdgeTypeInfo::new("WORKS_AT".to_string())
         .with_properties(vec![
-            graphdb::core::types::PropertyDef::new("position".to_string(), DataType::String),
-            graphdb::core::types::PropertyDef::new("since".to_string(), DataType::Int),
+            linkrs::core::types::PropertyDef::new("position".to_string(), DataType::String),
+            linkrs::core::types::PropertyDef::new("since".to_string(), DataType::Int),
         ]);
     harness
         .storage
@@ -502,7 +502,7 @@ fn test_transaction_edge_with_properties_sync() {
     edge_props.insert("position".to_string(), Value::string("Engineer"));
     edge_props.insert("since".to_string(), Value::Int(2020));
 
-    let edge = graphdb::core::Edge::new(
+    let edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(100).expect("test vertex id"),
         "WORKS_AT".to_string(),

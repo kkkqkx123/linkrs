@@ -153,7 +153,7 @@ Phase 2 召回测试与后续调优议题，不影响本轮正确性结论。
 默认关闭（feature `lock-metrics`），开启方式：
 
 ```shell
-cargo build --release -p graphdb-server --features vector-search/lock-metrics
+cargo build --release -p linkrs-server --features vector-search/lock-metrics
 ```
 
 验收口径（改进方案 §2.1.1）：开启后并发吞吐回退 < 5%。本机

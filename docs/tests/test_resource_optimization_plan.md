@@ -2,7 +2,7 @@
 
 ## 问题背景
 
-运行集成测试（特别是 `cargo test --test integration_dql -p graphdb-query`）时，系统因磁盘 I/O 和内存耗尽而崩溃。
+运行集成测试（特别是 `cargo test --test integration_dql -p linkrs-query`）时，系统因磁盘 I/O 和内存耗尽而崩溃。
 
 ### 根因
 
@@ -18,8 +18,8 @@
 | 层级 | 测试数 | DB 实例数 |
 |------|--------|-----------|
 | 根 `tests/` | ~625 | ~500 |
-| `crates/graphdb-query/tests/` | ~955 | ~800 |
-| `crates/graphdb-storage/tests/` | 50 | 50 |
+| `crates/linkrs-query/tests/` | ~955 | ~800 |
+| `crates/linkrs-storage/tests/` | 50 | 50 |
 | 其他 | ~50 | ~20 |
 | **总计** | **~1633** | **~1400** |
 
@@ -33,7 +33,7 @@
 
 **目标**：将测试实例的缓存上限从 128 MB 降至 8 MB，极大降低内存压力。
 
-**修改 `graphdb-storage`**：
+**修改 `linkrs-storage`**：
 
 在 `PropertyGraphConfig` 中新增 `test()` 方法：
 
@@ -72,11 +72,11 @@ let storage = Arc::new(RwLock::new(
 
 ### 2. 统一 TestStorage（高优先级）
 
-**问题**：`tests/common/mod.rs` 和 `crates/graphdb-query/tests/common/mod.rs` 存在两份完全相同的 `TestStorage` 实现，仅 import 路径不同。
+**问题**：`tests/common/mod.rs` 和 `crates/linkrs-query/tests/common/mod.rs` 存在两份完全相同的 `TestStorage` 实现，仅 import 路径不同。
 
-**方案**：将 `tests/common/` 提取为独立 crate `graphdb-test-utils`，两个位置都依赖它。
+**方案**：将 `tests/common/` 提取为独立 crate `linkrs-test-utils`，两个位置都依赖它。
 
-或者更简单的方案：让 `crates/graphdb-query/tests/common/mod.rs` 直接 `use graphdb::...` 重用根级实现。
+或者更简单的方案：让 `crates/linkrs-query/tests/common/mod.rs` 直接 `use linkrs::...` 重用根级实现。
 
 ### 3. 内存模式 vs 持久化模式（中优先级）
 

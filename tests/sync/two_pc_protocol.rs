@@ -2,9 +2,9 @@
 //!
 //! Tests for two-phase commit protocol implementation
 
-use graphdb::core::types::{DataType, TransactionId};
-use graphdb::core::Value;
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
+use linkrs::core::types::{DataType, TransactionId};
+use linkrs::core::Value;
+use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -14,13 +14,13 @@ fn create_harness_with_paths(
     db_path: &Path,
     index_path: &Path,
 ) -> Result<SyncTestHarness, Box<dyn std::error::Error>> {
-    use graphdb::search::{
+    use linkrs::search::{
         EngineType, FulltextConfig, FulltextIndexManager, SyncConfig, TantivyConfig, TokenizerKind,
     };
-    use graphdb::storage::GraphStorage;
-    use graphdb::sync::batch::BatchConfig;
-    use graphdb::sync::coordinator::SyncCoordinator;
-    use graphdb::sync::manager::SyncManager;
+    use linkrs::storage::GraphStorage;
+    use linkrs::sync::batch::BatchConfig;
+    use linkrs::sync::coordinator::SyncCoordinator;
+    use linkrs::sync::manager::SyncManager;
     use std::time::Duration;
 
     // Create storage
@@ -50,7 +50,7 @@ fn create_harness_with_paths(
         max_buffer_size: 1000,
         enable_persistence: false,
         persistence_path: None,
-        failure_policy: graphdb::search::SyncFailurePolicy::FailOpen,
+        failure_policy: linkrs::search::SyncFailurePolicy::FailOpen,
     };
 
     let sync_coordinator = Arc::new(SyncCoordinator::new(fulltext_manager.clone(), batch_config));

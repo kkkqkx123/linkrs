@@ -1,14 +1,14 @@
-# GraphDB 配置参考手册
+# Linkrs 配置参考手册
 
 ## 概述
 
-本文档详细说明 GraphDB 的所有配置项，包括默认值、实际效果和配置建议。配置项与 `graphdb-config` crate 中的定义一一对应。
+本文档详细说明 Linkrs 的所有配置项，包括默认值、实际效果和配置建议。配置项与 `linkrs-config` crate 中的定义一一对应。
 
 ---
 
 ## 配置文件结构
 
-GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`。配置文件包含以下主要部分：
+Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`。配置文件包含以下主要部分：
 
 - `[database]` - 数据库基础配置
 - `[transaction]` - 事务管理配置
@@ -36,7 +36,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - **类型**: String
 - **默认值**: `"127.0.0.1"`
 - **说明**: 数据库服务监听的主机地址
-- **实际效果**: 控制 GraphDB 服务绑定的 IP 地址
+- **实际效果**: 控制 Linkrs 服务绑定的 IP 地址
 - **配置建议**: 
   - 本地开发: `127.0.0.1`
   - 局域网访问: `0.0.0.0` 或具体内网 IP
@@ -50,7 +50,7 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 ### 1.3 storage_path
 - **类型**: String
-- **默认值**: `"data/graphdb"`
+- **默认值**: `"data/linkrs"`
 - **说明**: 数据存储路径
 - **实际效果**: 
   - 相对路径: 相对于配置文件所在目录解析
@@ -124,9 +124,9 @@ GraphDB 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 ### 3.3 file
 - **类型**: String
-- **默认值**: `"graphdb"`
+- **默认值**: `"linkrs"`
 - **说明**: 日志文件基础名称
-- **实际效果**: 生成的日志文件名为 `graphdb.YYYY-MM-DD.N.log`
+- **实际效果**: 生成的日志文件名为 `linkrs.YYYY-MM-DD.N.log`
 - **配置建议**: 根据部署环境自定义
 
 ### 3.4 max_file_size
@@ -679,7 +679,7 @@ history_size = 5
 [database]
 host = "127.0.0.1"
 port = 9758
-storage_path = "data/graphdb"
+storage_path = "data/linkrs"
 max_connections = 10
 
 [transaction]
@@ -690,7 +690,7 @@ auto_commit = false
 [log]
 level = "debug"
 dir = "logs"
-file = "graphdb"
+file = "linkrs"
 max_file_size = 52428800  # 50MB
 max_files = 3
 
@@ -744,7 +744,7 @@ slow_query_threshold_ms = 500
 [database]
 host = "0.0.0.0"
 port = 9758
-storage_path = "/var/lib/graphdb/data"
+storage_path = "/var/lib/linkrs/data"
 max_connections = 100
 
 [transaction]
@@ -754,8 +754,8 @@ auto_commit = false
 
 [log]
 level = "info"
-dir = "/var/log/graphdb"
-file = "graphdb"
+dir = "/var/log/linkrs"
+file = "linkrs"
 max_file_size = 524288000  # 500MB
 max_files = 20
 
@@ -821,7 +821,7 @@ timeout_secs = 60
 
 [fulltext]
 enabled = true
-index_path = "/var/lib/graphdb/fulltext"
+index_path = "/var/lib/linkrs/fulltext"
 
 [fulltext.tantivy]
 writer_memory_budget = 100000000
@@ -845,7 +845,7 @@ slow_query_threshold_ms = 1000
 [monitoring.slow_query_log]
 enabled = true
 threshold_ms = 1000
-log_file_path = "/var/log/graphdb/slow_query.log"
+log_file_path = "/var/log/linkrs/slow_query.log"
 max_file_size_mb = 500
 max_files = 10
 ```

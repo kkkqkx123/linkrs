@@ -21,10 +21,10 @@ use std::time::Instant;
 
 use tempfile::TempDir;
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 
 const SPACE: &str = "edge_point_write";
 const TAG: &str = "Node";

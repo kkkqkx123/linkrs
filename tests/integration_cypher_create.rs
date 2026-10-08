@@ -6,12 +6,12 @@
 //! - CREATE (a:Label1)-[:Type]->(b:Label2) - 创建路径
 //! - Automatic Schema Inference and Creation
 
-use graphdb::test_utils::TestStorage;
+use linkrs::test_utils::TestStorage;
 
-use graphdb::query::optimizer::OptimizerEngine;
-use graphdb::query::parser::Parser;
-use graphdb::query::QueryPipelineManager;
-use graphdb_metrics::StatsManager;
+use linkrs::query::optimizer::OptimizerEngine;
+use linkrs::query::parser::Parser;
+use linkrs::query::QueryPipelineManager;
+use linkrs_metrics::StatsManager;
 use std::sync::Arc;
 
 // ==================== CREATE node test ====================

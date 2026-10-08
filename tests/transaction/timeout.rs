@@ -6,7 +6,7 @@
 //! - Statement timeout
 //! - Idle timeout
 
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 use std::time::Duration;
 
 /// Test transaction with timeout handling

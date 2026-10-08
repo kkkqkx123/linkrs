@@ -13,9 +13,9 @@
 //! - String operations
 //! - Savepoint rollback
 
-use graphdb::core::Value;
-use graphdb::test_utils::test_scenario::TestScenario;
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+use linkrs::core::Value;
+use linkrs::test_utils::test_scenario::TestScenario;
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;

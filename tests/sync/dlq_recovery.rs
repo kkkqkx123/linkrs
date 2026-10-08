@@ -2,10 +2,10 @@
 //!
 //! Tests for DLQ recovery, retry, and the RecoveryResult struct
 
-use graphdb::core::types::DataType;
-use graphdb::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-use graphdb::sync::types::{ChangeType, IndexData, IndexOpKey, IndexOperation, IndexType};
-use graphdb::test_utils::sync_helpers::SyncTestHarness;
+use linkrs::core::types::DataType;
+use linkrs::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
+use linkrs::sync::types::{ChangeType, IndexData, IndexOpKey, IndexOperation, IndexType};
+use linkrs::test_utils::sync_helpers::SyncTestHarness;
 
 /// TC-310: Dead letter queue recovery flow
 ///
@@ -240,7 +240,7 @@ fn test_recover_operations_for_specific_index() {
 /// TC-314: RecoveryResult complete check
 #[test]
 fn test_recovery_result_complete_check() {
-    use graphdb::sync::RecoveryResult;
+    use linkrs::sync::RecoveryResult;
 
     let result = RecoveryResult::default();
     assert!(result.is_complete(), "Default result should be complete");

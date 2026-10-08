@@ -11,8 +11,8 @@
 //! - Double commit/rollback attempts
 //! - Shutdown errors
 
-use graphdb::core::types::TransactionId;
-use graphdb::transaction::{
+use linkrs::core::types::TransactionId;
+use linkrs::transaction::{
     TransactionError, TransactionErrorKind, TransactionManager, TransactionManagerConfig,
     TransactionOptions, TransactionState,
 };

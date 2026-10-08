@@ -1,0 +1,396 @@
+use std::sync::Arc;
+
+use crate::executor::expression::evaluator::traits::ExpressionContext;
+use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::executor::streaming::context::ValueRowContext;
+use crate::executor::streaming::executor::StreamingExecutor;
+use crate::executor::traversal::config::TraversalConfig;
+use crate::parser::ast::pattern::PathSemantic;
+use linkrs_core::error::QueryError;
+use linkrs_core::{EdgeDirection, Value};
+
+use super::super::visited_set::VisitedSet;
+use super::common;
+use super::{GraphOperator, GraphOperatorKind};
+
+pub(super) fn handle_traverse(
+    op: &mut GraphOperator,
+    input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
+    let GraphOperatorKind::Traverse {
+        storage,
+        space_name,
+        dst_tag,
+        edge_types,
+        direction,
+        min_depth,
+        max_depth,
+        visited,
+        path_semantic,
+        ..
+    } = &mut op.kind
+    else {
+        return Err(QueryError::execution(
+            "traverse::handle_traverse called for a non-traverse graph source".to_string(),
+        ));
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
+    let edge_types = &*edge_types;
+    let direction = *direction;
+    let min_depth = *min_depth;
+    let max_depth = *max_depth;
+    let visited = &mut *visited;
+    let path_semantic = path_semantic.clone();
+
+    let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
+    // Operator-level global dedup applies to Shortest variants and to the
+    // default (no semantic) traversal. Walk/Trail/Acyclic enumerate paths
+    // with per-path repeat rules, so they must not be collapsed by a
+    // global visited set.
+    let skip_visited = !matches!(
+        path_semantic,
+        Some(PathSemantic::Walk | PathSemantic::Trail | PathSemantic::Acyclic)
+    );
+    while let Some(chunk) = input.advance()? {
+        if let Some(storage_lock) = storage {
+            let reader = storage_lock.read();
+            let mut tc = TraversalConfig::traverse(
+                space_name.to_string(),
+                direction,
+                min_depth,
+                max_depth,
+                edge_types.to_vec(),
+            );
+            tc.vertex_tag = dst_tag.to_string();
+            tc.path_semantic = path_semantic.clone();
+            if let Some(output) = common::traverse_on_chunk_with_semantic(
+                chunk,
+                Arc::clone(&op.output_layout),
+                &*reader,
+                &tc,
+                visited,
+                skip_visited,
+                cancel_token.clone(),
+            )? {
+                return Ok(Some(output));
+            }
+        } else {
+            let mut new_cols: Vec<ColumnInfo> = chunk
+                .schema
+                .columns
+                .iter()
+                .map(|c| ColumnInfo {
+                    name: c.name.clone(),
+                    data_type: c.data_type.clone(),
+                })
+                .collect();
+            new_cols.push(ColumnInfo {
+                name: "_traverse_edge_type".to_string(),
+                data_type: "string".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_traverse_direction".to_string(),
+                data_type: "string".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_traverse_depth".to_string(),
+                data_type: "bigint".to_string(),
+            });
+            let _schema = Arc::new(Schema::new(new_cols));
+            let mut rows = common::visible_rows(&chunk)
+                .map(|(_, row)| row.clone())
+                .collect::<Vec<_>>();
+            for row in rows.iter_mut() {
+                row.push(Value::string(edge_types.join("/")));
+                row.push(Value::string(format!("{:?}", direction).to_lowercase()));
+                row.push(Value::BigInt(1));
+            }
+            if !rows.is_empty() {
+                return Ok(Some(DataChunk::new_with_layout(
+                    rows,
+                    Arc::clone(&op.output_layout),
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub(super) fn handle_traverse_all(
+    _op: &mut GraphOperator,
+    input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
+    input.advance()
+}
+
+pub(super) fn handle_bi_expand(
+    op: &mut GraphOperator,
+    input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
+    let GraphOperatorKind::BiExpand {
+        storage,
+        space_name,
+        dst_tag,
+        edge_types,
+        ..
+    } = &mut op.kind
+    else {
+        return Err(QueryError::execution(
+            "traverse::handle_bi_expand called for a non-bi-expand graph source".to_string(),
+        ));
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
+    let edge_types = &*edge_types;
+    while let Some(chunk) = input.advance()? {
+        if let Some(storage_lock) = storage {
+            let reader = storage_lock.read();
+            let dir = EdgeDirection::Both;
+            let col_names = chunk.col_names();
+
+            let mut out_rows = Vec::new();
+            for (_, row) in common::visible_rows(&chunk) {
+                if let Some(rt) = op.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
+                let context = ValueRowContext::new(row.clone(), chunk.get_layout());
+                let vid_val = context
+                    .get_variable("vid")
+                    .or_else(|| row.first().cloned())
+                    .unwrap_or(Value::Null(linkrs_core::NullType::Null));
+                let vid = match &vid_val {
+                    Value::Vertex(vertex) => vertex.vid,
+                    _ => {
+                        return Err(QueryError::execution(
+                            "Traversal seed requires a vertex value with tag; bare id is illegal"
+                                .to_string(),
+                        ));
+                    }
+                };
+                {
+                    let edges = reader.get_node_edges(
+                        space_name,
+                        &vid,
+                        dir,
+                        &edge_types
+                            .iter()
+                            .filter(|t| t.as_str() != "both")
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    )?;
+                    for e in &edges {
+                        let neighbor_id = if e.src() == &vid { *e.dst() } else { *e.src() };
+                        let Some(neighbor_tag) =
+                            crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                                &*reader,
+                                space_name,
+                                e,
+                                &neighbor_id,
+                                dst_tag,
+                            )
+                        else {
+                            continue;
+                        };
+                        // A neighbor that is not visible is legitimately absent,
+                        // but a read failure is a real error: dropping it here
+                        // would silently shorten the traversal result.
+                        if let Some(vertex) =
+                            reader.get_vertex(space_name, &neighbor_tag, &neighbor_id)?
+                        {
+                            let mut out_row = row.clone();
+                            out_row.push(Value::Vertex(Box::new(vertex)));
+                            out_row.push(Value::string(e.edge_type.clone()));
+                            out_row.push(Value::string("both"));
+                            out_rows.push(out_row);
+                        }
+                    }
+                }
+            }
+
+            if out_rows.is_empty() {
+                continue;
+            }
+            let mut new_cols: Vec<ColumnInfo> = col_names
+                .iter()
+                .map(|n| ColumnInfo {
+                    name: n.clone(),
+                    data_type: "string".to_string(),
+                })
+                .collect();
+            new_cols.push(ColumnInfo {
+                name: "_expand_vertex".to_string(),
+                data_type: "vertex".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_expand_edge_type".to_string(),
+                data_type: "string".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_expand_direction".to_string(),
+                data_type: "string".to_string(),
+            });
+            let _schema = Arc::new(Schema::new(new_cols));
+            return Ok(Some(DataChunk::new_with_layout(
+                out_rows,
+                Arc::clone(&op.output_layout),
+            )));
+        } else {
+            if !chunk.is_empty() {
+                return Ok(Some(chunk));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub(super) fn handle_bi_traverse(
+    op: &mut GraphOperator,
+    input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
+    let GraphOperatorKind::BiTraverse {
+        storage,
+        space_name,
+        dst_tag,
+        edge_types,
+        min_depth,
+        max_depth,
+        visited,
+        ..
+    } = &mut op.kind
+    else {
+        return Err(QueryError::execution(
+            "traverse::handle_bi_traverse called for a non-bi-traverse graph source".to_string(),
+        ));
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
+    let edge_types = &*edge_types;
+    let min_depth = *min_depth;
+    let max_depth = *max_depth;
+    let visited = &mut *visited;
+    while let Some(chunk) = input.advance()? {
+        if let Some(storage_lock) = storage {
+            let reader = storage_lock.read();
+            let dir = EdgeDirection::Both;
+            let col_names = chunk.col_names();
+
+            let mut out_rows = Vec::new();
+            for (_, row) in common::visible_rows(&chunk) {
+                if let Some(rt) = op.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
+                let ctx = ValueRowContext::new(row.clone(), chunk.get_layout());
+                let vid_val = ctx
+                    .get_variable("vid")
+                    .or_else(|| row.first().cloned())
+                    .unwrap_or(Value::Null(linkrs_core::NullType::Null));
+                let vid = match &vid_val {
+                    Value::Vertex(vertex) => vertex.vid,
+                    _ => {
+                        return Err(QueryError::execution(
+                            "Traversal seed requires a vertex value with tag; bare id is illegal"
+                                .to_string(),
+                        ));
+                    }
+                };
+                {
+                    let mut frontier = vec![(vid, 0u32)];
+                    let mut local_visited = VisitedSet::new();
+                    local_visited.insert(vid);
+
+                    while let Some((current, depth)) = frontier.pop() {
+                        if let Some(rt) = op.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
+                        if depth >= max_depth {
+                            continue;
+                        }
+                        let edges = reader.get_node_edges(
+                            space_name,
+                            &current,
+                            dir,
+                            &edge_types
+                                .iter()
+                                .filter(|t| t.as_str() != "both")
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        )?;
+                        for e in &edges {
+                            let nid = if e.src() == &current {
+                                *e.dst()
+                            } else {
+                                *e.src()
+                            };
+                            if local_visited.contains(&nid) || !visited.insert(nid) {
+                                continue;
+                            }
+                            local_visited.insert(nid);
+
+                            if depth + 1 >= min_depth {
+                                let Some(neighbor_tag) =
+                                    crate::executor::traversal::graph_reader::resolve_neighbor_tag(
+                                        &*reader, space_name, e, &nid, dst_tag,
+                                    )
+                                else {
+                                    continue;
+                                };
+                                if let Some(vertex) =
+                                    reader.get_vertex(space_name, &neighbor_tag, &nid)?
+                                {
+                                    let mut out_row = row.clone();
+                                    out_row.push(Value::Vertex(Box::new(vertex)));
+                                    out_row.push(Value::string(edge_types.join("/")));
+                                    out_row.push(Value::string("both"));
+                                    out_row.push(Value::BigInt((depth + 1) as i64));
+                                    out_rows.push(out_row);
+                                }
+                            }
+                            frontier.push((nid, depth + 1));
+                        }
+                    }
+                }
+            }
+
+            if out_rows.is_empty() {
+                continue;
+            }
+            let mut new_cols: Vec<ColumnInfo> = col_names
+                .iter()
+                .map(|n| ColumnInfo {
+                    name: n.clone(),
+                    data_type: "string".to_string(),
+                })
+                .collect();
+            new_cols.push(ColumnInfo {
+                name: "_traverse_vertex".to_string(),
+                data_type: "vertex".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_traverse_edge_type".to_string(),
+                data_type: "string".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_traverse_direction".to_string(),
+                data_type: "string".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_traverse_depth".to_string(),
+                data_type: "bigint".to_string(),
+            });
+            let _schema = Arc::new(Schema::new(new_cols));
+            return Ok(Some(DataChunk::new_with_layout(
+                out_rows,
+                Arc::clone(&op.output_layout),
+            )));
+        } else {
+            if !chunk.is_empty() {
+                return Ok(Some(chunk));
+            }
+        }
+    }
+    Ok(None)
+}

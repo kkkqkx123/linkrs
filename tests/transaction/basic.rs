@@ -6,8 +6,8 @@
 //! - Empty transaction (no operations)
 //! - Data visibility - committed data should be visible
 
-use graphdb::core::Value;
-use graphdb::test_utils::test_scenario::TestScenario;
+use linkrs::core::Value;
+use linkrs::test_utils::test_scenario::TestScenario;
 use std::collections::HashMap;
 
 /// Test basic transaction lifecycle - begin, commit, data persistence

@@ -1,0 +1,88 @@
+//! Immutable configuration for sink (data modification) operators.
+
+use linkrs_core::types::expr::Expression;
+
+/// Copy target type for COPY FROM
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyTarget {
+    Vertex(String),
+    Edge(String),
+}
+
+/// Immutable config for sink (data modification) operators.
+#[derive(Debug, Clone)]
+pub enum SinkSpec {
+    InsertVertices {
+        space_name: String,
+        vertex_properties: Vec<(String, Expression)>,
+        tag: String,
+        /// Property column names for the single tag.
+        tag_property_names: Vec<String>,
+        if_not_exists: bool,
+    },
+    InsertEdges {
+        space_name: String,
+        src_col: String,
+        dst_col: String,
+        edge_type: String,
+        edge_properties: Vec<(String, Expression)>,
+        if_not_exists: bool,
+    },
+    UpdateVertices {
+        space_name: String,
+        tag_name: String,
+        updates: Vec<(String, Expression)>,
+        condition: Option<Expression>,
+        is_upsert: bool,
+        replace_properties: bool,
+    },
+    UpdateEdges {
+        space_name: String,
+        src_col: String,
+        dst_col: String,
+        edge_type: String,
+        updates: Vec<(String, Expression)>,
+        condition: Option<Expression>,
+        is_upsert: bool,
+        replace_properties: bool,
+    },
+    DeleteVertices {
+        space_name: String,
+        tag: String,
+        vertex_id_col: String,
+        cascade: bool,
+    },
+    DeleteEdges {
+        space_name: String,
+        src_col: String,
+        dst_col: String,
+        edge_type: String,
+    },
+    PipeDeleteVertices {
+        space_name: String,
+        vertex_id_col: String,
+        cascade: bool,
+    },
+    PipeDeleteEdges {
+        space_name: String,
+        src_col: String,
+        dst_col: String,
+        edge_type: String,
+    },
+    CopyFrom {
+        space_name: String,
+        target: CopyTarget,
+        file_paths: Vec<String>,
+        by_column: bool,
+        header: bool,
+        delimiter: u8,
+        batch_size: usize,
+    },
+    CopyTo {
+        space_name: String,
+        target: CopyTarget,
+        file_path: String,
+        header: bool,
+        delimiter: u8,
+    },
+}

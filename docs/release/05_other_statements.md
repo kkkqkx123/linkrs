@@ -1,4 +1,4 @@
-# GraphDB 其他语句
+# Linkrs 其他语句
 
 ## 概述
 

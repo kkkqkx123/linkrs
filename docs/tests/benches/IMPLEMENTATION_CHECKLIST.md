@@ -1,4 +1,4 @@
-# GraphDB 性能分析框架 - 快速实施清单
+# Linkrs 性能分析框架 - 快速实施清单
 
 **日期**: 2026-06-18  
 **当前状态**: ✅ 框架完成，代码编译通过
@@ -461,9 +461,9 @@ use benches::{PerformanceAnalyzer, AnalysisMetrics};
 - **完成报告**: `docs/tests/benches/ANALYSIS_FRAMEWORK_COMPLETION.md`
 - **性能规划**: `docs/tests/benches/performance_benchmark_plan.md`
 
-### GraphDB 相关
-- **EXPLAIN 实现**: `/crates/graphdb-query/src/query/executor/explain/`
-- **执行统计**: `/crates/graphdb-core/src/core/stats/executor_stats.rs`
+### Linkrs 相关
+- **EXPLAIN 实现**: `/crates/linkrs-query/src/query/executor/explain/`
+- **执行统计**: `/crates/linkrs-core/src/core/stats/executor_stats.rs`
 - **测试示例**: `tests/e2e/social_network.rs`
 
 ### Criterion.rs

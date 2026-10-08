@@ -10,11 +10,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use graphdb::config::Config;
+use linkrs::config::Config;
 #[cfg(all(feature = "vector", feature = "embedded"))]
-use graphdb::config::VectorConfig;
+use linkrs::config::VectorConfig;
 #[cfg(all(feature = "vector", feature = "embedded"))]
-use graphdb::search::FulltextConfig;
+use linkrs::search::FulltextConfig;
 
 /// Test Log Configuration Defaults
 #[test]
@@ -23,7 +23,7 @@ fn test_log_config_defaults() {
 
     assert_eq!(config.common.log.level, "info");
     assert_eq!(config.common.log.dir, "logs");
-    assert_eq!(config.common.log.file, "graphdb");
+    assert_eq!(config.common.log.file, "linkrs");
     assert_eq!(config.common.log.max_file_size, 100 * 1024 * 1024); // 100MB
     assert_eq!(config.common.log.max_files, 5);
 }
@@ -33,51 +33,51 @@ fn test_log_config_defaults() {
 #[test]
 fn test_log_config_serialization() {
     let config = Config {
-        common: graphdb::config::CommonConfig {
-            database: graphdb::config::DatabaseConfig {
+        common: linkrs::config::CommonConfig {
+            database: linkrs::config::DatabaseConfig {
                 host: "127.0.0.1".to_string(),
                 port: 9758,
-                storage_path: "data/graphdb".to_string(),
+                storage_path: "data/linkrs".to_string(),
                 max_connections: 10,
             },
-            transaction: graphdb::config::TransactionConfig {
+            transaction: linkrs::config::TransactionConfig {
                 default_timeout: 30,
                 max_concurrent_transactions: 1000,
                 auto_commit: false,
             },
-            log: graphdb::config::LogConfig {
+            log: linkrs::config::LogConfig {
                 level: "debug".to_string(),
                 dir: "test_logs".to_string(),
-                file: "test_graphdb".to_string(),
+                file: "test_linkrs".to_string(),
                 max_file_size: 50 * 1024 * 1024,
                 max_files: 3,
             },
-            storage: graphdb::config::StorageConfig::default(),
-            optimizer: graphdb::config::OptimizerConfig::default(),
-            parallel: graphdb::config::ParallelConfig::default(),
-            monitoring: graphdb::config::MonitoringConfig::default(),
-            query_resource: graphdb::config::QueryResourceConfig::default(),
-            columnar: graphdb::config::ColumnarConfig::default(),
+            storage: linkrs::config::StorageConfig::default(),
+            optimizer: linkrs::config::OptimizerConfig::default(),
+            parallel: linkrs::config::ParallelConfig::default(),
+            monitoring: linkrs::config::MonitoringConfig::default(),
+            query_resource: linkrs::config::QueryResourceConfig::default(),
+            columnar: linkrs::config::ColumnarConfig::default(),
         },
         #[cfg(feature = "server")]
-        server: graphdb::config::ServerConfig::default(),
+        server: linkrs::config::ServerConfig::default(),
         vector: VectorConfig::default(),
         fulltext: FulltextConfig::default(),
-        embedded: graphdb::config::EmbeddedConfig::default(),
+        embedded: linkrs::config::EmbeddedConfig::default(),
     };
 
     let toml_str = toml::to_string_pretty(&config).expect("Failed to serialize config");
 
     assert!(toml_str.contains("level = \"debug\""));
     assert!(toml_str.contains("dir = \"test_logs\""));
-    assert!(toml_str.contains("file = \"test_graphdb\""));
+    assert!(toml_str.contains("file = \"test_linkrs\""));
     assert!(toml_str.contains("max_file_size = 52428800"));
     assert!(toml_str.contains("max_files = 3"));
 
     let loaded_config: Config = toml::from_str(&toml_str).expect("Failed to deserialize config");
     assert_eq!(loaded_config.common.log.level, "debug");
     assert_eq!(loaded_config.common.log.dir, "test_logs");
-    assert_eq!(loaded_config.common.log.file, "test_graphdb");
+    assert_eq!(loaded_config.common.log.file, "test_linkrs");
     assert_eq!(loaded_config.common.log.max_file_size, 52428800);
     assert_eq!(loaded_config.common.log.max_files, 3);
 }
@@ -114,7 +114,7 @@ fn test_log_config_from_file() {
 [database]
 host = "127.0.0.1"
 port = 9758
-storage_path = "data/graphdb"
+storage_path = "data/linkrs"
 max_connections = 10
 
 [transaction]
@@ -124,7 +124,7 @@ max_concurrent_transactions = 1000
 [log]
 level = "debug"
 dir = "custom_logs"
-file = "custom_graphdb"
+file = "custom_linkrs"
 max_file_size = 52428800
 max_files = 3
 
@@ -161,7 +161,7 @@ min_iteration_rounds = 1
     // Config::load resolves relative paths to absolute paths relative to the config file location
     let expected_dir = temp_dir.join("custom_logs").to_string_lossy().to_string();
     assert_eq!(config.common.log.dir, expected_dir);
-    assert_eq!(config.common.log.file, "custom_graphdb");
+    assert_eq!(config.common.log.file, "custom_linkrs");
     assert_eq!(config.common.log.max_file_size, 52428800);
     assert_eq!(config.common.log.max_files, 3);
 
@@ -241,8 +241,8 @@ fn test_flexi_logger_integration() {
         fs::create_dir_all(&test_dir).expect("Failed to create test directory");
 
         let config = Config {
-            common: graphdb::config::CommonConfig {
-                log: graphdb::config::LogConfig {
+            common: linkrs::config::CommonConfig {
+                log: linkrs::config::LogConfig {
                     level: "warn".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
                     file: "level_test".to_string(),
@@ -263,8 +263,8 @@ fn test_flexi_logger_integration() {
         fs::create_dir_all(&test_dir).expect("Failed to create test directory");
 
         let config = Config {
-            common: graphdb::config::CommonConfig {
-                log: graphdb::config::LogConfig {
+            common: linkrs::config::CommonConfig {
+                log: linkrs::config::LogConfig {
                     level: "info".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
                     file: "rotation_test".to_string(),
@@ -299,8 +299,8 @@ fn test_flexi_logger_integration() {
         fs::create_dir_all(&test_dir).expect("Failed to create test directory");
 
         let config = Config {
-            common: graphdb::config::CommonConfig {
-                log: graphdb::config::LogConfig {
+            common: linkrs::config::CommonConfig {
+                log: linkrs::config::LogConfig {
                     level: "debug".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
                     file: "async_test".to_string(),
@@ -328,8 +328,8 @@ fn test_flexi_logger_integration() {
 
         let max_files = 2;
         let config = Config {
-            common: graphdb::config::CommonConfig {
-                log: graphdb::config::LogConfig {
+            common: linkrs::config::CommonConfig {
+                log: linkrs::config::LogConfig {
                     level: "info".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
                     file: "cleanup_test".to_string(),
@@ -415,29 +415,29 @@ fn test_log_file_path_resolution() {
     let config = Config::default();
 
     let expected_log_path = format!("{}/{}.log", config.common.log.dir, config.common.log.file);
-    assert_eq!(expected_log_path, "logs/graphdb.log");
+    assert_eq!(expected_log_path, "logs/linkrs.log");
 
     let custom_config = Config {
-        common: graphdb::config::CommonConfig {
-            log: graphdb::config::LogConfig {
-                dir: "/var/log/graphdb".to_string(),
+        common: linkrs::config::CommonConfig {
+            log: linkrs::config::LogConfig {
+                dir: "/var/log/linkrs".to_string(),
                 file: "app".to_string(),
                 ..Default::default()
             },
             ..Default::default()
         },
         #[cfg(feature = "server")]
-        server: graphdb::config::ServerConfig::default(),
+        server: linkrs::config::ServerConfig::default(),
         vector: VectorConfig::default(),
         fulltext: FulltextConfig::default(),
-        embedded: graphdb::config::EmbeddedConfig::default(),
+        embedded: linkrs::config::EmbeddedConfig::default(),
     };
 
     let custom_path = format!(
         "{}/{}.log",
         custom_config.common.log.dir, custom_config.common.log.file
     );
-    assert_eq!(custom_path, "/var/log/graphdb/app.log");
+    assert_eq!(custom_path, "/var/log/linkrs/app.log");
 }
 
 /// Testing the configuration of the log file size.
@@ -447,8 +447,8 @@ fn test_log_file_size_config() {
     assert_eq!(config.common.log.max_file_size, 100 * 1024 * 1024);
 
     let custom_config = Config {
-        common: graphdb::config::CommonConfig {
-            log: graphdb::config::LogConfig {
+        common: linkrs::config::CommonConfig {
+            log: linkrs::config::LogConfig {
                 max_file_size: 500 * 1024 * 1024,
                 ..Default::default()
             },
@@ -459,8 +459,8 @@ fn test_log_file_size_config() {
     assert_eq!(custom_config.common.log.max_file_size, 500 * 1024 * 1024);
 
     let small_config = Config {
-        common: graphdb::config::CommonConfig {
-            log: graphdb::config::LogConfig {
+        common: linkrs::config::CommonConfig {
+            log: linkrs::config::LogConfig {
                 max_file_size: 1024,
                 ..Default::default()
             },
@@ -478,8 +478,8 @@ fn test_log_level_validation() {
 
     for level in valid_levels {
         let config = Config {
-            common: graphdb::config::CommonConfig {
-                log: graphdb::config::LogConfig {
+            common: linkrs::config::CommonConfig {
+                log: linkrs::config::LogConfig {
                     level: level.to_string(),
                     ..Default::default()
                 },

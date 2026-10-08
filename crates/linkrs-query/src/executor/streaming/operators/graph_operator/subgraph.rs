@@ -1,0 +1,167 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use crate::executor::expression::evaluator::traits::ExpressionContext;
+use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::executor::streaming::context::ValueRowContext;
+use crate::executor::streaming::executor::StreamingExecutor;
+use linkrs_core::error::QueryError;
+use linkrs_core::types::storage_ids::VertexId;
+use linkrs_core::{Edge, EdgeDirection, Value};
+
+use super::{GraphOperator, GraphOperatorKind};
+
+pub(super) fn handle(
+    op: &mut GraphOperator,
+    input: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
+    let GraphOperatorKind::Subgraph {
+        storage,
+        space_name,
+        dst_tag,
+        steps,
+        direction,
+        edge_types,
+    } = &mut op.kind
+    else {
+        return Err(QueryError::execution(
+            "Subgraph operator invoked with mismatched operator kind".to_string(),
+        ));
+    };
+    let storage = &*storage;
+    let space_name = &*space_name;
+    let dst_tag = &*dst_tag;
+    let steps = *steps;
+    let direction = *direction;
+    let edge_types = &*edge_types;
+    while let Some(mut chunk) = input.advance()? {
+        chunk.normalize_for_opaque("Subgraph");
+        if let Some(storage_lock) = storage {
+            let reader = storage_lock.read();
+            let col_names = chunk.col_names();
+
+            let mut out_rows = Vec::new();
+            for row in &chunk.rows {
+                if let Some(rt) = op.runtime.as_ref() {
+                    rt.ensure_not_cancelled()?;
+                }
+                let ctx = ValueRowContext::new(row.clone(), chunk.get_layout());
+                let vid_val = ctx
+                    .get_variable("vid")
+                    .or_else(|| row.first().cloned())
+                    .unwrap_or(Value::Null(linkrs_core::NullType::Null));
+
+                if let Value::Vertex(seed_vertex) = &vid_val {
+                    let seed_vid = seed_vertex.vid;
+                    let mut visited: HashSet<VertexId> = HashSet::new();
+                    let mut history_edges: Vec<(Edge, u32)> = Vec::new();
+                    let mut frontier = vec![(seed_vid, 0u32)];
+                    visited.insert(seed_vid);
+
+                    while let Some((current, current_step)) = frontier.pop() {
+                        if let Some(rt) = op.runtime.as_ref() {
+                            rt.ensure_not_cancelled()?;
+                        }
+                        if current_step >= steps {
+                            continue;
+                        }
+                        let edges =
+                            reader.get_node_edges(space_name, &current, direction, edge_types)?;
+                        for e in &edges {
+                            let neighbor_id = match direction {
+                                EdgeDirection::Out => *e.dst(),
+                                EdgeDirection::In => *e.src(),
+                                EdgeDirection::Both => {
+                                    if e.src() == &current {
+                                        *e.dst()
+                                    } else {
+                                        *e.src()
+                                    }
+                                }
+                            };
+                            history_edges.push((e.clone(), current_step + 1));
+                            if visited.insert(neighbor_id) && current_step + 1 < steps {
+                                frontier.push((neighbor_id, current_step + 1));
+                            }
+                        }
+                    }
+
+                    for (edge, _step) in &history_edges {
+                        let (src_tag, neighbor_tag) = if dst_tag.is_empty() {
+                            let Some(tags) =
+                                crate::executor::traversal::graph_reader::resolve_edge_endpoint_tags(
+                                    &*reader,
+                                    space_name,
+                                    &edge.edge_type,
+                                )
+                            else {
+                                continue;
+                            };
+                            tags
+                        } else {
+                            (dst_tag.clone(), dst_tag.clone())
+                        };
+                        let mut out_row = row.clone();
+                        let Some(src_vertex) = reader
+                            .get_vertex(space_name, &src_tag, &edge.src)
+                            .ok()
+                            .flatten()
+                        else {
+                            continue;
+                        };
+                        let Some(dst_vertex) = reader
+                            .get_vertex(space_name, &neighbor_tag, &edge.dst)
+                            .ok()
+                            .flatten()
+                        else {
+                            continue;
+                        };
+                        out_row.push(Value::Vertex(Box::new(src_vertex)));
+                        out_row.push(Value::Vertex(Box::new(dst_vertex)));
+                        out_row.push(Value::string(edge.edge_type.clone()));
+                        out_rows.push(out_row);
+                    }
+                } else if !matches!(vid_val, Value::Null(_)) {
+                    // Single-label enforcement mirrors pipeline delete:
+                    // bare identifiers are rejected, not silently skipped.
+                    return Err(QueryError::execution(
+                        "Subgraph requires a vertex value with tag; bare id is illegal".to_string(),
+                    ));
+                }
+            }
+
+            if out_rows.is_empty() {
+                continue;
+            }
+            let mut new_cols: Vec<ColumnInfo> = col_names
+                .iter()
+                .map(|n| ColumnInfo {
+                    name: n.clone(),
+                    data_type: "string".to_string(),
+                })
+                .collect();
+            new_cols.push(ColumnInfo {
+                name: "_subgraph_src".to_string(),
+                data_type: "vertex".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_subgraph_dst".to_string(),
+                data_type: "vertex".to_string(),
+            });
+            new_cols.push(ColumnInfo {
+                name: "_subgraph_edge_type".to_string(),
+                data_type: "string".to_string(),
+            });
+            let _schema = Arc::new(Schema::new(new_cols));
+            return Ok(Some(DataChunk::new_with_layout(
+                out_rows,
+                Arc::clone(&op.output_layout),
+            )));
+        } else {
+            if !chunk.is_empty() {
+                return Ok(Some(chunk));
+            }
+        }
+    }
+    Ok(None)
+}

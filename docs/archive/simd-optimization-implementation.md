@@ -156,8 +156,8 @@ rustflags = ["-C", "target-cpu=x86-64-v3"]
 ## 文件清单
 
 ```
-crates/graphdb-query/src/query/executor/streaming/chunk.rs      # 模块根 (75 行)
-crates/graphdb-query/src/query/executor/streaming/chunk/
+crates/linkrs-query/src/query/executor/streaming/chunk.rs      # 模块根 (75 行)
+crates/linkrs-query/src/query/executor/streaming/chunk/
 ├── core.rs              # DataChunk 核心 (430 行)
 ├── eval.rs              # 表达式求值 (380 行)
 ├── typed.rs             # Typed 列与批量运算 (320 行)
@@ -174,13 +174,13 @@ crates/graphdb-query/src/query/executor/streaming/chunk/
 
 ```bash
 # 编译检查
-cargo check -p graphdb-query
+cargo check -p linkrs-query
 
 # Clippy
-cargo clippy -p graphdb-query --lib --all-features
+cargo clippy -p linkrs-query --lib --all-features
 
 # 单元测试
-cargo test -p graphdb-query --lib chunk::tests
+cargo test -p linkrs-query --lib chunk::tests
 
 # 基准测试
 cargo bench --bench columnar_necessity_bench -- typed_data_chunk_filter

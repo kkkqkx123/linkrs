@@ -1,8 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use graphdb_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{DataType, Edge, Value, Vertex};
-use graphdb_storage::{
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_storage::{
     GraphStorage, ScanOptions, StoragePersistenceOps, StorageReader, StorageSchemaOps,
     StorageWriter,
 };

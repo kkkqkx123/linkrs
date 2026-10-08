@@ -1,0 +1,245 @@
+use std::path::Path;
+
+use linkrs_core::types::{
+    EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, VertexId,
+};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::DataType;
+use linkrs_core::{Edge, Value, Vertex};
+use linkrs_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+
+/// Create a new in-memory storage for integration testing.
+#[allow(dead_code)]
+pub fn create_in_memory_storage() -> GraphStorage {
+    GraphStorage::new().expect("Failed to create in-memory GraphStorage")
+}
+
+/// Create an isolated persistent work directory for a filesystem-backed test.
+#[allow(dead_code)]
+pub fn create_test_workdir() -> tempfile::TempDir {
+    tempfile::tempdir().expect("Failed to create isolated test work directory")
+}
+
+/// Create a persistent storage at the given path.
+#[allow(dead_code)]
+pub fn create_persistent_storage(path: &Path) -> GraphStorage {
+    GraphStorage::new_with_path(path.to_path_buf())
+        .expect("Failed to create persistent GraphStorage")
+}
+
+/// Open a previously persisted storage.
+#[allow(dead_code)]
+pub fn open_persistent_storage(path: &Path) -> GraphStorage {
+    GraphStorage::open(path.to_path_buf()).expect("Failed to open persistent GraphStorage")
+}
+
+/// Create test space with BigInt vid type.
+pub fn create_space(storage: &mut GraphStorage, name: &str) -> u64 {
+    let mut space = SpaceInfo::new(name.to_string())
+        .with_vid_type(DataType::BigInt)
+        .with_comment(Some("integration test space".to_string()));
+    storage.create_space(&mut space).unwrap();
+    storage.get_space_id(name).unwrap()
+}
+
+/// Create a Person tag. The leading `id` column is the primary key and
+/// materializes the external vertex id; `name` and `age` are ordinary
+/// properties. Vertices built by [`create_person_vertex`] omit `id`, so the
+/// storage layer fills it from the vertex id mirror.
+pub fn create_person_tag(storage: &mut GraphStorage, space: &str) -> u32 {
+    let tag = linkrs_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+        PropertyDef::new("id".into(), DataType::BigInt),
+        PropertyDef::new("name".into(), DataType::String),
+        PropertyDef::new("age".into(), DataType::BigInt),
+    ]);
+    storage
+        .create_tag(space, &tag)
+        .expect("Failed to create Person tag")
+}
+
+/// Create an Employee tag. The leading `id` column is the primary key
+/// mirroring the vertex id; `company` and `salary` are ordinary properties.
+#[allow(dead_code)]
+pub fn create_employee_tag(storage: &mut GraphStorage, space: &str) -> u32 {
+    let tag = linkrs_core::types::TagInfo::new("Employee".to_string()).with_properties(vec![
+        PropertyDef::new("id".into(), DataType::BigInt),
+        PropertyDef::new("company".into(), DataType::String),
+        PropertyDef::new("salary".into(), DataType::BigInt),
+    ]);
+    storage
+        .create_tag(space, &tag)
+        .expect("Failed to create Employee tag")
+}
+
+/// Create a KNOWS edge type with since property.
+pub fn create_knows_edge_type(storage: &mut GraphStorage, space: &str) -> u32 {
+    let edge = EdgeTypeInfo::new("KNOWS".to_string())
+        .with_src_tag("Person".to_string())
+        .with_dst_tag("Person".to_string())
+        .with_properties(vec![PropertyDef::new("since".into(), DataType::Int)]);
+    storage
+        .create_edge_type(space, &edge)
+        .expect("Failed to create KNOWS edge type")
+}
+
+/// Create a WORKS_AT edge type with role property.
+#[allow(dead_code)]
+pub fn create_works_at_edge_type(storage: &mut GraphStorage, space: &str) -> u32 {
+    let edge = EdgeTypeInfo::new("WORKS_AT".to_string())
+        .with_src_tag("Person".to_string())
+        .with_dst_tag("Employee".to_string())
+        .with_properties(vec![PropertyDef::new("role".into(), DataType::String)]);
+    storage
+        .create_edge_type(space, &edge)
+        .expect("Failed to create WORKS_AT edge type")
+}
+
+/// Create a person vertex with name and age.
+pub fn create_person_vertex(id: i64, name: &str, age: i64) -> Vertex {
+    Vertex::new(
+        VertexId::try_from_int64(id).expect("test vertex id"),
+        Tag::new(
+            "Person".to_string(),
+            vec![
+                ("name".into(), Value::string(name)),
+                ("age".into(), Value::BigInt(age)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+    )
+}
+
+/// Create an employee vertex with company and salary.
+#[allow(dead_code)]
+pub fn create_employee_vertex(id: i64, company: &str, salary: i64) -> Vertex {
+    Vertex::new(
+        VertexId::try_from_int64(id).expect("test vertex id"),
+        Tag::new(
+            "Employee".to_string(),
+            vec![
+                ("company".into(), Value::string(company)),
+                ("salary".into(), Value::BigInt(salary)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+    )
+}
+
+/// Create a KNOWS edge between two vertices.
+#[allow(dead_code)]
+pub fn create_knows_edge(src: i64, dst: i64, since: i32) -> Edge {
+    Edge::new(
+        VertexId::try_from_int64(src).expect("test vertex id"),
+        VertexId::try_from_int64(dst).expect("test vertex id"),
+        "KNOWS".to_string(),
+        0,
+        vec![("since".into(), Value::Int(since))]
+            .into_iter()
+            .collect(),
+    )
+}
+
+/// Setup basic schema and return space_id.
+#[allow(dead_code)]
+pub fn setup_basic_schema(storage: &mut GraphStorage) -> u64 {
+    let space_id = create_space(storage, "test_space");
+    create_person_tag(storage, "test_space");
+    create_knows_edge_type(storage, "test_space");
+    space_id
+}
+
+/// Setup schema with Person+KNOWS for single-label scenarios.
+#[allow(dead_code)]
+pub fn setup_multi_tag_schema(storage: &mut GraphStorage) -> u64 {
+    let space_id = create_space(storage, "test_space");
+    create_person_tag(storage, "test_space");
+    create_employee_tag(storage, "test_space");
+    create_knows_edge_type(storage, "test_space");
+    create_works_at_edge_type(storage, "test_space");
+    space_id
+}
+
+/// Create a name index on Person tag.
+#[allow(dead_code)]
+pub fn create_person_name_index(storage: &mut GraphStorage, space: &str) {
+    let index = Index::new(IndexConfig {
+        id: 1,
+        name: "person_name_idx".to_string(),
+        space_id: 0,
+        schema_name: "Person".to_string(),
+        fields: vec![IndexField::new(
+            "name".to_string(),
+            Value::string(""),
+            false,
+        )],
+        properties: vec![],
+        index_type: IndexType::TagIndex,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
+    });
+    storage
+        .create_tag_index(space, &index)
+        .expect("Failed to create person name index");
+}
+
+/// Insert test data: Alice (30) and Bob (25) with a KNOWS edge.
+#[allow(dead_code)]
+pub fn insert_test_data(storage: &mut GraphStorage, space: &str) {
+    let alice = create_person_vertex(1, "Alice", 30);
+    let bob = create_person_vertex(2, "Bob", 25);
+    storage.insert_vertex(space, alice).unwrap();
+    storage.insert_vertex(space, bob).unwrap();
+
+    let edge = create_knows_edge(1, 2, 2020);
+    storage.insert_edge(space, edge).unwrap();
+}
+
+/// Verify test data integrity.
+#[allow(dead_code)]
+pub fn verify_test_data(storage: &GraphStorage, space: &str) {
+    let alice = storage
+        .get_vertex(
+            space,
+            "Person",
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+        )
+        .unwrap()
+        .expect("Alice should exist");
+    assert_eq!(
+        alice.properties().get("name"),
+        Some(&Value::string("Alice"))
+    );
+    assert_eq!(alice.properties().get("age"), Some(&Value::BigInt(30)));
+
+    let bob = storage
+        .get_vertex(
+            space,
+            "Person",
+            &VertexId::try_from_int64(2).expect("test vertex id"),
+        )
+        .unwrap()
+        .expect("Bob should exist");
+    assert_eq!(bob.properties().get("name"), Some(&Value::string("Bob")));
+
+    let edge = storage
+        .get_edge(
+            space,
+            &VertexId::try_from_int64(1).expect("test vertex id"),
+            &VertexId::try_from_int64(2).expect("test vertex id"),
+            "KNOWS",
+            0,
+        )
+        .unwrap()
+        .expect("Edge should exist");
+    assert_eq!(
+        edge.src,
+        VertexId::try_from_int64(1).expect("test vertex id")
+    );
+    assert_eq!(
+        edge.dst,
+        VertexId::try_from_int64(2).expect("test vertex id")
+    );
+}

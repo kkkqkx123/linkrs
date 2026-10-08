@@ -1,4 +1,4 @@
-# GraphDB 数据操作语言 (DML)
+# Linkrs 数据操作语言 (DML)
 
 ## 概述
 

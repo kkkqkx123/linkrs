@@ -6,14 +6,14 @@
 //! - Vector search configuration handling
 //! - Error handling when schema_manager is not available
 
-use graphdb::api::api_core::QueryApi;
-use graphdb::config::Config;
-use graphdb::query::optimizer::OptimizerEngine;
-use graphdb::query::QueryPipelineManager;
-use graphdb::storage::{GraphStorage, StorageSchemaContextOps, SyncWrapper};
-use graphdb::test_utils::TestStorage;
-use graphdb_metrics::StatsManager;
-use graphdb_server::graph_service::GraphService;
+use linkrs::api::api_core::QueryApi;
+use linkrs::config::Config;
+use linkrs::query::optimizer::OptimizerEngine;
+use linkrs::query::QueryPipelineManager;
+use linkrs::storage::{GraphStorage, StorageSchemaContextOps, SyncWrapper};
+use linkrs::test_utils::TestStorage;
+use linkrs_metrics::StatsManager;
+use linkrs_server::graph_service::GraphService;
 use std::sync::Arc;
 
 /// Test that GraphService can be created with SyncWrapper<GraphStorage>
@@ -100,7 +100,7 @@ fn test_pipeline_manager_schema_manager_behavior() {
 #[cfg(feature = "vector")]
 #[test]
 fn test_vector_config_default_is_local() {
-    use graphdb::config::{VectorConfig, VectorEngineKind};
+    use linkrs::config::{VectorConfig, VectorEngineKind};
 
     let config = VectorConfig::default();
 
@@ -236,7 +236,7 @@ async fn test_graph_service_permission_enforcement() {
 
     // 3. Grant USER role — Read/Write/Delete allowed, Schema denied
     let pm = graph_service.get_permission_manager();
-    pm.grant_role("testuser", space_id, graphdb::core::RoleType::User)
+    pm.grant_role("testuser", space_id, linkrs::core::RoleType::User)
         .expect("Grant USER role should succeed");
 
     let result = graph_service
@@ -272,7 +272,7 @@ async fn test_graph_service_permission_enforcement() {
     );
 
     // 4. Upgrade to DBA role — Schema now allowed
-    pm.grant_role("testuser", space_id, graphdb::core::RoleType::Dba)
+    pm.grant_role("testuser", space_id, linkrs::core::RoleType::Dba)
         .expect("Grant DBA role should succeed");
 
     let result = graph_service
@@ -311,7 +311,7 @@ fn test_complete_storage_to_query_workflow() {
     let mut query_api = QueryApi::with_schema_manager(storage, stats_manager, schema_manager);
 
     // Step 3: Execute a query request
-    let request = graphdb::api::api_core::types::QueryRequest {
+    let request = linkrs::api::api_core::types::QueryRequest {
         space_id: None,
         space_name: None,
         auto_commit: true,

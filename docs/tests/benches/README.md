@@ -1,4 +1,4 @@
-# GraphDB 性能基准测试文档汇总
+# Linkrs 性能基准测试文档汇总
 
 **创建日期**: 2026-06-18  
 **文档总数**: 4 份  
@@ -336,4 +336,4 @@ cat docs/tests/benches/performance_benchmark_plan.md
 **文档汇总完成**  
 **总体完成度**: ✅ 100%  
 **可以开始实施**: ✅ 是  
-**维护者**: GraphDB Team
+**维护者**: Linkrs Team

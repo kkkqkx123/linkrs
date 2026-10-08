@@ -4,7 +4,7 @@
 
 ### 1.1 目标
 
-为 GraphDB CLI 提供多层次的智能自动补全系统，覆盖关键字、对象名、函数名、变量名等，并根据上下文提供精准的补全建议。
+为 Linkrs CLI 提供多层次的智能自动补全系统，覆盖关键字、对象名、函数名、变量名等，并根据上下文提供精准的补全建议。
 
 ### 1.2 参考实现
 
@@ -16,7 +16,7 @@
 
 ### 2.1 Phase 1 已实现
 
-当前 `GraphDBCompleter`（`src/completion/completer.rs`）实现了：
+当前 `LinkrsCompleter`（`src/completion/completer.rs`）实现了：
 
 - **关键字补全**：硬编码的 GQL 关键字列表（约 110 个）
 - **元命令补全**：硬编码的 `\` 命令列表（约 30 个）
@@ -131,7 +131,7 @@ enum FunctionCategory {
 #### 3.3.2 变量补全
 
 ```rust
-impl Completer for GraphDBCompleter {
+impl Completer for LinkrsCompleter {
     fn complete(&self, line: &str, pos: usize, ctx: &Context) -> Result<...> {
         // 检测 :varname 模式
         if let Some(colon_pos) = find_variable_prefix(line, pos) {
@@ -175,7 +175,7 @@ impl SchemaCache {
         }
     }
 
-    pub async fn refresh(&mut self, client: &GraphDBHttpClient, space: Option<&str>) -> Result<()> {
+    pub async fn refresh(&mut self, client: &LinkrsHttpClient, space: Option<&str>) -> Result<()> {
         self.spaces = client.list_spaces().await?;
         if let Some(space) = space {
             self.tags = client.list_tags(space).await?;
@@ -295,7 +295,7 @@ fn filter_used_names(candidates: &mut Vec<StringCandidate>, used: &HashSet<Strin
 ### 4.2 实现设计
 
 ```rust
-impl Hinter for GraphDBCompleter {
+impl Hinter for LinkrsCompleter {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
@@ -335,7 +335,7 @@ src/completion/
 ### 5.2 核心接口变更
 
 ```rust
-pub struct GraphDBCompleter {
+pub struct LinkrsCompleter {
     keywords: Vec<KeywordEntry>,
     functions: Vec<FunctionEntry>,
     meta_commands: Vec<MetaCommandEntry>,
@@ -346,7 +346,7 @@ pub struct GraphDBCompleter {
 
 **与 Session 的联动**：
 
-- `Session.variables` 通过 `Arc<Mutex<>>` 共享给 `GraphDBCompleter`
+- `Session.variables` 通过 `Arc<Mutex<>>` 共享给 `LinkrsCompleter`
 - `SchemaCache` 同样通过 `Arc<Mutex<>>` 共享
 - 补全时加锁读取，不阻塞主线程
 

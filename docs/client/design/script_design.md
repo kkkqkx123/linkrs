@@ -4,7 +4,7 @@
 
 ### 1.1 目标
 
-为 GraphDB CLI 提供完善的脚本执行功能，支持从文件读取并批量执行 GQL 语句，包括事务控制、错误处理、条件执行、输出控制和脚本嵌套，参考 psql 的脚本执行机制。
+为 Linkrs CLI 提供完善的脚本执行功能，支持从文件读取并批量执行 GQL 语句，包括事务控制、错误处理、条件执行、输出控制和脚本嵌套，参考 psql 的脚本执行机制。
 
 ### 1.2 参考实现
 
@@ -272,8 +272,8 @@ impl std::fmt::Display for ScriptError {
 #### 3.3.1 单事务模式
 
 ```bash
-graphdb-cli -1 -f init_script.gql
-graphdb-cli --single-transaction -f init_script.gql
+linkrs-cli -1 -f init_script.gql
+linkrs-cli --single-transaction -f init_script.gql
 ```
 
 **行为**：
@@ -553,7 +553,7 @@ impl OutputRedirector {
 #### 3.7.1 传递参数
 
 ```bash
-graphdb-cli -f init.gql -v space=mygraph -v vid_type=FIXED_STRING\(32\)
+linkrs-cli -f init.gql -v space=mygraph -v vid_type=FIXED_STRING\(32\)
 ```
 
 脚本中使用变量引用：
@@ -566,7 +566,7 @@ USE :space;
 #### 3.7.2 位置参数
 
 ```bash
-graphdb-cli -f init.gql -v 1=mygraph -v 2=FIXED_STRING\(32\)
+linkrs-cli -f init.gql -v 1=mygraph -v 2=FIXED_STRING\(32\)
 ```
 
 脚本中通过 `:1`、`:2` 引用位置参数。

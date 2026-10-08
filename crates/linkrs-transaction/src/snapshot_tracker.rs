@@ -1,0 +1,499 @@
+//! Explicit Snapshot Tracking
+//!
+//! Provides O(1) operations for querying the minimum active snapshot.
+//! Enables efficient tombstone garbage collection.
+//!
+//! ## Performance
+//!
+//! Uses BTreeMap for ordered snapshot tracking to achieve O(1) min queries
+//! instead of O(n) full scans. This is critical for high-concurrency scenarios
+//! with hundreds of concurrent reads.
+
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use dashmap::DashMap;
+use parking_lot::RwLock;
+
+use linkrs_core::error::storage::StorageErrorKind;
+use linkrs_core::error::StorageError;
+use linkrs_core::types::Timestamp;
+
+/// Tracks all active snapshots and their reference counts
+///
+/// This structure maintains:
+/// - A mapping of active snapshot timestamps to reference counts (for concurrent access)
+/// - An ordered BTreeMap for O(1) minimum snapshot queries
+/// - Thread-safe concurrent access
+///
+/// ## Example
+///
+/// ```rust
+/// use linkrs_transaction::snapshot_tracker::SnapshotTracker;
+///
+/// let tracker = SnapshotTracker::new();
+///
+/// // Create a snapshot
+/// tracker.add_snapshot(100).unwrap();
+///
+/// // Query minimum active snapshot
+/// let min = tracker.min_active_snapshot(); // O(1)
+///
+/// // Release snapshot
+/// tracker.release_snapshot(100).unwrap();
+/// ```
+pub struct SnapshotTracker {
+    /// Timestamp → reference count mapping (for concurrent updates)
+    snapshots: DashMap<u64, AtomicU64>,
+
+    /// Ordered snapshots for O(1) min queries
+    /// Only contains snapshots with ref_count > 0
+    /// RwLock allows concurrent reads for min queries without exclusive blocking.
+    ordered_snapshots: RwLock<BTreeMap<u64, u64>>,
+
+    /// First registration time for each active snapshot timestamp.
+    registered_at: DashMap<u64, Instant>,
+
+    /// Minimum active snapshot (cached for O(1) queries)
+    /// Updated via atomic compare-exchange to avoid locking on hot path.
+    min_active: AtomicU64,
+
+    /// Total registrations, including multiple readers at the same timestamp.
+    active_references: AtomicU64,
+}
+
+impl SnapshotTracker {
+    /// Create a new snapshot tracker
+    pub fn new() -> Self {
+        Self {
+            snapshots: DashMap::new(),
+            ordered_snapshots: RwLock::new(BTreeMap::new()),
+            registered_at: DashMap::new(),
+            min_active: AtomicU64::new(u64::MAX),
+            active_references: AtomicU64::new(0),
+        }
+    }
+
+    /// Add a new snapshot, incrementing its reference count
+    pub fn add_snapshot(&self, ts: Timestamp) -> Result<(), StorageError> {
+        self.active_references.fetch_add(1, Ordering::Relaxed);
+
+        // Increment reference count or create new entry
+        match self.snapshots.get(&ts) {
+            Some(count) => {
+                let new_count = count.fetch_add(1, Ordering::Relaxed) + 1;
+                log::trace!(
+                    "Snapshot {} ref count: {} -> {}",
+                    ts,
+                    new_count - 1,
+                    new_count
+                );
+            }
+            None => {
+                self.snapshots.insert(ts, AtomicU64::new(1));
+                self.registered_at.insert(ts, Instant::now());
+                log::trace!("Snapshot {} added with ref count 1", ts);
+
+                {
+                    let mut ordered = self.ordered_snapshots.write();
+                    ordered.insert(ts, 1);
+                }
+                self.update_min_active(ts);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Release a snapshot, decrementing its reference count
+    ///
+    /// When reference count reaches zero, the snapshot is removed
+    pub fn release_snapshot(&self, ts: Timestamp) -> Result<(), StorageError> {
+        match self.snapshots.get(&ts) {
+            Some(count) => {
+                let new_count = count.fetch_sub(1, Ordering::Relaxed) - 1;
+                log::trace!(
+                    "Snapshot {} ref count: {} -> {}",
+                    ts,
+                    new_count + 1,
+                    new_count
+                );
+
+                if new_count == 0 {
+                    drop(count); // Release the entry guard
+                    self.snapshots.remove(&ts);
+                    self.registered_at.remove(&ts);
+                    log::trace!("Snapshot {} removed (ref count = 0)", ts);
+
+                    // Hold the write lock through remove + recompute to prevent
+                    // a concurrent add_snapshot from inserting a new minimum
+                    // between the remove and the min_active update.
+                    let mut ordered = self.ordered_snapshots.write();
+                    ordered.remove(&ts);
+                    let was_min = self.min_active.load(Ordering::Acquire) == ts;
+                    if was_min {
+                        let new_min = ordered.keys().next().copied().unwrap_or(u64::MAX);
+                        // Use compare_exchange loop: a concurrent add_snapshot may
+                        // have inserted a smaller entry and lowered min_active via
+                        // fetch_min between our tree read and this update. Only
+                        // update if min_active still equals ts (i.e. no concurrent
+                        // update has occurred). If it has, the loop retries with
+                        // the current value, eventually converging.
+                        let mut current = ts;
+                        while current == ts {
+                            match self.min_active.compare_exchange(
+                                current,
+                                new_min,
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            ) {
+                                Ok(_) => break,
+                                Err(actual) => current = actual,
+                            }
+                        }
+                    }
+                }
+                self.active_references.fetch_sub(1, Ordering::Relaxed);
+                Ok(())
+            }
+            None => Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                format!("Snapshot {} not found", ts),
+            )),
+        }
+    }
+
+    /// Get the minimum active snapshot timestamp (O(1) with caching)
+    pub fn min_active_snapshot(&self) -> Timestamp {
+        let min = self.min_active.load(Ordering::Acquire);
+        if min == u64::MAX {
+            u64::MAX // No active snapshots
+        } else {
+            min
+        }
+    }
+
+    /// Get the cleanup threshold based on minimum active snapshot
+    ///
+    /// Returns the minimum active snapshot timestamp.
+    /// All versions with timestamp < this value can be safely cleaned.
+    pub fn cleanup_threshold(&self) -> Timestamp {
+        self.min_active_snapshot()
+    }
+
+    /// Fast path: atomically lower the cached min without BTree lock.
+    /// Used on insert of a new distinct timestamp.
+    fn update_min_active(&self, ts: Timestamp) {
+        self.min_active.fetch_min(ts, Ordering::AcqRel);
+    }
+
+    /// Fast check whether a timestamp is currently active.
+    pub fn is_active(&self, ts: Timestamp) -> bool {
+        self.snapshots.contains_key(&ts)
+    }
+
+    /// Drop every tracked snapshot and reset the cached minimum.
+    ///
+    /// Used by version-manager reset and restart rebuilds so a stale pin
+    /// cannot hold the safe-GC waterfront back forever.
+    pub fn clear(&self) {
+        self.snapshots.clear();
+        self.registered_at.clear();
+        self.ordered_snapshots.write().clear();
+        self.min_active.store(u64::MAX, Ordering::Release);
+        self.active_references.store(0, Ordering::Release);
+    }
+
+    /// Contains check for snapshot existence.
+    pub fn contains_snapshot(&self, ts: Timestamp) -> bool {
+        self.snapshots.contains_key(&ts)
+    }
+
+    /// Number of distinct snapshot timestamps (unique ts count).
+    pub fn distinct_count(&self) -> usize {
+        self.ordered_snapshots.read().len()
+    }
+
+    /// Get the reference count for a specific snapshot (for testing)
+    pub fn ref_count(&self, ts: Timestamp) -> Option<u64> {
+        self.snapshots
+            .get(&ts)
+            .map(|count| count.load(Ordering::Relaxed))
+    }
+
+    /// Get the total number of active snapshots (for testing)
+    pub fn active_count(&self) -> usize {
+        self.active_references.load(Ordering::Acquire) as usize
+    }
+
+    /// Age of the oldest active snapshot registration.
+    pub fn oldest_age(&self) -> Option<Duration> {
+        self.registered_at
+            .iter()
+            .map(|entry| entry.value().elapsed())
+            .max()
+    }
+}
+
+impl Default for SnapshotTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_and_query_snapshot() {
+        let tracker = SnapshotTracker::new();
+
+        assert!(tracker.add_snapshot(100).is_ok());
+        assert_eq!(tracker.min_active_snapshot(), 100);
+        assert_eq!(tracker.cleanup_threshold(), 100);
+    }
+
+    #[test]
+    fn test_multiple_snapshots() {
+        let tracker = SnapshotTracker::new();
+
+        assert!(tracker.add_snapshot(50).is_ok());
+        assert!(tracker.add_snapshot(100).is_ok());
+        assert!(tracker.add_snapshot(150).is_ok());
+
+        assert_eq!(tracker.min_active_snapshot(), 50);
+    }
+
+    #[test]
+    fn test_release_snapshot() {
+        let tracker = SnapshotTracker::new();
+
+        assert!(tracker.add_snapshot(100).is_ok());
+        assert_eq!(tracker.min_active_snapshot(), 100);
+
+        assert!(tracker.release_snapshot(100).is_ok());
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+    }
+
+    #[test]
+    fn test_ref_count() {
+        let tracker = SnapshotTracker::new();
+
+        assert!(tracker.add_snapshot(100).is_ok());
+        assert!(tracker.add_snapshot(100).is_ok());
+
+        assert!(tracker.release_snapshot(100).is_ok());
+        assert_eq!(tracker.min_active_snapshot(), 100);
+
+        assert!(tracker.release_snapshot(100).is_ok());
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+    }
+
+    #[test]
+    fn test_active_count_includes_same_timestamp_references() {
+        let tracker = SnapshotTracker::new();
+        tracker
+            .add_snapshot(100)
+            .expect("first snapshot must register");
+        tracker
+            .add_snapshot(100)
+            .expect("second snapshot must register");
+
+        assert_eq!(tracker.active_count(), 2);
+        assert!(tracker.oldest_age().is_some());
+
+        tracker
+            .release_snapshot(100)
+            .expect("first snapshot must release");
+        assert_eq!(tracker.active_count(), 1);
+    }
+
+    #[test]
+    fn test_cleanup_threshold() {
+        let tracker = SnapshotTracker::new();
+
+        // Add snapshots
+        tracker.add_snapshot(50).unwrap();
+        tracker.add_snapshot(100).unwrap();
+        tracker.add_snapshot(150).unwrap();
+
+        // Cleanup threshold should be the minimum active snapshot
+        assert_eq!(tracker.cleanup_threshold(), 50);
+
+        // Release the minimum
+        tracker.release_snapshot(50).unwrap();
+
+        // Now minimum should be 100
+        assert_eq!(tracker.cleanup_threshold(), 100);
+
+        // Release 100
+        tracker.release_snapshot(100).unwrap();
+
+        // Now we can cleanup before 150
+        assert_eq!(tracker.cleanup_threshold(), 150);
+
+        // Release last one
+        tracker.release_snapshot(150).unwrap();
+        assert_eq!(tracker.cleanup_threshold(), u64::MAX);
+    }
+
+    #[test]
+    fn test_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let tracker = Arc::new(SnapshotTracker::new());
+
+        let mut handles = vec![];
+
+        // Spawn multiple threads adding snapshots
+        for i in 0..10 {
+            let tracker_clone = Arc::clone(&tracker);
+            let handle = thread::spawn(move || {
+                for ts in (i * 100)..(i * 100 + 50) {
+                    let _ = tracker_clone.add_snapshot(ts);
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        assert!(tracker.min_active_snapshot() <= 50);
+    }
+
+    #[test]
+    fn test_release_nonexistent_snapshot() {
+        let tracker = SnapshotTracker::new();
+        assert!(tracker.release_snapshot(100).is_err());
+    }
+
+    #[test]
+    fn test_ordered_snapshots_consistency() {
+        let tracker = SnapshotTracker::new();
+
+        // Add snapshots in non-sorted order
+        tracker.add_snapshot(300).unwrap();
+        tracker.add_snapshot(100).unwrap();
+        tracker.add_snapshot(200).unwrap();
+
+        // Min should still be correct
+        assert_eq!(tracker.min_active_snapshot(), 100);
+
+        // Release out of order
+        tracker.release_snapshot(200).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 100);
+
+        tracker.release_snapshot(100).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 300);
+
+        tracker.release_snapshot(300).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+    }
+
+    #[test]
+    fn test_high_concurrency_stress() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Arc;
+        use std::thread;
+
+        let tracker = Arc::new(SnapshotTracker::new());
+        let mut handles = vec![];
+        let error_count = Arc::new(AtomicUsize::new(0));
+
+        // 100 concurrent threads doing add/release cycles
+        for tid in 0..100 {
+            let t = Arc::clone(&tracker);
+            let errors = Arc::clone(&error_count);
+            let handle = thread::spawn(move || {
+                for cycle in 0..100 {
+                    let ts = tid * 1000 + cycle;
+                    if t.add_snapshot(ts).is_err() {
+                        errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+
+                for cycle in 0..100 {
+                    let ts = tid * 1000 + cycle;
+                    if t.release_snapshot(ts).is_err() {
+                        errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // No errors should occur
+        assert_eq!(error_count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+    }
+
+    #[test]
+    fn test_atomic_min_cache_fetch_min_optimization() {
+        let tracker = SnapshotTracker::new();
+        tracker.add_snapshot(100).unwrap();
+        tracker.add_snapshot(50).unwrap();
+        // fetch_min should have updated min to 50 without recomputing whole tree
+        assert_eq!(tracker.min_active_snapshot(), 50);
+        tracker.add_snapshot(200).unwrap();
+        // min should stay 50
+        assert_eq!(tracker.min_active_snapshot(), 50);
+        tracker.release_snapshot(50).unwrap();
+        // recompute should happen only because removed min
+        assert_eq!(tracker.min_active_snapshot(), 100);
+        tracker.release_snapshot(200).unwrap();
+        // removing non-min should not recompute (still 100)
+        assert_eq!(tracker.min_active_snapshot(), 100);
+    }
+
+    #[test]
+    fn test_concurrent_add_release_min_active_correctness() {
+        use std::sync::Arc;
+        use std::thread;
+        let tracker = Arc::new(SnapshotTracker::new());
+        let mut handles = vec![];
+        for tid in 0..20 {
+            let t = Arc::clone(&tracker);
+            handles.push(thread::spawn(move || {
+                for cycle in 0..200 {
+                    let ts = tid * 1000 + cycle + 1;
+                    t.add_snapshot(ts).unwrap();
+                    // verify min is not greater than this ts if it is minimum
+                    let min = t.min_active_snapshot();
+                    assert!(min <= ts || min == u64::MAX);
+                    t.release_snapshot(ts).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+        assert_eq!(tracker.active_count(), 0);
+    }
+
+    #[test]
+    fn test_snapshot_tracker_releases_min_then_adds_smaller() {
+        let tracker = SnapshotTracker::new();
+        tracker.add_snapshot(100).unwrap();
+        tracker.add_snapshot(50).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 50);
+        tracker.release_snapshot(50).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 100);
+        tracker.add_snapshot(25).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 25);
+        tracker.release_snapshot(25).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), 100);
+        tracker.release_snapshot(100).unwrap();
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
+    }
+}

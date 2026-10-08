@@ -26,9 +26,9 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use graphdb::core::types::EdgeStrategy;
-use graphdb::storage::edge::edge_table::config::EdgeTableConfig;
-use graphdb::storage::edge::{EdgeSchema, EdgeStore};
+use linkrs::core::types::EdgeStrategy;
+use linkrs::storage::edge::edge_table::config::EdgeTableConfig;
+use linkrs::storage::edge::{EdgeSchema, EdgeStore};
 
 /// Batch sizes for the scaling leg (commit hold-time growth).
 const SIZES: [usize; 3] = [5_000, 10_000, 20_000];
@@ -47,7 +47,7 @@ fn make_table() -> EdgeStore {
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
-        record_form: graphdb::storage::edge::RecordForm::Columnar,
+        record_form: linkrs::storage::edge::RecordForm::Columnar,
     };
     EdgeStore::with_config(schema, EdgeTableConfig::default()).expect("bench table builds")
 }

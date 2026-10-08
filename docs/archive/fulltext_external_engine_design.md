@@ -3,7 +3,7 @@
 > 状态：设计文档（2026-08-28）
 > 前置文档：
 > - `docs/plan/fulltext_vector_architecture_refactor.md`（Phase 2: Fulltext 后端抽象）
-> - `crates/graphdb-fulltext/src/engine.rs`（`FulltextSearchEngine` trait 定义）
+> - `crates/linkrs-fulltext/src/engine.rs`（`FulltextSearchEngine` trait 定义）
 
 ---
 
@@ -22,7 +22,7 @@
 
 ### 2.1 `FulltextSearchEngine` trait
 
-Phase 2 在 `crates/graphdb-fulltext/src/engine.rs` 中定义了后端无关的搜索引擎 trait：
+Phase 2 在 `crates/linkrs-fulltext/src/engine.rs` 中定义了后端无关的搜索引擎 trait：
 
 ```rust
 #[async_trait]
@@ -130,7 +130,7 @@ fulltext-meilisearch = ["dep:reqwest"]       # Meilisearch 客户端
 
 ### 3.4 配置扩展
 
-在 `graphdb-config` 中扩展 `FulltextConfig`：
+在 `linkrs-config` 中扩展 `FulltextConfig`：
 
 ```rust
 pub struct FulltextConfig {
@@ -202,7 +202,7 @@ Tantivy 有本地 `consistency_state`（Consistent/Inconsistent/Rebuilding）。
 
 ### Phase 2: Elasticsearch 引擎（2-3 周）
 
-1. 创建 `graphdb-fulltext-elasticsearch` crate（或 feature-gated 模块）
+1. 创建 `linkrs-fulltext-elasticsearch` crate（或 feature-gated 模块）
 2. 实现 `ElasticsearchEngine: FulltextSearchEngine`
 3. 实现 `ElasticsearchEngineFactory`
 4. 配置管理和 HTTP 客户端

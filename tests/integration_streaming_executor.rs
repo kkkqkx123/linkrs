@@ -3,32 +3,32 @@
 //! Tests the workflow: StreamingExecutor construction → execution call chain
 //! Focus: verify call chain integrity and executor lifecycle
 
-use graphdb::core::error::QueryError;
-use graphdb::core::types::expr::Expression;
-use graphdb::core::types::expr::FunctionArg;
-use graphdb::core::types::operators::AggregateFunction;
-use graphdb::core::types::operators::BinaryOperator;
-use graphdb::core::Value;
-use graphdb::query::executor::base::{MemoryBudget, MemoryTracker};
-use graphdb::query::executor::streaming::chunk::DataChunk;
-use graphdb::query::executor::streaming::executor::SortDirection;
-use graphdb::query::executor::streaming::executor::StreamingExecutor;
-use graphdb::query::executor::streaming::operators::base::OperatorBase;
-use graphdb::query::executor::streaming::operators::blocking::{
+use linkrs::core::error::QueryError;
+use linkrs::core::types::expr::Expression;
+use linkrs::core::types::expr::FunctionArg;
+use linkrs::core::types::operators::AggregateFunction;
+use linkrs::core::types::operators::BinaryOperator;
+use linkrs::core::Value;
+use linkrs::query::executor::base::{MemoryBudget, MemoryTracker};
+use linkrs::query::executor::streaming::chunk::DataChunk;
+use linkrs::query::executor::streaming::executor::SortDirection;
+use linkrs::query::executor::streaming::executor::StreamingExecutor;
+use linkrs::query::executor::streaming::operators::base::OperatorBase;
+use linkrs::query::executor::streaming::operators::blocking::{
     BlockingOperator, BlockingOperatorKind,
 };
-use graphdb::query::executor::streaming::operators::join_operator::{
+use linkrs::query::executor::streaming::operators::join_operator::{
     HashJoinBuildSide, JoinOperator, JoinOperatorKind,
 };
-use graphdb::query::executor::streaming::operators::set_operator::{SetOperator, SetOperatorKind};
-use graphdb::query::executor::streaming::operators::source_operator::{
+use linkrs::query::executor::streaming::operators::set_operator::{SetOperator, SetOperatorKind};
+use linkrs::query::executor::streaming::operators::source_operator::{
     SourceOperator, SourceOperatorKind,
 };
-use graphdb::query::executor::streaming::operators::spec::BuildSide;
-use graphdb::query::executor::streaming::operators::unary_operator::{
+use linkrs::query::executor::streaming::operators::spec::BuildSide;
+use linkrs::query::executor::streaming::operators::unary_operator::{
     UnaryOperator, UnaryOperatorKind, UnaryOperatorState,
 };
-use graphdb::query::executor::streaming::slot::SlotLayout;
+use linkrs::query::executor::streaming::slot::SlotLayout;
 use std::sync::Arc;
 
 fn empty_layout() -> Arc<SlotLayout> {
@@ -438,7 +438,7 @@ fn test_hash_join_in_chain() {
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
                 right_col_names: vec![],
                 build_side_select: BuildSide::Left,
-                grace: graphdb::query::executor::streaming::operators::join_operator::grace_join::GraceJoinState::default(),
+                grace: linkrs::query::executor::streaming::operators::join_operator::grace_join::GraceJoinState::default(),
             },
             empty_layout(),
         )),
@@ -721,26 +721,26 @@ fn test_distinct_all_same() {
 
 #[cfg(test)]
 mod storage_backed {
-    use graphdb::core::types::VertexId;
-    use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo};
-    use graphdb::core::vertex_edge_path::{Tag, Vertex};
-    use graphdb::core::DataType;
-    use graphdb::core::Value;
-    use graphdb::query::executor::streaming::StreamingQueryResult;
-    use graphdb::query::optimizer::OptimizerEngine;
-    use graphdb::query::QueryPipelineManager;
-    use graphdb::query::QueryRequestContext;
-    use graphdb::storage::{
+    use linkrs::core::types::VertexId;
+    use linkrs::core::types::{PropertyDef, SpaceInfo, TagInfo};
+    use linkrs::core::vertex_edge_path::{Tag, Vertex};
+    use linkrs::core::DataType;
+    use linkrs::core::Value;
+    use linkrs::query::executor::streaming::StreamingQueryResult;
+    use linkrs::query::optimizer::OptimizerEngine;
+    use linkrs::query::QueryPipelineManager;
+    use linkrs::query::QueryRequestContext;
+    use linkrs::storage::{
         StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
     };
-    use graphdb::test_utils::TestStorage;
-    use graphdb_metrics::StatsManager;
+    use linkrs::test_utils::TestStorage;
+    use linkrs_metrics::StatsManager;
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::sync::Arc;
 
     /// Set up a minimal graph space with a Person tag and a few vertices.
-    fn setup_test_data(storage: &Arc<RwLock<graphdb::storage::GraphStorage>>) {
+    fn setup_test_data(storage: &Arc<RwLock<linkrs::storage::GraphStorage>>) {
         let mut store = storage.write();
         let mut space = SpaceInfo::new("test".to_string()).with_vid_type(DataType::BigInt);
         store.create_space(&mut space).unwrap();
@@ -868,7 +868,7 @@ mod storage_backed {
         )
         .with_schema_manager(schema_manager);
         let collect_visible =
-            |pipeline: &mut QueryPipelineManager<graphdb::storage::GraphStorage>,
+            |pipeline: &mut QueryPipelineManager<linkrs::storage::GraphStorage>,
              sql: &str|
              -> Vec<Vec<Value>> {
                 let rctx = Arc::new(QueryRequestContext::new(sql.to_string()));
@@ -913,8 +913,8 @@ mod storage_backed {
 
 #[test]
 fn test_columnar_stats_realistic_workload() {
-    use graphdb::query::executor::streaming::runtime::ColumnarStats;
-    use graphdb::query::executor::streaming::slot::SlotLayout;
+    use linkrs::query::executor::streaming::runtime::ColumnarStats;
+    use linkrs::query::executor::streaming::slot::SlotLayout;
     use std::sync::Arc;
 
     let layout = Arc::new(SlotLayout::from_names(&[

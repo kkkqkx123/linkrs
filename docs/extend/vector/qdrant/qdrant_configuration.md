@@ -13,7 +13,7 @@
 - [4. HNSW配置](#4-hnsw配置)
 - [5. 量化配置](#5-量化配置)
 - [6. 优化器配置](#6-优化器配置)
-- [7. GraphDB集成配置](#7-graphdb集成配置)
+- [7. Linkrs集成配置](#7-linkrs集成配置)
 
 ---
 
@@ -272,12 +272,12 @@ let optimizers_config = OptimizersConfigDiffBuilder::default()
 
 ---
 
-## 7. GraphDB集成配置
+## 7. Linkrs集成配置
 
 ### 7.1 配置文件结构
 
 ```toml
-# graphdb.toml
+# linkrs.toml
 [vector]
 enabled = true
 engine = "qdrant"

@@ -48,8 +48,8 @@ R2 在单写者架构下收益约等于零。
 
 | 文件 | 函数 | 改动 |
 |---|---|---|
-| `crates/graphdb-storage/src/storage/engine/graph_storage/reader.rs` | `scan_edges_by_type`（无约束分支，src/dst label 均为 0） | 串行遍历全部分区 → **scatter-gather + rayon `par_iter`** |
-| `crates/graphdb-storage/src/storage/engine/graph_storage/context/query.rs` | `collect_all_edge_records` | 同上 |
+| `crates/linkrs-storage/src/storage/engine/graph_storage/reader.rs` | `scan_edges_by_type`（无约束分支，src/dst label 均为 0） | 串行遍历全部分区 → **scatter-gather + rayon `par_iter`** |
+| `crates/linkrs-storage/src/storage/engine/graph_storage/context/query.rs` | `collect_all_edge_records` | 同上 |
 
 实现要点：
 
@@ -197,11 +197,11 @@ PostgreSQL 式"无 undo"（CLOG + 可见性过滤）：linkrs 的版本链（`co
 
 | 位置 | 缺陷 | 修复 |
 |---|---|---|
-| `crates/graphdb-storage/src/storage/engine/graph_storage/context/freeze.rs` `trigger_background_freeze` | `CompactConfig::with_fixed_ratio(true, 2.0)` 的 2.0 被 clamp 到 1.0 | 改为 `0.5`（等价于 2× 容量意图） |
-| `crates/graphdb-storage/src/storage/edge/mutable_csr.rs` `compact_with_ts` | `valid / (1.0 - reserve_ratio)` 在 ratio=1.0 时除零 → `inf as u32` 饱和到 `u32::MAX`，逐顶点容量爆炸（~205TB 分配，进程 OOM） | 对 `reserve_ratio ≥ 1.0` 守卫为"无预留"（`new_cap = valid`）；新增 2 个回归测试 |
+| `crates/linkrs-storage/src/storage/engine/graph_storage/context/freeze.rs` `trigger_background_freeze` | `CompactConfig::with_fixed_ratio(true, 2.0)` 的 2.0 被 clamp 到 1.0 | 改为 `0.5`（等价于 2× 容量意图） |
+| `crates/linkrs-storage/src/storage/edge/mutable_csr.rs` `compact_with_ts` | `valid / (1.0 - reserve_ratio)` 在 ratio=1.0 时除零 → `inf as u32` 饱和到 `u32::MAX`，逐顶点容量爆炸（~205TB 分配，进程 OOM） | 对 `reserve_ratio ≥ 1.0` 守卫为"无预留"（`new_cap = valid`）；新增 2 个回归测试 |
 
-验证：`cargo test -p graphdb-storage --lib`（717 个）全绿；`cargo clippy -p graphdb-storage --all-targets`、
-`cargo check -p graphdb --features server,fulltext,c_api,grpc,qdrant` 通过。
+验证：`cargo test -p linkrs-storage --lib`（717 个）全绿；`cargo clippy -p linkrs-storage --all-targets`、
+`cargo check -p linkrs --features server,fulltext,c_api,grpc,qdrant` 通过。
 
 ---
 

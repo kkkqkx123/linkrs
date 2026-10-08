@@ -3,8 +3,8 @@
 //! Verifies that different execution paths (materialized, streaming, embedded)
 //! produce the same transactional results for the same script.
 
-use graphdb::core::types::TransactionId;
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+use linkrs::core::types::TransactionId;
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
 /// Verify that the same transaction lifecycle (begin → commit) works
 /// regardless of whether the transaction is created via `begin_transaction`

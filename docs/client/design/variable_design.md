@@ -4,7 +4,7 @@
 
 ### 1.1 目标
 
-为 GraphDB CLI 提供完整的变量管理系统，支持用户自定义变量、变量替换、特殊内置变量、变量持久化和环境变量集成，参考 psql 的变量机制。
+为 Linkrs CLI 提供完整的变量管理系统，支持用户自定义变量、变量替换、特殊内置变量、变量持久化和环境变量集成，参考 psql 的变量机制。
 
 ### 1.2 参考实现
 
@@ -97,7 +97,7 @@ MATCH (p:person) WHERE p.name == :name RETURN p LIMIT :limit;
 
 ```sql
 -- 环境变量 HOME 可通过 :ENV_HOME 引用
-\set output_dir :ENV_HOME/graphdb_output
+\set output_dir :ENV_HOME/linkrs_output
 ```
 
 ### 3.2 变量替换语法
@@ -255,8 +255,8 @@ fn is_var_char(c: char) -> bool {
 #### 3.3.4 命令行预设
 
 ```bash
-graphdb-cli -v limit=10 -v name=Alice
-graphdb-cli --variable=limit=10 --variable=name=Alice
+linkrs-cli -v limit=10 -v name=Alice
+linkrs-cli --variable=limit=10 --variable=name=Alice
 ```
 
 ```rust
@@ -341,7 +341,7 @@ async fn execute_query(&mut self, query: &str, session: &mut SessionManager) -> 
 #### 3.5.1 存储位置
 
 ```
-~/.graphdb/
+~/.linkrs/
 ├── cli_variables.toml    # 用户变量持久化文件
 └── config.toml           # CLI 配置文件（含特殊变量默认值）
 ```
@@ -353,7 +353,7 @@ async fn execute_query(&mut self, query: &str, session: &mut SessionManager) -> 
 [variables]
 limit = "10"
 space = "mygraph"
-output_dir = "/tmp/graphdb_output"
+output_dir = "/tmp/linkrs_output"
 
 [special]
 ON_ERROR_STOP = "on"
@@ -408,7 +408,7 @@ impl VariableStore {
 ```
 :limit       = 10
 :name        = Alice
-:output_dir  = /tmp/graphdb_output
+:output_dir  = /tmp/linkrs_output
 ```
 
 ## 4. 模块结构
@@ -536,7 +536,7 @@ pub struct Session {
 ### 6.3 命令行预设
 
 ```bash
-graphdb-cli -v limit=10 -v name=Alice
+linkrs-cli -v limit=10 -v name=Alice
 # 在 CLI 中：
 # :limit → 10
 # :name → Alice

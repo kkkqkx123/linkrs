@@ -2,7 +2,7 @@
 
 ## 1. 现状分析
 
-文件 `crates/graphdb-query/src/planning/plan/factorization_compute.rs` 共 1576 行，包含一个巨型 `match self` 实现 `FactorizedSchemaCompute for LogicalNodeEnum`，涵盖 **48+ 个 LogicalNodeEnum 变体**的 schema 计算逻辑。职责过多体现在：
+文件 `crates/linkrs-query/src/planning/plan/factorization_compute.rs` 共 1576 行，包含一个巨型 `match self` 实现 `FactorizedSchemaCompute for LogicalNodeEnum`，涵盖 **48+ 个 LogicalNodeEnum 变体**的 schema 计算逻辑。职责过多体现在：
 
 | 类别 | 变体数 | 重复模式 |
 |------|--------|----------|
@@ -101,5 +101,5 @@ pub mod factorization_compute;  // 无需修改，Rust 自动识别目录形式�
 ## 4. 验证
 
 - `cargo fmt` 确保格式正确
-- `cargo test --lib -p graphdb-query` 确保所有原有测试通过
-- `cargo clippy -p graphdb-query` 确保无新警告
+- `cargo test --lib -p linkrs-query` 确保所有原有测试通过
+- `cargo clippy -p linkrs-query` 确保无新警告

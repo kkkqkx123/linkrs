@@ -1,12 +1,12 @@
-# GraphDB CLI E2E 测试设计方案
+# Linkrs CLI E2E 测试设计方案
 
 ## 概述
 
-本文档描述使用 graphdb-cli 进行端到端 (E2E) 测试的完整设计方案，包括测试命令范围、测试数据设计和执行流程。
+本文档描述使用 linkrs-cli 进行端到端 (E2E) 测试的完整设计方案，包括测试命令范围、测试数据设计和执行流程。
 
 ## 测试目标
 
-1. 验证 graphdb-cli 与 GraphDB 服务器的完整交互链路
+1. 验证 linkrs-cli 与 Linkrs 服务器的完整交互链路
 2. 验证 EXPLAIN/PROFILE 等分析命令的正确性
 3. 验证各类查询语句的执行结果
 4. 验证元数据管理功能
@@ -488,14 +488,14 @@ TC-025: 执行脚本文件
 ### 阶段 1: 环境准备
 
 ```bash
-# 1. 启动 GraphDB 服务器
+# 1. 启动 Linkrs 服务器
 cargo run --release
 
 # 2. 等待服务器就绪
 curl http://localhost:8080/v1/health
 
-# 3. 启动 graphdb-cli
-cargo run -p graphdb_cli -- --host 127.0.0.1 --port 8080
+# 3. 启动 linkrs-cli
+cargo run -p linkrs_cli -- --host 127.0.0.1 --port 8080
 ```
 
 ### 阶段 2: 数据准备
@@ -543,13 +543,13 @@ DROP SPACE e2e_test
 
 ```bash
 # 单次命令执行
-graphdb-cli -h 127.0.0.1 -p 8080 -c "SHOW SPACES"
+linkrs-cli -h 127.0.0.1 -p 8080 -c "SHOW SPACES"
 
 # 执行脚本文件
-graphdb-cli -h 127.0.0.1 -p 8080 -f e2e_test_suite.gql
+linkrs-cli -h 127.0.0.1 -p 8080 -f e2e_test_suite.gql
 
 # 带变量执行
-graphdb-cli -h 127.0.0.1 -p 8080 -v "test_space=e2e_test" -f test.gql
+linkrs-cli -h 127.0.0.1 -p 8080 -v "test_space=e2e_test" -f test.gql
 ```
 
 ### 预期输出验证
@@ -609,4 +609,4 @@ TC-ERR-004: 无效 EXPLAIN
 
 - 最后更新: 2026-04-27
 - 版本: v1.0
-- 维护者: GraphDB Team
+- 维护者: Linkrs Team

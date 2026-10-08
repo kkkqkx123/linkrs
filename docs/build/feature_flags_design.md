@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档描述了 GraphDB 项目的条件编译系统设计，包括 feature flags 的配置、使用场景以及最佳实践。
+本文档描述了 Linkrs 项目的条件编译系统设计，包括 feature flags 的配置、使用场景以及最佳实践。
 
 ## 设计目标
 
@@ -20,30 +20,30 @@
 default = ["server"]
 
 # Server API (HTTP/Web interface)
-server = ["graphdb-api/server", "graphdb-config/server"]
+server = ["linkrs-api/server", "linkrs-config/server"]
 
 # Full-text search support
-fulltext = ["graphdb-api/fulltext", "graphdb-fulltext/fulltext", "graphdb-sync/fulltext"]
+fulltext = ["linkrs-api/fulltext", "linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
 
 # Optional Chinese tokenizer support for full-text search
-jieba = ["graphdb-fulltext/jieba"]
+jieba = ["linkrs-fulltext/jieba"]
 
 # Vector search support
 qdrant = [
-    "graphdb-api/qdrant",
-    "graphdb-config/qdrant",
-    "graphdb-sync/qdrant",
-    "graphdb-query/qdrant",
+    "linkrs-api/qdrant",
+    "linkrs-config/qdrant",
+    "linkrs-sync/qdrant",
+    "linkrs-query/qdrant",
 ]
 
 # Embedded API for standalone/embedded usage (Rust API only)
-embedded = ["graphdb-api/embedded", "graphdb-config/embedded"]
+embedded = ["linkrs-api/embedded", "linkrs-config/embedded"]
 
 # gRPC API (implies server)
-grpc = ["graphdb-api/grpc"]
+grpc = ["linkrs-api/grpc"]
 
 # C API bindings (requires embedded to be usable)
-c_api = ["graphdb-api/c_api"]
+c_api = ["linkrs-api/c_api"]
 ```
 
 ### Feature 依赖关系图
@@ -51,41 +51,41 @@ c_api = ["graphdb-api/c_api"]
 ```
 default (server)
 └── server
-    ├── graphdb-api/server
+    ├── linkrs-api/server
     │   ├── axum
     │   ├── tower
     │   ├── tower-http
     │   ├── http
     │   ├── sqlx
     │   └── async-trait
-    └── graphdb-config/server
+    └── linkrs-config/server
 
 fulltext
-├── graphdb-api/fulltext
-│   ├── graphdb-fulltext/fulltext
-│   ├── graphdb-sync/fulltext
-│   └── graphdb-query/fulltext
-├── graphdb-fulltext/fulltext
-└── graphdb-sync/fulltext
+├── linkrs-api/fulltext
+│   ├── linkrs-fulltext/fulltext
+│   ├── linkrs-sync/fulltext
+│   └── linkrs-query/fulltext
+├── linkrs-fulltext/fulltext
+└── linkrs-sync/fulltext
 
 jieba
-└── graphdb-fulltext/jieba
+└── linkrs-fulltext/jieba
 
 qdrant
-├── graphdb-api/qdrant
-├── graphdb-config/qdrant
-├── graphdb-sync/qdrant
-└── graphdb-query/qdrant
+├── linkrs-api/qdrant
+├── linkrs-config/qdrant
+├── linkrs-sync/qdrant
+└── linkrs-query/qdrant
 
 embedded
-├── graphdb-api/embedded
-└── graphdb-config/embedded
+├── linkrs-api/embedded
+└── linkrs-config/embedded
 
 grpc
-└── graphdb-api/grpc (implies server)
+└── linkrs-api/grpc (implies server)
 
 c_api
-└── graphdb-api/c_api (requires embedded 才能生效)
+└── linkrs-api/c_api (requires embedded 才能生效)
 ```
 
 ## 使用场景
@@ -137,7 +137,7 @@ cargo build --release --no-default-features --features embedded
 
 **代码示例**：
 ```rust
-use graphdb::api::embedded::{GraphDatabase, DatabaseConfig};
+use linkrs::api::embedded::{GraphDatabase, DatabaseConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 打开数据库
@@ -166,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### 场景 3：向量检索模式（Qdrant）
 
-**用途**：启用 GraphDB 的向量索引与相似度搜索。
+**用途**：启用 Linkrs 的向量索引与相似度搜索。
 
 **编译命令**：
 ```bash
@@ -217,7 +217,7 @@ cargo build --release --features embedded,server,qdrant
 ### 模块级别条件编译
 
 ```rust
-// crates/graphdb-api/src/api.rs
+// crates/linkrs-api/src/api.rs
 pub mod core;
 
 #[cfg(feature = "server")]
@@ -232,7 +232,7 @@ pub use core::{VectorApi, VectorSearchResult};
 
 ```rust
 // src/lib.rs
-pub use graphdb_api::api;
+pub use linkrs_api::api;
 // ... 其他子 crate 的 re-export
 
 #[cfg(feature = "embedded")]
@@ -283,13 +283,13 @@ fn test_c_api_database_open_close() {
 
 | Feature 组合 | 库类型 | 二进制 | 主要能力 |
 |-------------|--------|--------|----------|
-| `default` | cdylib + rlib | graphdb-server | HTTP 服务器 |
+| `default` | cdylib + rlib | linkrs-server | HTTP 服务器 |
 | `embedded` | cdylib + rlib | 无 | Embedded Rust API |
-| `server` | cdylib + rlib | graphdb-server | HTTP 服务器 |
-| `server,fulltext` | cdylib + rlib | graphdb-server | HTTP 服务器 + 全文搜索 |
-| `server,qdrant` | cdylib + rlib | graphdb-server | HTTP 服务器 + 向量检索 |
-| `embedded,server,qdrant` | cdylib + rlib | graphdb-server | Embedded + Server + 向量检索 |
-| `server,grpc` | cdylib + rlib | graphdb-server | HTTP 服务器 + gRPC |
+| `server` | cdylib + rlib | linkrs-server | HTTP 服务器 |
+| `server,fulltext` | cdylib + rlib | linkrs-server | HTTP 服务器 + 全文搜索 |
+| `server,qdrant` | cdylib + rlib | linkrs-server | HTTP 服务器 + 向量检索 |
+| `embedded,server,qdrant` | cdylib + rlib | linkrs-server | Embedded + Server + 向量检索 |
+| `server,grpc` | cdylib + rlib | linkrs-server | HTTP 服务器 + gRPC |
 | `embedded,c_api` | cdylib + rlib | 无 | Embedded + C API |
 
 ---
@@ -373,11 +373,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```toml
 # ❌ 不推荐：引入不必要的依赖
 [dependencies]
-graphdb = "0.1.0"  # 默认启用 server
+linkrs = "0.1.0"  # 默认启用 server
 
 # ✅ 推荐：明确指定需要的功能
 [dependencies]
-graphdb = { version = "0.1.0", default-features = false, features = ["embedded"] }
+linkrs = { version = "0.1.0", default-features = false, features = ["embedded"] }
 ```
 
 ### 2. 条件编译代码组织
@@ -408,7 +408,7 @@ graphdb = { version = "0.1.0", default-features = false, features = ["embedded"]
 ```rust
 //! ```rust,ignore
 //! // 需要启用 embedded feature
-//! use graphdb::api::embedded::GraphDatabase;
+//! use linkrs::api::embedded::GraphDatabase;
 //! ```
 ```
 

@@ -16,11 +16,11 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 
-use graphdb::core::types::{EdgeId, Timestamp, VertexId};
-use graphdb::core::{DataType, Value};
-use graphdb::storage::edge::mutable_csr::MutableCsr;
-use graphdb::storage::edge::property_schema::PropertySchema;
-use graphdb::storage::edge::{CsrWithProperties, RowEdgeBatch};
+use linkrs::core::types::{EdgeId, Timestamp, VertexId};
+use linkrs::core::{DataType, Value};
+use linkrs::storage::edge::mutable_csr::MutableCsr;
+use linkrs::storage::edge::property_schema::PropertySchema;
+use linkrs::storage::edge::{CsrWithProperties, RowEdgeBatch};
 
 const VERTICES: u32 = 4096;
 
@@ -97,7 +97,7 @@ fn bench_scan(csr: &MutableCsr, label: &str) {
         });
     }
     let secs = start.elapsed().as_secs_f64();
-    let bytes = visited * std::mem::size_of::<graphdb::storage::edge::Nbr>();
+    let bytes = visited * std::mem::size_of::<linkrs::storage::edge::Nbr>();
     println!(
         "scan {:<14}: {:>7.3} GB/s ({} edges, {:.3}s)",
         label,
@@ -516,7 +516,7 @@ fn bench_overflow_multi_block_traversal() {
         true
     });
     let secs = start.elapsed().as_secs_f64();
-    let bytes = visited * std::mem::size_of::<graphdb::storage::edge::Nbr>();
+    let bytes = visited * std::mem::size_of::<linkrs::storage::edge::Nbr>();
     println!(
         "overflow multi-block : {:>7.3} GB/s ({} edges, {} chunks, {:.3}s)",
         bytes as f64 / secs / 1e9,

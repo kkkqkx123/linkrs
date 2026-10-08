@@ -19,7 +19,7 @@ impl<S: crate::storage::StorageClient + 'static> ValidationHelper<S> {
     /// Create a new validation helper
     pub fn new(storage: Arc<RwLock<S>>) -> Self {
         use crate::query::optimizer::OptimizerEngine;
-        use graphdb_metrics::StatsManager;
+        use linkrs_metrics::StatsManager;
         use std::sync::Arc;
 
         let stats_manager = Arc::new(StatsManager::new());

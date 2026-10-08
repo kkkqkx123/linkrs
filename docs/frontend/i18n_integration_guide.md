@@ -18,7 +18,7 @@
 | 生成产物 | `frontend/src/lib/paraglide/`（不入库，由构建生成） |
 | 取词入口 | `frontend/src/lib/i18n/index.ts`，导出 `t()` / `message()` / `MessageKey` / `setLocale()` |
 | 类型约束 | key 由生成的类型推导，`t('key')` 在编译期校验 |
-| 语言检测与持久化 | Paraglide `localStorage` 策略，键名 `graphdb_language`；回退顺序为浏览器语言 → 基准语言 `en` |
+| 语言检测与持久化 | Paraglide `localStorage` 策略，键名 `linkrs_language`；回退顺序为浏览器语言 → 基准语言 `en` |
 | 语言切换 | `LanguageSwitcher` 调用 `setLocale()`，整档重载文档 |
 | 一致性校验 | `frontend/scripts/check-i18n.mjs`，`npm run check` 首步执行 |
 
@@ -32,7 +32,7 @@ paraglideVitePlugin({
   outdir: './src/lib/paraglide',
   emitTsDeclarations: true,
   strategy: ['localStorage', 'preferredLanguage', 'baseLocale'],
-  localStorageKey: 'graphdb_language',
+  localStorageKey: 'linkrs_language',
 })
 ```
 
@@ -51,7 +51,7 @@ paraglideVitePlugin({
 ```jsonc
 // messages/en.json（节选）
 {
-  "app.title": "GraphDB Studio",
+  "app.title": "Linkrs Studio",
   "common.cancel": "Cancel",
   "common.confirmDelete": "Delete \"{name}\"? This cannot be undone."
 }
@@ -84,7 +84,7 @@ paraglideVitePlugin({
 
 - 同一概念只保留一处词条。
 - 数据驱动场景（导航项、布局下拉、过滤算子）返回**消息函数**而非 key 字符串。
-- **产品名 / 品牌名 / 技术标识不翻译**：`GraphDB`、`CSV`、`JSONL`，以及 `DATA_TYPE_LABELS` 中的类型名（`Fixed String`、`Geography LineString` 等）——它们是后端类型标识，翻译会与查询语法脱节。
+- **产品名 / 品牌名 / 技术标识不翻译**：`Linkrs`、`CSV`、`JSONL`，以及 `DATA_TYPE_LABELS` 中的类型名（`Fixed String`、`Geography LineString` 等）——它们是后端类型标识，翻译会与查询语法脱节。
 
 ### 2.3 插值
 

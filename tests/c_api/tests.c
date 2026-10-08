@@ -1,6 +1,6 @@
 /**
  * @file tests.c
- * @brief GraphDB C API 集成测试
+ * @brief Linkrs C API 集成测试
  * 
  * 测试范围:
  * - 数据库生命周期管理
@@ -18,7 +18,7 @@
 #include <assert.h>
 #include <stdbool.h>
 
-#include "graphdb.h"
+#include "linkrs.h"
 
 /* ==================== 测试辅助宏 ==================== */
 
@@ -72,17 +72,17 @@
 /* ==================== 数据库生命周期测试 ==================== */
 
 void test_database_open_close(void) {
-    graphdb_t* db = NULL;
+    linkrs_t* db = NULL;
     const char* db_path = "test_c_api.db";
     
     /* 删除旧数据库文件 */
     remove(db_path);
     
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(db);
     
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 清理测试文件 */
@@ -90,7 +90,7 @@ void test_database_open_close(void) {
 }
 
 void test_database_libversion(void) {
-    const char* version = graphdb_libversion();
+    const char* version = linkrs_libversion();
     ASSERT_NOT_NULL(version);
     ASSERT_TRUE(strlen(version) > 0);
     
@@ -98,319 +98,319 @@ void test_database_libversion(void) {
 }
 
 void test_database_null_params(void) {
-    graphdb_t* db = NULL;
+    linkrs_t* db = NULL;
     
-    int rc = graphdb_open(NULL, &db);
+    int rc = linkrs_open(NULL, &db);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
     
-    rc = graphdb_open("test.db", NULL);
+    rc = linkrs_open("test.db", NULL);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
 }
 
 /* ==================== 会话管理测试 ==================== */
 
 void test_session_create_close(void) {
-    graphdb_t* db = NULL;
-    graphdb_session_t* session = NULL;
+    linkrs_t* db = NULL;
+    linkrs_session_t* session = NULL;
     const char* db_path = "test_session.db";
     
     remove(db_path);
     
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(db);
     
-    rc = graphdb_session_create(db, &session);
+    rc = linkrs_session_create(db, &session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(session);
     
-    rc = graphdb_session_close(session);
+    rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     remove(db_path);
 }
 
 void test_session_autocommit(void) {
-    graphdb_t* db = NULL;
-    graphdb_session_t* session = NULL;
+    linkrs_t* db = NULL;
+    linkrs_session_t* session = NULL;
     const char* db_path = "test_autocommit.db";
     
     remove(db_path);
     
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_create(db, &session);
+    rc = linkrs_session_create(db, &session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 默认自动提交 */
-    bool autocommit = graphdb_session_get_autocommit(session);
+    bool autocommit = linkrs_session_get_autocommit(session);
     ASSERT_TRUE(autocommit);
     
     /* 关闭自动提交 */
-    rc = graphdb_session_set_autocommit(session, false);
+    rc = linkrs_session_set_autocommit(session, false);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    autocommit = graphdb_session_get_autocommit(session);
+    autocommit = linkrs_session_get_autocommit(session);
     ASSERT_FALSE(autocommit);
     
-    rc = graphdb_session_close(session);
+    rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     remove(db_path);
 }
 
 void test_session_null_params(void) {
-    graphdb_session_t* session = NULL;
+    linkrs_session_t* session = NULL;
     
-    int rc = graphdb_session_create(NULL, &session);
+    int rc = linkrs_session_create(NULL, &session);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
     
-    rc = graphdb_session_create(NULL, NULL);
+    rc = linkrs_session_create(NULL, NULL);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
 }
 
 /* ==================== 查询执行测试 ==================== */
 
 void test_execute_simple_query(void) {
-    graphdb_t* db = NULL;
-    graphdb_session_t* session = NULL;
-    graphdb_result_t* result = NULL;
+    linkrs_t* db = NULL;
+    linkrs_session_t* session = NULL;
+    linkrs_result_t* result = NULL;
     const char* db_path = "test_query.db";
     
     remove(db_path);
     
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_create(db, &session);
+    rc = linkrs_session_create(db, &session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     const char* query = "SHOW SPACES";
-    rc = graphdb_execute(session, query, &result);
+    rc = linkrs_execute(session, query, &result);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(result);
     
-    rc = graphdb_result_free(result);
+    rc = linkrs_result_free(result);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_close(session);
+    rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     remove(db_path);
 }
 
 void test_execute_null_params(void) {
-    graphdb_result_t* result = NULL;
+    linkrs_result_t* result = NULL;
     
-    int rc = graphdb_execute(NULL, "SHOW SPACES", &result);
+    int rc = linkrs_execute(NULL, "SHOW SPACES", &result);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
     
-    rc = graphdb_execute(NULL, NULL, &result);
+    rc = linkrs_execute(NULL, NULL, &result);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
 }
 
 /* ==================== 结果处理测试 ==================== */
 
 void test_result_metadata(void) {
-    graphdb_t* db = NULL;
-    graphdb_session_t* session = NULL;
-    graphdb_result_t* result = NULL;
+    linkrs_t* db = NULL;
+    linkrs_session_t* session = NULL;
+    linkrs_result_t* result = NULL;
     const char* db_path = "test_result.db";
     
     remove(db_path);
     
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_create(db, &session);
+    rc = linkrs_session_create(db, &session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     const char* query = "SHOW SPACES";
-    rc = graphdb_execute(session, query, &result);
+    rc = linkrs_execute(session, query, &result);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(result);
     
     /* 获取列数 */
-    int col_count = graphdb_column_count(result);
+    int col_count = linkrs_column_count(result);
     ASSERT_TRUE(col_count >= 0);
     
     /* 获取行数 */
-    int row_count = graphdb_row_count(result);
+    int row_count = linkrs_row_count(result);
     ASSERT_TRUE(row_count >= 0);
     
-    rc = graphdb_result_free(result);
+    rc = linkrs_result_free(result);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_close(session);
+    rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     remove(db_path);
 }
 
 void test_result_null_params(void) {
-    int count = graphdb_column_count(NULL);
+    int count = linkrs_column_count(NULL);
     ASSERT_EQ(-1, count);
     
-    count = graphdb_row_count(NULL);
+    count = linkrs_row_count(NULL);
     ASSERT_EQ(-1, count);
     
-    const char* name = graphdb_column_name(NULL, 0);
+    const char* name = linkrs_column_name(NULL, 0);
     ASSERT_NULL(name);
 }
 
 /* ==================== 事务管理测试 ==================== */
 
 void test_transaction_begin_commit(void) {
-    graphdb_t* db = NULL;
-    graphdb_session_t* session = NULL;
-    graphdb_txn_t* txn = NULL;
+    linkrs_t* db = NULL;
+    linkrs_session_t* session = NULL;
+    linkrs_txn_t* txn = NULL;
     const char* db_path = "test_txn_commit.db";
     
     remove(db_path);
     
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_create(db, &session);
+    rc = linkrs_session_create(db, &session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 开始事务 */
-    rc = graphdb_txn_begin(session, &txn);
+    rc = linkrs_txn_begin(session, &txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(txn);
     
     /* 提交事务 */
-    rc = graphdb_txn_commit(txn);
+    rc = linkrs_txn_commit(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 释放事务句柄 */
-    rc = graphdb_txn_free(txn);
+    rc = linkrs_txn_free(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_close(session);
+    rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     remove(db_path);
 }
 
 void test_transaction_begin_rollback(void) {
-    graphdb_t* db = NULL;
-    graphdb_session_t* session = NULL;
-    graphdb_txn_t* txn = NULL;
+    linkrs_t* db = NULL;
+    linkrs_session_t* session = NULL;
+    linkrs_txn_t* txn = NULL;
     const char* db_path = "test_txn_rollback.db";
     
     remove(db_path);
     
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_create(db, &session);
+    rc = linkrs_session_create(db, &session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 开始事务 */
-    rc = graphdb_txn_begin(session, &txn);
+    rc = linkrs_txn_begin(session, &txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(txn);
     
     /* 回滚事务 */
-    rc = graphdb_txn_rollback(txn);
+    rc = linkrs_txn_rollback(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 释放事务句柄 */
-    rc = graphdb_txn_free(txn);
+    rc = linkrs_txn_free(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_close(session);
+    rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     remove(db_path);
 }
 
 void test_transaction_null_params(void) {
-    graphdb_txn_t* txn = NULL;
+    linkrs_txn_t* txn = NULL;
     
-    int rc = graphdb_txn_begin(NULL, &txn);
+    int rc = linkrs_txn_begin(NULL, &txn);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
     
-    rc = graphdb_txn_begin(NULL, NULL);
+    rc = linkrs_txn_begin(NULL, NULL);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
 }
 
 /* ==================== 批量操作测试 ==================== */
 
 void test_batch_inserter_create_free(void) {
-    graphdb_t* db = NULL;
-    graphdb_session_t* session = NULL;
-    graphdb_batch_t* batch = NULL;
+    linkrs_t* db = NULL;
+    linkrs_session_t* session = NULL;
+    linkrs_batch_t* batch = NULL;
     const char* db_path = "test_batch.db";
     
     remove(db_path);
     
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_create(db, &session);
+    rc = linkrs_session_create(db, &session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 创建批量插入器 */
-    rc = graphdb_batch_inserter_create(session, 100, &batch);
+    rc = linkrs_batch_inserter_create(session, 100, &batch);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(batch);
     
     /* 释放批量插入器 */
-    rc = graphdb_batch_free(batch);
+    rc = linkrs_batch_free(batch);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_session_close(session);
+    rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     remove(db_path);
 }
 
 void test_batch_null_params(void) {
-    graphdb_batch_t* batch = NULL;
+    linkrs_batch_t* batch = NULL;
     
-    int rc = graphdb_batch_inserter_create(NULL, 100, &batch);
+    int rc = linkrs_batch_inserter_create(NULL, 100, &batch);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
     
-    rc = graphdb_batch_inserter_create(NULL, 100, NULL);
+    rc = linkrs_batch_inserter_create(NULL, 100, NULL);
     ASSERT_EQ(GRAPHDB_MISUSE, rc);
 }
 
 void test_batch_buffered_counts_null(void) {
-    int count = graphdb_batch_buffered_vertices(NULL);
+    int count = linkrs_batch_buffered_vertices(NULL);
     ASSERT_EQ(-1, count);
     
-    count = graphdb_batch_buffered_edges(NULL);
+    count = linkrs_batch_buffered_edges(NULL);
     ASSERT_EQ(-1, count);
 }
 
 /* ==================== 错误处理测试 ==================== */
 
 void test_error_string(void) {
-    const char* error_str = graphdb_error_string(GRAPHDB_OK);
+    const char* error_str = linkrs_error_string(GRAPHDB_OK);
     ASSERT_NOT_NULL(error_str);
     ASSERT_TRUE(strcmp(error_str, "成功") == 0);
 }
@@ -430,7 +430,7 @@ void test_error_codes(void) {
     };
     
     for (size_t i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
-        const char* error_str = graphdb_error_string(test_cases[i].code);
+        const char* error_str = linkrs_error_string(test_cases[i].code);
         ASSERT_NOT_NULL(error_str);
         ASSERT_TRUE(strcmp(error_str, test_cases[i].expected_desc) == 0);
     }
@@ -438,7 +438,7 @@ void test_error_codes(void) {
 
 void test_errmsg(void) {
     char buffer[256];
-    int len = graphdb_errmsg(buffer, sizeof(buffer));
+    int len = linkrs_errmsg(buffer, sizeof(buffer));
     
     ASSERT_TRUE(len >= 0);
     ASSERT_TRUE((size_t)len < sizeof(buffer));
@@ -448,81 +448,81 @@ void test_errmsg(void) {
 
 void test_free_string(void) {
     /* 注意：这个测试需要实际分配的字符串，暂时跳过 */
-    /* graphdb_free_string() 应该释放由 GraphDB 分配的字符串 */
+    /* linkrs_free_string() 应该释放由 Linkrs 分配的字符串 */
 }
 
 void test_free(void) {
     /* 注意：这个测试需要实际分配的内存，暂时跳过 */
-    /* graphdb_free() 应该释放由 GraphDB 分配的内存 */
+    /* linkrs_free() 应该释放由 Linkrs 分配的内存 */
 }
 
 /* ==================== 集成场景测试 ==================== */
 
 void test_full_workflow(void) {
-    graphdb_t* db = NULL;
-    graphdb_session_t* session = NULL;
-    graphdb_result_t* result = NULL;
-    graphdb_txn_t* txn = NULL;
-    graphdb_batch_t* batch = NULL;
+    linkrs_t* db = NULL;
+    linkrs_session_t* session = NULL;
+    linkrs_result_t* result = NULL;
+    linkrs_txn_t* txn = NULL;
+    linkrs_batch_t* batch = NULL;
     const char* db_path = "test_workflow.db";
     
     remove(db_path);
     
     /* 打开数据库 */
-    int rc = graphdb_open(db_path, &db);
+    int rc = linkrs_open(db_path, &db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(db);
     
     /* 创建会话 */
-    rc = graphdb_session_create(db, &session);
+    rc = linkrs_session_create(db, &session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(session);
     
     /* 执行查询 */
     const char* query = "SHOW SPACES";
-    rc = graphdb_execute(session, query, &result);
+    rc = linkrs_execute(session, query, &result);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(result);
     
     /* 获取结果元数据 */
-    int col_count = graphdb_column_count(result);
+    int col_count = linkrs_column_count(result);
     ASSERT_TRUE(col_count >= 0);
     
-    int row_count = graphdb_row_count(result);
+    int row_count = linkrs_row_count(result);
     ASSERT_TRUE(row_count >= 0);
     
     /* 释放结果 */
-    rc = graphdb_result_free(result);
+    rc = linkrs_result_free(result);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 开始事务 */
-    rc = graphdb_txn_begin(session, &txn);
+    rc = linkrs_txn_begin(session, &txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(txn);
     
     /* 提交事务 */
-    rc = graphdb_txn_commit(txn);
+    rc = linkrs_txn_commit(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 释放事务句柄 */
-    rc = graphdb_txn_free(txn);
+    rc = linkrs_txn_free(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 创建批量插入器 */
-    rc = graphdb_batch_inserter_create(session, 100, &batch);
+    rc = linkrs_batch_inserter_create(session, 100, &batch);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(batch);
     
     /* 释放批量插入器 */
-    rc = graphdb_batch_free(batch);
+    rc = linkrs_batch_free(batch);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 关闭会话 */
-    rc = graphdb_session_close(session);
+    rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 关闭数据库 */
-    rc = graphdb_close(db);
+    rc = linkrs_close(db);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
     /* 清理测试文件 */
@@ -533,7 +533,7 @@ void test_full_workflow(void) {
 
 int main(void) {
     printf("========================================\n");
-    printf("  GraphDB C API 集成测试\n");
+    printf("  Linkrs C API 集成测试\n");
     printf("========================================\n\n");
     
     /* 数据库生命周期测试 */

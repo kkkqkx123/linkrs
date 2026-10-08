@@ -1,0 +1,523 @@
+//! Storage Engine Operations
+//!
+//! Contains type conversion utilities, user operations, and maintenance operations.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::edge::EdgeRecord;
+use crate::vertex::VertexRecord;
+use crate::StorageStats;
+use linkrs_core::types::{LabelId, PasswordInfo, UserAlterInfo, UserInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{Edge, RoleType, StorageError, StorageResult, Value, Vertex};
+
+use super::context::GraphStorageContext;
+use super::writer;
+
+// ── Type Conversion Utilities ──
+
+/// External id routed to its table operation by [`VertexId`] kind.
+///
+/// Integer kinds map to the i64 key path, text kinds to the string key path.
+/// Empty and edge-endpoint ids are rejected: they can never address a vertex
+/// row, so every dispatch site fails closed instead of rendering them into a
+/// garbage key.
+pub(crate) enum RoutedVertexId {
+    Int(i64),
+    Text(String),
+}
+
+pub(crate) fn route_vertex_id(vid: &VertexId) -> StorageResult<RoutedVertexId> {
+    use linkrs_core::types::VertexIdKind;
+    match vid.kind() {
+        VertexIdKind::Int => vid
+            .int_bits()
+            .map(RoutedVertexId::Int)
+            .ok_or_else(|| StorageError::invalid_input("Malformed integer vertex id".to_string())),
+        VertexIdKind::Uint => {
+            let value = vid.uint_bits().ok_or_else(|| {
+                StorageError::invalid_input("Malformed unsigned vertex id".to_string())
+            })?;
+            i64::try_from(value).map(RoutedVertexId::Int).map_err(|_| {
+                StorageError::invalid_input(format!(
+                    "Vertex id {} overflows the i64 key path",
+                    value
+                ))
+            })
+        }
+        VertexIdKind::Text => vid
+            .as_str()
+            .map(|text| RoutedVertexId::Text(text.to_string()))
+            .ok_or_else(|| {
+                StorageError::invalid_input(
+                    "Non-UTF8 vertex id cannot address a vertex".to_string(),
+                )
+            }),
+        VertexIdKind::Empty | VertexIdKind::EdgeEndpoint => Err(StorageError::invalid_input(
+            format!("Vertex id {} cannot address a vertex row", vid),
+        )),
+    }
+}
+
+pub(crate) fn vertex_type_storage_name(space_id: u64, tag_name: &str) -> String {
+    format!("space_{space_id}:tag:{tag_name}")
+}
+
+pub(crate) fn edge_type_storage_name(space_id: u64, edge_type_name: &str) -> String {
+    format!("space_{space_id}:edge:{edge_type_name}")
+}
+
+pub(crate) fn tag_label_id(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag_name: &str,
+) -> StorageResult<Option<LabelId>> {
+    Ok(ctx
+        .schema_manager()
+        .get_tag(space, tag_name)?
+        .map(|tag| tag.tag_id))
+}
+
+pub(crate) fn endpoint_label_id(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag_name: &str,
+) -> StorageResult<Option<LabelId>> {
+    if tag_name.is_empty() {
+        return Ok(Some(0));
+    }
+    tag_label_id(ctx, space, tag_name)
+}
+
+pub(crate) fn edge_label_id(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type_name: &str,
+) -> StorageResult<Option<LabelId>> {
+    Ok(ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type_name)?
+        .map(|edge_type| edge_type.edge_type_id))
+}
+
+pub(crate) fn vertex_record_to_vertex(record: &VertexRecord, tag_name: &str) -> Vertex {
+    let properties: HashMap<std::sync::Arc<str>, Value> =
+        record.properties.iter().cloned().collect();
+
+    Vertex::new(
+        record.vid,
+        Tag {
+            name: tag_name.to_string(),
+            properties,
+        },
+    )
+}
+
+pub(crate) fn edge_record_to_edge(
+    record: EdgeRecord,
+    edge_type: &str,
+    src_vid: VertexId,
+    dst_vid: VertexId,
+) -> Edge {
+    let rank = record.rank;
+    let props: HashMap<Arc<str>, Value> = record.properties.into_iter().collect();
+    edge_record_to_edge_with_props(rank, edge_type, src_vid, dst_vid, props)
+}
+
+/// Like [`edge_record_to_edge`] but decodes only the requested properties.
+///
+/// Filters the record's property map before materializing the `Edge`, so
+/// unneeded columns are never cloned into the edge's property map.  An
+/// empty projection decodes every property (same "empty means everything"
+/// convention as the other projected read paths).
+pub(crate) fn edge_record_to_edge_projected(
+    record: EdgeRecord,
+    edge_type: &str,
+    src_vid: VertexId,
+    dst_vid: VertexId,
+    projection: &[Arc<str>],
+) -> Edge {
+    let rank = record.rank;
+    let props: HashMap<Arc<str>, Value> = if projection.is_empty() {
+        record.properties.into_iter().collect()
+    } else {
+        record
+            .properties
+            .into_iter()
+            .filter(|(key, _)| projection.contains(key))
+            .collect()
+    };
+    edge_record_to_edge_with_props(rank, edge_type, src_vid, dst_vid, props)
+}
+
+fn edge_record_to_edge_with_props(
+    rank: i64,
+    edge_type: &str,
+    src_vid: VertexId,
+    dst_vid: VertexId,
+    props: HashMap<Arc<str>, Value>,
+) -> Edge {
+    Edge {
+        src: src_vid,
+        dst: dst_vid,
+        edge_type: edge_type.to_string(),
+        ranking: rank,
+        props,
+    }
+}
+
+pub(crate) fn serialize_properties(props: &[(Arc<str>, Value)]) -> Vec<u8> {
+    let mut data = Vec::new();
+    for (key, value) in props {
+        data.extend_from_slice(key.as_bytes());
+        data.push(0);
+        match value {
+            Value::String(s) => {
+                data.push(1);
+                data.extend_from_slice(s.as_bytes());
+            }
+            Value::Int(i) => {
+                data.push(2);
+                data.extend_from_slice(&i.to_le_bytes());
+            }
+            Value::Float(f) => {
+                data.push(3);
+                data.extend_from_slice(&f.to_le_bytes());
+            }
+            Value::Bool(b) => {
+                data.push(4);
+                data.push(if *b { 1 } else { 0 });
+            }
+            _ => {
+                data.push(0);
+            }
+        }
+        data.push(0);
+    }
+    data
+}
+
+// ── User Operations ──
+
+pub(crate) fn create_user(ctx: &GraphStorageContext, info: &UserInfo) -> StorageResult<bool> {
+    ctx.user_storage().create_user(info)
+}
+
+pub(crate) fn drop_user(ctx: &GraphStorageContext, username: &str) -> StorageResult<bool> {
+    ctx.user_storage().drop_user(username)
+}
+
+pub(crate) fn alter_user(ctx: &GraphStorageContext, info: &UserAlterInfo) -> StorageResult<bool> {
+    ctx.user_storage().alter_user(info)
+}
+
+pub(crate) fn grant_role(
+    ctx: &GraphStorageContext,
+    username: &str,
+    space_id: i64,
+    role: RoleType,
+) -> StorageResult<bool> {
+    ctx.user_storage().grant_role(username, space_id, role)
+}
+
+pub(crate) fn revoke_role(
+    ctx: &GraphStorageContext,
+    username: &str,
+    space_id: i64,
+) -> StorageResult<bool> {
+    ctx.user_storage().revoke_role(username, space_id)
+}
+
+pub(crate) fn change_password(
+    ctx: &GraphStorageContext,
+    info: &PasswordInfo,
+) -> StorageResult<bool> {
+    ctx.user_storage().change_password(info)
+}
+
+// ── Maintenance Operations ──
+
+pub(crate) fn get_storage_stats(ctx: &GraphStorageContext) -> StorageStats {
+    let total_vertices = ctx.total_vertex_count();
+    let total_edges = ctx.total_edge_count();
+
+    let spaces = ctx.schema_manager().list_spaces().unwrap_or_default();
+    let tags = spaces
+        .iter()
+        .filter_map(|s| ctx.schema_manager().list_tags(&s.space_name).ok())
+        .flatten()
+        .count();
+
+    let edge_types = spaces
+        .iter()
+        .filter_map(|s| ctx.schema_manager().list_edge_types(&s.space_name).ok())
+        .flatten()
+        .count();
+
+    let total_size = ctx.storage_size() as u64;
+    let data_size = ctx.used_storage_size() as u64;
+
+    StorageStats {
+        total_vertices,
+        total_edges,
+        total_spaces: spaces.len(),
+        total_tags: tags,
+        total_edge_types: edge_types,
+        total_size_bytes: total_size,
+        data_size_bytes: data_size,
+        index_size_bytes: total_size.saturating_sub(data_size),
+    }
+}
+
+pub(crate) fn find_dangling_edges(
+    ctx: &GraphStorageContext,
+    space: &str,
+) -> StorageResult<Vec<Edge>> {
+    let _space_info = ctx
+        .schema_manager()
+        .get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+
+    let ts = ctx.get_read_timestamp();
+    let mut dangling_edges = Vec::new();
+    let edge_type_names: std::collections::HashMap<_, _> = ctx
+        .schema_manager()
+        .list_edge_types(space)?
+        .into_iter()
+        .map(|edge_type| (edge_type.edge_type_id, edge_type.edge_type_name))
+        .collect();
+
+    let edge_records = ctx.collect_all_edge_records(ts);
+    // Batch existence probe: one vertex lookup per unique (label, internal)
+    // endpoint instead of two lookups per edge plus two more for external
+    // resolution. Cached records also supply the external id for dangling
+    // endpoints without re-querying.
+    let mut unique_endpoints: std::collections::HashSet<(LabelId, u32)> =
+        std::collections::HashSet::with_capacity(edge_records.len().saturating_mul(2));
+    for (src_label_id, dst_label_id, _, record) in &edge_records {
+        if let Some(internal) = record.src_vid.as_internal_u32() {
+            unique_endpoints.insert((*src_label_id, internal));
+        }
+        if let Some(internal) = record.dst_vid.as_internal_u32() {
+            unique_endpoints.insert((*dst_label_id, internal));
+        }
+    }
+    let mut endpoint_records: std::collections::HashMap<
+        (LabelId, u32),
+        Option<crate::vertex::VertexRecord>,
+    > = std::collections::HashMap::with_capacity(unique_endpoints.len());
+    for (label, internal) in unique_endpoints {
+        let record = ctx.get_vertex_by_internal_id(label, internal, ts);
+        endpoint_records.insert((label, internal), record);
+    }
+    for (src_label_id, dst_label_id, edge_label_id, record) in edge_records {
+        let Some(edge_type_name) = edge_type_names.get(&edge_label_id) else {
+            continue;
+        };
+        let src_internal = record.src_vid.as_internal_u32();
+        let dst_internal = record.dst_vid.as_internal_u32();
+        let src_exists = src_internal
+            .and_then(|internal| {
+                endpoint_records
+                    .get(&(src_label_id, internal))
+                    .and_then(|entry| entry.as_ref())
+            })
+            .is_some();
+        let dst_exists = dst_internal
+            .and_then(|internal| {
+                endpoint_records
+                    .get(&(dst_label_id, internal))
+                    .and_then(|entry| entry.as_ref())
+            })
+            .is_some();
+
+        if !src_exists || !dst_exists {
+            let src_external = src_internal
+                .and_then(|internal| {
+                    endpoint_records
+                        .get(&(src_label_id, internal))
+                        .and_then(|entry| entry.as_ref().map(|vr| vr.vid))
+                        .or_else(|| ctx.get_external_id_by_internal_id(src_label_id, internal))
+                })
+                .unwrap_or(record.src_vid);
+            let dst_external = dst_internal
+                .and_then(|internal| {
+                    endpoint_records
+                        .get(&(dst_label_id, internal))
+                        .and_then(|entry| entry.as_ref().map(|vr| vr.vid))
+                        .or_else(|| ctx.get_external_id_by_internal_id(dst_label_id, internal))
+                })
+                .unwrap_or(record.dst_vid);
+            let edge = edge_record_to_edge(record, edge_type_name, src_external, dst_external);
+            dangling_edges.push(edge);
+        }
+    }
+
+    Ok(dangling_edges)
+}
+
+pub(crate) fn repair_dangling_edges(
+    ctx: &GraphStorageContext,
+    space: &str,
+) -> StorageResult<usize> {
+    let dangling_edges = find_dangling_edges(ctx, space)?;
+    let mut repaired_count = 0;
+
+    for edge in &dangling_edges {
+        if writer::delete_edge(
+            ctx,
+            space,
+            &edge.src,
+            &edge.dst,
+            &edge.edge_type,
+            edge.ranking,
+        )
+        .is_ok()
+        {
+            repaired_count += 1;
+        }
+    }
+
+    Ok(repaired_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::edge::EdgeRecord;
+    use crate::vertex::VertexRecord;
+    use linkrs_core::types::VertexId;
+    use linkrs_core::Value;
+
+    use super::{
+        edge_record_to_edge, edge_type_storage_name, serialize_properties, vertex_record_to_vertex,
+        vertex_type_storage_name,
+    };
+
+    #[test]
+    fn test_vertex_type_storage_name() {
+        assert_eq!(vertex_type_storage_name(1, "Person"), "space_1:tag:Person");
+        assert_eq!(
+            vertex_type_storage_name(0, "Employee"),
+            "space_0:tag:Employee"
+        );
+    }
+
+    #[test]
+    fn test_edge_type_storage_name() {
+        assert_eq!(edge_type_storage_name(1, "KNOWS"), "space_1:edge:KNOWS");
+        assert_eq!(
+            edge_type_storage_name(0, "WORKS_AT"),
+            "space_0:edge:WORKS_AT"
+        );
+    }
+
+    #[test]
+    fn test_vertex_record_to_vertex() {
+        let int_42 = VertexId::try_from_int64(42).expect("test vertex id");
+        let record = VertexRecord {
+            vid: int_42,
+            internal_id: 5,
+            properties: vec![
+                ("name".into(), Value::string("Alice")),
+                ("age".into(), Value::BigInt(30)),
+            ],
+        };
+
+        let vertex = vertex_record_to_vertex(&record, "Person");
+
+        assert_eq!(vertex.vid, int_42);
+        assert_eq!(vertex.tag_name(), "Person");
+        assert_eq!(
+            vertex.properties().get("name"),
+            Some(&Value::string("Alice"))
+        );
+        assert_eq!(vertex.properties().get("age"), Some(&Value::BigInt(30)));
+    }
+
+    #[test]
+    fn test_edge_record_to_edge_int_ids() {
+        let src_vid = VertexId::try_from_int64(1).expect("test vertex id");
+        let dst_vid = VertexId::try_from_int64(2).expect("test vertex id");
+        let record = EdgeRecord {
+            src_vid,
+            dst_vid,
+            rank: 0,
+            properties: vec![("since".into(), Value::Int(2020))],
+        };
+
+        let edge = edge_record_to_edge(record, "KNOWS", src_vid, dst_vid);
+
+        assert_eq!(edge.src, src_vid);
+        assert_eq!(edge.dst, dst_vid);
+        assert_eq!(edge.edge_type, "KNOWS");
+        assert_eq!(edge.ranking, 0);
+        assert_eq!(edge.props.get("since"), Some(&Value::Int(2020)));
+    }
+
+    #[test]
+    fn test_edge_record_to_edge_string_ids() {
+        let src_vid = VertexId::try_from_string("user-a").expect("test vertex id");
+        let dst_vid = VertexId::try_from_string("user-b").expect("test vertex id");
+        let record = EdgeRecord {
+            src_vid,
+            dst_vid,
+            rank: 1,
+            properties: vec![],
+        };
+
+        let edge = edge_record_to_edge(record, "FRIEND_OF", src_vid, dst_vid);
+
+        assert_eq!(edge.src, src_vid);
+        assert_eq!(edge.dst, dst_vid);
+        assert_eq!(edge.edge_type, "FRIEND_OF");
+        assert_eq!(edge.ranking, 1);
+    }
+
+    #[test]
+    fn test_serialize_properties_string() {
+        let props = vec![("name".into(), Value::string("Alice"))];
+        let data = serialize_properties(&props);
+        assert!(!data.is_empty());
+        assert!(data.contains(&b'n'));
+        assert!(data.contains(&b'A'));
+    }
+
+    #[test]
+    fn test_serialize_properties_int() {
+        let props = vec![("age".into(), Value::Int(30))];
+        let data = serialize_properties(&props);
+        assert!(!data.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_properties_bool() {
+        let props = vec![("active".into(), Value::Bool(true))];
+        let data = serialize_properties(&props);
+        assert!(!data.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_properties_float() {
+        let props = vec![("score".into(), Value::Float(9.5))];
+        let data = serialize_properties(&props);
+        assert!(!data.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_properties_empty() {
+        let data = serialize_properties(&[]);
+        assert!(data.is_empty());
+    }
+
+    #[test]
+    fn test_serialize_properties_multiple() {
+        let props = vec![
+            ("name".into(), Value::string("Bob")),
+            ("age".into(), Value::Int(25)),
+            ("active".into(), Value::Bool(true)),
+        ];
+        let data = serialize_properties(&props);
+        assert!(!data.is_empty());
+    }
+}

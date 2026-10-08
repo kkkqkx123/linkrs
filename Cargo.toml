@@ -2,22 +2,22 @@
 resolver = "2"
 members = [
     ".",
-    "crates/graphdb-core",
-    "crates/graphdb-config",
-    "crates/graphdb-metrics",
-    "crates/graphdb-fulltext",
-    "crates/graphdb-sync",
-    "crates/graphdb-transaction",
-    "crates/graphdb-storage",
-    "crates/graphdb-query",
-    "crates/graphdb-wire",
-    "crates/graphdb-api",
-    "crates/graphdb-server",
-    "crates/graphdb-migration",
+    "crates/linkrs-core",
+    "crates/linkrs-config",
+    "crates/linkrs-metrics",
+    "crates/linkrs-fulltext",
+    "crates/linkrs-sync",
+    "crates/linkrs-transaction",
+    "crates/linkrs-storage",
+    "crates/linkrs-query",
+    "crates/linkrs-wire",
+    "crates/linkrs-api",
+    "crates/linkrs-server",
+    "crates/linkrs-migration",
     "crates/vector-client",
     "crates/simvec",
-    "crates/graphdb-cli",
-    "crates/graphdb-migration-cli",
+    "crates/linkrs-cli",
+    "crates/linkrs-migration-cli",
 ]
 
 [patch.crates-io]
@@ -28,7 +28,7 @@ tantivy-tokenizer-api = { path = "crates/tantivy/tokenizer-api" }
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-authors = ["GraphDB Contributors"]
+authors = ["Linkrs Contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/kkkqkx123/graphDB"
 homepage = "https://github.com/kkkqkx123/graphDB"
@@ -144,7 +144,7 @@ tempfile = "3.23.0"
 serial_test = "3.0"
 
 [package]
-name = "graphdb"
+name = "linkrs"
 version.workspace = true
 edition.workspace = true
 description = "A lightweight single-node graph database implemented in Rust"
@@ -155,26 +155,26 @@ homepage.workspace = true
 autobenches = false
 
 [lib]
-name = "graphdb"
+name = "linkrs"
 crate-type = ["rlib"]
 
 [[bin]]
-name = "graphdb-server"
+name = "linkrs-server"
 path = "src/main.rs"
 required-features = ["server"]
 
 [dependencies]
-graphdb-core = { path = "crates/graphdb-core" }
-graphdb-metrics = { path = "crates/graphdb-metrics" }
-graphdb-config = { path = "crates/graphdb-config" }
-graphdb-fulltext = { path = "crates/graphdb-fulltext" }
-graphdb-sync = { path = "crates/graphdb-sync" }
-graphdb-transaction = { path = "crates/graphdb-transaction" }
-graphdb-storage = { path = "crates/graphdb-storage" }
-graphdb-query = { path = "crates/graphdb-query" }
-graphdb-api = { path = "crates/graphdb-api" }
-graphdb-server = { path = "crates/graphdb-server" }
-graphdb-migration = { path = "crates/graphdb-migration" }
+linkrs-core = { path = "crates/linkrs-core" }
+linkrs-metrics = { path = "crates/linkrs-metrics" }
+linkrs-config = { path = "crates/linkrs-config" }
+linkrs-fulltext = { path = "crates/linkrs-fulltext" }
+linkrs-sync = { path = "crates/linkrs-sync" }
+linkrs-transaction = { path = "crates/linkrs-transaction" }
+linkrs-storage = { path = "crates/linkrs-storage" }
+linkrs-query = { path = "crates/linkrs-query" }
+linkrs-api = { path = "crates/linkrs-api" }
+linkrs-server = { path = "crates/linkrs-server" }
+linkrs-migration = { path = "crates/linkrs-migration" }
 clap.workspace = true
 flexi_logger.workspace = true
 tracing.workspace = true
@@ -192,15 +192,15 @@ winapi = { version = "0.3", features = ["processthreadsapi", "psapi", "sysinfoap
 
 [features]
 default = ["server", "vector"]
-server = ["graphdb-config/server"]
-fulltext = ["graphdb-api/fulltext", "graphdb-server/fulltext", "graphdb-fulltext/fulltext", "graphdb-sync/fulltext"]
-jieba = ["graphdb-fulltext/jieba"]
-vector = ["graphdb-api/vector", "graphdb-server/vector", "graphdb-config/vector", "graphdb-sync/vector", "graphdb-query/vector"]
-embedding = ["vector", "graphdb-sync/embedding"]
-vector-qdrant = ["vector", "embedding", "dep:vector-client", "graphdb-api/vector-qdrant", "graphdb-server/vector-qdrant", "graphdb-config/vector-qdrant", "graphdb-sync/vector-qdrant", "graphdb-query/vector-qdrant"]
-grpc = ["graphdb-server/grpc"]
-embedded = ["graphdb-api/embedded", "graphdb-config/embedded"]
-c_api = ["graphdb-api/c_api"]
+server = ["linkrs-config/server"]
+fulltext = ["linkrs-api/fulltext", "linkrs-server/fulltext", "linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
+jieba = ["linkrs-fulltext/jieba"]
+vector = ["linkrs-api/vector", "linkrs-server/vector", "linkrs-config/vector", "linkrs-sync/vector", "linkrs-query/vector"]
+embedding = ["vector", "linkrs-sync/embedding"]
+vector-qdrant = ["vector", "embedding", "dep:vector-client", "linkrs-api/vector-qdrant", "linkrs-server/vector-qdrant", "linkrs-config/vector-qdrant", "linkrs-sync/vector-qdrant", "linkrs-query/vector-qdrant"]
+grpc = ["linkrs-server/grpc"]
+embedded = ["linkrs-api/embedded", "linkrs-config/embedded"]
+c_api = ["linkrs-api/c_api"]
 
 [profile.dev]
 opt-level = 0
@@ -224,8 +224,8 @@ regex = "1"
 toml = "1.1"
 reqwest = { version = "0.13", features = ["json"] }
 postcard.workspace = true
-graphdb-wire = { path = "crates/graphdb-wire" }
-graphdb-storage = { path = "crates/graphdb-storage", features = ["test-support"] }
+linkrs-wire = { path = "crates/linkrs-wire" }
+linkrs-storage = { path = "crates/linkrs-storage", features = ["test-support"] }
 
 [[bench]]
 name = "storage_bench"

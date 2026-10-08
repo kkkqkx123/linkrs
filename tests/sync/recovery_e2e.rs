@@ -4,11 +4,11 @@
 //! Note: storage writes in `insert_vertex_with_txn` are immediate (not transactional).
 //! Rollback only affects sync/index state, not storage.
 
-use graphdb::core::{types::DataType, Value};
-use graphdb::storage::StorageWriter;
-use graphdb::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-use graphdb::sync::types::{ChangeType, IndexData, IndexType};
-use graphdb::test_utils::sync_helpers::SyncTestHarness;
+use linkrs::core::{types::DataType, Value};
+use linkrs::storage::StorageWriter;
+use linkrs::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
+use linkrs::sync::types::{ChangeType, IndexData, IndexType};
+use linkrs::test_utils::sync_helpers::SyncTestHarness;
 
 /// TC-260: Complete sync and verify
 #[test]
@@ -30,9 +30,9 @@ fn test_complete_sync_and_verify() {
 
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Complete Test"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
         tag,
     );
 
@@ -71,9 +71,9 @@ fn test_transaction_commit_and_verify() {
 
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Transaction Test"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
         tag,
     );
 
@@ -116,9 +116,9 @@ fn test_transaction_rollback_and_verify() {
 
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Rollback Test"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
         tag,
     );
 
@@ -144,8 +144,8 @@ fn test_dead_letter_queue_operations() {
 
     for i in 0..15 {
         let entry = DeadLetterEntry::new(
-            graphdb::sync::IndexOperation {
-                key: graphdb::sync::IndexOpKey::new(1, "Document", "title"),
+            linkrs::sync::IndexOperation {
+                key: linkrs::sync::IndexOpKey::new(1, "Document", "title"),
                 index_type: IndexType::Fulltext,
                 change_type: ChangeType::Insert,
                 id: format!("test_id_{}", i),
@@ -194,9 +194,9 @@ fn test_multiple_sequential_transactions() {
                 "title".to_string(),
                 Value::string(format!("Seq{}{}", txn_num, i)),
             );
-            let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-            let vertex = graphdb::core::Vertex::new(
-                graphdb::core::types::VertexId::try_from_int64(vid).expect("test vertex id"),
+            let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+            let vertex = linkrs::core::Vertex::new(
+                linkrs::core::types::VertexId::try_from_int64(vid).expect("test vertex id"),
                 tag,
             );
 
@@ -242,9 +242,9 @@ fn test_interleaved_txn_non_txn() {
 
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("NonTxn1"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
         tag,
     );
     harness
@@ -259,9 +259,9 @@ fn test_interleaved_txn_non_txn() {
 
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Txn1"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(2).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(2).expect("test vertex id"),
         tag,
     );
 
@@ -277,9 +277,9 @@ fn test_interleaved_txn_non_txn() {
 
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("NonTxn2"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(3).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(3).expect("test vertex id"),
         tag,
     );
     harness
@@ -320,9 +320,9 @@ fn test_large_transaction() {
     for i in 0..50 {
         let mut properties = std::collections::HashMap::new();
         properties.insert("title".to_string(), Value::string(format!("Large{}", i)));
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-        let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+        let vertex = linkrs::core::Vertex::new(
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
             tag,
         );
 
@@ -375,9 +375,9 @@ fn test_rollback_does_not_corrupt_existing_data() {
 
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Initial"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
         tag,
     );
     harness
@@ -396,9 +396,9 @@ fn test_rollback_does_not_corrupt_existing_data() {
 
     let mut properties = std::collections::HashMap::new();
     properties.insert("title".to_string(), Value::string("Failed"));
-    let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-    let vertex = graphdb::core::Vertex::new(
-        graphdb::core::types::VertexId::try_from_int64(2).expect("test vertex id"),
+    let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+    let vertex = linkrs::core::Vertex::new(
+        linkrs::core::types::VertexId::try_from_int64(2).expect("test vertex id"),
         tag,
     );
 
@@ -438,9 +438,9 @@ fn test_storage_consistency_after_multi_insert() {
     for i in 0..10 {
         let mut properties = std::collections::HashMap::new();
         properties.insert("title".to_string(), Value::string(format!("Doc{}", i)));
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-        let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+        let vertex = linkrs::core::Vertex::new(
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
             tag,
         );
 
@@ -479,9 +479,9 @@ fn test_delete_and_verify_remaining() {
     for i in 0..5 {
         let mut properties = std::collections::HashMap::new();
         properties.insert("title".to_string(), Value::string(format!("Initial{}", i)));
-        let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
-        let vertex = graphdb::core::Vertex::new(
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
+        let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
+        let vertex = linkrs::core::Vertex::new(
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
             tag,
         );
 
@@ -494,7 +494,7 @@ fn test_delete_and_verify_remaining() {
 
     for i in 0..2 {
         let vertex_id =
-            graphdb::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id");
+            linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id");
         harness
             .storage
             .delete_vertex("test_space", "Document", &vertex_id)

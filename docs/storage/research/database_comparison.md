@@ -112,7 +112,7 @@ options.max_total_wal_size = 1 * 1024 * 1024 * 1024;  // 1GB max
 - Styles: Leveled, Tiered, FIFO
 - Trade-off: write amplification vs space
 
-### Key Takeaways for GraphDB
+### Key Takeaways for Linkrs
 
 1. **Memory Budget**: Implement unified memory management with configurable limits
 2. **Block Cache**: Add LRU cache for frequently accessed data
@@ -191,7 +191,7 @@ PRAGMA journal_mode = WAL;
 PRAGMA wal_autocheckpoint = 1000;  -- pages
 ```
 
-### Key Takeaways for GraphDB
+### Key Takeaways for Linkrs
 
 1. **Page-Based Storage**: Consider fixed-size pages for data
 2. **Simple Configuration**: Provide easy-to-use pragmas/settings
@@ -272,7 +272,7 @@ dbms.tx_log.rotation.retention_policy=100M size
 dbms.checkpoint.interval.time=5m
 ```
 
-### Key Takeaways for GraphDB
+### Key Takeaways for Linkrs
 
 1. **Fixed-Size Records**: Use fixed-size records for vertices/edges
 2. **Separate Stores**: Different files for different data types
@@ -327,7 +327,7 @@ dbms.checkpoint.interval.time=5m
 - Used for recovery and rebalancing
 - Incremental snapshot support
 
-### Key Takeaways for GraphDB
+### Key Takeaways for Linkrs
 
 1. **Engine Abstraction**: Define Engine trait for storage abstraction
 2. **Batch Writes**: Implement efficient batch write operations
@@ -411,7 +411,7 @@ void ImmutableCsr<EDATA_T>::open_internal(
 - Temporary directory for in-progress writes
 - Recovery from last valid checkpoint
 
-### Key Takeaways for GraphDB
+### Key Takeaways for Linkrs
 
 1. **Memory Levels**: Implement configurable memory levels
 2. **MMap Support**: Add mmap for efficient file I/O
@@ -442,9 +442,9 @@ void ImmutableCsr<EDATA_T>::open_internal(
 | Compression | ✓ | ✓ | - | ✓ | - |
 | Checksum | ✓ | ✓ | ✓ | ✓ | - |
 
-## Recommendations for GraphDB
+## Recommendations for Linkrs
 
-Based on this analysis, GraphDB should implement:
+Based on this analysis, Linkrs should implement:
 
 1. **Memory Management**
    - Unified memory budget with configurable limits

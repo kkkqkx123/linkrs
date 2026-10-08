@@ -1,4 +1,4 @@
-# GraphDB 数据定义语言 (DDL)
+# Linkrs 数据定义语言 (DDL)
 
 ## 概述
 

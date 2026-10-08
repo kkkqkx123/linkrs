@@ -7,7 +7,7 @@ use crate::common::{
     assert_count_eq, assert_query_row_count, assert_row_count, create_test_db,
     create_test_db_in_memory, load_gql_file, load_gql_file_grouped, setup_test_space,
 };
-use graphdb::core::Value;
+use linkrs::core::Value;
 
 const DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/data");
 

@@ -1,10 +1,10 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use graphdb_core::types::{
+use linkrs_core::types::{
     Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, TagInfo, VertexId,
 };
-use graphdb_core::vertex_edge_path::Tag;
-use graphdb_core::{DataType, Value, Vertex};
-use graphdb_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Value, Vertex};
+use linkrs_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use std::sync::Arc;
 
 #[path = "bench_group.rs"]

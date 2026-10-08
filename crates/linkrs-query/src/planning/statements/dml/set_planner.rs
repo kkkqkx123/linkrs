@@ -1,0 +1,381 @@
+//! SET Operation Planner
+//!
+//! Query planning for processing SET statements (set properties on vertices/edges)
+//!
+//! Migrated to generate a native LogicalNodeEnum tree; `from_logical_root`
+//! performs the one-shot logical → physical lowering so the optimizer sees
+//! the logical mirror.
+
+use crate::binder::BoundStatement;
+use crate::parser::ast::{SetStmt, Stmt};
+use crate::planning::plan::core::node_id_generator::next_node_id;
+use crate::planning::plan::core::nodes::{UpdateTargetType, VertexUpdateInfo};
+use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
+use crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode;
+use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
+use crate::planning::plan::{PlanNodeEnum, SubPlan};
+use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::clauses::exists_planner;
+use crate::QueryContext;
+use linkrs_core::types::{ContextualExpression, ExpressionMeta};
+use linkrs_core::Expression;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// SET Operation Planner
+/// Responsible for converting SET statements into execution plans.
+#[derive(Debug, Clone)]
+pub struct SetPlanner;
+
+impl SetPlanner {
+    /// Create a new SET planner.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Extract the SetStmt from the Stmt.
+    fn extract_set_stmt(&self, stmt: &Stmt) -> Result<SetStmt, PlannerError> {
+        match stmt {
+            Stmt::Set(set_stmt) => Ok(set_stmt.clone()),
+            _ => Err(PlannerError::PlanGenerationFailed(
+                "Statement does not contain SET".to_string(),
+            )),
+        }
+    }
+
+    /// Extract vertex ID from target expression
+    /// For expressions like "1.age", extract the vertex ID "1" as a new ContextualExpression
+    fn extract_vertex_id(&self, target: &ContextualExpression) -> Option<ContextualExpression> {
+        let expr_meta = target.expression()?;
+        let expr = expr_meta.inner();
+
+        match expr {
+            Expression::Property { object, .. } => {
+                // The object should be the vertex ID
+                match object.as_ref() {
+                    Expression::Literal(_) | Expression::Variable(_) => {
+                        // Create a new ExpressionMeta with just the object
+                        let object_meta = ExpressionMeta::new((**object).clone());
+                        // Register the expression in the context
+                        let context = target.context();
+                        let object_id = context.register_expression(object_meta);
+                        // Create a new ContextualExpression with the object ID
+                        Some(ContextualExpression::new(object_id, context.clone()))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Planner for SetPlanner {
+    fn plan_bound(
+        &mut self,
+        ctx: &crate::planning::context::PlanContext<'_>,
+    ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
+        let set = match bound {
+            BoundStatement::Set(s) => s,
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "Statement does not contain SET".to_string(),
+                ));
+            }
+        };
+
+        // Unified entry for expression-level EXISTS / IN (mirrors
+        // `transform`): the bound path must also reject subqueries in SET
+        // values at planning time with the precise error.
+        let set_stmt = self.extract_set_stmt(validated.stmt())?;
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        for assignment in &set_stmt.assignments {
+            if let Some(expr_meta) = assignment.value.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+
+        let space_name = qctx
+            .space_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "default".to_string());
+
+        let expr_ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+
+        let mut vertex_updates: Vec<VertexUpdateInfo> = Vec::new();
+        let mut variable_assignments: Vec<(String, ContextualExpression)> = Vec::new();
+
+        for assignment in &set.assignments {
+            if let Some(ref target) = assignment.target {
+                // Check if target is a direct property access like "1.age"
+                // i.e. BoundExpression::Property { object: Literal/Variable, .. }
+                let is_direct_vertex = match target {
+                    crate::binder::bound::BoundExpression::Property { object, .. } => {
+                        matches!(
+                            object.as_ref(),
+                            crate::binder::bound::BoundExpression::Literal(_, _)
+                                | crate::binder::bound::BoundExpression::Variable(_, _)
+                        )
+                    }
+                    _ => false,
+                };
+
+                if is_direct_vertex {
+                    // Extract vertex ID from the Property's object
+                    if let crate::binder::bound::BoundExpression::Property { object, .. } = target {
+                        let vertex_id = crate::binder::expr_converter::bound_expr_to_contextual(
+                            object, &expr_ctx,
+                        )
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+
+                        let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                            &assignment.value,
+                            &expr_ctx,
+                        )
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+
+                        let mut properties = HashMap::new();
+                        properties.insert(assignment.property.clone(), value);
+
+                        let vertex_update = VertexUpdateInfo {
+                            space_name: space_name.clone(),
+                            vertex_id,
+                            tag_name: None,
+                            properties,
+                            condition: None,
+                            is_upsert: false,
+                            replace_properties: assignment.is_map_overwrite,
+                        };
+                        vertex_updates.push(vertex_update);
+                    }
+                } else {
+                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                        &assignment.value,
+                        &expr_ctx,
+                    )
+                    .map_err(PlannerError::PlanGenerationFailed)?;
+                    variable_assignments.push((assignment.property.clone(), value));
+                }
+            } else {
+                let value = crate::binder::expr_converter::bound_expr_to_contextual(
+                    &assignment.value,
+                    &expr_ctx,
+                )
+                .map_err(PlannerError::PlanGenerationFailed)?;
+                variable_assignments.push((assignment.property.clone(), value));
+            }
+        }
+
+        if !vertex_updates.is_empty() {
+            let update_info = UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap());
+            let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
+                id: next_node_id(),
+                info: update_info,
+                output_var: None,
+                col_names: vec!["updated".to_string()],
+                column_types: vec![],
+            });
+            let mut sub_plan = SubPlan::from_logical_root(logical_root);
+            let arg_node =
+                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+            return Ok(sub_plan);
+        }
+
+        if !variable_assignments.is_empty() {
+            let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+                id: next_node_id(),
+                var: "set_input".to_string(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+
+            let logical_root = LogicalNodeEnum::Assign(LogicalAssignNode {
+                id: next_node_id(),
+                input: Some(Box::new(arg_logical)),
+                assignments: variable_assignments,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+            let mut sub_plan = SubPlan::from_logical_root(logical_root);
+            let arg_node =
+                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+            return Ok(sub_plan);
+        }
+
+        let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+            id: next_node_id(),
+            var: "set_input".to_string(),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let mut sub_plan = SubPlan::from_logical_root(arg_logical);
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+        Ok(sub_plan)
+    }
+
+    fn transform(
+        &mut self,
+        validated: &ValidatedStatement,
+        qctx: Arc<QueryContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        let set_stmt = self.extract_set_stmt(validated.stmt())?;
+
+        // Unified entry for expression-level EXISTS / IN: subqueries in SET
+        // value expressions are rejected at planning time with a precise
+        // error.
+        let check_space_id = qctx.space_id().unwrap_or(1);
+        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let outer_col_names: Vec<String> = Vec::new();
+        for assignment in &set_stmt.assignments {
+            if let Some(expr_meta) = assignment.value.expression() {
+                exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    check_space_id,
+                    &check_space_name,
+                    &outer_col_names,
+                )?;
+            }
+        }
+
+        // Get current space name from query context
+        let space_name = qctx
+            .space_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "default".to_string());
+
+        // Check if this is a direct vertex property update (e.g., SET 1.age = 31)
+        // or a variable-based update (e.g., SET p.age = 26)
+        let mut vertex_updates: Vec<VertexUpdateInfo> = Vec::new();
+        let mut variable_assignments: Vec<(String, ContextualExpression)> = Vec::new();
+
+        for assignment in &set_stmt.assignments {
+            if let Some(ref target) = assignment.target {
+                // This is a direct property access like "1.age"
+                // Extract vertex ID from the target expression
+                if let Some(vertex_id_expr) = self.extract_vertex_id(target) {
+                    // Create properties map
+                    let mut properties = HashMap::new();
+                    properties.insert(assignment.property.clone(), assignment.value.clone());
+
+                    let vertex_update = VertexUpdateInfo {
+                        space_name: space_name.clone(),
+                        vertex_id: vertex_id_expr,
+                        tag_name: None, // Will be determined at execution time
+                        properties,
+                        condition: None,
+                        is_upsert: false,
+                        replace_properties: assignment.is_map_overwrite,
+                    };
+                    vertex_updates.push(vertex_update);
+                } else {
+                    // Fallback to variable assignment
+                    variable_assignments
+                        .push((assignment.property.clone(), assignment.value.clone()));
+                }
+            } else {
+                // This is a variable assignment like "p.age" where p is a variable
+                variable_assignments.push((assignment.property.clone(), assignment.value.clone()));
+            }
+        }
+
+        // If we have vertex updates, create an UpdateNode
+        if !vertex_updates.is_empty() {
+            // For simplicity, handle the first vertex update
+            // In a full implementation, we might want to batch all updates
+            let update_info = if vertex_updates.len() == 1 {
+                UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap())
+            } else {
+                // For multiple vertices, we would need to create a batch update
+                // For now, just use the first one
+                UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap())
+            };
+
+            let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
+                id: next_node_id(),
+                info: update_info,
+                output_var: None,
+                col_names: vec!["updated".to_string()],
+                column_types: vec![],
+            });
+
+            let mut sub_plan = SubPlan::from_logical_root(logical_root);
+            let arg_node =
+                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+            return Ok(sub_plan);
+        }
+
+        // If no vertex updates, fall back to AssignNode for variable assignments
+        if !variable_assignments.is_empty() {
+            let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+                id: next_node_id(),
+                var: "set_input".to_string(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+
+            let logical_root = LogicalNodeEnum::Assign(LogicalAssignNode {
+                id: next_node_id(),
+                input: Some(Box::new(arg_logical)),
+                assignments: variable_assignments,
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            });
+            let mut sub_plan = SubPlan::from_logical_root(logical_root);
+            let arg_node =
+                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+            return Ok(sub_plan);
+        }
+
+        // If no assignments at all, return an empty plan
+        let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
+            id: next_node_id(),
+            var: "set_input".to_string(),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        });
+        let mut sub_plan = SubPlan::from_logical_root(arg_logical);
+        let arg_node =
+            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
+        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
+        Ok(sub_plan)
+    }
+
+    fn match_planner(&self, stmt: &Stmt) -> bool {
+        matches!(stmt, Stmt::Set(_))
+    }
+}
+
+impl Default for SetPlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}

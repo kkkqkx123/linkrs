@@ -1,0 +1,644 @@
+//! LOOKUP Statement Planner
+//! Planning for handling the Nebula LOOKUP queries
+//!
+//! ## Explanation of the improvements
+//!
+//! Unified import path
+//! Improve the expression parsing mechanism.
+//! Add logic for selecting attribute indexes.
+//! Use IndexSelector to automatically select the optimal index.
+
+use crate::binder::BoundStatement;
+use crate::metadata::{IndexMetadata, MetadataContext};
+use crate::parser::ast::{LookupStmt, Stmt};
+use crate::planning::plan::core::node_id_generator::next_node_id;
+use crate::planning::plan::core::nodes::access::{IndexLimit, ScanType};
+use crate::planning::plan::logical::logical_nodes::access::{
+    IndexHint, LogicalScanEdgesNode, LogicalScanVerticesNode,
+};
+use crate::planning::plan::logical::logical_nodes::operation::{
+    LogicalFilterNode, LogicalProjectNode,
+};
+use crate::planning::plan::logical::LogicalNodeEnum;
+use crate::planning::plan::SubPlan;
+use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::projection_util;
+use crate::QueryContext;
+use linkrs_core::types::operators::BinaryOperator;
+use linkrs_core::types::ContextualExpression;
+use linkrs_core::Expression;
+use linkrs_core::Value;
+use std::sync::Arc;
+
+/// LOOKUP Query Planner
+/// Responsible for converting the LOOKUP statement into an execution plan.
+#[derive(Debug, Clone)]
+pub struct LookupPlanner {}
+
+impl LookupPlanner {
+    /// Create a new LOOKUP planner.
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Planner for LookupPlanner {
+    fn transform(
+        &mut self,
+        validated: &ValidatedStatement,
+        qctx: Arc<QueryContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        let lookup_stmt = match validated.stmt() {
+            Stmt::Lookup(lookup_stmt) => lookup_stmt,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "LookupPlanner requires the Lookup statement.".to_string(),
+                ));
+            }
+        };
+
+        let is_edge = matches!(
+            lookup_stmt.target,
+            crate::parser::ast::LookupTarget::Edge(_)
+        );
+        self.plan_lookup(validated, qctx, None, is_edge, 0)
+    }
+
+    fn plan_bound(
+        &mut self,
+        ctx: &crate::planning::context::PlanContext<'_>,
+    ) -> Result<SubPlan, PlannerError> {
+        let bound = ctx.bound;
+        let qctx = ctx.qctx.clone();
+        let metadata = ctx.metadata;
+        let validated = ctx.validated;
+        let _ = (&bound, &qctx, &metadata, &validated);
+        let lookup = match bound {
+            BoundStatement::Lookup(l) => l,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "LookupPlanner requires the Lookup statement.".to_string(),
+                ));
+            }
+        };
+
+        let target_name = match &lookup.target {
+            crate::binder::bound::BoundLookupTarget::Tag(name) => name.clone(),
+            crate::binder::bound::BoundLookupTarget::Edge(name) => name.clone(),
+        };
+
+        let is_edge = matches!(
+            &lookup.target,
+            crate::binder::bound::BoundLookupTarget::Edge(_)
+        );
+
+        // Convert bound where clause to ContextualExpression for index selection
+        let where_ctx = lookup
+            .where_clause
+            .as_ref()
+            .map(|wc| {
+                crate::binder::expr_converter::bound_expr_to_contextual(
+                    &wc.condition,
+                    validated.expr_context(),
+                )
+                .map_err(PlannerError::PlanGenerationFailed)
+            })
+            .transpose()?;
+
+        // Use metadata for index selection (same logic as transform_with_metadata)
+        let (selected_index, tag_id) = if let Some(metadata_context) = metadata {
+            let selected =
+                Self::find_suitable_index(metadata_context, &target_name, is_edge, &where_ctx);
+            let tag_id = if is_edge {
+                0
+            } else {
+                metadata_context
+                    .get_tag_metadata(&target_name)
+                    .map(|meta| meta.tag_id as i32)
+                    .unwrap_or(0)
+            };
+            (selected, tag_id)
+        } else {
+            (None, 0)
+        };
+
+        // Build the plan using bound data
+        self.plan_lookup_bound(
+            lookup,
+            qctx,
+            validated,
+            selected_index.as_ref(),
+            tag_id,
+            where_ctx,
+        )
+    }
+
+    fn match_planner(&self, stmt: &Stmt) -> bool {
+        matches!(stmt, Stmt::Lookup(_))
+    }
+}
+
+impl LookupPlanner {
+    /// Select an index whose first field matches a WHERE condition on the
+    /// target tag/edge. Returns `None` when no suitable index exists, in
+    /// which case the caller falls back to a full scan.
+    fn find_suitable_index(
+        metadata_context: &MetadataContext,
+        target_name: &str,
+        is_edge: bool,
+        where_clause: &Option<ContextualExpression>,
+    ) -> Option<IndexMetadata> {
+        let where_expr = where_clause.as_ref()?.get_expression()?;
+        for index in metadata_context.get_all_indexes() {
+            if index.is_edge != is_edge || index.tag_name != target_name {
+                continue;
+            }
+            if index.field_name.is_empty() {
+                continue;
+            }
+            let mut limits = Vec::new();
+            Self::extract_conditions(
+                &where_expr,
+                std::slice::from_ref(&index.field_name),
+                &mut limits,
+            );
+            if !limits.is_empty() {
+                log::debug!(
+                    "LOOKUP using index '{}' on {} '{}'",
+                    index.index_name,
+                    if is_edge { "edge" } else { "tag" },
+                    target_name
+                );
+                return Some(index.clone());
+            }
+        }
+        None
+    }
+
+    fn plan_lookup(
+        &self,
+        validated: &ValidatedStatement,
+        qctx: Arc<QueryContext>,
+        selected_index: Option<&IndexMetadata>,
+        is_edge: bool,
+        tag_id: i32,
+    ) -> Result<SubPlan, PlannerError> {
+        let lookup_stmt = match validated.stmt() {
+            Stmt::Lookup(lookup_stmt) => lookup_stmt,
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "LookupPlanner requires the Lookup statement.".to_string(),
+                ));
+            }
+        };
+
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+
+        if space_id == 0 {
+            return Err(PlannerError::PlanGenerationFailed(
+                "Invalid space ID: 0".to_string(),
+            ));
+        }
+
+        // Use the verification information to optimize the planning process.
+        let validation_info = &validated.validation_info;
+
+        // 1. Check the optimization suggestions.
+        for hint in &validation_info.optimization_hints {
+            log::debug!("LOOKUP Optimization Tip: {:?}", hint);
+        }
+
+        // Extract the tag/edge name from the LOOKUP target for col_names
+        let target_name = match &lookup_stmt.target {
+            crate::parser::ast::LookupTarget::Tag(name) => name.clone(),
+            crate::parser::ast::LookupTarget::Edge(name) => name.clone(),
+            crate::parser::ast::LookupTarget::Unspecified(name) => name.clone(),
+        };
+
+        let _ = selected_index;
+        let _ = tag_id;
+
+        // Build the logical tree only (index scans are a physical choice
+        // that the logical representation drops).
+        let limit_from_yield = lookup_stmt
+            .yield_clause
+            .as_ref()
+            .and_then(|yc| yc.limit.as_ref().map(|limit| limit.count as i64));
+        let mut logical_root = if is_edge {
+            LogicalNodeEnum::ScanEdges(LogicalScanEdgesNode {
+                id: next_node_id(),
+                space_id,
+                edge_type: Some(target_name.clone()),
+                expression: None,
+                limit: limit_from_yield,
+                projected_properties: vec![],
+                index_hint: None,
+                estimated_cardinality: None,
+                output_var: None,
+                col_names: vec![target_name.clone()],
+                column_types: projection_util::unknown_column_types(1),
+            })
+        } else {
+            LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                id: next_node_id(),
+                space_id,
+                space_name: space_name.clone(),
+                tag: Some(target_name.clone()),
+                expression: None,
+                limit: limit_from_yield,
+                projected_properties: vec![],
+                index_hint: None,
+                estimated_cardinality: None,
+                output_var: None,
+                col_names: vec![target_name.clone()],
+                column_types: projection_util::unknown_column_types(1),
+            })
+        };
+
+        if let Some(ref condition) = lookup_stmt.where_clause {
+            let logical_filter = LogicalFilterNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                condition: condition.clone(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            };
+            logical_root = LogicalNodeEnum::Filter(logical_filter);
+        }
+
+        if lookup_stmt.yield_clause.is_some() {
+            let yield_columns = Self::build_yield_columns(lookup_stmt, validated)?;
+            let column_types = projection_util::project_column_types(&yield_columns);
+            let logical_project = LogicalProjectNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                columns: yield_columns.clone(),
+                subqueries: Vec::new(),
+                has_folded_expressions: false,
+                output_var: None,
+                col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
+                column_types,
+            };
+            logical_root = LogicalNodeEnum::Project(logical_project);
+        }
+
+        Ok(SubPlan::from_logical_root(logical_root))
+    }
+
+    /// Build a lookup plan from a bound statement (plan_bound path).
+    fn plan_lookup_bound(
+        &self,
+        lookup: &crate::binder::bound::BoundLookupStatement,
+        qctx: Arc<QueryContext>,
+        validated: &ValidatedStatement,
+        selected_index: Option<&IndexMetadata>,
+        tag_id: i32,
+        where_ctx: Option<ContextualExpression>,
+    ) -> Result<SubPlan, PlannerError> {
+        let space_id = qctx.space_id().unwrap_or(1);
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+
+        if space_id == 0 {
+            return Err(PlannerError::PlanGenerationFailed(
+                "Invalid space ID: 0".to_string(),
+            ));
+        }
+
+        let target_name = match &lookup.target {
+            crate::binder::bound::BoundLookupTarget::Tag(name) => name.clone(),
+            crate::binder::bound::BoundLookupTarget::Edge(name) => name.clone(),
+        };
+        let is_edge = matches!(
+            &lookup.target,
+            crate::binder::bound::BoundLookupTarget::Edge(_)
+        );
+
+        // When an index was selected, stamp it onto the logical scan as an
+        // index hint so the logical-to-physical mapping rebuilds an
+        // IndexScan instead of a full storage scan.
+        let index_hint: Option<IndexHint> = selected_index.and_then(|index| {
+            let where_expr = where_ctx.as_ref()?.get_expression()?;
+            let mut limits = Vec::new();
+            Self::extract_conditions(
+                &where_expr,
+                std::slice::from_ref(&index.field_name),
+                &mut limits,
+            );
+            if limits.is_empty() {
+                return None;
+            }
+            let scan_type = if limits.len() == 1 && limits[0].scan_type == ScanType::Unique {
+                ScanType::Unique
+            } else {
+                ScanType::Range
+            };
+            Some(IndexHint::new(
+                index.index_name.clone(),
+                target_name.clone(),
+                tag_id,
+                index.index_id,
+                scan_type.as_str().to_string(),
+            ))
+        });
+
+        // Build the logical tree only
+        let limit_from_yield = lookup
+            .yield_clause
+            .as_ref()
+            .and_then(|yc| yc.limit.as_ref().map(|limit| limit.count as i64));
+        let mut logical_root = if is_edge {
+            LogicalNodeEnum::ScanEdges(LogicalScanEdgesNode {
+                id: next_node_id(),
+                space_id,
+                edge_type: Some(target_name.clone()),
+                expression: None,
+                limit: limit_from_yield,
+                projected_properties: vec![],
+                index_hint: index_hint.clone(),
+                estimated_cardinality: None,
+                output_var: None,
+                col_names: vec![target_name.clone()],
+                column_types: projection_util::unknown_column_types(1),
+            })
+        } else {
+            LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+                id: next_node_id(),
+                space_id,
+                space_name: space_name.clone(),
+                tag: Some(target_name.clone()),
+                expression: None,
+                limit: limit_from_yield,
+                projected_properties: vec![],
+                index_hint,
+                estimated_cardinality: None,
+                output_var: None,
+                col_names: vec![target_name.clone()],
+                column_types: projection_util::unknown_column_types(1),
+            })
+        };
+
+        // Add filter node if WHERE clause present
+        if let Some(ref condition) = where_ctx {
+            let logical_filter = LogicalFilterNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                condition: condition.clone(),
+                output_var: None,
+                col_names: vec![],
+                column_types: vec![],
+            };
+            logical_root = LogicalNodeEnum::Filter(logical_filter);
+        }
+
+        // Add project node if YIELD clause present
+        if lookup.yield_clause.is_some() {
+            let yield_columns = self.build_yield_columns_from_bound(lookup, validated)?;
+            let column_types = projection_util::project_column_types(&yield_columns);
+            let logical_project = LogicalProjectNode {
+                id: next_node_id(),
+                input: Some(Box::new(logical_root)),
+                columns: yield_columns.clone(),
+                subqueries: Vec::new(),
+                has_folded_expressions: false,
+                output_var: None,
+                col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
+                column_types,
+            };
+            logical_root = LogicalNodeEnum::Project(logical_project);
+        }
+
+        Ok(SubPlan::from_logical_root(logical_root))
+    }
+
+    /// Build YIELD columns from bound statement (plan_bound path)
+    fn build_yield_columns_from_bound(
+        &self,
+        lookup: &crate::binder::bound::BoundLookupStatement,
+        validated: &ValidatedStatement,
+    ) -> Result<Vec<linkrs_core::YieldColumn>, PlannerError> {
+        let mut columns = Vec::new();
+
+        if let Some(ref yield_clause) = lookup.yield_clause {
+            for item in &yield_clause.items {
+                let column = crate::binder::expr_converter::bound_projection_to_yield_column(
+                    item,
+                    validated.expr_context(),
+                )
+                .map_err(PlannerError::PlanGenerationFailed)?;
+                columns.push(column);
+            }
+        }
+
+        if columns.is_empty() {
+            let expr = Expression::Variable("_vertex".to_string());
+            let meta = linkrs_core::types::expr::ExpressionMeta::new(expr);
+            let id = validated.expr_context().register_expression(meta);
+            let ctx_expr = ContextualExpression::new(id, validated.expr_context().clone());
+            columns.push(linkrs_core::YieldColumn {
+                expression: ctx_expr,
+                alias: "result".to_string(),
+            });
+        }
+
+        Ok(columns)
+    }
+
+    /// Construct the YIELD column
+    fn build_yield_columns(
+        lookup_stmt: &LookupStmt,
+        validated: &ValidatedStatement,
+    ) -> Result<Vec<linkrs_core::YieldColumn>, PlannerError> {
+        let mut columns = Vec::new();
+
+        if let Some(ref yield_clause) = lookup_stmt.yield_clause {
+            for item in &yield_clause.items {
+                columns.push(projection_util::yield_item_to_yield_column(item));
+            }
+        }
+
+        if columns.is_empty() {
+            let expr = Expression::Variable("_vertex".to_string());
+            let meta = linkrs_core::types::expr::ExpressionMeta::new(expr);
+            let id = validated.expr_context().register_expression(meta);
+            let ctx_expr = linkrs_core::types::ContextualExpression::new(
+                id,
+                validated.expr_context().clone(),
+            );
+            columns.push(linkrs_core::YieldColumn {
+                expression: ctx_expr,
+                alias: "result".to_string(),
+            });
+        }
+
+        Ok(columns)
+    }
+
+    fn extract_conditions(
+        expr: &Expression,
+        index_columns: &[String],
+        limits: &mut Vec<IndexLimit>,
+    ) {
+        if let Expression::Binary { left, op, right } = expr {
+            match op {
+                BinaryOperator::Equal => {
+                    if let Some((col, val)) = Self::extract_comparison(left, right, index_columns) {
+                        limits.push(IndexLimit::equal(col, val));
+                    }
+                }
+                BinaryOperator::NotEqual => {
+                    if let Some((col, val)) = Self::extract_comparison(left, right, index_columns) {
+                        limits.push(IndexLimit::range(
+                            col,
+                            Some(val.clone()),
+                            Some(val),
+                            true,
+                            true,
+                        ));
+                    }
+                }
+                BinaryOperator::LessThan => {
+                    if let Some((col, val)) = Self::extract_comparison(left, right, index_columns) {
+                        limits.push(IndexLimit::range(
+                            col,
+                            None::<Value>,
+                            Some(val),
+                            false,
+                            false,
+                        ));
+                    } else if let Some((col, val)) =
+                        Self::extract_comparison(right, left, index_columns)
+                    {
+                        limits.push(IndexLimit::range(
+                            col,
+                            Some(val),
+                            None::<Value>,
+                            true,
+                            false,
+                        ));
+                    }
+                }
+                BinaryOperator::LessThanOrEqual => {
+                    if let Some((col, val)) = Self::extract_comparison(left, right, index_columns) {
+                        limits.push(IndexLimit::range(
+                            col,
+                            None::<Value>,
+                            Some(val),
+                            false,
+                            true,
+                        ));
+                    } else if let Some((col, val)) =
+                        Self::extract_comparison(right, left, index_columns)
+                    {
+                        limits.push(IndexLimit::range(col, Some(val), None::<Value>, true, true));
+                    }
+                }
+                BinaryOperator::GreaterThan => {
+                    if let Some((col, val)) = Self::extract_comparison(left, right, index_columns) {
+                        limits.push(IndexLimit::range(
+                            col,
+                            Some(val),
+                            None::<Value>,
+                            false,
+                            false,
+                        ));
+                    } else if let Some((col, val)) =
+                        Self::extract_comparison(right, left, index_columns)
+                    {
+                        limits.push(IndexLimit::range(
+                            col,
+                            None::<Value>,
+                            Some(val),
+                            false,
+                            false,
+                        ));
+                    }
+                }
+                BinaryOperator::GreaterThanOrEqual => {
+                    if let Some((col, val)) = Self::extract_comparison(left, right, index_columns) {
+                        limits.push(IndexLimit::range(
+                            col,
+                            Some(val),
+                            None::<Value>,
+                            true,
+                            false,
+                        ));
+                    } else if let Some((col, val)) =
+                        Self::extract_comparison(right, left, index_columns)
+                    {
+                        limits.push(IndexLimit::range(
+                            col,
+                            None::<Value>,
+                            Some(val),
+                            false,
+                            true,
+                        ));
+                    }
+                }
+                BinaryOperator::And => {
+                    Self::extract_conditions(left, index_columns, limits);
+                    Self::extract_conditions(right, index_columns, limits);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn extract_comparison(
+        left: &Expression,
+        right: &Expression,
+        index_columns: &[String],
+    ) -> Option<(String, Value)> {
+        let col_name = Self::extract_property_name(left)?;
+        if !index_columns.iter().any(|c| c == &col_name) {
+            return None;
+        }
+        let value = Self::extract_literal_value(right)?;
+        Some((col_name, value))
+    }
+
+    fn extract_property_name(expr: &Expression) -> Option<String> {
+        match expr {
+            Expression::TagProperty { property, .. } => Some(property.clone()),
+            Expression::Property { property, .. } => Some(property.clone()),
+            Expression::Variable(name) => {
+                if name.contains('.') {
+                    let parts: Vec<&str> = name.split('.').collect();
+                    parts.last().map(|s| s.to_string())
+                } else {
+                    Some(name.clone())
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn extract_literal_value(expr: &Expression) -> Option<Value> {
+        match expr {
+            Expression::Literal(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    /// Analyzing the YIELD expression
+    fn _parse_yield_expression(name: &str) -> Result<Expression, PlannerError> {
+        if name.contains(".") {
+            let parts: Vec<&str> = name.split(".").collect();
+            if parts.len() == 2 {
+                return Ok(Expression::Property {
+                    object: Box::new(Expression::Variable(parts[0].to_string())),
+                    property: parts[1].to_string(),
+                });
+            }
+        }
+
+        Ok(Expression::Variable(name.to_string()))
+    }
+}
+
+impl Default for LookupPlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}

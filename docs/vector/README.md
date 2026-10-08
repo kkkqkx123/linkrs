@@ -2,7 +2,7 @@
 
 ## 文档概览
 
-本目录包含 GraphDB 向量引擎的完整设计和实现文档，涵盖了从架构设计、实现指南到测试策略的各个方面。
+本目录包含 Linkrs 向量引擎的完整设计和实现文档，涵盖了从架构设计、实现指南到测试策略的各个方面。
 
 ## 文档列表
 
@@ -185,7 +185,7 @@ pub enum DistanceMetric {
 }
 ```
 
-> **注意**：`Manhattan` 仅在 `vector.engine = "local"` 时可用（`crates/vector-search` 的 `distance` 内核已实现 `naive`/`avx2`，见 `docs/plan/vector_search_improvement_plan.md §2.3.1` 的全链路启用清单）。配置/查询走 Qdrant 后端时会被 `is_supported_by_qdrant` 守卫拒绝并返回明确错误（`graphdb-sync/src/sync/vector_sync.rs` 与 `graphdb-api/src/api/core/vector_api.rs` 的 `is_local()` 分支）。无需为 `Manhattan` 新增独立 TOML 配置项，度量随集合创建参数传递。
+> **注意**：`Manhattan` 仅在 `vector.engine = "local"` 时可用（`crates/vector-search` 的 `distance` 内核已实现 `naive`/`avx2`，见 `docs/plan/vector_search_improvement_plan.md §2.3.1` 的全链路启用清单）。配置/查询走 Qdrant 后端时会被 `is_supported_by_qdrant` 守卫拒绝并返回明确错误（`linkrs-sync/src/sync/vector_sync.rs` 与 `linkrs-api/src/api/core/vector_api.rs` 的 `is_local()` 分支）。无需为 `Manhattan` 新增独立 TOML 配置项，度量随集合创建参数传递。
 
 ### 相似度计算（余弦）
 
@@ -317,8 +317,8 @@ RUST_LOG=debug cargo test test_name -- --nocapture
 ### 创建和使用向量索引
 
 ```rust
-use graphdb::vector::{VectorManager, VectorClientConfig};
-use graphdb::vector_client::{CollectionConfig, DistanceMetric, VectorPoint, SearchQuery};
+use linkrs::vector::{VectorManager, VectorClientConfig};
+use linkrs::vector_client::{CollectionConfig, DistanceMetric, VectorPoint, SearchQuery};
 
 #[tokio::main]
 async fn main() {
@@ -374,7 +374,7 @@ let all_results = manager.search_batch("my_index", queries).await.unwrap();
 ### 使用过滤条件
 
 ```rust
-use graphdb::vector_client::{VectorFilter, FilterCondition};
+use linkrs::vector_client::{VectorFilter, FilterCondition};
 
 let mut payload = HashMap::new();
 payload.insert("category".to_string(), serde_json::json!("A"));
@@ -422,25 +422,25 @@ let results = manager.search("my_index", query).await.unwrap();
 | 维度 | 图存储（`GraphStorage + WAL + MVCC`） | 向量存储（`Local / Qdrant` via Outbox） |
 |------|---------------------------------------|------------------------------------------|
 | 提交可见性 | `commit_lsn` 立即可见（`commit_write_timestamp`） | 异步派生，最终一致，`frontier_lag = materialized_lsn - applied_lsn` 可观测 |
-| 读己之写 | 同一事务内立即可见（`staged_wal`） | 需 `ReadYourWrites{ timeout_ms, minimum_lsn }` 显式等待 `index_frontier >= commit_lsn`（`crates/graphdb-sync/src/sqlite_outbox.rs:1167 wait_for_minimum_lsn`），`Qdrant` 典型 `2000ms`、`Local` 典型 `500ms` |
+| 读己之写 | 同一事务内立即可见（`staged_wal`） | 需 `ReadYourWrites{ timeout_ms, minimum_lsn }` 显式等待 `index_frontier >= commit_lsn`（`crates/linkrs-sync/src/sqlite_outbox.rs:1167 wait_for_minimum_lsn`），`Qdrant` 典型 `2000ms`、`Local` 典型 `500ms` |
 | 可重复读 | `REPEATABLE READ` 由 MVCC 快照保证 | 不生效：搜索不携带 `read_timestamp`，不纳入 `SSI` 读集 |
-| 序列化 | `SERIALIZABLE` 经 `crates/graphdb-transaction/src/certify.rs:100 Certifier` 的 `write_set + SSI` 校验 | 默认不参与；可选开关见下 |
+| 序列化 | `SERIALIZABLE` 经 `crates/linkrs-transaction/src/certify.rs:100 Certifier` 的 `write_set + SSI` 校验 | 默认不参与；可选开关见下 |
 | 故障时 | 图提交阻塞于 WAL `fsync` | 向量滞后或 `degraded`，`has_degraded_range_through` 时 `RYW` 搜索报错而非脏读 |
 
 **含义**：同一事务/会话内 `INSERT` 后立即 `SEARCH`，在 `Eventual` 下可能滞后；在 `ReadYourWrites` 下会阻塞至 `frontier` 追上或超时（`VectorError::Timeout`），若该 LSN 区间已被标记 `degraded`（`SqliteOutbox::skip_event_degraded`）则抛错。
 
 ### 可选增强：向量读集的 SSI 校验（默认关闭）
 
-- 配置：`[vector.mvcc] ssi_read_set = false`（`crates/graphdb-config/src/lib.rs:VectorConfig`），默认关闭以保持单节点轻量定位。
-- 开启条件：`ssi_read_set=true` 且事务隔离级别为 `SERIALIZABLE` 时，`VectorSyncCoordinator::search_with_options` 会将本次 `SearchOptions` 触达的 `group_id`（`(space,tag,field)` 粗粒度，`HasId` 时才登记点 ID）登记到 `TransactionContext.vector_read_set`，纳入 `TransactionManager::certify` 的可选分支（`crates/graphdb-transaction/src/certify.rs:387 publish` 的 final review）。
+- 配置：`[vector.mvcc] ssi_read_set = false`（`crates/linkrs-config/src/lib.rs:VectorConfig`），默认关闭以保持单节点轻量定位。
+- 开启条件：`ssi_read_set=true` 且事务隔离级别为 `SERIALIZABLE` 时，`VectorSyncCoordinator::search_with_options` 会将本次 `SearchOptions` 触达的 `group_id`（`(space,tag,field)` 粗粒度，`HasId` 时才登记点 ID）登记到 `TransactionContext.vector_read_set`，纳入 `TransactionManager::certify` 的可选分支（`crates/linkrs-transaction/src/certify.rs:387 publish` 的 final review）。
 - 代价：`O(触达 group 数)` 的登记与一次 `HashMap` 查找；默认关闭时零开销。
 - 建议：仅在强序列化场景且可接受误 abort 率时开启；`group` 粗粒度登记避免 full scan 过粗导致的误判。
 
 ### 调用示例
 
 ```rust
-use graphdb_sync::vector_sync::{SearchOptions, SearchConsistency};
-use graphdb_core::types::CommitLsn;
+use linkrs_sync::vector_sync::{SearchOptions, SearchConsistency};
+use linkrs_core::types::CommitLsn;
 
 // 会话内读己之写：等待本事务的 commit_lsn
 let opts = SearchOptions::new(space_id, "Person", "embedding", query_vec, 10)
@@ -508,6 +508,6 @@ let opts = SearchOptions::new(space_id, "Person", "embedding", query_vec, 10)
 
 ---
 
-**维护者**：GraphDB Team  
+**维护者**：Linkrs Team  
 **最后更新**：2026-04-10  
 **版本**：1.0.0

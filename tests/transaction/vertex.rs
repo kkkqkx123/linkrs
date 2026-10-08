@@ -7,8 +7,8 @@
 //! - Batch insert performance in transaction
 //! - Property types support
 
-use graphdb::core::Value;
-use graphdb::test_utils::test_scenario::TestScenario;
+use linkrs::core::Value;
+use linkrs::test_utils::test_scenario::TestScenario;
 use std::collections::HashMap;
 
 /// Test multiple vertices insertion in single transaction

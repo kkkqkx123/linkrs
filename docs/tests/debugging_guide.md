@@ -1,8 +1,8 @@
-# GraphDB 测试调试规范文档
+# Linkrs 测试调试规范文档
 
 ## 概述
 
-本文档描述了 GraphDB 项目中测试调试基础设施的使用规范，包括调试工具、最佳实践和调试流程。
+本文档描述了 Linkrs 项目中测试调试基础设施的使用规范，包括调试工具、最佳实践和调试流程。
 
 ## 调试基础设施
 
@@ -189,7 +189,7 @@ fn test_row_count_debug() {
 ```rust
 #[test]
 fn test_plan_analysis() {
-    use graphdb::query::planner::QueryPlanner;
+    use linkrs::query::planner::QueryPlanner;
     
     let planner = QueryPlanner::new();
     let plan = planner.plan_query("MATCH (a)-[:KNOWS]->(b) RETURN a, b").unwrap();
@@ -335,7 +335,7 @@ fn test_complex_query_with_debug() {
 ```rust
 #[test]
 fn test_analyze_query_plan() {
-    use graphdb::query::planner::QueryPlanner;
+    use linkrs::query::planner::QueryPlanner;
     use crate::common::debug_helpers::format_query_plan;
     
     let planner = QueryPlanner::new();

@@ -1,0 +1,254 @@
+//! Graph Data Handlers
+//!
+//! Provides graph data query APIs for visualization:
+//! - Vertex details
+//! - Edge details
+//! - Neighbor queries
+
+use axum::{
+    extract::{Path, Query, State},
+    response::Json,
+    routing::get,
+    Router,
+};
+use serde::Deserialize;
+
+use crate::storage::{
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
+};
+use crate::web::{
+    error::{WebError, WebResult},
+    models::ApiResponse,
+    WebState,
+};
+
+/// Create graph data routes (without state)
+pub fn create_routes<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>() -> Router<WebState<S>> {
+    Router::new()
+        .route("/vertices/{vid}", get(get_vertex))
+        .route("/edges", get(get_edge))
+        .route("/vertices/{vid}/neighbors", get(get_neighbors))
+}
+
+/// Get vertex details
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct GetVertexParams {
+    pub space: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/graph/vertices/{vid}",
+    tag = "WebGraph",
+    params(
+        ("vid" = String, Path, description = "Vertex id"),
+        GetVertexParams
+    ),
+    responses(
+        (status = 200, description = "Vertex detail", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
+async fn get_vertex<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(web_state): State<WebState<S>>,
+    Path(vid): Path<String>,
+    Query(params): Query<GetVertexParams>,
+) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+    let graph_service = web_state.core_state.server.get_graph_service();
+
+    // Build query to fetch vertex by ID
+    let query = format!(
+        "USE {}; FETCH PROP ON * \"{}\" YIELD vertex AS v",
+        params.space, vid
+    );
+
+    let result = match graph_service.execute(0, &query).await {
+        Ok(result) => {
+            if let Some(vertex) = result.first_value() {
+                Ok(serde_json::json!({"vertex": vertex}))
+            } else {
+                Err(WebError::NotFound(format!(
+                    "Vertex '{}' not found in space '{}'",
+                    vid, params.space
+                )))
+            }
+        }
+        Err(e) => Err(WebError::Query(format!("Failed to get vertex: {}", e))),
+    };
+
+    Ok(Json(ApiResponse::success(result?)))
+}
+
+/// Get edge details
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct GetEdgeParams {
+    pub space: String,
+    pub src: String,
+    pub dst: String,
+    pub edge_type: String,
+    #[serde(default)]
+    pub rank: i64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/graph/edges",
+    tag = "WebGraph",
+    params(GetEdgeParams),
+    responses(
+        (status = 200, description = "Edge detail", body = ApiResponse<serde_json::Value>),
+        (status = 404, description = "Not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
+async fn get_edge<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(web_state): State<WebState<S>>,
+    Query(params): Query<GetEdgeParams>,
+) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+    let graph_service = web_state.core_state.server.get_graph_service();
+
+    // Build query to fetch edge
+    let query = format!(
+        "USE {}; FETCH PROP ON {} \"{}\" -> \"{}\"@{} YIELD edge AS e",
+        params.space, params.edge_type, params.src, params.dst, params.rank
+    );
+
+    let result = match graph_service.execute(0, &query).await {
+        Ok(result) => {
+            if let Some(edge) = result.first_value() {
+                Ok(serde_json::json!({"edge": edge}))
+            } else {
+                Err(WebError::NotFound(format!(
+                    "Edge from '{}' to '{}' with type '{}' not found in space '{}'",
+                    params.src, params.dst, params.edge_type, params.space
+                )))
+            }
+        }
+        Err(e) => Err(WebError::Query(format!("Failed to get edge: {}", e))),
+    };
+
+    Ok(Json(ApiResponse::success(result?)))
+}
+
+/// Get neighbors of a vertex
+#[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct GetNeighborsParams {
+    pub space: String,
+    /// Direction: OUT, IN, or BOTH
+    #[serde(default = "default_direction")]
+    pub direction: String,
+    /// Edge type filter
+    pub edge_type: Option<String>,
+}
+
+fn default_direction() -> String {
+    "BOTH".to_string()
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/graph/vertices/{vid}/neighbors",
+    tag = "WebGraph",
+    params(
+        ("vid" = String, Path, description = "Vertex id"),
+        GetNeighborsParams
+    ),
+    responses(
+        (status = 200, description = "Neighbor list", body = ApiResponse<serde_json::Value>),
+        (status = 500, description = "Internal error")
+    )
+)]
+async fn get_neighbors<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(web_state): State<WebState<S>>,
+    Path(vid): Path<String>,
+    Query(params): Query<GetNeighborsParams>,
+) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+    let graph_service = web_state.core_state.server.get_graph_service();
+
+    // Build match pattern based on direction
+    let pattern = match params.direction.as_str() {
+        "OUT" => "(v)-[e]->(n)".to_string(),
+        "IN" => "(v)<-[e]-(n)".to_string(),
+        _ => "(v)-[e]-(n)".to_string(),
+    };
+
+    // Add edge type filter if specified
+    let edge_filter = params
+        .edge_type
+        .as_ref()
+        .map(|et| format!(":{}", et))
+        .unwrap_or_default();
+    let pattern = pattern.replace("[e]", &format!("[e{}]", edge_filter));
+
+    let query = format!(
+        "USE {}; MATCH {} WHERE id(v) == \"{}\" RETURN n LIMIT 100",
+        params.space, pattern, vid
+    );
+
+    let result = match graph_service.execute(0, &query).await {
+        Ok(result) => {
+            let neighbors: Vec<serde_json::Value> = result
+                .rows()
+                .iter()
+                .flat_map(|row| row.iter())
+                .filter_map(|v| match v {
+                    linkrs_core::Value::Vertex(vertex) => {
+                        Some(serde_json::json!({"vertex": vertex}))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            Ok(serde_json::json!({
+                "vid": vid,
+                "space": params.space,
+                "direction": params.direction,
+                "edge_type": params.edge_type,
+                "neighbors": neighbors,
+            }))
+        }
+        Err(e) => Err(WebError::Query(format!("Failed to get neighbors: {}", e))),
+    };
+
+    Ok(Json(ApiResponse::success(result?)))
+}

@@ -9,12 +9,12 @@
 
 use std::sync::Arc;
 
-use graphdb::config::AuthConfig;
-use graphdb::core::types::SpaceInfo;
-use graphdb_server::permission::OperationType;
-use graphdb_server::permission::GOD_SPACE_ID;
-use graphdb_server::session::ClientSession;
-use graphdb_server::{
+use linkrs::config::AuthConfig;
+use linkrs::core::types::SpaceInfo;
+use linkrs_server::permission::OperationType;
+use linkrs_server::permission::GOD_SPACE_ID;
+use linkrs_server::session::ClientSession;
+use linkrs_server::{
     Authenticator, PasswordAuthenticator, Permission, PermissionChecker, PermissionManager,
     RoleType, Session,
 };

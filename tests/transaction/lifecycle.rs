@@ -6,8 +6,8 @@
 //! - Timeout cleanup releases all resources
 //! - Snapshot tracker has no leaks after commit/abort
 
-use graphdb::core::types::TransactionId;
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+use linkrs::core::types::TransactionId;
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
 use std::sync::Arc;
 use std::time::Duration;

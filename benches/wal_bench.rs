@@ -12,10 +12,10 @@
 //! data only, so it reads as an upper bound rather than the shipped path.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use graphdb::core::types::{EdgeTypeInfo, SpaceInfo, VertexId};
-use graphdb::core::wal::SyncPolicy;
-use graphdb::core::{DataType, Edge};
-use graphdb::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
+use linkrs::core::types::{EdgeTypeInfo, SpaceInfo, VertexId};
+use linkrs::core::wal::SyncPolicy;
+use linkrs::core::{DataType, Edge};
+use linkrs::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
@@ -118,18 +118,18 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
             storage
                 .create_tag(
                     &space_name,
-                    &graphdb::core::types::TagInfo::new("Node".to_string()).with_properties(vec![
-                        graphdb::core::types::PropertyDef::new("id".into(), DataType::BigInt),
+                    &linkrs::core::types::TagInfo::new("Node".to_string()).with_properties(vec![
+                        linkrs::core::types::PropertyDef::new("id".into(), DataType::BigInt),
                     ]),
                 )
                 .expect("create tag");
-            let vertices: Vec<graphdb::core::Vertex> = (0..500i64)
+            let vertices: Vec<linkrs::core::Vertex> = (0..500i64)
                 .map(|i| {
-                    graphdb::core::Vertex::new(
+                    linkrs::core::Vertex::new(
                         VertexId::try_from_int64(i).expect("valid vertex id"),
-                        graphdb::core::vertex_edge_path::Tag::new(
+                        linkrs::core::vertex_edge_path::Tag::new(
                             "Node".to_string(),
-                            [("id".into(), graphdb::core::Value::BigInt(i))]
+                            [("id".into(), linkrs::core::Value::BigInt(i))]
                                 .into_iter()
                                 .collect(),
                         ),
@@ -171,8 +171,8 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
                     storage
                         .create_tag(
                             &space_name,
-                            &graphdb::core::types::TagInfo::new("Node".to_string())
-                                .with_properties(vec![graphdb::core::types::PropertyDef::new(
+                            &linkrs::core::types::TagInfo::new("Node".to_string())
+                                .with_properties(vec![linkrs::core::types::PropertyDef::new(
                                     "id".to_string(),
                                     DataType::BigInt,
                                 )]),
@@ -181,13 +181,13 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
                     storage
                         .create_edge_type(&space_name, &EdgeTypeInfo::new("Link".to_string()))
                         .expect("create edge type");
-                    let vertices: Vec<graphdb::core::Vertex> = (0..500i64)
+                    let vertices: Vec<linkrs::core::Vertex> = (0..500i64)
                         .map(|i| {
-                            graphdb::core::Vertex::new(
+                            linkrs::core::Vertex::new(
                                 VertexId::try_from_int64(i).expect("valid vertex id"),
-                                graphdb::core::vertex_edge_path::Tag::new(
+                                linkrs::core::vertex_edge_path::Tag::new(
                                     "Node".to_string(),
-                                    [("id".into(), graphdb::core::Value::BigInt(i))]
+                                    [("id".into(), linkrs::core::Value::BigInt(i))]
                                         .into_iter()
                                         .collect(),
                                 ),

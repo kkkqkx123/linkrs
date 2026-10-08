@@ -1,11 +1,11 @@
-# GraphDB 测试工作流指南
+# Linkrs 测试工作流指南
 
-本文档总结了完整的 GraphDB 测试操作流程，包括服务器启动测试、E2E 验证和完整测试套件执行。
+本文档总结了完整的 Linkrs 测试操作流程，包括服务器启动测试、E2E 验证和完整测试套件执行。
 
 ## 前置条件
 
 1. 确保 Qdrant 已启动（如果需要向量功能）
-2. 确保 GraphDB 已编译（`cargo build --release --features server`）
+2. 确保 Linkrs 已编译（`cargo build --release --features server`）
 3. 确保配置文件 `config.toml` 存在
 
 ## 工作流一：服务器启动集成测试
@@ -28,7 +28,7 @@ python tests\server_startup_test.py
 
 ```
 ============================================================
-GraphDB Server Startup Integration Test
+Linkrs Server Startup Integration Test
 ============================================================
 ✓ PASS: test_01_server_binary_exists - OK
 ✓ PASS: test_02_config_file_exists - OK
@@ -45,7 +45,7 @@ Total: 7 tests, 7 passed, 0 failed
 
 | 测试项     | 说明                                  |
 | ---------- | ------------------------------------- |
-| 二进制检查 | 验证 `bin/graphdb-server.exe` 存在    |
+| 二进制检查 | 验证 `bin/linkrs-server.exe` 存在    |
 | 配置检查   | 验证 `config.toml` 存在               |
 | 端口检查   | 验证端口 9758 未被占用                |
 | 启动测试   | 启动服务器并等待就绪                  |
@@ -91,7 +91,7 @@ Total: 5/5 steps passed
 
 | 步骤            | 说明                                                         |
 | --------------- | ------------------------------------------------------------ |
-| Server Startup  | 启动 GraphDB 服务器                                          |
+| Server Startup  | 启动 Linkrs 服务器                                          |
 | Health Check    | 验证健康端点返回 200                                         |
 | Data Generation | 生成 E2E 测试数据                                            |
 | Basic Query     | 执行 6 个基础查询（CREATE/USE/CREATE TAG/INSERT/FETCH/DROP） |
@@ -112,10 +112,10 @@ Total: 5/5 steps passed
 cd d:\项目\database\graphDB
 
 # 2. 确保没有残留的服务器进程
-Get-Process graphdb-server -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process linkrs-server -ErrorAction SilentlyContinue | Stop-Process -Force
 
 # 3. 启动服务器（后台运行）
-Start-Process -FilePath ".\bin\graphdb-server.exe" -ArgumentList "serve", "--config", ".\config.toml" -WindowStyle Hidden
+Start-Process -FilePath ".\bin\linkrs-server.exe" -ArgumentList "serve", "--config", ".\config.toml" -WindowStyle Hidden
 
 # 4. 等待服务器启动
 Start-Sleep -Seconds 5
@@ -124,7 +124,7 @@ Start-Sleep -Seconds 5
 python tests\e2e\run_tests.py
 
 # 6. 测试完成后，停止服务器
-Get-Process graphdb-server -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process linkrs-server -ErrorAction SilentlyContinue | Stop-Process -Force
 ```
 
 ### 测试套件内容
@@ -153,14 +153,14 @@ Get-Process graphdb-server -ErrorAction SilentlyContinue | Stop-Process -Force
 cd d:\项目\database\graphDB
 
 # 2. 停止现有服务器
-Get-Process graphdb-server -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process linkrs-server -ErrorAction SilentlyContinue | Stop-Process -Force
 
 # 3. 重新构建 release 版本
 & 'D:\softwares\Visual Studio\Common7\Tools\Launch-VsDevShell.ps1'
 cargo build --release --features server
 
 # 4. 删除旧文件，复制新的可执行文件到 bin 目录(直接复制会被OS拦截)
-Remove-Item .\bin\graphdb-server.exe; Copy-Item .\target\release\graphdb-server.exe .\bin\graphdb-server.exe -Force
+Remove-Item .\bin\linkrs-server.exe; Copy-Item .\target\release\linkrs-server.exe .\bin\linkrs-server.exe -Force
 
 # 5. 运行启动测试验证
 python tests\server_startup_test.py
@@ -216,7 +216,7 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 9758).OwningProcess | Stop-Proc
 
 ```powershell
 # 手动检查服务器输出
-.\bin\graphdb-server.exe serve --config .\config.toml
+.\bin\linkrs-server.exe serve --config .\config.toml
 ```
 
 ### 问题 3：Qdrant 连接失败
@@ -258,9 +258,9 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 | 服务器启动测试   | `tests/server_startup_test.py` |
 | E2E 基础验证     | `tests/e2e_verify.py`          |
 | E2E 测试套件     | `tests/e2e/run_tests.py`       |
-| E2E 客户端       | `tests/e2e/graphdb_client.py`  |
+| E2E 客户端       | `tests/e2e/linkrs_client.py`  |
 | 测试数据生成     | `scripts/generate_e2e_data.py` |
-| 服务器可执行文件 | `bin/graphdb-server.exe`       |
+| 服务器可执行文件 | `bin/linkrs-server.exe`       |
 | 配置文件         | `config.toml`                  |
 | 问题文档         | `docs/issue/`                  |
 

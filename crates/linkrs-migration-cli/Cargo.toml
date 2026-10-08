@@ -1,0 +1,21 @@
+[package]
+name = "linkrs-migration-cli"
+version.workspace = true
+edition.workspace = true
+description = "CLI for linkrs migration management"
+license.workspace = true
+
+[[bin]]
+name = "linkrs-migration"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+log.workspace = true
+
+linkrs-core = { path = "../linkrs-core" }
+linkrs-storage = { path = "../linkrs-storage" }
+linkrs-migration = { path = "../linkrs-migration" }

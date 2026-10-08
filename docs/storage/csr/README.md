@@ -1,6 +1,6 @@
 # CSR（Compressed Sparse Row）边存储文档
 
-`crates/graphdb-storage/src/edge/` 下边存储 CSR 实现的导航。
+`crates/linkrs-storage/src/edge/` 下边存储 CSR 实现的导航。
 本目录五份文档均为现状文档，以代码为准；
 已删除的历史形态（`MultiSingle`、`Labeled`、旧不可变 `Csr`、
 `prop_offset`、`from_strategy`、`compact_with_ts`）不再收录。
@@ -25,12 +25,12 @@
 
 代码注释即第一来源，关键入口：
 
-- `crates/graphdb-storage/src/edge.rs`——`Nbr`/`HotNbr`/`ColdStamps`、
+- `crates/linkrs-storage/src/edge.rs`——`Nbr`/`HotNbr`/`ColdStamps`、
   `EdgeSchema`、`RecordForm`
-- `crates/graphdb-storage/src/edge/csr_variant.rs`——六变体枚举与分发宏
-- `crates/graphdb-storage/src/edge/csr_trait.rs`——`CsrBase`、`MutableCsrTrait`
-- `crates/graphdb-storage/src/edge/node_group.rs`——组分片、脏标记、冻结/解冻
-- `crates/graphdb-storage/src/edge/fragmentation_stats.rs`——浪费占比口径与组门限
+- `crates/linkrs-storage/src/edge/csr_variant.rs`——六变体枚举与分发宏
+- `crates/linkrs-storage/src/edge/csr_trait.rs`——`CsrBase`、`MutableCsrTrait`
+- `crates/linkrs-storage/src/edge/node_group.rs`——组分片、脏标记、冻结/解冻
+- `crates/linkrs-storage/src/edge/fragmentation_stats.rs`——浪费占比口径与组门限
 
 ## 仍然成立的设计决策
 

@@ -2,11 +2,11 @@
 //!
 //! Tests for SyncManager edge insert/delete/update operations
 
-use graphdb::core::types::{DataType, EdgeTypeInfo, PropertyDef, TransactionId, VertexId};
-use graphdb::core::Value;
-use graphdb::storage::{StorageReader, StorageSchemaOps, StorageWriter};
-use graphdb::sync::{EdgeProps, EdgeRef};
-use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
+use linkrs::core::types::{DataType, EdgeTypeInfo, PropertyDef, TransactionId, VertexId};
+use linkrs::core::Value;
+use linkrs::storage::{StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs::sync::{EdgeProps, EdgeRef};
+use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::collections::HashMap;
 
 /// TC-300: Edge insert sync via SyncManager
@@ -45,7 +45,7 @@ fn test_edge_insert_sync_via_manager() {
                 space_id,
                 "KNOWS",
                 "description",
-                Some(graphdb::search::EngineType::Bm25),
+                Some(linkrs::search::EngineType::Bm25),
             )
             .await
             .expect("Failed to create fulltext index for edge");
@@ -69,7 +69,7 @@ fn test_edge_insert_sync_via_manager() {
 
     let txn_id = TransactionId(harness.current_txn_id.unwrap());
 
-    let edge = graphdb::core::Edge::new(
+    let edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
@@ -89,7 +89,7 @@ fn test_edge_insert_sync_via_manager() {
         .on_edge_insert(
             txn_id,
             space_id,
-            &graphdb::core::Edge::new(
+            &linkrs::core::Edge::new(
                 VertexId::try_from_int64(1).expect("test vertex id"),
                 VertexId::try_from_int64(2).expect("test vertex id"),
                 "KNOWS".to_string(),
@@ -153,7 +153,7 @@ fn test_edge_with_fulltext_property_sync() {
                 space_id,
                 "KNOWS",
                 "description",
-                Some(graphdb::search::EngineType::Bm25),
+                Some(linkrs::search::EngineType::Bm25),
             )
             .await
             .expect("Failed to create fulltext index for edge");
@@ -176,7 +176,7 @@ fn test_edge_with_fulltext_property_sync() {
         "description".to_string(),
         Value::string("Alice knows Bob since 2020"),
     );
-    let edge = graphdb::core::Edge::new(
+    let edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
@@ -244,7 +244,7 @@ fn test_edge_delete_sync_via_manager() {
                 space_id,
                 "KNOWS",
                 "description",
-                Some(graphdb::search::EngineType::Bm25),
+                Some(linkrs::search::EngineType::Bm25),
             )
             .await
             .expect("Failed to create index");
@@ -264,7 +264,7 @@ fn test_edge_delete_sync_via_manager() {
     // Insert an edge first (non-txn)
     let mut props = HashMap::new();
     props.insert("description".to_string(), Value::string("Alice knows Bob"));
-    let edge = graphdb::core::Edge::new(
+    let edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
@@ -349,7 +349,7 @@ fn test_edge_update_sync_via_manager() {
                 space_id,
                 "KNOWS",
                 "description",
-                Some(graphdb::search::EngineType::Bm25),
+                Some(linkrs::search::EngineType::Bm25),
             )
             .await
             .expect("Failed to create index");
@@ -369,7 +369,7 @@ fn test_edge_update_sync_via_manager() {
     // Insert initial edge
     let mut old_props = HashMap::new();
     old_props.insert("description".to_string(), Value::string("old description"));
-    let old_edge = graphdb::core::Edge::new(
+    let old_edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
@@ -387,7 +387,7 @@ fn test_edge_update_sync_via_manager() {
     // Update edge
     let mut new_props = HashMap::new();
     new_props.insert("description".to_string(), Value::string("new description"));
-    let new_edge = graphdb::core::Edge::new(
+    let new_edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
@@ -485,7 +485,7 @@ fn test_edge_delete_no_index_graceful() {
     harness.wait_for_async(200);
 
     // Insert edge
-    let edge = graphdb::core::Edge::new(
+    let edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),

@@ -1,0 +1,887 @@
+use crate::engine::graph_storage::GraphStorageContext;
+use crate::{
+    LabelVersionHistory, PropertyChange, StorageAdmin, StorageAuthOps, StorageGcOps,
+    StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
+    StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
+    StorageSyncContextOps, StorageWriter,
+};
+use linkrs_core::error::StorageError;
+use linkrs_core::metadata::IndexMetadataManager;
+use linkrs_core::types::{
+    EdgeTypeInfo, EdgeTypeSchema, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
+    PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
+};
+use linkrs_core::{Edge, EdgeDeleteKey, EdgeDirection, RoleType, StorageResult, Value, Vertex};
+use linkrs_transaction::UndoTarget;
+use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+macro_rules! mock_stub {
+    (&self, $fn:ident($($arg:ident: $ty:ty),*) -> $ret:ty, $val:expr) => {
+        fn $fn(&self, $($arg: $ty),*) -> $ret { $val }
+    };
+    (&mut self, $fn:ident($($arg:ident: $ty:ty),*) -> $ret:ty, $val:expr) => {
+        fn $fn(&mut self, $($arg: $ty),*) -> $ret { $val }
+    };
+}
+
+#[derive(Debug, Clone)]
+pub struct MockStorage {
+    graph: GraphStorageContext,
+    schema_manager: Arc<linkrs_core::metadata::SchemaManager>,
+    operation_context: Option<Arc<StorageOperationContext>>,
+    fail_insert_edge: Arc<RwLock<bool>>,
+    fail_delete_edge: Arc<RwLock<bool>>,
+    fail_batch_insert_edges: Arc<RwLock<bool>>,
+    edge_types: Arc<RwLock<Vec<EdgeTypeInfo>>>,
+    edges: Arc<RwLock<Vec<Edge>>>,
+    /// Vertices keyed by space (mirrors the graph storage API used by
+    /// executor-level tests for the point-lookup sources).
+    vertices: Arc<RwLock<HashMap<String, Vec<Vertex>>>>,
+    migration_history: Arc<RwLock<crate::migration_history::MigrationHistoryManager>>,
+    edge_property_indexes: Arc<RwLock<std::collections::HashSet<String>>>,
+}
+
+impl MockStorage {
+    pub fn new() -> Result<Self, StorageError> {
+        Ok(Self {
+            graph: GraphStorageContext::new(),
+            schema_manager: Arc::new(linkrs_core::metadata::SchemaManager::new()),
+            operation_context: None,
+            fail_insert_edge: Arc::new(RwLock::new(false)),
+            fail_delete_edge: Arc::new(RwLock::new(false)),
+            fail_batch_insert_edges: Arc::new(RwLock::new(false)),
+            edge_types: Arc::new(RwLock::new(Vec::new())),
+            edges: Arc::new(RwLock::new(Vec::new())),
+            vertices: Arc::new(RwLock::new(HashMap::new())),
+            migration_history: Arc::new(RwLock::new(
+                crate::migration_history::MigrationHistoryManager::new(),
+            )),
+            edge_property_indexes: Arc::new(RwLock::new(std::collections::HashSet::new())),
+        })
+    }
+
+    pub fn get_graph(&self) -> &GraphStorageContext {
+        &self.graph
+    }
+
+    pub fn set_fail_insert_edge(&self, enabled: bool) {
+        *self.fail_insert_edge.write() = enabled;
+    }
+
+    pub fn set_fail_delete_edge(&self, enabled: bool) {
+        *self.fail_delete_edge.write() = enabled;
+    }
+
+    pub fn set_edge_types(&self, edge_types: Vec<EdgeTypeInfo>) {
+        *self.edge_types.write() = edge_types;
+    }
+
+    pub fn set_edges(&self, edges: Vec<Edge>) {
+        *self.edges.write() = edges;
+    }
+
+    pub fn set_fail_batch_insert_edges(&self, enabled: bool) {
+        *self.fail_batch_insert_edges.write() = enabled;
+    }
+}
+
+impl Default for MockStorage {
+    fn default() -> Self {
+        Self::new().expect("Failed to create MockStorage")
+    }
+}
+
+/// The mock keeps its rows outside the engine's tables, so there is nothing
+/// meaningful to report; the defaulted no-op snapshots make consumers fall
+/// back to their sampling path.
+impl crate::stats_reader::ColumnStatsReader for MockStorage {}
+
+impl StorageReader for MockStorage {
+    fn get_vertex(
+        &self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+    ) -> Result<Option<Vertex>, StorageError> {
+        Ok(self.vertices.read().get(space).and_then(|vertices| {
+            vertices
+                .iter()
+                .find(|v| v.vid == *id && v.tag.name == tag)
+                .cloned()
+        }))
+    }
+
+    fn get_vertex_projected(
+        &self,
+        space: &str,
+        tag: &str,
+        id: &VertexId,
+        projection: &[Arc<str>],
+    ) -> Result<Option<Vertex>, StorageError> {
+        let vertex = self.get_vertex(space, tag, id)?;
+        if projection.is_empty() {
+            return Ok(vertex);
+        }
+        Ok(vertex.map(|mut v| {
+            v.tag.properties.retain(|k, _| projection.contains(k));
+            v
+        }))
+    }
+    mock_stub!(&self, scan_vertices(_space: &str) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, scan_vertices_by_tag(_space: &str, _tag: &str) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, scan_vertices_by_prop(_space: &str, _tag: &str, _prop: &str, _value: &Value) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
+    fn get_edge(
+        &self,
+        _space: &str,
+        src: &VertexId,
+        dst: &VertexId,
+        edge_type: &str,
+        rank: i64,
+    ) -> Result<Option<Edge>, StorageError> {
+        Ok(self
+            .edges
+            .read()
+            .iter()
+            .find(|edge| {
+                edge.src == *src
+                    && edge.dst == *dst
+                    && edge.edge_type == edge_type
+                    && edge.ranking == rank
+            })
+            .cloned())
+    }
+    fn get_edge_projected(
+        &self,
+        space: &str,
+        src: &VertexId,
+        dst: &VertexId,
+        edge_type: &str,
+        rank: i64,
+        projection: &[Arc<str>],
+    ) -> Result<Option<Edge>, StorageError> {
+        let edge = self.get_edge(space, src, dst, edge_type, rank)?;
+        if projection.is_empty() {
+            return Ok(edge);
+        }
+        Ok(edge.map(|mut e| {
+            e.props.retain(|k, _| projection.contains(k));
+            e
+        }))
+    }
+    mock_stub!(&self, get_node_edges(_space: &str, _node_id: &VertexId, _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, neighbor_dst_ids_batch(_space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<Vec<VertexId>>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, out_degree_batch(_space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<usize>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, scan_edges_by_type(_space: &str, _edge_type: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, scan_all_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, count_vertices_by_tag(_space: &str, _tag: &str) -> Result<u64, StorageError>, Ok(0));
+    mock_stub!(&self, count_edges_by_type(_space: &str, _edge_type: &str) -> Result<u64, StorageError>, Ok(0));
+    fn enable_edge_property_index(
+        &self,
+        space: &str,
+        edge_type: &str,
+        _pool_capacity: u64,
+    ) -> Result<bool, StorageError> {
+        self.edge_property_indexes
+            .write()
+            .insert(format!("{space}.{edge_type}"));
+        Ok(true)
+    }
+    fn has_edge_property_index(&self, space: &str, edge_type: &str) -> Result<bool, StorageError> {
+        Ok(self
+            .edge_property_indexes
+            .read()
+            .contains(&format!("{space}.{edge_type}")))
+    }
+    fn disable_edge_property_index(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Result<(), StorageError> {
+        self.edge_property_indexes
+            .write()
+            .remove(&format!("{space}.{edge_type}"));
+        Ok(())
+    }
+    fn lookup_edges_by_property_range(
+        &self,
+        _space: &str,
+        edge_type: &str,
+        prop_name: &str,
+        lower: Option<&Value>,
+        upper: Option<&Value>,
+        include_lower: bool,
+        include_upper: bool,
+    ) -> Result<Vec<Edge>, StorageError> {
+        let codec = linkrs_core::value::ordered_codec::OrderedCodec::new();
+        let prefix_bounds = include_lower && !include_upper && lower.is_some() && upper == lower;
+        let value_lower = match lower {
+            Some(value) => {
+                let encoded = codec.encode(value)?;
+                if include_lower {
+                    encoded
+                } else {
+                    linkrs_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
+                }
+            }
+            None => Vec::new(),
+        };
+        let value_upper = match upper {
+            Some(value) => {
+                let encoded = codec.encode(value)?;
+                if prefix_bounds || include_upper {
+                    linkrs_core::value::ordered_codec::OrderedCodec::prefix_upper_bound(&encoded)
+                } else {
+                    encoded
+                }
+            }
+            None => Vec::new(),
+        };
+        let edges = self.edges.read().clone();
+        let mut result = Vec::new();
+        for edge in edges.into_iter().filter(|e| e.edge_type == edge_type) {
+            let Some(prop_value) = edge.props.get(prop_name) else {
+                continue;
+            };
+            let Ok(encoded) = codec.encode(prop_value) else {
+                continue;
+            };
+            if !value_lower.is_empty() && encoded < value_lower {
+                continue;
+            }
+            if !value_upper.is_empty() && encoded >= value_upper {
+                continue;
+            }
+            result.push(edge);
+        }
+        Ok(result)
+    }
+    mock_stub!(&self, lookup_index(_space: &str, _index: &str, _value: &Value) -> Result<Vec<Value>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_vertex_with_schema(_space: &str, _tag: &str, _id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>, Ok(None));
+    mock_stub!(&self, get_edge_with_schema(_space: &str, _edge_type: &str, _src: &Value, _dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>, Ok(None));
+    mock_stub!(&self, scan_vertices_with_schema(_space: &str, _tag: &str) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, scan_edges_with_schema(_space: &str, _edge_type: &str) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_space(_space: &str) -> Result<Option<SpaceInfo>, StorageError>, Ok(None));
+    mock_stub!(&self, get_space_by_id(_space_id: u64) -> Result<Option<SpaceInfo>, StorageError>, Ok(None));
+    mock_stub!(&self, list_spaces() -> Result<Vec<SpaceInfo>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_space_id(_space: &str) -> Result<u64, StorageError>, Ok(1));
+    mock_stub!(&self, space_exists(_space: &str) -> bool, false);
+    mock_stub!(&self, get_tag(_space: &str, _tag: &str) -> Result<Option<TagInfo>, StorageError>, Ok(None));
+    mock_stub!(&self, list_tags(_space: &str) -> Result<Vec<TagInfo>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_edge_type(_space: &str, _edge_type: &str) -> Result<Option<EdgeTypeSchema>, StorageError>, Ok(None));
+    fn list_edge_types(&self, _space: &str) -> Result<Vec<EdgeTypeSchema>, StorageError> {
+        Ok(self.edge_types.read().clone())
+    }
+    mock_stub!(&self, get_tag_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>, Ok(None));
+    mock_stub!(&self, list_tag_indexes(_space: &str) -> Result<Vec<Index>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_edge_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>, Ok(None));
+    mock_stub!(&self, list_edge_indexes(_space: &str) -> Result<Vec<Index>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_vertex_version_history(_space: &str, _tag: &str) -> Result<Option<LabelVersionHistory>, StorageError>, Ok(None));
+    mock_stub!(&self, get_edge_version_history(_space: &str, _edge_type: &str) -> Result<Option<LabelVersionHistory>, StorageError>, Ok(None));
+    mock_stub!(&self, get_vertex_schema_changes(_space: &str, _tag: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_edge_schema_changes(_space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, detect_vertex_breaking_changes(_space: &str, _tag: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, detect_edge_breaking_changes(_space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    fn list_migration_history(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError> {
+        Ok(self.migration_history.read().list(space, label, is_edge))
+    }
+    fn get_applied_versions(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<Vec<u64>, StorageError> {
+        Ok(self
+            .migration_history
+            .read()
+            .get_applied_versions_sorted(space, label, is_edge))
+    }
+    fn record_migration_history(
+        &self,
+        record: crate::MigrationHistoryRecord,
+    ) -> Result<(), StorageError> {
+        self.migration_history.write().record(record)
+    }
+    fn list_all_migration_history(
+        &self,
+    ) -> Result<Vec<crate::MigrationHistoryRecord>, StorageError> {
+        Ok(self.migration_history.read().list_all())
+    }
+    fn scan_vertices_by_tag_paginated(
+        &self,
+        space: &str,
+        tag: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Vertex>, StorageError> {
+        let vertices = self.vertices.read().get(space).cloned().unwrap_or_default();
+        // Filter by tag if vertices have tags
+        let filtered: Vec<Vertex> = vertices
+            .into_iter()
+            .filter(|v| v.tag.name == tag || tag.is_empty())
+            .collect();
+        Ok(filtered.into_iter().skip(offset).take(limit).collect())
+    }
+    fn scan_edges_by_type_paginated(
+        &self,
+        _space: &str,
+        _edge_type: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Edge>, StorageError> {
+        let edges = self.edges.read().clone();
+        Ok(edges.into_iter().skip(offset).take(limit).collect())
+    }
+}
+
+impl StorageWriter for MockStorage {
+    fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError> {
+        self.vertices
+            .write()
+            .entry(space.to_string())
+            .or_default()
+            .push(vertex.clone());
+        Ok(vertex.vid)
+    }
+    mock_stub!(&mut self, update_vertex(_space: &str, _vertex: Vertex) -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&mut self, update_vertex_replace(_space: &str, _vertex: Vertex) -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&mut self, delete_vertex(_space: &str, _tag: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&mut self, delete_vertex_with_edges(_space: &str, _tag: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&mut self, batch_delete_vertices_with_edges(_space: &str, _tag: &str, _ids: &[VertexId]) -> Result<usize, StorageError>, Ok(0));
+    mock_stub!(&mut self, batch_insert_vertices(_space: &str, _vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>, Ok(Vec::new()));
+    fn insert_edge(&mut self, _space: &str, _edge: Edge) -> Result<(), StorageError> {
+        if *self.fail_insert_edge.read() {
+            Err(StorageError::db_error("insert_edge failed".to_string()))
+        } else {
+            Ok(())
+        }
+    }
+    fn update_edge(&mut self, _space: &str, _edge: Edge) -> Result<(), StorageError> {
+        Ok(())
+    }
+    fn update_edge_replace(&mut self, _space: &str, _edge: Edge) -> Result<(), StorageError> {
+        Ok(())
+    }
+    fn delete_edge(
+        &mut self,
+        _space: &str,
+        _src: &VertexId,
+        _dst: &VertexId,
+        _edge_type: &str,
+        _rank: i64,
+    ) -> Result<(), StorageError> {
+        if *self.fail_delete_edge.read() {
+            Err(StorageError::db_error("delete_edge failed".to_string()))
+        } else {
+            Ok(())
+        }
+    }
+    fn batch_insert_edges(&mut self, _space: &str, _edges: Vec<Edge>) -> Result<(), StorageError> {
+        if *self.fail_batch_insert_edges.read() {
+            Err(StorageError::db_error(
+                "batch_insert_edges failed".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+    mock_stub!(&mut self, batch_delete_edges(_space: &str, _deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>, Ok(0));
+    mock_stub!(&mut self, insert_vertex_data(_space: &str, _info: &InsertVertexInfo) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, insert_edge_data(_space: &str, _info: &InsertEdgeInfo) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, delete_vertex_data(_space: &str, _tag: &str, _vertex_id: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, delete_edge_data(_space: &str, _src: &str, _dst: &str, _rank: i64) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, update_data(_space: &str, _space_id: u64, _info: &UpdateInfo) -> Result<bool, StorageError>, Ok(true));
+}
+
+impl StorageSchemaOps for MockStorage {
+    mock_stub!(&mut self, create_space(_space: &mut SpaceInfo) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, drop_space(_space: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, clear_space(_space: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, alter_space_comment(_space_id: u64, _comment: String) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, create_tag(_space: &str, _info: &TagInfo) -> Result<u32, StorageError>, Ok(1));
+    mock_stub!(&mut self, alter_tag(_space: &str, _tag: &str, _additions: Vec<PropertyDef>, _deletions: Vec<String>) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, rename_vertex_property(_label: LabelId, _old_name: &str, _new_name: &str) -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&mut self, rename_tag_property(_space: &str, _tag: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, rename_tag(_space: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, drop_tag(_space: &str, _tag: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, create_edge_type(_space: &str, _info: &EdgeTypeSchema) -> Result<u32, StorageError>, Ok(1));
+    mock_stub!(&mut self, alter_edge_type(_space: &str, _edge_type: &str, _additions: Vec<PropertyDef>, _deletions: Vec<String>) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, rename_edge_type(_space: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, update_edge_endpoints(_space: &str, _edge_type: &str, _src_tag: &str, _dst_tag: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, drop_edge_type(_space: &str, _edge_type: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, create_tag_index(_space: &str, _info: &Index) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, drop_tag_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, rebuild_tag_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, create_edge_index(_space: &str, _info: &Index) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, drop_edge_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, rebuild_edge_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));
+}
+
+impl StorageAuthOps for MockStorage {
+    mock_stub!(&mut self, change_password(_info: &PasswordInfo) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, create_user(_info: &UserInfo) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, alter_user(_info: &UserAlterInfo) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, drop_user(_username: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&self, user_exists(_username: &str) -> bool, false);
+    mock_stub!(&self, list_users() -> Vec<String>, Vec::new());
+    mock_stub!(&self, get_user(_username: &str) -> Option<UserInfo>, None);
+    mock_stub!(&self, update_last_login(_username: &str) -> Result<bool, StorageError>, Ok(false));
+    mock_stub!(&self, list_user_roles(_username: &str) -> Vec<(i64, RoleType)>, Vec::new());
+    mock_stub!(&self, list_all_user_roles() -> Vec<(String, Vec<(i64, RoleType)>)>, Vec::new());
+    mock_stub!(&mut self, grant_role(_username: &str, _space_id: i64, _role: RoleType) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(&mut self, revoke_role(_username: &str, _space_id: i64) -> Result<bool, StorageError>, Ok(true));
+}
+
+impl StorageAdmin for MockStorage {
+    mock_stub!(&mut self, load_from_disk() -> Result<(), StorageError>, Ok(()));
+    mock_stub!(&self, save_to_disk() -> Result<(), StorageError>, Ok(()));
+
+    fn get_storage_stats(&self) -> StorageStats {
+        StorageStats {
+            total_vertices: 0,
+            total_edges: 0,
+            total_spaces: 0,
+            total_tags: 0,
+            total_edge_types: 0,
+            total_size_bytes: 0,
+            data_size_bytes: 0,
+            index_size_bytes: 0,
+        }
+    }
+
+    mock_stub!(&self, find_dangling_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&mut self, repair_dangling_edges(_space: &str) -> Result<usize, StorageError>, Ok(0));
+    mock_stub!(&self, get_db_path() -> &str, "");
+}
+
+impl StoragePersistenceOps for MockStorage {
+    fn flush(&self) -> linkrs_core::StorageResult<()> {
+        Ok(())
+    }
+
+    fn create_checkpoint(&self) -> linkrs_core::StorageResult<Option<crate::CheckpointStats>> {
+        Ok(None)
+    }
+
+    fn verify_snapshot(&self, _snapshot_id: u64) -> linkrs_core::StorageResult<bool> {
+        Ok(false)
+    }
+
+    fn cleanup_snapshots(&self) -> linkrs_core::StorageResult<usize> {
+        Ok(0)
+    }
+
+    fn snapshot_stats(&self) -> crate::SnapshotStats {
+        Default::default()
+    }
+
+    fn persistence_diagnostics(&self) -> Option<crate::PersistenceDiagnostics> {
+        None
+    }
+
+    fn compact(
+        &self,
+        _config: &linkrs_core::types::CompactConfig,
+    ) -> linkrs_core::StorageResult<()> {
+        Ok(())
+    }
+
+    fn save_data_to_dir(&self, _dir: &std::path::Path) -> linkrs_core::StorageResult<()> {
+        Ok(())
+    }
+
+    fn should_flush(&self) -> bool {
+        false
+    }
+
+    fn should_checkpoint(&self) -> bool {
+        false
+    }
+}
+
+impl StorageSchemaContextOps for MockStorage {
+    fn get_schema_manager(&self) -> Option<Arc<linkrs_core::metadata::SchemaManager>> {
+        Some(self.schema_manager.clone())
+    }
+
+    fn get_index_metadata_manager(&self) -> Option<Arc<dyn IndexMetadataManager>> {
+        None
+    }
+}
+
+impl StorageOperationContextOps for MockStorage {
+    fn bind_auto_commit_context(&self) -> StorageResult<Self> {
+        Ok(self.bind_operation_context(StorageOperationContext {
+            transaction_id: None,
+            read_timestamp: 1,
+            write_timestamp: Some(1),
+            read_only: false,
+            auto_commit: true,
+            mutation_recorder: None,
+            auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
+        }))
+    }
+
+    fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
+        let mut bound = self.clone();
+        bound.operation_context = Some(Arc::new(context));
+        bound
+    }
+
+    fn bind_read_operation_context(&self) -> StorageResult<Self> {
+        Ok(self.bind_operation_context(StorageOperationContext {
+            transaction_id: None,
+            read_timestamp: 1,
+            write_timestamp: None,
+            read_only: true,
+            auto_commit: true,
+            mutation_recorder: None,
+            auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
+        }))
+    }
+
+    fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
+        self.operation_context.clone()
+    }
+
+    fn finalize_operation(&self, _committed: bool) -> linkrs_core::StorageResult<()> {
+        Ok(())
+    }
+}
+
+impl crate::StorageCommitOps for MockStorage {
+    fn commit_staged_writes(
+        &self,
+        _transaction_id: linkrs_core::types::TransactionId,
+        _intents: &[linkrs_core::wal::OutboxIntent],
+    ) -> linkrs_core::StorageResult<linkrs_core::types::CommitLsn> {
+        Ok(linkrs_core::types::CommitLsn::ZERO)
+    }
+
+    fn abort_staged_writes(
+        &self,
+        _transaction_id: linkrs_core::types::TransactionId,
+    ) -> linkrs_core::StorageResult<()> {
+        Ok(())
+    }
+
+    fn recover_outbox_projection(
+        &self,
+        _sync_manager: &linkrs_sync::SyncManager,
+    ) -> linkrs_core::StorageResult<usize> {
+        Ok(0)
+    }
+}
+
+impl StorageSyncContextOps for MockStorage {
+    fn get_sync_manager(&self) -> Option<Arc<linkrs_sync::SyncManager>> {
+        None
+    }
+}
+
+impl UndoTarget for MockStorage {
+    fn delete_vertex_type(
+        &self,
+        label: LabelId,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph.delete_vertex_type(label)
+    }
+
+    fn delete_edge_type(
+        &self,
+        edge_key: linkrs_core::types::EdgeKey,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph.delete_edge_type(edge_key)
+    }
+
+    fn delete_vertex(
+        &self,
+        vertex: linkrs_core::types::VertexIdentifier,
+        ts: linkrs_transaction::wal::Timestamp,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph
+            .delete_vertex(vertex.label, &vertex.vid.to_string(), ts)
+            .map_err(|e| linkrs_transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
+    }
+
+    fn delete_edge(
+        &self,
+        edge_ctx: linkrs_core::types::EdgeDeletionContext,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        let edge_id = &edge_ctx.edge_id;
+        let params = crate::engine::params::EdgeOperationParams {
+            edge_label: edge_id.edge_label,
+            src_label: edge_id.src_label,
+            src_id: edge_id.src_vid,
+            dst_label: edge_id.dst_label,
+            dst_id: edge_id.dst_vid,
+            rank: edge_id.rank,
+        };
+        self.graph
+            .delete_edge(&params, edge_ctx.timestamp)
+            .map(|_| ())
+            .map_err(|e| linkrs_transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
+    }
+
+    fn restore_edge(
+        &self,
+        edge: linkrs_core::types::EdgeIdentifier,
+        properties: Vec<(std::sync::Arc<str>, linkrs_core::Value)>,
+        ts: linkrs_transaction::wal::Timestamp,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph.restore_edge(edge, properties, ts)
+    }
+
+    fn undo_update_edge_property(
+        &self,
+        edge_id: linkrs_core::types::EdgeIdentifier,
+        col_id: linkrs_core::types::ColumnId,
+        value: linkrs_core::Value,
+        ts: linkrs_transaction::wal::Timestamp,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph
+            .undo_update_edge_property(edge_id, col_id, value, ts)
+    }
+
+    fn revert_delete_edge(
+        &self,
+        edge_ctx: linkrs_core::types::EdgeDeletionContext,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph.revert_delete_edge(edge_ctx)
+    }
+
+    fn revert_delete_vertex_properties(
+        &self,
+        label_name: &str,
+        prop_names: &[Arc<str>],
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph
+            .revert_delete_vertex_properties(label_name, prop_names)
+    }
+
+    fn revert_delete_edge_properties(
+        &self,
+        src_label: &str,
+        dst_label: &str,
+        edge_label: &str,
+        prop_names: &[Arc<str>],
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph
+            .revert_delete_edge_properties(src_label, dst_label, edge_label, prop_names)
+    }
+
+    fn revert_delete_vertex_label(
+        &self,
+        label_name: &str,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph.revert_delete_vertex_label(label_name)
+    }
+
+    fn revert_delete_edge_label(
+        &self,
+        src_label: &str,
+        dst_label: &str,
+        edge_label: &str,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph
+            .revert_delete_edge_label(src_label, dst_label, edge_label)
+    }
+
+    fn revert_rename_vertex_properties(
+        &self,
+        label_name: &str,
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph
+            .revert_rename_vertex_properties(label_name, current_names, original_names)
+    }
+
+    fn revert_rename_edge_properties(
+        &self,
+        src_label: &str,
+        dst_label: &str,
+        edge_label: &str,
+        current_names: &[Arc<str>],
+        original_names: &[Arc<str>],
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph.revert_rename_edge_properties(
+            src_label,
+            dst_label,
+            edge_label,
+            current_names,
+            original_names,
+        )
+    }
+
+    fn staged_write_mark(
+        &self,
+        txn_id: linkrs_core::types::TransactionId,
+    ) -> Option<linkrs_core::types::StagedWriteMark> {
+        self.graph.staged_write_mark(txn_id)
+    }
+
+    fn rollback_staged_writes(
+        &self,
+        txn_id: linkrs_core::types::TransactionId,
+        mark: linkrs_core::types::StagedWriteMark,
+    ) -> linkrs_transaction::undo_log::UndoLogResult<()> {
+        self.graph.rollback_staged_writes(txn_id, mark)
+    }
+}
+
+impl StorageRecoveryOps for MockStorage {
+    fn needs_recovery(&self) -> bool {
+        false
+    }
+
+    fn recover_from_wal(
+        &self,
+    ) -> linkrs_core::StorageResult<linkrs_transaction::wal::recovery::RecoveryStats> {
+        Ok(Default::default())
+    }
+
+    fn recover_from_wal_with_config(
+        &self,
+        _config: linkrs_transaction::wal::recovery::RecoveryConfig,
+    ) -> linkrs_core::StorageResult<linkrs_transaction::wal::recovery::RecoveryStats> {
+        Ok(Default::default())
+    }
+}
+
+impl StorageGcOps for MockStorage {
+    fn is_index_gc_running(&self) -> bool {
+        false
+    }
+
+    fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {
+        None
+    }
+
+    fn stop_index_gc(&self) {}
+}
+
+// The mock has no auto-commit batch/group window; the stubs exist so the
+// `QueryStorage` blanket impl (required by snapshot tests and the sync
+// wrapper's generic bounds) applies to `MockStorage`.
+impl crate::AutoCommitBatchOps for MockStorage {
+    fn begin_auto_commit_batch(
+        &self,
+    ) -> StorageResult<Arc<crate::engine::graph_storage::AutoCommitBatchWindow>> {
+        Err(StorageError::not_supported(
+            "MockStorage does not support auto-commit batches",
+        ))
+    }
+
+    fn bind_auto_commit_statement(
+        &self,
+        _window: &Arc<crate::engine::graph_storage::AutoCommitBatchWindow>,
+    ) -> StorageResult<Self>
+    where
+        Self: Sized,
+    {
+        Err(StorageError::not_supported(
+            "MockStorage does not support auto-commit batches",
+        ))
+    }
+
+    fn finalize_auto_commit_batch(
+        &self,
+        _window: &crate::engine::graph_storage::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        Err(StorageError::not_supported(
+            "MockStorage does not support auto-commit batches",
+        ))
+    }
+}
+
+impl crate::AutoCommitGroupOps for MockStorage {
+    fn begin_auto_commit_group(
+        &self,
+    ) -> StorageResult<Arc<crate::engine::graph_storage::AutoCommitBatchWindow>> {
+        Err(StorageError::not_supported(
+            "MockStorage does not support group commit",
+        ))
+    }
+
+    fn finalize_auto_commit_group(
+        &self,
+        _window: &crate::engine::graph_storage::AutoCommitBatchWindow,
+    ) -> StorageResult<()> {
+        Err(StorageError::not_supported(
+            "MockStorage does not support group commit",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::client::StorageOperationContextOps;
+    use crate::QueryStorage;
+
+    #[test]
+    fn unbound_storage_reports_no_snapshot() {
+        let storage = MockStorage::new().expect("MockStorage should be created");
+        assert!(storage.snapshot_handle().is_none());
+    }
+
+    #[test]
+    fn read_bound_storage_pins_snapshot_handle() {
+        let storage = MockStorage::new().expect("MockStorage should be created");
+        let bound = storage
+            .bind_read_operation_context()
+            .expect("read binding should succeed");
+        let handle = bound
+            .snapshot_handle()
+            .expect("bound storage has a snapshot");
+        assert_eq!(handle.ts, 1);
+    }
+
+    #[test]
+    fn auto_commit_bound_storage_pins_snapshot_handle() {
+        let storage = MockStorage::new().expect("MockStorage should be created");
+        let bound = storage
+            .bind_auto_commit_context()
+            .expect("auto-commit binding should succeed");
+        let handle = bound
+            .snapshot_handle()
+            .expect("auto-commit storage has a snapshot");
+        assert_eq!(handle.ts, 1);
+    }
+
+    #[test]
+    fn explicit_write_context_reports_read_timestamp() {
+        use linkrs_core::types::TransactionId;
+        let storage = MockStorage::new().expect("MockStorage should be created");
+        // A read-committed statement refresh moves the read stamp past the
+        // write stamp; the handle must report the stamp storage actually
+        // reads at, otherwise the query layer misfires snapshot-consistency
+        // errors on multi-statement write transactions.
+        let bound = storage.bind_operation_context(StorageOperationContext {
+            transaction_id: Some(TransactionId::from(7)),
+            read_timestamp: 43,
+            write_timestamp: Some(42),
+            read_only: false,
+            auto_commit: false,
+            mutation_recorder: None,
+            auto_commit_group_start: None,
+            auto_commit_staging_start: None,
+            auto_commit_wal_start: 0,
+        });
+        let handle = bound
+            .snapshot_handle()
+            .expect("bound storage has a snapshot");
+        assert_eq!(handle.ts, 43);
+    }
+}

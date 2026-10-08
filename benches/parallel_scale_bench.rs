@@ -9,13 +9,13 @@
 //! eta(n) = parallel_work_time/parallel_wall_time, actual worker count and
 //! fallback reason from `EXPLAIN ANALYZE`, plus storage-read share R.
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::query::optimizer::{OptimizerEngine, PartitioningConfig};
-use graphdb::query::pipeline::QueryPipelineManager;
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
-use graphdb_metrics::StatsManager;
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::query::optimizer::{OptimizerEngine, PartitioningConfig};
+use linkrs::query::pipeline::QueryPipelineManager;
+use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -295,7 +295,7 @@ fn measure(
     }
     let mut last_metrics = ExplainMetrics::default();
     let table = format!("EXPLAIN ANALYZE {query}");
-    if let Ok(graphdb::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+    if let Ok(linkrs::query::executor::base::ExecutionResult::DataSet { data, .. }) =
         pipeline.execute_query_with_space(&table, Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {
@@ -305,7 +305,7 @@ fn measure(
         }
     }
     let dot = format!("EXPLAIN ANALYZE FORMAT = DOT {query}");
-    if let Ok(graphdb::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+    if let Ok(linkrs::query::executor::base::ExecutionResult::DataSet { data, .. }) =
         pipeline.execute_query_with_space(&dot, Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {

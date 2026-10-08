@@ -1,5 +1,5 @@
 PS D:\项目\database\graphDB\tests\e2e> python run_tests.py
-Checking GraphDB server at 127.0.0.1:9758...
+Checking Linkrs server at 127.0.0.1:9758...
 ✓ Server is ready
 
 ============================================================

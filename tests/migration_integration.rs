@@ -1,10 +1,10 @@
-use graphdb::core::{DataType, Value};
-use graphdb::migration::{
+use linkrs::core::{DataType, Value};
+use linkrs::migration::{
     convert_value, generate_edge_plan, generate_vertex_plan, is_compatible_type, MigrationPlan,
     MigrationReport, MigrationTarget, SafetyLevel, VersionRange,
 };
-use graphdb::storage::MockStorage;
-use graphdb_core::value::null::NullType;
+use linkrs::storage::MockStorage;
+use linkrs_core::value::null::NullType;
 
 #[test]
 fn test_generate_vertex_plan_empty() {
@@ -48,7 +48,7 @@ fn test_execute_migration_plan_empty() {
         SafetyLevel::Safe,
         None,
     );
-    let report = graphdb::migration::execute_migration_plan(&mut storage, &plan);
+    let report = linkrs::migration::execute_migration_plan(&mut storage, &plan);
     assert!(report.is_ok());
     let report = report.unwrap();
     assert!(report.success);
@@ -56,8 +56,8 @@ fn test_execute_migration_plan_empty() {
 
 #[test]
 fn test_migration_event_registry_receives_lifecycle() {
-    use graphdb::migration::{execute_migration_plan_with_options, ExecuteOptions, MigrationEvent};
-    use graphdb_core::event_dispatch::EventSubscriptions;
+    use linkrs::migration::{execute_migration_plan_with_options, ExecuteOptions, MigrationEvent};
+    use linkrs_core::event_dispatch::EventSubscriptions;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -111,7 +111,7 @@ fn test_rollback_migration_no_plan() {
         SafetyLevel::Safe,
         None,
     );
-    let report = graphdb::migration::rollback_migration(&mut storage, &plan);
+    let report = linkrs::migration::rollback_migration(&mut storage, &plan);
     assert!(report.is_err());
 }
 
@@ -168,15 +168,15 @@ fn test_null_conversion() {
 
 #[test]
 fn test_parse_migrate_plan() {
-    let mut parser = graphdb::query::parser::Parser::new(
+    let mut parser = linkrs::query::parser::Parser::new(
         "MIGRATE PLAN FOR TAG person FROM VERSION 1 TO 2 IN test_space",
     );
     let result = parser.parse();
     assert!(result.is_ok(), "parse failed: {:?}", result.err());
     let ast = result.unwrap().ast;
     match &ast.stmt {
-        graphdb::query::parser::ast::Stmt::Migrate(m) => match m {
-            graphdb::query::parser::ast::MigrateStmt::Plan(p) => {
+        linkrs::query::parser::ast::Stmt::Migrate(m) => match m {
+            linkrs::query::parser::ast::MigrateStmt::Plan(p) => {
                 assert_eq!(p.label, "person");
                 assert_eq!(p.space, "test_space");
                 assert!(!p.is_edge);
@@ -191,27 +191,27 @@ fn test_parse_migrate_plan() {
 
 #[test]
 fn test_parse_migrate_execute() {
-    let mut parser = graphdb::query::parser::Parser::new("MIGRATE EXECUTE '{\"test\":1}'");
+    let mut parser = linkrs::query::parser::Parser::new("MIGRATE EXECUTE '{\"test\":1}'");
     let result = parser.parse();
     assert!(result.is_ok(), "parse failed: {:?}", result.err());
     let ast = result.unwrap().ast;
     assert!(matches!(
         ast.stmt,
-        graphdb::query::parser::ast::Stmt::Migrate(_)
+        linkrs::query::parser::ast::Stmt::Migrate(_)
     ));
 }
 
 #[test]
 fn test_parse_migrate_edge() {
-    let mut parser = graphdb::query::parser::Parser::new(
+    let mut parser = linkrs::query::parser::Parser::new(
         "MIGRATE PLAN FOR EDGE knows FROM VERSION 2 TO 5 IN my_space",
     );
     let result = parser.parse();
     assert!(result.is_ok(), "parse failed: {:?}", result.err());
     let ast = result.unwrap().ast;
     match &ast.stmt {
-        graphdb::query::parser::ast::Stmt::Migrate(m) => match m {
-            graphdb::query::parser::ast::MigrateStmt::Plan(p) => {
+        linkrs::query::parser::ast::Stmt::Migrate(m) => match m {
+            linkrs::query::parser::ast::MigrateStmt::Plan(p) => {
                 assert!(p.is_edge);
                 assert_eq!(p.label, "knows");
             }
@@ -223,9 +223,9 @@ fn test_parse_migrate_edge() {
 
 #[test]
 fn test_ddl_migrate_plan_operator() {
-    use graphdb::query::executor::streaming::operators::ddl_operator::DdlOperator;
-    use graphdb::query::executor::streaming::operators::spec::DdlSpec;
-    use graphdb::query::executor::streaming::slot::SlotLayout;
+    use linkrs::query::executor::streaming::operators::ddl_operator::DdlOperator;
+    use linkrs::query::executor::streaming::operators::spec::DdlSpec;
+    use linkrs::query::executor::streaming::slot::SlotLayout;
     use std::sync::Arc;
     let spec = DdlSpec::MigratePlan {
         space_name: "test_space".to_string(),
@@ -235,11 +235,11 @@ fn test_ddl_migrate_plan_operator() {
         to_version: 2,
     };
     let storage = Arc::new(parking_lot::RwLock::new(MockStorage::new().unwrap()))
-        as std::sync::Arc<parking_lot::RwLock<dyn graphdb::storage::QueryStorage>>;
+        as std::sync::Arc<parking_lot::RwLock<dyn linkrs::storage::QueryStorage>>;
     let layout = Arc::new(SlotLayout::new(vec![]));
     let op = DdlOperator::from_spec(&spec, Some(storage), layout);
     match op.kind {
-        graphdb::query::executor::streaming::operators::ddl_operator::DdlOperatorKind::MigratePlan {
+        linkrs::query::executor::streaming::operators::ddl_operator::DdlOperatorKind::MigratePlan {
             space_name,
             label,
             is_edge,

@@ -1,6 +1,6 @@
 #![cfg(feature = "embedded")]
 
-use graphdb::api::embedded::{GraphDatabase, TransactionConfig};
+use linkrs::api::embedded::{GraphDatabase, TransactionConfig};
 use std::time::Duration;
 
 #[test]

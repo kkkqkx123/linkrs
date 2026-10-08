@@ -10,9 +10,9 @@ const SAMPLE_SIZE: usize = 50;
 
 #[cfg(feature = "fulltext")]
 fn bench_fulltext_index_build(c: &mut Criterion) {
-    use graphdb_config::fulltext::FulltextConfig;
-    use graphdb_fulltext::manager::FulltextIndexManager;
-    use graphdb_fulltext::EngineType;
+    use linkrs_config::fulltext::FulltextConfig;
+    use linkrs_fulltext::manager::FulltextIndexManager;
+    use linkrs_fulltext::EngineType;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -80,9 +80,9 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
 
 #[cfg(feature = "fulltext")]
 fn bench_fulltext_search(c: &mut Criterion) {
-    use graphdb_config::fulltext::FulltextConfig;
-    use graphdb_fulltext::manager::FulltextIndexManager;
-    use graphdb_fulltext::EngineType;
+    use linkrs_config::fulltext::FulltextConfig;
+    use linkrs_fulltext::manager::FulltextIndexManager;
+    use linkrs_fulltext::EngineType;
     use std::sync::Arc;
     use tempfile::TempDir;
 

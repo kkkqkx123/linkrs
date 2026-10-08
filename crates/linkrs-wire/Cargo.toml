@@ -1,0 +1,14 @@
+[package]
+name = "linkrs-wire"
+version.workspace = true
+edition.workspace = true
+description = "Wire contract DTOs shared between linkrs-api and linkrs-cli"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+linkrs-core = { path = "../linkrs-core" }
+serde.workspace = true
+serde_json.workspace = true
+utoipa = { workspace = true }

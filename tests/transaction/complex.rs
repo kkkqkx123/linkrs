@@ -10,8 +10,8 @@
 //! - Nested operations
 //! - Aggregation operations
 
-use graphdb::core::Value;
-use graphdb::test_utils::test_scenario::TestScenario;
+use linkrs::core::Value;
+use linkrs::test_utils::test_scenario::TestScenario;
 use std::collections::HashMap;
 
 /// Test complex transaction with multiple operations

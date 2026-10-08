@@ -2,7 +2,7 @@
 
 > 最近更新: 2026-06-06
 
-本目录汇总 GraphDB 当前的 Qdrant 集成资料，配合 `vector-client` 的现有实现使用。
+本目录汇总 Linkrs 当前的 Qdrant 集成资料，配合 `vector-client` 的现有实现使用。
 
 ---
 
@@ -60,7 +60,7 @@ let results = client.search_points(
 
 ## 客户端 Crate
 
-GraphDB 当前已经使用独立的 `vector-client` crate 作为向量客户端实现，遵循与 BM25、全文检索类似的模块化拆分：
+Linkrs 当前已经使用独立的 `vector-client` crate 作为向量客户端实现，遵循与 BM25、全文检索类似的模块化拆分：
 
 ```
 crates/vector-client/
@@ -81,7 +81,7 @@ crates/vector-client/
 
 ---
 
-## 与 GraphDB 集成要点
+## 与 Linkrs 集成要点
 
 1. **集合命名**: `space_{space_id}_{tag}_{field}`
 2. **Payload设计**: 存储vertex_id、tag_name、关键属性

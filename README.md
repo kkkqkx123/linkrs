@@ -1,4 +1,4 @@
-# GraphDB
+# Linkrs
 
 [中文版](README_zh.md)
 
@@ -20,8 +20,8 @@ A **lightweight single-node graph database** implemented in Rust, focusing on lo
   - **gRPC** (tonic/prost) — 77+ RPCs for high-performance access
   - **Embedded API** — Direct Rust library integration
   - **C API** — SQLite-like bindings for foreign languages (cbindgen)
-- **Web Management UI** — Svelte + TypeScript dashboard (graphdb-studio)
-- **CLI Client** — Interactive REPL via graphdb-cli
+- **Web Management UI** — Svelte + TypeScript dashboard (linkrs-studio)
+- **CLI Client** — Interactive REPL via linkrs-cli
 - **Comprehensive Benchmark** — Criterion.rs-based performance measurement
 
 ---
@@ -30,15 +30,15 @@ A **lightweight single-node graph database** implemented in Rust, focusing on lo
 
 ```
 crates/
-├── graphdb-core          # Core types, errors, data structures
-├── graphdb-config        # Configuration management
-├── graphdb-fulltext        # Full-text search (tantivy/BM25)
-├── graphdb-sync          # Synchronization primitives
-├── graphdb-transaction   # Transaction management (MVCC)
-├── graphdb-migration     # Schema/data migration
-├── graphdb-storage       # CSR storage engine
-├── graphdb-query         # Query parser, optimizer, streaming executor
-├── graphdb-api           # HTTP, gRPC, embedded, C API
+├── linkrs-core          # Core types, errors, data structures
+├── linkrs-config        # Configuration management
+├── linkrs-fulltext        # Full-text search (tantivy/BM25)
+├── linkrs-sync          # Synchronization primitives
+├── linkrs-transaction   # Transaction management (MVCC)
+├── linkrs-migration     # Schema/data migration
+├── linkrs-storage       # CSR storage engine
+├── linkrs-query         # Query parser, optimizer, streaming executor
+├── linkrs-api           # HTTP, gRPC, embedded, C API
 └── vector-client         # Qdrant vector search client
 ```
 
@@ -128,8 +128,8 @@ Configuration is managed via `config.toml`:
 |------|-------------|
 | `crates/` | 11 sub-crates (8 core + migration + vector-client + cli) |
 | `src/` | Root crate: server binary, C API, library re-exports |
-| `frontend/` | graphdb-studio: SvelteKit + Svelte 5 + TypeScript web UI |
-| `crates/graphdb-cli/` | Interactive CLI client |
+| `frontend/` | linkrs-studio: SvelteKit + Svelte 5 + TypeScript web UI |
+| `crates/linkrs-cli/` | Interactive CLI client |
 | `proto/` | gRPC protobuf definitions |
 | `tests/` | Integration + C API + E2E tests |
 | `benches/` | Criterion.rs benchmarks |
@@ -150,26 +150,26 @@ Port `9669`. 77+ RPCs covering health, auth, session, query, schema, batch, vect
 Use directly as a Rust library:
 
 ```rust
-use graphdb::api::Database;
+use linkrs::api::Database;
 let db = Database::open("path/to/data")?;
 db.execute("CREATE TAG person(name string)")?;
 ```
 
 ### C API
-SQLite-style interface. Include `include/graphdb.h` and link against `libgraphdb`.
+SQLite-style interface. Include `include/linkrs.h` and link against `liblinkrs`.
 
 ```c
-graphdb *db;
-graphdb_open("path/to/data", &db);
-graphdb_execute(db, "CREATE TAG person(name string)", NULL, NULL);
-graphdb_close(db);
+linkrs *db;
+linkrs_open("path/to/data", &db);
+linkrs_execute(db, "CREATE TAG person(name string)", NULL, NULL);
+linkrs_close(db);
 ```
 
 ---
 
 ## Query Language
 
-GraphDB supports a Cypher-compatible query language:
+Linkrs supports a Cypher-compatible query language:
 
 ```cypher
 CREATE TAG person(name string, age int);
@@ -185,7 +185,7 @@ MATCH (a:person)-[:knows]->(b:person) RETURN a.name, b.name;
 ## CLI Client
 
 ```shell
-cd crates/graphdb-cli
+cd crates/linkrs-cli
 cargo run -- --host localhost --port 9758
 ```
 
@@ -193,7 +193,7 @@ Interactive REPL with syntax highlighting, history, CSV export, and pagination.
 
 ---
 
-## Web UI (graphdb-studio)
+## Web UI (linkrs-studio)
 
 ```shell
 cd frontend

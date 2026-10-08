@@ -1,0 +1,110 @@
+use super::SyncWrapper;
+use crate::engine::graph_storage::AutoCommitBatchWindow;
+use crate::StorageClient;
+use linkrs_core::StorageResult;
+use std::sync::Arc;
+
+impl<S: StorageClient + crate::AutoCommitBatchOps> crate::AutoCommitBatchOps for SyncWrapper<S> {
+    fn begin_auto_commit_batch(&self) -> StorageResult<Arc<AutoCommitBatchWindow>> {
+        self.inner.begin_auto_commit_batch()
+    }
+
+    fn bind_auto_commit_statement(
+        &self,
+        window: &Arc<AutoCommitBatchWindow>,
+    ) -> StorageResult<Self> {
+        let inner = self.inner.bind_auto_commit_statement(window)?;
+        Ok(SyncWrapper {
+            inner,
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+            auto_commit_owner: self.auto_commit_owner,
+        })
+    }
+
+    fn finalize_auto_commit_batch(&self, window: &AutoCommitBatchWindow) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_batch(window)
+    }
+}
+
+impl<S: StorageClient + crate::AutoCommitGroupOps> crate::AutoCommitGroupOps for SyncWrapper<S> {
+    fn begin_auto_commit_group(&self) -> StorageResult<Arc<AutoCommitBatchWindow>> {
+        self.inner.begin_auto_commit_group()
+    }
+
+    fn finalize_auto_commit_group(&self, window: &AutoCommitBatchWindow) -> StorageResult<()> {
+        self.inner.finalize_auto_commit_group(window)
+    }
+}
+
+impl<S: StorageClient + linkrs_transaction::UndoTarget + 'static>
+    linkrs_transaction::TransactionCommitSink for SyncWrapper<S>
+{
+    fn commit_transaction(
+        &self,
+        transaction_id: linkrs_core::types::TransactionId,
+    ) -> Result<linkrs_core::types::CommitLsn, String> {
+        self.commit_transaction_fact(transaction_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn commit_transaction_with_descriptor(
+        &self,
+        descriptor: &linkrs_transaction::TransactionCommitDescriptor,
+    ) -> Result<linkrs_core::types::CommitLsn, String> {
+        self.commit_transaction_fact_with_durability(
+            descriptor.transaction_id,
+            descriptor.durability,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn finalize_commit(
+        &self,
+        descriptor: &linkrs_transaction::TransactionCommitDescriptor,
+        commit_lsn: linkrs_core::types::CommitLsn,
+    ) -> Result<(), String> {
+        self.finalize_commit_fact(descriptor.transaction_id, commit_lsn)
+            .map_err(|error| error.to_string())
+    }
+
+    fn abort_transaction(
+        &self,
+        transaction_id: linkrs_core::types::TransactionId,
+    ) -> Result<(), String> {
+        self.abort_transaction_fact(transaction_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn abort_transaction_with_descriptor(
+        &self,
+        descriptor: &linkrs_transaction::TransactionAbortDescriptor,
+    ) -> Result<(), String> {
+        descriptor
+            .context
+            .execute_undo_logs(&self.inner)
+            .map_err(|error| error.to_string())?;
+        descriptor
+            .context
+            .clear_undo_logs()
+            .map_err(|error| error.to_string())?;
+        self.abort_transaction_fact(descriptor.transaction_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn auto_checkpoint_if_needed(&self) -> Result<(), String> {
+        use crate::StoragePersistenceOps;
+        let _ = <Self as StoragePersistenceOps>::auto_checkpoint_if_needed(self)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    fn recover_unfinalized_commits(&self) -> Result<usize, String> {
+        // Page-level redo belongs to storage WAL replay on open; fact-table
+        // post-commit finalization (`finalize_commit_fact`) is idempotent, so
+        // same-process re-drive happens through the manager's pending queue
+        // (`recover_pending_finalization`). Nothing extra is durable here yet,
+        // report zero rather than silently inheriting the default no-op.
+        Ok(0)
+    }
+}

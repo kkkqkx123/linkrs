@@ -5,10 +5,10 @@
 //! with an un-checkpointed WAL tail to replay. Debug-mode friendly dataset.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{DataType, Edge, Value, Vertex};
-use graphdb::storage::{
+use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs::core::vertex_edge_path::Tag;
+use linkrs::core::{DataType, Edge, Value, Vertex};
+use linkrs::storage::{
     GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 use std::time::{Duration, Instant};

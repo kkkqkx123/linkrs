@@ -1,0 +1,972 @@
+//! MVCC management: snapshot isolation and garbage collection.
+//!
+//! Visibility authority is `edge_timestamps` alone. There is no second
+//! tombstone table: deletion enumeration, statistics, and tombstone checks
+//! all derive from the authority records. CSR row stamps and adjacency `Nbr`
+//! stamps are physical projections for collection only. Every visibility
+//! decision goes through [`MVCCManager::is_edge_visible`] (or its
+//! pending-aware overload) so the projections cannot drift apart.
+
+use super::stats::TombstoneStats;
+use super::Nbr;
+use linkrs_core::types::{EdgeId, Timestamp};
+use std::collections::HashMap;
+
+/// Segmented sparse per-edge visibility authority keyed by edge id.
+///
+/// Edge ids are table-allocated dense values; one segment covers
+/// `SEGMENT_ROWS` ids and untouched segments stay unallocated. Slots of
+/// removed edges hold `None` and read as absent (fail closed: invisible).
+/// Middle segments are never compacted; empty segments are freed in place
+/// and only trailing holes are truncated on reclaim, matching the property
+/// edge-map caliber.
+#[derive(Debug, Clone, Default)]
+pub struct AuthorityMap {
+    segments: Vec<Option<Box<[Option<EdgeTimestamps>; 1024]>>>,
+    live: usize,
+    /// Cached tombstone count backing the write-path reclaim gate.
+    ///
+    /// Incrementally maintained by every mutation below so the commit path
+    /// never scans the authority to decide whether a reclaim pass is
+    /// worthwhile. Load rebuilds it through `insert`, one entry at a time.
+    tombstones: usize,
+}
+
+impl AuthorityMap {
+    const SEGMENT_ROWS: usize = 1024;
+    const SEGMENT_SHIFT: u32 = 10;
+    const SEGMENT_MASK: usize = 1024 - 1;
+
+    pub fn new() -> Self {
+        Self {
+            segments: Vec::new(),
+            live: 0,
+            tombstones: 0,
+        }
+    }
+
+    #[inline]
+    fn segment_of(edge_id: &EdgeId) -> (usize, usize) {
+        let slot = edge_id.0 as usize;
+        (slot >> Self::SEGMENT_SHIFT, slot & Self::SEGMENT_MASK)
+    }
+
+    pub fn get(&self, edge_id: &EdgeId) -> Option<&EdgeTimestamps> {
+        let (seg, off) = Self::segment_of(edge_id);
+        self.segments.get(seg)?.as_ref()?[off].as_ref()
+    }
+
+    pub fn get_mut(&mut self, edge_id: &EdgeId) -> Option<&mut EdgeTimestamps> {
+        let (seg, off) = Self::segment_of(edge_id);
+        self.segments.get_mut(seg)?.as_mut()?.get_mut(off)?.as_mut()
+    }
+
+    pub fn insert(&mut self, edge_id: EdgeId, ts: EdgeTimestamps) {
+        let (seg, off) = Self::segment_of(&edge_id);
+        if seg >= self.segments.len() {
+            self.segments.resize_with(seg + 1, || None);
+        }
+        let segment =
+            self.segments[seg].get_or_insert_with(|| Box::new([None; Self::SEGMENT_ROWS]));
+        let was_tombstoned = segment[off].is_some_and(|prev| prev.delete_ts != Timestamp::MAX);
+        if segment[off].is_none() {
+            self.live += 1;
+        }
+        segment[off] = Some(ts);
+        // Overwrites keep the count exact: only a fresh tombstone state
+        // transition moves it.
+        let is_tombstoned = ts.delete_ts != Timestamp::MAX;
+        match (was_tombstoned, is_tombstoned) {
+            (false, true) => self.tombstones += 1,
+            (true, false) => self.tombstones = self.tombstones.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    /// Record a deletion stamp, keeping the earliest stamp on repeat calls.
+    ///
+    /// Returns whether this call newly tombstoned the edge, so the caller
+    /// keeps the cached tombstone count without a second lookup.
+    pub fn note_deletion(&mut self, edge_id: &EdgeId, delete_ts: Timestamp) -> bool {
+        let (seg, off) = Self::segment_of(edge_id);
+        let Some(slot) = self
+            .segments
+            .get_mut(seg)
+            .and_then(|s| s.as_mut())
+            .and_then(|values| values[off].as_mut())
+        else {
+            return false;
+        };
+        let newly = slot.delete_ts == Timestamp::MAX && delete_ts != Timestamp::MAX;
+        slot.delete_ts = slot.delete_ts.min(delete_ts);
+        if newly {
+            self.tombstones += 1;
+        }
+        newly
+    }
+
+    /// Clear a deletion stamp, reviving the edge.
+    ///
+    /// Returns whether a tombstone was lifted, so the caller keeps the
+    /// cached tombstone count without a second lookup.
+    pub fn revive(&mut self, edge_id: &EdgeId) -> bool {
+        let (seg, off) = Self::segment_of(edge_id);
+        let Some(slot) = self
+            .segments
+            .get_mut(seg)
+            .and_then(|s| s.as_mut())
+            .and_then(|values| values[off].as_mut())
+        else {
+            return false;
+        };
+        let was_tombstoned = slot.delete_ts != Timestamp::MAX;
+        slot.delete_ts = Timestamp::MAX;
+        if was_tombstoned {
+            self.tombstones = self.tombstones.saturating_sub(1);
+        }
+        was_tombstoned
+    }
+
+    pub fn remove(&mut self, edge_id: &EdgeId) {
+        let (seg, off) = Self::segment_of(edge_id);
+        let Some(segment) = self.segments.get_mut(seg).and_then(|s| s.as_mut()) else {
+            return;
+        };
+        if let Some(prev) = segment[off].take() {
+            if prev.delete_ts != Timestamp::MAX {
+                self.tombstones = self.tombstones.saturating_sub(1);
+            }
+            self.live = self.live.saturating_sub(1);
+            if segment.iter().all(|slot| slot.is_none()) {
+                self.segments[seg] = None;
+            }
+            self.truncate_empty_tail_segments();
+        }
+    }
+
+    pub fn contains_key(&self, edge_id: &EdgeId) -> bool {
+        self.get(edge_id).is_some()
+    }
+
+    pub fn len(&self) -> usize {
+        self.live
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.live == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.segments.clear();
+        self.live = 0;
+        self.tombstones = 0;
+    }
+
+    /// Cached tombstone count, maintained by every mutation above.
+    pub fn tombstone_count(&self) -> usize {
+        self.tombstones
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &EdgeTimestamps> {
+        self.segments
+            .iter()
+            .filter_map(|segment| segment.as_ref())
+            .flat_map(|values| values.iter().filter_map(|slot| slot.as_ref()))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (EdgeId, &EdgeTimestamps)> {
+        self.segments
+            .iter()
+            .enumerate()
+            .filter_map(|(seg, segment)| {
+                segment.as_ref().map(|values| {
+                    let base = seg * Self::SEGMENT_ROWS;
+                    values.iter().enumerate().filter_map(move |(off, slot)| {
+                        slot.as_ref().map(|ts| (EdgeId((base + off) as u64), ts))
+                    })
+                })
+            })
+            .flatten()
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = EdgeId> + '_ {
+        self.segments
+            .iter()
+            .enumerate()
+            .filter_map(|(seg, segment)| {
+                segment.as_ref().map(|values| {
+                    let base = seg * Self::SEGMENT_ROWS;
+                    values.iter().enumerate().filter_map(move |(off, slot)| {
+                        slot.is_some().then_some(EdgeId((base + off) as u64))
+                    })
+                })
+            })
+            .flatten()
+    }
+
+    pub fn allocated_segments(&self) -> usize {
+        self.segments.iter().filter(|seg| seg.is_some()).count()
+    }
+
+    pub fn memory_bytes(&self) -> usize {
+        self.segments.capacity()
+            * std::mem::size_of::<Option<Box<[Option<EdgeTimestamps>; 1024]>>>()
+            + self.allocated_segments()
+                * Self::SEGMENT_ROWS
+                * std::mem::size_of::<Option<EdgeTimestamps>>()
+    }
+
+    fn truncate_empty_tail_segments(&mut self) {
+        while self.segments.last().is_some_and(|seg| seg.is_none()) {
+            self.segments.pop();
+        }
+    }
+
+    /// Batch visibility probe over `edge_ids` at `ts`, appending one flag
+    /// per id to `out`.
+    ///
+    /// One segment lookup per id with direct subscript. Missing
+    /// slots read as absent (fail closed: invisible), matching `get`-based
+    /// single checks.
+    pub fn fill_visibility_mask(&self, edge_ids: &[EdgeId], ts: Timestamp, out: &mut Vec<bool>) {
+        out.clear();
+        out.reserve(edge_ids.len());
+        for id in edge_ids {
+            out.push(self.get(id).is_some_and(|ts_info| ts_info.is_alive_at(ts)));
+        }
+    }
+
+    /// Drop records deleted at or before `watermark` whose rows are gone.
+    ///
+    /// Eligibility shares the single [`crate::mvcc_visibility::Visibility::is_gc_eligible`]
+    /// predicate with the CSR and property reclaim paths, so the three layers
+    /// cannot drift apart by one round at the boundary stamp.
+    /// Returns the reclaimed count, frees emptied segments in place and
+    /// truncates trailing holes so a delete-heavy table does not hold an
+    /// ever-longer tail of empty segments.
+    pub fn reclaim_where(
+        &mut self,
+        watermark: Timestamp,
+        is_gone: impl Fn(EdgeId) -> bool,
+    ) -> usize {
+        let mut reclaimed = 0usize;
+        for (seg, segment) in self.segments.iter_mut().enumerate() {
+            let Some(values) = segment.as_mut() else {
+                continue;
+            };
+            let base = seg * Self::SEGMENT_ROWS;
+            for (off, slot) in values.iter_mut().enumerate() {
+                let eligible = slot.is_some_and(|ts| {
+                    ts.delete_ts != Timestamp::MAX
+                        && crate::mvcc_visibility::Visibility::is_gc_eligible(
+                            ts.delete_ts,
+                            watermark,
+                        )
+                });
+                if eligible && is_gone(EdgeId((base + off) as u64)) {
+                    *slot = None;
+                    reclaimed += 1;
+                }
+            }
+            if values.iter().all(|slot| slot.is_none()) {
+                *segment = None;
+            }
+        }
+        self.live = self.live.saturating_sub(reclaimed);
+        // Every reclaimed record passed the tombstone eligibility check
+        // above, so each one leaves the tombstone count as well.
+        self.tombstones = self.tombstones.saturating_sub(reclaimed);
+        self.truncate_empty_tail_segments();
+        reclaimed
+    }
+}
+
+/// Per-edge creation and deletion timestamps.
+#[derive(Debug, Clone, Copy)]
+pub struct EdgeTimestamps {
+    pub create_ts: Timestamp,
+    pub delete_ts: Timestamp,
+}
+
+impl EdgeTimestamps {
+    pub fn new(create_ts: Timestamp) -> Self {
+        Self {
+            create_ts,
+            delete_ts: Timestamp::MAX,
+        }
+    }
+
+    pub fn is_alive_at(&self, ts: Timestamp) -> bool {
+        crate::mvcc_visibility::Visibility::is_edge_visible(ts, self.create_ts, self.delete_ts)
+    }
+}
+
+/// MVCC and snapshot management for the node-group sharded edge table.
+///
+/// Single authority for edge visibility. `active_snapshots` /
+/// `min_active_snapshot_ts` are a per-table pin cache; the GC truth source
+/// is the transaction layer (`SnapshotTracker`, unified per pass via
+/// `MvccWatermarks`), so pass-level cutoffs must come from captured
+/// watermarks, never from this cache alone.
+pub struct MVCCManager {
+    /// Per-edge creation/deletion timestamps (visibility authority).
+    pub edge_timestamps: AuthorityMap,
+    /// Minimum timestamp of all active snapshots.
+    pub min_active_snapshot_ts: Timestamp,
+    /// Active snapshot timestamps and their reference count.
+    pub active_snapshots: HashMap<Timestamp, usize>,
+}
+
+impl Default for MVCCManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MVCCManager {
+    /// Create a new MVCC manager
+    pub fn new() -> Self {
+        Self {
+            edge_timestamps: AuthorityMap::new(),
+            min_active_snapshot_ts: Timestamp::MAX,
+            active_snapshots: HashMap::new(),
+        }
+    }
+
+    /// Check if an edge is tombstoned at a given timestamp.
+    ///
+    /// Derived from the authority record; edges without authority are never
+    /// reported as tombstoned.
+    pub fn is_tombstoned(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
+        self.edge_timestamps.get(&edge_id).is_some_and(|info| {
+            info.delete_ts != Timestamp::MAX
+                && crate::mvcc_visibility::Visibility::is_gc_eligible(info.delete_ts, ts)
+        })
+    }
+
+    /// Register a new active snapshot at the given timestamp.
+    ///
+    /// This increments the reference count for the snapshot timestamp.
+    /// Uses incremental min maintenance to avoid O(n) scans.
+    pub fn register_active_snapshot(&mut self, ts: Timestamp) {
+        *self.active_snapshots.entry(ts).or_insert(0) += 1;
+        // Incremental min maintenance: a new snapshot can only lower the
+        // minimum, so compare against the current value instead of rescanning
+        // the whole map.
+        if ts < self.min_active_snapshot_ts {
+            self.min_active_snapshot_ts = ts;
+        }
+    }
+
+    /// Unregister an active snapshot at the given timestamp.
+    ///
+    /// This decrements the reference count. When count reaches 0 the
+    /// timestamp is removed and the cached minimum is recomputed.
+    ///
+    /// Deliberately performs no garbage collection: the table-local minimum
+    /// only sees this table's readers, while tombstones may still pin
+    /// readers of other tables. Reclamation always derives its cutoff from
+    /// the global watermarks (`MvccWatermarks::capture`) at pass level —
+    /// see `gc_tombstones` callers — never from this cache alone.
+    pub fn unregister_active_snapshot(&mut self, ts: Timestamp) -> usize {
+        let mut removed_min = false;
+        let new_count = if let Some(count) = self.active_snapshots.get_mut(&ts) {
+            if *count > 0 {
+                *count -= 1;
+            }
+            if *count == 0 {
+                self.active_snapshots.remove(&ts);
+                removed_min = ts == self.min_active_snapshot_ts;
+                0
+            } else {
+                *count
+            }
+        } else {
+            0
+        };
+
+        // Only rescan when the removed timestamp was the current minimum;
+        // otherwise the min is unchanged. No GC here by design (see docs).
+        if removed_min {
+            self.min_active_snapshot_ts = self
+                .active_snapshots
+                .keys()
+                .copied()
+                .min()
+                .unwrap_or(Timestamp::MAX);
+        }
+
+        new_count
+    }
+
+    /// Get current tombstone statistics for observability.
+    ///
+    /// Derived from the authority records; no second table is maintained.
+    pub fn tombstone_stats(&self) -> TombstoneStats {
+        let mut count = 0usize;
+        let mut oldest: Option<Timestamp> = None;
+        let mut newest: Option<Timestamp> = None;
+        for info in self.edge_timestamps.values() {
+            if info.delete_ts != Timestamp::MAX {
+                count += 1;
+                oldest = Some(oldest.map_or(info.delete_ts, |cur| cur.min(info.delete_ts)));
+                newest = Some(newest.map_or(info.delete_ts, |cur| cur.max(info.delete_ts)));
+            }
+        }
+        TombstoneStats {
+            count,
+            memory_bytes: TombstoneStats::estimate_memory(count),
+            oldest_delete_ts: oldest,
+            newest_delete_ts: newest,
+        }
+    }
+
+    /// Total count of deletions (for memory accounting).
+    ///
+    /// Cached counter maintained by every authority mutation, so the
+    /// write-path reclaim gate stays constant-time on delete-heavy tables.
+    pub fn total_tombstone_count(&self) -> usize {
+        self.edge_timestamps.tombstone_count()
+    }
+
+    /// Record a deletion against the authority record.
+    ///
+    /// Single entry point for every deletion path. Keeps the earliest
+    /// `delete_ts` when the same edge is recorded more than once: an
+    /// earlier deletion covers a wider query range and must win. Edges
+    /// without authority are ignored; such orphans are rejected on load.
+    pub fn record_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
+        self.edge_timestamps.note_deletion(&edge_id, delete_ts);
+    }
+
+    /// Get number of active snapshots (for testing and debugging)
+    #[cfg(test)]
+    pub fn active_snapshot_count(&self) -> usize {
+        self.active_snapshots.values().sum()
+    }
+
+    // ── Per-edge timestamp management (centralized MVCC) ──
+
+    /// Record edge creation. Called on insert_edge to register the edge's
+    /// creation timestamp in the centralized MVCC store.
+    ///
+    /// The stamp must come from the timestamp allocator: zero and the two
+    /// top sentinels are reserved (uncommitted marker and liveness pins) and
+    /// doubling as a creation stamp would alias the free-row state kept by
+    /// the property store. Reserved stamps fail here instead of aliasing.
+    pub fn record_creation(
+        &mut self,
+        edge_id: EdgeId,
+        create_ts: Timestamp,
+    ) -> linkrs_core::StorageResult<()> {
+        if !linkrs_core::types::is_allocatable_timestamp(create_ts) {
+            return Err(linkrs_core::StorageError::invalid_input(format!(
+                "edge {:?} carries reserved creation timestamp {}",
+                edge_id, create_ts
+            )));
+        }
+        self.edge_timestamps
+            .insert(edge_id, EdgeTimestamps::new(create_ts));
+        Ok(())
+    }
+
+    /// Record edge deletion (logical). Called on delete_edge to set the
+    /// edge's deletion timestamp and record the tombstone.
+    ///
+    /// Delegates fully to the single deletion entry: the earliest stamp
+    /// wins and the cached tombstone count moves exactly once.
+    pub fn record_edge_deletion(&mut self, edge_id: EdgeId, delete_ts: Timestamp) {
+        self.record_deletion(edge_id, delete_ts);
+    }
+
+    /// Check if an edge is visible at a given timestamp.
+    ///
+    /// Frozen contract: creation later than the query hides, deletion at or
+    /// before the query hides, same-stamp re-delete is idempotent, and
+    /// cross-stamp conflicts are reported on the write path, never hidden here.
+    /// Edges without authority are invisible (fail closed).
+    pub fn is_edge_visible(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
+        if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
+            return crate::mvcc_visibility::Visibility::is_edge_visible(
+                ts,
+                ts_info.create_ts,
+                ts_info.delete_ts,
+            );
+        }
+        false
+    }
+
+    /// Pending-aware overload of [`Self::is_edge_visible`].
+    ///
+    /// Same single authority, but creation/deletion stamps owned by foreign
+    /// uncommitted transactions are filtered through `gate`: a foreign
+    /// pending creation hides the edge, a foreign pending deletion in the
+    /// authority stamps is ignored. Edges without an authority record are
+    /// invisible. Operation-layer scans funnel through the table
+    /// `*_with_gate` methods.
+    pub fn is_edge_visible_with_gate(
+        &self,
+        edge_id: EdgeId,
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+    ) -> bool {
+        if let Some(ts_info) = self.edge_timestamps.get(&edge_id) {
+            if ts_info.delete_ts != Timestamp::MAX
+                && ts_info.delete_ts <= ts
+                && gate.is_foreign_pending(ts, ts_info.delete_ts)
+            {
+                return true;
+            }
+            return gate.is_edge_visible(ts, ts_info.create_ts, ts_info.delete_ts);
+        }
+        false
+    }
+
+    /// Batch form of [`Self::is_edge_visible`]: `out[i]` reports whether
+    /// `edge_ids[i]` is visible at `ts` through the same single authority.
+    /// One segment lookup per id, so a staged row pays one authority pass
+    /// instead of one method call per edge.
+    pub fn are_visible(&self, edge_ids: &[EdgeId], ts: Timestamp, out: &mut Vec<bool>) {
+        self.edge_timestamps.fill_visibility_mask(edge_ids, ts, out);
+    }
+
+    /// Batch form of [`Self::is_edge_visible_with_gate`] with the same
+    /// authority-plus-gate semantics. Per-stamp gate probes stay per edge;
+    /// the batching amortizes the call and reservation overhead.
+    pub fn are_visible_with_gate(
+        &self,
+        edge_ids: &[EdgeId],
+        ts: Timestamp,
+        gate: &crate::mvcc_visibility::PendingGate<'_>,
+        out: &mut Vec<bool>,
+    ) {
+        out.clear();
+        out.reserve(edge_ids.len());
+        for id in edge_ids {
+            out.push(self.is_edge_visible_with_gate(*id, ts, gate));
+        }
+    }
+
+    /// In-place filter of a staged neighbor row to its visible entries.
+    ///
+    /// Single authority pass backing the batch fill paths: physical
+    /// collection stages the row once, this pass compacts it without a
+    /// second id vector. Survivor order is preserved.
+    pub fn retain_visible(&self, nbrs: &mut Vec<Nbr>, ts: Timestamp) {
+        let mut write = 0usize;
+        for read in 0..nbrs.len() {
+            let visible = self
+                .edge_timestamps
+                .get(&nbrs[read].edge_id)
+                .is_some_and(|stamps| {
+                    crate::mvcc_visibility::Visibility::is_edge_visible(
+                        ts,
+                        stamps.create_ts,
+                        stamps.delete_ts,
+                    )
+                });
+            if visible {
+                if write != read {
+                    nbrs.swap(write, read);
+                }
+                write += 1;
+            }
+        }
+        nbrs.truncate(write);
+    }
+
+    /// Get the creation timestamp of an edge, if known.
+    pub fn creation_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        self.edge_timestamps.get(&edge_id).map(|ts| ts.create_ts)
+    }
+
+    /// Get the deletion timestamp of an edge, if deleted.
+    pub fn deletion_ts_of(&self, edge_id: EdgeId) -> Option<Timestamp> {
+        self.edge_timestamps
+            .get(&edge_id)
+            .filter(|ts| ts.delete_ts != Timestamp::MAX)
+            .map(|ts| ts.delete_ts)
+    }
+
+    /// Check if an edge has been deleted (authority delete stamp set).
+    pub fn is_edge_deleted(&self, edge_id: EdgeId) -> bool {
+        self.edge_timestamps
+            .get(&edge_id)
+            .is_some_and(|ts| ts.delete_ts != Timestamp::MAX)
+    }
+
+    /// Remove edge timestamps. Called during rollback of a failed insert.
+    pub fn remove_edge_timestamps(&mut self, edge_id: EdgeId) {
+        self.edge_timestamps.remove(&edge_id);
+    }
+
+    /// Reclaim authority records below a global watermark.
+    ///
+    /// Removes entries whose deletion timestamp is below `watermark` and for
+    /// which `is_gone` confirms both directions hold no physical row. The
+    /// watermark must come from the global snapshot tracker
+    /// (`MvccWatermarks::capture`), never from the table-local pin cache, so
+    /// no active snapshot of any table can still observe the removed
+    /// tombstone. Returns the reclaimed count so long-running tables stay
+    /// proportional to live edges rather than historical totals.
+    pub fn reclaim_below(
+        &mut self,
+        watermark: Timestamp,
+        is_gone: impl Fn(EdgeId) -> bool,
+    ) -> usize {
+        if watermark == Timestamp::MAX {
+            return 0;
+        }
+        self.edge_timestamps.reclaim_where(watermark, is_gone)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::*;
+    use super::*;
+    use crate::edge::edge_table::config::EdgeTableConfig;
+    use crate::edge::edge_table::core::EdgeStore;
+    use linkrs_core::types::EdgeId;
+    use linkrs_core::Value;
+
+    fn create_edge_table_with_props() -> EdgeStore {
+        let schema = EdgeSchema {
+            label_id: 0,
+            label_name: "knows".into(),
+            src_label: 0,
+            dst_label: 0,
+            properties: vec![crate::types::StoragePropertyDef {
+                name: "weight".into(),
+                data_type: linkrs_core::types::DataType::Double,
+                nullable: false,
+                default_value: Some(Value::Double(0.0)),
+            }],
+            oe_strategy: EdgeStrategy::Multiple,
+            ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
+            record_form: RecordForm::default(),
+        };
+        EdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
+    }
+
+    #[test]
+    fn test_authority_deletion_count() {
+        let mut table = create_edge_table_with_props();
+
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.insert_edge(0, 3, 0, &[], 100).unwrap();
+        assert_eq!(table.mvcc.total_tombstone_count(), 0);
+
+        table.delete_edge(0, 1, 0, 200).unwrap();
+        table.delete_edge(0, 2, 0, 250).unwrap();
+        assert_eq!(table.mvcc.total_tombstone_count(), 2);
+        assert!(table.mvcc.is_tombstoned(EdgeId(0), 200));
+        assert!(!table.mvcc.is_tombstoned(EdgeId(0), 199));
+    }
+
+    #[test]
+    fn test_authority_stats_derive_from_records() {
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.delete_edge(0, 1, 0, 150).unwrap();
+        let stats = table.mvcc.tombstone_stats();
+        assert_eq!(stats.count, 1);
+        assert_eq!(stats.oldest_delete_ts, Some(150));
+    }
+
+    #[test]
+    fn test_snapshot_lifecycle_never_gc_implicitly() {
+        let mut table = create_edge_table_with_props();
+
+        table
+            .insert_edge(0, 1, 0, &[("weight".into(), Value::Double(1.5))], 100)
+            .unwrap();
+
+        table.delete_edge(0, 1, 0, 150).unwrap();
+
+        let stats_before = table.mvcc.tombstone_stats();
+        assert_eq!(stats_before.count, 1);
+
+        table.mvcc.register_active_snapshot(100);
+        table.mvcc.register_active_snapshot(100);
+        table.mvcc.register_active_snapshot(120);
+
+        let count_after_first = table.mvcc.unregister_active_snapshot(100);
+        assert_eq!(count_after_first, 1);
+
+        // Unregistering snapshots is pure bookkeeping: tombstones survive
+        // until an explicit watermark-driven pass reclaims them, so a
+        // table-local minimum can never free another table's readers.
+        let count_after_second = table.mvcc.unregister_active_snapshot(100);
+        assert_eq!(count_after_second, 0);
+
+        let count_120 = table.mvcc.unregister_active_snapshot(120);
+        assert_eq!(count_120, 0);
+
+        let stats_after_unregister = table.mvcc.tombstone_stats();
+        assert_eq!(stats_after_unregister.count, 1);
+
+        let stats_after_gc = table.mvcc.tombstone_stats();
+        assert_eq!(stats_after_gc.count, 1);
+    }
+
+    #[test]
+    fn test_visibility_uses_single_predicate() {
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        assert!(table.has_edge(0, 1, 0, 100));
+        assert!(!table.has_edge(0, 1, 0, 99));
+        assert!(table.delete_edge(0, 1, 0, 150).unwrap());
+        assert!(table.has_edge(0, 1, 0, 149));
+        assert!(!table.has_edge(0, 1, 0, 150));
+    }
+
+    #[test]
+    fn test_mvcc_metrics_gc_count() {
+        let mut table = create_edge_table_with_props();
+
+        // timestamp 0 is reserved; start inserts at 1
+        for i in 1..=5u64 {
+            table
+                .insert_edge(
+                    0,
+                    1,
+                    i as i64,
+                    &[("weight".into(), Value::Double(i as f64))],
+                    i,
+                )
+                .unwrap();
+        }
+
+        table.delete_edge(0, 1, 1, 2).unwrap();
+        table.delete_edge(0, 1, 2, 3).unwrap();
+
+        table.mvcc.register_active_snapshot(1);
+        table.mvcc.register_active_snapshot(4);
+
+        assert_eq!(table.mvcc.total_tombstone_count(), 2);
+
+        assert_eq!(table.mvcc.total_tombstone_count(), 2);
+    }
+
+    #[test]
+    fn test_mvcc_metrics_tombstone_count() {
+        use linkrs_metrics::{MetricType, StatsManager};
+        use std::sync::Arc;
+
+        let mut table = create_edge_table_with_props();
+
+        let stats_manager = Arc::new(StatsManager::new());
+        table.set_stats_manager(stats_manager.clone());
+
+        // timestamp 0 is reserved; start inserts at 1
+        for i in 1..=5u64 {
+            table
+                .insert_edge(
+                    0,
+                    1,
+                    i as i64,
+                    &[("weight".into(), Value::Double(i as f64))],
+                    i,
+                )
+                .unwrap();
+        }
+
+        table.delete_edge(0, 1, 1, 10).unwrap();
+        table.delete_edge(0, 1, 2, 11).unwrap();
+        table.delete_edge(0, 1, 3, 12).unwrap();
+
+        let tom_stats = table.mvcc.tombstone_stats();
+        assert_eq!(tom_stats.count, 3);
+
+        stats_manager.record_tombstone_stats(
+            tom_stats.count as u64,
+            tom_stats.memory_bytes as u64,
+            tom_stats.oldest_delete_ts.map(|ts| ts as u32),
+            tom_stats.newest_delete_ts.map(|ts| ts as u32),
+            1,
+        );
+
+        let tombstone_count = stats_manager
+            .get_value(MetricType::TombstoneCount)
+            .unwrap_or(0);
+        assert_eq!(tombstone_count, 3);
+
+        let tombstone_memory = stats_manager
+            .get_value(MetricType::TombstoneMemoryBytes)
+            .unwrap_or(0);
+        assert!(tombstone_memory > 0);
+    }
+
+    #[test]
+    fn test_mvcc_metrics_active_snapshots() {
+        let mut table = create_edge_table_with_props();
+
+        table.mvcc.register_active_snapshot(1);
+        assert_eq!(table.mvcc.active_snapshot_count(), 1);
+
+        table.mvcc.register_active_snapshot(2);
+        assert_eq!(table.mvcc.active_snapshot_count(), 2);
+
+        table.mvcc.unregister_active_snapshot(1);
+        assert_eq!(table.mvcc.active_snapshot_count(), 1);
+    }
+
+    #[test]
+    fn test_batch_visibility_matches_single_checks() {
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.insert_edge(0, 3, 0, &[], 300).unwrap();
+        table.delete_edge(0, 2, 0, 150).unwrap();
+
+        // Live, deleted, not-yet-created and never-existing ids.
+        let ids = [EdgeId(0), EdgeId(1), EdgeId(2), EdgeId(999)];
+        for ts in [99, 100, 150, 200, 300] {
+            let mut mask = Vec::new();
+            table.mvcc.are_visible(&ids, ts, &mut mask);
+            assert_eq!(mask.len(), ids.len());
+            for (id, visible) in ids.iter().zip(mask.iter()) {
+                assert_eq!(
+                    *visible,
+                    table.mvcc.is_edge_visible(*id, ts),
+                    "batch/single disagree for {:?} at {}",
+                    id,
+                    ts
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_batch_visibility_with_gate_matches_single_checks() {
+        use crate::mvcc_visibility::PendingGate;
+        use linkrs_transaction::VersionManager;
+
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.delete_edge(0, 2, 0, 150).unwrap();
+
+        let vm = VersionManager::new();
+        let gate = PendingGate::new(&vm, None);
+        let ids = [EdgeId(0), EdgeId(1), EdgeId(999)];
+        for ts in [100, 150, 200] {
+            let mut mask = Vec::new();
+            table.mvcc.are_visible_with_gate(&ids, ts, &gate, &mut mask);
+            assert_eq!(mask.len(), ids.len());
+            for (id, visible) in ids.iter().zip(mask.iter()) {
+                assert_eq!(
+                    *visible,
+                    table.mvcc.is_edge_visible_with_gate(*id, ts, &gate),
+                    "gated batch/single disagree for {:?} at {}",
+                    id,
+                    ts
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_retain_visible_preserves_order_and_matches_single_checks() {
+        use crate::edge::Nbr;
+
+        let mut table = create_edge_table_with_props();
+        table.insert_edge(0, 1, 0, &[], 100).unwrap();
+        table.insert_edge(0, 2, 0, &[], 100).unwrap();
+        table.insert_edge(0, 3, 0, &[], 100).unwrap();
+        table.delete_edge(0, 2, 0, 150).unwrap();
+
+        // Staged out of order with a never-existing id mixed in.
+        let mut staged = vec![
+            Nbr::new(3, 0, EdgeId(2)),
+            Nbr::new(9, 0, EdgeId(999)),
+            Nbr::new(1, 0, EdgeId(0)),
+            Nbr::new(2, 0, EdgeId(1)),
+        ];
+        table.mvcc.retain_visible(&mut staged, 200);
+        let kept: Vec<EdgeId> = staged.iter().map(|nbr| nbr.edge_id).collect();
+        assert_eq!(kept, vec![EdgeId(2), EdgeId(0)]);
+
+        // Same survivor set as filtering through the single checks.
+        let mut staged = vec![
+            Nbr::new(3, 0, EdgeId(2)),
+            Nbr::new(9, 0, EdgeId(999)),
+            Nbr::new(1, 0, EdgeId(0)),
+            Nbr::new(2, 0, EdgeId(1)),
+        ];
+        staged.retain(|nbr| table.mvcc.is_edge_visible(nbr.edge_id, 200));
+        let expected: Vec<EdgeId> = staged.iter().map(|nbr| nbr.edge_id).collect();
+        assert_eq!(kept, expected);
+    }
+
+    #[test]
+    fn test_record_deletion_keeps_earliest_ts() {
+        let mut mvcc = MVCCManager::new();
+        mvcc.record_creation(EdgeId(7), 100)
+            .expect("allocatable creation stamp records");
+
+        mvcc.record_deletion(EdgeId(7), 200);
+        mvcc.record_deletion(EdgeId(7), 150);
+
+        // The earlier deletion wins: it covers a wider query range.
+        assert_eq!(mvcc.deletion_ts_of(EdgeId(7)), Some(150));
+        assert!(mvcc.is_tombstoned(EdgeId(7), 200));
+        assert!(!mvcc.is_tombstoned(EdgeId(7), 100));
+    }
+
+    #[test]
+    fn test_record_deletion_deduplicates() {
+        let mut mvcc = MVCCManager::new();
+        mvcc.record_creation(EdgeId(3), 100)
+            .expect("allocatable creation stamp records");
+
+        // Repeated deletions of the same edge must not grow the authority
+        // count: a single record keeps the earliest delete_ts.
+        mvcc.record_deletion(EdgeId(3), 150);
+        mvcc.record_deletion(EdgeId(3), 200);
+
+        assert_eq!(mvcc.deletion_ts_of(EdgeId(3)), Some(150));
+        assert_eq!(mvcc.total_tombstone_count(), 1);
+        assert!(mvcc.is_tombstoned(EdgeId(3), 200));
+        assert!(!mvcc.is_tombstoned(EdgeId(3), 100));
+    }
+
+    #[test]
+    fn cached_tombstone_count_tracks_all_transitions() {
+        let mut mvcc = MVCCManager::new();
+        let full_scan = |mvcc: &MVCCManager| {
+            mvcc.edge_timestamps
+                .values()
+                .filter(|info| info.delete_ts != linkrs_core::types::Timestamp::MAX)
+                .count()
+        };
+        for id in 0..5u64 {
+            mvcc.record_creation(EdgeId(id), 100)
+                .expect("allocatable creation stamp records");
+        }
+        assert_eq!(mvcc.total_tombstone_count(), 0);
+        mvcc.record_deletion(EdgeId(0), 200);
+        mvcc.record_deletion(EdgeId(1), 200);
+        // Repeat deletions never double count.
+        mvcc.record_deletion(EdgeId(0), 250);
+        mvcc.record_edge_deletion(EdgeId(1), 300);
+        assert_eq!(mvcc.total_tombstone_count(), 2);
+        // Reviving lifts exactly one tombstone.
+        mvcc.edge_timestamps.revive(&EdgeId(0));
+        assert_eq!(mvcc.total_tombstone_count(), 1);
+        // Reviving a live edge moves nothing.
+        mvcc.edge_timestamps.revive(&EdgeId(2));
+        assert_eq!(mvcc.total_tombstone_count(), 1);
+        // Removing a tombstoned record decrements; removing a live one
+        // leaves the count alone.
+        mvcc.edge_timestamps.remove(&EdgeId(1));
+        assert_eq!(mvcc.total_tombstone_count(), 0);
+        mvcc.edge_timestamps.remove(&EdgeId(2));
+        assert_eq!(mvcc.total_tombstone_count(), 0);
+        assert_eq!(mvcc.total_tombstone_count(), full_scan(&mvcc));
+    }
+}

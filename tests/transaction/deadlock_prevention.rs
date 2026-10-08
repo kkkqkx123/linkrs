@@ -3,7 +3,7 @@
 //! These tests specifically verify the fix for the deadlock issue caused by
 //! calling block_on inside spawn_blocking contexts when handling transactions.
 
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+use linkrs::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
