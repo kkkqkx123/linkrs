@@ -22,7 +22,7 @@ graphdb-core = { path = "../graphdb-core" }
 graphdb-metrics = { path = "../graphdb-metrics" }
 graphdb-fulltext = { path = "../graphdb-fulltext" }
 graphdb-config = { path = "../graphdb-config" }
-llm-embedding = { path = "../llm-kit/crates/llm-embedding", optional = true }
+llm-embedding = { path = "../llm-suite/crates/llm-embedding", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
