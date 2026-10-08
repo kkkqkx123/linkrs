@@ -3,6 +3,7 @@ name = "graphdb-metrics"
 version.workspace = true
 edition.workspace = true
 description = "Central observability primitives: StatsManager, latency histograms, error and slow-query statistics"
+license.workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["rc"] }

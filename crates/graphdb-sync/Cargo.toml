@@ -2,6 +2,8 @@
 name = "graphdb-sync"
 version.workspace = true
 edition.workspace = true
+description = "Synchronization primitives for GraphDB"
+license.workspace = true
 
 [features]
 # Built-in local vector engine. Enables the `vector_sync` module and

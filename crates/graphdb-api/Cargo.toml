@@ -2,6 +2,8 @@
 name = "graphdb-api"
 version.workspace = true
 edition.workspace = true
+description = "Transport-independent core API for GraphDB"
+license.workspace = true
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }

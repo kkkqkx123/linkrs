@@ -2,6 +2,8 @@
 name = "graphdb-core"
 version.workspace = true
 edition.workspace = true
+description = "Core data structures, types, and errors for GraphDB"
+license.workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["rc"] }

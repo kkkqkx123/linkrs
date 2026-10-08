@@ -2,6 +2,8 @@
 name = "graphdb-storage"
 version.workspace = true
 edition.workspace = true
+description = "Storage engine with CSR and memory-mapped containers"
+license.workspace = true
 
 [features]
 default = []

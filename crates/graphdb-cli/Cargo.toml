@@ -2,6 +2,8 @@
 name = "graphdb_cli"
 version.workspace = true
 edition.workspace = true
+description = "Command-line interface for GraphDB"
+license.workspace = true
 
 [dependencies]
 tokio.workspace = true

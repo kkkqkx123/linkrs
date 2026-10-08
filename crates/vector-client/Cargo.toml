@@ -3,6 +3,7 @@ name = "vector-client"
 version.workspace = true
 edition.workspace = true
 description = "A vector database client crate with support for multiple backends"
+license.workspace = true
 
 [lib]
 name = "vector_client"

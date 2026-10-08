@@ -2,6 +2,8 @@
 name = "graphdb-transaction"
 version.workspace = true
 edition.workspace = true
+description = "Transaction management for GraphDB"
+license.workspace = true
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }

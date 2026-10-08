@@ -2,6 +2,8 @@
 name = "graphdb-fulltext"
 version.workspace = true
 edition.workspace = true
+description = "Full-text search engine based on BM25 and Tantivy"
+license.workspace = true
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
