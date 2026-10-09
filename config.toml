@@ -5,9 +5,9 @@ storage_path = "~/.linkrs/data"
 max_connections = 100
 
 [transaction]
-# 默认事务超时时间（秒）
+# Default transaction timeout (seconds)
 default_timeout = 30
-# 最大并发事务数
+# Maximum number of concurrent transactions
 max_concurrent_transactions = 1000
 
 [log]
@@ -18,46 +18,46 @@ max_file_size = 104857600  # 100MB
 max_files = 5
 
 [auth]
-# 是否启用授权（false时跳过所有权限检查）
+# Whether to enable authorization (when false, all permission checks are skipped)
 enable_authorize = true
-# 登录失败次数限制（0表示不限制）
+# Login failure limit (0 means no limit)
 failed_login_attempts = 5
-# 会话空闲超时时间（秒）
+# Session idle timeout (seconds)
 session_idle_timeout_secs = 3600
-# 默认用户名
+# Default username
 default_username = "root"
-# 默认密码（生产环境请务必修改）
+# Default password (must be changed in production)
 default_password = "root"
-# 是否强制修改默认密码（首次登录时）
+# Whether to force changing the default password (on first login)
 force_change_default_password = true
-# bcrypt 密码哈希成本（4-12，越高越安全但越慢，本地低配机器可适当调低）
+# bcrypt password hash cost (4-12; higher is safer but slower; may be lowered on low-end local machines)
 bcrypt_cost = 12
 
 [bootstrap]
-# 是否自动创建默认Space
+# Whether to automatically create the default Space
 auto_create_default_space = true
-# 默认Space名称
+# Default Space name
 default_space_name = "default"
-# 单用户模式（跳过认证，始终使用默认用户，适合个人使用）
+# Single-user mode (skips authentication and always uses the default user; suitable for personal use)
 single_user_mode = false
 
 [http]
-# 是否启用跨域（关闭则不挂载跨域层）
+# Whether to enable CORS (when disabled, the CORS layer is not mounted)
 cors_enabled = true
-# 跨域来源白名单（空表示开发宽松模式；生产必须填写精确来源）
+# CORS allowed origins (empty means permissive development mode; production must list exact origins)
 cors_allowed_origins = []
 
 [security.password_policy]
-# 最小口令长度（下限 8）
+# Minimum password length (floor is 8)
 min_length = 8
-# 四类字符要求
+# Four character-class requirements
 require_uppercase = true
 require_lowercase = true
 require_digit = true
 require_special = false
-# 口令最长存活天数（0 表示不过期）
+# Maximum password age in days (0 means no expiration)
 max_age_days = 0
-# 历史口令保留条数（0 表示不检查复用）
+# Number of historical passwords to keep (0 disables reuse checks)
 history_size = 0
 
 [optimizer]
@@ -71,23 +71,23 @@ stable_threshold = 2
 min_iteration_rounds = 1
 
 [optimizer.rules]
-# 禁用的规则列表
+# List of disabled rules
 disabled_rules = []
-# 显式启用的规则列表（优先级高于默认）
+# Explicitly enabled rules (higher priority than defaults)
 enabled_rules = []
 
 [parallel]
-# 是否启用查询内并行分区（默认关闭，行为与关闭时完全一致）
+# Whether to enable intra-query parallel partitioning (disabled by default; behavior is identical to when disabled)
 enabled = false
-# 共享调度器的工作线程数
+# Number of worker threads for the shared scheduler
 workers = 1
-# 每个分区的最小行数（低于阈值拒绝分区）
+# Minimum rows per partition (partitioning is rejected below this threshold)
 min_rows_per_partition = 100000
-# 单个扫描的最大分区数
+# Maximum number of partitions for a single scan
 max_partitions = 1
-# 每个分区 worker 的最大缓冲块数（背压）
+# Maximum number of buffered chunks per partition worker (backpressure)
 max_buffered_chunks = 10
-# 可选的顶点 ID 范围（同时设置 start/end 才生效）
+# Optional vertex ID range (takes effect only when both start and end are set)
 # vertex_id_start = 0
 # vertex_id_end = 100000
 
@@ -100,83 +100,83 @@ slow_query_threshold_ms = 1000
 progress_report_rows_interval = 0
 
 [grpc]
-# 是否启用 gRPC 服务
+# Whether to enable the gRPC service
 enabled = true
-# gRPC 服务端口
+# gRPC service port
 port = 9669
-# 最大并发连接数
+# Maximum number of concurrent connections
 max_connections = 100
-# 最大请求消息大小（字节）
+# Maximum request message size (bytes)
 max_request_size = 10485760  # 10MB
-# 最大响应消息大小（字节）
+# Maximum response message size (bytes)
 max_response_size = 10485760  # 10MB
-# Keepalive 间隔（秒，0 表示禁用）
+# Keepalive interval (seconds, 0 disables)
 keepalive_interval_secs = 30
-# Keepalive 超时时间（秒，0 表示禁用）
+# Keepalive timeout (seconds, 0 disables)
 keepalive_timeout_secs = 10
-# 连接超时时间（秒）
+# Connection timeout (seconds)
 connection_timeout_secs = 10
-# 请求超时时间（秒，0 表示禁用）
+# Request timeout (seconds, 0 disables)
 request_timeout_secs = 60
 
 [vector]
-# 是否启用向量搜索（二级索引默认关闭，需显式开启）
+# Whether to enable vector search (secondary index, disabled by default; must be enabled explicitly)
 enabled = false
-# 向量搜索引擎类型（local | qdrant）
+# Vector search engine type (local | qdrant)
 engine = "local"
-# 写时文本自动向量化（默认关闭；开启需配置嵌入服务，失败则写事务失败）
+# Write-time automatic text vectorization (disabled by default; enabling it requires configuring an embedding service, and failures fail the write transaction)
 auto_embed_text = false
 
 [vector.local]
-# 本地向量引擎数据目录（不填则默认使用 <storage_path>/vector）
+# Local vector engine data directory (defaults to <storage_path>/vector when unset)
 # data_dir = "data/vector"
-# 距离度量说明：Cosine / Euclid / Dot 兼容本地与 Qdrant 双后端；
-# Manhattan 仅本地引擎可用（`crates/simvec` 已实现 naive/avx2 内核与分数契约 1/(1+√d)），Qdrant 后端会拒绝并报错；无需额外配置，度量随集合创建参数传递。
+# Distance metrics: Cosine / Euclid / Dot are supported by both the local and Qdrant backends;
+# Manhattan is only available for the local engine (`crates/simvec` implements naive/avx2 kernels with the score contract 1/(1+sqrt(d)); the Qdrant backend rejects it with an error. No extra configuration is needed; the metric is passed along with the collection creation parameters.
 
 [vector.qdrant]
-# 是否启用 qdrant 后端（仅当 engine = "qdrant" 时生效）
+# Whether to enable the qdrant backend (only takes effect when engine = "qdrant")
 enabled = false
 
 [vector.qdrant.connection]
-# Qdrant 服务器地址
+# Qdrant server address
 host = "localhost"
-# gRPC 端口
+# gRPC port
 port = 6334
-# HTTP 端口（用于健康检查）
+# HTTP port (used for health checks)
 http_port = 6333
-# 是否使用 TLS
+# Whether to use TLS
 use_tls = false
-# API 密钥（如果需要）
+# API key (if required)
 # api_key = "your-api-key"
-# 连接超时时间（秒）
+# Connection timeout (seconds)
 connect_timeout_secs = 5
 
 [vector.qdrant.timeout]
-# 请求超时时间（秒）
+# Request timeout (seconds)
 request_timeout_secs = 30
-# 搜索超时时间（秒）
+# Search timeout (seconds)
 search_timeout_secs = 10
-# 插入/更新超时时间（秒）
+# Insert/update timeout (seconds)
 upsert_timeout_secs = 30
 
-# 嵌入服务配置（可选，不配置则仅支持显式向量读写，TEXT 查询报错）
+# Embedding service configuration (optional; without it only explicit vector read/write is supported and TEXT queries report an error)
 # [vector.qdrant.embedding]
-# 嵌入 API 端点
+# Embedding API endpoint
 # base_url = "http://localhost:11434/api/embeddings"
-# API 密钥（如 OpenAI 需要填写）
+# API key (required for services like OpenAI)
 # api_key = "sk-xxx"
-# 模型名称
+# Model name
 # model = "all-minilm"
-# 请求超时（秒，默认 30）
+# Request timeout (seconds, default 30)
 # timeout_secs = 30
-# 向量维度（必填，启动期校验，须与索引 vector_size 一致）
+# Vector dimension (required, validated at startup; must match the index vector_size)
 # dimension = 768
 
-# 文本预处理器配置（可选）
+# Text preprocessor configuration (optional)
 # [vector.embedding.preprocessor]
 # type = "prefix"
 # prefix = "query: "
 
 
-# 调试用：在向量查询时自动将文本转为向量
-# 需配合 [vector.embedding] 一起使用
+# Debug helper: automatically convert text to vectors during vector queries
+# Must be used together with [vector.embedding]
