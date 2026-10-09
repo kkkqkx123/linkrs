@@ -9,7 +9,7 @@ use std::ffi::{c_char, c_int, CStr, CString};
 use std::ptr;
 
 /// Internal structure of result set handles
-pub struct GraphDbResultHandle {
+pub struct LinkrsResultHandle {
     pub(crate) inner: QueryResult,
 }
 
@@ -50,7 +50,7 @@ fn value_as_str(value: &linkrs_core::Value) -> Option<&str> {
 /// - `result`: Result set handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -60,12 +60,12 @@ fn value_as_str(value: &linkrs_core::Value) -> Option<&str> {
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_result_free(result: *mut linkrs_result_t) -> c_int {
     if result.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let _ = Box::from_raw(result as *mut GraphDbResultHandle);
+    let _ = Box::from_raw(result as *mut LinkrsResultHandle);
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Get the number of columns in the result set
@@ -84,7 +84,7 @@ pub unsafe extern "C" fn linkrs_column_count(result: *mut linkrs_result_t) -> c_
         return -1;
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
     handle.inner.columns().len() as c_int
 }
 
@@ -104,7 +104,7 @@ pub unsafe extern "C" fn linkrs_row_count(result: *mut linkrs_result_t) -> c_int
         return -1;
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
     handle.inner.len() as c_int
 }
 
@@ -134,7 +134,7 @@ pub unsafe extern "C" fn linkrs_column_name(
         return ptr::null_mut();
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     match handle.inner.columns().get(index as usize) {
         Some(name) => match CString::new(name.as_str()) {
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn linkrs_column_name(
 /// - `value`: Output parameter, integer value
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -170,28 +170,28 @@ pub unsafe extern "C" fn linkrs_get_int(
     value: *mut i64,
 ) -> c_int {
     if result.is_null() || col.is_null() || value.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let col_str = match CStr::from_ptr(col).to_str() {
         Ok(s) => s,
-        Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_str) {
             Some(v) => match value_as_i64(v) {
                 Some(i) => {
                     *value = i;
-                    linkrs_error_code_t::GRAPHDB_OK as c_int
+                    linkrs_error_code_t::LINKRS_OK as c_int
                 }
-                None => linkrs_error_code_t::GRAPHDB_MISMATCH as c_int,
+                None => linkrs_error_code_t::LINKRS_MISMATCH as c_int,
             },
-            None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+            None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
         },
-        None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     }
 }
 
@@ -240,7 +240,7 @@ pub unsafe extern "C" fn linkrs_get_string(
         }
     };
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_str) {
@@ -311,7 +311,7 @@ pub unsafe extern "C" fn linkrs_get_blob(
         }
     };
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_str) {
@@ -352,7 +352,7 @@ pub unsafe extern "C" fn linkrs_get_blob(
 /// - `value`: Output parameter, integer value
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -368,16 +368,16 @@ pub unsafe extern "C" fn linkrs_get_int_by_index(
     value: *mut i64,
 ) -> c_int {
     if result.is_null() || value.is_null() || col < 0 {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     // Getting Column Names
     let columns = handle.inner.columns();
     let col_name = match columns.get(col as usize) {
         Some(name) => name.as_str(),
-        None => return linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => return linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     };
 
     match handle.inner.get(row as usize) {
@@ -385,13 +385,13 @@ pub unsafe extern "C" fn linkrs_get_int_by_index(
             Some(v) => match value_as_i64(v) {
                 Some(i) => {
                     *value = i;
-                    linkrs_error_code_t::GRAPHDB_OK as c_int
+                    linkrs_error_code_t::LINKRS_OK as c_int
                 }
-                None => linkrs_error_code_t::GRAPHDB_MISMATCH as c_int,
+                None => linkrs_error_code_t::LINKRS_MISMATCH as c_int,
             },
-            None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+            None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
         },
-        None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     }
 }
 
@@ -430,7 +430,7 @@ pub unsafe extern "C" fn linkrs_get_string_by_index(
         return ptr::null_mut();
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     let columns = handle.inner.columns();
     let col_name = match columns.get(col as usize) {
@@ -487,7 +487,7 @@ pub unsafe extern "C" fn linkrs_get_string_by_index(
 /// - `value`: Output parameter, boolean value
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -503,27 +503,27 @@ pub unsafe extern "C" fn linkrs_get_bool_by_index(
     value: *mut bool,
 ) -> c_int {
     if result.is_null() || value.is_null() || col < 0 {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     let columns = handle.inner.columns();
     let col_name = match columns.get(col as usize) {
         Some(name) => name.as_str(),
-        None => return linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => return linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     };
 
     match handle.inner.get(row as usize) {
         Some(row_data) => match row_data.get(col_name) {
             Some(linkrs_core::Value::Bool(b)) => {
                 *value = *b;
-                linkrs_error_code_t::GRAPHDB_OK as c_int
+                linkrs_error_code_t::LINKRS_OK as c_int
             }
-            Some(_) => linkrs_error_code_t::GRAPHDB_MISMATCH as c_int,
-            None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+            Some(_) => linkrs_error_code_t::LINKRS_MISMATCH as c_int,
+            None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
         },
-        None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     }
 }
 
@@ -536,7 +536,7 @@ pub unsafe extern "C" fn linkrs_get_bool_by_index(
 /// - `value`: Output parameter, float value
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -552,15 +552,15 @@ pub unsafe extern "C" fn linkrs_get_float_by_index(
     value: *mut f64,
 ) -> c_int {
     if result.is_null() || value.is_null() || col < 0 {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     let columns = handle.inner.columns();
     let col_name = match columns.get(col as usize) {
         Some(name) => name.as_str(),
-        None => return linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => return linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     };
 
     match handle.inner.get(row as usize) {
@@ -568,13 +568,13 @@ pub unsafe extern "C" fn linkrs_get_float_by_index(
             Some(v) => match value_as_f64(v) {
                 Some(f) => {
                     *value = f;
-                    linkrs_error_code_t::GRAPHDB_OK as c_int
+                    linkrs_error_code_t::LINKRS_OK as c_int
                 }
-                None => linkrs_error_code_t::GRAPHDB_MISMATCH as c_int,
+                None => linkrs_error_code_t::LINKRS_MISMATCH as c_int,
             },
-            None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+            None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
         },
-        None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     }
 }
 
@@ -612,7 +612,7 @@ pub unsafe extern "C" fn linkrs_get_blob_by_index(
         return ptr::null();
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     let columns = handle.inner.columns();
     let col_name = match columns.get(col as usize) {
@@ -662,7 +662,7 @@ pub unsafe extern "C" fn linkrs_get_blob_by_index(
 /// - `col`: Column index (starting from 0)
 ///
 /// # Returns
-/// - Column type, returns GRAPHDB_NULL on error
+/// - Column type, returns LINKRS_NULL on error
 ///
 /// # Safety
 /// - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
@@ -675,10 +675,10 @@ pub unsafe extern "C" fn linkrs_column_type(
     use crate::embedded::c_api::types::linkrs_value_type_t;
 
     if result.is_null() || col < 0 {
-        return linkrs_value_type_t::GRAPHDB_NULL;
+        return linkrs_value_type_t::LINKRS_NULL;
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
 
     // Get the first line to determine the type
     match handle.inner.first() {
@@ -686,34 +686,34 @@ pub unsafe extern "C" fn linkrs_column_type(
             let columns = handle.inner.columns();
             let col_name = match columns.get(col as usize) {
                 Some(name) => name.as_str(),
-                None => return linkrs_value_type_t::GRAPHDB_NULL,
+                None => return linkrs_value_type_t::LINKRS_NULL,
             };
 
             match row.get(col_name) {
                 Some(value) => match value {
-                    linkrs_core::Value::Null(_) => linkrs_value_type_t::GRAPHDB_NULL,
-                    linkrs_core::Value::Bool(_) => linkrs_value_type_t::GRAPHDB_BOOL,
+                    linkrs_core::Value::Null(_) => linkrs_value_type_t::LINKRS_NULL,
+                    linkrs_core::Value::Bool(_) => linkrs_value_type_t::LINKRS_BOOL,
                     linkrs_core::Value::SmallInt(_)
                     | linkrs_core::Value::Int(_)
-                    | linkrs_core::Value::BigInt(_) => linkrs_value_type_t::GRAPHDB_INT,
+                    | linkrs_core::Value::BigInt(_) => linkrs_value_type_t::LINKRS_INT,
                     linkrs_core::Value::Float(_) | linkrs_core::Value::Double(_) => {
-                        linkrs_value_type_t::GRAPHDB_FLOAT
+                        linkrs_value_type_t::LINKRS_FLOAT
                     }
                     linkrs_core::Value::String(_) | linkrs_core::Value::FixedString(_) => {
-                        linkrs_value_type_t::GRAPHDB_STRING
+                        linkrs_value_type_t::LINKRS_STRING
                     }
-                    linkrs_core::Value::Blob(_) => linkrs_value_type_t::GRAPHDB_BLOB,
-                    linkrs_core::Value::List(_) => linkrs_value_type_t::GRAPHDB_LIST,
-                    linkrs_core::Value::Map(_) => linkrs_value_type_t::GRAPHDB_MAP,
-                    linkrs_core::Value::Vertex(_) => linkrs_value_type_t::GRAPHDB_VERTEX,
-                    linkrs_core::Value::Edge(_) => linkrs_value_type_t::GRAPHDB_EDGE,
-                    linkrs_core::Value::Path(_) => linkrs_value_type_t::GRAPHDB_PATH,
-                    _ => linkrs_value_type_t::GRAPHDB_NULL,
+                    linkrs_core::Value::Blob(_) => linkrs_value_type_t::LINKRS_BLOB,
+                    linkrs_core::Value::List(_) => linkrs_value_type_t::LINKRS_LIST,
+                    linkrs_core::Value::Map(_) => linkrs_value_type_t::LINKRS_MAP,
+                    linkrs_core::Value::Vertex(_) => linkrs_value_type_t::LINKRS_VERTEX,
+                    linkrs_core::Value::Edge(_) => linkrs_value_type_t::LINKRS_EDGE,
+                    linkrs_core::Value::Path(_) => linkrs_value_type_t::LINKRS_PATH,
+                    _ => linkrs_value_type_t::LINKRS_NULL,
                 },
-                None => linkrs_value_type_t::GRAPHDB_NULL,
+                None => linkrs_value_type_t::LINKRS_NULL,
             }
         }
-        None => linkrs_value_type_t::GRAPHDB_NULL,
+        None => linkrs_value_type_t::LINKRS_NULL,
     }
 }
 
@@ -724,7 +724,7 @@ pub unsafe extern "C" fn linkrs_column_type(
 /// - `out_ms`: Output parameter, execution time in milliseconds
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -736,12 +736,12 @@ pub unsafe extern "C" fn linkrs_result_execution_time_ms(
     out_ms: *mut u64,
 ) -> c_int {
     if result.is_null() || out_ms.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
     *out_ms = handle.inner.metadata().execution_time.as_millis() as u64;
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Get the number of rows scanned while producing the result set.
@@ -751,7 +751,7 @@ pub unsafe extern "C" fn linkrs_result_execution_time_ms(
 /// - `out_rows`: Output parameter, scanned row count
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -763,12 +763,12 @@ pub unsafe extern "C" fn linkrs_result_rows_scanned(
     out_rows: *mut u64,
 ) -> c_int {
     if result.is_null() || out_rows.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(result as *mut GraphDbResultHandle);
+    let handle = &*(result as *mut LinkrsResultHandle);
     *out_rows = handle.inner.metadata().rows_scanned;
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 #[cfg(test)]
@@ -778,7 +778,7 @@ mod tests {
     #[test]
     fn test_result_null_params() {
         let rc = unsafe { linkrs_result_free(ptr::null_mut()) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
 
         let count = unsafe { linkrs_column_count(ptr::null_mut()) };
         assert_eq!(count, -1);

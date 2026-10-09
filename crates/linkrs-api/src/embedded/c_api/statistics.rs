@@ -3,7 +3,7 @@
 //! Provides functions for querying session and query statistics
 
 use crate::embedded::c_api::error::linkrs_error_code_t;
-use crate::embedded::c_api::session::GraphDbSessionHandle;
+use crate::embedded::c_api::session::LinkrsSessionHandle;
 use crate::embedded::c_api::types::linkrs_session_t;
 use std::ffi::c_int;
 
@@ -23,7 +23,7 @@ pub unsafe extern "C" fn linkrs_session_changes(session: *mut linkrs_session_t) 
         return 0;
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
     handle.inner.changes()
 }
 
@@ -43,7 +43,7 @@ pub unsafe extern "C" fn linkrs_session_total_changes(session: *mut linkrs_sessi
         return 0;
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
     handle.inner.total_changes()
 }
 
@@ -54,8 +54,8 @@ pub unsafe extern "C" fn linkrs_session_total_changes(session: *mut linkrs_sessi
 /// - `vertex_id`: Output parameter, vertex ID
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
-/// - Failure: Error code (GRAPHDB_NOTFOUND if no vertex was inserted)
+/// - Success: LINKRS_OK
+/// - Failure: Error code (LINKRS_NOTFOUND if no vertex was inserted)
 ///
 /// # Safety
 /// - `session` must be a valid session handle created by `linkrs_session_create`
@@ -66,16 +66,16 @@ pub unsafe extern "C" fn linkrs_session_last_insert_vertex_id(
     vertex_id: *mut u64,
 ) -> c_int {
     if session.is_null() || vertex_id.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
     match handle.inner.last_insert_vertex_id() {
         Some(id) => {
             *vertex_id = id;
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
-        None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     }
 }
 
@@ -86,8 +86,8 @@ pub unsafe extern "C" fn linkrs_session_last_insert_vertex_id(
 /// - `edge_id`: Output parameter, edge ID
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
-/// - Failure: Error code (GRAPHDB_NOTFOUND if no edge was inserted)
+/// - Success: LINKRS_OK
+/// - Failure: Error code (LINKRS_NOTFOUND if no edge was inserted)
 ///
 /// # Safety
 /// - `session` must be a valid session handle created by `linkrs_session_create`
@@ -98,16 +98,16 @@ pub unsafe extern "C" fn linkrs_session_last_insert_edge_id(
     edge_id: *mut u64,
 ) -> c_int {
     if session.is_null() || edge_id.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
     match handle.inner.last_insert_edge_id() {
         Some(id) => {
             *edge_id = id;
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
-        None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
     }
 }
 
@@ -118,7 +118,7 @@ pub unsafe extern "C" fn linkrs_session_last_insert_edge_id(
 /// - `stats`: Output parameter, statistics structure
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -129,10 +129,10 @@ pub unsafe extern "C" fn linkrs_session_get_statistics(
     stats: *mut linkrs_session_statistics_t,
 ) -> c_int {
     if session.is_null() || stats.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
     let session_stats = handle.inner.statistics();
 
     *stats = linkrs_session_statistics_t {
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn linkrs_session_get_statistics(
         last_insert_edge_id: handle.inner.last_insert_edge_id().unwrap_or(0),
     };
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Session statistics structure
@@ -169,7 +169,7 @@ mod tests {
         unsafe {
             let db = GraphDatabase::open_in_memory().unwrap();
             let session = db.session().unwrap();
-            let handle = Box::new(GraphDbSessionHandle::new(session));
+            let handle = Box::new(LinkrsSessionHandle::new(session));
             let session_ptr = Box::into_raw(handle) as *mut linkrs_session_t;
 
             assert_eq!(linkrs_session_changes(session_ptr), 0);
@@ -185,7 +185,7 @@ mod tests {
             assert_eq!(stats.last_changes, 0);
             assert_eq!(stats.total_changes, 0);
 
-            let _ = Box::from_raw(session_ptr as *mut GraphDbSessionHandle);
+            let _ = Box::from_raw(session_ptr as *mut LinkrsSessionHandle);
         }
     }
 }

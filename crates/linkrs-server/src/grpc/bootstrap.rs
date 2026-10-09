@@ -13,8 +13,8 @@ use crate::storage::{
     StorageSyncContextOps,
 };
 
-use super::proto::graph_db_service_server::GraphDbServiceServer;
-use super::service::GraphDBService;
+use super::proto::linkrs_service_server::LinkrsServiceServer;
+use super::service::LinkrsService;
 
 /// Run the gRPC server
 pub async fn run_server<
@@ -33,9 +33,9 @@ pub async fn run_server<
     config: Config,
     addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let service = GraphDBService::new(app_state.clone(), config.clone());
+    let service = LinkrsService::new(app_state.clone(), config.clone());
 
-    tracing::info!("GraphDB gRPC service listening on {}", addr);
+    tracing::info!("Linkrs gRPC service listening on {}", addr);
 
     let grpc_cfg = config.grpc().clone();
     let builder = Server::builder();
@@ -61,7 +61,7 @@ pub async fn run_server<
         builder
     };
     let router = builder.add_service(
-        GraphDbServiceServer::new(service)
+        LinkrsServiceServer::new(service)
             .max_decoding_message_size(grpc_cfg.max_request_size)
             .max_encoding_message_size(grpc_cfg.max_response_size),
     );
@@ -84,13 +84,13 @@ pub async fn run_server_with_grpc_service<
         + Sync
         + 'static,
 >(
-    service: GraphDBService<S>,
+    service: LinkrsService<S>,
     addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("GraphDB gRPC service listening on {}", addr);
+    tracing::info!("Linkrs gRPC service listening on {}", addr);
 
     Server::builder()
-        .add_service(GraphDbServiceServer::new(service))
+        .add_service(LinkrsServiceServer::new(service))
         .serve(addr)
         .await?;
 

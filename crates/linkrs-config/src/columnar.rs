@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// These knobs only change *how* the row-based `DataChunk` is filled by scan
 /// sources; the output rows are bit-for-bit identical to the row-based path.
 /// They are on by default; set `column_block_enabled` to false or export
-/// `GRAPHDB_COLUMN_BLOCK_ENABLED=0` to roll back to the row-based path.
+/// `LINKRS_COLUMN_BLOCK_ENABLED=0` to roll back to the row-based path.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ColumnarConfig {
     /// Enable the storage column-block scan path.

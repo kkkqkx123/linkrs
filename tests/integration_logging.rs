@@ -34,6 +34,7 @@ fn test_log_config_defaults() {
 fn test_log_config_serialization() {
     let config = Config {
         common: linkrs::config::CommonConfig {
+            migration: linkrs::config::MigrationConfig::default(),
             database: linkrs::config::DatabaseConfig {
                 host: "127.0.0.1".to_string(),
                 port: 9758,
@@ -242,6 +243,7 @@ fn test_flexi_logger_integration() {
 
         let config = Config {
             common: linkrs::config::CommonConfig {
+                migration: linkrs::config::MigrationConfig::default(),
                 log: linkrs::config::LogConfig {
                     level: "warn".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
@@ -264,6 +266,7 @@ fn test_flexi_logger_integration() {
 
         let config = Config {
             common: linkrs::config::CommonConfig {
+                migration: linkrs::config::MigrationConfig::default(),
                 log: linkrs::config::LogConfig {
                     level: "info".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
@@ -300,6 +303,7 @@ fn test_flexi_logger_integration() {
 
         let config = Config {
             common: linkrs::config::CommonConfig {
+                migration: linkrs::config::MigrationConfig::default(),
                 log: linkrs::config::LogConfig {
                     level: "debug".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
@@ -329,6 +333,7 @@ fn test_flexi_logger_integration() {
         let max_files = 2;
         let config = Config {
             common: linkrs::config::CommonConfig {
+                migration: linkrs::config::MigrationConfig::default(),
                 log: linkrs::config::LogConfig {
                     level: "info".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
@@ -419,6 +424,7 @@ fn test_log_file_path_resolution() {
 
     let custom_config = Config {
         common: linkrs::config::CommonConfig {
+            migration: linkrs::config::MigrationConfig::default(),
             log: linkrs::config::LogConfig {
                 dir: "/var/log/linkrs".to_string(),
                 file: "app".to_string(),
@@ -448,6 +454,7 @@ fn test_log_file_size_config() {
 
     let custom_config = Config {
         common: linkrs::config::CommonConfig {
+            migration: linkrs::config::MigrationConfig::default(),
             log: linkrs::config::LogConfig {
                 max_file_size: 500 * 1024 * 1024,
                 ..Default::default()
@@ -460,6 +467,7 @@ fn test_log_file_size_config() {
 
     let small_config = Config {
         common: linkrs::config::CommonConfig {
+            migration: linkrs::config::MigrationConfig::default(),
             log: linkrs::config::LogConfig {
                 max_file_size: 1024,
                 ..Default::default()
@@ -479,6 +487,7 @@ fn test_log_level_validation() {
     for level in valid_levels {
         let config = Config {
             common: linkrs::config::CommonConfig {
+                migration: linkrs::config::MigrationConfig::default(),
                 log: linkrs::config::LogConfig {
                     level: level.to_string(),
                     ..Default::default()

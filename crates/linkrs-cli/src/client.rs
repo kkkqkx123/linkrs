@@ -1,6 +1,6 @@
-//! Client module for GraphDB CLI
+//! Client module for Linkrs CLI
 //!
-//! Provides HTTP client for connecting to GraphDB server. Wire DTOs are
+//! Provides HTTP client for connecting to Linkrs server. Wire DTOs are
 //! re-exported from `linkrs-wire` (the single contract source shared with
 //! the server) so the CLI never mirrors HTTP types by hand.
 

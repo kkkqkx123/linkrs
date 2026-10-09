@@ -16,10 +16,10 @@ const MAX_BCRYPT_COST: u32 = 12;
 static BCRYPT_COST: AtomicU32 = AtomicU32::new(DEFAULT_BCRYPT_COST);
 static BCRYPT_COST_SET: AtomicBool = AtomicBool::new(false);
 
-/// Resolve the bcrypt cost factor from the `GRAPHDBC_BCRYPT_COST` environment
+/// Resolve the bcrypt cost factor from the `LINKRS_BCRYPT_COST` environment
 /// variable, falling back to the default cost when absent or invalid.
 fn resolve_bcrypt_cost() -> u32 {
-    std::env::var("GRAPHDBC_BCRYPT_COST")
+    std::env::var("LINKRS_BCRYPT_COST")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
         .filter(|cost| (MIN_BCRYPT_COST..=MAX_BCRYPT_COST).contains(cost))

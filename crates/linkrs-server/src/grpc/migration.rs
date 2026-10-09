@@ -9,7 +9,7 @@ use crate::storage::{
 
 use super::error::require_session_id;
 use super::proto::*;
-use super::service::{GraphDBService, StreamMigrationProgressStream};
+use super::service::{LinkrsService, StreamMigrationProgressStream};
 
 impl<
         S: StorageClient
@@ -20,7 +20,7 @@ impl<
             + Send
             + Sync
             + 'static,
-    > GraphDBService<S>
+    > LinkrsService<S>
 {
     pub(crate) async fn handle_migrate_plan(
         &self,

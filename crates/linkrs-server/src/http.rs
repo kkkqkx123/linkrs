@@ -1,6 +1,6 @@
 //! HTTP Service Module
 //!
-//! Provides an interface to GraphDB services based on the HTTP protocol.
+//! Provides an interface to Linkrs services based on the HTTP protocol.
 
 pub mod error;
 pub mod handlers;

@@ -201,7 +201,7 @@ impl Candidate for StringCandidate {
 }
 
 #[derive(Debug)]
-pub struct GraphDBCompleter {
+pub struct LinkrsCompleter {
     keywords: Vec<String>,
     meta_commands: Vec<String>,
     functions: Vec<FunctionEntry>,
@@ -209,13 +209,13 @@ pub struct GraphDBCompleter {
     variables: Arc<Mutex<HashMap<String, String>>>,
 }
 
-impl Default for GraphDBCompleter {
+impl Default for LinkrsCompleter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl GraphDBCompleter {
+impl LinkrsCompleter {
     pub fn new() -> Self {
         Self {
             keywords: GQL_KEYWORDS.iter().map(|s| s.to_string()).collect(),
@@ -241,7 +241,7 @@ impl GraphDBCompleter {
     }
 }
 
-impl Completer for GraphDBCompleter {
+impl Completer for LinkrsCompleter {
     type Candidate = StringCandidate;
 
     fn complete(
@@ -275,7 +275,7 @@ impl Completer for GraphDBCompleter {
     }
 }
 
-impl GraphDBCompleter {
+impl LinkrsCompleter {
     fn complete_meta(
         &self,
         line_to_pos: &str,
@@ -537,7 +537,7 @@ impl GraphDBCompleter {
     }
 }
 
-impl Hinter for GraphDBCompleter {
+impl Hinter for LinkrsCompleter {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
@@ -570,7 +570,7 @@ impl Hinter for GraphDBCompleter {
     }
 }
 
-impl Highlighter for GraphDBCompleter {
+impl Highlighter for LinkrsCompleter {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
         if line.starts_with('\\') {
             return Cow::Owned(line.cyan().to_string());
@@ -661,9 +661,9 @@ impl Highlighter for GraphDBCompleter {
     }
 }
 
-impl Validator for GraphDBCompleter {}
+impl Validator for LinkrsCompleter {}
 
-impl Helper for GraphDBCompleter {}
+impl Helper for LinkrsCompleter {}
 
 fn is_gql_keyword(word: &str) -> bool {
     let upper = word.to_uppercase();
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn test_linkrs_completer_new() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         assert!(!completer.keywords.is_empty());
         assert!(!completer.meta_commands.is_empty());
         assert!(!completer.functions.is_empty());
@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_linkrs_completer_default() {
-        let completer: GraphDBCompleter = Default::default();
+        let completer: LinkrsCompleter = Default::default();
         assert!(!completer.keywords.is_empty());
         assert!(!completer.meta_commands.is_empty());
     }
@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn test_completer_update_variables() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let mut vars = HashMap::new();
         vars.insert("var1".to_string(), "value1".to_string());
         completer.update_variables(vars);
@@ -793,7 +793,7 @@ mod tests {
 
     #[test]
     fn test_completer_set_schema_cache() {
-        let mut completer = GraphDBCompleter::new();
+        let mut completer = LinkrsCompleter::new();
         let new_cache = Arc::new(Mutex::new(crate::completion::context::SchemaCache::new()));
         completer.set_schema_cache(new_cache.clone());
 
@@ -803,48 +803,48 @@ mod tests {
 
     #[test]
     fn test_completer_get_tag_names() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let names = completer.get_tag_names();
         assert!(names.is_empty());
     }
 
     #[test]
     fn test_completer_get_edge_names() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let names = completer.get_edge_names();
         assert!(names.is_empty());
     }
 
     #[test]
     fn test_completer_get_space_names() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let names = completer.get_space_names();
         assert!(names.is_empty());
     }
 
     #[test]
     fn test_highlighter_highlight_meta_command() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let highlighted = completer.highlight("\\help", 0);
         assert!(highlighted.contains("\\help"));
     }
 
     #[test]
     fn test_highlighter_highlight_keywords() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let highlighted = completer.highlight("MATCH (v)", 0);
         assert!(highlighted.contains("MATCH"));
     }
 
     #[test]
     fn test_highlighter_highlight_char() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         assert!(completer.highlight_char("", 0, false));
     }
 
     #[test]
     fn test_complete_keyword() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (pos, candidates) = completer
             .complete_keyword("MATC", 4)
             .expect("complete_keyword failed");
@@ -855,7 +855,7 @@ mod tests {
 
     #[test]
     fn test_complete_keyword_empty() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (pos, candidates) = completer
             .complete_keyword("   ", 3)
             .expect("complete_keyword failed");
@@ -865,7 +865,7 @@ mod tests {
 
     #[test]
     fn test_complete_function() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (pos, candidates) = completer
             .complete_function("cou", 3)
             .expect("complete_function failed");
@@ -876,7 +876,7 @@ mod tests {
 
     #[test]
     fn test_complete_function_empty() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (pos, candidates) = completer
             .complete_function("   ", 3)
             .expect("complete_function failed");
@@ -886,7 +886,7 @@ mod tests {
 
     #[test]
     fn test_complete_variable() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let mut vars = HashMap::new();
         vars.insert("myvar".to_string(), "value".to_string());
         completer.update_variables(vars);
@@ -900,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_complete_variable_empty() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_variable("LIMIT :", 7)
             .expect("complete_variable failed");
@@ -909,7 +909,7 @@ mod tests {
 
     #[test]
     fn test_complete_meta_empty() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_meta("\\", 1)
             .expect("complete_meta failed");
@@ -919,7 +919,7 @@ mod tests {
 
     #[test]
     fn test_complete_meta_with_partial() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_meta("\\he", 3)
             .expect("complete_meta failed");
@@ -929,7 +929,7 @@ mod tests {
 
     #[test]
     fn test_complete_meta_format() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_meta("\\format tab", 11)
             .expect("complete_meta failed");
@@ -939,7 +939,7 @@ mod tests {
 
     #[test]
     fn test_complete_tag() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_tag("MATCH (v:Pers", 13)
             .expect("complete_tag failed");
@@ -948,7 +948,7 @@ mod tests {
 
     #[test]
     fn test_complete_edge() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_edge("OVER FRI", 8)
             .expect("complete_edge failed");
@@ -957,7 +957,7 @@ mod tests {
 
     #[test]
     fn test_complete_space() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_space("USE test", 8)
             .expect("complete_space failed");
@@ -966,7 +966,7 @@ mod tests {
 
     #[test]
     fn test_complete_meta_arg() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_meta_arg("test", 4)
             .expect("complete_meta_arg failed");
@@ -975,7 +975,7 @@ mod tests {
 
     #[test]
     fn test_complete_space_after_meta() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_space_after_meta("myspace", 7)
             .expect("complete_space_after_meta failed");
@@ -984,7 +984,7 @@ mod tests {
 
     #[test]
     fn test_complete_tag_after_meta() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_tag_after_meta("Person", 6)
             .expect("complete_tag_after_meta failed");
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn test_complete_edge_after_meta() {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let (_pos, candidates) = completer
             .complete_edge_after_meta("FRIEND", 6)
             .expect("complete_edge_after_meta failed");

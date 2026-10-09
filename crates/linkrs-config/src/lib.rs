@@ -547,7 +547,7 @@ impl Config {
     }
 
     fn user_config_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        if let Ok(dir) = env::var("GRAPHDB_CONFIG_DIR") {
+        if let Ok(dir) = env::var("LINKRS_CONFIG_DIR") {
             return Ok(PathBuf::from(dir));
         }
         if let Some(dir) = dirs::config_dir() {
@@ -1048,8 +1048,8 @@ storage_path = "storage"
 "#;
         std::fs::write(config_dir.join("config.toml"), config_content)
             .expect("Failed to write config");
-        let previous_dir = env::var("GRAPHDB_CONFIG_DIR").ok();
-        env::set_var("GRAPHDB_CONFIG_DIR", &config_dir);
+        let previous_dir = env::var("LINKRS_CONFIG_DIR").ok();
+        env::set_var("LINKRS_CONFIG_DIR", &config_dir);
         let config =
             Config::load_user_config_named("config.toml").expect("Failed to load user config");
         assert_eq!(
@@ -1057,9 +1057,9 @@ storage_path = "storage"
             config_dir.join("storage").to_string_lossy()
         );
         if let Some(value) = previous_dir {
-            env::set_var("GRAPHDB_CONFIG_DIR", value);
+            env::set_var("LINKRS_CONFIG_DIR", value);
         } else {
-            env::remove_var("GRAPHDB_CONFIG_DIR");
+            env::remove_var("LINKRS_CONFIG_DIR");
         }
     }
 

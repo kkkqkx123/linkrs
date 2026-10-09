@@ -15,7 +15,7 @@ export default defineConfig({
 			// An explicit choice must win over the browser's language, and the app
 			// is client-rendered so no server-visible strategy is needed.
 			strategy: ['localStorage', 'preferredLanguage', 'baseLocale'],
-			localStorageKey: 'graphdb_language',
+			localStorageKey: 'linkrs_language',
 		}),
 		tailwindcss(),
 	],

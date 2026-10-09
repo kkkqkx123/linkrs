@@ -1,6 +1,6 @@
 //! Transaction Management Module
 //!
-//! Provides transaction management functionality for GraphDB, including:
+//! Provides transaction management functionality for Linkrs, including:
 //! - Transaction lifecycle management (start, commit, abort)
 //! - Transaction statistics and monitoring
 //! - MVCC version management

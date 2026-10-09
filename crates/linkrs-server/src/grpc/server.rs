@@ -10,12 +10,12 @@ use crate::storage::{
     StorageSyncContextOps,
 };
 
-use super::proto::graph_db_service_server::GraphDbService as GraphDBServiceTrait;
+use super::proto::linkrs_service_server::LinkrsService as LinkrsServiceTrait;
 use super::proto::*;
 use super::service::{ExecuteQueryStreamStream, StreamMigrationProgressStream};
 
-pub use super::service::GraphDBService;
-pub use super::service::GraphDBService as GrpcService;
+pub use super::service::LinkrsService;
+pub use super::service::LinkrsService as GrpcService;
 
 #[tonic::async_trait]
 impl<
@@ -29,7 +29,7 @@ impl<
             + Send
             + Sync
             + 'static,
-    > GraphDBServiceTrait for GraphDBService<S>
+    > LinkrsServiceTrait for LinkrsService<S>
 {
     type ExecuteQueryStreamStream = ExecuteQueryStreamStream;
     type StreamMigrationProgressStream = StreamMigrationProgressStream;

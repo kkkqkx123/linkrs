@@ -1,4 +1,4 @@
-//! E2E Integration Tests for GraphDB
+//! E2E Integration Tests for Linkrs
 //!
 //! This file serves as the entry point for E2E tests.
 //! Actual tests are organized in the e2e/ subdirectory.

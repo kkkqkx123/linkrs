@@ -11,7 +11,7 @@
 
 ```bash
 # 进入项目目录
-cd /home/kkkqkx/code/graphDB
+cd /home/kkkqkx/code/linkrs
 
 # 验证编译
 cargo check --benches

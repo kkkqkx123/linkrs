@@ -1,6 +1,6 @@
 //! Embedded API module
 //!
-//! Provide an embedded GraphDB interface for standalone use, with a similar usage approach to SQLite.
+//! Provide an embedded Linkrs interface for standalone use, with a similar usage approach to SQLite.
 //!
 //! # Get started quickly
 //!

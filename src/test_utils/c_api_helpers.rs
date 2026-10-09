@@ -47,7 +47,7 @@ impl CApiTestDatabase {
 
         assert_eq!(
             rc,
-            linkrs_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::LINKRS_OK as i32,
             "Failed to open database, error code: {}, path: {:?}",
             rc,
             db_path
@@ -92,7 +92,7 @@ impl CApiTestSession {
 
         assert_eq!(
             rc,
-            linkrs_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::LINKRS_OK as i32,
             "Failed to create a session."
         );
         assert!(
@@ -137,7 +137,7 @@ impl CApiTestTransaction {
 
         assert_eq!(
             rc,
-            linkrs_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::LINKRS_OK as i32,
             "Failed to start the transaction."
         );
         assert!(
@@ -158,7 +158,7 @@ impl CApiTestTransaction {
         let rc = unsafe { crate::api::embedded::c_api::transaction::linkrs_txn_commit(self.txn) };
         assert_eq!(
             rc,
-            linkrs_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::LINKRS_OK as i32,
             "The transaction failed to be committed."
         );
         // Prevent the component from being released again when the “Drop” event occurs.
@@ -170,7 +170,7 @@ impl CApiTestTransaction {
         let rc = unsafe { crate::api::embedded::c_api::transaction::linkrs_txn_rollback(self.txn) };
         assert_eq!(
             rc,
-            linkrs_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::LINKRS_OK as i32,
             "Rolling back the transaction failed."
         );
         // Prevent the object from being released again when the “Drop” event occurs.
@@ -211,7 +211,7 @@ impl CApiTestResult {
 
         assert_eq!(
             rc,
-            linkrs_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::LINKRS_OK as i32,
             "The query failed to be executed."
         );
         assert!(!result.is_null(), "The result handle should not be empty.");
@@ -262,7 +262,7 @@ impl CApiTestBatch {
 
         assert_eq!(
             rc,
-            linkrs_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::LINKRS_OK as i32,
             "Failed to create the batch inserter."
         );
         assert!(

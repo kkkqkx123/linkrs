@@ -72,7 +72,7 @@
 ## 目录结构
 
 ```
-graphDB/
+linkrs/
 ├── scripts/
 │   ├── generate_e2e_data.py      # 测试数据生成脚本
 │   └── linkrs.ps1               # 服务管理脚本
@@ -577,8 +577,8 @@ pytest tests/e2e -n auto
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| GRAPHDB_HOST | Linkrs 服务器地址 | 127.0.0.1 |
-| GRAPHDB_PORT | Linkrs 服务器端口 | 9758 |
+| LINKRS_HOST | Linkrs 服务器地址 | 127.0.0.1 |
+| LINKRS_PORT | Linkrs 服务器端口 | 9758 |
 
 ### 命令行参数
 

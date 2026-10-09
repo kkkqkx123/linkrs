@@ -11,11 +11,11 @@
 /**
  * Hook type constants
  */
-#define GRAPHDB_HOOK_INSERT 1
+#define LINKRS_HOOK_INSERT 1
 
-#define GRAPHDB_HOOK_UPDATE 2
+#define LINKRS_HOOK_UPDATE 2
 
-#define GRAPHDB_HOOK_DELETE 3
+#define LINKRS_HOOK_DELETE 3
 
 /**
  * Error code
@@ -24,95 +24,95 @@ typedef enum linkrs_error_code_t {
   /**
    * Success
    */
-  GRAPHDB_OK = 0,
+  LINKRS_OK = 0,
   /**
    * Common errors
    */
-  GRAPHDB_ERROR = 1,
+  LINKRS_ERROR = 1,
   /**
    * Internal error
    */
-  GRAPHDB_INTERNAL = 2,
+  LINKRS_INTERNAL = 2,
   /**
    * The permission was denied.
    */
-  GRAPHDB_PERM = 3,
+  LINKRS_PERM = 3,
   /**
    * The operation was terminated.
    */
-  GRAPHDB_ABORT = 4,
+  LINKRS_ABORT = 4,
   /**
    * The database is busy.
    */
-  GRAPHDB_BUSY = 5,
+  LINKRS_BUSY = 5,
   /**
    * The database is locked.
    */
-  GRAPHDB_LOCKED = 6,
+  LINKRS_LOCKED = 6,
   /**
    * Insufficient memory
    */
-  GRAPHDB_NOMEM = 7,
+  LINKRS_NOMEM = 7,
   /**
    * Read-only
    */
-  GRAPHDB_READONLY = 8,
+  LINKRS_READONLY = 8,
   /**
    * The operation was interrupted.
    */
-  GRAPHDB_INTERRUPT = 9,
+  LINKRS_INTERRUPT = 9,
   /**
    * IO error
    */
-  GRAPHDB_IOERR = 10,
+  LINKRS_IOERR = 10,
   /**
    * Data corruption
    */
-  GRAPHDB_CORRUPT = 11,
+  LINKRS_CORRUPT = 11,
   /**
    * Nothing was found.
    */
-  GRAPHDB_NOTFOUND = 12,
+  LINKRS_NOTFOUND = 12,
   /**
    * The disk is full.
    */
-  GRAPHDB_FULL = 13,
+  LINKRS_FULL = 13,
   /**
    * Unable to open.
    */
-  GRAPHDB_CANTOPEN = 14,
+  LINKRS_CANTOPEN = 14,
   /**
    * Protocol error
    */
-  GRAPHDB_PROTOCOL = 15,
+  LINKRS_PROTOCOL = 15,
   /**
    * Pattern error
    */
-  GRAPHDB_SCHEMA = 16,
+  LINKRS_SCHEMA = 16,
   /**
    * The data volume is too large.
    */
-  GRAPHDB_TOOBIG = 17,
+  LINKRS_TOOBIG = 17,
   /**
    * Violation of constraints
    */
-  GRAPHDB_CONSTRAINT = 18,
+  LINKRS_CONSTRAINT = 18,
   /**
    * Type mismatch.
    */
-  GRAPHDB_MISMATCH = 19,
+  LINKRS_MISMATCH = 19,
   /**
    * Misuse
    */
-  GRAPHDB_MISUSE = 20,
+  LINKRS_MISUSE = 20,
   /**
    * Out of range
    */
-  GRAPHDB_RANGE = 21,
+  LINKRS_RANGE = 21,
   /**
    * Not implemented
    */
-  GRAPHDB_NOT_IMPLEMENTED = 22,
+  LINKRS_NOT_IMPLEMENTED = 22,
 } linkrs_error_code_t;
 
 /**
@@ -122,30 +122,30 @@ typedef enum linkrs_extended_error_code_t {
   /**
    * No extension error
    */
-  GRAPHDB_EXTENDED_NONE = 0,
-  GRAPHDB_ERROR_SYNTAX = 1000,
-  GRAPHDB_ERROR_SEMANTIC = 1001,
-  GRAPHDB_ERROR_UNEXPECTED_TOKEN = 1002,
-  GRAPHDB_ERROR_UNTERMINATED_LITERAL = 1003,
-  GRAPHDB_ERROR_TYPE_MISMATCH = 1100,
-  GRAPHDB_ERROR_DIVISION_BY_ZERO = 1101,
-  GRAPHDB_ERROR_OUT_OF_RANGE = 1102,
-  GRAPHDB_ERROR_DUPLICATE_KEY = 1200,
-  GRAPHDB_ERROR_FOREIGN_KEY = 1201,
-  GRAPHDB_ERROR_NOT_NULL = 1202,
-  GRAPHDB_ERROR_UNIQUE = 1203,
-  GRAPHDB_ERROR_CHECK = 1204,
-  GRAPHDB_ERROR_CONNECTION_LOST = 1300,
-  GRAPHDB_ERROR_DEADLOCK = 1301,
-  GRAPHDB_ERROR_LOCK_TIMEOUT = 1302,
-  GRAPHDB_ERROR_CONFLICT = 1303,
-  GRAPHDB_ERROR_NOT_OWNER = 1304,
-  GRAPHDB_ERROR_ALREADY_COMPLETED = 1305,
-  GRAPHDB_ERROR_RECOVERY_REQUIRED = 1306,
-  GRAPHDB_ERROR_INVALID_VERTEX = 1400,
-  GRAPHDB_ERROR_INVALID_EDGE = 1401,
-  GRAPHDB_ERROR_PATH_NOT_FOUND = 1402,
-  GRAPHDB_ERROR_INTERNAL = 1500,
+  LINKRS_EXTENDED_NONE = 0,
+  LINKRS_ERROR_SYNTAX = 1000,
+  LINKRS_ERROR_SEMANTIC = 1001,
+  LINKRS_ERROR_UNEXPECTED_TOKEN = 1002,
+  LINKRS_ERROR_UNTERMINATED_LITERAL = 1003,
+  LINKRS_ERROR_TYPE_MISMATCH = 1100,
+  LINKRS_ERROR_DIVISION_BY_ZERO = 1101,
+  LINKRS_ERROR_OUT_OF_RANGE = 1102,
+  LINKRS_ERROR_DUPLICATE_KEY = 1200,
+  LINKRS_ERROR_FOREIGN_KEY = 1201,
+  LINKRS_ERROR_NOT_NULL = 1202,
+  LINKRS_ERROR_UNIQUE = 1203,
+  LINKRS_ERROR_CHECK = 1204,
+  LINKRS_ERROR_CONNECTION_LOST = 1300,
+  LINKRS_ERROR_DEADLOCK = 1301,
+  LINKRS_ERROR_LOCK_TIMEOUT = 1302,
+  LINKRS_ERROR_CONFLICT = 1303,
+  LINKRS_ERROR_NOT_OWNER = 1304,
+  LINKRS_ERROR_ALREADY_COMPLETED = 1305,
+  LINKRS_ERROR_RECOVERY_REQUIRED = 1306,
+  LINKRS_ERROR_INVALID_VERTEX = 1400,
+  LINKRS_ERROR_INVALID_EDGE = 1401,
+  LINKRS_ERROR_PATH_NOT_FOUND = 1402,
+  LINKRS_ERROR_INTERNAL = 1500,
 } linkrs_extended_error_code_t;
 
 /**
@@ -155,47 +155,47 @@ typedef enum linkrs_value_type_t {
   /**
    * Null / empty value
    */
-  GRAPHDB_NULL = 0,
+  LINKRS_NULL = 0,
   /**
    * Boolean
    */
-  GRAPHDB_BOOL = 1,
+  LINKRS_BOOL = 1,
   /**
    * 64-bit signed integer
    */
-  GRAPHDB_INT = 2,
+  LINKRS_INT = 2,
   /**
    * Double-precision floating point
    */
-  GRAPHDB_FLOAT = 3,
+  LINKRS_FLOAT = 3,
   /**
    * UTF-8 string
    */
-  GRAPHDB_STRING = 4,
+  LINKRS_STRING = 4,
   /**
    * List
    */
-  GRAPHDB_LIST = 5,
+  LINKRS_LIST = 5,
   /**
    * Map / dictionary
    */
-  GRAPHDB_MAP = 6,
+  LINKRS_MAP = 6,
   /**
    * Vertex
    */
-  GRAPHDB_VERTEX = 7,
+  LINKRS_VERTEX = 7,
   /**
    * Edge
    */
-  GRAPHDB_EDGE = 8,
+  LINKRS_EDGE = 8,
   /**
    * Path
    */
-  GRAPHDB_PATH = 9,
+  LINKRS_PATH = 9,
   /**
    * Binary blob
    */
-  GRAPHDB_BLOB = 10,
+  LINKRS_BLOB = 10,
 } linkrs_value_type_t;
 
 /**
@@ -432,7 +432,7 @@ extern "C" {
  * - `batch`: output parameter, batch operation handle
  *
  * # Returns
- * Success: GRAPHDB_OK
+ * Success: LINKRS_OK
  * Failure: Error code
  *
  * # Safety
@@ -469,7 +469,7 @@ int linkrs_batch_free(struct linkrs_batch_t *batch);
  * - `tags`: single tag name (exactly one label is required)
  *
  * # Returns
- * Success: GRAPHDB_OK
+ * Success: LINKRS_OK
  * Failure: Error code
  *
  * # Safety
@@ -492,7 +492,7 @@ int linkrs_batch_add_vertex(struct linkrs_batch_t *batch,
  * - `edge_type`: edge type
  *
  * # Returns
- * Success: GRAPHDB_OK
+ * Success: LINKRS_OK
  * Failure: Error code
  *
  * # Safety
@@ -512,7 +512,7 @@ int linkrs_batch_add_edge(struct linkrs_batch_t *batch,
  * - `batch`: batch operation handle
  *
  * # Returns
- * Success: GRAPHDB_OK
+ * Success: LINKRS_OK
  * Failure: Error code
  *
  * # Safety
@@ -528,7 +528,7 @@ int linkrs_batch_execute(struct linkrs_batch_t *batch);
  * - `count`: output parameter
  *
  * # Returns
- * Success: GRAPHDB_OK
+ * Success: LINKRS_OK
  * Failure: Error code
  *
  * # Safety
@@ -545,7 +545,7 @@ int linkrs_batch_vertices_inserted(struct linkrs_batch_t *batch, int *count);
  * - `count`: output parameter
  *
  * # Returns
- * Success: GRAPHDB_OK
+ * Success: LINKRS_OK
  * Failure: Error code
  *
  * # Safety
@@ -601,7 +601,7 @@ struct linkrs_busy_handler_t *linkrs_busy_handler_create(int timeout_ms);
  * - `handler`: Busy handler handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -676,7 +676,7 @@ uint64_t linkrs_busy_handler_elapsed_ms(struct linkrs_busy_handler_t *handler);
  * - `handler`: Busy handler handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -736,7 +736,7 @@ struct linkrs_config_t *linkrs_config_memory(void);
  * - `config`: Configuration handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -753,7 +753,7 @@ int linkrs_config_free(struct linkrs_config_t *config);
  * - `size_mb`: Cache size in MB
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -769,7 +769,7 @@ int linkrs_config_set_cache_size(struct linkrs_config_t *config, int size_mb);
  * - `timeout_ms`: Timeout in milliseconds
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -785,7 +785,7 @@ int linkrs_config_set_timeout(struct linkrs_config_t *config, int timeout_ms);
  * - `read_only`: Read-only flag
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -801,7 +801,7 @@ int linkrs_config_set_read_only(struct linkrs_config_t *config, int read_only);
  * - `create`: Create-if-missing flag
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -817,7 +817,7 @@ int linkrs_config_set_create_if_missing(struct linkrs_config_t *config, int crea
  * - `enable`: Enable flag
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -833,8 +833,8 @@ int linkrs_config_set_enable_wal(struct linkrs_config_t *config, int enable);
  * - `mode`: 0 = Full (every write synced), 1 = Normal (default), 2 = Off
  *
  * # Returns
- * - Success: GRAPHDB_OK
- * - Failure: GRAPHDB_MISUSE for null handles or out-of-range modes
+ * - Success: LINKRS_OK
+ * - Failure: LINKRS_MISUSE for null handles or out-of-range modes
  *
  * # Safety
  * - `config` must be a valid configuration handle
@@ -849,7 +849,7 @@ int linkrs_config_set_sync_mode(struct linkrs_config_t *config, int mode);
  * - `db`: Output parameter, database handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -871,7 +871,7 @@ int linkrs_open(const char *path, struct linkrs_t **db);
  * - `db`: Output parameter, database handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -888,7 +888,7 @@ int linkrs_open_with_config(struct linkrs_config_t *config, struct linkrs_t **db
  * - `db`: Database handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -905,7 +905,7 @@ int linkrs_close(struct linkrs_t *db);
  * - `db`: Database handle
  *
  * # Returns
- * - Error code, returns GRAPHDB_OK if no error
+ * - Error code, returns LINKRS_OK if no error
  *
  * # Safety
  * - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
@@ -921,28 +921,28 @@ int linkrs_errcode(struct linkrs_t *db);
 const char *linkrs_libversion(void);
 
 /**
- * Release strings (strings allocated by GraphDB)
+ * Release strings (strings allocated by Linkrs)
  *
  * # Arguments
  * - `str`: String pointer
  *
  * # Safety
- * - `str` must be a valid pointer to a string allocated by GraphDB
+ * - `str` must be a valid pointer to a string allocated by Linkrs
  * - After calling this function, the pointer becomes invalid and must not be used
- * - This function should only be called on strings that were allocated by GraphDB C API functions
+ * - This function should only be called on strings that were allocated by Linkrs C API functions
  */
 void linkrs_free_string(char *str);
 
 /**
- * Freeing memory (memory allocated by GraphDB)
+ * Freeing memory (memory allocated by Linkrs)
  *
  * # Arguments
  * - `ptr`: Memory pointer
  *
  * # Safety
- * - `ptr` must be a valid pointer to memory allocated by GraphDB
+ * - `ptr` must be a valid pointer to memory allocated by Linkrs
  * - After calling this function, the pointer becomes invalid and must not be used
- * - This function should only be called on memory that was allocated by GraphDB C API functions
+ * - This function should only be called on memory that was allocated by Linkrs C API functions
  */
 void linkrs_free(void *ptr);
 
@@ -992,7 +992,7 @@ int linkrs_error_offset(struct linkrs_session_t *session);
  * - `session`: session handle
  *
  * # Returns
- * - Extended error code, returns 0 if no error or invalid session (GRAPHDB_EXTENDED_NONE)
+ * - Extended error code, returns 0 if no error or invalid session (LINKRS_EXTENDED_NONE)
  */
 int linkrs_extended_errcode(struct linkrs_session_t *session);
 
@@ -1008,7 +1008,7 @@ int linkrs_extended_errcode(struct linkrs_session_t *session);
  * - `x_destroy`: Destructor callback, can be NULL
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Example
@@ -1046,7 +1046,7 @@ int linkrs_create_function(struct linkrs_session_t *session,
  * - `x_destroy`: Destructor callback, can be NULL
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1071,7 +1071,7 @@ int linkrs_create_aggregate(struct linkrs_session_t *session,
  * - `name`: Function name
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1171,7 +1171,7 @@ int linkrs_context_arg_count(struct linkrs_context_t *context);
  * - `path`: Null-terminated UTF-8 path to the `.so` / `.dylib` / `.dll` file
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1188,7 +1188,7 @@ int linkrs_load_extension(struct linkrs_session_t *session, const char *path);
  * - `name`: Null-terminated UTF-8 function name
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1207,7 +1207,7 @@ int linkrs_unload_extension(struct linkrs_session_t *session, const char *name);
  *   0 when the file is unchanged and reloading was skipped
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1295,7 +1295,7 @@ struct linkrs_migration_report_t *linkrs_migration_rollback(struct linkrs_t *db,
  * - `result`: Output parameter, result set handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1324,7 +1324,7 @@ int linkrs_execute(struct linkrs_session_t *session,
  * - `result`: Output parameter, result set handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1347,7 +1347,7 @@ int linkrs_execute_params(struct linkrs_session_t *session,
  * - `result`: Result set handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1417,7 +1417,7 @@ char *linkrs_column_name(struct linkrs_result_t *result,
  * - `value`: Output parameter, integer value
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1490,7 +1490,7 @@ const uint8_t *linkrs_get_blob(struct linkrs_result_t *result, int row, const ch
  * - `value`: Output parameter, integer value
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1539,7 +1539,7 @@ char *linkrs_get_string_by_index(struct linkrs_result_t *result,
  * - `value`: Output parameter, boolean value
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1560,7 +1560,7 @@ int linkrs_get_bool_by_index(struct linkrs_result_t *result, int row, int col, b
  * - `value`: Output parameter, float value
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1603,7 +1603,7 @@ const uint8_t *linkrs_get_blob_by_index(struct linkrs_result_t *result, int row,
  * - `col`: Column index (starting from 0)
  *
  * # Returns
- * - Column type, returns GRAPHDB_NULL on error
+ * - Column type, returns LINKRS_NULL on error
  *
  * # Safety
  * - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
@@ -1619,7 +1619,7 @@ enum linkrs_value_type_t linkrs_column_type(struct linkrs_result_t *result, int 
  * - `out_ms`: Output parameter, execution time in milliseconds
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1636,7 +1636,7 @@ int linkrs_result_execution_time_ms(struct linkrs_result_t *result, uint64_t *ou
  * - `out_rows`: Output parameter, scanned row count
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1653,7 +1653,7 @@ int linkrs_result_rows_scanned(struct linkrs_result_t *result, uint64_t *out_row
  * - `session`: Output parameter, session handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1671,7 +1671,7 @@ int linkrs_session_create(struct linkrs_t *db, struct linkrs_session_t **session
  * - `session`: Session handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1689,7 +1689,7 @@ int linkrs_session_close(struct linkrs_session_t *session);
  * - `space_name`: Graph space name (UTF-8 encoded)
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1734,7 +1734,7 @@ char *linkrs_session_current_space(struct linkrs_session_t *session);
  * - `autocommit`: Whether to enable autocommit
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1764,7 +1764,7 @@ bool linkrs_session_get_autocommit(struct linkrs_session_t *session);
  * - `timeout_ms`: Timeout in milliseconds
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -1795,7 +1795,7 @@ int linkrs_busy_timeout_get(struct linkrs_session_t *session);
  * - `user_data`: User data pointer, will be passed to the callback
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Example
@@ -1949,8 +1949,8 @@ uint64_t linkrs_session_total_changes(struct linkrs_session_t *session);
  * - `vertex_id`: Output parameter, vertex ID
  *
  * # Returns
- * - Success: GRAPHDB_OK
- * - Failure: Error code (GRAPHDB_NOTFOUND if no vertex was inserted)
+ * - Success: LINKRS_OK
+ * - Failure: Error code (LINKRS_NOTFOUND if no vertex was inserted)
  *
  * # Safety
  * - `session` must be a valid session handle created by `linkrs_session_create`
@@ -1966,8 +1966,8 @@ int linkrs_session_last_insert_vertex_id(struct linkrs_session_t *session, uint6
  * - `edge_id`: Output parameter, edge ID
  *
  * # Returns
- * - Success: GRAPHDB_OK
- * - Failure: Error code (GRAPHDB_NOTFOUND if no edge was inserted)
+ * - Success: LINKRS_OK
+ * - Failure: Error code (LINKRS_NOTFOUND if no edge was inserted)
  *
  * # Safety
  * - `session` must be a valid session handle created by `linkrs_session_create`
@@ -1983,7 +1983,7 @@ int linkrs_session_last_insert_edge_id(struct linkrs_session_t *session, uint64_
  * - `stats`: Output parameter, statistics structure
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -2000,7 +2000,7 @@ int linkrs_session_get_statistics(struct linkrs_session_t *session,
  * - `txn`: output parameter, transaction handle
  *
  * # Return
- * Success: GRAPHDB_OK
+ * Success: LINKRS_OK
  * Failure: Error code
  *
  * # Safety
@@ -2019,7 +2019,7 @@ int linkrs_txn_begin(struct linkrs_session_t *session, struct linkrs_txn_t **txn
  * - `txn`: Output parameter, transaction handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -2039,7 +2039,7 @@ int linkrs_txn_begin_readonly(struct linkrs_session_t *session, struct linkrs_tx
  * - `result`: Output parameter, result set handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -2060,7 +2060,7 @@ int linkrs_txn_execute(struct linkrs_txn_t *txn,
  * - `txn`: Transaction handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -2078,7 +2078,7 @@ int linkrs_txn_commit(struct linkrs_txn_t *txn);
  * - `txn`: Transaction handle
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -2116,7 +2116,7 @@ int64_t linkrs_txn_savepoint(struct linkrs_txn_t *txn,
  * - `savepoint_id`: ID of the savepoint
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety
@@ -2135,7 +2135,7 @@ int linkrs_txn_release_savepoint(struct linkrs_txn_t *txn,
  * - `savepoint_id`: Savepoint ID
  *
  * # Returns
- * - Success: GRAPHDB_OK
+ * - Success: LINKRS_OK
  * - Failure: Error code
  *
  * # Safety

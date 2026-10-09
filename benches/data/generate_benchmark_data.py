@@ -163,7 +163,7 @@ def generate_vector_bench_data(output_file, vector_count, dimensions):
     print(f"  - Dimensions: {dimensions}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate benchmark data for GraphDB')
+    parser = argparse.ArgumentParser(description='Generate benchmark data for Linkrs')
     parser.add_argument('--type', choices=['storage', 'transaction', 'query', 'fulltext', 'vector', 'all'],
                        required=True, help='Type of benchmark data to generate')
     parser.add_argument('--output-dir', default='benches/data', help='Output directory for GQL files')

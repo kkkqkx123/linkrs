@@ -7,7 +7,7 @@ use std::time::Duration;
 
 /// Database configuration
 ///
-/// Used to configure the behavior of the embedded GraphDB database.
+/// Used to configure the behavior of the embedded Linkrs database.
 ///
 /// # Example
 ///

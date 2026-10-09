@@ -1,4 +1,4 @@
-//! Central metrics and observability primitives for GraphDB.
+//! Central metrics and observability primitives for Linkrs.
 //!
 //! Extracted from linkrs-core so any crate can depend on it without pulling
 //! in the core data model. Hosts the unified [`StatsManager`] with its

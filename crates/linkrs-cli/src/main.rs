@@ -73,7 +73,7 @@ async fn run(cli: Cli) -> Result<()> {
     match session_mgr.connect(&user, &password).await {
         Ok(()) => {
             if !cli.quiet {
-                println!("Connected to GraphDB at {}:{} as {}", host, port, user);
+                println!("Connected to Linkrs at {}:{} as {}", host, port, user);
             }
         }
         Err(e) => {

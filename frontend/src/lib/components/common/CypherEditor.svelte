@@ -102,7 +102,7 @@
 		const instance = monaco.editor.create(containerEl, {
 			value,
 			language,
-			theme: isDark ? 'graphdb-dark' : 'graphdb-light',
+			theme: isDark ? 'linkrs-dark' : 'linkrs-light',
 			automaticLayout: true,
 			minimap: { enabled: false },
 			fontSize: 13,
@@ -157,7 +157,7 @@
 			instance.trigger('keyboard', 'redo', null);
 		});
 		instance.addAction({
-			id: 'graphdb-run-selection',
+			id: 'linkrs-run-selection',
 			label: t('common.runSelectionAtCursor'),
 			contextMenuGroupId: 'navigation',
 			contextMenuOrder: 1.5,
@@ -197,7 +197,7 @@
 	 * own colours, mirroring the light/dark surfaces of the rest of the app.
 	 */
 	function defineTheme(monaco: typeof Monaco) {
-		monaco.editor.defineTheme('graphdb-light', {
+		monaco.editor.defineTheme('linkrs-light', {
 			base: 'vs',
 			inherit: true,
 			rules: [
@@ -209,7 +209,7 @@
 			],
 			colors: {},
 		});
-		monaco.editor.defineTheme('graphdb-dark', {
+		monaco.editor.defineTheme('linkrs-dark', {
 			base: 'vs-dark',
 			inherit: true,
 			rules: [
@@ -231,7 +231,7 @@
 
 	$effect(() => {
 		if (monacoRef && editor) {
-			monacoRef.editor.setTheme(isDark ? 'graphdb-dark' : 'graphdb-light');
+			monacoRef.editor.setTheme(isDark ? 'linkrs-dark' : 'linkrs-light');
 		}
 	});
 

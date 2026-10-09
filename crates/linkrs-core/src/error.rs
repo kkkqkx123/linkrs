@@ -1,4 +1,4 @@
-//! Unified Error Handling System for GraphDB
+//! Unified Error Handling System for Linkrs
 //!
 //! ## Design concepts ##
 //!
@@ -412,7 +412,7 @@ impl ToPublicError for DBError {
 /// Harmonized result types
 pub type DBResult<T> = Result<T, DBError>;
 
-// GraphDBResult was previously aliased here for backward compatibility.
+// LinkrsResult was previously aliased here for backward compatibility.
 // Use DBResult directly for new code.
 
 // ==================== Tests ====================

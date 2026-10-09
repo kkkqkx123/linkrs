@@ -1,4 +1,4 @@
-//! The GraphDB API module
+//! The Linkrs API module
 //!
 //! Provides the transport-independent core API consumed by the network
 //! service layer (`linkrs-server`) and library users.

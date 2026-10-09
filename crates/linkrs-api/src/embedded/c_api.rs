@@ -1,6 +1,6 @@
 //! C API Module
 //!
-//! Provides a C interface to GraphDB
+//! Provides a C interface to Linkrs
 
 pub mod batch;
 pub mod busy_handler;

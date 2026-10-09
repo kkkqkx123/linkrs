@@ -1,6 +1,6 @@
 //! HTTP server
 //!
-//! Provides an HTTP-based interface to GraphDB services
+//! Provides an HTTP-based interface to Linkrs services
 
 use crate::auth::PasswordAuthenticator;
 use crate::batch::BatchManager;

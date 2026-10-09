@@ -79,11 +79,11 @@ void test_database_open_close(void) {
     remove(db_path);
     
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(db);
     
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 清理测试文件 */
     remove(db_path);
@@ -101,10 +101,10 @@ void test_database_null_params(void) {
     linkrs_t* db = NULL;
     
     int rc = linkrs_open(NULL, &db);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
     
     rc = linkrs_open("test.db", NULL);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
 }
 
 /* ==================== 会话管理测试 ==================== */
@@ -117,18 +117,18 @@ void test_session_create_close(void) {
     remove(db_path);
     
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(db);
     
     rc = linkrs_session_create(db, &session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(session);
     
     rc = linkrs_session_close(session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     remove(db_path);
 }
@@ -141,10 +141,10 @@ void test_session_autocommit(void) {
     remove(db_path);
     
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_create(db, &session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 默认自动提交 */
     bool autocommit = linkrs_session_get_autocommit(session);
@@ -152,16 +152,16 @@ void test_session_autocommit(void) {
     
     /* 关闭自动提交 */
     rc = linkrs_session_set_autocommit(session, false);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     autocommit = linkrs_session_get_autocommit(session);
     ASSERT_FALSE(autocommit);
     
     rc = linkrs_session_close(session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     remove(db_path);
 }
@@ -170,10 +170,10 @@ void test_session_null_params(void) {
     linkrs_session_t* session = NULL;
     
     int rc = linkrs_session_create(NULL, &session);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
     
     rc = linkrs_session_create(NULL, NULL);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
 }
 
 /* ==================== 查询执行测试 ==================== */
@@ -187,24 +187,24 @@ void test_execute_simple_query(void) {
     remove(db_path);
     
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_create(db, &session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     const char* query = "SHOW SPACES";
     rc = linkrs_execute(session, query, &result);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(result);
     
     rc = linkrs_result_free(result);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_close(session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     remove(db_path);
 }
@@ -213,10 +213,10 @@ void test_execute_null_params(void) {
     linkrs_result_t* result = NULL;
     
     int rc = linkrs_execute(NULL, "SHOW SPACES", &result);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
     
     rc = linkrs_execute(NULL, NULL, &result);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
 }
 
 /* ==================== 结果处理测试 ==================== */
@@ -230,14 +230,14 @@ void test_result_metadata(void) {
     remove(db_path);
     
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_create(db, &session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     const char* query = "SHOW SPACES";
     rc = linkrs_execute(session, query, &result);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(result);
     
     /* 获取列数 */
@@ -249,13 +249,13 @@ void test_result_metadata(void) {
     ASSERT_TRUE(row_count >= 0);
     
     rc = linkrs_result_free(result);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_close(session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     remove(db_path);
 }
@@ -282,28 +282,28 @@ void test_transaction_begin_commit(void) {
     remove(db_path);
     
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_create(db, &session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 开始事务 */
     rc = linkrs_txn_begin(session, &txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(txn);
     
     /* 提交事务 */
     rc = linkrs_txn_commit(txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* Release transaction handle (void return) */
     linkrs_txn_free(txn);
     
     rc = linkrs_session_close(session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     remove(db_path);
 }
@@ -317,28 +317,28 @@ void test_transaction_begin_rollback(void) {
     remove(db_path);
     
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_create(db, &session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 开始事务 */
     rc = linkrs_txn_begin(session, &txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(txn);
     
     /* 回滚事务 */
     rc = linkrs_txn_rollback(txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* Release transaction handle (void return) */
     linkrs_txn_free(txn);
     
     rc = linkrs_session_close(session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     remove(db_path);
 }
@@ -347,10 +347,10 @@ void test_transaction_null_params(void) {
     linkrs_txn_t* txn = NULL;
     
     int rc = linkrs_txn_begin(NULL, &txn);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
     
     rc = linkrs_txn_begin(NULL, NULL);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
 }
 
 /* ==================== 批量操作测试 ==================== */
@@ -364,25 +364,25 @@ void test_batch_inserter_create_free(void) {
     remove(db_path);
     
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_create(db, &session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 创建批量插入器 */
     rc = linkrs_batch_inserter_create(session, 100, &batch);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(batch);
     
     /* 释放批量插入器 */
     rc = linkrs_batch_free(batch);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_session_close(session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     remove(db_path);
 }
@@ -391,10 +391,10 @@ void test_batch_null_params(void) {
     linkrs_batch_t* batch = NULL;
     
     int rc = linkrs_batch_inserter_create(NULL, 100, &batch);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
     
     rc = linkrs_batch_inserter_create(NULL, 100, NULL);
-    ASSERT_EQ(GRAPHDB_MISUSE, rc);
+    ASSERT_EQ(LINKRS_MISUSE, rc);
 }
 
 void test_batch_buffered_counts_null(void) {
@@ -408,7 +408,7 @@ void test_batch_buffered_counts_null(void) {
 /* ==================== 错误处理测试 ==================== */
 
 void test_errstr(void) {
-    const char* error_str = linkrs_errstr(GRAPHDB_OK);
+    const char* error_str = linkrs_errstr(LINKRS_OK);
     ASSERT_NOT_NULL(error_str);
     ASSERT_TRUE(strcmp(error_str, "OK") == 0);
 }
@@ -418,13 +418,13 @@ void test_error_codes(void) {
         int code;
         const char* expected_desc;
     } test_cases[] = {
-        {GRAPHDB_OK, "OK"},
-        {GRAPHDB_ERROR, "General error"},
-        {GRAPHDB_MISUSE, "Misuse"},
-        {GRAPHDB_NOTFOUND, "Not found"},
-        {GRAPHDB_IOERR, "IO error"},
-        {GRAPHDB_CORRUPT, "Data corruption"},
-        {GRAPHDB_NOMEM, "Out of memory"},
+        {LINKRS_OK, "OK"},
+        {LINKRS_ERROR, "General error"},
+        {LINKRS_MISUSE, "Misuse"},
+        {LINKRS_NOTFOUND, "Not found"},
+        {LINKRS_IOERR, "IO error"},
+        {LINKRS_CORRUPT, "Data corruption"},
+        {LINKRS_NOMEM, "Out of memory"},
     };
     
     for (size_t i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
@@ -468,18 +468,18 @@ void test_full_workflow(void) {
     
     /* 打开数据库 */
     int rc = linkrs_open(db_path, &db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(db);
     
     /* 创建会话 */
     rc = linkrs_session_create(db, &session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(session);
     
     /* 执行查询 */
     const char* query = "SHOW SPACES";
     rc = linkrs_execute(session, query, &result);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(result);
     
     /* 获取结果元数据 */
@@ -491,36 +491,36 @@ void test_full_workflow(void) {
     
     /* 释放结果 */
     rc = linkrs_result_free(result);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 开始事务 */
     rc = linkrs_txn_begin(session, &txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(txn);
     
     /* 提交事务 */
     rc = linkrs_txn_commit(txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* Release transaction handle (void return) */
     linkrs_txn_free(txn);
     
     /* Create batch inserter */
     rc = linkrs_batch_inserter_create(session, 100, &batch);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     ASSERT_NOT_NULL(batch);
     
     /* 释放批量插入器 */
     rc = linkrs_batch_free(batch);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 关闭会话 */
     rc = linkrs_session_close(session);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 关闭数据库 */
     rc = linkrs_close(db);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    ASSERT_EQ(LINKRS_OK, rc);
     
     /* 清理测试文件 */
     remove(db_path);

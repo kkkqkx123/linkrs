@@ -11,27 +11,27 @@ use std::ffi::{c_char, c_void};
 #[allow(non_camel_case_types)]
 pub enum linkrs_value_type_t {
     /// Null / empty value
-    GRAPHDB_NULL = 0,
+    LINKRS_NULL = 0,
     /// Boolean
-    GRAPHDB_BOOL = 1,
+    LINKRS_BOOL = 1,
     /// 64-bit signed integer
-    GRAPHDB_INT = 2,
+    LINKRS_INT = 2,
     /// Double-precision floating point
-    GRAPHDB_FLOAT = 3,
+    LINKRS_FLOAT = 3,
     /// UTF-8 string
-    GRAPHDB_STRING = 4,
+    LINKRS_STRING = 4,
     /// List
-    GRAPHDB_LIST = 5,
+    LINKRS_LIST = 5,
     /// Map / dictionary
-    GRAPHDB_MAP = 6,
+    LINKRS_MAP = 6,
     /// Vertex
-    GRAPHDB_VERTEX = 7,
+    LINKRS_VERTEX = 7,
     /// Edge
-    GRAPHDB_EDGE = 8,
+    LINKRS_EDGE = 8,
     /// Path
-    GRAPHDB_PATH = 9,
+    LINKRS_PATH = 9,
     /// Binary blob
-    GRAPHDB_BLOB = 10,
+    LINKRS_BLOB = 10,
 }
 
 /// Borrowed binary blob view; the data pointer is not owned by this struct.

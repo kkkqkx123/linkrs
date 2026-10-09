@@ -30,8 +30,8 @@ edition = "2021"
 rust-version = "1.88"
 authors = ["Linkrs Contributors"]
 license = "Apache-2.0"
-repository = "https://github.com/kkkqkx123/graphDB"
-homepage = "https://github.com/kkkqkx123/graphDB"
+repository = "https://github.com/kkkqkx123/linkrs"
+homepage = "https://github.com/kkkqkx123/linkrs"
 
 [workspace.dependencies]
 # serialization

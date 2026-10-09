@@ -2,7 +2,7 @@
 //!
 //! Provide database opening, closing and basic management functions
 
-use crate::embedded::c_api::config::GraphDbConfigHandle;
+use crate::embedded::c_api::config::LinkrsConfigHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
 };
@@ -14,7 +14,7 @@ use std::ptr;
 use std::sync::Arc;
 
 /// Database handle internal structure
-pub struct GraphDbHandle {
+pub struct LinkrsHandle {
     pub(crate) inner: Arc<GraphDatabase<GraphStorage>>,
     pub(crate) last_error: Option<CString>,
 }
@@ -26,7 +26,7 @@ pub struct GraphDbHandle {
 /// - `db`: Output parameter, database handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -38,28 +38,28 @@ pub struct GraphDbHandle {
 pub unsafe extern "C" fn linkrs_open(path: *const c_char, db: *mut *mut linkrs_t) -> c_int {
     // parameter verification
     if path.is_null() || db.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Converting path strings
     let path_str = unsafe {
         match CStr::from_ptr(path).to_str() {
             Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
         }
     };
 
     // Open database
     match GraphDatabase::open(path_str) {
         Ok(linkrs) => {
-            let handle = Box::new(GraphDbHandle {
+            let handle = Box::new(LinkrsHandle {
                 inner: Arc::new(linkrs),
                 last_error: None,
             });
             unsafe {
                 *db = Box::into_raw(handle) as *mut linkrs_t;
             }
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn linkrs_open(path: *const c_char, db: *mut *mut linkrs_t
 /// - `db`: Output parameter, database handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -96,20 +96,20 @@ pub unsafe extern "C" fn linkrs_open_with_config(
     db: *mut *mut linkrs_t,
 ) -> c_int {
     if config.is_null() || db.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let config_handle = &*(config as *mut GraphDbConfigHandle);
+    let config_handle = &*(config as *mut LinkrsConfigHandle);
     match GraphDatabase::open_with_config(config_handle.inner.clone()) {
         Ok(linkrs) => {
-            let handle = Box::new(GraphDbHandle {
+            let handle = Box::new(LinkrsHandle {
                 inner: Arc::new(linkrs),
                 last_error: None,
             });
             unsafe {
                 *db = Box::into_raw(handle) as *mut linkrs_t;
             }
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn linkrs_open_with_config(
 /// - `db`: Database handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -139,15 +139,15 @@ pub unsafe extern "C" fn linkrs_open_with_config(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_close(db: *mut linkrs_t) -> c_int {
     if db.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     unsafe {
         // Converts the original pointer back to a Box, which is automatically released at the end of the function.
-        let _ = Box::from_raw(db as *mut GraphDbHandle);
+        let _ = Box::from_raw(db as *mut LinkrsHandle);
     }
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Get Error Code
@@ -156,22 +156,22 @@ pub unsafe extern "C" fn linkrs_close(db: *mut linkrs_t) -> c_int {
 /// - `db`: Database handle
 ///
 /// # Returns
-/// - Error code, returns GRAPHDB_OK if no error
+/// - Error code, returns LINKRS_OK if no error
 ///
 /// # Safety
 /// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_errcode(db: *mut linkrs_t) -> c_int {
     if db.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     unsafe {
-        let handle = &*(db as *mut GraphDbHandle);
+        let handle = &*(db as *mut LinkrsHandle);
         if handle.last_error.is_some() {
-            linkrs_error_code_t::GRAPHDB_ERROR as c_int
+            linkrs_error_code_t::LINKRS_ERROR as c_int
         } else {
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
     }
 }
@@ -186,15 +186,15 @@ pub extern "C" fn linkrs_libversion() -> *const c_char {
     VERSION.as_ptr() as *const c_char
 }
 
-/// Release strings (strings allocated by GraphDB)
+/// Release strings (strings allocated by Linkrs)
 ///
 /// # Arguments
 /// - `str`: String pointer
 ///
 /// # Safety
-/// - `str` must be a valid pointer to a string allocated by GraphDB
+/// - `str` must be a valid pointer to a string allocated by Linkrs
 /// - After calling this function, the pointer becomes invalid and must not be used
-/// - This function should only be called on strings that were allocated by GraphDB C API functions
+/// - This function should only be called on strings that were allocated by Linkrs C API functions
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_free_string(str: *mut c_char) {
     if !str.is_null() {
@@ -204,15 +204,15 @@ pub unsafe extern "C" fn linkrs_free_string(str: *mut c_char) {
     }
 }
 
-/// Freeing memory (memory allocated by GraphDB)
+/// Freeing memory (memory allocated by Linkrs)
 ///
 /// # Arguments
 /// - `ptr`: Memory pointer
 ///
 /// # Safety
-/// - `ptr` must be a valid pointer to memory allocated by GraphDB
+/// - `ptr` must be a valid pointer to memory allocated by Linkrs
 /// - After calling this function, the pointer becomes invalid and must not be used
-/// - This function should only be called on memory that was allocated by GraphDB C API functions
+/// - This function should only be called on memory that was allocated by Linkrs C API functions
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_free(ptr: *mut c_void) {
     if !ptr.is_null() {
@@ -264,7 +264,7 @@ mod tests {
         let mut db: *mut linkrs_t = ptr::null_mut();
 
         let rc = unsafe { linkrs_open(path_cstring.as_ptr(), &mut db) };
-        if rc != linkrs_error_code_t::GRAPHDB_OK as c_int {
+        if rc != linkrs_error_code_t::LINKRS_OK as c_int {
             panic!(
                 "Failed to open database, error code: {}, path: {:?}",
                 rc, db_path
@@ -273,15 +273,15 @@ mod tests {
         assert!(!db.is_null());
 
         let rc = unsafe { linkrs_close(db) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
     }
 
     #[test]
     fn test_linkrs_null_params() {
         let rc = unsafe { linkrs_open(ptr::null(), ptr::null_mut()) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
 
         let rc = unsafe { linkrs_close(ptr::null_mut()) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
     }
 }

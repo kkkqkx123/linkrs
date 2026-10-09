@@ -20,7 +20,7 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 ### 1.2 Benchmark 项目结构
 
 ```
-graphDB/
+linkrs/
 ├── benches/                    # 基准测试目录
 │   ├── lib.rs                 # 基准测试导出
 │   ├── common/                # 共享工具

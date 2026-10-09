@@ -136,7 +136,7 @@ impl UtilityFunction {
                 "Return first argument if not NULL, otherwise second argument"
             }
             UtilityFunction::TypeOf => "Return the type name of a value",
-            UtilityFunction::Version => "Return the GraphDB version string",
+            UtilityFunction::Version => "Return the Linkrs version string",
             UtilityFunction::CurrentUser => "Return the current user name",
             UtilityFunction::CurrentDatabase => "Return the current database name",
             UtilityFunction::Corr => "Return the correlation coefficient of two lists",
@@ -601,7 +601,7 @@ fn execute_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_version(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::string("GraphDB 0.1.0"))
+    Ok(Value::string("Linkrs 0.1.0"))
 }
 
 fn execute_current_user(_args: &[Value]) -> Result<Value, ExpressionError> {

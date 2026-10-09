@@ -3,12 +3,12 @@ use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 use rustyline::Editor;
 
-use crate::completion::completer::GraphDBCompleter;
+use crate::completion::completer::LinkrsCompleter;
 use crate::input::history::{HistoryDedupPolicy, HistoryManager, HistorySavePolicy};
 use crate::utils::error::{CliError, Result};
 
 pub struct InputHandler {
-    editor: Editor<GraphDBCompleter, DefaultHistory>,
+    editor: Editor<LinkrsCompleter, DefaultHistory>,
     history_mgr: HistoryManager,
 }
 
@@ -25,7 +25,7 @@ impl InputHandler {
     }
 
     pub fn with_history_manager(mut history_mgr: HistoryManager) -> Result<Self> {
-        let completer = GraphDBCompleter::new();
+        let completer = LinkrsCompleter::new();
         let mut editor = Editor::new()
             .map_err(|e| CliError::Other(format!("Failed to create line editor: {}", e)))?;
 

@@ -8,7 +8,7 @@ use crate::storage::{
 
 use super::error::parse_session_id;
 use super::proto::*;
-use super::service::GraphDBService;
+use super::service::LinkrsService;
 
 fn require_session(value: &Option<String>) -> Result<i64, Status> {
     match value.as_deref().filter(|s| !s.is_empty()) {
@@ -26,7 +26,7 @@ impl<
             + Send
             + Sync
             + 'static,
-    > GraphDBService<S>
+    > LinkrsService<S>
 {
     pub(crate) async fn handle_open_cursor(
         &self,

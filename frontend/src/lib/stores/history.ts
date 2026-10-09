@@ -33,7 +33,7 @@ function generateId(): string {
 
 function loadPersisted(): { history: QueryHistoryItem[]; favorites: QueryFavoriteItem[] } {
 	try {
-		const saved = localStorage.getItem('graphdb-console-storage');
+		const saved = localStorage.getItem('linkrs-console-storage');
 		if (saved) {
 			const parsed = JSON.parse(saved);
 			return {
@@ -49,7 +49,7 @@ function loadPersisted(): { history: QueryHistoryItem[]; favorites: QueryFavorit
 
 function persist(history: QueryHistoryItem[], favorites: QueryFavoriteItem[]): void {
 	try {
-		localStorage.setItem('graphdb-console-storage', JSON.stringify({ history, favorites }));
+		localStorage.setItem('linkrs-console-storage', JSON.stringify({ history, favorites }));
 	} catch {
 		/* ignore */
 	}

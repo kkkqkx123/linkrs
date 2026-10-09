@@ -6,9 +6,9 @@ mod server_main {
     use linkrs_server::{execute_query, start_service_with_config_path};
 
     #[derive(Parser)]
-    #[clap(version = "0.1.0", author = "GraphDB Contributors")]
+    #[clap(version = "0.1.0", author = "Linkrs Contributors")]
     enum Cli {
-        /// Start the GraphDB service
+        /// Start the Linkrs service
         Serve {
             #[clap(short, long)]
             config: Option<String>,
@@ -25,7 +25,7 @@ mod server_main {
 
         let result = match cli {
             Cli::Serve { config } => {
-                println!("Starting GraphDB service");
+                println!("Starting Linkrs service");
                 println!("Process ID: {}", std::process::id());
 
                 // Load configuration, retaining the file path for

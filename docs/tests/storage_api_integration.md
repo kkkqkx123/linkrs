@@ -76,7 +76,7 @@
 
 ### StorageClient Trait
 
-`StorageClient` 是存储层的统一接口，定义在 [`src/storage/storage_client.rs`](file:///d:/项目/database/graphDB/src/storage/storage_client.rs)：
+`StorageClient` 是存储层的统一接口，定义在 [`src/storage/storage_client.rs`](file:///d:/项目/database/linkrs/src/storage/storage_client.rs)：
 
 ```rust
 pub trait StorageClient: Send + Sync + std::fmt::Debug {
@@ -105,7 +105,7 @@ pub trait StorageClient: Send + Sync + std::fmt::Debug {
 
 `RedbStorage` 实现了 `StorageClient` trait，提供基于 Redb 的持久化存储：
 
-**实现位置**：[`src/storage/redb_storage.rs`](file:///d:/项目/database/graphDB/src/storage/redb_storage.rs#L253-L680)
+**实现位置**：[`src/storage/redb_storage.rs`](file:///d:/项目/database/linkrs/src/storage/redb_storage.rs#L253-L680)
 
 ```rust
 impl StorageClient for RedbStorage {
@@ -306,7 +306,7 @@ tests/
 
 #### 1. TestStorage
 
-位置：[`tests/common/mod.rs`](file:///d:/项目/database/graphDB/tests/common/mod.rs#L28-L58)
+位置：[`tests/common/mod.rs`](file:///d:/项目/database/linkrs/tests/common/mod.rs#L28-L58)
 
 ```rust
 pub struct TestStorage {
@@ -333,7 +333,7 @@ impl TestStorage {
 
 #### 2. get_storage
 
-位置：[`tests/common/storage_helpers.rs`](file:///d:/项目/database/graphDB/tests/common/storage_helpers.rs#L51-L57)
+位置：[`tests/common/storage_helpers.rs`](file:///d:/项目/database/linkrs/tests/common/storage_helpers.rs#L51-L57)
 
 ```rust
 pub fn get_storage(
@@ -347,7 +347,7 @@ pub fn get_storage(
 
 #### 3. create_test_space
 
-位置：[`tests/common/storage_helpers.rs`](file:///d:/项目/database/graphDB/tests/common/storage_helpers.rs#L11-L15)
+位置：[`tests/common/storage_helpers.rs`](file:///d:/项目/database/linkrs/tests/common/storage_helpers.rs#L11-L15)
 
 ```rust
 pub fn create_test_space(name: &str) -> SpaceInfo {
@@ -359,7 +359,7 @@ pub fn create_test_space(name: &str) -> SpaceInfo {
 
 #### 4. person_tag_info
 
-位置：[`tests/common/storage_helpers.rs`](file:///d:/项目/database/graphDB/tests/common/storage_helpers.rs#L37-L43)
+位置：[`tests/common/storage_helpers.rs`](file:///d:/项目/database/linkrs/tests/common/storage_helpers.rs#L37-L43)
 
 ```rust
 pub fn person_tag_info() -> TagInfo {

@@ -9,8 +9,8 @@ use linkrs_core::error::StorageError;
 use linkrs_core::StorageResult;
 use std::path::Path;
 
-/// Magic bytes identifying GraphDB persistence files
-pub const PERSISTENCE_MAGIC: [u8; 4] = *b"GRDB";
+/// Magic bytes identifying Linkrs persistence files
+pub const PERSISTENCE_MAGIC: [u8; 4] = *b"LKRS";
 
 /// Header size in bytes: magic(4) + section_id(4) = 8
 pub const HEADER_SIZE: usize = 8;

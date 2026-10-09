@@ -3,7 +3,7 @@
 //! Provides:
 //! - `SpillConfig / SpillManager`: temp-file lifecycle management
 //! - `SpilledRun / RunWriter / RunReader`: the single spill file format —
-//!   columnar v2 run (`GRSC`): versioned header, schema fingerprint,
+//!   columnar v2 run (`LRSC`): versioned header, schema fingerprint,
 //!   per-section checksums, optional per-section zstd body (columns are
 //!   contiguous postcard-encoded value slices, one section per column group)
 //! - `HashPartitionSpiller`: per-partition run writers
@@ -57,9 +57,8 @@ pub const HASH_JOIN_MAX_DEPTH: u32 = 3;
 
 // ── Run file format constants ───────────────────────────────────────────────
 
-/// Magic bytes at the start of every spill run file: `GRSC` = GraphDB Run
-/// Spill Columnar. The legacy row-major `GRSP` format is rejected.
-const RUN_MAGIC: [u8; 4] = [0x47, 0x52, 0x53, 0x43];
+/// Magic bytes at the start of every spill run file: `LRSC` = Linkrs Run
+const RUN_MAGIC: [u8; 4] = [0x4C, 0x52, 0x53, 0x43];
 
 /// Current run file format version (columnar v2).
 const RUN_VERSION: u32 = 3;
@@ -105,7 +104,7 @@ pub enum RunCompression {
 ///
 /// Layout (48 bytes total):
 /// ```text
-/// [0..4)   magic: b"GRSC"
+/// [0..4)   magic: b"LRSC"
 /// [4..8)   version: u32 LE (= 3)
 /// [8..16)  schema_fingerprint: u64 LE
 /// [16..24) row_count: u64 LE

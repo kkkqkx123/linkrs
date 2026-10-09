@@ -11,7 +11,7 @@ use crate::storage::{
 };
 
 use super::proto::*;
-use super::service::GraphDBService;
+use super::service::LinkrsService;
 
 #[allow(dead_code)]
 fn http_status(error: HttpError) -> Status {
@@ -34,7 +34,7 @@ impl<
             + Send
             + Sync
             + 'static,
-    > GraphDBService<S>
+    > LinkrsService<S>
 {
     pub(crate) async fn handle_rebuild_fulltext_index(
         &self,

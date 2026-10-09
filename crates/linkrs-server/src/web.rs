@@ -1,6 +1,6 @@
 //! Web Management Module
 //!
-//! Provides Web management interface API for GraphDB frontend:
+//! Provides Web management interface API for Linkrs frontend:
 //! - Query history management
 //! - Query favorites management
 //! - Extended Schema management

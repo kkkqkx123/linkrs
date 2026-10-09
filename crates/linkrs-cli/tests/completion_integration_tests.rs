@@ -1,4 +1,4 @@
-use linkrs_cli::completion::completer::GraphDBCompleter;
+use linkrs_cli::completion::completer::LinkrsCompleter;
 use linkrs_cli::completion::context::{
     detect_context, get_function_completions, new_shared_cache, CompletionContext,
     FunctionCategory, FunctionEntry, SchemaCache,
@@ -219,7 +219,7 @@ fn test_function_entry_integration() {
 
 #[test]
 fn test_linkrs_completer_integration() {
-    let mut completer = GraphDBCompleter::new();
+    let mut completer = LinkrsCompleter::new();
 
     let vars = Arc::new(Mutex::new(HashMap::new()));
     completer.set_variables(vars.clone());
@@ -230,7 +230,7 @@ fn test_linkrs_completer_integration() {
 
 #[test]
 fn test_linkrs_completer_default_integration() {
-    let completer: GraphDBCompleter = Default::default();
+    let completer: LinkrsCompleter = Default::default();
     let _ = completer;
 }
 

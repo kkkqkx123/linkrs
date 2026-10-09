@@ -28,7 +28,7 @@ use std::str::FromStr;
 
 /// Decimal128 Value Wrapper
 ///
-/// Wraps the `dec::Decimal128` type to provide integration with the GraphDB type system.
+/// Wraps the `dec::Decimal128` type to provide integration with the Linkrs type system.
 ///
 /// ## Example
 ///

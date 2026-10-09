@@ -3,7 +3,7 @@
 //! Provides batch operation functions, supporting batch insert, batch update, and batch delete
 
 use crate::embedded::c_api::error::{linkrs_error_code_t, set_last_error_message};
-use crate::embedded::c_api::session::GraphDbSessionHandle;
+use crate::embedded::c_api::session::LinkrsSessionHandle;
 use crate::embedded::c_api::types::{linkrs_batch_t, linkrs_session_t, linkrs_value_t};
 use linkrs_core::types::VertexId;
 use linkrs_core::vertex_edge_path::Tag;
@@ -21,9 +21,9 @@ enum BatchItem {
 ///
 /// Note: This structure holds the session pointer, but does not own the session.
 /// The caller must ensure that the session is not closed until the batch operation handle is released.
-pub struct GraphDbBatchHandle {
+pub struct LinkrsBatchHandle {
     /// Associated session pointer (used to verify session validity)
-    session_ptr: *mut GraphDbSessionHandle,
+    session_ptr: *mut LinkrsSessionHandle,
     /// Batch size
     batch_size: usize,
     /// Buffer
@@ -36,14 +36,14 @@ pub struct GraphDbBatchHandle {
     errors: Vec<String>,
 }
 
-impl GraphDbBatchHandle {
+impl LinkrsBatchHandle {
     /// Check if the session is still active
     fn is_session_valid(&self) -> bool {
         !self.session_ptr.is_null()
     }
 
     /// Get session reference (if valid)
-    fn get_session(&self) -> Option<&GraphDbSessionHandle> {
+    fn get_session(&self) -> Option<&LinkrsSessionHandle> {
         if self.is_session_valid() {
             Some(unsafe { &*self.session_ptr })
         } else {
@@ -159,7 +159,7 @@ impl GraphDbBatchHandle {
 /// - `batch`: output parameter, batch operation handle
 ///
 /// # Returns
-/// Success: GRAPHDB_OK
+/// Success: LINKRS_OK
 /// Failure: Error code
 ///
 /// # Safety
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn linkrs_batch_inserter_create(
     batch: *mut *mut linkrs_batch_t,
 ) -> c_int {
     if session.is_null() || batch.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let size = if batch_size <= 0 {
@@ -185,8 +185,8 @@ pub unsafe extern "C" fn linkrs_batch_inserter_create(
         batch_size as usize
     };
 
-    let handle = Box::new(GraphDbBatchHandle {
-        session_ptr: session as *mut GraphDbSessionHandle,
+    let handle = Box::new(LinkrsBatchHandle {
+        session_ptr: session as *mut LinkrsSessionHandle,
         batch_size: size,
         buffer: Vec::new(),
         vertices_inserted: 0,
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn linkrs_batch_inserter_create(
     });
 
     *batch = Box::into_raw(handle) as *mut linkrs_batch_t;
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Free batch operation handle
@@ -210,10 +210,10 @@ pub unsafe extern "C" fn linkrs_batch_inserter_create(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_batch_free(batch: *mut linkrs_batch_t) -> c_int {
     if batch.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
-    let _ = Box::from_raw(batch as *mut GraphDbBatchHandle);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    let _ = Box::from_raw(batch as *mut LinkrsBatchHandle);
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Add a vertex to the batch
@@ -224,7 +224,7 @@ pub unsafe extern "C" fn linkrs_batch_free(batch: *mut linkrs_batch_t) -> c_int 
 /// - `tags`: single tag name (exactly one label is required)
 ///
 /// # Returns
-/// Success: GRAPHDB_OK
+/// Success: LINKRS_OK
 /// Failure: Error code
 ///
 /// # Safety
@@ -239,30 +239,30 @@ pub unsafe extern "C" fn linkrs_batch_add_vertex(
     tags: *const c_char,
 ) -> c_int {
     if batch.is_null() || vid.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(batch as *mut GraphDbBatchHandle);
+    let handle = &mut *(batch as *mut LinkrsBatchHandle);
 
     // Check if session is valid
     if !handle.is_session_valid() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Convert C value to core Value
     let vid_value = unsafe { super::value::linkrs_value_to_core(vid) };
     let vid_id = match value_to_vertex_id(&vid_value) {
         Some(id) => id,
-        None => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
     // Parse the single tag: exactly one non-empty label is required.
     if tags.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
     let tags_str = match unsafe { CStr::from_ptr(tags).to_str() } {
         Ok(s) => s,
-        Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
     let mut tag_names = tags_str
         .split(',')
@@ -270,7 +270,7 @@ pub unsafe extern "C" fn linkrs_batch_add_vertex(
         .filter(|s| !s.is_empty());
     let single_tag = match (tag_names.next(), tag_names.next()) {
         (Some(name), None) => name.to_string(),
-        _ => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        _ => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
     // Create vertex
@@ -281,11 +281,11 @@ pub unsafe extern "C" fn linkrs_batch_add_vertex(
     if handle.buffer.len() >= handle.batch_size {
         if let Err(e) = handle.execute() {
             set_last_error_message(e);
-            return linkrs_error_code_t::GRAPHDB_ERROR as c_int;
+            return linkrs_error_code_t::LINKRS_ERROR as c_int;
         }
     }
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Add an edge to the batch
@@ -297,7 +297,7 @@ pub unsafe extern "C" fn linkrs_batch_add_vertex(
 /// - `edge_type`: edge type
 ///
 /// # Returns
-/// Success: GRAPHDB_OK
+/// Success: LINKRS_OK
 /// Failure: Error code
 ///
 /// # Safety
@@ -312,14 +312,14 @@ pub unsafe extern "C" fn linkrs_batch_add_edge(
     edge_type: *const c_char,
 ) -> c_int {
     if batch.is_null() || src_vid.is_null() || dst_vid.is_null() || edge_type.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(batch as *mut GraphDbBatchHandle);
+    let handle = &mut *(batch as *mut LinkrsBatchHandle);
 
     // Check if session is valid
     if !handle.is_session_valid() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Convert C values to core Values
@@ -327,17 +327,17 @@ pub unsafe extern "C" fn linkrs_batch_add_edge(
     let dst_value = unsafe { super::value::linkrs_value_to_core(dst_vid) };
     let src_id = match value_to_vertex_id(&src_value) {
         Some(id) => id,
-        None => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
     let dst_id = match value_to_vertex_id(&dst_value) {
         Some(id) => id,
-        None => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
     // Get edge type
     let edge_type_str = match CStr::from_ptr(edge_type).to_str() {
         Ok(s) => s.to_string(),
-        Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
     // Create edge
@@ -348,11 +348,11 @@ pub unsafe extern "C" fn linkrs_batch_add_edge(
     if handle.buffer.len() >= handle.batch_size {
         if let Err(e) = handle.execute() {
             set_last_error_message(e);
-            return linkrs_error_code_t::GRAPHDB_ERROR as c_int;
+            return linkrs_error_code_t::LINKRS_ERROR as c_int;
         }
     }
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Execute batch operation (flush all buffered data)
@@ -361,7 +361,7 @@ pub unsafe extern "C" fn linkrs_batch_add_edge(
 /// - `batch`: batch operation handle
 ///
 /// # Returns
-/// Success: GRAPHDB_OK
+/// Success: LINKRS_OK
 /// Failure: Error code
 ///
 /// # Safety
@@ -369,22 +369,22 @@ pub unsafe extern "C" fn linkrs_batch_add_edge(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_batch_execute(batch: *mut linkrs_batch_t) -> c_int {
     if batch.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(batch as *mut GraphDbBatchHandle);
+    let handle = &mut *(batch as *mut LinkrsBatchHandle);
 
     // Check if session is valid
     if !handle.is_session_valid() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     if let Err(e) = handle.execute() {
         set_last_error_message(e);
-        return linkrs_error_code_t::GRAPHDB_ERROR as c_int;
+        return linkrs_error_code_t::LINKRS_ERROR as c_int;
     }
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Get the number of vertices inserted
@@ -394,7 +394,7 @@ pub unsafe extern "C" fn linkrs_batch_execute(batch: *mut linkrs_batch_t) -> c_i
 /// - `count`: output parameter
 ///
 /// # Returns
-/// Success: GRAPHDB_OK
+/// Success: LINKRS_OK
 /// Failure: Error code
 ///
 /// # Safety
@@ -406,13 +406,13 @@ pub unsafe extern "C" fn linkrs_batch_vertices_inserted(
     count: *mut c_int,
 ) -> c_int {
     if batch.is_null() || count.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(batch as *mut GraphDbBatchHandle);
+    let handle = &*(batch as *mut LinkrsBatchHandle);
     *count = handle.vertices_inserted as c_int;
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Get the number of edges inserted
@@ -422,7 +422,7 @@ pub unsafe extern "C" fn linkrs_batch_vertices_inserted(
 /// - `count`: output parameter
 ///
 /// # Returns
-/// Success: GRAPHDB_OK
+/// Success: LINKRS_OK
 /// Failure: Error code
 ///
 /// # Safety
@@ -434,13 +434,13 @@ pub unsafe extern "C" fn linkrs_batch_edges_inserted(
     count: *mut c_int,
 ) -> c_int {
     if batch.is_null() || count.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(batch as *mut GraphDbBatchHandle);
+    let handle = &*(batch as *mut LinkrsBatchHandle);
     *count = handle.edges_inserted as c_int;
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Get the number of buffered vertices
@@ -456,7 +456,7 @@ pub unsafe extern "C" fn linkrs_batch_buffered_vertices(batch: *mut linkrs_batch
         return -1;
     }
 
-    let handle = &*(batch as *mut GraphDbBatchHandle);
+    let handle = &*(batch as *mut LinkrsBatchHandle);
     handle
         .buffer
         .iter()
@@ -477,7 +477,7 @@ pub unsafe extern "C" fn linkrs_batch_buffered_edges(batch: *mut linkrs_batch_t)
         return -1;
     }
 
-    let handle = &*(batch as *mut GraphDbBatchHandle);
+    let handle = &*(batch as *mut LinkrsBatchHandle);
     handle
         .buffer
         .iter()
@@ -504,7 +504,7 @@ mod tests {
         let result = unsafe {
             linkrs_batch_inserter_create(std::ptr::null_mut(), 100, std::ptr::null_mut())
         };
-        assert_eq!(result, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(result, linkrs_error_code_t::LINKRS_MISUSE as c_int);
     }
 
     #[test]

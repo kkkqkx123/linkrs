@@ -60,7 +60,7 @@ function generateId(): string {
 
 function loadPersisted(): Partial<ConsoleState> {
 	try {
-		const saved = localStorage.getItem('graphdb-console-storage');
+		const saved = localStorage.getItem('linkrs-console-storage');
 		if (saved) return JSON.parse(saved);
 	} catch {
 		/* ignore */
@@ -70,7 +70,7 @@ function loadPersisted(): Partial<ConsoleState> {
 
 function persist(state: ConsoleState): void {
 	try {
-		localStorage.setItem('graphdb-console-storage', JSON.stringify({
+		localStorage.setItem('linkrs-console-storage', JSON.stringify({
 			activeView: state.activeView,
 			executionPreference: state.executionPreference,
 			autoStreamThreshold: state.autoStreamThreshold,
@@ -119,15 +119,15 @@ function loadBindings(key: string): Record<string, unknown> {
 
 export function createConsoleStore() {
 	const { subscribe, update } = writable<ConsoleState>({
-		editorContent: localStorage.getItem('graphdb_editor_draft') || '',
+		editorContent: localStorage.getItem('linkrs_editor_draft') || '',
 		isExecuting: false,
 		currentResult: null,
 		results: [],
 		executionTime: 0,
 		error: null,
 		activeView: (persisted.activeView as 'table' | 'json' | 'graph') || 'table',
-		parameters: loadBindings('graphdb_console_parameters'),
-		sessionVariables: loadBindings('graphdb_console_session_variables'),
+		parameters: loadBindings('linkrs_console_parameters'),
+		sessionVariables: loadBindings('linkrs_console_session_variables'),
 		resultMode: null,
 		executionPreference: restorePreference(),
 		autoStreamThreshold: clampAutoThreshold(
@@ -340,12 +340,12 @@ export function createConsoleStore() {
 		subscribe,
 		setEditorContent: (content: string) => {
 			update((s) => ({ ...s, editorContent: content }));
-			localStorage.setItem('graphdb_editor_draft', content);
+			localStorage.setItem('linkrs_editor_draft', content);
 		},
 		setParameters: (parameters: Record<string, unknown>) => {
 			update((s) => ({ ...s, parameters }));
 			try {
-				localStorage.setItem('graphdb_console_parameters', JSON.stringify(parameters));
+				localStorage.setItem('linkrs_console_parameters', JSON.stringify(parameters));
 			} catch {
 				/* ignore */
 			}
@@ -353,7 +353,7 @@ export function createConsoleStore() {
 		setSessionVariables: (sessionVariables: Record<string, unknown>) => {
 			update((s) => ({ ...s, sessionVariables }));
 			try {
-				localStorage.setItem('graphdb_console_session_variables', JSON.stringify(sessionVariables));
+				localStorage.setItem('linkrs_console_session_variables', JSON.stringify(sessionVariables));
 			} catch {
 				/* ignore */
 			}

@@ -307,7 +307,7 @@ fn test_is_statement_complete_integration() {
 fn test_show_help_integration() {
     let general_help = show_help(None);
     assert!(!general_help.is_empty());
-    assert!(general_help.contains("GraphDB"));
+    assert!(general_help.contains("Linkrs"));
 
     let topics = vec![
         "match",
@@ -337,11 +337,11 @@ fn test_show_help_integration() {
 #[test]
 fn test_show_version_and_copyright() {
     let version = show_version();
-    assert!(version.contains("GraphDB"));
+    assert!(version.contains("Linkrs"));
     assert!(version.contains("v"));
 
     let copyright = show_copyright();
-    assert!(copyright.contains("GraphDB"));
+    assert!(copyright.contains("Linkrs"));
     assert!(copyright.contains("Copyright"));
     assert!(copyright.contains("License"));
 }

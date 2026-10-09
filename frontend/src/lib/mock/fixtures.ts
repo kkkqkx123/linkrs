@@ -97,7 +97,7 @@ export const demoVertices: MockVertex[] = [
 	{
 		id: '9007199254740996',
 		tag: 'company',
-		properties: { title: 'GraphDB Inc.' },
+		properties: { title: 'Linkrs Inc.' },
 	},
 ];
 

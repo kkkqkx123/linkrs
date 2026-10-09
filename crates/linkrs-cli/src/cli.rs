@@ -4,8 +4,8 @@ use clap::Parser;
 #[clap(
     name = "linkrs-cli",
     version = env!("CARGO_PKG_VERSION"),
-    about = "GraphDB CLI - Interactive command-line client for GraphDB",
-    long_about = "GraphDB CLI is an interactive command-line client for GraphDB,\
+    about = "Linkrs CLI - Interactive command-line client for Linkrs",
+    long_about = "Linkrs CLI is an interactive command-line client for Linkrs,\
                   similar to PostgreSQL's psql. It supports GQL query execution,\
                   schema inspection, and various output formats."
 )]

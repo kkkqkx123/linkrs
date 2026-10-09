@@ -11,7 +11,7 @@ use crate::storage::{
 use super::convert::{proto_value_to_core, value_to_proto_value};
 use super::error::parse_session_id;
 use super::proto::*;
-use super::service::{ExecuteQueryStreamStream, GraphDBService};
+use super::service::{ExecuteQueryStreamStream, LinkrsService};
 
 impl<
         S: StorageClient
@@ -22,7 +22,7 @@ impl<
             + Send
             + Sync
             + 'static,
-    > GraphDBService<S>
+    > LinkrsService<S>
 {
     pub(crate) async fn handle_execute_query(
         &self,
@@ -295,7 +295,7 @@ impl<
             + Send
             + Sync
             + 'static,
-    > GraphDBService<S>
+    > LinkrsService<S>
 {
     pub(crate) async fn handle_execute_batch_query(
         &self,

@@ -1,7 +1,7 @@
 // Compile-time protobuf code generation for the gRPC layer.
 //
 // Source contracts live in the workspace `proto/` directory:
-// - `linkrs.proto` for the client-facing GraphDB service.
+// - `linkrs.proto` for the client-facing Linkrs service.
 //
 // `tonic-build` regenerates the Rust bindings into OUT_DIR whenever a proto
 // changes; `crate::grpc::proto` pulls them in via `tonic::include_proto!`.

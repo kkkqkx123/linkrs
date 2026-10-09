@@ -12,7 +12,7 @@ fn show_general_help() -> String {
 
     output.push_str(&format!(
         "\n{}\n",
-        "GraphDB CLI - Meta Commands".cyan().bold()
+        "Linkrs CLI - Meta Commands".cyan().bold()
     ));
     output.push_str(&"─".repeat(50).dimmed());
     output.push('\n');
@@ -266,7 +266,7 @@ fn show_general_help() -> String {
         "  {:25} {}\n",
         "\\copyright", "Show copyright information"
     ));
-    output.push_str(&format!("  {:25} {}\n", "\\q", "Quit GraphDB CLI"));
+    output.push_str(&format!("  {:25} {}\n", "\\q", "Quit Linkrs CLI"));
 
     output.push('\n');
     output
@@ -540,14 +540,14 @@ Example:
 
 pub fn show_version() -> String {
     format!(
-        "GraphDB CLI v{}\nGraphDB - A lightweight single-node graph database",
+        "Linkrs CLI v{}\nLinkrs - A lightweight single-node graph database",
         env!("CARGO_PKG_VERSION")
     )
 }
 
 pub fn show_copyright() -> String {
-    "GraphDB CLI\n\
-     Copyright (c) 2024 GraphDB Contributors\n\
+    "Linkrs CLI\n\
+     Copyright (c) 2024 Linkrs Contributors\n\
      Licensed under the Apache License, Version 2.0"
         .to_string()
 }
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn test_show_help_general() {
         let help = show_help(None);
-        assert!(help.contains("GraphDB CLI"));
+        assert!(help.contains("Linkrs CLI"));
         assert!(help.contains("Connection"));
         assert!(help.contains("Object Inspection"));
         assert!(help.contains("Output Format"));
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn test_show_version() {
         let version = show_version();
-        assert!(version.contains("GraphDB CLI"));
+        assert!(version.contains("Linkrs CLI"));
         assert!(version.contains("v"));
         assert!(version.contains("graph database"));
     }
@@ -694,7 +694,7 @@ mod tests {
     #[test]
     fn test_show_copyright() {
         let copyright = show_copyright();
-        assert!(copyright.contains("GraphDB CLI"));
+        assert!(copyright.contains("Linkrs CLI"));
         assert!(copyright.contains("Copyright"));
         assert!(copyright.contains("Apache License"));
     }

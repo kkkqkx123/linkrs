@@ -18,7 +18,7 @@
 
 ```powershell
 # 1. 进入项目目录
-cd d:\项目\database\graphDB
+cd d:\项目\database\linkrs
 
 # 2. 运行服务器启动测试
 python tests\server_startup_test.py
@@ -65,7 +65,7 @@ Total: 7 tests, 7 passed, 0 failed
 
 ```powershell
 # 1. 进入项目目录
-cd d:\项目\database\graphDB
+cd d:\项目\database\linkrs
 
 # 2. 运行 E2E 基础验证
 python tests\e2e_verify.py
@@ -109,7 +109,7 @@ Total: 5/5 steps passed
 
 ```powershell
 # 1. 进入项目目录
-cd d:\项目\database\graphDB
+cd d:\项目\database\linkrs
 
 # 2. 确保没有残留的服务器进程
 Get-Process linkrs-server -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -150,7 +150,7 @@ Get-Process linkrs-server -ErrorAction SilentlyContinue | Stop-Process -Force
 
 ```powershell
 # 1. 进入项目目录
-cd d:\项目\database\graphDB
+cd d:\项目\database\linkrs
 
 # 2. 停止现有服务器
 Get-Process linkrs-server -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -181,7 +181,7 @@ python tests\e2e_verify.py
 
 ```powershell
 # 1. 进入项目目录
-cd d:\项目\database\graphDB
+cd d:\项目\database\linkrs
 
 # 2. 生成测试数据
 python scripts\generate_e2e_data.py --output-dir tests\e2e\data

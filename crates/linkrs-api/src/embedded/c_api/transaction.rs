@@ -6,8 +6,8 @@ use crate::api_core::types::TransactionHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
 };
-use crate::embedded::c_api::result::GraphDbResultHandle;
-use crate::embedded::c_api::session::GraphDbSessionHandle;
+use crate::embedded::c_api::result::LinkrsResultHandle;
+use crate::embedded::c_api::session::LinkrsSessionHandle;
 use crate::embedded::c_api::types::{linkrs_result_t, linkrs_session_t, linkrs_txn_t};
 use std::ffi::{c_char, c_int, CStr};
 use std::ptr;
@@ -16,21 +16,21 @@ use std::ptr;
 ///
 /// Note: This structure holds the session pointer, but does not own the session.
 /// The caller must ensure that the session is not closed until the transaction completes.
-pub struct GraphDbTxnHandle {
-    pub(crate) session: *mut GraphDbSessionHandle,
+pub struct LinkrsTxnHandle {
+    pub(crate) session: *mut LinkrsSessionHandle,
     pub(crate) txn_handle: Option<TransactionHandle>,
     pub(crate) committed: bool,
     pub(crate) rolled_back: bool,
 }
 
-impl GraphDbTxnHandle {
+impl LinkrsTxnHandle {
     /// Check if the session is still active
     fn is_session_valid(&self) -> bool {
         !self.session.is_null()
     }
 
     /// Get session reference (if valid)
-    fn get_session(&self) -> Option<&GraphDbSessionHandle> {
+    fn get_session(&self) -> Option<&LinkrsSessionHandle> {
         if self.is_session_valid() {
             Some(unsafe { &*self.session })
         } else {
@@ -39,7 +39,7 @@ impl GraphDbTxnHandle {
     }
 }
 
-impl Drop for GraphDbTxnHandle {
+impl Drop for LinkrsTxnHandle {
     fn drop(&mut self) {
         if !self.committed && !self.rolled_back {
             if let Some(txn_handle) = self.txn_handle.take() {
@@ -59,7 +59,7 @@ impl Drop for GraphDbTxnHandle {
 /// - `txn`: output parameter, transaction handle
 ///
 /// # Return
-/// Success: GRAPHDB_OK
+/// Success: LINKRS_OK
 /// Failure: Error code
 ///
 /// # Safety
@@ -73,29 +73,29 @@ pub unsafe extern "C" fn linkrs_txn_begin(
     txn: *mut *mut linkrs_txn_t,
 ) -> c_int {
     if session.is_null() || txn.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
 
     // Use embedded session API instead of direct TransactionManager access
     match handle.inner.begin_transaction() {
         Ok(transaction) => {
             let txn_handle = transaction.txn_handle();
-            let txn_handle_box = Box::new(GraphDbTxnHandle {
-                session: session as *mut GraphDbSessionHandle,
+            let txn_handle_box = Box::new(LinkrsTxnHandle {
+                session: session as *mut LinkrsSessionHandle,
                 txn_handle: Some(txn_handle),
                 committed: false,
                 rolled_back: false,
             });
             // Leak the transaction to prevent Drop from being called
-            // The transaction lifecycle is now managed by GraphDbTxnHandle
+            // The transaction lifecycle is now managed by LinkrsTxnHandle
             std::mem::forget(transaction);
             *txn = Box::into_raw(txn_handle_box) as *mut linkrs_txn_t;
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) => {
-            let error_code = linkrs_error_code_t::GRAPHDB_ABORT as c_int;
+            let error_code = linkrs_error_code_t::LINKRS_ABORT as c_int;
             let error_msg = format!("{}", e);
             set_last_error_message(error_msg);
             *txn = ptr::null_mut();
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn linkrs_txn_begin(
 /// - `txn`: Output parameter, transaction handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -125,28 +125,28 @@ pub unsafe extern "C" fn linkrs_txn_begin_readonly(
     txn: *mut *mut linkrs_txn_t,
 ) -> c_int {
     if session.is_null() || txn.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
 
     // Use embedded session API with read-only config
     let config = crate::embedded::TransactionConfig::new().read_only();
     match handle.inner.begin_transaction_with_config(config) {
         Ok(transaction) => {
             let txn_handle = transaction.txn_handle();
-            let txn_handle_box = Box::new(GraphDbTxnHandle {
-                session: session as *mut GraphDbSessionHandle,
+            let txn_handle_box = Box::new(LinkrsTxnHandle {
+                session: session as *mut LinkrsSessionHandle,
                 txn_handle: Some(txn_handle),
                 committed: false,
                 rolled_back: false,
             });
             std::mem::forget(transaction);
             *txn = Box::into_raw(txn_handle_box) as *mut linkrs_txn_t;
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) => {
-            let error_code = linkrs_error_code_t::GRAPHDB_ABORT as c_int;
+            let error_code = linkrs_error_code_t::LINKRS_ABORT as c_int;
             let error_msg = format!("{}", e);
             set_last_error_message(error_msg);
             *txn = ptr::null_mut();
@@ -163,7 +163,7 @@ pub unsafe extern "C" fn linkrs_txn_begin_readonly(
 /// - `result`: Output parameter, result set handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -179,29 +179,29 @@ pub unsafe extern "C" fn linkrs_txn_execute(
     result: *mut *mut linkrs_result_t,
 ) -> c_int {
     if txn.is_null() || query.is_null() || result.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let query_str = match CStr::from_ptr(query).to_str() {
         Ok(s) => s,
-        Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
-    let handle = &mut *(txn as *mut GraphDbTxnHandle);
+    let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Checking session validity
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return linkrs_error_code_t::GRAPHDB_INTERNAL as c_int,
+        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
     };
 
     let ctx = crate::api_core::QueryRequest {
@@ -221,11 +221,11 @@ pub unsafe extern "C" fn linkrs_txn_execute(
     match query_api.execute(query_str, ctx) {
         Ok(core_result) => {
             let query_result = crate::embedded::result::QueryResult::from_core(core_result);
-            let result_handle = Box::new(GraphDbResultHandle {
+            let result_handle = Box::new(LinkrsResultHandle {
                 inner: query_result,
             });
             *result = Box::into_raw(result_handle) as *mut linkrs_result_t;
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
@@ -243,7 +243,7 @@ pub unsafe extern "C" fn linkrs_txn_execute(
 /// - `txn`: Transaction handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -254,18 +254,18 @@ pub unsafe extern "C" fn linkrs_txn_execute(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_txn_commit(txn: *mut linkrs_txn_t) -> c_int {
     if txn.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(txn as *mut GraphDbTxnHandle);
+    let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Check session validity first (only check pointer, don't borrow)
     if !handle.is_session_valid() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Get session pointer for later use
@@ -285,21 +285,21 @@ pub unsafe extern "C" fn linkrs_txn_commit(txn: *mut linkrs_txn_t) -> c_int {
     // the historical pre-commit veto behavior.
     let txn_id = match handle.txn_handle.as_ref() {
         Some(h) => h.0,
-        None => return linkrs_error_code_t::GRAPHDB_INTERNAL as c_int,
+        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
     };
     let result = session.inner.txn_manager().commit_transaction(txn_id);
     match result {
         Ok(_) => {
             handle.txn_handle.take();
             handle.committed = true;
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) if e.kind() == linkrs_transaction::TransactionErrorKind::CommitVetoed => {
             linkrs_txn_rollback(txn)
         }
         Err(e) => {
             handle.txn_handle.take();
-            let error_code = linkrs_error_code_t::GRAPHDB_ABORT as c_int;
+            let error_code = linkrs_error_code_t::LINKRS_ABORT as c_int;
             let error_msg = format!("{}", e);
             set_last_error_message(error_msg);
             error_code
@@ -313,7 +313,7 @@ pub unsafe extern "C" fn linkrs_txn_commit(txn: *mut linkrs_txn_t) -> c_int {
 /// - `txn`: Transaction handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -324,18 +324,18 @@ pub unsafe extern "C" fn linkrs_txn_commit(txn: *mut linkrs_txn_t) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_txn_rollback(txn: *mut linkrs_txn_t) -> c_int {
     if txn.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(txn as *mut GraphDbTxnHandle);
+    let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Check session validity first (only check pointer, don't borrow)
     if !handle.is_session_valid() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Get session pointer for later use
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn linkrs_txn_rollback(txn: *mut linkrs_txn_t) -> c_int {
 
     let txn_handle = match handle.txn_handle.take() {
         Some(h) => h,
-        None => return linkrs_error_code_t::GRAPHDB_INTERNAL as c_int,
+        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
     };
 
     // Use embedded session API instead of direct TransactionManager access
@@ -367,10 +367,10 @@ pub unsafe extern "C" fn linkrs_txn_rollback(txn: *mut linkrs_txn_t) -> c_int {
     match session.inner.rollback_transaction(txn_handle) {
         Ok(_) => {
             handle.rolled_back = true;
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) => {
-            let error_code = linkrs_error_code_t::GRAPHDB_ABORT as c_int;
+            let error_code = linkrs_error_code_t::LINKRS_ABORT as c_int;
             let error_msg = format!("{}", e);
             set_last_error_message(error_msg);
             error_code
@@ -403,7 +403,7 @@ pub unsafe extern "C" fn linkrs_txn_savepoint(txn: *mut linkrs_txn_t, name: *con
         Err(_) => return -1,
     };
 
-    let handle = &mut *(txn as *mut GraphDbTxnHandle);
+    let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
         return -1;
@@ -433,7 +433,7 @@ pub unsafe extern "C" fn linkrs_txn_savepoint(txn: *mut linkrs_txn_t, name: *con
 /// - `savepoint_id`: ID of the savepoint
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -446,30 +446,30 @@ pub unsafe extern "C" fn linkrs_txn_release_savepoint(
     savepoint_id: i64,
 ) -> c_int {
     if txn.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(txn as *mut GraphDbTxnHandle);
+    let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
     let savepoint = crate::api_core::types::SavepointId(savepoint_id as u64);
 
     // Use embedded session API instead of direct TransactionManager access
     match session.inner.release_savepoint(txn_handle, savepoint) {
-        Ok(_) => linkrs_error_code_t::GRAPHDB_OK as c_int,
+        Ok(_) => linkrs_error_code_t::LINKRS_OK as c_int,
         Err(e) => {
             let core_error = crate::api_core::error::CoreError::TransactionFailed(format!("{}", e));
             let (error_code, _) = error_code_from_core_error(&core_error);
@@ -487,7 +487,7 @@ pub unsafe extern "C" fn linkrs_txn_release_savepoint(
 /// - `savepoint_id`: Savepoint ID
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -500,30 +500,30 @@ pub unsafe extern "C" fn linkrs_txn_rollback_to_savepoint(
     savepoint_id: i64,
 ) -> c_int {
     if txn.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(txn as *mut GraphDbTxnHandle);
+    let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return linkrs_error_code_t::GRAPHDB_INTERNAL as c_int,
+        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
     };
 
     let savepoint = crate::api_core::types::SavepointId(savepoint_id as u64);
 
     // Use embedded session API instead of direct TransactionManager access
     match session.inner.rollback_to_savepoint(txn_handle, savepoint) {
-        Ok(_) => linkrs_error_code_t::GRAPHDB_OK as c_int,
+        Ok(_) => linkrs_error_code_t::LINKRS_OK as c_int,
         Err(e) => {
             let core_error = crate::api_core::error::CoreError::TransactionFailed(format!("{}", e));
             let (error_code, _) = error_code_from_core_error(&core_error);
@@ -546,7 +546,7 @@ pub unsafe extern "C" fn linkrs_txn_rollback_to_savepoint(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_txn_free(txn: *mut linkrs_txn_t) {
     if !txn.is_null() {
-        let _ = Box::from_raw(txn as *mut GraphDbTxnHandle);
+        let _ = Box::from_raw(txn as *mut LinkrsTxnHandle);
     }
 }
 
@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn test_txn_begin_null_params() {
         let result = unsafe { linkrs_txn_begin(ptr::null_mut(), ptr::null_mut()) };
-        assert_eq!(result, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(result, linkrs_error_code_t::LINKRS_MISUSE as c_int);
     }
 
     #[test]
@@ -569,12 +569,12 @@ mod tests {
     #[test]
     fn test_txn_commit_null() {
         let result = unsafe { linkrs_txn_commit(ptr::null_mut()) };
-        assert_eq!(result, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(result, linkrs_error_code_t::LINKRS_MISUSE as c_int);
     }
 
     #[test]
     fn test_txn_rollback_null() {
         let result = unsafe { linkrs_txn_rollback(ptr::null_mut()) };
-        assert_eq!(result, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(result, linkrs_error_code_t::LINKRS_MISUSE as c_int);
     }
 }

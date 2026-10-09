@@ -151,7 +151,7 @@
 	class="w-60 bg-white dark:bg-[#1C2333] border-r border-gray-200 dark:border-gray-700/50 flex flex-col flex-shrink-0 overflow-y-auto transition-colors duration-300"
 >
 	<div class="px-5 py-4 border-b border-gray-200 dark:border-gray-700/50">
-		<h1 class="text-lg font-bold text-[var(--color-primary)]">GraphDB</h1>
+		<h1 class="text-lg font-bold text-[var(--color-primary)]">Linkrs</h1>
 	</div>
 	<nav class="flex-1 p-3">
 		<ul class="space-y-1">

@@ -24,7 +24,7 @@ tests/c_api/
 
 ```powershell
 #Enter the project root directory
-cd graphDB
+cd linkrs
 
 #Build and Run Tests
 .\tests\c_api\build_msvc.ps1 -Run

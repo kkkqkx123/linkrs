@@ -5,8 +5,8 @@
 use crate::embedded::c_api::error::{
     error_code_from_core_error, extended_error_code_from_core_error, linkrs_error_code_t,
 };
-use crate::embedded::c_api::result::GraphDbResultHandle;
-use crate::embedded::c_api::session::GraphDbSessionHandle;
+use crate::embedded::c_api::result::LinkrsResultHandle;
+use crate::embedded::c_api::session::LinkrsSessionHandle;
 use crate::embedded::c_api::types::{linkrs_result_t, linkrs_session_t, linkrs_value_t};
 use linkrs_core::Value;
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ use std::ptr;
 /// - `result`: Output parameter, result set handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -36,18 +36,18 @@ pub unsafe extern "C" fn linkrs_execute(
     result: *mut *mut linkrs_result_t,
 ) -> c_int {
     if session.is_null() || query.is_null() || result.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let query_str = unsafe {
         match CStr::from_ptr(query).to_str() {
             Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
         }
     };
 
     unsafe {
-        let handle = &mut *(session as *mut GraphDbSessionHandle);
+        let handle = &mut *(session as *mut LinkrsSessionHandle);
 
         // Calling the SQL tracing callback
         handle.trace(query_str);
@@ -76,11 +76,11 @@ pub unsafe extern "C" fn linkrs_execute(
                     }
                 }
 
-                let result_handle = Box::new(GraphDbResultHandle {
+                let result_handle = Box::new(LinkrsResultHandle {
                     inner: query_result,
                 });
                 *result = Box::into_raw(result_handle) as *mut linkrs_result_t;
-                linkrs_error_code_t::GRAPHDB_OK as c_int
+                linkrs_error_code_t::LINKRS_OK as c_int
             }
             Err(e) => {
                 let (error_code, _) = error_code_from_core_error(&e);
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn linkrs_execute(
 /// - `result`: Output parameter, result set handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -128,13 +128,13 @@ pub unsafe extern "C" fn linkrs_execute_params(
     result: *mut *mut linkrs_result_t,
 ) -> c_int {
     if session.is_null() || query.is_null() || result.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let query_str = unsafe {
         match CStr::from_ptr(query).to_str() {
             Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
         }
     };
 
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn linkrs_execute_params(
     }
 
     unsafe {
-        let handle = &mut *(session as *mut GraphDbSessionHandle);
+        let handle = &mut *(session as *mut LinkrsSessionHandle);
 
         // Calling the SQL tracing callback (matches `linkrs_execute`).
         handle.trace(query_str);
@@ -181,11 +181,11 @@ pub unsafe extern "C" fn linkrs_execute_params(
                     }
                 }
 
-                let result_handle = Box::new(GraphDbResultHandle {
+                let result_handle = Box::new(LinkrsResultHandle {
                     inner: query_result,
                 });
                 *result = Box::into_raw(result_handle) as *mut linkrs_result_t;
-                linkrs_error_code_t::GRAPHDB_OK as c_int
+                linkrs_error_code_t::LINKRS_OK as c_int
             }
             Err(e) => {
                 let (error_code, _) = error_code_from_core_error(&e);
@@ -216,11 +216,11 @@ pub unsafe fn convert_c_value_to_rust(c_value: &linkrs_value_t) -> Value {
     use crate::embedded::c_api::types::linkrs_value_type_t;
 
     match c_value.type_ {
-        linkrs_value_type_t::GRAPHDB_NULL => Value::Null(linkrs_core::value::NullType::Null),
-        linkrs_value_type_t::GRAPHDB_BOOL => Value::Bool(c_value.data.boolean),
-        linkrs_value_type_t::GRAPHDB_INT => Value::BigInt(c_value.data.integer),
-        linkrs_value_type_t::GRAPHDB_FLOAT => Value::Double(c_value.data.floating),
-        linkrs_value_type_t::GRAPHDB_STRING => {
+        linkrs_value_type_t::LINKRS_NULL => Value::Null(linkrs_core::value::NullType::Null),
+        linkrs_value_type_t::LINKRS_BOOL => Value::Bool(c_value.data.boolean),
+        linkrs_value_type_t::LINKRS_INT => Value::BigInt(c_value.data.integer),
+        linkrs_value_type_t::LINKRS_FLOAT => Value::Double(c_value.data.floating),
+        linkrs_value_type_t::LINKRS_STRING => {
             if c_value.data.string.data.is_null() || c_value.data.string.len == 0 {
                 Value::string("")
             } else {
@@ -232,7 +232,7 @@ pub unsafe fn convert_c_value_to_rust(c_value: &linkrs_value_t) -> Value {
                 Value::string(s)
             }
         }
-        linkrs_value_type_t::GRAPHDB_BLOB => {
+        linkrs_value_type_t::LINKRS_BLOB => {
             if c_value.data.blob.data.is_null() || c_value.data.blob.len == 0 {
                 Value::Blob(Vec::new())
             } else {
@@ -268,7 +268,7 @@ mod tests {
         let mut db: *mut linkrs_t = ptr::null_mut();
 
         let rc = unsafe { linkrs_open(path_cstring.as_ptr(), &mut db) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
         assert!(!db.is_null());
 
         db
@@ -294,11 +294,11 @@ mod tests {
     #[test]
     fn test_execute_null_params() {
         let rc = unsafe { linkrs_execute(ptr::null_mut(), ptr::null(), ptr::null_mut()) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
 
         let mut result: *mut linkrs_result_t = ptr::null_mut();
         let rc = unsafe { linkrs_execute(ptr::null_mut(), ptr::null(), &mut result) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
     }
 
     #[test]
@@ -312,13 +312,13 @@ mod tests {
                 ptr::null_mut(),
             )
         };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
 
         let mut result: *mut linkrs_result_t = ptr::null_mut();
         let rc = unsafe {
             linkrs_execute_params(ptr::null_mut(), ptr::null(), ptr::null(), 0, &mut result)
         };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
     }
 
     #[test]
@@ -327,13 +327,13 @@ mod tests {
         let mut session: *mut linkrs_session_t = ptr::null_mut();
 
         let rc = unsafe { linkrs_session_create(db, &mut session) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
 
         let query = CString::new("RETURN 1").expect("Failed to create query CString");
         let mut result: *mut linkrs_result_t = ptr::null_mut();
 
         let rc = unsafe { linkrs_execute(session, query.as_ptr(), &mut result) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
         assert!(!result.is_null());
 
         unsafe { linkrs_result_free(result) };
@@ -353,7 +353,7 @@ mod tests {
         let mut session: *mut linkrs_session_t = ptr::null_mut();
         assert_eq!(
             unsafe { linkrs_session_create(db, &mut session) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
 
         // Integer literals evaluate to `BigInt`; the wide getter must accept them.
@@ -361,32 +361,32 @@ mod tests {
         let mut result: *mut linkrs_result_t = ptr::null_mut();
         assert_eq!(
             unsafe { linkrs_execute(session, query.as_ptr(), &mut result) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         assert_eq!(
             unsafe { linkrs_column_type(result, 0) },
-            linkrs_value_type_t::GRAPHDB_INT
+            linkrs_value_type_t::LINKRS_INT
         );
         let mut value: i64 = 0;
         assert_eq!(
             unsafe { linkrs_get_int_by_index(result, 0, 0, &mut value) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         assert_eq!(value, 1);
 
         let mut ms: u64 = 0;
         assert_eq!(
             unsafe { linkrs_result_execution_time_ms(result, &mut ms) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         let mut scanned: u64 = 0;
         assert_eq!(
             unsafe { linkrs_result_rows_scanned(result, &mut scanned) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         assert_eq!(
             unsafe { linkrs_result_execution_time_ms(ptr::null_mut(), &mut ms) },
-            linkrs_error_code_t::GRAPHDB_MISUSE as c_int
+            linkrs_error_code_t::LINKRS_MISUSE as c_int
         );
 
         unsafe { linkrs_result_free(result) };
@@ -405,24 +405,24 @@ mod tests {
         let mut session: *mut linkrs_session_t = ptr::null_mut();
         assert_eq!(
             unsafe { linkrs_session_create(db, &mut session) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
 
         // `params[i]` binds `@param_{i}`.
         let query = CString::new("RETURN @param_0").unwrap();
         let param = linkrs_value_t {
-            type_: linkrs_value_type_t::GRAPHDB_INT,
+            type_: linkrs_value_type_t::LINKRS_INT,
             data: linkrs_value_data_t { integer: 41 },
         };
         let mut result: *mut linkrs_result_t = ptr::null_mut();
         assert_eq!(
             unsafe { linkrs_execute_params(session, query.as_ptr(), &param, 1, &mut result) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         let mut value: i64 = 0;
         assert_eq!(
             unsafe { linkrs_get_int_by_index(result, 0, 0, &mut value) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         assert_eq!(value, 41);
 
@@ -448,25 +448,25 @@ mod tests {
         assert!(!config.is_null());
         assert_eq!(
             unsafe { linkrs_config_set_read_only(config, 1) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         let mut db: *mut linkrs_t = ptr::null_mut();
         assert_eq!(
             unsafe { linkrs_open_with_config(config, &mut db) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         assert!(!db.is_null());
 
         let mut session: *mut linkrs_session_t = ptr::null_mut();
         assert_eq!(
             unsafe { linkrs_session_create(db, &mut session) },
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         );
         let query = CString::new("DROP SPACE nosuch").unwrap();
         let mut result: *mut linkrs_result_t = ptr::null_mut();
         assert_eq!(
             unsafe { linkrs_execute(session, query.as_ptr(), &mut result) },
-            linkrs_error_code_t::GRAPHDB_READONLY as c_int
+            linkrs_error_code_t::LINKRS_READONLY as c_int
         );
 
         unsafe { linkrs_session_close(session) };

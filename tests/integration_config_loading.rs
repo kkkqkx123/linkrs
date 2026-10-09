@@ -41,8 +41,8 @@ storage_path = "storage"
     )
     .expect("Failed to write config file");
 
-    let previous = env::var("GRAPHDB_CONFIG_DIR").ok();
-    env::set_var("GRAPHDB_CONFIG_DIR", &config_dir);
+    let previous = env::var("LINKRS_CONFIG_DIR").ok();
+    env::set_var("LINKRS_CONFIG_DIR", &config_dir);
 
     let config = Config::load_user_config().expect("Failed to load user config");
     assert_eq!(
@@ -51,7 +51,7 @@ storage_path = "storage"
     );
 
     match previous {
-        Some(value) => env::set_var("GRAPHDB_CONFIG_DIR", value),
-        None => env::remove_var("GRAPHDB_CONFIG_DIR"),
+        Some(value) => env::set_var("LINKRS_CONFIG_DIR", value),
+        None => env::remove_var("LINKRS_CONFIG_DIR"),
     }
 }

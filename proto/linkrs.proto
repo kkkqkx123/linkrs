@@ -1,9 +1,9 @@
 syntax = "proto3";
 
-package graphdb;
+package linkrs;
 
-// GraphDB Service Definition
-service GraphDBService {
+// Linkrs Service Definition
+service LinkrsService {
   // Health Check
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
   

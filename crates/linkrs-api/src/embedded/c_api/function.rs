@@ -3,7 +3,7 @@
 //! Provide a registration function for custom scalar functions and aggregate functions.
 
 use crate::embedded::c_api::error::linkrs_error_code_t;
-use crate::embedded::c_api::session::GraphDbSessionHandle;
+use crate::embedded::c_api::session::LinkrsSessionHandle;
 use crate::embedded::c_api::types::{linkrs_session_t, linkrs_value_t, linkrs_value_type_t};
 use linkrs_query::executor::expression::functions::{
     AggregateFinalCallback, AggregateStepCallback, CFunctionContext, CustomFunction,
@@ -51,7 +51,7 @@ pub struct linkrs_context_t {
 /// - `x_destroy`: Destructor callback, can be NULL
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Example
@@ -78,18 +78,18 @@ pub unsafe extern "C" fn linkrs_create_function(
     _x_destroy: linkrs_function_destroy_callback,
 ) -> c_int {
     if session.is_null() || name.is_null() || x_func.is_none() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let name_str = unsafe {
         match CStr::from_ptr(name).to_str() {
             Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
         }
     };
 
     unsafe {
-        let handle = &*(session as *mut GraphDbSessionHandle);
+        let handle = &*(session as *mut LinkrsSessionHandle);
 
         // Convert the C callback to a Rust callback type.
         let callback: ScalarFunctionCallback = std::mem::transmute(x_func);
@@ -107,11 +107,11 @@ pub unsafe extern "C" fn linkrs_create_function(
         // Register for the session.
         if let Err(e) = handle.inner.register_custom_function(func) {
             error!("Registration function failed: {:?}", e);
-            return linkrs_error_code_t::GRAPHDB_ERROR as c_int;
+            return linkrs_error_code_t::LINKRS_ERROR as c_int;
         }
     }
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Creating custom aggregate functions
@@ -126,7 +126,7 @@ pub unsafe extern "C" fn linkrs_create_function(
 /// - `x_destroy`: Destructor callback, can be NULL
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -145,18 +145,18 @@ pub unsafe extern "C" fn linkrs_create_aggregate(
     _x_destroy: linkrs_function_destroy_callback,
 ) -> c_int {
     if session.is_null() || name.is_null() || x_step.is_none() || x_final.is_none() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let name_str = unsafe {
         match CStr::from_ptr(name).to_str() {
             Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
         }
     };
 
     unsafe {
-        let handle = &*(session as *mut GraphDbSessionHandle);
+        let handle = &*(session as *mut LinkrsSessionHandle);
 
         // Convert the C callback to a Rust callback type.
         let step_callback: AggregateStepCallback = std::mem::transmute(x_step);
@@ -176,11 +176,11 @@ pub unsafe extern "C" fn linkrs_create_aggregate(
         // Register for the session.
         if let Err(e) = handle.inner.register_custom_function(func) {
             error!("Registration of the aggregate function failed: {:?}", e);
-            return linkrs_error_code_t::GRAPHDB_ERROR as c_int;
+            return linkrs_error_code_t::LINKRS_ERROR as c_int;
         }
     }
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Delete the custom function.
@@ -190,7 +190,7 @@ pub unsafe extern "C" fn linkrs_create_aggregate(
 /// - `name`: Function name
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -202,12 +202,12 @@ pub unsafe extern "C" fn linkrs_delete_function(
     name: *const c_char,
 ) -> c_int {
     if session.is_null() || name.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // The function needs to be deleted from the registry.
     // The current return was successful (the function will automatically clean up at the end of the session).
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Setting the return value of a function
@@ -229,7 +229,7 @@ pub unsafe extern "C" fn linkrs_context_set_result(
     value: *const linkrs_value_t,
 ) -> c_int {
     if context.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     unsafe {
@@ -242,7 +242,7 @@ pub unsafe extern "C" fn linkrs_context_set_result(
         }
     }
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Obtaining the type of the value returned by a function
@@ -261,14 +261,14 @@ pub unsafe extern "C" fn linkrs_context_result_type(
     context: *mut linkrs_context_t,
 ) -> linkrs_value_type_t {
     if context.is_null() {
-        return linkrs_value_type_t::GRAPHDB_NULL;
+        return linkrs_value_type_t::LINKRS_NULL;
     }
 
     unsafe {
         let ctx = &*(context as *const CFunctionContext);
         match &ctx.result {
             Some(val) => linkrs_core::value_conversion::core_value_to_linkrs_type(val),
-            None => linkrs_value_type_t::GRAPHDB_NULL,
+            None => linkrs_value_type_t::LINKRS_NULL,
         }
     }
 }
@@ -292,7 +292,7 @@ pub unsafe extern "C" fn linkrs_context_set_error(
     error_msg: *const c_char,
 ) -> c_int {
     if context.is_null() || error_msg.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     unsafe {
@@ -301,7 +301,7 @@ pub unsafe extern "C" fn linkrs_context_set_error(
         ctx.set_error(msg);
     }
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Obtain parameter values from the context (auxiliary function)
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn linkrs_context_arg_count(context: *mut linkrs_context_t
 /// - `path`: Null-terminated UTF-8 path to the `.so` / `.dylib` / `.dll` file
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -371,22 +371,22 @@ pub unsafe extern "C" fn linkrs_load_extension(
     path: *const c_char,
 ) -> c_int {
     if session.is_null() || path.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
     let path_str = unsafe {
         match CStr::from_ptr(path).to_str() {
             Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
         }
     };
     unsafe {
-        let handle = &*(session as *mut GraphDbSessionHandle);
+        let handle = &*(session as *mut LinkrsSessionHandle);
         if let Err(e) = handle.inner.load_extension(std::path::Path::new(path_str)) {
             error!("Load extension failed: {:?}", e);
-            return linkrs_error_code_t::GRAPHDB_ERROR as c_int;
+            return linkrs_error_code_t::LINKRS_ERROR as c_int;
         }
     }
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Unload a previously loaded dynamic UDF by function name.
@@ -396,7 +396,7 @@ pub unsafe extern "C" fn linkrs_load_extension(
 /// - `name`: Null-terminated UTF-8 function name
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -408,22 +408,22 @@ pub unsafe extern "C" fn linkrs_unload_extension(
     name: *const c_char,
 ) -> c_int {
     if session.is_null() || name.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
     let name_str = unsafe {
         match CStr::from_ptr(name).to_str() {
             Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
         }
     };
     unsafe {
-        let handle = &*(session as *mut GraphDbSessionHandle);
+        let handle = &*(session as *mut LinkrsSessionHandle);
         if let Err(e) = handle.inner.unload_extension(name_str) {
             error!("Unload extension failed: {:?}", e);
-            return linkrs_error_code_t::GRAPHDB_ERROR as c_int;
+            return linkrs_error_code_t::LINKRS_ERROR as c_int;
         }
     }
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Reload a dynamic UDF from its original library path.
@@ -435,7 +435,7 @@ pub unsafe extern "C" fn linkrs_unload_extension(
 ///   0 when the file is unchanged and reloading was skipped
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -449,16 +449,16 @@ pub unsafe extern "C" fn linkrs_reload_extension(
     reloaded: *mut c_int,
 ) -> c_int {
     if session.is_null() || name.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
     let name_str = unsafe {
         match CStr::from_ptr(name).to_str() {
             Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
         }
     };
     unsafe {
-        let handle = &*(session as *mut GraphDbSessionHandle);
+        let handle = &*(session as *mut LinkrsSessionHandle);
         match handle.inner.reload_extension(name_str) {
             Ok(did_reload) => {
                 if !reloaded.is_null() {
@@ -467,9 +467,9 @@ pub unsafe extern "C" fn linkrs_reload_extension(
             }
             Err(e) => {
                 error!("Reload extension failed: {:?}", e);
-                return linkrs_error_code_t::GRAPHDB_ERROR as c_int;
+                return linkrs_error_code_t::LINKRS_ERROR as c_int;
             }
         }
     }
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }

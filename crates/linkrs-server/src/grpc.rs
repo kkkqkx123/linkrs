@@ -1,6 +1,6 @@
 //! gRPC Service Module
 //!
-//! Provides an interface to GraphDB services based on the gRPC protocol.
+//! Provides an interface to Linkrs services based on the gRPC protocol.
 //!
 //! The whole transport boundary returns `Result<T, tonic::Status>`: the error
 //! type and its size are fixed by the tonic trait contracts (generated and
@@ -34,4 +34,4 @@ pub mod proto {
 }
 
 pub use bootstrap::{run_server, run_server_with_grpc_service};
-pub use service::GraphDBService;
+pub use service::LinkrsService;

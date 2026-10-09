@@ -408,7 +408,7 @@
 	function loadThresholds(): Thresholds {
 		const fallback: Thresholds = { cpuPercent: 80, memPercent: 80, slowMs: 500 };
 		try {
-			const raw = localStorage.getItem('graphdb_monitor_thresholds');
+			const raw = localStorage.getItem('linkrs_monitor_thresholds');
 			if (!raw) return fallback;
 			const parsed = JSON.parse(raw) as Partial<Thresholds>;
 			return {
@@ -429,7 +429,7 @@
 	$effect(() => {
 		if (!thresholdsReady) return;
 		try {
-			localStorage.setItem('graphdb_monitor_thresholds', JSON.stringify(thresholds));
+			localStorage.setItem('linkrs_monitor_thresholds', JSON.stringify(thresholds));
 		} catch {
 			/* storage unavailable */
 		}

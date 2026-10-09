@@ -803,7 +803,7 @@
 							{t('functions.implementation')}
 							<input
 								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
-								placeholder="/usr/lib/graphdb/udf.so"
+								placeholder="/usr/lib/linkrs/udf.so"
 								bind:value={newFunctionImpl}
 							/>
 						</label>

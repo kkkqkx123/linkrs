@@ -1,7 +1,7 @@
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::ptr;
 
-use crate::embedded::c_api::database::GraphDbHandle;
+use crate::embedded::c_api::database::LinkrsHandle;
 use crate::embedded::c_api::error::set_last_error_message;
 use crate::embedded::c_api::types::linkrs_t;
 
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn linkrs_migration_execute(
         }
     };
 
-    let handle = unsafe { &*(db as *mut GraphDbHandle) };
+    let handle = unsafe { &*(db as *mut LinkrsHandle) };
     let report = match handle
         .inner
         .execute_migration_plan_online(&plan, &linkrs_migration::MigrationConfig::default())
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn linkrs_migration_plan_json(
         }
     };
 
-    let handle = unsafe { &*(db as *mut GraphDbHandle) };
+    let handle = unsafe { &*(db as *mut LinkrsHandle) };
     let expand = expand_contract != 0;
     let plan_res = if is_edge != 0 {
         handle.inner.generate_edge_migration_plan_with_expand(
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn linkrs_migration_rollback(
         }
     };
 
-    let handle = unsafe { &*(db as *mut GraphDbHandle) };
+    let handle = unsafe { &*(db as *mut LinkrsHandle) };
     let report = match handle.inner.rollback_migration(&plan) {
         Ok(r) => r,
         Err(e) => {

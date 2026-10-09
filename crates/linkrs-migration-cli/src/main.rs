@@ -33,7 +33,7 @@ fn print_migration_event(event: &MigrationEvent) {
 }
 
 #[derive(Parser)]
-#[command(name = "linkrs-migration", about = "GraphDB Migration CLI")]
+#[command(name = "linkrs-migration", about = "Linkrs Migration CLI")]
 struct Cli {
     #[arg(long, default_value = "./data", global = true)]
     db_path: PathBuf,

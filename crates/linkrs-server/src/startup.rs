@@ -52,7 +52,7 @@ pub async fn start_service_with_config_path(
     config: Config,
     config_path: Option<PathBuf>,
 ) -> DBResult<()> {
-    info!("Initializing GraphDB service...");
+    info!("Initializing Linkrs service...");
     info!("Configuration loaded: {:?}", config);
 
     // Apply the bcrypt cost factor before any password hashing happens.
@@ -484,7 +484,7 @@ pub async fn start_service_with_config_path(
 
     super::shutdown_signal().await;
 
-    info!("Shutting down GraphDB service...");
+    info!("Shutting down Linkrs service...");
     graph_service.shutdown();
     Ok(())
 }

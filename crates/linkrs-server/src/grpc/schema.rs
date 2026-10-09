@@ -7,7 +7,7 @@ use crate::storage::{
 };
 
 use super::proto::*;
-use super::service::GraphDBService;
+use super::service::LinkrsService;
 
 impl<
         S: StorageClient
@@ -18,7 +18,7 @@ impl<
             + Send
             + Sync
             + 'static,
-    > GraphDBService<S>
+    > LinkrsService<S>
 {
     pub(crate) async fn handle_create_space(
         &self,

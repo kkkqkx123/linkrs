@@ -210,7 +210,7 @@ fn build_secondary_managers(
     }
 }
 
-/// Embedded GraphDB database
+/// Embedded Linkrs database
 ///
 /// This is the main entry point for the embedded API, offering a simple way of use similar to that of SQLite.
 /// The sqlite3 structure corresponding to SQLite.

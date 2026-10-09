@@ -1,6 +1,6 @@
-//! E2E Test Suite for GraphDB
+//! E2E Test Suite for Linkrs
 //!
-//! This library provides all E2E tests for GraphDB.
+//! This library provides all E2E tests for Linkrs.
 //! Run with: cargo test --test integration_e2e
 //!
 //! Tests are organized by functionality:

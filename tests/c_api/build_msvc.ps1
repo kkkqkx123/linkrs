@@ -1,4 +1,4 @@
-# GraphDB C API 测试构建脚本 (MSVC)
+# Linkrs C API 测试构建脚本 (MSVC)
 # 用于 Windows PowerShell 环境
 
 param(
@@ -50,7 +50,7 @@ New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  GraphDB C API 测试构建脚本 (MSVC)" -ForegroundColor Cyan
+Write-Host "  Linkrs C API 测试构建脚本 (MSVC)" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -65,12 +65,12 @@ Write-Host "  构建模式: $BuildMode"
 Write-Host ""
 
 # 检查库文件
-$LibName = "graphdb.dll.lib"
+$LibName = "linkrs.dll.lib"
 $LibPath = Join-Path $LibDir $LibName
 
 if (-not (Test-Path $LibPath)) {
-    Write-Host "错误: 未找到 GraphDB 库文件: $LibPath" -ForegroundColor Red
-    Write-Host "请先构建 GraphDB 项目: cargo build --$BuildMode" -ForegroundColor Red
+    Write-Host "错误: 未找到 Linkrs 库文件: $LibPath" -ForegroundColor Red
+    Write-Host "请先构建 Linkrs 项目: cargo build --$BuildMode" -ForegroundColor Red
     exit 1
 }
 
@@ -79,7 +79,7 @@ Write-Host ""
 
 # 编译选项
 $SourceFile = Join-Path $SourceDir "tests.c"
-$OutputFile = Join-Path $OutputDir "graphdb_c_api_tests.exe"
+$OutputFile = Join-Path $OutputDir "linkrs_c_api_tests.exe"
 $ObjectFile = Join-Path $BuildDir "tests.obj"
 
 Write-Host "编译测试程序..." -ForegroundColor Cyan
@@ -93,7 +93,7 @@ $CompileArgs = @(
     $SourceFile,
     "/link",
     "/LIBPATH:$LibDir",
-    "graphdb.dll.lib",
+    "linkrs.dll.lib",
     "ws2_32.lib"
 )
 

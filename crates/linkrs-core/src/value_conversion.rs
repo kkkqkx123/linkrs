@@ -12,21 +12,21 @@ use crate::types::c_api::{
 pub fn core_value_to_linkrs(value: &Value) -> linkrs_value_t {
     match value {
         Value::Null(_) => linkrs_value_t {
-            type_: linkrs_value_type_t::GRAPHDB_NULL,
+            type_: linkrs_value_type_t::LINKRS_NULL,
             data: linkrs_value_data_t {
                 ptr: std::ptr::null_mut(),
             },
         },
         Value::Bool(b) => linkrs_value_t {
-            type_: linkrs_value_type_t::GRAPHDB_BOOL,
+            type_: linkrs_value_type_t::LINKRS_BOOL,
             data: linkrs_value_data_t { boolean: *b },
         },
         Value::Int(i) => linkrs_value_t {
-            type_: linkrs_value_type_t::GRAPHDB_INT,
+            type_: linkrs_value_type_t::LINKRS_INT,
             data: linkrs_value_data_t { integer: *i as i64 },
         },
         Value::Float(f) => linkrs_value_t {
-            type_: linkrs_value_type_t::GRAPHDB_FLOAT,
+            type_: linkrs_value_type_t::LINKRS_FLOAT,
             data: linkrs_value_data_t {
                 floating: *f as f64,
             },
@@ -37,12 +37,12 @@ pub fn core_value_to_linkrs(value: &Value) -> linkrs_value_t {
                 len: s.len(),
             };
             linkrs_value_t {
-                type_: linkrs_value_type_t::GRAPHDB_STRING,
+                type_: linkrs_value_type_t::LINKRS_STRING,
                 data: linkrs_value_data_t { string: string_t },
             }
         }
         _ => linkrs_value_t {
-            type_: linkrs_value_type_t::GRAPHDB_NULL,
+            type_: linkrs_value_type_t::LINKRS_NULL,
             data: linkrs_value_data_t {
                 ptr: std::ptr::null_mut(),
             },
@@ -53,16 +53,16 @@ pub fn core_value_to_linkrs(value: &Value) -> linkrs_value_t {
 /// C API type to get Core Value
 pub fn core_value_to_linkrs_type(value: &Value) -> linkrs_value_type_t {
     match value {
-        Value::Null(_) => linkrs_value_type_t::GRAPHDB_NULL,
-        Value::Bool(_) => linkrs_value_type_t::GRAPHDB_BOOL,
-        Value::Int(_) => linkrs_value_type_t::GRAPHDB_INT,
-        Value::Float(_) => linkrs_value_type_t::GRAPHDB_FLOAT,
-        Value::String(_) => linkrs_value_type_t::GRAPHDB_STRING,
-        Value::List(_) => linkrs_value_type_t::GRAPHDB_LIST,
-        Value::Map(_) => linkrs_value_type_t::GRAPHDB_MAP,
-        Value::Vertex(_) => linkrs_value_type_t::GRAPHDB_VERTEX,
-        Value::Edge(_) => linkrs_value_type_t::GRAPHDB_EDGE,
-        Value::Path(_) => linkrs_value_type_t::GRAPHDB_PATH,
-        _ => linkrs_value_type_t::GRAPHDB_NULL,
+        Value::Null(_) => linkrs_value_type_t::LINKRS_NULL,
+        Value::Bool(_) => linkrs_value_type_t::LINKRS_BOOL,
+        Value::Int(_) => linkrs_value_type_t::LINKRS_INT,
+        Value::Float(_) => linkrs_value_type_t::LINKRS_FLOAT,
+        Value::String(_) => linkrs_value_type_t::LINKRS_STRING,
+        Value::List(_) => linkrs_value_type_t::LINKRS_LIST,
+        Value::Map(_) => linkrs_value_type_t::LINKRS_MAP,
+        Value::Vertex(_) => linkrs_value_type_t::LINKRS_VERTEX,
+        Value::Edge(_) => linkrs_value_type_t::LINKRS_EDGE,
+        Value::Path(_) => linkrs_value_type_t::LINKRS_PATH,
+        _ => linkrs_value_type_t::LINKRS_NULL,
     }
 }

@@ -14,7 +14,7 @@
 //!
 //! Standard commands (run from the workspace root):
 //! ```text
-//! GRAPHDB_REFRESH_OPENAPI=1 cargo test -p linkrs-server --features vector,fulltext openapi_snapshot_matches
+//! LINKRS_REFRESH_OPENAPI=1 cargo test -p linkrs-server --features vector,fulltext openapi_snapshot_matches
 //! cargo test -p linkrs-server --features vector,fulltext
 //! ```
 
@@ -24,7 +24,7 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(
-    info(title = "GraphDB API", version = "1.0.0"),
+    info(title = "Linkrs API", version = "1.0.0"),
     paths(
         crate::http::handlers::health::check,
         crate::http::handlers::auth::login,
@@ -177,7 +177,7 @@ struct CoreDoc;
 #[cfg(feature = "vector")]
 #[derive(OpenApi)]
 #[openapi(
-    info(title = "GraphDB API", version = "1.0.0"),
+    info(title = "Linkrs API", version = "1.0.0"),
     paths(
         crate::http::handlers::vector::create_index,
         crate::http::handlers::vector::list_indexes,
@@ -211,7 +211,7 @@ struct VectorDoc;
 #[cfg(feature = "fulltext")]
 #[derive(OpenApi)]
 #[openapi(
-    info(title = "GraphDB API", version = "1.0.0"),
+    info(title = "Linkrs API", version = "1.0.0"),
     paths(
         crate::http::handlers::rebuild::rebuild_fulltext,
         crate::http::handlers::rebuild::fulltext_rebuild_status,
@@ -252,7 +252,7 @@ mod tests {
     // ---- contract configuration (repo-specific) ----
 
     const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../frontend/openapi.json");
-    const REFRESH_ENV: &str = "GRAPHDB_REFRESH_OPENAPI";
+    const REFRESH_ENV: &str = "LINKRS_REFRESH_OPENAPI";
 
     fn source_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src")

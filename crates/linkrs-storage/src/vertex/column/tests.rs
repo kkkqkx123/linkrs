@@ -486,7 +486,7 @@ mod tests {
         let long_strings = [
             "The quick brown fox jumps over the lazy dog",
             "A Rust programming language feature",
-            "GraphDB storage compression techniques",
+            "Linkrs storage compression techniques",
             "The quick brown fox jumps over the lazy dog", // Repetition
             "Efficient data compression algorithms",
         ];

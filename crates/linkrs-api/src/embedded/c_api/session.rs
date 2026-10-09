@@ -2,7 +2,7 @@
 //!
 //! It provides functions for creating, destroying, and performing basic management of sessions.
 
-use crate::embedded::c_api::database::GraphDbHandle;
+use crate::embedded::c_api::database::LinkrsHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, extended_error_code_from_core_error, linkrs_error_code_t,
     set_last_error_message,
@@ -17,7 +17,7 @@ use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
 
 /// Internal structure of the session handler
-pub struct GraphDbSessionHandle {
+pub struct LinkrsSessionHandle {
     pub(crate) inner: Session<GraphStorage>,
     pub(crate) last_error: Option<CString>,
     /// Busy wait timeout (in milliseconds)
@@ -52,10 +52,10 @@ pub struct GraphDbSessionHandle {
 // thread performing the operation that triggers them; `user_data` must stay
 // valid from registration until replacement, session close, or explicit NULL
 // deregistration, whichever comes first.
-unsafe impl Send for GraphDbSessionHandle {}
-unsafe impl Sync for GraphDbSessionHandle {}
+unsafe impl Send for LinkrsSessionHandle {}
+unsafe impl Sync for LinkrsSessionHandle {}
 
-impl GraphDbSessionHandle {
+impl LinkrsSessionHandle {
     /// Create a new session handle.
     pub(crate) fn new(inner: Session<GraphStorage>) -> Self {
         Self {
@@ -159,7 +159,7 @@ impl GraphDbSessionHandle {
 /// - `session`: Output parameter, session handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -173,21 +173,21 @@ pub unsafe extern "C" fn linkrs_session_create(
     session: *mut *mut linkrs_session_t,
 ) -> c_int {
     if db.is_null() || session.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let db_handle = &*(db as *mut GraphDbHandle);
+    let db_handle = &*(db as *mut LinkrsHandle);
 
     match db_handle.inner.session() {
         Ok(sess) => {
-            let mut handle = Box::new(GraphDbSessionHandle::new(sess));
+            let mut handle = Box::new(LinkrsSessionHandle::new(sess));
             // Inherit the database default timeout so the C
             // `linkrs_config_set_timeout` setting takes effect instead of
             // the fixed 5s fallback inside the handle constructor.
             let timeout_ms = db_handle.inner.config().default_timeout.as_millis();
             handle.busy_timeout_ms = timeout_ms.min(u32::MAX as u128) as u32;
             *session = Box::into_raw(handle) as *mut linkrs_session_t;
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
@@ -205,7 +205,7 @@ pub unsafe extern "C" fn linkrs_session_create(
 /// - `session`: Session handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -215,10 +215,10 @@ pub unsafe extern "C" fn linkrs_session_create(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_session_close(session: *mut linkrs_session_t) -> c_int {
     if session.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = Box::from_raw(session as *mut GraphDbSessionHandle);
+    let handle = Box::from_raw(session as *mut LinkrsSessionHandle);
     // Retire the commit-hook bridge so a closed session's user_data can
     // never be invoked by a later commit on the shared manager.
     if let Some(id) = handle.commit_veto_id {
@@ -226,7 +226,7 @@ pub unsafe extern "C" fn linkrs_session_close(session: *mut linkrs_session_t) ->
     }
     drop(handle);
 
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Switch to the image space
@@ -236,7 +236,7 @@ pub unsafe extern "C" fn linkrs_session_close(session: *mut linkrs_session_t) ->
 /// - `space_name`: Graph space name (UTF-8 encoded)
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -248,20 +248,20 @@ pub unsafe extern "C" fn linkrs_session_use_space(
     space_name: *const c_char,
 ) -> c_int {
     if session.is_null() || space_name.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let name_str = match CStr::from_ptr(space_name).to_str() {
         Ok(s) => s,
-        Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
-    let handle = &mut *(session as *mut GraphDbSessionHandle);
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
 
     match handle.inner.use_space(name_str) {
         Ok(_) => {
             handle.clear_error();
-            linkrs_error_code_t::GRAPHDB_OK as c_int
+            linkrs_error_code_t::LINKRS_OK as c_int
         }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
@@ -306,7 +306,7 @@ pub unsafe extern "C" fn linkrs_session_current_space(
         return ptr::null_mut();
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
 
     match handle.inner.current_space() {
         Some(name) => {
@@ -330,7 +330,7 @@ pub unsafe extern "C" fn linkrs_session_current_space(
 /// - `autocommit`: Whether to enable autocommit
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -341,12 +341,12 @@ pub unsafe extern "C" fn linkrs_session_set_autocommit(
     autocommit: bool,
 ) -> c_int {
     if session.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(session as *mut GraphDbSessionHandle);
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
     handle.inner.set_auto_commit(autocommit);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Enable the automatic submission mode.
@@ -365,7 +365,7 @@ pub unsafe extern "C" fn linkrs_session_get_autocommit(session: *mut linkrs_sess
         return true; // Default automatic submission
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
     handle.inner.auto_commit()
 }
 
@@ -376,7 +376,7 @@ pub unsafe extern "C" fn linkrs_session_get_autocommit(session: *mut linkrs_sess
 /// - `timeout_ms`: Timeout in milliseconds
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -387,13 +387,13 @@ pub unsafe extern "C" fn linkrs_busy_timeout(
     timeout_ms: c_int,
 ) -> c_int {
     if session.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(session as *mut GraphDbSessionHandle);
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
     // The storage timeout settings are applied to the handle.
     handle.busy_timeout_ms = timeout_ms.max(0) as u32;
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Busy wait timeout has occurred.
@@ -412,7 +412,7 @@ pub unsafe extern "C" fn linkrs_busy_timeout_get(session: *mut linkrs_session_t)
         return 0;
     }
 
-    let handle = &*(session as *mut GraphDbSessionHandle);
+    let handle = &*(session as *mut LinkrsSessionHandle);
     handle.busy_timeout_ms as c_int
 }
 
@@ -424,7 +424,7 @@ pub unsafe extern "C" fn linkrs_busy_timeout_get(session: *mut linkrs_session_t)
 /// - `user_data`: User data pointer, will be passed to the callback
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Example
@@ -447,13 +447,13 @@ pub unsafe extern "C" fn linkrs_trace(
     user_data: *mut c_void,
 ) -> c_int {
     if session.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(session as *mut GraphDbSessionHandle);
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
     handle.trace_callback = callback;
     handle.trace_user_data = user_data;
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Setting up the commit hook
@@ -489,7 +489,7 @@ pub unsafe extern "C" fn linkrs_commit_hook(
         return ptr::null_mut();
     }
 
-    let handle = &mut *(session as *mut GraphDbSessionHandle);
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
     let old_user_data = handle.commit_hook_user_data;
     // Retire the previous bridge registration, if any.
     if let Some(id) = handle.commit_veto_id.take() {
@@ -548,7 +548,7 @@ pub unsafe extern "C" fn linkrs_rollback_hook(
         return ptr::null_mut();
     }
 
-    let handle = &mut *(session as *mut GraphDbSessionHandle);
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
     let old_user_data = handle.rollback_hook_user_data;
     handle.rollback_hook = callback;
     handle.rollback_hook_user_data = user_data;
@@ -587,7 +587,7 @@ pub unsafe extern "C" fn linkrs_update_hook(
         return ptr::null_mut();
     }
 
-    let handle = &mut *(session as *mut GraphDbSessionHandle);
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
     let old_user_data = handle.update_hook_user_data;
     handle.update_hook = callback;
     handle.update_hook_user_data = user_data;
@@ -607,12 +607,12 @@ pub unsafe extern "C" fn linkrs_update_hook(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_connection_interrupt(session: *mut linkrs_session_t) -> c_int {
     if session.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(session as *const GraphDbSessionHandle);
+    let handle = &*(session as *const LinkrsSessionHandle);
     handle.inner.interrupt();
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Clear a previously requested session interrupt.
@@ -624,12 +624,12 @@ pub unsafe extern "C" fn linkrs_connection_clear_interrupt(
     session: *mut linkrs_session_t,
 ) -> c_int {
     if session.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &*(session as *const GraphDbSessionHandle);
+    let handle = &*(session as *const LinkrsSessionHandle);
     handle.inner.clear_interrupt();
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 #[cfg(test)]
@@ -662,7 +662,7 @@ mod tests {
         let mut db: *mut linkrs_t = ptr::null_mut();
 
         let rc = unsafe { linkrs_open(path_cstring.as_ptr(), &mut db) };
-        if rc != linkrs_error_code_t::GRAPHDB_OK as c_int {
+        if rc != linkrs_error_code_t::LINKRS_OK as c_int {
             panic!(
                 "Failed to open database, error code: {}, path: {:?}",
                 rc, db_path
@@ -680,16 +680,16 @@ mod tests {
 
         // Create a session
         let rc = unsafe { linkrs_session_create(db, &mut session) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
         assert!(!session.is_null());
 
         // Close the session.
         let rc = unsafe { linkrs_session_close(session) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
 
         // Close the database.
         let rc = unsafe { linkrs_close(db) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
     }
 
     #[test]
@@ -698,7 +698,7 @@ mod tests {
         let mut session: *mut linkrs_session_t = ptr::null_mut();
 
         let rc = unsafe { linkrs_session_create(db, &mut session) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
 
         // Default automatic submission
         let autocommit = unsafe { linkrs_session_get_autocommit(session) };
@@ -706,7 +706,7 @@ mod tests {
 
         // Turn off automatic submission.
         let rc = unsafe { linkrs_session_set_autocommit(session, false) };
-        assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as c_int);
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
 
         let autocommit = unsafe { linkrs_session_get_autocommit(session) };
         assert!(!autocommit);

@@ -1,4 +1,4 @@
-//! HTTP client for connecting to GraphDB server
+//! HTTP client for connecting to Linkrs server
 //!
 //! All request/response bodies use the shared `linkrs-wire` DTOs, so the
 //! CLI never maintains a second copy of the HTTP contract.
@@ -24,7 +24,7 @@ use crate::client::transaction::TransactionOptions;
 use crate::client::types::QueryResult;
 use crate::utils::error::{CliError, Result};
 
-/// HTTP client for connecting to remote GraphDB server
+/// HTTP client for connecting to remote Linkrs server
 pub struct HttpClient {
     inner: reqwest::Client,
     base_url: String,

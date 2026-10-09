@@ -460,7 +460,7 @@ impl BinaryOperationEvaluator {
             }
         };
 
-        // Convert result to appropriate GraphDB Value
+        // Convert result to appropriate Linkrs Value
         let value_result = if as_text {
             // Return as string
             match result {

@@ -169,7 +169,7 @@ impl SpaceExporter {
         };
 
         if self.config.include_schema {
-            writeln!(writer, "# GraphDB Space Export")?;
+            writeln!(writer, "# Linkrs Space Export")?;
             writeln!(writer, "# Space: {}", metadata.space_name)?;
             writeln!(writer, "# Version: {}", metadata.version)?;
             writeln!(writer, "# Timestamp: {}", metadata.timestamp)?;

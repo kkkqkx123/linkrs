@@ -35,7 +35,7 @@ pub unsafe extern "C" fn linkrs_busy_handler_create(
 /// - `handler`: Busy handler handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -43,11 +43,11 @@ pub unsafe extern "C" fn linkrs_busy_handler_create(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_busy_handler_free(handler: *mut linkrs_busy_handler_t) -> c_int {
     if handler.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let _ = Box::from_raw(handler as *mut BusyHandler);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Handle busy condition
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn linkrs_busy_handler_elapsed_ms(
 /// - `handler`: Busy handler handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -154,12 +154,12 @@ pub unsafe extern "C" fn linkrs_busy_handler_elapsed_ms(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_busy_handler_reset(handler: *mut linkrs_busy_handler_t) -> c_int {
     if handler.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let handle = &*(handler as *mut BusyHandler);
     handle.reset();
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 #[cfg(test)]

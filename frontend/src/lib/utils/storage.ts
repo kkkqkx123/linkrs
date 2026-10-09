@@ -1,4 +1,4 @@
-const STORAGE_PREFIX = 'graphdb_';
+const STORAGE_PREFIX = 'linkrs_';
 
 export function estimateSize(value: unknown): number {
 	try {

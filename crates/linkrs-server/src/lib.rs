@@ -1,4 +1,4 @@
-//! GraphDB network service layer (HTTP/gRPC).
+//! Linkrs network service layer (HTTP/gRPC).
 //!
 //! Standalone server crate decoupled from the programmatic API
 //! (`linkrs-api`) and the wire contract (`linkrs-wire`). The service
@@ -42,7 +42,7 @@ pub use batch::BatchManager;
 pub use client::{ClientSession, Session};
 pub use graph_service::GraphService;
 #[cfg(feature = "grpc")]
-pub use grpc::{run_server, GraphDBService};
+pub use grpc::{run_server, LinkrsService};
 pub use http::HttpServer;
 pub use permission::{Permission, PermissionChecker, PermissionManager, RoleType};
 pub use session::GraphSessionManager;

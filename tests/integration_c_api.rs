@@ -48,7 +48,7 @@ fn test_c_api_database_null_params() {
     let rc = unsafe {
         linkrs::api::embedded::c_api::database::linkrs_open(ptr::null(), ptr::null_mut())
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as i32);
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn test_c_api_session_autocommit() {
             false,
         )
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
 
     let autocommit = unsafe {
         linkrs::api::embedded::c_api::session::linkrs_session_get_autocommit(session.handle())
@@ -107,7 +107,7 @@ fn test_c_api_session_null_params() {
             ptr::null_mut(),
         )
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as i32);
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn test_c_api_execute_simple_query() {
         )
     };
 
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
     assert!(!result.is_null());
 
     // Cleanup results
@@ -167,7 +167,7 @@ fn test_c_api_execute_null_params() {
             ptr::null_mut(),
         )
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as i32);
 }
 
 // ==================== Result Processing Test ====================
@@ -187,7 +187,7 @@ fn test_c_api_result_metadata() {
             &mut result,
         )
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
 
     // Get the number of columns
     let col_count = unsafe { linkrs::api::embedded::c_api::result::linkrs_column_count(result) };
@@ -218,7 +218,7 @@ fn test_c_api_result_column_name() {
             &mut result,
         )
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
 
     // Get the number of columns
     let col_count = unsafe { linkrs::api::embedded::c_api::result::linkrs_column_count(result) };
@@ -273,13 +273,13 @@ fn test_c_api_transaction_begin_commit() {
     let rc = unsafe {
         linkrs::api::embedded::c_api::transaction::linkrs_txn_begin(session.handle(), &mut txn)
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
     assert!(!txn.is_null());
 
     // Submit the transaction
     let rc = unsafe { linkrs::api::embedded::c_api::transaction::linkrs_txn_commit(txn) };
 
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
 
     // Clean up transaction handlers
     unsafe {
@@ -298,12 +298,12 @@ fn test_c_api_transaction_begin_rollback() {
     let rc = unsafe {
         linkrs::api::embedded::c_api::transaction::linkrs_txn_begin(session.handle(), &mut txn)
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
     assert!(!txn.is_null());
 
     // Roll back a transaction
     let rc = unsafe { linkrs::api::embedded::c_api::transaction::linkrs_txn_rollback(txn) };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
 
     // Clean up transaction handlers
     unsafe {
@@ -343,7 +343,7 @@ fn test_c_api_transaction_null_params() {
             ptr::null_mut(),
         )
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as i32);
 }
 
 // ==================== Batch Operation Testing ====================
@@ -363,12 +363,12 @@ fn test_c_api_batch_inserter_create_free() {
             &mut batch,
         )
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
     assert!(!batch.is_null());
 
     // Release the batch inserter.
     let rc = unsafe { linkrs::api::embedded::c_api::batch::linkrs_batch_free(batch) };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
 }
 
 #[test]
@@ -389,7 +389,7 @@ fn test_c_api_batch_null_params() {
             ptr::null_mut(),
         )
     };
-    assert_eq!(rc, linkrs_error_code_t::GRAPHDB_MISUSE as i32);
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as i32);
 }
 
 #[test]
@@ -411,7 +411,7 @@ fn test_c_api_batch_buffered_counts_null() {
 fn test_c_api_errstr() {
     let error_str = unsafe {
         std::ffi::CStr::from_ptr(linkrs::api::embedded::c_api::error::linkrs_errstr(
-            linkrs_error_code_t::GRAPHDB_OK as i32,
+            linkrs_error_code_t::LINKRS_OK as i32,
         ))
     };
 
@@ -422,16 +422,16 @@ fn test_c_api_errstr() {
 #[test]
 fn test_c_api_error_codes() {
     let test_cases = vec![
-        (linkrs_error_code_t::GRAPHDB_OK as i32, "OK"),
-        (linkrs_error_code_t::GRAPHDB_ERROR as i32, "General error"),
-        (linkrs_error_code_t::GRAPHDB_MISUSE as i32, "Misuse"),
-        (linkrs_error_code_t::GRAPHDB_NOTFOUND as i32, "Not found"),
-        (linkrs_error_code_t::GRAPHDB_IOERR as i32, "IO error"),
+        (linkrs_error_code_t::LINKRS_OK as i32, "OK"),
+        (linkrs_error_code_t::LINKRS_ERROR as i32, "General error"),
+        (linkrs_error_code_t::LINKRS_MISUSE as i32, "Misuse"),
+        (linkrs_error_code_t::LINKRS_NOTFOUND as i32, "Not found"),
+        (linkrs_error_code_t::LINKRS_IOERR as i32, "IO error"),
         (
-            linkrs_error_code_t::GRAPHDB_CORRUPT as i32,
+            linkrs_error_code_t::LINKRS_CORRUPT as i32,
             "Data corruption",
         ),
-        (linkrs_error_code_t::GRAPHDB_NOMEM as i32, "Out of memory"),
+        (linkrs_error_code_t::LINKRS_NOMEM as i32, "Out of memory"),
     ];
 
     for (code, expected_desc) in test_cases {

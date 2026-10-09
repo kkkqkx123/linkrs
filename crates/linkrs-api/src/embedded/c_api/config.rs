@@ -9,11 +9,11 @@ use std::ffi::{c_char, c_int, CStr};
 use std::time::Duration;
 
 /// Internal structure of configuration handles
-pub struct GraphDbConfigHandle {
+pub struct LinkrsConfigHandle {
     pub(crate) inner: DatabaseConfig,
 }
 
-impl GraphDbConfigHandle {
+impl LinkrsConfigHandle {
     pub fn new(inner: DatabaseConfig) -> Self {
         Self { inner }
     }
@@ -33,7 +33,7 @@ impl GraphDbConfigHandle {
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_config_new() -> *mut linkrs_config_t {
     let config = DatabaseConfig::memory();
-    let handle = Box::new(GraphDbConfigHandle::new(config));
+    let handle = Box::new(LinkrsConfigHandle::new(config));
     Box::into_raw(handle) as *mut linkrs_config_t
 }
 
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn linkrs_config_file(path: *const c_char) -> *mut linkrs_
     };
 
     let config = DatabaseConfig::file(path_str);
-    let handle = Box::new(GraphDbConfigHandle::new(config));
+    let handle = Box::new(LinkrsConfigHandle::new(config));
     Box::into_raw(handle) as *mut linkrs_config_t
 }
 
@@ -78,7 +78,7 @@ pub unsafe extern "C" fn linkrs_config_file(path: *const c_char) -> *mut linkrs_
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_config_memory() -> *mut linkrs_config_t {
     let config = DatabaseConfig::memory();
-    let handle = Box::new(GraphDbConfigHandle::new(config));
+    let handle = Box::new(LinkrsConfigHandle::new(config));
     Box::into_raw(handle) as *mut linkrs_config_t
 }
 
@@ -88,7 +88,7 @@ pub unsafe extern "C" fn linkrs_config_memory() -> *mut linkrs_config_t {
 /// - `config`: Configuration handle
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -97,11 +97,11 @@ pub unsafe extern "C" fn linkrs_config_memory() -> *mut linkrs_config_t {
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_config_free(config: *mut linkrs_config_t) -> c_int {
     if config.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let _ = Box::from_raw(config as *mut GraphDbConfigHandle);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    let _ = Box::from_raw(config as *mut LinkrsConfigHandle);
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Set cache size
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn linkrs_config_free(config: *mut linkrs_config_t) -> c_i
 /// - `size_mb`: Cache size in MB
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -122,12 +122,12 @@ pub unsafe extern "C" fn linkrs_config_set_cache_size(
     size_mb: c_int,
 ) -> c_int {
     if config.is_null() || size_mb <= 0 {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(config as *mut GraphDbConfigHandle);
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
     handle.inner = handle.inner.clone().with_cache_size(size_mb as usize);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Set timeout
@@ -137,7 +137,7 @@ pub unsafe extern "C" fn linkrs_config_set_cache_size(
 /// - `timeout_ms`: Timeout in milliseconds
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -148,15 +148,15 @@ pub unsafe extern "C" fn linkrs_config_set_timeout(
     timeout_ms: c_int,
 ) -> c_int {
     if config.is_null() || timeout_ms < 0 {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(config as *mut GraphDbConfigHandle);
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
     handle.inner = handle
         .inner
         .clone()
         .with_timeout(Duration::from_millis(timeout_ms as u64));
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Set read-only mode
@@ -166,7 +166,7 @@ pub unsafe extern "C" fn linkrs_config_set_timeout(
 /// - `read_only`: Read-only flag
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -177,12 +177,12 @@ pub unsafe extern "C" fn linkrs_config_set_read_only(
     read_only: c_int,
 ) -> c_int {
     if config.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(config as *mut GraphDbConfigHandle);
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
     handle.inner = handle.inner.clone().with_read_only(read_only != 0);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Set create-if-missing flag
@@ -192,7 +192,7 @@ pub unsafe extern "C" fn linkrs_config_set_read_only(
 /// - `create`: Create-if-missing flag
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -203,12 +203,12 @@ pub unsafe extern "C" fn linkrs_config_set_create_if_missing(
     create: c_int,
 ) -> c_int {
     if config.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(config as *mut GraphDbConfigHandle);
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
     handle.inner = handle.inner.clone().with_create_if_missing(create != 0);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Set WAL (Write-Ahead Logging) enabled
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn linkrs_config_set_create_if_missing(
 /// - `enable`: Enable flag
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
+/// - Success: LINKRS_OK
 /// - Failure: Error code
 ///
 /// # Safety
@@ -229,12 +229,12 @@ pub unsafe extern "C" fn linkrs_config_set_enable_wal(
     enable: c_int,
 ) -> c_int {
     if config.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
-    let handle = &mut *(config as *mut GraphDbConfigHandle);
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
     handle.inner = handle.inner.clone().with_wal(enable != 0);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 /// Set the synchronization mode (mirrors `SyncMode`).
@@ -244,8 +244,8 @@ pub unsafe extern "C" fn linkrs_config_set_enable_wal(
 /// - `mode`: 0 = Full (every write synced), 1 = Normal (default), 2 = Off
 ///
 /// # Returns
-/// - Success: GRAPHDB_OK
-/// - Failure: GRAPHDB_MISUSE for null handles or out-of-range modes
+/// - Success: LINKRS_OK
+/// - Failure: LINKRS_MISUSE for null handles or out-of-range modes
 ///
 /// # Safety
 /// - `config` must be a valid configuration handle
@@ -255,18 +255,18 @@ pub unsafe extern "C" fn linkrs_config_set_sync_mode(
     mode: c_int,
 ) -> c_int {
     if config.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
     let sync_mode = match mode {
         0 => SyncMode::Full,
         1 => SyncMode::Normal,
         2 => SyncMode::Off,
-        _ => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
+        _ => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
     };
 
-    let handle = &mut *(config as *mut GraphDbConfigHandle);
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
     handle.inner = handle.inner.clone().with_sync_mode(sync_mode);
-    linkrs_error_code_t::GRAPHDB_OK as c_int
+    linkrs_error_code_t::LINKRS_OK as c_int
 }
 
 #[cfg(test)]
@@ -329,11 +329,11 @@ mod tests {
             assert_eq!(linkrs_config_set_sync_mode(config, 2), 0);
             assert_eq!(
                 linkrs_config_set_sync_mode(config, 7),
-                linkrs_error_code_t::GRAPHDB_MISUSE as c_int
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
             );
             assert_eq!(
                 linkrs_config_set_sync_mode(std::ptr::null_mut(), 1),
-                linkrs_error_code_t::GRAPHDB_MISUSE as c_int
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
             );
             assert_eq!(linkrs_config_free(config), 0);
         }
@@ -355,7 +355,7 @@ mod tests {
             let mut db: *mut linkrs_t = std::ptr::null_mut();
             assert_eq!(
                 linkrs_open_with_config(std::ptr::null_mut(), &mut db),
-                linkrs_error_code_t::GRAPHDB_MISUSE as c_int
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
             );
         }
     }

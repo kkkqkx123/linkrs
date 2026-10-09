@@ -1,4 +1,4 @@
-PS D:\项目\database\graphDB\tests\e2e> python run_tests.py
+PS D:\项目\database\linkrs\tests\e2e> python run_tests.py
 Checking Linkrs server at 127.0.0.1:9758...
 ✓ Server is ready
 
@@ -89,7 +89,7 @@ TC-020: Basic transaction commit.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_social_network.py", line 446, in test_020_transaction_commit  
+File "D:\项目\database\linkrs\tests\e2e\test_social_network.py", line 446, in test_020_transaction_commit  
  self.assertTrue(result.success, f"INSERT failed: {result.error}")
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: False is not true : INSERT failed: Query execution failed: Query error: Execution error: Execution error: Storage error: Database error: Timed out acquiring write lock after 10s. Another write transaction may be blocking.
@@ -101,7 +101,7 @@ TC-021: Transaction rollback.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_social_network.py", line 472, in test_021_transaction_rollback  
+File "D:\项目\database\linkrs\tests\e2e\test_social_network.py", line 472, in test_021_transaction_rollback  
  self.assertTrue(result.success, f"INSERT failed: {result.error}")
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: False is not true : INSERT failed: Query execution failed: Query error: Execution error: Execution error: Storage error: Database error: Timed out acquiring write lock after 10s. Another write transaction may be blocking.
@@ -143,7 +143,7 @@ TC-IDX-001: Equality query should use IndexScan.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_optimizer.py", line 82, in test_idx_001_index_scan_for_equality
+File "D:\项目\database\linkrs\tests\e2e\test_optimizer.py", line 82, in test_idx_001_index_scan_for_equality
 self.assertIn("IndexScan", plan or "")
 ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 'IndexScan' not found in '{"columns": ["plan"], "rows": [{"plan": "-----------------------------------------------------------------------------------\\n| id | name | deps | profiling_data | operator_info | output_var | \\n-----------------------------------------------------------------------------------\\n| 4401 | ScanVertices | - | - | space:e2e_optimizer | p | \\n| 4400 | Filter | 4401 | - | - | - | \\n| 4399 | Project | 4400 | -
@@ -156,7 +156,7 @@ TC-IDX-002: Range query should use IndexScan.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_optimizer.py", line 93, in test_idx_002_index_scan_for_range  
+File "D:\项目\database\linkrs\tests\e2e\test_optimizer.py", line 93, in test_idx_002_index_scan_for_range  
  self.assertIn("IndexScan", plan or "")
 ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
 AssertionError: 'IndexScan' not found in '{"columns": ["plan"], "rows": [{"plan": "-----------------------------------------------------------------------------------\\n| id | name | deps | profiling_data | operator_info | output_var | \\n-----------------------------------------------------------------------------------\\n| 4675 | ScanVertices | - | - | space:e2e_optimizer | p | \\n| 4674 | Filter | 4675 | - | - | - | \\n| 4673 | Project | 4674 | -
@@ -169,7 +169,7 @@ TC-JOIN-001: Verify join algorithm is selected.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_optimizer.py", line 176, in test_join_001_join_algorithm_selection
+File "D:\项目\database\linkrs\tests\e2e\test_optimizer.py", line 176, in test_join_001_join_algorithm_selection
 self.assertTrue(
 ~~~~~~~~~~~~~~~^
 "HashJoin" in plan or "IndexJoin" in plan or "NestedLoop" in plan,
@@ -225,7 +225,7 @@ TC-VEC-002: Cosine similarity search.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_extended_types.py", line 238, in test_vec_002_cosine_similarity
+File "D:\项目\database\linkrs\tests\e2e\test_extended_types.py", line 238, in test_vec_002_cosine_similarity
 self.assertTrue(result.success)
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
 AssertionError: False is not true
@@ -237,7 +237,7 @@ TC-VEC-003: Vector search with filter.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_extended_types.py", line 251, in test_vec_003_filtered_vector_search
+File "D:\项目\database\linkrs\tests\e2e\test_extended_types.py", line 251, in test_vec_003_filtered_vector_search
 self.assertTrue(result.success)
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
 AssertionError: False is not true
@@ -249,7 +249,7 @@ TC-VEC-004: EXPLAIN vector query.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_extended_types.py", line 264, in test_vec_004_explain_vector_query
+File "D:\项目\database\linkrs\tests\e2e\test_extended_types.py", line 264, in test_vec_004_explain_vector_query
 self.assertTrue(result.success)
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
 AssertionError: False is not true
@@ -261,7 +261,7 @@ TC-FT-001: Create fulltext index.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_extended_types.py", line 330, in test_ft_001_fulltext_index_creation
+File "D:\项目\database\linkrs\tests\e2e\test_extended_types.py", line 330, in test_ft_001_fulltext_index_creation
 self.assertTrue(result.success)
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
 AssertionError: False is not true
@@ -273,7 +273,7 @@ TC-FT-002: Basic fulltext search.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_extended_types.py", line 343, in test_ft_002_basic_search  
+File "D:\项目\database\linkrs\tests\e2e\test_extended_types.py", line 343, in test_ft_002_basic_search  
  self.assertTrue(result.success)
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
 AssertionError: False is not true
@@ -285,7 +285,7 @@ TC-FT-003: Boolean query search.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_extended_types.py", line 353, in test_ft_003_boolean_search  
+File "D:\项目\database\linkrs\tests\e2e\test_extended_types.py", line 353, in test_ft_003_boolean_search  
  self.assertTrue(result.success)
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
 AssertionError: False is not true
@@ -297,7 +297,7 @@ TC-FT-004: EXPLAIN fulltext search.
 ---
 
 Traceback (most recent call last):
-File "D:\项目\database\graphDB\tests\e2e\test_extended_types.py", line 363, in test_ft_004_explain_fulltext  
+File "D:\项目\database\linkrs\tests\e2e\test_extended_types.py", line 363, in test_ft_004_explain_fulltext  
  self.assertTrue(result.success)
 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
 AssertionError: False is not true
@@ -352,4 +352,4 @@ Skipped: 0
 Duration: 53.36s
 
 ✗ SOME TESTS FAILED
-PS D:\项目\database\graphDB\tests\e2e>
+PS D:\项目\database\linkrs\tests\e2e>

@@ -23,7 +23,7 @@ pub(crate) type StreamMigrationProgressStream = std::pin::Pin<
 >;
 
 /// gRPC service implementation behind the generated trait.
-pub struct GraphDBService<
+pub struct LinkrsService<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
@@ -43,7 +43,7 @@ impl<
             + StorageOperationContextOps
             + Clone
             + 'static,
-    > GraphDBService<S>
+    > LinkrsService<S>
 {
     /// Create a new gRPC service instance.
     pub fn new(app_state: AppState<S>, config: Config) -> Self {

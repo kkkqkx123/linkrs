@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 
 export type Theme = 'light' | 'dark';
 
-const STORAGE_KEY = 'graphdb-theme';
+const STORAGE_KEY = 'linkrs-theme';
 
 function initialTheme(): Theme {
 	const saved = localStorage.getItem(STORAGE_KEY);

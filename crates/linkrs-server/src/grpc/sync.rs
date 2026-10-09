@@ -7,10 +7,10 @@ use crate::storage::{
 };
 
 use super::proto::*;
-use super::service::GraphDBService;
+use super::service::LinkrsService;
 
 fn require_sync<S>(
-    service: &GraphDBService<S>,
+    service: &LinkrsService<S>,
 ) -> Result<std::sync::Arc<linkrs_api::api_core::SyncApi>, Status>
 where
     S: StorageClient
@@ -38,7 +38,7 @@ impl<
             + Send
             + Sync
             + 'static,
-    > GraphDBService<S>
+    > LinkrsService<S>
 {
     pub(crate) async fn handle_get_sync_status(
         &self,
