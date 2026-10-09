@@ -167,8 +167,7 @@ impl CApiTestTransaction {
 
     /// Roll back a transaction
     pub fn rollback(self) {
-        let rc =
-            unsafe { crate::api::embedded::c_api::transaction::linkrs_txn_rollback(self.txn) };
+        let rc = unsafe { crate::api::embedded::c_api::transaction::linkrs_txn_rollback(self.txn) };
         assert_eq!(
             rc,
             linkrs_error_code_t::GRAPHDB_OK as i32,

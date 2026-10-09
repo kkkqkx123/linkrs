@@ -6,9 +6,7 @@ use crate::embedded::c_api::config::GraphDbConfigHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
 };
-use crate::embedded::c_api::types::{
-    linkrs_config_t, linkrs_t, GRAPHDB_OPEN_CREATE, GRAPHDB_OPEN_READONLY, GRAPHDB_OPEN_READWRITE,
-};
+use crate::embedded::c_api::types::{linkrs_config_t, linkrs_t};
 use crate::embedded::{DatabaseConfig, GraphDatabase};
 use crate::storage::GraphStorage;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -53,93 +51,6 @@ pub unsafe extern "C" fn linkrs_open(path: *const c_char, db: *mut *mut linkrs_t
 
     // Open database
     match GraphDatabase::open(path_str) {
-        Ok(linkrs) => {
-            let handle = Box::new(GraphDbHandle {
-                inner: Arc::new(linkrs),
-                last_error: None,
-            });
-            unsafe {
-                *db = Box::into_raw(handle) as *mut linkrs_t;
-            }
-            linkrs_error_code_t::GRAPHDB_OK as c_int
-        }
-        Err(e) => {
-            let (error_code, _) = error_code_from_core_error(&e);
-            let error_msg = format!("{}", e);
-            set_last_error_message(error_msg);
-            unsafe {
-                *db = ptr::null_mut();
-            }
-            error_code
-        }
-    }
-}
-
-/// Open the database using the flag
-///
-/// # Arguments
-/// - `path`: Database file path (UTF-8 encoded)
-/// - `db`: Output parameter, database handle
-/// - `flags`: Open flags
-/// - `vfs`: VFS name (reserved parameter, currently unused, can be NULL)
-///
-/// # Returns
-/// - Success: GRAPHDB_OK
-/// - Failure: Error code
-///
-/// # Flags
-/// - GRAPHDB_OPEN_READONLY: Read-only mode
-/// - GRAPHDB_OPEN_READWRITE: Read-write mode
-/// - GRAPHDB_OPEN_CREATE: Create database if it doesn't exist
-///
-/// # Safety
-/// - `path` must be a valid pointer to a null-terminated UTF-8 string
-/// - `db` must be a valid pointer to store the database handle
-/// - The caller is responsible for closing the database using `linkrs_close` when done
-/// - The database handle must not be used after closing
-#[no_mangle]
-pub unsafe extern "C" fn linkrs_open_v2(
-    path: *const c_char,
-    db: *mut *mut linkrs_t,
-    flags: c_int,
-    _vfs: *const c_char,
-) -> c_int {
-    // Parameter validation (vfs can be NULL)
-    if path.is_null() || db.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
-    }
-
-    // Converting path strings
-    let path_str = unsafe {
-        match CStr::from_ptr(path).to_str() {
-            Ok(s) => s,
-            Err(_) => return linkrs_error_code_t::GRAPHDB_MISUSE as c_int,
-        }
-    };
-
-    // analytic symbol
-    let read_only = (flags & GRAPHDB_OPEN_READONLY) != 0;
-    let read_write = (flags & GRAPHDB_OPEN_READWRITE) != 0;
-    let create = (flags & GRAPHDB_OPEN_CREATE) != 0;
-
-    // Validation Flag Combination
-    if read_only && read_write {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
-    }
-
-    // Build Configuration
-    let mut config = if read_only {
-        DatabaseConfig::file(path_str).with_read_only(true)
-    } else {
-        DatabaseConfig::file(path_str)
-    };
-
-    if create {
-        config = config.with_create_if_missing(true);
-    }
-
-    // Open database
-    match GraphDatabase::open_with_config(config) {
         Ok(linkrs) => {
             let handle = Box::new(GraphDbHandle {
                 inner: Arc::new(linkrs),
@@ -222,7 +133,7 @@ pub unsafe extern "C" fn linkrs_open_with_config(
 /// - Failure: Error code
 ///
 /// # Safety
-/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_v2`
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
 /// - After calling this function, the database handle becomes invalid and must not be used
 /// - All sessions associated with this database must be closed before calling this function
 #[no_mangle]
@@ -248,7 +159,7 @@ pub unsafe extern "C" fn linkrs_close(db: *mut linkrs_t) -> c_int {
 /// - Error code, returns GRAPHDB_OK if no error
 ///
 /// # Safety
-/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_v2`
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_errcode(db: *mut linkrs_t) -> c_int {
     if db.is_null() {

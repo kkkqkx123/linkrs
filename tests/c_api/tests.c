@@ -296,9 +296,8 @@ void test_transaction_begin_commit(void) {
     rc = linkrs_txn_commit(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    /* 释放事务句柄 */
-    rc = linkrs_txn_free(txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    /* Release transaction handle (void return) */
+    linkrs_txn_free(txn);
     
     rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
@@ -332,9 +331,8 @@ void test_transaction_begin_rollback(void) {
     rc = linkrs_txn_rollback(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    /* 释放事务句柄 */
-    rc = linkrs_txn_free(txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    /* Release transaction handle (void return) */
+    linkrs_txn_free(txn);
     
     rc = linkrs_session_close(session);
     ASSERT_EQ(GRAPHDB_OK, rc);
@@ -409,10 +407,10 @@ void test_batch_buffered_counts_null(void) {
 
 /* ==================== 错误处理测试 ==================== */
 
-void test_error_string(void) {
-    const char* error_str = linkrs_error_string(GRAPHDB_OK);
+void test_errstr(void) {
+    const char* error_str = linkrs_errstr(GRAPHDB_OK);
     ASSERT_NOT_NULL(error_str);
-    ASSERT_TRUE(strcmp(error_str, "成功") == 0);
+    ASSERT_TRUE(strcmp(error_str, "OK") == 0);
 }
 
 void test_error_codes(void) {
@@ -420,17 +418,17 @@ void test_error_codes(void) {
         int code;
         const char* expected_desc;
     } test_cases[] = {
-        {GRAPHDB_OK, "成功"},
-        {GRAPHDB_ERROR, "一般错误"},
-        {GRAPHDB_MISUSE, "误用"},
-        {GRAPHDB_NOTFOUND, "未找到"},
-        {GRAPHDB_IOERR, "IO 错误"},
-        {GRAPHDB_CORRUPT, "数据损坏"},
-        {GRAPHDB_NOMEM, "内存不足"},
+        {GRAPHDB_OK, "OK"},
+        {GRAPHDB_ERROR, "General error"},
+        {GRAPHDB_MISUSE, "Misuse"},
+        {GRAPHDB_NOTFOUND, "Not found"},
+        {GRAPHDB_IOERR, "IO error"},
+        {GRAPHDB_CORRUPT, "Data corruption"},
+        {GRAPHDB_NOMEM, "Out of memory"},
     };
     
     for (size_t i = 0; i < sizeof(test_cases) / sizeof(test_cases[0]); i++) {
-        const char* error_str = linkrs_error_string(test_cases[i].code);
+        const char* error_str = linkrs_errstr(test_cases[i].code);
         ASSERT_NOT_NULL(error_str);
         ASSERT_TRUE(strcmp(error_str, test_cases[i].expected_desc) == 0);
     }
@@ -504,11 +502,10 @@ void test_full_workflow(void) {
     rc = linkrs_txn_commit(txn);
     ASSERT_EQ(GRAPHDB_OK, rc);
     
-    /* 释放事务句柄 */
-    rc = linkrs_txn_free(txn);
-    ASSERT_EQ(GRAPHDB_OK, rc);
+    /* Release transaction handle (void return) */
+    linkrs_txn_free(txn);
     
-    /* 创建批量插入器 */
+    /* Create batch inserter */
     rc = linkrs_batch_inserter_create(session, 100, &batch);
     ASSERT_EQ(GRAPHDB_OK, rc);
     ASSERT_NOT_NULL(batch);
@@ -578,7 +575,7 @@ int main(void) {
     
     /* 错误处理测试 */
     printf("【错误处理测试】\n");
-    TEST(error_string);
+    TEST(errstr);
     TEST(error_codes);
     TEST(errmsg);
     printf("\n");

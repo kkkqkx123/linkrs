@@ -62,7 +62,7 @@ pub use linkrs_core::SessionStatistics;
 // C API re-export
 pub use c_api::{
     error::linkrs_error_code_t,
-    statistics::SessionStatistics as CApiSessionStatistics,
+    statistics::linkrs_session_statistics_t as CApiSessionStatistics,
     types::{
         linkrs_batch_t, linkrs_config_t, linkrs_result_t, linkrs_session_t, linkrs_string_t,
         linkrs_t, linkrs_txn_t, linkrs_value_data_t, linkrs_value_t, linkrs_value_type_t,

@@ -11,24 +11,46 @@ pub use linkrs_core::types::c_api::{
 };
 
 /// Database handle (opaque pointer)
+///
+/// The `_dummy` member gives the type a real size in C: an empty struct is
+/// not valid C11 and MSVC rejects it (C2016).
 #[repr(C)]
-pub struct linkrs_t;
+pub struct linkrs_t {
+    _dummy: u8,
+}
 
 /// Session handles (opaque pointers)
 #[repr(C)]
-pub struct linkrs_session_t;
+pub struct linkrs_session_t {
+    _dummy: u8,
+}
 
 /// Transaction handles (opaque pointers)
 #[repr(C)]
-pub struct linkrs_txn_t;
+pub struct linkrs_txn_t {
+    _dummy: u8,
+}
 
 /// Result set handle (opaque pointer)
 #[repr(C)]
-pub struct linkrs_result_t;
+pub struct linkrs_result_t {
+    _dummy: u8,
+}
 
 /// Batch operation handles (opaque pointers)
 #[repr(C)]
-pub struct linkrs_batch_t;
+pub struct linkrs_batch_t {
+    _dummy: u8,
+}
+
+/// Busy handler handle (opaque pointer).
+///
+/// Created by `linkrs_busy_handler_create`, released with
+/// `linkrs_busy_handler_free`.
+#[repr(C)]
+pub struct linkrs_busy_handler_t {
+    _dummy: u8,
+}
 
 /// Database configuration handle (opaque pointer).
 ///
@@ -38,16 +60,9 @@ pub struct linkrs_batch_t;
 /// `linkrs_config_free`. It is opaque on purpose: pattern matches the other
 /// handle types in this module.
 #[repr(C)]
-pub struct linkrs_config_t;
-
-/// Database open flag
-pub const GRAPHDB_OPEN_READONLY: c_int = 0x00000001;
-pub const GRAPHDB_OPEN_READWRITE: c_int = 0x00000002;
-pub const GRAPHDB_OPEN_CREATE: c_int = 0x00000004;
-pub const GRAPHDB_OPEN_NOMUTEX: c_int = 0x00008000;
-pub const GRAPHDB_OPEN_FULLMUTEX: c_int = 0x00010000;
-pub const GRAPHDB_OPEN_SHAREDCACHE: c_int = 0x00020000;
-pub const GRAPHDB_OPEN_PRIVATECACHE: c_int = 0x00040000;
+pub struct linkrs_config_t {
+    _dummy: u8,
+}
 
 /// SQL Trace Callback Types
 #[allow(non_camel_case_types)]

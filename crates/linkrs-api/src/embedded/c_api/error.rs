@@ -192,6 +192,39 @@ pub enum linkrs_error_code_t {
     GRAPHDB_NOT_IMPLEMENTED = 22,
 }
 
+impl TryFrom<i32> for linkrs_error_code_t {
+    type Error = ();
+
+    fn try_from(code: i32) -> Result<Self, Self::Error> {
+        Ok(match code {
+            0 => linkrs_error_code_t::GRAPHDB_OK,
+            1 => linkrs_error_code_t::GRAPHDB_ERROR,
+            2 => linkrs_error_code_t::GRAPHDB_INTERNAL,
+            3 => linkrs_error_code_t::GRAPHDB_PERM,
+            4 => linkrs_error_code_t::GRAPHDB_ABORT,
+            5 => linkrs_error_code_t::GRAPHDB_BUSY,
+            6 => linkrs_error_code_t::GRAPHDB_LOCKED,
+            7 => linkrs_error_code_t::GRAPHDB_NOMEM,
+            8 => linkrs_error_code_t::GRAPHDB_READONLY,
+            9 => linkrs_error_code_t::GRAPHDB_INTERRUPT,
+            10 => linkrs_error_code_t::GRAPHDB_IOERR,
+            11 => linkrs_error_code_t::GRAPHDB_CORRUPT,
+            12 => linkrs_error_code_t::GRAPHDB_NOTFOUND,
+            13 => linkrs_error_code_t::GRAPHDB_FULL,
+            14 => linkrs_error_code_t::GRAPHDB_CANTOPEN,
+            15 => linkrs_error_code_t::GRAPHDB_PROTOCOL,
+            16 => linkrs_error_code_t::GRAPHDB_SCHEMA,
+            17 => linkrs_error_code_t::GRAPHDB_TOOBIG,
+            18 => linkrs_error_code_t::GRAPHDB_CONSTRAINT,
+            19 => linkrs_error_code_t::GRAPHDB_MISMATCH,
+            20 => linkrs_error_code_t::GRAPHDB_MISUSE,
+            21 => linkrs_error_code_t::GRAPHDB_RANGE,
+            22 => linkrs_error_code_t::GRAPHDB_NOT_IMPLEMENTED,
+            _ => return Err(()),
+        })
+    }
+}
+
 /// Converting from core error codes to C error codes and extended error codes
 pub fn error_code_from_core_error(error: &CoreError) -> (i32, linkrs_extended_error_code_t) {
     // Read-only violations surface as GRAPHDB_READONLY regardless of the
@@ -387,9 +420,7 @@ pub fn extended_error_code_to_message(code: linkrs_extended_error_code_t) -> &'s
         }
         linkrs_extended_error_code_t::GRAPHDB_ERROR_DEADLOCK => "Deadlock\0".as_bytes(),
         linkrs_extended_error_code_t::GRAPHDB_ERROR_LOCK_TIMEOUT => "Lock timeout\0".as_bytes(),
-        linkrs_extended_error_code_t::GRAPHDB_ERROR_CONFLICT => {
-            "Transaction conflict\0".as_bytes()
-        }
+        linkrs_extended_error_code_t::GRAPHDB_ERROR_CONFLICT => "Transaction conflict\0".as_bytes(),
         linkrs_extended_error_code_t::GRAPHDB_ERROR_NOT_OWNER => {
             "Transaction owner mismatch\0".as_bytes()
         }
@@ -399,13 +430,9 @@ pub fn extended_error_code_to_message(code: linkrs_extended_error_code_t) -> &'s
         linkrs_extended_error_code_t::GRAPHDB_ERROR_RECOVERY_REQUIRED => {
             "Transaction recovery required\0".as_bytes()
         }
-        linkrs_extended_error_code_t::GRAPHDB_ERROR_INVALID_VERTEX => {
-            "Invalid vertex\0".as_bytes()
-        }
+        linkrs_extended_error_code_t::GRAPHDB_ERROR_INVALID_VERTEX => "Invalid vertex\0".as_bytes(),
         linkrs_extended_error_code_t::GRAPHDB_ERROR_INVALID_EDGE => "Invalid edge\0".as_bytes(),
-        linkrs_extended_error_code_t::GRAPHDB_ERROR_PATH_NOT_FOUND => {
-            "Path not found\0".as_bytes()
-        }
+        linkrs_extended_error_code_t::GRAPHDB_ERROR_PATH_NOT_FOUND => "Path not found\0".as_bytes(),
     }
 }
 
@@ -447,46 +474,6 @@ pub unsafe extern "C" fn linkrs_errmsg(msg: *mut std::ffi::c_char, len: usize) -
     copy_len as i32
 }
 
-/// Obtain the description of the error code.
-///
-/// # Parameters
-/// `code`: Error code
-///
-/// # Back
-/// Error description string (static lifecycle)
-#[no_mangle]
-pub extern "C" fn linkrs_error_string(code: i32) -> *const std::ffi::c_char {
-    let error_code = match code {
-        0 => linkrs_error_code_t::GRAPHDB_OK,
-        1 => linkrs_error_code_t::GRAPHDB_ERROR,
-        2 => linkrs_error_code_t::GRAPHDB_INTERNAL,
-        3 => linkrs_error_code_t::GRAPHDB_PERM,
-        4 => linkrs_error_code_t::GRAPHDB_ABORT,
-        5 => linkrs_error_code_t::GRAPHDB_BUSY,
-        6 => linkrs_error_code_t::GRAPHDB_LOCKED,
-        7 => linkrs_error_code_t::GRAPHDB_NOMEM,
-        8 => linkrs_error_code_t::GRAPHDB_READONLY,
-        9 => linkrs_error_code_t::GRAPHDB_INTERRUPT,
-        10 => linkrs_error_code_t::GRAPHDB_IOERR,
-        11 => linkrs_error_code_t::GRAPHDB_CORRUPT,
-        12 => linkrs_error_code_t::GRAPHDB_NOTFOUND,
-        13 => linkrs_error_code_t::GRAPHDB_FULL,
-        14 => linkrs_error_code_t::GRAPHDB_CANTOPEN,
-        15 => linkrs_error_code_t::GRAPHDB_PROTOCOL,
-        16 => linkrs_error_code_t::GRAPHDB_SCHEMA,
-        17 => linkrs_error_code_t::GRAPHDB_TOOBIG,
-        18 => linkrs_error_code_t::GRAPHDB_CONSTRAINT,
-        19 => linkrs_error_code_t::GRAPHDB_MISMATCH,
-        20 => linkrs_error_code_t::GRAPHDB_MISUSE,
-        21 => linkrs_error_code_t::GRAPHDB_RANGE,
-        _ => linkrs_error_code_t::GRAPHDB_ERROR,
-    };
-
-    let desc = error_code_to_message(error_code);
-    // The string to be translated is static and does not need to be released.
-    desc.as_ptr() as *const std::ffi::c_char
-}
-
 /// Retrieve the string description corresponding to the error code (similar to sqlite3_errstr in SQLite).
 ///
 /// # Parameter
@@ -496,46 +483,10 @@ pub extern "C" fn linkrs_error_string(code: i32) -> *const std::ffi::c_char {
 /// Error description string (static lifecycle; no need for release)
 #[no_mangle]
 pub extern "C" fn linkrs_errstr(code: i32) -> *const std::ffi::c_char {
-    let error_code = match code {
-        0 => linkrs_error_code_t::GRAPHDB_OK,
-        1 => linkrs_error_code_t::GRAPHDB_ERROR,
-        2 => linkrs_error_code_t::GRAPHDB_INTERNAL,
-        3 => linkrs_error_code_t::GRAPHDB_PERM,
-        4 => linkrs_error_code_t::GRAPHDB_ABORT,
-        5 => linkrs_error_code_t::GRAPHDB_BUSY,
-        6 => linkrs_error_code_t::GRAPHDB_LOCKED,
-        7 => linkrs_error_code_t::GRAPHDB_NOMEM,
-        8 => linkrs_error_code_t::GRAPHDB_READONLY,
-        9 => linkrs_error_code_t::GRAPHDB_INTERRUPT,
-        10 => linkrs_error_code_t::GRAPHDB_IOERR,
-        11 => linkrs_error_code_t::GRAPHDB_CORRUPT,
-        12 => linkrs_error_code_t::GRAPHDB_NOTFOUND,
-        13 => linkrs_error_code_t::GRAPHDB_FULL,
-        14 => linkrs_error_code_t::GRAPHDB_CANTOPEN,
-        15 => linkrs_error_code_t::GRAPHDB_PROTOCOL,
-        16 => linkrs_error_code_t::GRAPHDB_SCHEMA,
-        17 => linkrs_error_code_t::GRAPHDB_TOOBIG,
-        18 => linkrs_error_code_t::GRAPHDB_CONSTRAINT,
-        19 => linkrs_error_code_t::GRAPHDB_MISMATCH,
-        20 => linkrs_error_code_t::GRAPHDB_MISUSE,
-        21 => linkrs_error_code_t::GRAPHDB_RANGE,
-        _ => linkrs_error_code_t::GRAPHDB_ERROR,
-    };
-
-    let desc = error_code_to_message(error_code);
-    desc.as_ptr() as *const std::ffi::c_char
-}
-
-/// Retrieve the last error message.
-///
-/// # Return
-/// Pointer to the error message string (thread-local storage; does not need to be freed)
-#[no_mangle]
-pub extern "C" fn linkrs_get_last_error_message() -> *const std::ffi::c_char {
-    LAST_ERROR_MESSAGE.with(|m| match m.borrow().as_ref() {
-        Some(s) => s.as_ptr() as *const std::ffi::c_char,
-        None => std::ptr::null(),
-    })
+    match linkrs_error_code_t::try_from(code) {
+        Ok(code) => error_code_to_message(code).as_ptr() as *const std::ffi::c_char,
+        Err(()) => b"Unknown error code\0".as_ptr() as *const std::ffi::c_char,
+    }
 }
 
 /// Get the location of the SQL error (in terms of character offset).

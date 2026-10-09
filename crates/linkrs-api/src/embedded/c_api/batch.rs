@@ -443,34 +443,6 @@ pub unsafe extern "C" fn linkrs_batch_edges_inserted(
     linkrs_error_code_t::GRAPHDB_OK as c_int
 }
 
-/// Get the number of items in the buffer
-///
-/// # Parameters
-/// - `batch`: batch operation handle
-/// - `count`: output parameter
-///
-/// # Returns
-/// Success: GRAPHDB_OK
-/// Failure: Error code
-///
-/// # Safety
-/// - `batch` must be a valid batch handle
-/// - `count` must be a valid pointer
-#[no_mangle]
-pub unsafe extern "C" fn linkrs_batch_buffered_count(
-    batch: *mut linkrs_batch_t,
-    count: *mut c_int,
-) -> c_int {
-    if batch.is_null() || count.is_null() {
-        return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
-    }
-
-    let handle = &*(batch as *mut GraphDbBatchHandle);
-    *count = handle.buffer.len() as c_int;
-
-    linkrs_error_code_t::GRAPHDB_OK as c_int
-}
-
 /// Get the number of buffered vertices
 ///
 /// # Safety
@@ -539,12 +511,5 @@ mod tests {
     fn test_batch_free_null() {
         // Should not panic
         unsafe { linkrs_batch_free(std::ptr::null_mut()) };
-    }
-
-    #[test]
-    fn test_batch_buffered_counts_null() {
-        let result =
-            unsafe { linkrs_batch_buffered_count(std::ptr::null_mut(), std::ptr::null_mut()) };
-        assert_eq!(result, linkrs_error_code_t::GRAPHDB_MISUSE as c_int);
     }
 }

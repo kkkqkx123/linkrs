@@ -163,7 +163,7 @@ impl GraphDbSessionHandle {
 /// - Failure: Error code
 ///
 /// # Safety
-/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_v2`
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
 /// - `session` must be a valid pointer to store the session handle
 /// - The caller is responsible for closing the session using `linkrs_session_close` when done
 /// - The session handle must not be used after closing
@@ -367,90 +367,6 @@ pub unsafe extern "C" fn linkrs_session_get_autocommit(session: *mut linkrs_sess
 
     let handle = &*(session as *mut GraphDbSessionHandle);
     handle.inner.auto_commit()
-}
-
-/// Get the number of rows affected by the last operation
-///
-/// # Arguments
-/// - `session`: Session handle
-///
-/// # Returns
-/// - Number of rows affected by last operation, returns 0 if session is invalid
-///
-/// # Safety
-/// - `session` must be a valid session handle created by `linkrs_session_create`
-#[no_mangle]
-pub unsafe extern "C" fn linkrs_changes(session: *mut linkrs_session_t) -> c_int {
-    if session.is_null() {
-        return 0;
-    }
-
-    let handle = &*(session as *mut GraphDbSessionHandle);
-    handle.inner.changes() as c_int
-}
-
-/// The total number of changes since the database was opened has been retrieved.
-///
-/// # Arguments
-/// - `session`: Session handle
-///
-/// # Returns
-/// - Total number of changes
-///
-/// # Safety
-/// - `session` must be a valid session handle created by `linkrs_session_create`
-#[no_mangle]
-pub unsafe extern "C" fn linkrs_total_changes(session: *mut linkrs_session_t) -> i64 {
-    if session.is_null() {
-        return 0;
-    }
-
-    let handle = &*(session as *mut GraphDbSessionHandle);
-    handle.inner.total_changes() as i64
-}
-
-/// Obtain the ID of the last vertex that was inserted.
-///
-/// # Arguments
-/// - `session`: Session handle
-///
-/// # Returns
-/// - Last inserted vertex ID, returns 0 if none
-///
-/// # Safety
-/// - `session` must be a valid session handle created by `linkrs_session_create`
-#[no_mangle]
-pub unsafe extern "C" fn linkrs_last_insert_vertex_id(session: *mut linkrs_session_t) -> i64 {
-    if session.is_null() {
-        return -1;
-    }
-
-    let handle = &*(session as *mut GraphDbSessionHandle);
-    handle
-        .inner
-        .last_insert_vertex_id()
-        .map(|id| id as i64)
-        .unwrap_or(-1)
-}
-
-/// Obtain the ID of the last inserted edge.
-///
-/// # Arguments
-/// - `session`: Session handle
-///
-/// # Returns
-/// - Last inserted edge ID, returns 0 if none
-///
-/// # Safety
-/// - `session` must be a valid session handle created by `linkrs_session_create`
-#[no_mangle]
-pub unsafe extern "C" fn linkrs_last_insert_edge_id(session: *mut linkrs_session_t) -> u64 {
-    if session.is_null() {
-        return 0;
-    }
-
-    let handle = &*(session as *mut GraphDbSessionHandle);
-    handle.inner.last_insert_edge_id().unwrap_or(0)
 }
 
 /// Setting the busy wait timeout

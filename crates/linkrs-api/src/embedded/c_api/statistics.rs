@@ -63,7 +63,7 @@ pub unsafe extern "C" fn linkrs_session_total_changes(session: *mut linkrs_sessi
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_session_last_insert_vertex_id(
     session: *mut linkrs_session_t,
-    vertex_id: *mut i64,
+    vertex_id: *mut u64,
 ) -> c_int {
     if session.is_null() || vertex_id.is_null() {
         return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn linkrs_session_last_insert_vertex_id(
     let handle = &*(session as *mut GraphDbSessionHandle);
     match handle.inner.last_insert_vertex_id() {
         Some(id) => {
-            *vertex_id = id as i64;
+            *vertex_id = id;
             linkrs_error_code_t::GRAPHDB_OK as c_int
         }
         None => linkrs_error_code_t::GRAPHDB_NOTFOUND as c_int,
@@ -126,7 +126,7 @@ pub unsafe extern "C" fn linkrs_session_last_insert_edge_id(
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_session_get_statistics(
     session: *mut linkrs_session_t,
-    stats: *mut SessionStatistics,
+    stats: *mut linkrs_session_statistics_t,
 ) -> c_int {
     if session.is_null() || stats.is_null() {
         return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
@@ -135,7 +135,7 @@ pub unsafe extern "C" fn linkrs_session_get_statistics(
     let handle = &*(session as *mut GraphDbSessionHandle);
     let session_stats = handle.inner.statistics();
 
-    *stats = SessionStatistics {
+    *stats = linkrs_session_statistics_t {
         last_changes: session_stats.last_changes(),
         total_changes: session_stats.total_changes(),
         last_insert_vertex_id: handle.inner.last_insert_vertex_id().unwrap_or(0),
@@ -148,7 +148,7 @@ pub unsafe extern "C" fn linkrs_session_get_statistics(
 /// Session statistics structure
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct SessionStatistics {
+pub struct linkrs_session_statistics_t {
     /// Number of rows affected by the last operation
     pub last_changes: u64,
     /// Total number of rows affected
@@ -175,7 +175,7 @@ mod tests {
             assert_eq!(linkrs_session_changes(session_ptr), 0);
             assert_eq!(linkrs_session_total_changes(session_ptr), 0);
 
-            let mut stats = SessionStatistics {
+            let mut stats = linkrs_session_statistics_t {
                 last_changes: 0,
                 total_changes: 0,
                 last_insert_vertex_id: 0,

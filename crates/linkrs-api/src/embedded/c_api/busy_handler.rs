@@ -4,12 +4,8 @@
 
 use crate::embedded::busy_handler::BusyHandler;
 use crate::embedded::c_api::error::linkrs_error_code_t;
-use std::ffi::{c_int, c_void};
-
-/// Internal structure of busy handler
-pub struct GraphDbBusyHandler {
-    pub(crate) inner: BusyHandler,
-}
+use crate::embedded::c_api::types::linkrs_busy_handler_t;
+use std::ffi::c_int;
 
 /// Create a new busy handler
 ///
@@ -26,10 +22,11 @@ pub struct GraphDbBusyHandler {
 /// This function uses FFI and returns a raw pointer. The returned pointer must be freed
 /// using `linkrs_busy_handler_free` to avoid memory leaks.
 #[no_mangle]
-pub unsafe extern "C" fn linkrs_busy_handler_create(timeout_ms: c_int) -> *mut c_void {
+pub unsafe extern "C" fn linkrs_busy_handler_create(
+    timeout_ms: c_int,
+) -> *mut linkrs_busy_handler_t {
     let handler = BusyHandler::new(timeout_ms as u32);
-    let handle = Box::new(GraphDbBusyHandler { inner: handler });
-    Box::into_raw(handle) as *mut c_void
+    Box::into_raw(Box::new(handler)) as *mut linkrs_busy_handler_t
 }
 
 /// Free busy handler
@@ -44,12 +41,12 @@ pub unsafe extern "C" fn linkrs_busy_handler_create(timeout_ms: c_int) -> *mut c
 /// # Safety
 /// - `handler` must be a valid busy handler handle created by `linkrs_busy_handler_create`
 #[no_mangle]
-pub unsafe extern "C" fn linkrs_busy_handler_free(handler: *mut c_void) -> c_int {
+pub unsafe extern "C" fn linkrs_busy_handler_free(handler: *mut linkrs_busy_handler_t) -> c_int {
     if handler.is_null() {
         return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
     }
 
-    let _ = Box::from_raw(handler as *mut GraphDbBusyHandler);
+    let _ = Box::from_raw(handler as *mut BusyHandler);
     linkrs_error_code_t::GRAPHDB_OK as c_int
 }
 
@@ -67,17 +64,13 @@ pub unsafe extern "C" fn linkrs_busy_handler_free(handler: *mut c_void) -> c_int
 /// # Safety
 /// - `handler` must be a valid busy handler handle
 #[no_mangle]
-pub unsafe extern "C" fn linkrs_busy_handler_handle(handler: *mut c_void) -> c_int {
+pub unsafe extern "C" fn linkrs_busy_handler_handle(handler: *mut linkrs_busy_handler_t) -> c_int {
     if handler.is_null() {
         return 0;
     }
 
-    let handle = &*(handler as *mut GraphDbBusyHandler);
-    if handle.inner.handle_busy() {
-        1
-    } else {
-        0
-    }
+    let handle = &*(handler as *mut BusyHandler);
+    i32::from(handle.handle_busy())
 }
 
 /// Check if timeout has expired
@@ -92,17 +85,15 @@ pub unsafe extern "C" fn linkrs_busy_handler_handle(handler: *mut c_void) -> c_i
 /// # Safety
 /// - `handler` must be a valid busy handler handle
 #[no_mangle]
-pub unsafe extern "C" fn linkrs_busy_handler_is_timeout(handler: *mut c_void) -> c_int {
+pub unsafe extern "C" fn linkrs_busy_handler_is_timeout(
+    handler: *mut linkrs_busy_handler_t,
+) -> c_int {
     if handler.is_null() {
         return 1;
     }
 
-    let handle = &*(handler as *mut GraphDbBusyHandler);
-    if handle.inner.is_timeout() {
-        1
-    } else {
-        0
-    }
+    let handle = &*(handler as *mut BusyHandler);
+    i32::from(handle.is_timeout())
 }
 
 /// Get current retry count
@@ -116,13 +107,15 @@ pub unsafe extern "C" fn linkrs_busy_handler_is_timeout(handler: *mut c_void) ->
 /// # Safety
 /// - `handler` must be a valid busy handler handle
 #[no_mangle]
-pub unsafe extern "C" fn linkrs_busy_handler_retry_count(handler: *mut c_void) -> u32 {
+pub unsafe extern "C" fn linkrs_busy_handler_retry_count(
+    handler: *mut linkrs_busy_handler_t,
+) -> u32 {
     if handler.is_null() {
         return 0;
     }
 
-    let handle = &*(handler as *mut GraphDbBusyHandler);
-    handle.inner.retry_count()
+    let handle = &*(handler as *mut BusyHandler);
+    handle.retry_count()
 }
 
 /// Get elapsed time in milliseconds
@@ -136,13 +129,15 @@ pub unsafe extern "C" fn linkrs_busy_handler_retry_count(handler: *mut c_void) -
 /// # Safety
 /// - `handler` must be a valid busy handler handle
 #[no_mangle]
-pub unsafe extern "C" fn linkrs_busy_handler_elapsed_ms(handler: *mut c_void) -> u64 {
+pub unsafe extern "C" fn linkrs_busy_handler_elapsed_ms(
+    handler: *mut linkrs_busy_handler_t,
+) -> u64 {
     if handler.is_null() {
         return 0;
     }
 
-    let handle = &*(handler as *mut GraphDbBusyHandler);
-    handle.inner.elapsed_ms()
+    let handle = &*(handler as *mut BusyHandler);
+    handle.elapsed_ms()
 }
 
 /// Reset busy handler state
@@ -157,13 +152,13 @@ pub unsafe extern "C" fn linkrs_busy_handler_elapsed_ms(handler: *mut c_void) ->
 /// # Safety
 /// - `handler` must be a valid busy handler handle
 #[no_mangle]
-pub unsafe extern "C" fn linkrs_busy_handler_reset(handler: *mut c_void) -> c_int {
+pub unsafe extern "C" fn linkrs_busy_handler_reset(handler: *mut linkrs_busy_handler_t) -> c_int {
     if handler.is_null() {
         return linkrs_error_code_t::GRAPHDB_MISUSE as c_int;
     }
 
-    let handle = &*(handler as *mut GraphDbBusyHandler);
-    handle.inner.reset();
+    let handle = &*(handler as *mut BusyHandler);
+    handle.reset();
     linkrs_error_code_t::GRAPHDB_OK as c_int
 }
 

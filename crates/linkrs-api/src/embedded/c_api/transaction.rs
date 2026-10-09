@@ -393,10 +393,7 @@ pub unsafe extern "C" fn linkrs_txn_rollback(txn: *mut linkrs_txn_t) -> c_int {
 /// - `name` must be a valid pointer to a null-terminated UTF-8 string
 /// - The transaction must not have been committed or rolled back
 #[no_mangle]
-pub unsafe extern "C" fn linkrs_txn_savepoint(
-    txn: *mut linkrs_txn_t,
-    name: *const c_char,
-) -> i64 {
+pub unsafe extern "C" fn linkrs_txn_savepoint(txn: *mut linkrs_txn_t, name: *const c_char) -> i64 {
     if txn.is_null() || name.is_null() {
         return -1;
     }

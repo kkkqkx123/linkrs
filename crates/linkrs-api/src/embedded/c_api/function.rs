@@ -30,11 +30,14 @@ pub type linkrs_aggregate_final_callback = Option<extern "C" fn(context: *mut li
 #[allow(non_camel_case_types)]
 pub type linkrs_function_destroy_callback = Option<extern "C" fn(user_data: *mut c_void)>;
 
-/// Function execution context (opaque pointers)
+/// Function execution context (opaque pointer).
+///
+/// The context is passed to registered callbacks as a borrowed pointer to the
+/// query engine's `CFunctionContext`; all access goes through the
+/// `linkrs_context_*` functions below, so the layout stays private to C.
 #[repr(C)]
 pub struct linkrs_context_t {
-    /// Internal context
-    pub(crate) inner: CFunctionContext,
+    _dummy: u8,
 }
 
 /// Create a custom scalar function
@@ -230,7 +233,7 @@ pub unsafe extern "C" fn linkrs_context_set_result(
     }
 
     unsafe {
-        let ctx = &mut (*context).inner;
+        let ctx = &mut *(context as *mut CFunctionContext);
         if value.is_null() {
             ctx.set_result(linkrs_core::Value::Null(linkrs_core::NullType::Null));
         } else {
@@ -262,7 +265,7 @@ pub unsafe extern "C" fn linkrs_context_result_type(
     }
 
     unsafe {
-        let ctx = &(*context).inner;
+        let ctx = &*(context as *const CFunctionContext);
         match &ctx.result {
             Some(val) => linkrs_core::value_conversion::core_value_to_linkrs_type(val),
             None => linkrs_value_type_t::GRAPHDB_NULL,
@@ -293,7 +296,7 @@ pub unsafe extern "C" fn linkrs_context_set_error(
     }
 
     unsafe {
-        let ctx = &mut (*context).inner;
+        let ctx = &mut *(context as *mut CFunctionContext);
         let msg = CStr::from_ptr(error_msg).to_string_lossy().into_owned();
         ctx.set_error(msg);
     }
@@ -323,7 +326,7 @@ pub unsafe extern "C" fn linkrs_context_get_arg(
     if context.is_null() {
         return std::ptr::null();
     }
-    let ctx = &(*context).inner;
+    let ctx = &*(context as *const CFunctionContext);
     if index < 0 || index as usize >= ctx.argc {
         return std::ptr::null();
     }
@@ -346,7 +349,7 @@ pub unsafe extern "C" fn linkrs_context_arg_count(context: *mut linkrs_context_t
     if context.is_null() {
         return 0;
     }
-    (*context).inner.argc as c_int
+    (*(context as *const CFunctionContext)).argc as c_int
 }
 
 /// Load a UDF dynamic library and register the exported function.

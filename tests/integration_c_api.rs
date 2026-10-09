@@ -138,18 +138,6 @@ fn test_c_api_execute_simple_query() {
         )
     };
 
-    // Printing error messages is used for debugging purposes.
-    if rc != linkrs_error_code_t::GRAPHDB_OK as i32 {
-        let error_msg = linkrs::api::embedded::c_api::error::linkrs_get_last_error_message();
-        if !error_msg.is_null() {
-            let _msg = unsafe {
-                std::ffi::CStr::from_ptr(error_msg)
-                    .to_string_lossy()
-                    .to_string()
-            };
-        }
-    }
-
     assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
     assert!(!result.is_null());
 
@@ -264,8 +252,7 @@ fn test_c_api_result_null_params() {
         unsafe { linkrs::api::embedded::c_api::result::linkrs_column_count(ptr::null_mut()) };
     assert_eq!(count, -1);
 
-    let count =
-        unsafe { linkrs::api::embedded::c_api::result::linkrs_row_count(ptr::null_mut()) };
+    let count = unsafe { linkrs::api::embedded::c_api::result::linkrs_row_count(ptr::null_mut()) };
     assert_eq!(count, -1);
 
     let name =
@@ -291,18 +278,6 @@ fn test_c_api_transaction_begin_commit() {
 
     // Submit the transaction
     let rc = unsafe { linkrs::api::embedded::c_api::transaction::linkrs_txn_commit(txn) };
-
-    // Printing error messages is used for debugging.
-    if rc != linkrs_error_code_t::GRAPHDB_OK as i32 {
-        let error_msg = linkrs::api::embedded::c_api::error::linkrs_get_last_error_message();
-        if !error_msg.is_null() {
-            let _msg = unsafe {
-                std::ffi::CStr::from_ptr(error_msg)
-                    .to_string_lossy()
-                    .to_string()
-            };
-        }
-    }
 
     assert_eq!(rc, linkrs_error_code_t::GRAPHDB_OK as i32);
 
@@ -433,9 +408,9 @@ fn test_c_api_batch_buffered_counts_null() {
 // ==================== Error Handling Tests ====================
 
 #[test]
-fn test_c_api_error_string() {
+fn test_c_api_errstr() {
     let error_str = unsafe {
-        std::ffi::CStr::from_ptr(linkrs::api::embedded::c_api::error::linkrs_error_string(
+        std::ffi::CStr::from_ptr(linkrs::api::embedded::c_api::error::linkrs_errstr(
             linkrs_error_code_t::GRAPHDB_OK as i32,
         ))
     };
@@ -461,9 +436,7 @@ fn test_c_api_error_codes() {
 
     for (code, expected_desc) in test_cases {
         let error_str = unsafe {
-            std::ffi::CStr::from_ptr(linkrs::api::embedded::c_api::error::linkrs_error_string(
-                code,
-            ))
+            std::ffi::CStr::from_ptr(linkrs::api::embedded::c_api::error::linkrs_errstr(code))
         };
 
         let desc = error_str.to_str().expect("Invalid error description");

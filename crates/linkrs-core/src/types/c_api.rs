@@ -5,62 +5,62 @@
 
 use std::ffi::{c_char, c_void};
 
-/// value type
+/// Tag describing which payload a value carries.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum linkrs_value_type_t {
-    /// empty value
+    /// Null / empty value
     GRAPHDB_NULL = 0,
-    /// boolean
+    /// Boolean
     GRAPHDB_BOOL = 1,
-    /// integer (math.)
+    /// 64-bit signed integer
     GRAPHDB_INT = 2,
-    /// floating point
+    /// Double-precision floating point
     GRAPHDB_FLOAT = 3,
-    /// string (computer science)
+    /// UTF-8 string
     GRAPHDB_STRING = 4,
-    /// listings
+    /// List
     GRAPHDB_LIST = 5,
-    /// map (math.)
+    /// Map / dictionary
     GRAPHDB_MAP = 6,
-    /// vertice
+    /// Vertex
     GRAPHDB_VERTEX = 7,
-    /// suffix of a noun of locality
+    /// Edge
     GRAPHDB_EDGE = 8,
-    /// trails
+    /// Path
     GRAPHDB_PATH = 9,
-    /// binary data
+    /// Binary blob
     GRAPHDB_BLOB = 10,
 }
 
-/// binary data structure
+/// Borrowed binary blob view; the data pointer is not owned by this struct.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct linkrs_blob_t {
-    /// data pointer
+    /// Pointer to the first byte
     pub data: *const u8,
-    /// data length
+    /// Length in bytes
     pub len: usize,
 }
 
-/// string structure
+/// Borrowed string view; the data pointer is not owned by this struct.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct linkrs_string_t {
-    /// string data
+    /// Pointer to UTF-8 bytes (not null-terminated; length lives in `len`)
     pub data: *const c_char,
-    /// String length
+    /// Length in bytes
     pub len: usize,
 }
 
-/// value structure
+/// Value: a type tag plus its payload.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct linkrs_value_t {
-    /// Value types
+    /// Type tag of this value
     pub type_: linkrs_value_type_t,
-    /// value data
+    /// Payload of this value
     pub data: linkrs_value_data_t,
 }
 
@@ -72,20 +72,20 @@ impl std::fmt::Debug for linkrs_value_t {
     }
 }
 
-/// Value Data Consortium
+/// Payload union; active member is selected by the value type tag.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union linkrs_value_data_t {
-    /// Boolean values
+    /// Boolean payload
     pub boolean: bool,
-    /// Integer
+    /// Integer payload
     pub integer: i64,
-    /// Floating-point number
+    /// Floating-point payload
     pub floating: f64,
-    /// String
+    /// String payload (borrowed view)
     pub string: linkrs_string_t,
-    /// Binary data
+    /// Binary blob payload (borrowed view)
     pub blob: linkrs_blob_t,
-    /// pointer on a gauge
+    /// Opaque pointer payload
     pub ptr: *mut c_void,
 }
