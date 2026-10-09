@@ -6,7 +6,7 @@
 //!
 //! Convention: 11 iterations, median reported, machine + core count printed.
 //! Run with:
-//!   cargo bench --bench edge_property_tables_bench
+//!   cargo bench -p linkrs-storage --bench edge_property_tables_bench
 
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -14,12 +14,12 @@ use std::time::Instant;
 
 use tempfile::TempDir;
 
-use linkrs::core::types::{EdgeId, EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::storage::edge::edge_table::config::EdgeTableConfig;
-use linkrs::storage::edge::{EdgeSchema, EdgeStore, MutableCsr, Nbr};
-use linkrs::storage::{
+use linkrs_core::types::{EdgeId, EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_storage::edge::edge_table::config::EdgeTableConfig;
+use linkrs_storage::edge::{EdgeSchema, EdgeStore, MutableCsr, Nbr};
+use linkrs_storage::{
     GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 
@@ -402,8 +402,8 @@ fn bench_b3() {
 const B4_EDGES: usize = 5000;
 
 fn table_schema(out_only: bool) -> EdgeSchema {
-    use linkrs::core::types::EdgeStrategy;
-    use linkrs::storage::edge::RecordForm;
+    use linkrs_core::types::EdgeStrategy;
+    use linkrs_storage::edge::RecordForm;
     EdgeSchema {
         label_id: 0,
         label_name: "bench".to_string(),
@@ -716,9 +716,9 @@ const B7_EDGES: usize = 10_000;
 
 fn bench_b7() {
     println!("\n## B7: per-edge byte split (narrow-row candidacy)");
-    use linkrs::core::types::EdgeStrategy;
-    use linkrs::storage::edge::RecordForm;
-    use linkrs::storage::StoragePropertyDef;
+    use linkrs_core::types::EdgeStrategy;
+    use linkrs_storage::edge::RecordForm;
+    use linkrs_storage::StoragePropertyDef;
     let flat_schema = EdgeSchema {
         label_id: 0,
         label_name: "flat".to_string(),

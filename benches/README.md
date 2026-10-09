@@ -1,387 +1,65 @@
-# Linkrs Performance Benchmarks
+# 性能基准总览
 
-Performance benchmark suite for Linkrs using Criterion.rs
+基准已按被测代码归属下沉到各子包，根 `benches/` 不再承载任何 `[[bench]]`
+目标。本文件只说明新布局与常用命令，各基准的具体决策背景见
+`docs/analysis/benches_migration_analysis.md`，迁移实施记录见
+`docs/analysis/benches_migration_record.md`。
 
-## Directory Structure
+## 布局
 
 ```
-benches/
-├── bench_group.rs                   # Shared criterion group setup
-├── results_report.rs                # Shared results.txt writer
-├── data/                            # Benchmark data (GQL files)
-│   ├── generate_benchmark_data.py   # Data generation script
-│   └── bench_*.gql                  # Generated data files
-├── results/                         # Per-suite reports written by benches
-├── storage_bench.rs                 # Storage layer benchmarks
-├── transaction_bench.rs             # Transaction layer benchmarks
-├── query_bench.rs                   # Query engine benchmarks
-├── search_bench.rs                  # Search (fulltext + vector) benchmarks
-├── api_bench.rs                     # API layer benchmarks
-├── end_to_end_bench.rs              # End-to-end workflow benchmarks
-└── README.md                        # This file
+benches/                        # 根目录：仅保留共享数据与历史产物
+├── data/                       # 基准数据（GQL 文件与生成脚本，各包基准共用）
+├── results/                    # 历史报告封存（迁移前的输出，不再更新）
+├── README.md                   # 本文件
+└── BENCHMARK_REPORT.md         # 历史报告（迁移前 6 套件时代的快照，仅供查阅）
+
+crates/linkrs-storage/benches/  # 存储层（13 个）：GraphStorage 读写、CSR、
+                                # ingest 归因、提交竞争、WAL、恢复、分配计数
+crates/linkrs-transaction/benches/ # 事务层（2 个）：事务操作/MVCC/认证、
+                                   # 写写冲突
+crates/linkrs-query/benches/    # 查询层（6 个）：查询主基准、阶段拆分、
+                                # 遍历曲线、并行扩展、OLAP 基线、执行器微基准
+crates/linkrs-fulltext/benches/ # 全文检索（1 个，需 --features fulltext）
+crates/linkrs-core/benches/     # 核心类型 serde（1 个）
+crates/simvec/benches/          # 向量距离内核（1 个）+ 已有向量基准
 ```
 
-Cargo compiles each `[[bench]]` as its own crate, so the two shared modules
-are pulled in per target with `#[path = "..."] mod ...;` rather than being
-declared as module roots.
+各包 `benches/` 内自带所需的 `bench_group.rs`（统一 warm-up／measurement
+窗口）与 `results_report.rs`（写 `benches/results/<suite>/results.txt`），
+不再跨包共享。 plain-main 基准（`harness = false` 的手工中位数报告）与
+criterion 基准结果口径不同，横向对比时注意区分。
 
-## Running Benchmarks
-
-### Run All Benchmarks
+## 运行
 
 ```bash
-cargo bench
+# 某包的全部基准
+cargo bench -p linkrs-storage
+cargo bench -p linkrs-query
+cargo bench -p linkrs-transaction
+
+# 单个基准
+cargo bench -p linkrs-storage --bench ingest_bench
+cargo bench -p linkrs-query --bench olap_e2e_bench
+cargo bench -p linkrs-query --bench executor_bench
+
+# 全文基准需要特性门
+cargo bench -p linkrs-fulltext --features fulltext --bench fulltext_bench
+
+# SIMD 探针跑两遍对比
+cargo bench -p linkrs-query --bench executor_bench
+RUSTFLAGS="-C target-cpu=native" cargo bench -p linkrs-query --bench executor_bench
 ```
 
-### Run Specific Benchmark Suite
-
-```bash
-# Storage layer benchmarks
-cargo bench --bench storage_bench
-
-# Transaction layer benchmarks
-cargo bench --bench transaction_bench
-
-# Query engine benchmarks
-cargo bench --bench query_bench
-
-# Search (fulltext + vector) benchmarks
-cargo bench --bench search_bench
-
-# API layer benchmarks
-cargo bench --bench api_bench
-
-# End-to-end workflow benchmarks
-cargo bench --bench end_to_end_bench
-```
-
-### Diagnostic Suites
-
-These isolate one subsystem each and write a short report under
-`benches/results/<suite>/results.txt`:
-
-```bash
-cargo bench --bench query_stage_bench        # parse / bind / plan+opt / execute
-cargo bench --bench csr_perf_bench           # CSR storage internals
-cargo bench --bench traversal_perf_bench     # 1-2 hop traversal scale curve
-cargo bench --bench neighbor_batch_bench     # adjacency + batch property reads
-cargo bench --bench edge_property_tables_bench
-cargo bench --bench edge_read_alloc_bench    # per-read heap bytes / allocations
-cargo bench --bench edge_point_write_bench
-cargo bench --bench edge_scan_speedup_bench
-cargo bench --bench edge_group_commit_bench
-cargo bench --bench write_gate_bench
-cargo bench --bench wal_bench                # fsync latency + sync policies
-cargo bench --bench txn_conflict_bench       # MVCC write-write contention
-cargo bench --bench crash_recovery_bench     # open + recover latency
-cargo bench --bench rollback_bench
-cargo bench --bench operator_bench
-cargo bench --bench accumulation_bench
-cargo bench --bench import_bench
-cargo bench --bench indexed_bulk_load_bench
-cargo bench --bench parallel_scale_bench
-cargo bench --bench storage_read_baseline
-cargo bench --bench columnar_necessity_bench
-```
-
-### Run Specific Benchmark
-
-```bash
-# Run only vertex insert benchmarks
-cargo bench -- vertex_insert
-
-# Run only query parsing benchmarks
-cargo bench -- query_parse
-
-# Use wildcard patterns
-cargo bench -- 'storage*'
-```
-
-### Save and Compare Results
-
-```bash
-# Save current benchmark results as baseline
-cargo bench -- --save-baseline=v1_0
-
-# Compare against baseline
-cargo bench -- --baseline=v1_0
-
-# Save with custom profile
-cargo bench --release -- --save-baseline=release_v1_0
-```
-
-### Benchmark Options
-
-```bash
-# Verbose output
-cargo bench -- --verbose
-
-# Increase sample size for more stability
-cargo bench -- --sample-size 200
-
-# Longer measurement time
-cargo bench -- --measurement-time 30
-
-# Generate plots
-cargo bench --features "plots"
-```
-
-## Benchmark Data Generation
-
-### Generate Benchmark Data
-
-```bash
-# Generate all benchmark data
-python3 benches/data/generate_benchmark_data.py --type all
-
-# Generate specific benchmark data
-python3 benches/data/generate_benchmark_data.py --type storage --vertices 10000 --edges-per-vertex 5
-python3 benches/data/generate_benchmark_data.py --type query --vertices 10000
-python3 benches/data/generate_benchmark_data.py --type transaction --vertices 5000
-python3 benches/data/generate_benchmark_data.py --type fulltext --documents 10000
-python3 benches/data/generate_benchmark_data.py --type vector --vectors 10000 --dimensions 256
-```
-
-### Custom Data Generation
-
-```bash
-# Generate large-scale benchmark data
-python3 benches/data/generate_benchmark_data.py --type storage \
-    --vertices 100000 \
-    --edges-per-vertex 10
-
-# Generate high-dimensional vector data
-python3 benches/data/generate_benchmark_data.py --type vector \
-    --vectors 100000 \
-    --dimensions 768
-```
-
-## Benchmark Suites Overview
-
-### Storage Layer (`storage_bench.rs`)
-
-Tests performance of vertex and edge storage operations:
-
-- **Vertex Insert**: Single and batch vertex insertion (10, 100, 1000 vertices)
-- **Edge Insert**: Edge creation with varying per-vertex count (1, 5, 10)
-- **Data Generation**: GQL string generation performance
-
-**Performance Targets**:
-- Single vertex insert: <0.5ms
-- Single edge insert: <0.5ms
-- Batch insert throughput: >20k ops/s
-
-### Transaction Layer (`transaction_bench.rs`)
-
-Tests transaction management and MVCC:
-
-- **Transaction Operations**: Create, commit, rollback
-- **Batch Operations**: 10, 100, 1000 operations per transaction
-- **MVCC Version Management**: Version chain traversal (1, 10, 100 versions)
-- **Conflict Detection**: Write conflict detection overhead
-- **Isolation Levels**: Performance of different isolation levels
-
-**Performance Targets**:
-- Transaction commit: <0.2ms
-- 100-operation transaction: <10ms
-- Concurrent reads (8 threads): >80k ops/s
-
-### Query Engine (`query_bench.rs`)
-
-Tests query execution performance:
-
-- **Simple Query Parsing**: Basic vertex and edge queries
-- **Data Access**: Vertex retrieval at different scales
-- **Path Traversal**: 2-hop, 3-hop, 5-hop path queries
-- **Aggregation**: Count, sum, average operations
-
-**Performance Targets**:
-- Simple vertex query: <1ms
-- 2-hop path query: <10ms
-- 3-hop path query: <100ms
-
-### Search Layer (`search_bench.rs`)
-
-Tests fulltext and vector search performance:
-
-- **Fulltext Index Building**: Index creation at different scales (100, 1k, 10k documents)
-- **Fulltext Queries**: Keyword search performance
-- **Fulltext Scaling**: Search performance on larger datasets
-- **Vector Index Building**: Vector index construction (128d, 256d, 512d)
-- **Vector Distance Calculation**: Distance metric computation
-- **Vector Top-K Search**: Nearest neighbor retrieval (K=10, 100, 1000)
-
-**Performance Targets**:
-- Fulltext search: <100ms
-- Vector search (K=10): <50ms
-- Vector search (K=100): <100ms
-
-### API Layer (`api_bench.rs`)
-
-Tests HTTP and gRPC API performance:
-
-- **HTTP Request Parsing**: JSON parsing overhead
-- **HTTP Response Serialization**: Response generation
-- **gRPC Encoding**: Protobuf encoding/decoding
-- **Concurrent Requests**: Multi-threaded request handling
-- **Request Routing**: URL routing performance
-- **Authentication**: Token verification and permission checking
-- **Request Validation**: Query and schema validation
-
-**Performance Targets**:
-- HTTP API request: <2ms
-- gRPC request: <1ms
-- Concurrent (100 reqs): P99 <100ms
-
-### End-to-End (`end_to_end_bench.rs`)
-
-Tests complete workflows:
-
-- **Data Loading**: Loading 1k and 10k vertices with edges
-- **Query Analysis**: Simple and path queries on loaded data
-- **Search Workflow**: Fulltext and vector search on large datasets
-- **Write Transactions**: Insert and update workflows
-- **Concurrent Workload**: 8-thread read-write mix
-
-## Performance Data Location
-
-Generated benchmark results are saved to:
-
-```
-target/criterion/
-├── report/
-│   └── index.html          # HTML report with graphs
-├── [benchmark_name]/
-│   ├── base/
-│   │   └── raw.json        # Raw benchmark data
-│   └── comparison.json     # Comparison with baseline
-```
-
-Open the HTML report:
-
-```bash
-open target/criterion/report/index.html
-```
-
-## Best Practices
-
-### Writing New Benchmarks
-
-1. **Use `black_box`** to prevent compiler optimizations:
-   ```rust
-   b.iter(|| black_box(operation()))
-   ```
-
-2. **Separate setup from iteration**:
-   ```rust
-   let data = setup();
-   b.iter(|| operation(&data));  // ✓ Correct
-   b.iter(|| {                   // ✗ Wrong
-       let data = setup();
-       operation(&data);
-   });
-   ```
-
-3. **Use appropriate measurement time**:
-   ```rust
-   group.measurement_time(Duration::from_secs(10));  // Accurate results
-   ```
-
-4. **Include warm-up**:
-   ```rust
-   group.warm_up_time(Duration::from_secs(1));  // Warm up CPU, caches
-   ```
-
-### Interpreting Results
-
-- **Latency**: Mean, P50, P95, P99 times (lower is better)
-- **Throughput**: Operations per second (higher is better)
-- **Coefficient of Variation (CV)**: Stability metric (< 5% is good)
-
-If results are unstable (CV > 10%):
-- Close background processes
-- Fix CPU frequency with `cpupower`
-- Increase sample size
-
-## Continuous Integration
-
-Benchmarks can be integrated into CI/CD:
-
-```bash
-# Compare with main branch
-git fetch origin main
-cargo bench -- --save-baseline=main
-cargo bench -- --baseline=main
-
-# Fail if performance regresses >5%
-# (Requires additional scripting)
-```
-
-## Performance Analysis Tips
-
-1. **Run in Release Mode**: Always use `cargo bench --release`
-2. **Monitor System**: Use `htop`, `iostat` while benchmarking
-3. **Repeat Runs**: Run multiple times to check consistency
-4. **Profile Hot Paths**: Use `cargo flamegraph` for detailed analysis
-
-```bash
-# Generate flame graph for a benchmark
-cargo flamegraph --bench storage_bench -- --profile-time 10
-
-# View the result
-open flamegraph.svg
-```
-
-## Data Files
-
-Pre-generated benchmark data files:
-
-| File | Vertices/Docs | Size | Use Case |
-|------|--------------|------|----------|
-| `bench_storage_1000v_5e.gql` | 1k vertices, 5k edges | 429KB | Storage layer |
-| `bench_query_1000v.gql` | 1k vertices | 235KB | Query engine |
-| `bench_transaction_1000v.gql` | 1k vertices | 56KB | Transactions |
-| `bench_fulltext_1000d.gql` | 1k documents | 287KB | Fulltext search |
-| `bench_vector_1000v_128d.gql` | 1k 128d vectors | 1.2MB | Vector search |
-
-## Common Issues
-
-### Benchmark Results Vary Widely
-
-**Solution**: Ensure consistent system state
-- Close unnecessary applications
-- Disable frequency scaling: `cpupower frequency-set -g performance`
-- Increase sample size: `cargo bench -- --sample-size 200`
-
-### Compilation Too Slow
-
-**Solution**: Use release optimizations
-- `cargo bench --release`
-- Pre-compile with `cargo build --release`
-
-### Memory Issues with Large Benchmarks
-
-**Solution**: Reduce data size or run separately
-- Run individual benchmarks: `cargo bench --bench storage_bench`
-- Reduce vertex count: `--vertices 1000` instead of `100000`
-
-## References
-
-- [Criterion.rs Documentation](https://bheisler.github.io/criterion.rs/book/)
-- [Rust Performance Book](https://nnethercote.github.io/perf-book/)
-- [GitHub Benchmark Results](../docs/tests/benches/)
-
-## Contributing
-
-When adding new benchmarks:
-
-1. Add benchmark to appropriate `*_bench.rs` file
-2. Update data generator if needed
-3. Document target performance in module doc comment
-4. Run and record baseline results
-5. Update this README
-
----
-
-**Last Updated**: 2026-10-06  
-**Maintained By**: Linkrs Team
+回归门：`olap_e2e_bench` 的 Q1～Q5 与 `traversal_perf_bench` 的两项阈值
+（锚定 1 跳、非锚定 2 跳）是优化工作的基线门，改动执行器或存储读路径后
+必须跑一次对照。
+
+## 新增基准时
+
+1. 放到被测代码所在的包，不要放回根目录。
+2. 复用包内已有的 `bench_group::create_benchmark_group`，保持各包窗口一致。
+3. 跨 3 个以上工作区包、或触及网络传输层的端到端基准，才考虑放在根目录
+  （当前没有，新建前先评估是否真有必要）。
+4. `linkrs-server`／`linkrs-api` 的真实基准（HTTP 路由／序列化、gRPC 编解码、
+   并发请求）目前仍然缺失，见迁移记录中的后续工作。

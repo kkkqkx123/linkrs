@@ -1,31 +1,41 @@
-//! Batch-import bottleneck attribution.
+//! Storage ingest bottleneck attribution.
 //!
-//! Splits `batch_insert_vertices` / `batch_insert_edges` time into a CPU-side
-//! component (schema validation + allocation + shard locks + CSR insertion)
-//! and an I/O-side component (WAL append + commit fsync):
+//! Merged from the former `import_bench` and `edge_point_write_bench`, which
+//! shared the same memory-vs-persistent attribution method on the same batch
+//! entry points. Three legs:
 //!
-//! Method: the same batch is executed on an in-memory storage (no WAL, no
-//! fsync; measures the CPU side only) and on a persistent storage
-//! (`GraphStorage::new_with_path`, full WAL + Sync-durability commit).
-//! CPU share = T(in-memory) / T(persistent).
+//! 1. `batch_insert_vertices` CPU-side vs WAL-side split across batch sizes.
+//! 2. `batch_insert_edges` CPU-side vs WAL-side split (vertex setup excluded).
+//! 3. Single-commit vs batched-commit per-edge cost, memory and persistent.
+//!
+//! Method: the same batch runs on an in-memory storage (no WAL, no fsync;
+//! CPU side only) and on a persistent storage (`GraphStorage::new_with_path`,
+//! full WAL + Sync-durability commit). CPU share = T(in-memory) / T(persistent).
+//!
+//! Decision gates: while the CPU-side share stays small, import
+//! parallelization is not justified; while the persistent single-commit
+//! per-edge cost dominates the memory cost, callers should batch instead of
+//! asking for vertex-level locks or shard-parallel writes.
 //!
 //! Plain-main bench (harness = false). Run with:
-//!   cargo bench --bench import_bench
+//!   cargo bench -p linkrs-storage --bench ingest_bench
 
+use std::collections::HashMap;
 use std::hint::black_box;
 use std::time::Instant;
 
 use tempfile::TempDir;
 
-use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 
-const SPACE: &str = "b3";
+const SPACE: &str = "ingest";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
 const BATCH_SIZES: [usize; 3] = [10_000, 100_000, 1_000_000];
+const EDGE_COUNT: usize = 1000;
 /// Measurement repetitions per configuration (median reported).
 const ITERATIONS: usize = 3;
 
@@ -83,25 +93,62 @@ fn build_edges(count: usize) -> Vec<Edge> {
             dst: VertexId::try_from_int64((i as i64 + 1) % count as i64).expect("valid vertex id"),
             edge_type: EDGE.to_string(),
             ranking: 0,
-            props: Default::default(),
+            props: HashMap::new(),
         })
         .collect()
 }
 
-fn measure<F>(mut setup: F) -> f64
-where
-    F: FnMut() -> f64,
-{
+fn measure(mut sample: impl FnMut() -> f64) -> f64 {
     let mut samples = Vec::with_capacity(ITERATIONS);
     for _ in 0..ITERATIONS {
-        samples.push(setup());
+        samples.push(sample());
     }
     samples.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
     samples[ITERATIONS / 2]
 }
 
+fn measure_single(persistent: bool, edges: &[Edge]) -> f64 {
+    measure(|| {
+        let (mut storage, _dir) = new_storage(persistent);
+        storage
+            .batch_insert_vertices(SPACE, build_vertices(edges.len()))
+            .expect("setup vertices");
+        let start = Instant::now();
+        for edge in edges {
+            storage
+                .insert_edge(SPACE, edge.clone())
+                .expect("single edge");
+        }
+        black_box(());
+        start.elapsed().as_secs_f64() * 1000.0
+    })
+}
+
+fn measure_batch(persistent: bool, edges: &[Edge]) -> f64 {
+    measure(|| {
+        let (mut storage, _dir) = new_storage(persistent);
+        storage
+            .batch_insert_vertices(SPACE, build_vertices(edges.len()))
+            .expect("setup vertices");
+        let start = Instant::now();
+        storage
+            .batch_insert_edges(SPACE, edges.to_vec())
+            .expect("batch edges");
+        black_box(());
+        start.elapsed().as_secs_f64() * 1000.0
+    })
+}
+
+fn cpu_share(cpu_ms: f64, wal_ms: f64) -> f64 {
+    if wal_ms > 0.0 {
+        cpu_ms / wal_ms
+    } else {
+        1.0
+    }
+}
+
 fn main() {
-    println!("== B3: batch-import bottleneck attribution ==");
+    println!("== storage ingest bottleneck attribution ==");
     println!(
         "machine: {} ({} visible cores)",
         machine_name(),
@@ -114,7 +161,7 @@ fn main() {
         BATCH_SIZES, ITERATIONS
     );
 
-    // ── vertices ────────────────────────────────────────────────────────────
+    // ── leg 1: vertices ─────────────────────────────────────────────────────
     println!("\n### batch_insert_vertices");
     println!(
         "{:>10} | {:>10} | {:>10} | {:>9} | {:>9}",
@@ -140,18 +187,18 @@ fn main() {
             black_box(());
             start.elapsed().as_secs_f64() * 1000.0
         });
-        let cpu_share = if wal_ms > 0.0 { cpu_ms / wal_ms } else { 1.0 };
+        let share = cpu_share(cpu_ms, wal_ms);
         println!(
             "{:>10} | {:>10.2} | {:>10.2} | {:>8.1}% | {:>8.1}%",
             size,
             cpu_ms,
             wal_ms,
-            cpu_share * 100.0,
-            (1.0 - cpu_share) * 100.0
+            share * 100.0,
+            (1.0 - share) * 100.0
         );
     }
 
-    // ── edges ───────────────────────────────────────────────────────────────
+    // ── leg 2: edges ────────────────────────────────────────────────────────
     println!("\n### batch_insert_edges (vertex setup excluded)");
     println!(
         "{:>10} | {:>10} | {:>10} | {:>9} | {:>9}",
@@ -183,18 +230,53 @@ fn main() {
             black_box(());
             start.elapsed().as_secs_f64() * 1000.0
         });
-        let cpu_share = if wal_ms > 0.0 { cpu_ms / wal_ms } else { 1.0 };
+        let share = cpu_share(cpu_ms, wal_ms);
         println!(
             "{:>10} | {:>10.2} | {:>10.2} | {:>8.1}% | {:>8.1}%",
             size,
             cpu_ms,
             wal_ms,
-            cpu_share * 100.0,
-            (1.0 - cpu_share) * 100.0
+            share * 100.0,
+            (1.0 - share) * 100.0
         );
     }
 
-    println!("\nresult: CPU-side share < 40% -> import parallelization not justified");
+    // ── leg 3: single vs batched commits ────────────────────────────────────
+    println!("\n### single-commit vs batched-commit per-edge cost");
+    let edges = build_edges(EDGE_COUNT);
+    let single_mem = measure_single(false, &edges);
+    let single_wal = measure_single(true, &edges);
+    let batch_mem = measure_batch(false, &edges);
+    let batch_wal = measure_batch(true, &edges);
+
+    println!(
+        "{:>12} | {:>12} | {:>12} | {:>12}",
+        "mode", "total ms", "per-edge us", "vs single"
+    );
+    let rows = [
+        ("single/mem", single_mem),
+        ("single/wal", single_wal),
+        ("batch/mem", batch_mem),
+        ("batch/wal", batch_wal),
+    ];
+    for (mode, total_ms) in rows {
+        let per_edge_us = total_ms * 1000.0 / EDGE_COUNT as f64;
+        let speedup = if total_ms > 0.0 {
+            single_wal / total_ms
+        } else {
+            1.0
+        };
+        println!(
+            "{:>12} | {:>12.2} | {:>12.2} | {:>11.2}x",
+            mode, total_ms, per_edge_us, speedup
+        );
+    }
+
+    println!(
+        "\nresult: CPU-side share < 40% -> import parallelization not justified; \
+        WAL/fsync share above 60% means point-write latency is durability-bound, \
+        prefer caller batching over vertex-level locks or shard-parallel writes"
+    );
 }
 
 fn machine_name() -> String {

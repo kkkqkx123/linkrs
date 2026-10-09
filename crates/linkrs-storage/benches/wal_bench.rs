@@ -1,7 +1,7 @@
 //! Standalone WAL benchmark: fsync latency baseline and WAL durability cost
 //! under different sync policies, plus sequential replay-read throughput.
 //!
-//! WAL previously appeared only inside import/rollback benches as a
+//! WAL previously appeared only inside the ingest/rollback benches as a
 //! "persistent - memory" difference. This suite isolates it: the cost of a
 //! per-append fsync barrier, and what a sync policy buys end to end.
 //!
@@ -12,10 +12,10 @@
 //! data only, so it reads as an upper bound rather than the shipped path.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use linkrs::core::types::{EdgeTypeInfo, SpaceInfo, VertexId};
-use linkrs::core::wal::SyncPolicy;
-use linkrs::core::{DataType, Edge};
-use linkrs::storage::{GraphStorage, StorageSchemaOps, StorageWriter};
+use linkrs_core::types::{EdgeTypeInfo, SpaceInfo, VertexId};
+use linkrs_core::wal::SyncPolicy;
+use linkrs_core::{DataType, Edge};
+use linkrs_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
@@ -118,18 +118,18 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
             storage
                 .create_tag(
                     &space_name,
-                    &linkrs::core::types::TagInfo::new("Node".to_string()).with_properties(vec![
-                        linkrs::core::types::PropertyDef::new("id".into(), DataType::BigInt),
+                    &linkrs_core::types::TagInfo::new("Node".to_string()).with_properties(vec![
+                        linkrs_core::types::PropertyDef::new("id".into(), DataType::BigInt),
                     ]),
                 )
                 .expect("create tag");
-            let vertices: Vec<linkrs::core::Vertex> = (0..500i64)
+            let vertices: Vec<linkrs_core::Vertex> = (0..500i64)
                 .map(|i| {
-                    linkrs::core::Vertex::new(
+                    linkrs_core::Vertex::new(
                         VertexId::try_from_int64(i).expect("valid vertex id"),
-                        linkrs::core::vertex_edge_path::Tag::new(
+                        linkrs_core::vertex_edge_path::Tag::new(
                             "Node".to_string(),
-                            [("id".into(), linkrs::core::Value::BigInt(i))]
+                            [("id".into(), linkrs_core::Value::BigInt(i))]
                                 .into_iter()
                                 .collect(),
                         ),
@@ -171,23 +171,24 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
                     storage
                         .create_tag(
                             &space_name,
-                            &linkrs::core::types::TagInfo::new("Node".to_string())
-                                .with_properties(vec![linkrs::core::types::PropertyDef::new(
+                            &linkrs_core::types::TagInfo::new("Node".to_string()).with_properties(
+                                vec![linkrs_core::types::PropertyDef::new(
                                     "id".to_string(),
                                     DataType::BigInt,
-                                )]),
+                                )],
+                            ),
                         )
                         .expect("create tag");
                     storage
                         .create_edge_type(&space_name, &EdgeTypeInfo::new("Link".to_string()))
                         .expect("create edge type");
-                    let vertices: Vec<linkrs::core::Vertex> = (0..500i64)
+                    let vertices: Vec<linkrs_core::Vertex> = (0..500i64)
                         .map(|i| {
-                            linkrs::core::Vertex::new(
+                            linkrs_core::Vertex::new(
                                 VertexId::try_from_int64(i).expect("valid vertex id"),
-                                linkrs::core::vertex_edge_path::Tag::new(
+                                linkrs_core::vertex_edge_path::Tag::new(
                                     "Node".to_string(),
-                                    [("id".into(), linkrs::core::Value::BigInt(i))]
+                                    [("id".into(), linkrs_core::Value::BigInt(i))]
                                         .into_iter()
                                         .collect(),
                                 ),

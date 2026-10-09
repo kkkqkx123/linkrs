@@ -1,12 +1,12 @@
+//! Fulltext index benchmarks (moved from the root `search_bench`).
+//!
+//! Covers fulltext index building and search. Without the `fulltext` feature
+//! the groups compile to inert placeholders; run with:
+//!   cargo bench -p linkrs-fulltext --features fulltext --bench fulltext_bench
+
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-
-#[path = "bench_group.rs"]
-mod bench_group;
-use bench_group::create_benchmark_group;
-
-const SAMPLE_SIZE: usize = 50;
 
 #[cfg(feature = "fulltext")]
 fn bench_fulltext_index_build(c: &mut Criterion) {
@@ -149,27 +149,5 @@ fn bench_fulltext_search(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_vector_distance(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "vector_distance", SAMPLE_SIZE);
-
-    for dim in &[128, 256, 512] {
-        group.bench_with_input(BenchmarkId::from_parameter(dim), dim, |b, &d| {
-            let a: Vec<f32> = (0..d).map(|i| i as f32 * 0.1).collect();
-            let bv: Vec<f32> = (0..d).map(|i| (i + 1) as f32 * 0.1).collect();
-            b.iter(|| {
-                let sum: f32 = a.iter().zip(bv.iter()).map(|(x, y)| (x - y).abs()).sum();
-                black_box(sum)
-            });
-        });
-    }
-
-    group.finish();
-}
-
-criterion_group!(
-    benches,
-    bench_fulltext_index_build,
-    bench_fulltext_search,
-    bench_vector_distance,
-);
+criterion_group!(benches, bench_fulltext_index_build, bench_fulltext_search,);
 criterion_main!(benches);

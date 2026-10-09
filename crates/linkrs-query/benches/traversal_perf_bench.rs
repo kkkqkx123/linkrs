@@ -6,15 +6,15 @@
 //!   unanchored 2-hop <= 2s
 //!
 //! Run with:
-//!   cargo bench --bench traversal_perf_bench
+//!   cargo bench -p linkrs-query --bench traversal_perf_bench
 
-use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::query::optimizer::{OptimizerEngine, PartitioningConfig};
-use linkrs::query::pipeline::QueryPipelineManager;
-use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
 use linkrs_metrics::StatsManager;
+use linkrs_query::optimizer::{OptimizerEngine, PartitioningConfig};
+use linkrs_query::pipeline::QueryPipelineManager;
+use linkrs_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -137,7 +137,7 @@ fn run(pipeline: &mut QueryPipelineManager<GraphStorage>, query: &str, space: &S
 }
 
 fn explain(pipeline: &mut QueryPipelineManager<GraphStorage>, query: &str, space: &SpaceInfo) {
-    if let Ok(linkrs::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+    if let Ok(linkrs_query::executor::base::ExecutionResult::DataSet { data, .. }) =
         pipeline.execute_query_with_space(&format!("EXPLAIN ANALYZE {query}"), Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {

@@ -4,7 +4,7 @@
 //! improvement (columnar scans, vectorization, factorization). The dataset is
 //! generated with a fixed-seed preferential-attachment model so every run sees
 //! identical data. Scale via `OLAP_BENCH_SCALE` (multiplier on the base vertex
-//! count), e.g. `OLAP_BENCH_SCALE=5 cargo bench --bench olap_e2e_bench`.
+//! count), e.g. `OLAP_BENCH_SCALE=5 cargo bench -p linkrs-query --bench olap_e2e_bench`.
 //!
 //! Query families:
 //!   Q1  two-hop traversal count (unanchored, full graph)
@@ -13,7 +13,7 @@
 //!   Q4  edge-scan with range predicate (storage-side pushdown path)
 //!   Q5  vertex-scan with range predicate (50% selectivity)
 //!
-//! Run with: cargo bench --bench olap_e2e_bench
+//! Run with: cargo bench -p linkrs-query --bench olap_e2e_bench
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,16 +21,16 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use parking_lot::RwLock;
 
-use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::query::optimizer::OptimizerEngine;
-use linkrs::query::pipeline::QueryPipelineManager;
-use linkrs::query::QueryRequestContext;
-use linkrs::storage::{
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_metrics::StatsManager;
+use linkrs_query::optimizer::OptimizerEngine;
+use linkrs_query::pipeline::QueryPipelineManager;
+use linkrs_query::QueryRequestContext;
+use linkrs_storage::{
     GraphStorage, StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
 };
-use linkrs_metrics::StatsManager;
 
 const SPACE: &str = "olap_e2e";
 const TAG: &str = "Person";

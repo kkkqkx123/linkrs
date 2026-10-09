@@ -29,7 +29,7 @@ mod bench_coverage_tests {
 
     const BENCH_SOURCE: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../benches/storage_bench.rs"
+        "/benches/storage_bench.rs"
     ));
 
     /// One policy knob: the constant it tunes and the bench function

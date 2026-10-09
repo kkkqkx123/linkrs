@@ -1,13 +1,12 @@
 use std::hint::black_box;
-use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use linkrs::core::types::VertexId;
-use linkrs::transaction::manager::TransactionManager;
-use linkrs::transaction::mvcc::VersionManager;
-use linkrs::transaction::types::*;
+use linkrs_core::types::VertexId;
+use linkrs_transaction::manager::TransactionManager;
+use linkrs_transaction::mvcc::VersionManager;
+use linkrs_transaction::types::*;
 
 fn bench_transaction_create_commit(c: &mut Criterion) {
     let manager = TransactionManager::new(TransactionManagerConfig::default());
@@ -109,56 +108,6 @@ fn bench_mvcc_version_management(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_conflict_detection(c: &mut Criterion) {
-    let manager = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
-
-    let mut group = c.benchmark_group("conflict_detection");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
-    group.warm_up_time(Duration::from_secs(1));
-
-    for vertex_count in &[1, 10, 100] {
-        group.bench_with_input(
-            BenchmarkId::from_parameter(vertex_count),
-            vertex_count,
-            |b, &count| {
-                let mgr = Arc::clone(&manager);
-                b.iter(|| {
-                    let txn_a = mgr
-                        .begin_insert_transaction(TransactionOptions::default())
-                        .unwrap();
-                    {
-                        let ctx = mgr.get_context(txn_a).unwrap();
-                        for i in 0..count {
-                            ctx.record_vertex_write(
-                                VertexId::try_from_int64(i as i64).expect("valid vertex id"),
-                            );
-                        }
-                    }
-                    let _ = mgr.check_write_set_conflict(txn_a);
-                    let txn_b = mgr
-                        .begin_insert_transaction(TransactionOptions::default())
-                        .unwrap();
-                    {
-                        let ctx = mgr.get_context(txn_b).unwrap();
-                        for i in 0..count {
-                            ctx.record_vertex_write(
-                                VertexId::try_from_int64((i + count) as i64)
-                                    .expect("valid vertex id"),
-                            );
-                        }
-                    }
-                    let _ = black_box(mgr.check_write_set_conflict(txn_b));
-                    mgr.abort_transaction(txn_a).unwrap();
-                    mgr.abort_transaction(txn_b).unwrap();
-                });
-            },
-        );
-    }
-
-    group.finish();
-}
-
 fn bench_certification_fast_paths(c: &mut Criterion) {
     let mut group = c.benchmark_group("certification_fast_paths");
     group.measurement_time(Duration::from_secs(5));
@@ -179,8 +128,7 @@ fn bench_certification_fast_paths(c: &mut Criterion) {
 
     group.bench_function("certification_single_writer", |b| {
         let mut cfg = TransactionManagerConfig::default();
-        cfg.txn_config.concurrency_mode =
-            linkrs::transaction::types::ConcurrencyMode::SingleWriter;
+        cfg.txn_config.concurrency_mode = linkrs_transaction::types::ConcurrencyMode::SingleWriter;
         let sw_manager = TransactionManager::new(cfg);
         b.iter(|| {
             let txn_id = sw_manager
@@ -207,7 +155,7 @@ fn bench_certification_fast_paths(c: &mut Criterion) {
 }
 
 fn bench_snapshot_tracker(c: &mut Criterion) {
-    use linkrs::transaction::SnapshotTracker;
+    use linkrs_transaction::SnapshotTracker;
     let mut group = c.benchmark_group("snapshot_tracker");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(100);
@@ -236,7 +184,6 @@ criterion_group!(
     bench_transaction_create_commit,
     bench_write_set_operations,
     bench_mvcc_version_management,
-    bench_conflict_detection,
     bench_certification_fast_paths,
     bench_snapshot_tracker,
 );

@@ -10,19 +10,17 @@
 //! the MVCC write timestamp.
 //!
 //! Plain-main bench (harness = false). Run with:
-//!   cargo bench --bench rollback_bench
+//!   cargo bench -p linkrs-storage --bench rollback_bench
 
 use std::hint::black_box;
 use std::time::Instant;
 
 use tempfile::TempDir;
 
-use linkrs::core::types::{
-    EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, TransactionId, VertexId,
-};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::storage::{
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, TransactionId, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_storage::{
     GraphStorage, StorageCommitOps, StorageOperationContext, StorageOperationContextOps,
     StorageSchemaOps, StorageWriter,
 };

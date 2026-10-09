@@ -13,18 +13,18 @@
 //! Small dataset (debug-mode friendly): 500 vertices, 4 edges/vertex.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::query::binder::Binder;
-use linkrs::query::optimizer::OptimizerEngine;
-use linkrs::query::parser::Parser;
-use linkrs::query::pipeline::QueryPipelineManager;
-use linkrs::query::QueryRequestContext;
-use linkrs::storage::{
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_metrics::StatsManager;
+use linkrs_query::binder::Binder;
+use linkrs_query::optimizer::OptimizerEngine;
+use linkrs_query::parser::Parser;
+use linkrs_query::pipeline::QueryPipelineManager;
+use linkrs_query::QueryRequestContext;
+use linkrs_storage::{
     GraphStorage, StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
 };
-use linkrs_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

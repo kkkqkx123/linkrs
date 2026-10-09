@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 description = "Storage engine with CSR and memory-mapped containers"
 license.workspace = true
+autobenches = false
 
 [features]
 default = []
@@ -37,5 +38,58 @@ tracing.workspace = true
 arc-swap.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tempfile.workspace = true
 linkrs-config = { path = "../linkrs-config" }
+
+[[bench]]
+name = "storage_bench"
+harness = false
+
+[[bench]]
+name = "csr_perf_bench"
+harness = false
+
+[[bench]]
+name = "neighbor_batch_bench"
+harness = false
+
+[[bench]]
+name = "edge_property_tables_bench"
+harness = false
+
+[[bench]]
+name = "ingest_bench"
+harness = false
+
+[[bench]]
+name = "commit_gate_bench"
+harness = false
+
+[[bench]]
+name = "edge_scan_speedup_bench"
+harness = false
+
+[[bench]]
+name = "edge_read_alloc_bench"
+harness = false
+
+[[bench]]
+name = "storage_read_baseline"
+harness = false
+
+[[bench]]
+name = "wal_bench"
+harness = false
+
+[[bench]]
+name = "crash_recovery_bench"
+harness = false
+
+[[bench]]
+name = "rollback_bench"
+harness = false
+
+[[bench]]
+name = "storage_workflow_bench"
+harness = false

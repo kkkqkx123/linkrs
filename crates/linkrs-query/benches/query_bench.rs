@@ -1,18 +1,18 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::query::executor::streaming::runtime::{
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_metrics::StatsManager;
+use linkrs_query::executor::streaming::runtime::{
     ColumnarStatsSnapshot, D1_EVAL_THRESHOLD, D1_TYPED_RATE_THRESHOLD,
 };
-use linkrs::query::optimizer::OptimizerEngine;
-use linkrs::query::pipeline::QueryPipelineManager;
-use linkrs::query::QueryRequestContext;
-use linkrs::storage::{
+use linkrs_query::optimizer::OptimizerEngine;
+use linkrs_query::pipeline::QueryPipelineManager;
+use linkrs_query::QueryRequestContext;
+use linkrs_storage::{
     GraphStorage, ScanOptions, StorageReader, StorageSchemaContextOps, StorageSchemaOps,
     StorageWriter,
 };
-use linkrs_metrics::StatsManager;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -149,33 +149,6 @@ fn setup_large_graph(vertex_count: u64, edges_per_vertex: usize) -> GraphStorage
     }
 
     storage
-}
-
-fn bench_simple_query_parse(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "query_parse", SAMPLE_SIZE);
-    let storage = setup_graph(100, 3);
-
-    group.bench_function("parse_simple_vertex_query", |b| {
-        b.iter(|| {
-            let _ = storage.get_vertex(
-                "bench_q100e3",
-                "Node",
-                &VertexId::try_from_string("n1").expect("valid vertex id"),
-            );
-        });
-    });
-
-    group.bench_function("parse_simple_edge_query", |b| {
-        b.iter(|| {
-            let _ = storage.get_vertex(
-                "bench_q100e3",
-                "Node",
-                &VertexId::try_from_string("n1").expect("valid vertex id"),
-            );
-        });
-    });
-
-    group.finish();
 }
 
 fn bench_query_data_access(c: &mut Criterion) {
@@ -748,7 +721,6 @@ fn bench_b7_mixed_rw(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_simple_query_parse,
     bench_query_data_access,
     bench_path_traversal,
     bench_aggregation_queries,

@@ -3,19 +3,19 @@
 //! -> execute -> profile).
 //!
 //! Plain-main bench (harness = false). Run with:
-//!   cargo bench --bench parallel_scale_bench
+//!   cargo bench -p linkrs-query --bench parallel_scale_bench
 //!
 //! Outputs T(n) medians, speedup E(n) = T(1)/T(n), parallel efficiency
 //! eta(n) = parallel_work_time/parallel_wall_time, actual worker count and
 //! fallback reason from `EXPLAIN ANALYZE`, plus storage-read share R.
 
-use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::query::optimizer::{OptimizerEngine, PartitioningConfig};
-use linkrs::query::pipeline::QueryPipelineManager;
-use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
 use linkrs_metrics::StatsManager;
+use linkrs_query::optimizer::{OptimizerEngine, PartitioningConfig};
+use linkrs_query::pipeline::QueryPipelineManager;
+use linkrs_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -295,7 +295,7 @@ fn measure(
     }
     let mut last_metrics = ExplainMetrics::default();
     let table = format!("EXPLAIN ANALYZE {query}");
-    if let Ok(linkrs::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+    if let Ok(linkrs_query::executor::base::ExecutionResult::DataSet { data, .. }) =
         pipeline.execute_query_with_space(&table, Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {
@@ -305,7 +305,7 @@ fn measure(
         }
     }
     let dot = format!("EXPLAIN ANALYZE FORMAT = DOT {query}");
-    if let Ok(linkrs::query::executor::base::ExecutionResult::DataSet { data, .. }) =
+    if let Ok(linkrs_query::executor::base::ExecutionResult::DataSet { data, .. }) =
         pipeline.execute_query_with_space(&dot, Some(space.clone()))
     {
         if let Some(row) = data.rows.first() {

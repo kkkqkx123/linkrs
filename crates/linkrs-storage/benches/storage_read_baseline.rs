@@ -3,12 +3,12 @@
 //!
 //! Plain-main bench (harness = false) so results can be consumed directly.
 //! Run with:
-//!   cargo bench --bench storage_read_baseline
+//!   cargo bench -p linkrs-storage --bench storage_read_baseline
 
-use linkrs::core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Value, Vertex};
-use linkrs::storage::{GraphStorage, ScanOptions, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs_core::types::{PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Value, Vertex};
+use linkrs_storage::{GraphStorage, ScanOptions, StorageReader, StorageSchemaOps, StorageWriter};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;

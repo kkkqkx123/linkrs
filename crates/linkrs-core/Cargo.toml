@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 description = "Core data structures, types, and errors for Linkrs"
 license.workspace = true
+autobenches = false
 
 [dependencies]
 serde = { workspace = true, features = ["rc"] }
@@ -24,4 +25,11 @@ zstd.workspace = true
 bitvec.workspace = true
 postcard.workspace = true
 bcrypt.workspace = true
-utoipa = { workspace = true }
+ utoipa = { workspace = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "serde_bench"
+harness = false

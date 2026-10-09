@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 description = "Query engine, parser, and executor for Linkrs"
 license.workspace = true
+autobenches = false
 
 [dependencies]
 linkrs-core = { path = "../linkrs-core" }
@@ -41,5 +42,30 @@ embedding = ["linkrs-sync/embedding"]
 fulltext = ["linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
 
 [dev-dependencies]
+criterion.workspace = true
 linkrs-storage = { path = "../linkrs-storage", features = ["test-support"] }
 tempfile.workspace = true
+
+[[bench]]
+name = "query_bench"
+harness = false
+
+[[bench]]
+name = "query_stage_bench"
+harness = false
+
+[[bench]]
+name = "traversal_perf_bench"
+harness = false
+
+[[bench]]
+name = "parallel_scale_bench"
+harness = false
+
+[[bench]]
+name = "olap_e2e_bench"
+harness = false
+
+[[bench]]
+name = "executor_bench"
+harness = false

@@ -5,7 +5,7 @@
 //! worker count (n):
 //!
 //! Plain-main bench (harness = false). Run with:
-//!   cargo bench --bench edge_scan_speedup_bench
+//!   cargo bench -p linkrs-storage --bench edge_scan_speedup_bench
 //!
 //! Machine requirement: >= 8 cores. Record CPU model and core count for
 //! reproducibility.
@@ -17,10 +17,10 @@ use std::time::Instant;
 use parking_lot::RwLock;
 use rayon::ThreadPoolBuilder;
 
-use linkrs::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
-use linkrs::core::vertex_edge_path::Tag;
-use linkrs::core::{DataType, Edge, Value, Vertex};
-use linkrs::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::{DataType, Edge, Value, Vertex};
+use linkrs_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 
 const SPACE: &str = "b1";
 const EDGE: &str = "Link";
