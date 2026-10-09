@@ -14,7 +14,7 @@ embedding = ["vector", "dep:llm-embedding", "dep:llm-token", "linkrs-config/embe
 # Post-recall rerank stage, independent of embedding.
 rerank = ["vector", "dep:llm-rerank", "linkrs-config/rerank"]
 # Remote qdrant client on top of the local engine types.
-vector-qdrant = ["vector", "embedding", "dep:vector-client", "linkrs-config/vector-qdrant"]
+vector-qdrant = ["vector", "dep:vector-client", "linkrs-config/vector-qdrant"]
 # Transport-layer sub-features for the remote client. They are additive on
 # top of `vector-qdrant`; enabling both compiles in HTTP + gRPC.
 vector-http = ["vector-qdrant", "vector-client/qdrant-http"]

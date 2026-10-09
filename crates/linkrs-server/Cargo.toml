@@ -79,7 +79,6 @@ rerank = [
 ]
 vector-qdrant = [
     "vector",
-    "embedding",
     "dep:vector-client",
     "dep:reqwest",
     "linkrs-config/vector-qdrant",

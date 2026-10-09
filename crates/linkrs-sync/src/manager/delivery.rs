@@ -37,6 +37,90 @@ pub(crate) fn edge_entity_id(
 ) -> String {
     format!("{}->{}#{}", src, dst, ranking)
 }
+
+fn is_disabled_error(message: &str) -> bool {
+    message.contains("Vector engine is disabled") || message.contains("EngineDisabled")
+}
+
+fn retry_backoff_ms(retry_count: u64) -> u64 {
+    100u64
+        .saturating_mul(1u64 << retry_count.min(16))
+        .min(300_000)
+}
+
+fn record_transport_latency(
+    stats: &Option<std::sync::Arc<linkrs_metrics::StatsManager>>,
+    elapsed_ms: u64,
+) {
+    if let Some(stats) = stats {
+        stats.record_transport_latency(elapsed_ms);
+    }
+}
+
+async fn handle_delivery_error(
+    outbox: &crate::sqlite_outbox::SqliteOutbox,
+    event: &crate::sqlite_outbox::ClaimedEvent,
+    error: &str,
+    now: u64,
+    consumer: &crate::manager::OutboxConsumerConfig,
+    auth_paused_until_ms: &std::sync::Arc<std::sync::atomic::AtomicU64>,
+    target: &str,
+) -> Result<bool, crate::manager::SyncError> {
+    use crate::vector_error::VectorErrorKind;
+    if is_disabled_error(error) {
+        outbox
+            .retry(event, now.saturating_add(5_000), error)
+            .await
+            .map_err(crate::manager::SyncError::PersistenceError)?;
+        return Ok(false);
+    }
+    match VectorErrorKind::classify_str(error) {
+        VectorErrorKind::Auth => {
+            let pause_until = now.saturating_add(60_000);
+            auth_paused_until_ms.store(pause_until, std::sync::atomic::Ordering::Relaxed);
+            tracing::error!(
+                target = target,
+                error = %error,
+                pause_until,
+                "auth failure: pausing outbox delivery"
+            );
+            outbox
+                .retry(event, now.saturating_add(60_000), error)
+                .await
+                .map_err(crate::manager::SyncError::PersistenceError)?;
+            Ok(true)
+        }
+        VectorErrorKind::NonRetryable => {
+            outbox
+                .dead_letter(event, now, error)
+                .await
+                .map_err(crate::manager::SyncError::PersistenceError)?;
+            Ok(false)
+        }
+        VectorErrorKind::Retryable => {
+            let retry_count = outbox
+                .retry_count(event.event_id)
+                .await
+                .map_err(crate::manager::SyncError::PersistenceError)?;
+            if retry_count.saturating_add(1) >= consumer.max_retries {
+                outbox
+                    .dead_letter(event, now, error)
+                    .await
+                    .map_err(crate::manager::SyncError::PersistenceError)?;
+            } else {
+                outbox
+                    .retry(
+                        event,
+                        now.saturating_add(retry_backoff_ms(retry_count)),
+                        error,
+                    )
+                    .await
+                    .map_err(crate::manager::SyncError::PersistenceError)?;
+            }
+            Ok(false)
+        }
+    }
+}
 #[cfg_attr(
     not(any(feature = "fulltext", feature = "vector")),
     allow(unused_variables)
@@ -128,97 +212,32 @@ impl super::SyncManager {
                             .await;
                         match result {
                             Ok(()) => {
-                                if let Some(stats) = &stats_manager {
-                                    stats.record_transport_latency(
-                                        apply_started.elapsed().as_millis() as u64
-                                    );
-                                }
+                                record_transport_latency(
+                                    &stats_manager,
+                                    apply_started.elapsed().as_millis() as u64,
+                                );
                                 outbox
                                     .acknowledge(&event)
                                     .await
                                     .map_err(SyncError::PersistenceError)?;
                             }
                             Err(error) => {
-                                if let Some(stats) = &stats_manager {
-                                    stats.record_transport_latency(
-                                        apply_started.elapsed().as_millis() as u64
-                                    );
-                                }
-                                // Qdrant disabled events are retained for retry after
-                                // engine recovery and must not be dead-lettered even after
-                                // max_retries. Detect by the EngineDisabled message.
-                                let is_disabled_error = error.contains("Vector engine is disabled")
-                                    || error.contains("EngineDisabled");
-                                if is_disabled_error {
-                                    let backoff = 5_000u64;
-                                    outbox
-                                        .retry(&event, now.saturating_add(backoff), &error)
-                                        .await
-                                        .map_err(SyncError::PersistenceError)?;
-                                } else {
-                                    // Classify the error so NonRetryable goes straight to
-                                    // dead_letter and Auth pauses delivery.
-                                    let kind = crate::vector_error::VectorErrorKind::classify_str(
-                                        &error,
-                                    );
-                                    match kind {
-                                        crate::vector_error::VectorErrorKind::Auth => {
-                                            let pause_until = now.saturating_add(60_000);
-                                            self_clone.auth_paused_until_ms.store(
-                                                pause_until,
-                                                std::sync::atomic::Ordering::Relaxed,
-                                            );
-                                            tracing::error!(
-                                                target = target.as_str(),
-                                                error = %error,
-                                                pause_until,
-                                                "auth failure: pausing outbox delivery for 60s"
-                                            );
-                                            let backoff = 60_000u64;
-                                            outbox
-                                                .retry(
-                                                    &event,
-                                                    now.saturating_add(backoff),
-                                                    &error,
-                                                )
-                                                .await
-                                                .map_err(SyncError::PersistenceError)?;
-                                            // Pause the target after recording the retry.
-                                            break;
-                                        }
-                                        crate::vector_error::VectorErrorKind::NonRetryable => {
-                                            outbox
-                                                .dead_letter(&event, now, &error)
-                                                .await
-                                                .map_err(SyncError::PersistenceError)?;
-                                        }
-                                        crate::vector_error::VectorErrorKind::Retryable => {
-                                            let retry_count = outbox
-                                                .retry_count(event.event_id)
-                                                .await
-                                                .map_err(SyncError::PersistenceError)?;
-                                            if retry_count.saturating_add(1)
-                                                >= consumer.max_retries
-                                            {
-                                                outbox
-                                                    .dead_letter(&event, now, &error)
-                                                    .await
-                                                    .map_err(SyncError::PersistenceError)?;
-                                            } else {
-                                                let backoff = 100u64
-                                                    .saturating_mul(1u64 << retry_count.min(16))
-                                                    .min(300_000);
-                                                outbox
-                                                    .retry(
-                                                        &event,
-                                                        now.saturating_add(backoff),
-                                                        &error,
-                                                    )
-                                                    .await
-                                                    .map_err(SyncError::PersistenceError)?;
-                                            }
-                                        }
-                                    }
+                                record_transport_latency(
+                                    &stats_manager,
+                                    apply_started.elapsed().as_millis() as u64,
+                                );
+                                let should_break = handle_delivery_error(
+                                    outbox,
+                                    &event,
+                                    &error,
+                                    now,
+                                    &consumer,
+                                    &self_clone.auth_paused_until_ms,
+                                    target.as_str(),
+                                )
+                                .await?;
+                                if should_break {
+                                    break;
                                 }
                             }
                         }
@@ -276,108 +295,32 @@ impl super::SyncManager {
                                     .await;
                                 match result {
                                     Ok(()) => {
-                                        if let Some(stats) = &stats_c {
-                                            stats.record_transport_latency(
-                                                apply_started.elapsed().as_millis() as u64
-                                            );
-                                        }
+                                        record_transport_latency(
+                                            &stats_c,
+                                            apply_started.elapsed().as_millis() as u64,
+                                        );
                                         outbox_c
                                             .acknowledge(&event)
                                             .await
                                             .map_err(SyncError::PersistenceError)?;
                                     }
                                     Err(error) => {
-                                        if let Some(stats) = &stats_c {
-                                            stats.record_transport_latency(
-                                                apply_started.elapsed().as_millis() as u64
-                                            );
-                                        }
-                                        let is_disabled_error = error
-                                            .contains("Vector engine is disabled")
-                                            || error.contains("EngineDisabled");
-                                        if is_disabled_error {
-                                            let backoff = 5_000u64;
-                                            outbox_c
-                                                .retry(
-                                                    &event,
-                                                    now.saturating_add(backoff),
-                                                    &error,
-                                                )
-                                                .await
-                                                .map_err(SyncError::PersistenceError)?;
-                                        } else {
-                                            let kind =
-                                                crate::vector_error::VectorErrorKind::classify_str(
-                                                    &error,
-                                                );
-                                            match kind {
-                                                crate::vector_error::VectorErrorKind::Auth => {
-                                                    let pause_until = now.saturating_add(60_000);
-                                                    self_c.auth_paused_until_ms.store(
-                                                        pause_until,
-                                                        std::sync::atomic::Ordering::Relaxed,
-                                                    );
-                                                    tracing::error!(
-                                                        target = target_c.as_str(),
-                                                        error = %error,
-                                                        pause_until,
-                                                        "auth failure: pausing outbox delivery"
-                                                    );
-                                                    outbox_c
-                                                        .retry(
-                                                            &event,
-                                                            now.saturating_add(60_000),
-                                                            &error,
-                                                        )
-                                                        .await
-                                                        .map_err(
-                                                            SyncError::PersistenceError,
-                                                        )?;
-                                                    break;
-                                                }
-                                                crate::vector_error::VectorErrorKind::NonRetryable => {
-                                                    outbox_c
-                                                        .dead_letter(&event, now, &error)
-                                                        .await
-                                                        .map_err(
-                                                            SyncError::PersistenceError,
-                                                        )?;
-                                                }
-                                                crate::vector_error::VectorErrorKind::Retryable => {
-                                                    let retry_count = outbox_c
-                                                        .retry_count(event.event_id)
-                                                        .await
-                                                        .map_err(
-                                                            SyncError::PersistenceError,
-                                                        )?;
-                                                    if retry_count.saturating_add(1)
-                                                        >= consumer_c.max_retries
-                                                    {
-                                                        outbox_c
-                                                            .dead_letter(&event, now, &error)
-                                                            .await
-                                                            .map_err(
-                                                                SyncError::PersistenceError,
-                                                            )?;
-                                                    } else {
-                                                        let backoff = 100u64
-                                                            .saturating_mul(
-                                                                1u64 << retry_count.min(16),
-                                                            )
-                                                            .min(300_000);
-                                                        outbox_c
-                                                            .retry(
-                                                                &event,
-                                                                now.saturating_add(backoff),
-                                                                &error,
-                                                            )
-                                                            .await
-                                                            .map_err(
-                                                                SyncError::PersistenceError,
-                                                            )?;
-                                                    }
-                                                }
-                                            }
+                                        record_transport_latency(
+                                            &stats_c,
+                                            apply_started.elapsed().as_millis() as u64,
+                                        );
+                                        let should_break = handle_delivery_error(
+                                            &outbox_c,
+                                            &event,
+                                            &error,
+                                            now,
+                                            &consumer_c,
+                                            &self_c.auth_paused_until_ms,
+                                            target_c.as_str(),
+                                        )
+                                        .await?;
+                                        if should_break {
+                                            break;
                                         }
                                     }
                                 }

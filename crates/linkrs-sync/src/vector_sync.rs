@@ -139,45 +139,8 @@ pub struct VectorIndexLocation {
 
 const VECTOR_INDEX_PREFIX: &str = "space";
 
-/// Collection granularity mirrors `linkrs_config::VectorCollectionGranularity`
-/// but is re-declared here to avoid a hard dependency on `linkrs-config`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum CollectionGranularity {
-    #[default]
-    Space,
-    Field,
-}
-
-/// Naming strategy derived from granularity.
-pub trait CollectionNaming: Send + Sync + std::fmt::Debug {
-    fn collection_name(&self, loc: &VectorIndexLocation) -> String;
-    fn group_id(&self, loc: &VectorIndexLocation) -> Option<String>;
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SpaceGranularityNaming;
-impl CollectionNaming for SpaceGranularityNaming {
-    fn collection_name(&self, loc: &VectorIndexLocation) -> String {
-        format!("{}_{}", VECTOR_INDEX_PREFIX, loc.space_id)
-    }
-    fn group_id(&self, loc: &VectorIndexLocation) -> Option<String> {
-        Some(format!("{}_{}", loc.tag_name, loc.field_name))
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct FieldGranularityNaming;
-impl CollectionNaming for FieldGranularityNaming {
-    fn collection_name(&self, loc: &VectorIndexLocation) -> String {
-        format!(
-            "{}_{}_{}_{}",
-            VECTOR_INDEX_PREFIX, loc.space_id, loc.tag_name, loc.field_name
-        )
-    }
-    fn group_id(&self, _loc: &VectorIndexLocation) -> Option<String> {
-        None
-    }
-}
+/// Collection granularity shared with configuration so naming stays consistent.
+pub use linkrs_config::VectorCollectionGranularity as CollectionGranularity;
 
 impl VectorIndexLocation {
     pub fn new(space_id: u64, tag_name: impl Into<String>, field_name: impl Into<String>) -> Self {

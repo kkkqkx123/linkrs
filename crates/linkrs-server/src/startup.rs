@@ -646,15 +646,7 @@ fn attach_vector_coordinator(
         );
     }
     {
-        use linkrs_config::VectorCollectionGranularity;
-        let granularity = match _config.vector_config().collection.granularity {
-            VectorCollectionGranularity::Space => {
-                linkrs_sync::vector_sync::CollectionGranularity::Space
-            }
-            VectorCollectionGranularity::Field => {
-                linkrs_sync::vector_sync::CollectionGranularity::Field
-            }
-        };
+        let granularity = _config.vector_config().collection.granularity;
         vector_coordinator.set_granularity(granularity);
         info!("Vector collection granularity: {:?}", granularity);
     }

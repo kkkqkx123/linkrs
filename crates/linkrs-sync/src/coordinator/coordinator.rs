@@ -153,21 +153,37 @@ impl SyncCoordinator {
         &self,
         ctx: &ChangeContext,
     ) -> Result<IndexOperation, SyncCoordinatorError> {
-        let ChangeData::Fulltext(ref text) = ctx.data;
         let key = IndexOpKey::new(ctx.space_id, &ctx.tag_name, &ctx.field_name);
+        let is_delete = ctx.change_type == ChangeType::Delete;
 
-        let text = if ctx.change_type == ChangeType::Delete {
-            None
-        } else {
-            Some(text.clone())
-        };
-
-        Ok(IndexOperation::new_fulltext(
-            key,
-            ctx.change_type,
-            ctx.vertex_id.clone(),
-            text,
-        ))
+        match &ctx.data {
+            ChangeData::Fulltext(text) => {
+                let text = if is_delete {
+                    None
+                } else {
+                    Some(text.clone())
+                };
+                Ok(IndexOperation::new_fulltext(
+                    key,
+                    ctx.change_type,
+                    ctx.vertex_id.clone(),
+                    text,
+                ))
+            }
+            ChangeData::Vector(vector) => {
+                let vector = if is_delete {
+                    None
+                } else {
+                    Some(vector.clone())
+                };
+                Ok(IndexOperation::new_vector(
+                    key,
+                    ctx.change_type,
+                    ctx.vertex_id.clone(),
+                    vector,
+                ))
+            }
+        }
     }
 
     pub async fn on_vertex_change(

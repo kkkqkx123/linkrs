@@ -1,3 +1,12 @@
+//! Synchronization coordination for derived secondary indexes.
+//!
+//! Engine implementations live outside this crate: fulltext search in
+//! `linkrs-fulltext` and vector search in `simvec` plus `vector-client`.
+//! This crate owns only coordination: durable outbox staging, delivery,
+//! retry and rebuild orchestration, with thin per-engine coordinators on top.
+//! `vector_type_conv` is the single conversion point between transport-side
+//! filter types and index-side filter types.
+
 #[cfg(feature = "vector")]
 pub mod backend;
 pub mod batch;
@@ -44,8 +53,7 @@ pub use circuit_breaker::{
 };
 #[cfg(feature = "fulltext")]
 pub use coordinator::{
-    ChangeContext, ChangeData, ChangeType, IndexType, RecoveryResult, SyncCoordinator,
-    SyncCoordinatorError,
+    ChangeContext, ChangeData, RecoveryResult, SyncCoordinator, SyncCoordinatorError,
 };
 pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 pub use linkrs_fulltext::SyncConfig;
@@ -72,7 +80,7 @@ pub use sqlite_outbox::{
     ClaimedEvent, DeadLetterRow, DegradedRangeRow, IndexSyncDiagnostics, OutboxSnapshot,
     RebuildEvent, SqliteOutbox, SyncDiagnostics, TargetSyncDiagnostics,
 };
-pub use types::{IndexOpKey, IndexOperation};
+pub use types::{ChangeType, IndexData, IndexOpKey, IndexOperation, IndexType};
 pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};
 
 #[cfg(feature = "vector")]

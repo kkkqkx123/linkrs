@@ -27,11 +27,13 @@ impl IndexOpKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IndexType {
     Fulltext,
+    Vector,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IndexData {
     Fulltext(String),
+    Vector(Vec<f32>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +61,21 @@ impl IndexOperation {
         }
     }
 
+    pub fn new_vector(
+        key: IndexOpKey,
+        change_type: ChangeType,
+        id: impl Into<String>,
+        vector: Option<Vec<f32>>,
+    ) -> Self {
+        Self {
+            key,
+            index_type: IndexType::Vector,
+            change_type,
+            id: id.into(),
+            data: vector.map(IndexData::Vector),
+        }
+    }
+
     pub fn extract_index_key(&self) -> (u64, String, String) {
         (
             self.key.space_id,
@@ -82,7 +99,14 @@ impl IndexOperation {
     pub fn text(&self) -> Option<&str> {
         match &self.data {
             Some(IndexData::Fulltext(text)) => Some(text),
-            None => None,
+            Some(IndexData::Vector(_)) | None => None,
+        }
+    }
+
+    pub fn vector(&self) -> Option<&[f32]> {
+        match &self.data {
+            Some(IndexData::Vector(vector)) => Some(vector),
+            Some(IndexData::Fulltext(_)) | None => None,
         }
     }
 }

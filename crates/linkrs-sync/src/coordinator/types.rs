@@ -1,11 +1,4 @@
-use serde::{Deserialize, Serialize};
-
-pub use crate::types::ChangeType;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum IndexType {
-    Fulltext,
-}
+pub use crate::types::{ChangeType, IndexType};
 
 #[derive(Debug, Clone)]
 pub struct ChangeContext {
@@ -21,6 +14,7 @@ pub struct ChangeContext {
 #[derive(Debug, Clone)]
 pub enum ChangeData {
     Fulltext(String),
+    Vector(Vec<f32>),
 }
 
 impl ChangeContext {
@@ -40,6 +34,25 @@ impl ChangeContext {
             change_type,
             vertex_id: vertex_id.into(),
             data: ChangeData::Fulltext(text.into()),
+        }
+    }
+
+    pub fn new_vector(
+        space_id: u64,
+        tag_name: impl Into<String>,
+        field_name: impl Into<String>,
+        change_type: ChangeType,
+        vertex_id: impl Into<String>,
+        vector: Vec<f32>,
+    ) -> Self {
+        Self {
+            space_id,
+            tag_name: tag_name.into(),
+            field_name: field_name.into(),
+            index_type: IndexType::Vector,
+            change_type,
+            vertex_id: vertex_id.into(),
+            data: ChangeData::Vector(vector),
         }
     }
 

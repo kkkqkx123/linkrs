@@ -152,35 +152,48 @@ impl SyncCoordinatorBuilder {
     }
 }
 
-#[cfg(feature = "vector-qdrant")]
+#[cfg(feature = "vector")]
 pub struct VectorCoordinatorBuilder {
+    backend: Option<crate::backend::VectorBackend>,
+    #[cfg(feature = "vector-qdrant")]
     vector_manager: Option<Arc<vector_client::VectorManager>>,
+    #[cfg(feature = "embedding")]
     embedding_service: Option<Arc<crate::vector_sync::EmbeddingService>>,
     runtime_handle: Option<tokio::runtime::Handle>,
 }
 
-#[cfg(feature = "vector-qdrant")]
+#[cfg(feature = "vector")]
 impl Default for VectorCoordinatorBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "vector-qdrant")]
+#[cfg(feature = "vector")]
 impl VectorCoordinatorBuilder {
     pub fn new() -> Self {
         Self {
+            backend: None,
+            #[cfg(feature = "vector-qdrant")]
             vector_manager: None,
+            #[cfg(feature = "embedding")]
             embedding_service: None,
             runtime_handle: None,
         }
     }
 
+    pub fn with_backend(mut self, backend: crate::backend::VectorBackend) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
+    #[cfg(feature = "vector-qdrant")]
     pub fn with_vector_manager(mut self, manager: Arc<vector_client::VectorManager>) -> Self {
         self.vector_manager = Some(manager);
         self
     }
 
+    #[cfg(feature = "embedding")]
     pub fn with_embedding_service(
         mut self,
         service: Arc<crate::vector_sync::EmbeddingService>,
@@ -195,18 +208,36 @@ impl VectorCoordinatorBuilder {
     }
 
     pub fn build(self) -> Result<Arc<VectorSyncCoordinator>, crate::SyncError> {
-        let manager = self
-            .vector_manager
-            .ok_or_else(|| crate::SyncError::Internal("VectorManager is required".to_string()))?;
+        let backend = if let Some(backend) = self.backend {
+            backend
+        } else {
+            #[cfg(feature = "vector-qdrant")]
+            if let Some(manager) = self.vector_manager {
+                crate::backend::VectorBackend::qdrant(manager)
+            } else {
+                return Err(crate::SyncError::Internal(
+                    "VectorBackend or VectorManager is required".to_string(),
+                ));
+            }
+            #[cfg(not(feature = "vector-qdrant"))]
+            return Err(crate::SyncError::Internal(
+                "VectorBackend is required".to_string(),
+            ));
+        };
         let handle = self.runtime_handle.unwrap_or_else(|| {
             tokio::runtime::Handle::try_current().expect("No tokio runtime available")
         });
-        let backend = crate::backend::VectorBackend::qdrant(manager);
-
-        Ok(Arc::new(VectorSyncCoordinator::new(
-            backend,
-            self.embedding_service,
-            handle,
-        )))
+        #[cfg(feature = "embedding")]
+        {
+            Ok(Arc::new(VectorSyncCoordinator::new(
+                backend,
+                self.embedding_service,
+                handle,
+            )))
+        }
+        #[cfg(not(feature = "embedding"))]
+        {
+            Ok(Arc::new(VectorSyncCoordinator::new(backend, handle)))
+        }
     }
 }

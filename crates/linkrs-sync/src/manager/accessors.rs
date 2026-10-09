@@ -86,6 +86,31 @@ impl super::SyncManager {
             .unwrap_or_default()
     }
 
+    /// Vector rebuilds stuck in the `Failed` phase. Live data still serves;
+    /// retry the rebuild. Mirrors the fulltext inconsistent listing so both
+    /// engines share one alerting shape. Empty when vector is not configured.
+    #[cfg(feature = "vector")]
+    pub fn inconsistent_vector_indexes(&self) -> Vec<linkrs_core::index_events::RebuildProgress> {
+        self.vector_coordinator
+            .as_ref()
+            .map(|coordinator| coordinator.inconsistent_vector_indexes())
+            .unwrap_or_default()
+    }
+
+    /// True when any configured engine reports an index needing attention.
+    #[cfg(any(feature = "fulltext", feature = "vector"))]
+    pub fn has_inconsistent_indexes(&self) -> bool {
+        #[cfg(feature = "fulltext")]
+        if !self.inconsistent_fulltext_indexes().is_empty() {
+            return true;
+        }
+        #[cfg(feature = "vector")]
+        if !self.inconsistent_vector_indexes().is_empty() {
+            return true;
+        }
+        false
+    }
+
     /// Unified rebuild progress for one logical index.
     ///
     /// Fulltext and vector rebuilds share the same `RebuildProgress` shape but
