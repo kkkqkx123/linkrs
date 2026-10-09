@@ -1,6 +1,7 @@
 pub mod error;
 pub mod event_dispatch;
 pub mod fusion;
+pub mod index_events;
 pub mod metadata;
 pub mod npath;
 pub mod session_stats;
@@ -61,6 +62,9 @@ pub use type_system::TypeUtils;
 
 // Permission type
 pub use permission::{Permission, RoleType};
+
+// Index lifecycle and rebuild progress types shared by fulltext and vector engines
+pub use index_events::{IndexEvent, IndexEventCallback, RebuildPhase, RebuildProgress};
 
 // Session statistics type
 pub use session_stats::SessionStatistics;

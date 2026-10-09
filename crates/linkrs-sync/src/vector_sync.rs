@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use linkrs_fulltext::{RebuildPhase, RebuildProgress};
+use linkrs_core::index_events::{RebuildPhase, RebuildProgress};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 

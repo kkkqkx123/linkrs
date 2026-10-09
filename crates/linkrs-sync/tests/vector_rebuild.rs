@@ -12,9 +12,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use linkrs_core::index_events::RebuildPhase;
 use linkrs_core::types::{CommitLsn, TransactionId, VertexId};
 use linkrs_core::{Value, VectorValue};
-use linkrs_fulltext::RebuildPhase;
 use linkrs_sync::types::ChangeType;
 use linkrs_sync::vector_sync::CollectionGranularity;
 use linkrs_sync::{

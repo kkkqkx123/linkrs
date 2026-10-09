@@ -256,7 +256,7 @@ impl VectorApi {
     /// These indexes still serve live data but need operator attention: retry
     /// [`VectorApi::rebuild_collection`]. Mirrors
     /// [`crate::api_core::fulltext_api::FulltextApi::inconsistent_indexes`].
-    pub fn inconsistent_indexes(&self) -> Vec<linkrs_sync::RebuildProgress> {
+    pub fn inconsistent_indexes(&self) -> Vec<linkrs_core::index_events::RebuildProgress> {
         let Some(coordinator) = &self.coordinator else {
             return Vec::new();
         };

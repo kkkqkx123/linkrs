@@ -32,9 +32,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use linkrs_core::index_events::{IndexEvent, RebuildPhase, RebuildProgress};
 use linkrs_core::types::{CommitLsn, TargetId, VertexId};
 use linkrs_core::Value;
-use linkrs_fulltext::{IndexEvent, RebuildPhase, RebuildProgress};
 
 use crate::backend::VectorBackend;
 use crate::manager::{format_vector_point_id, stable_hash, SyncError, SyncManager};

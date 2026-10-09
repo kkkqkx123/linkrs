@@ -16,7 +16,7 @@ use tracing::info;
 use crate::backend::VectorBackend;
 use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, VectorError};
 use linkrs_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
-pub use linkrs_fulltext::{IndexEvent, IndexEventCallback};
+use linkrs_core::index_events::{IndexEvent, IndexEventCallback};
 pub use simvec::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
 use simvec::{
     types::validate_distance_metric, CollectionConfig, FilterCondition, IndexMetadata,

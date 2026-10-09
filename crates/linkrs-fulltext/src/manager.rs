@@ -5,8 +5,6 @@ use std::sync::Arc;
 
 use crate::engine::FulltextSearchEngine;
 use crate::error::SearchError;
-use crate::index_events::{IndexEvent, IndexEventCallback};
-pub use crate::index_events::{RebuildPhase, RebuildProgress};
 use crate::metadata::{IndexKey, IndexMetadata, IndexStatus};
 use crate::metrics::MetricsSearchEngine;
 use crate::result::{IndexStats, SearchResult};
@@ -14,6 +12,7 @@ use crate::tantivy_index::TantivySearchEngine;
 use crate::ConsistencyState;
 use linkrs_config::fulltext::{FulltextConfig, FulltextEngineType as EngineType};
 use linkrs_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
+use linkrs_core::index_events::{IndexEvent, IndexEventCallback, RebuildPhase, RebuildProgress};
 use linkrs_core::metadata::SchemaManager;
 use linkrs_metrics::StatsManager;
 

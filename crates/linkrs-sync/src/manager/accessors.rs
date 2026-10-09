@@ -99,7 +99,7 @@ impl super::SyncManager {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-    ) -> Option<linkrs_fulltext::RebuildProgress> {
+    ) -> Option<linkrs_core::index_events::RebuildProgress> {
         #[cfg(feature = "fulltext")]
         if let Some(manager) = self.fulltext_manager_opt() {
             if let Some(progress) = manager.rebuild_progress(space_id, tag_name, field_name) {
@@ -122,7 +122,7 @@ impl super::SyncManager {
         _space_id: u64,
         _tag_name: &str,
         _field_name: &str,
-    ) -> Option<linkrs_fulltext::RebuildProgress> {
+    ) -> Option<linkrs_core::index_events::RebuildProgress> {
         None
     }
 

@@ -23,13 +23,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use linkrs_core::index_events::{RebuildPhase, RebuildProgress};
 use linkrs_core::types::{
     CommitLsn, IdempotencyKey, IndexGeneration, OrderingKey, TargetId, VertexId,
 };
 use linkrs_core::wal::{EntityRef, IndexMutation, IndexOperation, WAL_SYNC_WIRE_VERSION};
 use linkrs_core::Value;
 use linkrs_fulltext::engine::FulltextSearchEngine;
-use linkrs_fulltext::{RebuildPhase, RebuildProgress};
 
 use crate::manager::{stable_hash, SyncError, SyncManager};
 use crate::outbox::OutboxPayload;

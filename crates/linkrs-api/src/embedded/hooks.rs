@@ -45,7 +45,7 @@ enum BusTarget {
         SubscriptionId,
     ),
     Index(
-        Arc<EventSubscriptions<linkrs_fulltext::IndexEvent>>,
+        Arc<EventSubscriptions<linkrs_core::index_events::IndexEvent>>,
         SubscriptionId,
     ),
     Dml(Arc<EventSubscriptions<DmlStatementEvent>>, SubscriptionId),
@@ -59,7 +59,7 @@ pub struct HookBus {
     schema_events: Option<Arc<EventSubscriptions<SchemaChangeEvent>>>,
     session_events: RwLock<Option<Arc<EventSubscriptions<SessionEvent>>>>,
     storage_events: RwLock<Option<Arc<EventSubscriptions<linkrs_storage::StorageEvent>>>>,
-    index_events: RwLock<Option<Arc<EventSubscriptions<linkrs_fulltext::IndexEvent>>>>,
+    index_events: RwLock<Option<Arc<EventSubscriptions<linkrs_core::index_events::IndexEvent>>>>,
     /// Statement-level DML registry, owned by the bus itself: no other
     /// manager emits these, so no attach step is needed. Always present,
     /// zero overhead when empty.
@@ -111,7 +111,7 @@ impl HookBus {
     /// Attach the shared fulltext/vector index-lifecycle registry.
     pub fn attach_index_registry(
         &self,
-        shared: Arc<EventSubscriptions<linkrs_fulltext::IndexEvent>>,
+        shared: Arc<EventSubscriptions<linkrs_core::index_events::IndexEvent>>,
     ) {
         *self.index_events.write() = Some(shared);
     }
@@ -291,7 +291,7 @@ impl HookBus {
     /// `attach_index_registry`.
     pub fn subscribe_index(
         &self,
-        callback: linkrs_fulltext::IndexEventCallback,
+        callback: linkrs_core::index_events::IndexEventCallback,
     ) -> Option<SubscriptionId> {
         let registry = Arc::clone(self.index_events.read().as_ref()?);
         let leaf = registry.add(callback);
@@ -301,8 +301,8 @@ impl HookBus {
     /// Filtered index subscription. Returns `None` without an attached registry.
     pub fn subscribe_index_filtered(
         &self,
-        callback: linkrs_fulltext::IndexEventCallback,
-        filter: EventFilter<linkrs_fulltext::IndexEvent>,
+        callback: linkrs_core::index_events::IndexEventCallback,
+        filter: EventFilter<linkrs_core::index_events::IndexEvent>,
     ) -> Option<SubscriptionId> {
         let registry = Arc::clone(self.index_events.read().as_ref()?);
         let leaf = registry.add_filtered(callback, Some(filter));
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn storage_and_index_subscription_require_attached_registries() {
-        use linkrs_fulltext::IndexEvent;
+        use linkrs_core::index_events::IndexEvent;
         use linkrs_storage::StorageEvent;
 
         let bus = HookBus::new(

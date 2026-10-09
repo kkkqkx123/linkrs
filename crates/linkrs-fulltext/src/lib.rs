@@ -1,6 +1,5 @@
 pub mod engine;
 pub mod error;
-pub mod index_events;
 #[cfg(feature = "jieba")]
 pub mod jieba_tokenizer;
 #[cfg(feature = "fulltext")]
@@ -25,7 +24,6 @@ pub use linkrs_config::fulltext::{
     TantivyConfig, TokenizerKind,
 };
 pub use linkrs_core::ConsistencyState;
-pub use index_events::{IndexEvent, IndexEventCallback, RebuildPhase, RebuildProgress};
 #[cfg(feature = "fulltext")]
 pub use manager::FulltextIndexManager;
 pub use metadata::{IndexKey, IndexMetadata, IndexStatus};

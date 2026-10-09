@@ -76,10 +76,6 @@ pub use types::{IndexOpKey, IndexOperation};
 pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};
 
 #[cfg(feature = "vector")]
-pub use linkrs_fulltext::{IndexEvent, IndexEventCallback};
-#[cfg(any(feature = "fulltext", feature = "vector"))]
-pub use linkrs_fulltext::{RebuildPhase, RebuildProgress};
-#[cfg(feature = "vector")]
 pub use vector_index_manager::{PublishOutcome, TempCollection, TempKey, VectorIndexManager};
 #[cfg(feature = "vector")]
 pub use vector_rebuild::{
