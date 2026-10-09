@@ -134,6 +134,39 @@ impl StatsManager {
         self.set_value(MetricType::VectorDisabledSkips, count);
     }
 
+    /// Record one embedding call (global bucket only).
+    ///
+    /// The embedding path has no space context, so only global counters are
+    /// updated; per-space keys are never synthesized here. Failed calls
+    /// carry zero token usage.
+    pub fn record_vector_embedding(
+        &self,
+        prompt_tokens: u64,
+        total_tokens: u64,
+        latency_ms: u64,
+        success: bool,
+    ) {
+        self.add_value(MetricType::VectorEmbeddingOps);
+        if !success {
+            self.add_value(MetricType::VectorEmbeddingErrors);
+        }
+        self.add_value_with_amount(MetricType::VectorEmbeddingLatencyMs, latency_ms);
+        self.add_value_with_amount(MetricType::VectorEmbeddingPromptTokens, prompt_tokens);
+        self.add_value_with_amount(MetricType::VectorEmbeddingTotalTokens, total_tokens);
+    }
+
+    /// Record one issued rerank call (global bucket only).
+    ///
+    /// Skipped reranks (no service, no query text, thin coverage) are not
+    /// recorded; only actual provider calls land here.
+    pub fn record_vector_rerank(&self, latency_ms: u64, success: bool) {
+        self.add_value(MetricType::VectorRerankOps);
+        if !success {
+            self.add_value(MetricType::VectorRerankErrors);
+        }
+        self.add_value_with_amount(MetricType::VectorRerankLatencyMs, latency_ms);
+    }
+
     pub fn search_index_breakdown(&self) -> Vec<SearchIndexBreakdown> {
         let mut out = Vec::new();
         for entry in self.index_metrics.iter() {

@@ -10,7 +10,9 @@ license.workspace = true
 # `VectorBackend::Local`.
 vector = ["dep:simvec"]
 # Embedding infrastructure, independent of remote backend.
-embedding = ["vector", "dep:llm-embedding"]
+embedding = ["vector", "dep:llm-embedding", "dep:llm-token", "linkrs-config/embedding"]
+# Post-recall rerank stage, independent of embedding.
+rerank = ["vector", "dep:llm-rerank", "linkrs-config/rerank"]
 # Remote qdrant client on top of the local engine types.
 vector-qdrant = ["vector", "embedding", "dep:vector-client", "linkrs-config/vector-qdrant"]
 # Transport-layer sub-features for the remote client. They are additive on
@@ -25,6 +27,8 @@ linkrs-metrics = { path = "../linkrs-metrics" }
 linkrs-fulltext = { path = "../linkrs-fulltext" }
 linkrs-config = { path = "../linkrs-config" }
 llm-embedding = { path = "../llm-suite/crates/llm-embedding", optional = true }
+llm-rerank = { path = "../llm-suite/crates/llm-rerank", optional = true }
+llm-token = { path = "../llm-suite/crates/llm-token", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

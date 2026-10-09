@@ -38,6 +38,7 @@ simvec = { path = "../simvec", optional = true }
 vector = ["dep:simvec", "linkrs-sync/vector"]
 vector-qdrant = ["vector", "linkrs-sync/vector-qdrant"]
 embedding = ["linkrs-sync/embedding"]
+rerank = ["linkrs-sync/rerank"]
 fulltext = ["linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
 
 [dev-dependencies]

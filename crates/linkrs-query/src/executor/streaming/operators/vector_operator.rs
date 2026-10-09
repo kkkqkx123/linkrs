@@ -562,13 +562,21 @@ impl VectorOperator {
                             query_vector.clone()
                         };
                         // Fetch enough candidates so skipping `offset` rows
-                        // still leaves up to `top_k` results.
+                        // still leaves up to `top_k` results. An active
+                        // rerank stage widens recall to its candidate window;
+                        // rerank truncates back to the requested shape.
+                        #[cfg(feature = "rerank")]
+                        let recall_limit = (*top_k as usize)
+                            .saturating_add(*offset)
+                            .max(coordinator.rerank_recall_window(query_text.as_deref()));
+                        #[cfg(not(feature = "rerank"))]
+                        let recall_limit = (*top_k as usize).saturating_add(*offset);
                         let mut options = linkrs_sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),
                             resolved_vector,
-                            (*top_k as usize).saturating_add(*offset),
+                            recall_limit,
                         );
                         // A zero threshold is vacuous for similarity scores;
                         // keep it unset so behavior matches the no-THRESHOLD
@@ -591,6 +599,18 @@ impl VectorOperator {
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Vector search",
                                 coordinator.search_with_options(options),
+                            )?;
+                        // Optional post-recall rerank: fail-open, the original
+                        // recall order survives any rerank failure.
+                        #[cfg(feature = "rerank")]
+                        let search_results =
+                            crate::executor::streaming::helpers::runtime_bridge::wait(
+                                "Vector rerank",
+                                coordinator.maybe_rerank(
+                                    query_text.as_deref(),
+                                    field_name,
+                                    search_results,
+                                ),
                             )?;
                         let mut rows = Vec::new();
                         for result in search_results.into_iter().skip(*offset) {
@@ -690,12 +710,19 @@ impl VectorOperator {
                         } else {
                             query_vector.clone()
                         };
+                        // Widen recall to the rerank candidate window when the
+                        // stage is active; rerank truncates back to `top_k`.
+                        #[cfg(feature = "rerank")]
+                        let recall_limit = (*top_k as usize)
+                            .max(coordinator.rerank_recall_window(query_text.as_deref()));
+                        #[cfg(not(feature = "rerank"))]
+                        let recall_limit = *top_k as usize;
                         let mut options = linkrs_sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),
                             resolved_vector,
-                            *top_k as usize,
+                            recall_limit,
                         );
                         if let Some(cfg) = ryw_config {
                             options.consistency =
@@ -708,6 +735,18 @@ impl VectorOperator {
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Vector lookup",
                                 coordinator.search_with_options(options),
+                            )?;
+                        // Optional post-recall rerank: fail-open, the original
+                        // recall order survives any rerank failure.
+                        #[cfg(feature = "rerank")]
+                        let search_results =
+                            crate::executor::streaming::helpers::runtime_bridge::wait(
+                                "Vector rerank",
+                                coordinator.maybe_rerank(
+                                    query_text.as_deref(),
+                                    field_name,
+                                    search_results,
+                                ),
                             )?;
                         let mut rows = Vec::new();
                         for result in search_results {
@@ -827,6 +866,18 @@ impl VectorOperator {
                                 ),
                             )?
                         };
+                        // Optional post-recall rerank over the fixed recall
+                        // window: fail-open, threshold filtering still holds.
+                        #[cfg(feature = "rerank")]
+                        let search_results =
+                            crate::executor::streaming::helpers::runtime_bridge::wait(
+                                "Vector rerank",
+                                coordinator.maybe_rerank(
+                                    query_text.as_deref(),
+                                    field_name,
+                                    search_results,
+                                ),
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![

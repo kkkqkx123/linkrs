@@ -50,6 +50,10 @@ impl super::SyncManager {
         mut self,
         vector_coordinator: Arc<VectorSyncCoordinator>,
     ) -> Self {
+        #[cfg(any(feature = "embedding", feature = "rerank"))]
+        if let Some(stats) = self.stats_manager.clone() {
+            vector_coordinator.set_stats_manager(stats);
+        }
         self.vector_coordinator = Some(vector_coordinator);
         self
     }
@@ -71,6 +75,10 @@ impl super::SyncManager {
     }
 
     pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {
+        #[cfg(all(feature = "vector", any(feature = "embedding", feature = "rerank")))]
+        if let Some(coordinator) = self.vector_coordinator.as_ref() {
+            coordinator.set_stats_manager(stats_manager.clone());
+        }
         self.stats_manager = Some(stats_manager);
         self
     }
@@ -88,6 +96,10 @@ impl super::SyncManager {
     }
 
     pub fn set_stats_manager(&mut self, stats_manager: Arc<StatsManager>) {
+        #[cfg(all(feature = "vector", any(feature = "embedding", feature = "rerank")))]
+        if let Some(coordinator) = self.vector_coordinator.as_ref() {
+            coordinator.set_stats_manager(stats_manager.clone());
+        }
         self.stats_manager = Some(stats_manager);
     }
 

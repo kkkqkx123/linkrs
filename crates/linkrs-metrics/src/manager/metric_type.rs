@@ -142,6 +142,16 @@ pub enum MetricType {
     VectorEmbeddingOps,
     VectorEmbeddingErrors,
     VectorEmbeddingLatencyMs,
+    /// Cumulative prompt tokens reported by embedding calls.
+    VectorEmbeddingPromptTokens,
+    /// Cumulative total tokens reported by embedding calls.
+    VectorEmbeddingTotalTokens,
+    /// Post-recall rerank calls issued.
+    VectorRerankOps,
+    /// Failed post-recall rerank calls (recall order kept).
+    VectorRerankErrors,
+    /// Cumulative rerank call latency in milliseconds.
+    VectorRerankLatencyMs,
     VectorDisabledSkips,
     // MVCC Tombstone metrics
     TombstoneCount,

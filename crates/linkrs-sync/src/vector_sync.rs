@@ -24,6 +24,10 @@ pub type EmbeddingService =
 
 #[cfg(feature = "embedding")]
 pub const EMBEDDING_BATCH_SIZE: usize = 32;
+#[cfg(feature = "embedding")]
+pub const EMBEDDING_MAX_TOKENS_PER_CALL: usize = 8192;
+#[cfg(feature = "embedding")]
+const EMBEDDING_MAX_RETRIES: u32 = 2;
 pub use simvec::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
 use simvec::{CollectionConfig, IndexMetadata, VectorFilter};
 
@@ -260,6 +264,18 @@ pub struct VectorSyncCoordinator {
     index_manager: Arc<VectorIndexManager>,
     #[cfg(feature = "embedding")]
     embedding_service: Option<Arc<EmbeddingService>>,
+    #[cfg(feature = "embedding")]
+    query_embedding_service: Option<Arc<EmbeddingService>>,
+    /// Optional shared observability handle for embedding calls. Interior
+    /// mutability so late binding through the sync manager needs no rebuild.
+    #[cfg(any(feature = "embedding", feature = "rerank"))]
+    stats_manager: parking_lot::RwLock<Option<Arc<linkrs_metrics::StatsManager>>>,
+    /// Optional post-recall rerank service, assembled by the server layer.
+    #[cfg(feature = "rerank")]
+    rerank_service: Option<Arc<llm_rerank::CohereRerankProvider>>,
+    /// Snapshot of the rerank configuration carried with the service.
+    #[cfg(feature = "rerank")]
+    rerank_config: Option<linkrs_config::VectorRerankConfig>,
     /// Vector change items skipped because the engine is disabled (delivery
     /// plane). Observable accounting for silent degradation.
     disabled_skips: std::sync::atomic::AtomicU64,
@@ -277,6 +293,15 @@ impl std::fmt::Debug for VectorSyncCoordinator {
         debug.field("index_manager", &self.index_manager);
         #[cfg(feature = "embedding")]
         debug.field("embedding_service", &self.embedding_service.is_some());
+        #[cfg(feature = "embedding")]
+        debug.field(
+            "query_embedding_service",
+            &self.query_embedding_service.is_some(),
+        );
+        #[cfg(any(feature = "embedding", feature = "rerank"))]
+        debug.field("has_stats_manager", &self.stats_manager.read().is_some());
+        #[cfg(feature = "rerank")]
+        debug.field("rerank_service", &self.rerank_service.is_some());
         debug.finish()
     }
 }
@@ -312,6 +337,14 @@ impl VectorSyncCoordinator {
             index_manager: Arc::new(VectorIndexManager::new(backend)),
             #[cfg(feature = "embedding")]
             embedding_service,
+            #[cfg(feature = "embedding")]
+            query_embedding_service: None,
+            #[cfg(any(feature = "embedding", feature = "rerank"))]
+            stats_manager: parking_lot::RwLock::new(None),
+            #[cfg(feature = "rerank")]
+            rerank_service: None,
+            #[cfg(feature = "rerank")]
+            rerank_config: None,
             disabled_skips: std::sync::atomic::AtomicU64::new(0),
             runtime,
             outbox: parking_lot::RwLock::new(None),
@@ -448,6 +481,45 @@ impl VectorSyncCoordinator {
     #[cfg(feature = "embedding")]
     pub fn embedding_service(&self) -> Option<&Arc<EmbeddingService>> {
         self.embedding_service.as_ref()
+    }
+
+    /// Set the query-side embedding service used for read-time text
+    /// queries. Falls back to the shared service when unset.
+    #[cfg(feature = "embedding")]
+    pub fn with_query_embedding_service(mut self, service: Arc<EmbeddingService>) -> Self {
+        self.query_embedding_service = Some(service);
+        self
+    }
+
+    /// Effective service for read-time queries: the query override when
+    /// present, otherwise the shared document-side service.
+    #[cfg(feature = "embedding")]
+    fn query_service(&self) -> Option<&Arc<EmbeddingService>> {
+        self.query_embedding_service
+            .as_ref()
+            .or(self.embedding_service.as_ref())
+    }
+
+    /// Late-bind the shared observability handle. Safe to call after the
+    /// coordinator is already mounted in the sync manager.
+    #[cfg(any(feature = "embedding", feature = "rerank"))]
+    pub fn set_stats_manager(&self, stats_manager: Arc<linkrs_metrics::StatsManager>) {
+        *self.stats_manager.write() = Some(stats_manager);
+    }
+
+    /// Record one embedding call against the bound handle, if any.
+    #[cfg(feature = "embedding")]
+    fn record_embedding_call(
+        &self,
+        prompt_tokens: u64,
+        total_tokens: u64,
+        latency_ms: u64,
+        success: bool,
+    ) {
+        let stats = self.stats_manager.read().clone();
+        if let Some(stats) = stats.as_ref() {
+            stats.record_vector_embedding(prompt_tokens, total_tokens, latency_ms, success);
+        }
     }
 
     // ── Index lifecycle (delegated) ───────────────────────────────────
@@ -848,25 +920,31 @@ impl VectorSyncCoordinator {
 
     /// Resolve query text into a vector for read-time text queries.
     ///
-    /// The write path persists explicit vector columns only. Text search
-    /// is a read-time convenience; writers that need write-time conversion
-    /// must embed before staging outbox intents (see `embed_texts`).
+    /// Uses the query-side service when configured, otherwise the shared
+    /// document-side service. Retries transport-level failures and splits
+    /// oversized batches by estimated token budget.
     #[cfg(feature = "embedding")]
     pub async fn embed_text(&self, text: &str) -> VectorCoordinatorResult<Vec<f32>> {
-        if let Some(embedding) = &self.embedding_service {
-            let result = embedding
-                .embed_batch(&[text.to_string()])
-                .await
-                .map_err(|e| VectorCoordinatorError::EmbeddingError(e.to_string()))?;
-            result
-                .embeddings
-                .into_iter()
-                .next()
-                .ok_or_else(|| {
-                    VectorCoordinatorError::EmbeddingError(
-                        "Embedding service returned no vector".to_string(),
-                    )
-                })
+        if let Some(embedding) = self.query_service() {
+            let owned = vec![text.to_string()];
+            let started = std::time::Instant::now();
+            let outcome = Self::embed_with_retry(embedding, &owned).await;
+            let latency_ms = started.elapsed().as_millis() as u64;
+            match &outcome {
+                Ok(result) => self.record_embedding_call(
+                    result.prompt_tokens,
+                    result.total_tokens,
+                    latency_ms,
+                    true,
+                ),
+                Err(_) => self.record_embedding_call(0, 0, latency_ms, false),
+            }
+            let result = outcome?;
+            result.embeddings.into_iter().next().ok_or_else(|| {
+                VectorCoordinatorError::EmbeddingError(
+                    "Embedding service returned no vector".to_string(),
+                )
+            })
         } else {
             Err(VectorCoordinatorError::EmbeddingError(
                 "Embedding service not available".to_string(),
@@ -882,15 +960,824 @@ impl VectorSyncCoordinator {
     pub async fn embed_texts(&self, texts: &[&str]) -> VectorCoordinatorResult<Vec<Vec<f32>>> {
         if let Some(embedding) = &self.embedding_service {
             let owned: Vec<String> = texts.iter().map(|text| text.to_string()).collect();
-            let result = embedding
-                .embed_batch(&owned)
-                .await
-                .map_err(|e| VectorCoordinatorError::EmbeddingError(e.to_string()))?;
-            Ok(result.embeddings)
+            let started = std::time::Instant::now();
+            let outcome = Self::embed_with_retry(embedding, &owned).await;
+            let latency_ms = started.elapsed().as_millis() as u64;
+            match &outcome {
+                Ok(result) => self.record_embedding_call(
+                    result.prompt_tokens,
+                    result.total_tokens,
+                    latency_ms,
+                    true,
+                ),
+                Err(_) => self.record_embedding_call(0, 0, latency_ms, false),
+            }
+            Ok(outcome?.embeddings)
         } else {
             Err(VectorCoordinatorError::EmbeddingError(
                 "Embedding service not available".to_string(),
             ))
         }
+    }
+
+    /// Embed with token-budget splitting and limited retry.
+    ///
+    /// Generic over the provider so scripted test doubles exercise the same
+    /// retry and batching path as the production service. Oversized single
+    /// texts fail fast without network traffic. Retry covers transport
+    /// failures, timeouts, 429 and 5xx only; config and request errors return
+    /// immediately. Usage is reported through debug telemetry so deployments
+    /// can observe token spend.
+    #[cfg(feature = "embedding")]
+    async fn embed_with_retry<P: llm_embedding::EmbeddingProvider>(
+        service: &llm_embedding::EmbeddingService<P>,
+        texts: &[String],
+    ) -> VectorCoordinatorResult<llm_embedding::EmbeddingResult> {
+        if texts.is_empty() {
+            return Ok(llm_embedding::EmbeddingResult::default());
+        }
+        let batches = Self::split_for_token_budget(texts)?;
+        let mut embeddings = Vec::with_capacity(texts.len());
+        let mut prompt_tokens = 0u64;
+        let mut total_tokens = 0u64;
+        for batch in &batches {
+            let mut attempt = 0u32;
+            loop {
+                match llm_embedding::EmbeddingProvider::embed(service.provider(), batch).await {
+                    Ok(result) => {
+                        debug!(
+                            "embedding batch ok: texts={} prompt_tokens={} total_tokens={}",
+                            batch.len(),
+                            result.prompt_tokens,
+                            result.total_tokens
+                        );
+                        prompt_tokens += result.prompt_tokens;
+                        total_tokens += result.total_tokens;
+                        embeddings.extend(result.embeddings);
+                        break;
+                    }
+                    Err(err) => {
+                        if !is_retryable_embedding_error(&err) || attempt >= EMBEDDING_MAX_RETRIES {
+                            return Err(VectorCoordinatorError::EmbeddingError(err.to_string()));
+                        }
+                        attempt += 1;
+                        debug!("embedding attempt {} failed, retrying: {}", attempt, err);
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            100 * 2u64.pow(attempt.saturating_sub(1)),
+                        ))
+                        .await;
+                    }
+                }
+            }
+        }
+        Ok(llm_embedding::EmbeddingResult {
+            embeddings,
+            prompt_tokens,
+            total_tokens,
+        })
+    }
+
+    /// Split texts so each provider call stays within the count batch and
+    /// the estimated token budget. Rejects a single over-budget text.
+    #[cfg(feature = "embedding")]
+    fn split_for_token_budget(texts: &[String]) -> VectorCoordinatorResult<Vec<Vec<String>>> {
+        let mut batches: Vec<Vec<String>> = Vec::new();
+        let mut current: Vec<String> = Vec::new();
+        let mut current_tokens = 0usize;
+        for text in texts {
+            let estimate = llm_token::estimate_tokens(text);
+            if estimate > EMBEDDING_MAX_TOKENS_PER_CALL {
+                return Err(VectorCoordinatorError::EmbeddingError(format!(
+                    "embedding text exceeds token budget: estimated {} > {}",
+                    estimate, EMBEDDING_MAX_TOKENS_PER_CALL
+                )));
+            }
+            if current.len() >= EMBEDDING_BATCH_SIZE
+                || current_tokens + estimate > EMBEDDING_MAX_TOKENS_PER_CALL
+            {
+                batches.push(std::mem::take(&mut current));
+                current_tokens = 0;
+            }
+            current_tokens += estimate;
+            current.push(text.clone());
+        }
+        if !current.is_empty() {
+            batches.push(current);
+        }
+        Ok(batches)
+    }
+
+    // ── Rerank ────────────────────────────────────────────────────────
+
+    /// Attach the optional post-recall rerank stage. Absent by default;
+    /// assembly warns and disables on invalid config instead of failing.
+    #[cfg(feature = "rerank")]
+    pub fn with_rerank_service(
+        mut self,
+        service: Arc<llm_rerank::CohereRerankProvider>,
+        config: linkrs_config::VectorRerankConfig,
+    ) -> Self {
+        self.rerank_service = Some(service);
+        self.rerank_config = Some(config);
+        self
+    }
+
+    /// Recall window enlargement for text queries when rerank is active.
+    /// Returns zero when rerank is disabled or the query carries no text,
+    /// leaving existing recall limits untouched.
+    #[cfg(feature = "rerank")]
+    pub fn rerank_recall_window(&self, query_text: Option<&str>) -> usize {
+        match (
+            query_text,
+            self.rerank_service.as_ref(),
+            self.rerank_config.as_ref(),
+        ) {
+            (Some(_), Some(_), Some(config)) => config.max_candidates.max(1),
+            _ => 0,
+        }
+    }
+
+    /// Reorder recall results with the configured rerank service. Fail-open:
+    /// any missing precondition or provider failure returns the input order
+    /// wrapped in `Ok`; the `Result` only exists so query operators can drive
+    /// the call through the shared runtime bridge like every other call.
+    #[cfg(feature = "rerank")]
+    pub async fn maybe_rerank(
+        &self,
+        query_text: Option<&str>,
+        field_name: &str,
+        results: Vec<SearchResult>,
+    ) -> VectorCoordinatorResult<Vec<SearchResult>> {
+        let Some(query) = query_text else {
+            return Ok(results);
+        };
+        let Some(service) = self.rerank_service.as_ref() else {
+            return Ok(results);
+        };
+        let Some(config) = self.rerank_config.as_ref() else {
+            return Ok(results);
+        };
+        if results.len() < 2 {
+            return Ok(results);
+        }
+        let max_candidates = config.max_candidates.max(1);
+        let mut head = results;
+        let tail = if head.len() > max_candidates {
+            head.split_off(max_candidates)
+        } else {
+            Vec::new()
+        };
+        let text_field = config.text_field.as_deref().unwrap_or(field_name);
+        let indexed = Self::rerank_candidates(&head, text_field);
+        if indexed.len() < 2 {
+            head.extend(tail);
+            return Ok(head);
+        }
+        let runtime = llm_rerank::RerankRuntimeConfig {
+            max_candidates,
+            temperature: 0.0,
+            return_reasoning: false,
+            score_fusion_strategy: config.fusion,
+            timeout_ms: service.config().timeout_secs.max(1).saturating_mul(1000),
+        };
+        let started = std::time::Instant::now();
+        let outcome =
+            Self::rerank_with_provider(service.as_ref(), &runtime, query, &indexed, head).await;
+        let latency_ms = started.elapsed().as_millis() as u64;
+        match outcome {
+            Ok(mut reordered) => {
+                self.record_rerank_call(latency_ms, true);
+                reordered.extend(tail);
+                Ok(reordered)
+            }
+            Err(original) => {
+                self.record_rerank_call(latency_ms, false);
+                let mut restored = original;
+                restored.extend(tail);
+                Ok(restored)
+            }
+        }
+    }
+
+    /// Record one issued rerank call against the bound handle, if any.
+    /// Skipped reranks never reach here.
+    #[cfg(feature = "rerank")]
+    fn record_rerank_call(&self, latency_ms: u64, success: bool) {
+        let stats = self.stats_manager.read().clone();
+        if let Some(stats) = stats.as_ref() {
+            stats.record_vector_rerank(latency_ms, success);
+        }
+    }
+
+    /// Collect text-bearing recall hits as `(recall index, text)` pairs.
+    /// The text comes from the payload field under test, defaulting to the
+    /// searched field; hits without usable text are excluded.
+    #[cfg(feature = "rerank")]
+    fn rerank_candidates(results: &[SearchResult], text_field: &str) -> Vec<(usize, String)> {
+        results
+            .iter()
+            .enumerate()
+            .filter_map(|(index, result)| {
+                let text = result.payload.as_ref()?.get(text_field)?.as_str()?;
+                if text.is_empty() {
+                    return None;
+                }
+                Some((index, text.to_string()))
+            })
+            .collect()
+    }
+
+    /// Run one rerank call and map the provider order back onto the recall
+    /// hits. Generic over the provider so scripted test doubles exercise the
+    /// same mapping path as the production service. Returns the original
+    /// hits on any provider or mapping failure.
+    #[cfg(feature = "rerank")]
+    async fn rerank_with_provider<P: llm_rerank::RerankProvider>(
+        provider: &P,
+        runtime: &llm_rerank::RerankRuntimeConfig,
+        query: &str,
+        indexed: &[(usize, String)],
+        head: Vec<SearchResult>,
+    ) -> Result<Vec<SearchResult>, Vec<SearchResult>> {
+        let mut candidates = Vec::with_capacity(indexed.len());
+        for (index, text) in indexed {
+            if let Some(point) = head.get(*index) {
+                candidates.push(llm_rerank::RerankCandidate {
+                    id: index.to_string(),
+                    content: text.clone(),
+                    file_path: point.id.to_string(),
+                    initial_score: point.score,
+                    entity_type: None,
+                    metadata: HashMap::new(),
+                });
+            } else {
+                return Err(head);
+            }
+        }
+        let request = llm_rerank::RerankRequest {
+            query: query.to_string(),
+            candidates,
+            config: runtime.clone(),
+        };
+        let result = match provider.rerank(&request).await {
+            Ok(result) => result,
+            Err(_) => return Err(head),
+        };
+        if result.reranked_candidates.len() != indexed.len() {
+            return Err(head);
+        }
+        let mut order = Vec::with_capacity(indexed.len());
+        let mut seen = std::collections::HashSet::with_capacity(indexed.len());
+        for item in &result.reranked_candidates {
+            match item.id.parse::<usize>() {
+                Ok(index) if index < head.len() && seen.insert(index) => order.push(index),
+                _ => return Err(head),
+            }
+        }
+        let mut slots: Vec<Option<SearchResult>> = head.into_iter().map(Some).collect();
+        let mut ordered = Vec::with_capacity(slots.len());
+        for index in order {
+            if let Some(slot) = slots.get_mut(index) {
+                if let Some(point) = slot.take() {
+                    ordered.push(point);
+                }
+            }
+        }
+        ordered.extend(slots.into_iter().flatten());
+        Ok(ordered)
+    }
+}
+
+#[cfg(feature = "embedding")]
+fn is_retryable_embedding_error(err: &llm_embedding::EmbeddingError) -> bool {
+    match err {
+        llm_embedding::EmbeddingError::Transport(_) | llm_embedding::EmbeddingError::Timeout => {
+            true
+        }
+        llm_embedding::EmbeddingError::Provider { status, .. } => {
+            *status == 429 || (500..=599).contains(status)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(all(test, feature = "embedding"))]
+mod embedding_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::collections::VecDeque;
+
+    enum ScriptedStep {
+        Succeed,
+        Fail(llm_embedding::EmbeddingError),
+    }
+
+    struct ScriptedProvider {
+        dimension: usize,
+        steps: std::sync::Mutex<VecDeque<ScriptedStep>>,
+        calls: std::sync::Mutex<Vec<usize>>,
+    }
+
+    impl ScriptedProvider {
+        fn succeeding(dimension: usize) -> Self {
+            Self::with_steps(dimension, Vec::new())
+        }
+
+        fn with_steps(dimension: usize, steps: Vec<ScriptedStep>) -> Self {
+            Self {
+                dimension,
+                steps: std::sync::Mutex::new(steps.into()),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn recorded_calls(&self) -> Vec<usize> {
+            self.calls
+                .lock()
+                .expect("test mutex is never poisoned")
+                .clone()
+        }
+    }
+
+    #[async_trait]
+    impl llm_embedding::EmbeddingProvider for ScriptedProvider {
+        async fn embed(
+            &self,
+            texts: &[String],
+        ) -> llm_embedding::Result<llm_embedding::EmbeddingResult> {
+            self.calls
+                .lock()
+                .expect("test mutex is never poisoned")
+                .push(texts.len());
+            let step = self
+                .steps
+                .lock()
+                .expect("test mutex is never poisoned")
+                .pop_front();
+            match step {
+                Some(ScriptedStep::Fail(err)) => Err(err),
+                _ => Ok(llm_embedding::EmbeddingResult {
+                    embeddings: texts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, _)| vec![index as f32; self.dimension])
+                        .collect(),
+                    prompt_tokens: texts.len() as u64,
+                    total_tokens: texts.len() as u64,
+                }),
+            }
+        }
+
+        fn dimension(&self) -> usize {
+            self.dimension
+        }
+
+        fn model_name(&self) -> &str {
+            "scripted-test"
+        }
+    }
+
+    fn scripted_service(
+        provider: ScriptedProvider,
+    ) -> llm_embedding::EmbeddingService<ScriptedProvider> {
+        llm_embedding::EmbeddingService::new(provider, EMBEDDING_BATCH_SIZE)
+    }
+
+    #[test]
+    fn split_respects_count_batch() {
+        let texts: Vec<String> = (0..EMBEDDING_BATCH_SIZE + 1)
+            .map(|_| "a".to_string())
+            .collect();
+        let batches = VectorSyncCoordinator::split_for_token_budget(&texts)
+            .expect("short texts stay within budget");
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].len(), EMBEDDING_BATCH_SIZE);
+        assert_eq!(batches[1].len(), 1);
+    }
+
+    #[test]
+    fn split_rejects_single_over_budget_text() {
+        let texts = vec!["a".repeat(100_000)];
+        let before = texts.len();
+        let err = VectorSyncCoordinator::split_for_token_budget(&texts)
+            .expect_err("over-budget text must fail");
+        assert!(err.to_string().contains("token budget"));
+        assert_eq!(before, texts.len());
+    }
+
+    #[test]
+    fn retryable_classification_matches_policy() {
+        assert!(is_retryable_embedding_error(
+            &llm_embedding::EmbeddingError::Transport("down".to_string())
+        ));
+        assert!(is_retryable_embedding_error(
+            &llm_embedding::EmbeddingError::Timeout
+        ));
+        for status in [429u16, 500, 503] {
+            assert!(
+                is_retryable_embedding_error(&llm_embedding::EmbeddingError::Provider {
+                    status,
+                    message: "retryable".to_string(),
+                    retry_after_ms: None,
+                }),
+                "status {status} must be retryable"
+            );
+        }
+        for status in [400u16, 401, 404] {
+            assert!(
+                !is_retryable_embedding_error(&llm_embedding::EmbeddingError::Provider {
+                    status,
+                    message: "permanent".to_string(),
+                    retry_after_ms: None,
+                }),
+                "status {status} must not be retryable"
+            );
+        }
+        assert!(!is_retryable_embedding_error(
+            &llm_embedding::EmbeddingError::Config("bad wiring".to_string())
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_input_returns_empty_without_calls() {
+        let provider = ScriptedProvider::succeeding(4);
+        let service = scripted_service(provider);
+        let result = VectorSyncCoordinator::embed_with_retry(&service, &[])
+            .await
+            .expect("empty input succeeds");
+        assert!(result.embeddings.is_empty());
+        assert_eq!(service.provider().recorded_calls(), Vec::<usize>::new());
+    }
+
+    #[tokio::test]
+    async fn single_text_shape_matches_read_path() {
+        let provider = ScriptedProvider::succeeding(4);
+        let service = scripted_service(provider);
+        let result = VectorSyncCoordinator::embed_with_retry(&service, &["hello".to_string()])
+            .await
+            .expect("single embed succeeds");
+        assert_eq!(result.embeddings.len(), 1);
+        assert_eq!(result.embeddings[0], vec![0.0; 4]);
+        assert_eq!(service.provider().recorded_calls(), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn batch_shape_preserves_write_path_order() {
+        let provider = ScriptedProvider::succeeding(2);
+        let service = scripted_service(provider);
+        let texts: Vec<String> = ["alpha", "beta", "gamma"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let result = VectorSyncCoordinator::embed_with_retry(&service, &texts)
+            .await
+            .expect("batch embed succeeds");
+        assert_eq!(result.embeddings.len(), 3);
+        for (index, vector) in result.embeddings.iter().enumerate() {
+            assert_eq!(*vector, vec![index as f32; 2]);
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_recovers_after_transport_failure() {
+        let provider = ScriptedProvider::with_steps(
+            4,
+            vec![
+                ScriptedStep::Fail(llm_embedding::EmbeddingError::Transport(
+                    "connection reset".to_string(),
+                )),
+                ScriptedStep::Succeed,
+            ],
+        );
+        let service = scripted_service(provider);
+        let result = VectorSyncCoordinator::embed_with_retry(&service, &["retry me".to_string()])
+            .await
+            .expect("retry recovers");
+        assert_eq!(result.embeddings.len(), 1);
+        assert_eq!(service.provider().recorded_calls(), vec![1, 1]);
+    }
+
+    #[tokio::test]
+    async fn non_retryable_error_returns_without_retry() {
+        let provider = ScriptedProvider::with_steps(
+            4,
+            vec![ScriptedStep::Fail(llm_embedding::EmbeddingError::Config(
+                "bad wiring".to_string(),
+            ))],
+        );
+        let service = scripted_service(provider);
+        let err = VectorSyncCoordinator::embed_with_retry(&service, &["x".to_string()])
+            .await
+            .expect_err("config errors fail fast");
+        assert!(err.to_string().contains("bad wiring"));
+        assert_eq!(service.provider().recorded_calls(), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn exhausted_retries_return_error() {
+        let provider = ScriptedProvider::with_steps(
+            4,
+            vec![
+                ScriptedStep::Fail(llm_embedding::EmbeddingError::Timeout),
+                ScriptedStep::Fail(llm_embedding::EmbeddingError::Timeout),
+                ScriptedStep::Fail(llm_embedding::EmbeddingError::Timeout),
+                ScriptedStep::Succeed,
+            ],
+        );
+        let service = scripted_service(provider);
+        VectorSyncCoordinator::embed_with_retry(&service, &["x".to_string()])
+            .await
+            .expect_err("retries are capped");
+        assert_eq!(service.provider().recorded_calls(), vec![1, 1, 1]);
+    }
+}
+
+#[cfg(all(test, feature = "rerank"))]
+mod rerank_tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    struct ScriptedRerank {
+        reverse: bool,
+        fail: bool,
+        drop_last: bool,
+        calls: std::sync::Mutex<usize>,
+    }
+
+    impl ScriptedRerank {
+        fn ordered() -> Self {
+            Self {
+                reverse: false,
+                fail: false,
+                drop_last: false,
+                calls: std::sync::Mutex::new(0),
+            }
+        }
+
+        fn reversed() -> Self {
+            Self {
+                reverse: true,
+                ..Self::ordered()
+            }
+        }
+
+        fn failing() -> Self {
+            Self {
+                fail: true,
+                ..Self::ordered()
+            }
+        }
+
+        fn truncated() -> Self {
+            Self {
+                drop_last: true,
+                ..Self::ordered()
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            *self.calls.lock().expect("test mutex is never poisoned")
+        }
+    }
+
+    #[async_trait]
+    impl llm_rerank::RerankProvider for ScriptedRerank {
+        async fn rerank(
+            &self,
+            request: &llm_rerank::RerankRequest,
+        ) -> llm_rerank::Result<llm_rerank::RerankResult> {
+            *self.calls.lock().expect("test mutex is never poisoned") += 1;
+            if self.fail {
+                return Err(llm_rerank::RerankError::Transport("down".to_string()));
+            }
+            let mut ids: Vec<String> = request.candidates.iter().map(|c| c.id.clone()).collect();
+            if self.drop_last {
+                ids.pop();
+            }
+            if self.reverse {
+                ids.reverse();
+            }
+            let total = ids.len();
+            let reranked = ids
+                .into_iter()
+                .enumerate()
+                .map(|(position, id)| {
+                    let initial = request
+                        .candidates
+                        .iter()
+                        .find(|c| c.id == id)
+                        .map(|c| c.initial_score)
+                        .unwrap_or(0.0);
+                    llm_rerank::RerankedCandidate {
+                        id,
+                        rerank_score: (total - position) as f32,
+                        initial_score: initial,
+                        final_score: (total - position) as f32,
+                        rank_change: 0,
+                        reasoning: None,
+                    }
+                })
+                .collect();
+            Ok(llm_rerank::RerankResult::new(reranked))
+        }
+
+        fn provider_name(&self) -> &str {
+            "scripted-test"
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+    }
+
+    fn search_hit(id: &str, score: f32, text: Option<&str>) -> SearchResult {
+        let mut payload = simvec::types::Payload::new();
+        if let Some(text) = text {
+            payload.insert(
+                "content".to_string(),
+                serde_json::Value::String(text.to_string()),
+            );
+        }
+        SearchResult::new(id, score).with_payload(payload)
+    }
+
+    fn hit_ids(results: &[SearchResult]) -> Vec<String> {
+        results.iter().map(|r| r.id.to_string()).collect()
+    }
+
+    #[test]
+    fn candidates_skip_hits_without_text() {
+        let results = vec![
+            search_hit("a", 0.9, Some("alpha")),
+            search_hit("b", 0.8, None),
+            search_hit("c", 0.7, Some("")),
+            search_hit("d", 0.6, Some("delta")),
+        ];
+        let indexed = VectorSyncCoordinator::rerank_candidates(&results, "content");
+        assert_eq!(
+            indexed,
+            vec![(0, "alpha".to_string()), (3, "delta".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_order_reorders_hits() {
+        let provider = ScriptedRerank::reversed();
+        let head = vec![
+            search_hit("a", 0.9, Some("alpha")),
+            search_hit("b", 0.8, Some("beta")),
+            search_hit("c", 0.7, Some("gamma")),
+        ];
+        let indexed = VectorSyncCoordinator::rerank_candidates(&head, "content");
+        let reordered = VectorSyncCoordinator::rerank_with_provider(
+            &provider,
+            &runtime_config(),
+            "q",
+            &indexed,
+            head,
+        )
+        .await
+        .expect("reorder succeeds");
+        assert_eq!(
+            hit_ids(&reordered),
+            vec!["c".to_string(), "b".to_string(), "a".to_string()]
+        );
+        assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_failure_returns_original_hits() {
+        let provider = ScriptedRerank::failing();
+        let head = vec![
+            search_hit("a", 0.9, Some("alpha")),
+            search_hit("b", 0.8, Some("beta")),
+        ];
+        let indexed = VectorSyncCoordinator::rerank_candidates(&head, "content");
+        let original = hit_ids(&head);
+        let restored = VectorSyncCoordinator::rerank_with_provider(
+            &provider,
+            &runtime_config(),
+            "q",
+            &indexed,
+            head,
+        )
+        .await
+        .expect_err("failure keeps original");
+        assert_eq!(hit_ids(&restored), original);
+    }
+
+    #[tokio::test]
+    async fn count_mismatch_returns_original_hits() {
+        let provider = ScriptedRerank::truncated();
+        let head = vec![
+            search_hit("a", 0.9, Some("alpha")),
+            search_hit("b", 0.8, Some("beta")),
+        ];
+        let indexed = VectorSyncCoordinator::rerank_candidates(&head, "content");
+        let original = hit_ids(&head);
+        let restored = VectorSyncCoordinator::rerank_with_provider(
+            &provider,
+            &runtime_config(),
+            "q",
+            &indexed,
+            head,
+        )
+        .await
+        .expect_err("mismatch keeps original");
+        assert_eq!(hit_ids(&restored), original);
+    }
+
+    #[tokio::test]
+    async fn textless_hits_sink_in_recall_order() {
+        let provider = ScriptedRerank::ordered();
+        let head = vec![
+            search_hit("a", 0.9, Some("alpha")),
+            search_hit("b", 0.8, None),
+            search_hit("c", 0.7, Some("gamma")),
+            search_hit("d", 0.6, None),
+        ];
+        let indexed = VectorSyncCoordinator::rerank_candidates(&head, "content");
+        let reordered = VectorSyncCoordinator::rerank_with_provider(
+            &provider,
+            &runtime_config(),
+            "q",
+            &indexed,
+            head,
+        )
+        .await
+        .expect("partial coverage succeeds");
+        assert_eq!(
+            hit_ids(&reordered),
+            vec![
+                "a".to_string(),
+                "c".to_string(),
+                "b".to_string(),
+                "d".to_string()
+            ]
+        );
+    }
+
+    fn runtime_config() -> llm_rerank::RerankRuntimeConfig {
+        llm_rerank::RerankRuntimeConfig::default()
+    }
+
+    fn bare_coordinator() -> (tempfile::TempDir, VectorSyncCoordinator) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let engine = Arc::new(simvec::LocalVectorEngine::open(dir.path()).expect("local engine"));
+        let coordinator = VectorSyncCoordinator::new_without_embedding(
+            crate::backend::VectorBackend::from_local_arc(engine),
+            tokio::runtime::Handle::current(),
+        );
+        (dir, coordinator)
+    }
+
+    #[tokio::test]
+    async fn skips_without_service_text_or_coverage() {
+        let (_dir, coordinator) = bare_coordinator();
+        assert_eq!(coordinator.rerank_recall_window(Some("q")), 0);
+        assert_eq!(coordinator.rerank_recall_window(None), 0);
+
+        let hits = vec![
+            search_hit("a", 0.9, Some("alpha")),
+            search_hit("b", 0.8, Some("beta")),
+        ];
+        let kept = coordinator
+            .maybe_rerank(None, "content", hits.clone())
+            .await
+            .expect("fail-open never errors");
+        assert_eq!(hit_ids(&kept), hit_ids(&hits));
+
+        let single = vec![search_hit("a", 0.9, Some("alpha"))];
+        let kept = coordinator
+            .maybe_rerank(Some("q"), "content", single.clone())
+            .await
+            .expect("fail-open never errors");
+        assert_eq!(hit_ids(&kept), hit_ids(&single));
+    }
+
+    #[tokio::test]
+    async fn recall_window_opens_with_attached_service() {
+        let (_dir, coordinator) = bare_coordinator();
+        let provider = llm_rerank::CohereRerankProvider::new(llm_rerank::RerankConfig::new(
+            "http://localhost:9/rerank",
+            "test",
+        ))
+        .expect("client builds without I/O");
+        let config = linkrs_config::VectorRerankConfig {
+            endpoint: llm_rerank::RerankConfig::new("http://localhost:9/rerank", "test"),
+            max_candidates: 20,
+            fusion: llm_rerank::RerankFusionStrategy::default(),
+            text_field: None,
+        };
+        let coordinator = coordinator.with_rerank_service(std::sync::Arc::new(provider), config);
+        assert_eq!(coordinator.rerank_recall_window(Some("q")), 20);
+        assert_eq!(coordinator.rerank_recall_window(None), 0);
+
+        let single = vec![search_hit("a", 0.9, Some("alpha"))];
+        let kept = coordinator
+            .maybe_rerank(Some("q"), "content", single.clone())
+            .await
+            .expect("fail-open never errors");
+        assert_eq!(hit_ids(&kept), hit_ids(&single));
     }
 }

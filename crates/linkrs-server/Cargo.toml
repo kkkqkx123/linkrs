@@ -53,6 +53,7 @@ prost = { workspace = true, optional = true }
 vector-client = { path = "../vector-client", optional = true }
 simvec = { path = "../simvec", optional = true }
 llm-embedding = { path = "../llm-suite/crates/llm-embedding", optional = true }
+llm-rerank = { path = "../llm-suite/crates/llm-rerank", optional = true }
 reqwest = { workspace = true, optional = true }
 
 [features]
@@ -67,7 +68,15 @@ vector = [
 embedding = [
     "vector",
     "dep:llm-embedding",
+    "linkrs-config/embedding",
     "linkrs-sync/embedding",
+]
+rerank = [
+    "vector",
+    "dep:llm-rerank",
+    "linkrs-config/rerank",
+    "linkrs-sync/rerank",
+    "linkrs-query/rerank",
 ]
 vector-qdrant = [
     "vector",

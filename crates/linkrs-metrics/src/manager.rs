@@ -54,6 +54,56 @@ mod tests {
     }
 
     #[test]
+    fn test_record_vector_embedding() {
+        let stats = StatsManager::new();
+        stats.record_vector_embedding(7, 9, 12, true);
+        assert_eq!(stats.get_value(MetricType::VectorEmbeddingOps), Some(1));
+        assert_eq!(stats.get_value(MetricType::VectorEmbeddingErrors), None);
+        assert_eq!(
+            stats.get_value(MetricType::VectorEmbeddingLatencyMs),
+            Some(12)
+        );
+        assert_eq!(
+            stats.get_value(MetricType::VectorEmbeddingPromptTokens),
+            Some(7)
+        );
+        assert_eq!(
+            stats.get_value(MetricType::VectorEmbeddingTotalTokens),
+            Some(9)
+        );
+
+        stats.record_vector_embedding(0, 0, 8, false);
+        assert_eq!(stats.get_value(MetricType::VectorEmbeddingOps), Some(2));
+        assert_eq!(stats.get_value(MetricType::VectorEmbeddingErrors), Some(1));
+        assert_eq!(
+            stats.get_value(MetricType::VectorEmbeddingLatencyMs),
+            Some(20)
+        );
+        assert_eq!(
+            stats.get_value(MetricType::VectorEmbeddingPromptTokens),
+            Some(7)
+        );
+        assert_eq!(
+            stats.get_value(MetricType::VectorEmbeddingTotalTokens),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn test_record_vector_rerank() {
+        let stats = StatsManager::new();
+        stats.record_vector_rerank(15, true);
+        assert_eq!(stats.get_value(MetricType::VectorRerankOps), Some(1));
+        assert_eq!(stats.get_value(MetricType::VectorRerankErrors), None);
+        assert_eq!(stats.get_value(MetricType::VectorRerankLatencyMs), Some(15));
+
+        stats.record_vector_rerank(5, false);
+        assert_eq!(stats.get_value(MetricType::VectorRerankOps), Some(2));
+        assert_eq!(stats.get_value(MetricType::VectorRerankErrors), Some(1));
+        assert_eq!(stats.get_value(MetricType::VectorRerankLatencyMs), Some(20));
+    }
+
+    #[test]
     fn test_add_value() {
         let stats = StatsManager::new();
         stats.add_value(MetricType::NumQueries);

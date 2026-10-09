@@ -57,6 +57,10 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "embedding")]
+use llm_embedding::{EmbeddingConfig, PreprocessorConfig};
+#[cfg(feature = "rerank")]
+use llm_rerank::{RerankConfig, RerankFusionStrategy};
 #[cfg(feature = "vector-qdrant")]
 use vector_client::VectorClientConfig;
 
@@ -384,6 +388,53 @@ impl Default for OutboxRetentionConfig {
     }
 }
 
+/// Optional post-recall rerank stage for vector text queries.
+///
+/// Absent disables rerank with zero overhead. Present but invalid values only
+/// warn and disable at service assembly; startup never fails for rerank.
+#[cfg(feature = "rerank")]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct VectorRerankConfig {
+    /// Endpoint shared by rerank providers (address, model, timeout, proxy).
+    #[serde(flatten)]
+    pub endpoint: RerankConfig,
+    /// Maximum recall candidates forwarded per call.
+    #[serde(default = "default_rerank_max_candidates")]
+    pub max_candidates: usize,
+    /// Strategy fusing rerank scores with recall scores.
+    #[serde(default)]
+    pub fusion: RerankFusionStrategy,
+    /// Payload field carrying candidate text. Defaults to the searched field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_field: Option<String>,
+}
+
+#[cfg(feature = "rerank")]
+fn default_rerank_max_candidates() -> usize {
+    20
+}
+
+#[cfg(feature = "rerank")]
+impl VectorRerankConfig {
+    /// Guardrail validation: endpoint address and model are required and the
+    /// candidate window stays within a cost-bounded range.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.endpoint.base_url.is_empty() {
+            return Err("vector.rerank base_url must not be empty".to_string());
+        }
+        if !self.endpoint.base_url.contains("://") {
+            return Err("vector.rerank base_url must include a scheme".to_string());
+        }
+        if self.endpoint.model.is_empty() {
+            return Err("vector.rerank model must not be empty".to_string());
+        }
+        if self.max_candidates == 0 || self.max_candidates > 100 {
+            return Err("vector.rerank max_candidates must be within 1..=100".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Vector search configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct VectorConfig {
@@ -413,6 +464,23 @@ pub struct VectorConfig {
     /// write so deployments pay the embedding availability cost directly.
     #[serde(default)]
     pub auto_embed_text: bool,
+    /// Backend-independent embedding endpoint shared by the local engine
+    /// and the remote client. `[vector.qdrant.embedding]` overrides it
+    /// when both are set.
+    #[cfg(feature = "embedding")]
+    #[serde(default)]
+    pub embedding: Option<EmbeddingConfig>,
+    /// Optional query-side preprocessor override. The shared `embedding`
+    /// config carries the document-side preprocessor used for writes;
+    /// reads apply this override when set.
+    #[cfg(feature = "embedding")]
+    #[serde(default)]
+    pub embedding_query_preprocessor: Option<PreprocessorConfig>,
+    /// Optional post-recall rerank stage. Absent disables rerank with zero
+    /// overhead; invalid values warn and disable at assembly.
+    #[cfg(feature = "rerank")]
+    #[serde(default)]
+    pub rerank: Option<VectorRerankConfig>,
 }
 
 fn default_true() -> bool {
@@ -431,6 +499,12 @@ impl Default for VectorConfig {
             collection: VectorCollectionConfig::default(),
             retention: OutboxRetentionConfig::default(),
             auto_embed_text: false,
+            #[cfg(feature = "embedding")]
+            embedding: None,
+            #[cfg(feature = "embedding")]
+            embedding_query_preprocessor: None,
+            #[cfg(feature = "rerank")]
+            rerank: None,
         }
     }
 }
@@ -1083,5 +1157,36 @@ upsert_timeout_secs = 30
 "#;
         let c: VectorClientConfig = toml::from_str(toml).expect("vc parse");
         assert_eq!(c.connection.host, "localhost");
+    }
+
+    #[cfg(feature = "rerank")]
+    #[test]
+    fn parse_and_validate_rerank_config() {
+        let toml = r#"
+base_url = "https://api.example.com/v1/rerank"
+model = "reranker"
+max_candidates = 20
+fusion = "linear_weighted"
+"#;
+        let c: VectorRerankConfig = toml::from_str(toml).expect("rerank parse");
+        assert_eq!(c.max_candidates, 20);
+        assert!(c.text_field.is_none());
+        c.validate().expect("valid rerank config");
+
+        let missing_model = VectorRerankConfig {
+            endpoint: RerankConfig::new("https://api.example.com/v1/rerank", ""),
+            max_candidates: 20,
+            fusion: RerankFusionStrategy::default(),
+            text_field: None,
+        };
+        assert!(missing_model.validate().is_err());
+
+        let bad_window = VectorRerankConfig {
+            endpoint: RerankConfig::new("https://api.example.com/v1/rerank", "reranker"),
+            max_candidates: 0,
+            fusion: RerankFusionStrategy::default(),
+            text_field: None,
+        };
+        assert!(bad_window.validate().is_err());
     }
 }

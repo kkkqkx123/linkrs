@@ -53,16 +53,17 @@ impl VectorClient {
         &self,
         collection: impl Into<String>,
         text: &str,
-        embedding_config: llm_embedding::EmbeddingConfig,
+        embedding_service: &llm_embedding::EmbeddingService<
+            llm_embedding::OpenAICompatibleProvider,
+        >,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         use llm_embedding::EmbeddingProvider;
-        let provider = llm_embedding::OpenAICompatibleProvider::new(embedding_config)
-            .map_err(|e| VectorClientError::InternalError(e.to_string()))?;
-        let vector = provider
+        let vector = embedding_service
+            .provider()
             .embed_one(text)
             .await
-            .map_err(|e| VectorClientError::InternalError(e.to_string()))?;
+            .map_err(VectorClientError::from)?;
 
         let query = SearchQuery::new(vector, limit);
         self.search(collection).search(query).await
