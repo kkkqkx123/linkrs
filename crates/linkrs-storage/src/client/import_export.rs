@@ -307,10 +307,7 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
             if let Some(val_str) = fields.get(*col_idx) {
                 let val_str = val_str.trim().trim_matches('"');
                 if !val_str.is_empty() {
-                    properties.insert(
-                        col_name.clone().into(),
-                        linkrs_core::Value::string(val_str),
-                    );
+                    properties.insert(col_name.clone().into(), linkrs_core::Value::string(val_str));
                 }
             }
         }
@@ -324,10 +321,8 @@ pub(crate) fn import_vertex_csv_from_path<W: StorageWriter + ?Sized>(
             );
             continue;
         };
-        let vertex = linkrs_core::Vertex::new(
-            vid,
-            linkrs_core::Tag::new(tag_name.to_string(), properties),
-        );
+        let vertex =
+            linkrs_core::Vertex::new(vid, linkrs_core::Tag::new(tag_name.to_string(), properties));
         vertices.push(vertex);
 
         if vertices.len() >= 1000 {
@@ -433,10 +428,7 @@ pub(crate) fn import_edge_csv_from_path<W: StorageWriter + ?Sized>(
             if let Some(val_str) = fields.get(*col_idx) {
                 let val_str = val_str.trim().trim_matches('"');
                 if !val_str.is_empty() {
-                    props.insert(
-                        col_name.clone().into(),
-                        linkrs_core::Value::string(val_str),
-                    );
+                    props.insert(col_name.clone().into(), linkrs_core::Value::string(val_str));
                 }
             }
         }

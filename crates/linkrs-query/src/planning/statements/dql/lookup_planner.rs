@@ -462,10 +462,8 @@ impl LookupPlanner {
             let expr = Expression::Variable("_vertex".to_string());
             let meta = linkrs_core::types::expr::ExpressionMeta::new(expr);
             let id = validated.expr_context().register_expression(meta);
-            let ctx_expr = linkrs_core::types::ContextualExpression::new(
-                id,
-                validated.expr_context().clone(),
-            );
+            let ctx_expr =
+                linkrs_core::types::ContextualExpression::new(id, validated.expr_context().clone());
             columns.push(linkrs_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),

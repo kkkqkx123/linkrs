@@ -7,8 +7,8 @@
 use super::error::UdfError;
 use super::plugin::{check_arity, UdfDestroyFn, UdfPlugin};
 use crate::executor::expression::{ExpressionError, ExpressionErrorType};
-use linkrs_core::Value;
 use libloading::Library;
+use linkrs_core::Value;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 

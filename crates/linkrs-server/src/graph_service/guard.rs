@@ -207,9 +207,7 @@ impl<
         };
         if !matches!(
             op_role,
-            linkrs_core::RoleType::God
-                | linkrs_core::RoleType::Admin
-                | linkrs_core::RoleType::Dba
+            linkrs_core::RoleType::God | linkrs_core::RoleType::Admin | linkrs_core::RoleType::Dba
         ) {
             return Err(denied("only Admin or God can manage roles".to_string()));
         }

@@ -329,10 +329,7 @@ impl TraversalStartSelector {
     /// - id(v) == value
     /// - v.id == value
     /// - {id: value}
-    fn has_vid_condition_ctx(
-        &self,
-        expr: &linkrs_core::types::expr::ContextualExpression,
-    ) -> bool {
+    fn has_vid_condition_ctx(&self, expr: &linkrs_core::types::expr::ContextualExpression) -> bool {
         match expr.expression() {
             Some(meta) => self.has_vid_condition(meta.inner()),
             None => false,

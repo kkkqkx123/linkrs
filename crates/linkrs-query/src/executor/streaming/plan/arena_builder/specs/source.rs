@@ -173,9 +173,7 @@ fn index_limit_to_predicate(
                 value: limit
                     .begin_value
                     .clone()
-                    .unwrap_or(linkrs_core::Value::Null(
-                        linkrs_core::value::NullType::Null,
-                    )),
+                    .unwrap_or(linkrs_core::Value::Null(linkrs_core::value::NullType::Null)),
             }
         }
         crate::planning::plan::core::nodes::access::index_scan::ScanType::Range => {
@@ -193,9 +191,7 @@ fn index_limit_to_predicate(
                 prefix: limit
                     .begin_value
                     .clone()
-                    .unwrap_or(linkrs_core::Value::Null(
-                        linkrs_core::value::NullType::Null,
-                    )),
+                    .unwrap_or(linkrs_core::Value::Null(linkrs_core::value::NullType::Null)),
             }
         }
         crate::planning::plan::core::nodes::access::index_scan::ScanType::Full => {

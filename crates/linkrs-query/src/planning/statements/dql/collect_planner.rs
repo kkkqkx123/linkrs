@@ -95,9 +95,7 @@ impl Planner for CollectPlanner {
                 .expression()
                 .map(|e| e.inner().clone())
                 .unwrap_or_else(|| {
-                    linkrs_core::types::Expression::Variable(
-                        item.expression.to_expression_string(),
-                    )
+                    linkrs_core::types::Expression::Variable(item.expression.to_expression_string())
                 });
             let field = match &expression {
                 linkrs_core::types::Expression::Function { name, args }

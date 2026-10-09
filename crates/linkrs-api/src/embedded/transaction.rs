@@ -163,9 +163,7 @@ pub struct Transaction<'sess, S: StorageClient + Clone + 'static> {
     rolled_back: bool,
 }
 
-impl<'sess, S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget>
-    Transaction<'sess, S>
-{
+impl<'sess, S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Transaction<'sess, S> {
     /// Creating a new transaction
     pub(crate) fn new(session: &'sess Session<S>, txn_handle: TransactionHandle) -> Self {
         Self {

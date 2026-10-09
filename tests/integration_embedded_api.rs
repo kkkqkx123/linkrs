@@ -981,9 +981,7 @@ fn test_multiple_sessions() {
 
 // ==================== Phase 4: ALTER ADD/DROP FROM ====================
 
-fn setup_phase4_graph(
-    session: &mut linkrs::api::embedded::Session<linkrs::storage::GraphStorage>,
-) {
+fn setup_phase4_graph(session: &mut linkrs::api::embedded::Session<linkrs::storage::GraphStorage>) {
     session
         .create_space("phase4", SpaceConfig::default())
         .expect("create space");

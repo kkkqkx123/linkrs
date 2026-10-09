@@ -739,7 +739,10 @@ impl MockEmbeddingProvider {
 
 #[async_trait]
 impl EmbeddingProvider for MockEmbeddingProvider {
-    async fn embed(&self, texts: &[String]) -> std::result::Result<EmbeddingResult, EmbeddingError> {
+    async fn embed(
+        &self,
+        texts: &[String],
+    ) -> std::result::Result<EmbeddingResult, EmbeddingError> {
         Ok(EmbeddingResult {
             embeddings: texts.iter().map(|t| self.generate_embedding(t)).collect(),
             prompt_tokens: 0,

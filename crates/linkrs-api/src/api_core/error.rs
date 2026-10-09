@@ -166,8 +166,7 @@ impl From<linkrs_core::error::DBError> for CoreError {
         match err.kind() {
             ErrorKind::Query => {
                 if let Some(source) = err.source() {
-                    if let Some(query_err) =
-                        source.downcast_ref::<linkrs_core::error::QueryError>()
+                    if let Some(query_err) = source.downcast_ref::<linkrs_core::error::QueryError>()
                     {
                         return CoreError::from(query_err.clone());
                     }

@@ -50,10 +50,7 @@ impl UndoTarget for RecordingUndoTarget {
         Ok(())
     }
 
-    fn delete_edge(
-        &self,
-        _edge_ctx: linkrs_core::types::EdgeDeletionContext,
-    ) -> UndoLogResult<()> {
+    fn delete_edge(&self, _edge_ctx: linkrs_core::types::EdgeDeletionContext) -> UndoLogResult<()> {
         Ok(())
     }
 

@@ -102,10 +102,8 @@ pub async fn fetch_cursor<
         .await
         .map_err(|message| {
             let elapsed_us = start.elapsed().as_micros() as u64;
-            let mut profile = linkrs_metrics::QueryProfile::new(
-                request.session_id,
-                "(cursor fetch)".to_string(),
-            );
+            let mut profile =
+                linkrs_metrics::QueryProfile::new(request.session_id, "(cursor fetch)".to_string());
             profile.trace_id = trace_id.clone();
             profile.total_duration_us = elapsed_us;
             profile.stages.execute_us = elapsed_us;

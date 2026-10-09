@@ -402,21 +402,11 @@ fn equality_join_keys_are_simple(
         && hash_keys
             .first()
             .and_then(|k| k.expression())
-            .is_some_and(|m| {
-                matches!(
-                    m.inner(),
-                    linkrs_core::types::expr::Expression::Variable(_)
-                )
-            })
+            .is_some_and(|m| matches!(m.inner(), linkrs_core::types::expr::Expression::Variable(_)))
         && probe_keys
             .first()
             .and_then(|k| k.expression())
-            .is_some_and(|m| {
-                matches!(
-                    m.inner(),
-                    linkrs_core::types::expr::Expression::Variable(_)
-                )
-            })
+            .is_some_and(|m| matches!(m.inner(), linkrs_core::types::expr::Expression::Variable(_)))
 }
 
 /// Whether a join key references the vertex-id partition key (`vid`), the only

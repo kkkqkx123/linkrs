@@ -502,19 +502,13 @@ impl PartitioningPlanner {
                 .first()
                 .and_then(|k| k.expression())
                 .is_some_and(|m| {
-                    matches!(
-                        m.inner(),
-                        linkrs_core::types::expr::Expression::Variable(_)
-                    )
+                    matches!(m.inner(), linkrs_core::types::expr::Expression::Variable(_))
                 })
             && probe_keys
                 .first()
                 .and_then(|k| k.expression())
                 .is_some_and(|m| {
-                    matches!(
-                        m.inner(),
-                        linkrs_core::types::expr::Expression::Variable(_)
-                    )
+                    matches!(m.inner(), linkrs_core::types::expr::Expression::Variable(_))
                 })
     }
 

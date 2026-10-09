@@ -12,7 +12,7 @@ pub mod state;
 pub mod typed_path;
 
 pub use error::HttpError;
-pub use linkrs_wire::query::{QueryRequest, QueryResponse};
 pub use handlers::{ExportQuery, ImportResponse, ImportStatusResponse};
+pub use linkrs_wire::query::{QueryRequest, QueryResponse};
 pub use server::HttpServer;
 pub use state::AppState;

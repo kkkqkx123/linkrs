@@ -277,10 +277,7 @@ fn rebuild_restarts_after_incremental_replay_failure() {
             .expect("space should be created");
         let tag = linkrs_core::types::TagInfo::new("Person".to_string()).with_properties(vec![
             linkrs_core::types::PropertyDef::new("id".into(), linkrs_core::DataType::BigInt),
-            linkrs_core::types::PropertyDef::new(
-                "name".to_string(),
-                linkrs_core::DataType::String,
-            ),
+            linkrs_core::types::PropertyDef::new("name".to_string(), linkrs_core::DataType::String),
         ]);
         storage
             .create_tag("test_space", &tag)

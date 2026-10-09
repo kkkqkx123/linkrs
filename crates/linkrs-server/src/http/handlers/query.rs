@@ -446,12 +446,10 @@ fn error_with_trace(
     trace_id: String,
     elapsed_us: u64,
 ) -> QueryResponse {
-    let position = error
-        .position()
-        .map(|p| linkrs_wire::query::ErrorPosition {
-            line: p.line,
-            column: p.column,
-        });
+    let position = error.position().map(|p| linkrs_wire::query::ErrorPosition {
+        line: p.line,
+        column: p.column,
+    });
     let mut response =
         QueryResponse::error_with_position(code, error.message().to_string(), None, position);
     response.metadata.trace_id = Some(trace_id);

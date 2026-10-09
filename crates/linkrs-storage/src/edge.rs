@@ -80,8 +80,8 @@ pub use bundled_csr::{decode_scalar, encode_scalar, BundledCsr};
 pub use edge_table::checkpoint::snapshot::{
     MappedFrozen, MappedFrozenIterator, MappedFrozenRowIter,
 };
-pub use linkrs_core::types::INVALID_EDGE_ID;
 pub use immutable_csr::{FrozenRowIter, ImmutableCsr, ImmutableCsrIterator};
+pub use linkrs_core::types::INVALID_EDGE_ID;
 pub use pure_csr::{PureAllIter, PureRowIter, PureTopologyCsr};
 
 pub use record_form_policy::{

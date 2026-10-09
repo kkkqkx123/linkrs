@@ -172,15 +172,14 @@ impl super::SyncManager {
                 .map_err(SyncError::PersistenceError)?;
             let mut processed = 0usize;
             for target in targets {
-                let max_concurrency = if target.as_str() == "vector"
-                    && backend_policy_name == "qdrant"
-                {
-                    consumer.max_concurrency.max(4)
-                } else if target.as_str() == "vector" && backend_policy_name == "local" {
-                    1
-                } else {
-                    consumer.max_concurrency.max(1)
-                };
+                let max_concurrency =
+                    if target.as_str() == "vector" && backend_policy_name == "qdrant" {
+                        consumer.max_concurrency.max(4)
+                    } else if target.as_str() == "vector" && backend_policy_name == "local" {
+                        1
+                    } else {
+                        consumer.max_concurrency.max(1)
+                    };
                 if max_concurrency <= 1 {
                     // Single-threaded path (Local): preserves global
                     // commit_lsn ordering and keeps SQLite contention minimal.
@@ -250,8 +249,7 @@ impl super::SyncManager {
                     // lease_epoch fencing guarantees no overlapping acks. Each
                     // worker respects the global commit_lsn order via the
                     // `NOT EXISTS (ordering_key)` fence plus `ORDER BY`.
-                    let per_worker_batch =
-                        consumer.batch_size.div_ceil(max_concurrency);
+                    let per_worker_batch = consumer.batch_size.div_ceil(max_concurrency);
                     let outbox_for_workers = outbox.clone();
                     let target_for_workers = target.clone();
                     let consumer_for_workers = consumer.clone();
@@ -269,8 +267,7 @@ impl super::SyncManager {
                         handles.push(tokio::spawn(async move {
                             let mut local_processed = 0usize;
                             while local_processed < per_worker_batch {
-                                let now =
-                                    chrono::Utc::now().timestamp_millis().max(0) as u64;
+                                let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
                                 let paused = self_c
                                     .auth_paused_until_ms
                                     .load(std::sync::atomic::Ordering::Relaxed);

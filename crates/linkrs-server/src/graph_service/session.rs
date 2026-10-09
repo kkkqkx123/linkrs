@@ -490,9 +490,7 @@ impl<
             .ok_or_else(|| "permission denied: only Admin or God can manage roles".to_string())?;
         if !matches!(
             operator_role,
-            linkrs_core::RoleType::God
-                | linkrs_core::RoleType::Admin
-                | linkrs_core::RoleType::Dba
+            linkrs_core::RoleType::God | linkrs_core::RoleType::Admin | linkrs_core::RoleType::Dba
         ) {
             return Err("permission denied: only Admin or God can manage roles".to_string());
         }
@@ -530,9 +528,7 @@ impl<
             .ok_or_else(|| "permission denied: only Admin or God can manage roles".to_string())?;
         if !matches!(
             operator_role,
-            linkrs_core::RoleType::God
-                | linkrs_core::RoleType::Admin
-                | linkrs_core::RoleType::Dba
+            linkrs_core::RoleType::God | linkrs_core::RoleType::Admin | linkrs_core::RoleType::Dba
         ) {
             return Err("permission denied: only Admin or God can manage roles".to_string());
         }

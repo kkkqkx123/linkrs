@@ -476,9 +476,8 @@ mod tests {
             .insert_to_group_and_scope_with_name(expr(20), Some("b".to_string()), g1)
             .unwrap();
 
-        let the_expr = linkrs_core::Expression::Path(vec![linkrs_core::Expression::Variable(
-            "b".to_string(),
-        )]);
+        let the_expr =
+            linkrs_core::Expression::Path(vec![linkrs_core::Expression::Variable("b".to_string())]);
         let mut analyzer = GroupDependencyAnalyzer::new(&schema, false);
         analyzer.visit_expression(&the_expr);
         assert!(analyzer.dependent_groups().contains(&g1));

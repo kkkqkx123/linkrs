@@ -369,9 +369,9 @@ pub(crate) fn try_read_fixed_vector(
             })?;
         out.push(f32::from_le_bytes(chunk));
     }
-    Ok(Some(Value::Vector(
-        linkrs_core::value::VectorValue::dense(out),
-    )))
+    Ok(Some(Value::Vector(linkrs_core::value::VectorValue::dense(
+        out,
+    ))))
 }
 
 /// Write one fixed-dense-vector slot as little-endian `f32` components.

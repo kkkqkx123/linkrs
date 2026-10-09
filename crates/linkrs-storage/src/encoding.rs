@@ -142,11 +142,7 @@ impl ColumnEncoding {
         Ok(written)
     }
 
-    pub fn set(
-        &mut self,
-        row_idx: usize,
-        value: Option<&Value>,
-    ) -> linkrs_core::StorageResult<()> {
+    pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> linkrs_core::StorageResult<()> {
         use linkrs_core::StorageError;
 
         match self {

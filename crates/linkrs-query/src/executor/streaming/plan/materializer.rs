@@ -435,10 +435,7 @@ impl PhysicalPlanMaterializer {
     /// Rough type compatibility check for parameter values.
     /// ensures the runtime value is semantically assignable to the
     /// declared parameter type.
-    fn type_compatible(
-        value: &linkrs_core::Value,
-        expected_type: &linkrs_core::DataType,
-    ) -> bool {
+    fn type_compatible(value: &linkrs_core::Value, expected_type: &linkrs_core::DataType) -> bool {
         use linkrs_core::DataType;
         use linkrs_core::Value;
         matches!(

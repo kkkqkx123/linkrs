@@ -525,13 +525,7 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
                     props.insert(col.as_str().into(), value.clone());
                 }
             }
-            edges.push(linkrs_core::Edge::new(
-                src,
-                dst,
-                name.to_string(),
-                0,
-                props,
-            ));
+            edges.push(linkrs_core::Edge::new(src, dst, name.to_string(), 0, props));
         }
         let count = self.batch_insert_edges(edges)?;
         self.statistics.record_changes(count as u64);

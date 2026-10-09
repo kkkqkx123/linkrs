@@ -225,10 +225,7 @@ impl VertexSchema {
     /// The primary key column is a materialized mirror of the external vertex
     /// id, so only the id-compatible families are allowed: the integer family
     /// and strings. Everything else is rejected at schema creation time.
-    fn validate_key_type(
-        data_type: &linkrs_core::DataType,
-        prop_name: &str,
-    ) -> Result<(), String> {
+    fn validate_key_type(data_type: &linkrs_core::DataType, prop_name: &str) -> Result<(), String> {
         use linkrs_core::DataType;
 
         let allowed = matches!(

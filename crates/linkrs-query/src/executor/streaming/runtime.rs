@@ -344,10 +344,7 @@ impl ExecutionRuntime {
     }
 
     /// Set the macro catalog manager for this execution instance.
-    pub fn set_macro_manager(
-        &mut self,
-        manager: Option<Arc<linkrs_core::metadata::MacroManager>>,
-    ) {
+    pub fn set_macro_manager(&mut self, manager: Option<Arc<linkrs_core::metadata::MacroManager>>) {
         self.macro_manager = manager;
     }
 

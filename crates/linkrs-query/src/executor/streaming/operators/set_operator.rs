@@ -528,8 +528,7 @@ impl SetOperator {
                     );
                     while !left_rows.is_empty() {
                         let take = (COLLECTOR_RUN_ROWS_MAX as usize).min(left_rows.len());
-                        let chunk: Vec<Vec<linkrs_core::Value>> =
-                            left_rows.drain(..take).collect();
+                        let chunk: Vec<Vec<linkrs_core::Value>> = left_rows.drain(..take).collect();
                         let mut writer = sm.create_run_writer(fp)?;
                         writer.write_rows(&chunk)?;
                         let run = sm.finalize_run(writer)?;

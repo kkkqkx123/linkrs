@@ -638,9 +638,7 @@ fn partitioned_aggregate_runs_once_after_gathering_all_partitions() {
                 aggregate_functions: vec![
                     (
                         linkrs_core::types::operators::AggregateFunction::Count,
-                        vec![linkrs_core::types::expr::Expression::Literal(Value::Int(
-                            1,
-                        ))],
+                        vec![linkrs_core::types::expr::Expression::Literal(Value::Int(1))],
                     ),
                     (
                         linkrs_core::types::operators::AggregateFunction::Sum,

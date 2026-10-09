@@ -282,9 +282,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         // Create a VectorSyncCoordinator with the shared backend (no embedding service for query-only use)
         let handle = tokio::runtime::Handle::current();
         let vector_coordinator = Arc::new(
-            linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-                backend, handle,
-            ),
+            linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(backend, handle),
         );
 
         // Create pipeline manager with vector coordinator and optional schema manager
@@ -604,9 +602,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         execution: linkrs_query::executor::base::ExecutionResult,
     ) -> CoreResult<QueryResult> {
         let rows_returned = match &execution {
-            linkrs_query::executor::base::ExecutionResult::DataSet { data, .. } => {
-                data.row_count()
-            }
+            linkrs_query::executor::base::ExecutionResult::DataSet { data, .. } => data.row_count(),
             _ => 0,
         };
         match execution {

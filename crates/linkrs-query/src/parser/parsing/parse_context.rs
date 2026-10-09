@@ -1007,9 +1007,7 @@ impl<'a> ParseContext<'a> {
             }
             TokenKind::Null => {
                 self.next_token();
-                Ok(linkrs_core::Value::Null(
-                    linkrs_core::null::NullType::Null,
-                ))
+                Ok(linkrs_core::Value::Null(linkrs_core::null::NullType::Null))
             }
             _ => {
                 let pos = self.current_position();

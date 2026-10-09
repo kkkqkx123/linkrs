@@ -15,6 +15,6 @@ mod local;
 mod sync;
 
 pub use compression::decompress_payload;
-pub use linkrs_core::wal::traits::WalWriter;
 pub use group_commit::GroupCommitCoordinator;
+pub use linkrs_core::wal::traits::WalWriter;
 pub use local::LocalWalWriter;

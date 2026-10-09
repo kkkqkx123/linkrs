@@ -435,10 +435,7 @@ impl FsstColumn {
                 )
             })?;
             writer.write_all(&len.to_le_bytes()).map_err(|e| {
-                linkrs_core::StorageError::io_error(format!(
-                    "FsstColumn serialize item len: {}",
-                    e
-                ))
+                linkrs_core::StorageError::io_error(format!("FsstColumn serialize item len: {}", e))
             })?;
             writer.write_all(item).map_err(|e| {
                 linkrs_core::StorageError::io_error(format!("FsstColumn serialize item: {}", e))

@@ -169,10 +169,7 @@ impl PersistenceCoordinator {
         let mut checkpoint_manager =
             CheckpointManager::new(&config.wal_dir, &config.checkpoint_dir, None);
         checkpoint_manager.init().map_err(|e| {
-            linkrs_core::StorageError::db_error(format!(
-                "Failed to init checkpoint manager: {}",
-                e
-            ))
+            linkrs_core::StorageError::db_error(format!("Failed to init checkpoint manager: {}", e))
         })?;
         checkpoint_manager
             .adopt_published_sequence(published_sequence)

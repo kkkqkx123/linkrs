@@ -125,49 +125,46 @@ pub(crate) fn lookup_edges_by_property_range(
     let ts = ctx.get_read_timestamp();
     let mut edges = Vec::new();
 
-    let records: Vec<(
-        linkrs_core::types::LabelId,
-        linkrs_core::types::LabelId,
-        _,
-    )> = if src_label != 0 && dst_label != 0 {
-        ctx.lookup_edges_by_property_range(
-            src_label,
-            dst_label,
-            edge_label,
-            prop_name,
-            &value_lower,
-            &value_upper,
-            ts,
-        )
-        .into_iter()
-        .map(|record| (src_label, dst_label, record))
-        .collect()
-    } else {
-        ctx.data_store().with_edge_tables(|tables| {
-            let matching: Vec<_> = tables
-                .values()
-                .filter(|arc| arc.read().label() == edge_label)
-                .cloned()
-                .collect();
-            let mut records = Vec::new();
-            for arc in matching {
-                let table = arc.read();
-                let table_src_label = table.src_label();
-                let table_dst_label = table.dst_label();
-                records.extend(
-                    table
-                        .lookup_edges_by_property_range(prop_name, &value_lower, &value_upper)
-                        .into_iter()
-                        .filter_map(|(src, dst, rank)| {
-                            table
-                                .get_edge(src, dst, rank, ts)
-                                .map(|record| (table_src_label, table_dst_label, record))
-                        }),
-                );
-            }
-            records
-        })
-    };
+    let records: Vec<(linkrs_core::types::LabelId, linkrs_core::types::LabelId, _)> =
+        if src_label != 0 && dst_label != 0 {
+            ctx.lookup_edges_by_property_range(
+                src_label,
+                dst_label,
+                edge_label,
+                prop_name,
+                &value_lower,
+                &value_upper,
+                ts,
+            )
+            .into_iter()
+            .map(|record| (src_label, dst_label, record))
+            .collect()
+        } else {
+            ctx.data_store().with_edge_tables(|tables| {
+                let matching: Vec<_> = tables
+                    .values()
+                    .filter(|arc| arc.read().label() == edge_label)
+                    .cloned()
+                    .collect();
+                let mut records = Vec::new();
+                for arc in matching {
+                    let table = arc.read();
+                    let table_src_label = table.src_label();
+                    let table_dst_label = table.dst_label();
+                    records.extend(
+                        table
+                            .lookup_edges_by_property_range(prop_name, &value_lower, &value_upper)
+                            .into_iter()
+                            .filter_map(|(src, dst, rank)| {
+                                table
+                                    .get_edge(src, dst, rank, ts)
+                                    .map(|record| (table_src_label, table_dst_label, record))
+                            }),
+                    );
+                }
+                records
+            })
+        };
 
     for (record_src_label, record_dst_label, record) in records {
         let src_internal = record.src_vid.as_internal_u32();

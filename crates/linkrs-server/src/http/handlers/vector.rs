@@ -484,10 +484,9 @@ pub async fn search<
                 || cons.eq_ignore_ascii_case("read-your-writes");
             if is_ryw {
                 let timeout = request.consistency_timeout_ms.unwrap_or(2000);
-                options.consistency =
-                    linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                        timeout_ms: timeout,
-                    };
+                options.consistency = linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
+                    timeout_ms: timeout,
+                };
                 if let Some(lsn) = request.minimum_lsn {
                     options.minimum_lsn = Some(linkrs_core::types::CommitLsn::new(lsn));
                 }

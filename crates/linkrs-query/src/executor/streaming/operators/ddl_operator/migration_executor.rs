@@ -36,9 +36,7 @@ fn build_plan_chunk(plan: &linkrs_migration::MigrationPlan) -> Result<DataChunk,
     Ok(DataChunk::new(vec![row], schema))
 }
 
-fn build_report_chunk(
-    report: &linkrs_migration::MigrationReport,
-) -> Result<DataChunk, QueryError> {
+fn build_report_chunk(report: &linkrs_migration::MigrationReport) -> Result<DataChunk, QueryError> {
     let schema = Arc::new(Schema::new(vec![
         ColumnInfo {
             name: "success".to_string(),

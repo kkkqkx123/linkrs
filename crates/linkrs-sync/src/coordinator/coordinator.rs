@@ -158,11 +158,7 @@ impl SyncCoordinator {
 
         match &ctx.data {
             ChangeData::Fulltext(text) => {
-                let text = if is_delete {
-                    None
-                } else {
-                    Some(text.clone())
-                };
+                let text = if is_delete { None } else { Some(text.clone()) };
                 Ok(IndexOperation::new_fulltext(
                     key,
                     ctx.change_type,

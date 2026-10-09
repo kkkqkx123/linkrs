@@ -473,8 +473,8 @@ fn test_transaction_edge_with_properties_sync() {
         .expect("Failed to create Company tag");
 
     // Create edge type with properties
-    let edge_info = linkrs::core::types::EdgeTypeInfo::new("WORKS_AT".to_string())
-        .with_properties(vec![
+    let edge_info =
+        linkrs::core::types::EdgeTypeInfo::new("WORKS_AT".to_string()).with_properties(vec![
             linkrs::core::types::PropertyDef::new("position".to_string(), DataType::String),
             linkrs::core::types::PropertyDef::new("since".to_string(), DataType::Int),
         ]);

@@ -501,9 +501,7 @@ impl<
     }
 }
 
-pub(crate) fn core_space_to_proto(
-    info: &linkrs_core::types::SpaceInfo,
-) -> super::proto::SpaceInfo {
+pub(crate) fn core_space_to_proto(info: &linkrs_core::types::SpaceInfo) -> super::proto::SpaceInfo {
     super::proto::SpaceInfo {
         id: info.space_id as i32,
         name: info.space_name.clone(),

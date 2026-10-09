@@ -8,9 +8,7 @@ pub mod file_backed;
 pub use file_backed::{FileBackedUndoLog, UndoLogConfig};
 
 use super::wal::{ColumnId, LabelId, Timestamp, VertexId};
-use linkrs_core::types::{
-    EdgeDeletionContext, EdgeDeletionContextParams, EdgeIdentifier, EdgeKey,
-};
+use linkrs_core::types::{EdgeDeletionContext, EdgeDeletionContextParams, EdgeIdentifier, EdgeKey};
 
 /// Undo log error
 pub use linkrs_core::types::UndoLogError;

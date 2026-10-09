@@ -362,9 +362,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         context.isolation_level = query_context.isolation_level();
         context.ryw_config = query_context.request_context().ryw_config;
         if query_context.has_arena() {
-            context.arena = Some(Arc::new(
-                parking_lot::Mutex::new(linkrs_core::Arena::new()),
-            ));
+            context.arena = Some(Arc::new(parking_lot::Mutex::new(linkrs_core::Arena::new())));
         }
         // Stats feedback loop: share the engine's feedback history
         // with every execution so estimated-vs-actual operator feedback is

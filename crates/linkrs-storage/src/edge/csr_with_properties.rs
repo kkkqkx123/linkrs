@@ -42,8 +42,7 @@ enum RowState {
 
 impl RowVisibility {
     fn state(&self) -> RowState {
-        if self.create_ts == linkrs_core::types::RESERVED_ZERO_TIMESTAMP
-            && self.delete_ts.is_none()
+        if self.create_ts == linkrs_core::types::RESERVED_ZERO_TIMESTAMP && self.delete_ts.is_none()
         {
             RowState::Virgin
         } else if self.delete_ts.is_some() {
