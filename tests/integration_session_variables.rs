@@ -31,7 +31,7 @@ async fn setup() -> (Arc<GraphService<SyncWrapper<GraphStorage>>>, i64) {
     let sid = session.id();
 
     graph_service
-        .execute(sid, "CREATE SPACE sv_space (vid_type=INT64)")
+        .execute(sid, "CREATE SPACE sv_space (vid_type=STRING)")
         .await
         .expect("CREATE SPACE should succeed");
     graph_service
@@ -73,6 +73,7 @@ async fn exec_err(
         .execute(sid, stmt)
         .await
         .expect_err(&format!("statement `{}` should fail", stmt))
+        .to_string()
 }
 
 fn first_scalar(data: &DataSet) -> linkrs::core::Value {
@@ -103,14 +104,15 @@ async fn test_session_variable_let_and_reference() {
     let data = exec(&service, sid, "RETURN $name").await;
     assert_eq!(first_scalar(&data), linkrs::core::Value::string("Alice"));
 
-    // Variable references resolve inside DML.
+    // Variable references resolve inside DML. The first tag property mirrors
+    // the vertex id, so the vid carries the same string.
     exec(
         &service,
         sid,
-        "INSERT VERTEX Person(name, age) VALUES 1:($name, $x)",
+        "INSERT VERTEX Person(name, age) VALUES 'Alice':($name, $x)",
     )
     .await;
-    let data = exec(&service, sid, "FETCH PROP ON Person 1").await;
+    let data = exec(&service, sid, "FETCH PROP ON Person 'Alice'").await;
     let vertex = data
         .rows
         .first()

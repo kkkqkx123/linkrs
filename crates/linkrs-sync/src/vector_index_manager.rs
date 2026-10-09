@@ -1308,29 +1308,6 @@ impl VectorIndexManager {
         self.search(&collection_name, query).await
     }
 
-    /// Search with threshold.
-    pub async fn search_with_threshold(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        query_vector: Vec<f32>,
-        limit: usize,
-        threshold: f32,
-    ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        if self.is_disabled_engine() {
-            return Err(VectorCoordinatorError::EngineDisabled);
-        }
-        let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
-        let collection_name = self.collection_name_for(&loc);
-        let mut query = SearchQuery::new(query_vector, limit).with_score_threshold(threshold);
-        if let Some(gid) = self.group_id_for(&loc) {
-            let filter = VectorFilter::new().must(FilterCondition::match_value("group_id", gid));
-            query = query.with_filter(filter);
-        }
-        self.search(&collection_name, query).await
-    }
-
     /// Search with filter.
     pub async fn search_with_filter(
         &self,

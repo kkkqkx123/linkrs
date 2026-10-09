@@ -62,6 +62,7 @@ fn point(
 async fn setup_env() -> TestEnv {
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let mut config = Config::default();
+    config.server.auth.enable_authorize = false;
     config.vector.enabled = true;
     config.vector.engine = VectorEngineKind::Local;
     config.vector.local.data_dir = Some(temp_dir.path().join("vector"));
@@ -123,6 +124,7 @@ impl TestEnv {
         self.service
             .execute(self.session_id, sql)
             .await
+            .map_err(|err| err.to_string())
             .map(|result| result.rows().to_vec())
     }
 }
@@ -234,10 +236,7 @@ async fn case4_vector_drop_index_semantics() {
         .await
         .expect("DROP VECTOR INDEX should succeed");
     assert_eq!(rows.len(), 1);
-    assert_eq!(
-        rows[0][0],
-        linkrs::core::Value::string("drop_vector_index")
-    );
+    assert_eq!(rows[0][0], linkrs::core::Value::string("drop_vector_index"));
     assert_eq!(rows[0][1], linkrs::core::Value::string("idx_item_vec"));
     assert_eq!(rows[0][2], linkrs::core::Value::string("dropped"));
 

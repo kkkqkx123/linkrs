@@ -76,7 +76,6 @@ rerank = [
     "dep:llm-rerank",
     "linkrs-config/rerank",
     "linkrs-sync/rerank",
-    "linkrs-query/rerank",
 ]
 vector-qdrant = [
     "vector",

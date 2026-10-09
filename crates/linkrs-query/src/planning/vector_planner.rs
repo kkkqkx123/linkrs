@@ -59,8 +59,10 @@ impl Planner for VectorSearchPlanner {
         let create = match bound {
             crate::binder::BoundStatement::CreateVectorIndex(c) => c,
             // DROP/SEARCH/LOOKUP/MATCH variants have no bound representation
-            // yet and still use the AST path.
-            _ => return self.transform(ctx.validated, qctx),
+            // yet and still use the AST path; the plan-phase metadata carries
+            // the vector index registry so index names resolve to their
+            // (space, tag, field) location during planning.
+            _ => return self.transform_bound(ctx.validated, qctx, ctx.metadata),
         };
 
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
@@ -117,27 +119,7 @@ impl Planner for VectorSearchPlanner {
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let stmt = validated.stmt();
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let space_id = qctx.space_id().unwrap_or(0);
-
-        match stmt {
-            Stmt::CreateVectorIndex(create) => self.transform_create_vector_index(
-                create,
-                &space_name,
-                space_id,
-                self.metadata_context.as_deref(),
-            ),
-            Stmt::DropVectorIndex(drop) => self.transform_drop_vector_index(drop, &space_name),
-            Stmt::SearchVector(search) => self.transform_search_vector(search, space_id),
-            Stmt::LookupVector(lookup) => {
-                self.transform_lookup_vector(lookup, space_id, &space_name)
-            }
-            Stmt::MatchVector(match_stmt) => self.transform_match_vector(match_stmt, space_id),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "Not a vector search statement".to_string(),
-            )),
-        }
+        self.transform_bound(validated, qctx, None)
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {
@@ -153,6 +135,40 @@ impl Planner for VectorSearchPlanner {
 }
 
 impl VectorSearchPlanner {
+    /// Dispatch AST-level vector statements with plan-phase metadata.
+    ///
+    /// The metadata context carries the vector index registry, so index
+    /// names resolve to their (space, tag, field) location during planning;
+    /// `metadata_context` on the planner remains the fallback for callers
+    /// without plan-phase metadata.
+    fn transform_bound(
+        &self,
+        validated: &ValidatedStatement,
+        qctx: Arc<QueryContext>,
+        metadata: Option<&MetadataContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        let stmt = validated.stmt();
+        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
+        let space_id = qctx.space_id().unwrap_or(0);
+        let metadata = metadata.or(self.metadata_context.as_deref());
+        match stmt {
+            Stmt::CreateVectorIndex(create) => {
+                self.transform_create_vector_index(create, &space_name, space_id, metadata)
+            }
+            Stmt::DropVectorIndex(drop) => {
+                self.transform_drop_vector_index(drop, &space_name, metadata)
+            }
+            Stmt::SearchVector(search) => self.transform_search_vector(search, space_id, metadata),
+            Stmt::LookupVector(lookup) => {
+                self.transform_lookup_vector(lookup, space_id, &space_name, metadata)
+            }
+            Stmt::MatchVector(match_stmt) => self.transform_match_vector(match_stmt, space_id),
+            _ => Err(PlannerError::PlanGenerationFailed(
+                "Not a vector search statement".to_string(),
+            )),
+        }
+    }
+
     fn transform_create_vector_index(
         &self,
         create: &CreateVectorIndex,
@@ -207,12 +223,25 @@ impl VectorSearchPlanner {
         &self,
         drop: &DropVectorIndex,
         space_name: &str,
+        metadata: Option<&MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
         let node = DropVectorIndexNode::new(
             drop.index_name.clone(),
             space_name.to_string(),
             drop.if_exists,
         );
+        // Attach the (space, tag, field) location resolved from the index
+        // registry; the executor rejects an unresolved location unless the
+        // statement opted into IF EXISTS.
+        let node = match metadata.and_then(|metadata| metadata.get_index_metadata(&drop.index_name))
+        {
+            Some(index_metadata) => node.with_location(
+                index_metadata.space_id,
+                index_metadata.tag_name.clone(),
+                index_metadata.field_name.clone(),
+            ),
+            None => node,
+        };
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
@@ -227,6 +256,7 @@ impl VectorSearchPlanner {
         &self,
         search: &SearchVectorStatement,
         space_id: u64,
+        metadata: Option<&MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
         // Parse output fields from yield clause
         let output_fields = self.parse_output_fields(&search.yield_clause);
@@ -241,22 +271,17 @@ impl VectorSearchPlanner {
             None => None,
         };
 
-        // Pre-resolve tag_name and field_name from metadata context if available
-        let (tag_name, field_name) = if let Some(ref metadata_context) = self.metadata_context {
-            // Try to get index metadata from context
-            if let Some(index_metadata) = metadata_context.get_index_metadata(&search.index_name) {
+        // Pre-resolve tag_name and field_name from the index registry; an
+        // unknown index leaves them empty for the executor to reject.
+        let (tag_name, field_name) = metadata
+            .and_then(|metadata| metadata.get_index_metadata(&search.index_name))
+            .map(|index_metadata| {
                 (
                     index_metadata.tag_name.clone(),
                     index_metadata.field_name.clone(),
                 )
-            } else {
-                // Metadata not pre-resolved, use empty strings (executor will resolve)
-                (String::new(), String::new())
-            }
-        } else {
-            // No metadata context, use empty strings (backward compatibility)
-            (String::new(), String::new())
-        };
+            })
+            .unwrap_or_else(|| (String::new(), String::new()));
 
         let node = self.build_simvec_node(
             search,
@@ -275,6 +300,7 @@ impl VectorSearchPlanner {
         lookup: &LookupVector,
         _space_id: u64,
         space_name: &str,
+        metadata: Option<&MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
         let schema_name = if lookup.schema_name.is_empty() {
             space_name.to_string()
@@ -284,21 +310,18 @@ impl VectorSearchPlanner {
 
         let yield_fields = self.parse_output_fields(&lookup.yield_clause);
 
-        // Pre-resolve tag_name and field_name from metadata context if
-        // available; otherwise leave empty (executor will report a clear error).
-        let (tag_name, field_name, resolved_space_id) =
-            if let Some(ref metadata_context) = self.metadata_context {
-                match metadata_context.get_index_metadata(&lookup.index_name) {
-                    Some(index_metadata) => (
-                        index_metadata.tag_name.clone(),
-                        index_metadata.field_name.clone(),
-                        index_metadata.space_id,
-                    ),
-                    None => (String::new(), String::new(), 0),
-                }
-            } else {
-                (String::new(), String::new(), 0)
-            };
+        // Pre-resolve tag_name and field_name from the index registry; an
+        // unknown index leaves them empty for the executor to reject.
+        let (tag_name, field_name, resolved_space_id) = metadata
+            .and_then(|metadata| metadata.get_index_metadata(&lookup.index_name))
+            .map(|index_metadata| {
+                (
+                    index_metadata.tag_name.clone(),
+                    index_metadata.field_name.clone(),
+                    index_metadata.space_id,
+                )
+            })
+            .unwrap_or_else(|| (String::new(), String::new(), 0));
 
         let node = VectorLookupNode::new(
             schema_name,

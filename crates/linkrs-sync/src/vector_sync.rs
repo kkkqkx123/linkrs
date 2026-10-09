@@ -77,6 +77,9 @@ pub struct SearchOptions {
     pub field_name: String,
     pub query_vector: Vec<f32>,
     pub limit: usize,
+    /// Original query text; drives the optional post-recall rerank stage.
+    /// `None` for pure vector queries, which skip rerank entirely.
+    pub query_text: Option<String>,
     pub threshold: Option<f32>,
     pub filter: Option<VectorFilter>,
     pub consistency: SearchConsistency,
@@ -97,6 +100,7 @@ impl SearchOptions {
             field_name: field_name.into(),
             query_vector,
             limit,
+            query_text: None,
             threshold: None,
             filter: None,
             consistency: SearchConsistency::default(),
@@ -797,7 +801,14 @@ impl VectorSyncCoordinator {
             .await
     }
 
-    /// Search with options (handles RYW consistency before delegating).
+    /// Search with options (handles RYW consistency, then delegates to the
+    /// index manager).
+    ///
+    /// This is the single entry point for the post-recall rerank stage: with
+    /// an active stage the recall limit is widened to the rerank candidate
+    /// window, results are reranked, and the output is truncated back to the
+    /// requested `limit`, so callers always observe at most `limit` hits in
+    /// rerank order.
     pub async fn search_with_options(
         &self,
         options: SearchOptions,
@@ -854,6 +865,24 @@ impl VectorSyncCoordinator {
                 }
             }
         }
+        #[cfg(feature = "rerank")]
+        {
+            let mut options = options;
+            let requested_limit = options.limit;
+            let window = self.rerank_recall_window(options.query_text.as_deref());
+            if window > options.limit {
+                options.limit = window;
+            }
+            let query_text = options.query_text.clone();
+            let field_name = options.field_name.clone();
+            let results = self.index_manager.search_with_options(options).await?;
+            let mut results = self
+                .maybe_rerank(query_text.as_deref(), &field_name, results)
+                .await;
+            results.truncate(requested_limit);
+            return Ok(results);
+        }
+        #[cfg(not(feature = "rerank"))]
         self.index_manager.search_with_options(options).await
     }
 
@@ -867,27 +896,6 @@ impl VectorSyncCoordinator {
     ) -> VectorCoordinatorResult<Vec<SearchResult>> {
         self.index_manager
             .search_by_location(space_id, tag_name, field_name, query_vector, limit)
-            .await
-    }
-
-    pub async fn search_with_threshold(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        query_vector: Vec<f32>,
-        limit: usize,
-        threshold: f32,
-    ) -> VectorCoordinatorResult<Vec<SearchResult>> {
-        self.index_manager
-            .search_with_threshold(
-                space_id,
-                tag_name,
-                field_name,
-                query_vector,
-                limit,
-                threshold,
-            )
             .await
     }
 
@@ -1086,7 +1094,7 @@ impl VectorSyncCoordinator {
     /// Returns zero when rerank is disabled or the query carries no text,
     /// leaving existing recall limits untouched.
     #[cfg(feature = "rerank")]
-    pub fn rerank_recall_window(&self, query_text: Option<&str>) -> usize {
+    fn rerank_recall_window(&self, query_text: Option<&str>) -> usize {
         match (
             query_text,
             self.rerank_service.as_ref(),
@@ -1098,27 +1106,25 @@ impl VectorSyncCoordinator {
     }
 
     /// Reorder recall results with the configured rerank service. Fail-open:
-    /// any missing precondition or provider failure returns the input order
-    /// wrapped in `Ok`; the `Result` only exists so query operators can drive
-    /// the call through the shared runtime bridge like every other call.
+    /// any missing precondition or provider failure returns the input order.
     #[cfg(feature = "rerank")]
-    pub async fn maybe_rerank(
+    async fn maybe_rerank(
         &self,
         query_text: Option<&str>,
         field_name: &str,
         results: Vec<SearchResult>,
-    ) -> VectorCoordinatorResult<Vec<SearchResult>> {
+    ) -> Vec<SearchResult> {
         let Some(query) = query_text else {
-            return Ok(results);
+            return results;
         };
         let Some(service) = self.rerank_service.as_ref() else {
-            return Ok(results);
+            return results;
         };
         let Some(config) = self.rerank_config.as_ref() else {
-            return Ok(results);
+            return results;
         };
         if results.len() < 2 {
-            return Ok(results);
+            return results;
         }
         let max_candidates = config.max_candidates.max(1);
         let mut head = results;
@@ -1131,7 +1137,7 @@ impl VectorSyncCoordinator {
         let indexed = Self::rerank_candidates(&head, text_field);
         if indexed.len() < 2 {
             head.extend(tail);
-            return Ok(head);
+            return head;
         }
         let runtime = llm_rerank::RerankRuntimeConfig {
             max_candidates,
@@ -1148,13 +1154,13 @@ impl VectorSyncCoordinator {
             Ok(mut reordered) => {
                 self.record_rerank_call(latency_ms, true);
                 reordered.extend(tail);
-                Ok(reordered)
+                reordered
             }
             Err(original) => {
                 self.record_rerank_call(latency_ms, false);
                 let mut restored = original;
                 restored.extend(tail);
-                Ok(restored)
+                restored
             }
         }
     }
@@ -1743,15 +1749,13 @@ mod rerank_tests {
         ];
         let kept = coordinator
             .maybe_rerank(None, "content", hits.clone())
-            .await
-            .expect("fail-open never errors");
+            .await;
         assert_eq!(hit_ids(&kept), hit_ids(&hits));
 
         let single = vec![search_hit("a", 0.9, Some("alpha"))];
         let kept = coordinator
             .maybe_rerank(Some("q"), "content", single.clone())
-            .await
-            .expect("fail-open never errors");
+            .await;
         assert_eq!(hit_ids(&kept), hit_ids(&single));
     }
 
@@ -1776,8 +1780,60 @@ mod rerank_tests {
         let single = vec![search_hit("a", 0.9, Some("alpha"))];
         let kept = coordinator
             .maybe_rerank(Some("q"), "content", single.clone())
-            .await
-            .expect("fail-open never errors");
+            .await;
         assert_eq!(hit_ids(&kept), hit_ids(&single));
+    }
+
+    #[tokio::test]
+    async fn search_truncates_rerank_widened_recall() {
+        let (_dir, coordinator) = bare_coordinator();
+        coordinator
+            .create_vector_index(1, "user", "embedding", 4, DistanceMetric::Cosine)
+            .await
+            .expect("index created");
+        let inserts: Vec<VectorChangeContext> = (0..5)
+            .map(|i| {
+                VectorChangeContext::new(
+                    1,
+                    "user",
+                    "embedding",
+                    VectorChangeType::Insert,
+                    VectorPointData {
+                        id: format!("p{i}"),
+                        vector: vec![1.0, i as f32, 0.5, 0.25],
+                        payload: HashMap::new(),
+                    },
+                )
+            })
+            .collect();
+        coordinator
+            .on_vector_change_batch(inserts)
+            .await
+            .expect("delivery");
+
+        let provider = llm_rerank::CohereRerankProvider::new(llm_rerank::RerankConfig::new(
+            "http://localhost:9/rerank",
+            "test",
+        ))
+        .expect("client builds without I/O");
+        let config = linkrs_config::VectorRerankConfig {
+            endpoint: llm_rerank::RerankConfig::new("http://localhost:9/rerank", "test"),
+            max_candidates: 20,
+            fusion: llm_rerank::RerankFusionStrategy::default(),
+            text_field: None,
+        };
+        let coordinator = coordinator.with_rerank_service(std::sync::Arc::new(provider), config);
+
+        let mut options = SearchOptions::new(1, "user", "embedding", vec![1.0, 0.0, 0.5, 0.25], 3);
+        options.query_text = Some("q".to_string());
+        let results = coordinator
+            .search_with_options(options)
+            .await
+            .expect("search");
+        assert_eq!(
+            results.len(),
+            3,
+            "rerank-widened recall truncates back to the requested limit"
+        );
     }
 }
