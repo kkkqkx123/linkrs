@@ -142,12 +142,9 @@ impl TestDb {
                 false
             }
         };
-        let query_api = QueryApi::with_schema_and_sync_manager(
-            storage.clone(),
-            stats_manager.clone(),
-            schema_manager.clone(),
-            sync_manager,
-        );
+        let query_api = QueryApi::new(storage.clone(), stats_manager.clone())
+            .with_schema_manager(schema_manager.clone())
+            .with_sync_manager(sync_manager);
         let transaction_manager = Arc::new(
             TransactionManager::with_shared_version_manager(
                 TransactionManagerConfig::default(),
@@ -196,12 +193,9 @@ impl TestDb {
                 false
             }
         };
-        let query_api = QueryApi::with_schema_and_sync_manager(
-            storage.clone(),
-            stats_manager.clone(),
-            schema_manager.clone(),
-            sync_manager,
-        );
+        let query_api = QueryApi::new(storage.clone(), stats_manager.clone())
+            .with_schema_manager(schema_manager.clone())
+            .with_sync_manager(sync_manager);
         let transaction_manager = Arc::new(
             TransactionManager::with_shared_version_manager(
                 TransactionManagerConfig::default(),

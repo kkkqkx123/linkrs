@@ -343,6 +343,7 @@ impl HookBus {
     }
 
     /// Whether any statement-level DML observer is registered.
+    #[cfg(feature = "c_api")]
     pub(crate) fn has_dml_observers(&self) -> bool {
         !self.dml_events.is_empty()
     }

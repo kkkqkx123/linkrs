@@ -136,6 +136,7 @@ fn extended_error_code_from_internal(code: ExtendedErrorCode) -> linkrs_extended
         ExtendedErrorCode::PathNotFound => {
             linkrs_extended_error_code_t::GRAPHDB_ERROR_PATH_NOT_FOUND
         }
+        ExtendedErrorCode::Internal => linkrs_extended_error_code_t::GRAPHDB_ERROR_INTERNAL,
     }
 }
 
@@ -266,6 +267,7 @@ pub fn error_code_from_core_error(error: &CoreError) -> (i32, linkrs_extended_er
                 ExtendedErrorCode::InvalidVertex
                 | ExtendedErrorCode::InvalidEdge
                 | ExtendedErrorCode::PathNotFound => linkrs_error_code_t::GRAPHDB_NOTFOUND as i32,
+                ExtendedErrorCode::Internal => linkrs_error_code_t::GRAPHDB_ERROR as i32,
                 ExtendedErrorCode::None => linkrs_error_code_t::GRAPHDB_OK as i32,
             };
             (
@@ -433,6 +435,7 @@ pub fn extended_error_code_to_message(code: linkrs_extended_error_code_t) -> &'s
         linkrs_extended_error_code_t::GRAPHDB_ERROR_INVALID_VERTEX => "Invalid vertex\0".as_bytes(),
         linkrs_extended_error_code_t::GRAPHDB_ERROR_INVALID_EDGE => "Invalid edge\0".as_bytes(),
         linkrs_extended_error_code_t::GRAPHDB_ERROR_PATH_NOT_FOUND => "Path not found\0".as_bytes(),
+        linkrs_extended_error_code_t::GRAPHDB_ERROR_INTERNAL => "Internal error\0".as_bytes(),
     }
 }
 

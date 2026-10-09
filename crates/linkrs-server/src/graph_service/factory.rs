@@ -242,8 +242,20 @@ impl<
                         );
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     api.install_query_manager(Arc::clone(&query_manager));
-                    let vector_api = Arc::new(VectorApi::new(backend));
-                    (Arc::new(RwLock::new(api)), Some(vector_api))
+                    // The standalone VectorApi needs the sync manager that
+                    // hosts the vector coordinator; without it the HTTP/gRPC
+                    // vector endpoints cannot list indexes, so it is left
+                    // unconfigured and those endpoints report unavailability
+                    // instead of silently serving empty results.
+                    let vector_api = storage.get_sync_manager().and_then(|sync_manager| {
+                        sync_manager
+                            .vector_coordinator()
+                            .cloned()
+                            .map(|coordinator| {
+                                Arc::new(VectorApi::new(backend, coordinator, sync_manager))
+                            })
+                    });
+                    (Arc::new(RwLock::new(api)), vector_api)
                 }
                 Err(e) => {
                     warn!(

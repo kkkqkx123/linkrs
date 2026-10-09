@@ -7,7 +7,7 @@ use linkrs_sync::backend::VectorBackend;
 use linkrs_sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
 use simvec::{
     types::{validate_distance_metric, IndexMetadata, PointId},
-    CollectionConfig, DistanceMetric, FilterCondition, SearchQuery, VectorPoint,
+    CollectionConfig, DistanceMetric, VectorPoint,
 };
 use std::sync::Arc;
 
@@ -56,50 +56,27 @@ pub enum VectorWriteMode {
 /// Vector Index API – Core Layer
 pub struct VectorApi {
     backend: VectorBackend,
-    coordinator: Option<Arc<VectorSyncCoordinator>>,
-    sync_manager: Option<Arc<linkrs_sync::SyncManager>>,
+    coordinator: Arc<VectorSyncCoordinator>,
+    sync_manager: Arc<linkrs_sync::SyncManager>,
 }
 
 impl VectorApi {
-    /// Create a new VectorApi instance
-    pub fn new(backend: VectorBackend) -> Self {
-        Self {
-            backend,
-            coordinator: None,
-            sync_manager: None,
-        }
-    }
-
-    /// Create a new VectorApi instance with sync coordinator
-    pub fn with_coordinator(
-        backend: VectorBackend,
-        coordinator: Arc<VectorSyncCoordinator>,
-    ) -> Self {
-        Self {
-            backend,
-            coordinator: Some(coordinator),
-            sync_manager: None,
-        }
-    }
-
-    /// Create a new VectorApi with both coordinator and sync manager (for
-    /// transactional vector writes).
-    pub fn with_coordinator_and_sync_manager(
+    /// Create a VectorApi with the full assembly the vector subsystem needs.
+    ///
+    /// The coordinator and sync manager are required, not optional: every
+    /// assembly owning a vector backend also owns the sync manager hosting
+    /// the vector coordinator, and a partially wired instance would serve
+    /// degraded reads or empty index listings instead of failing loudly.
+    pub fn new(
         backend: VectorBackend,
         coordinator: Arc<VectorSyncCoordinator>,
         sync_manager: Arc<linkrs_sync::SyncManager>,
     ) -> Self {
         Self {
             backend,
-            coordinator: Some(coordinator),
-            sync_manager: Some(sync_manager),
+            coordinator,
+            sync_manager,
         }
-    }
-
-    /// Attach a sync manager after construction (for transactional writes).
-    pub fn with_sync_manager(mut self, sync_manager: Arc<linkrs_sync::SyncManager>) -> Self {
-        self.sync_manager = Some(sync_manager);
-        self
     }
 
     /// Get the vector backend
@@ -108,8 +85,8 @@ impl VectorApi {
     }
 
     /// Get the sync coordinator
-    pub fn coordinator(&self) -> Option<&Arc<VectorSyncCoordinator>> {
-        self.coordinator.as_ref()
+    pub fn coordinator(&self) -> &Arc<VectorSyncCoordinator> {
+        &self.coordinator
     }
 
     /// Create a vector index
@@ -144,7 +121,7 @@ impl VectorApi {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-        mut config: CollectionConfig,
+        config: CollectionConfig,
     ) -> CoreResult<String> {
         validate_metric(config.distance)?;
         if let Some(qc) = &config.quantization_config {
@@ -152,56 +129,23 @@ impl VectorApi {
                 .map_err(|e| CoreError::VectorError(e.to_string()))?;
         }
 
-        if let Some(coordinator) = &self.coordinator {
-            // Prefer the coordinator's full-config path when quantization/hnsw is set
-            if config.quantization_config.is_some() || config.hnsw_config.is_some() {
-                return coordinator
-                    .create_index_with_config(space_id, tag_name, field_name, config)
-                    .await
-                    .map_err(|e| CoreError::VectorError(e.to_string()));
-            }
-            return coordinator
-                .create_vector_index(
-                    space_id,
-                    tag_name,
-                    field_name,
-                    config.vector_size,
-                    config.distance,
-                )
+        if config.quantization_config.is_some() || config.hnsw_config.is_some() {
+            return self
+                .coordinator
+                .create_index_with_config(space_id, tag_name, field_name, config)
                 .await
                 .map_err(|e| CoreError::VectorError(e.to_string()));
-        } else {
-            let collection_name =
-                VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-            // When using the bare backend (no coordinator), ensure a sensible
-            // default for remote Qdrant while letting the local engine keep
-            // exact defaults unless explicitly overridden.
-            if !self.backend.is_local() && config.hnsw_config.is_none() {
-                config.hnsw_config = Some(simvec::types::HnswConfig {
-                    m: 16,
-                    ef_construct: 100,
-                    full_scan_threshold: None,
-                    max_indexing_threads: None,
-                    on_disk: None,
-                    payload_m: Some(16),
-                    ..Default::default()
-                });
-                config.index_type = Some(simvec::types::IndexType::HNSW);
-            }
-            self.backend
-                .create_index(&collection_name, &config)
-                .await
-                .map_err(|e| CoreError::VectorError(e.to_string()))?;
-            let _ = self
-                .backend
-                .create_payload_index(
-                    &collection_name,
-                    "group_id",
-                    simvec::types::PayloadSchemaType::Keyword,
-                )
-                .await;
-            Ok(collection_name)
         }
+        self.coordinator
+            .create_vector_index(
+                space_id,
+                tag_name,
+                field_name,
+                config.vector_size,
+                config.distance,
+            )
+            .await
+            .map_err(|e| CoreError::VectorError(e.to_string()))
     }
 
     /// Drop a vector index
@@ -211,19 +155,10 @@ impl VectorApi {
         tag_name: &str,
         field_name: &str,
     ) -> CoreResult<()> {
-        if let Some(coordinator) = &self.coordinator {
-            coordinator
-                .drop_vector_index(space_id, tag_name, field_name)
-                .await
-                .map_err(|e| CoreError::VectorError(e.to_string()))
-        } else {
-            let collection_name =
-                VectorIndexLocation::new(space_id, tag_name, field_name).to_collection_name();
-            self.backend
-                .delete_collection(&collection_name)
-                .await
-                .map_err(|e| CoreError::VectorError(e.to_string()))
-        }
+        self.coordinator
+            .drop_vector_index(space_id, tag_name, field_name)
+            .await
+            .map_err(|e| CoreError::VectorError(e.to_string()))
     }
 
     /// Get vector index info (from logical index metadata)
@@ -233,18 +168,12 @@ impl VectorApi {
         tag_name: &str,
         field_name: &str,
     ) -> CoreResult<Option<IndexMetadata>> {
-        let Some(coordinator) = &self.coordinator else {
-            return Ok(None);
-        };
-        Ok(coordinator.index_info(space_id, tag_name, field_name))
+        Ok(self.coordinator.index_info(space_id, tag_name, field_name))
     }
 
     /// List all vector indexes
     pub fn list_indexes(&self) -> Vec<String> {
-        let Some(coordinator) = &self.coordinator else {
-            return Vec::new();
-        };
-        coordinator
+        self.coordinator
             .list_indexes()
             .into_iter()
             .map(|w| w.collection_name)
@@ -254,13 +183,9 @@ impl VectorApi {
     /// List vector indexes whose last rebuild failed.
     ///
     /// These indexes still serve live data but need operator attention: retry
-    /// [`VectorApi::rebuild_collection`]. Mirrors
-    /// [`crate::api_core::fulltext_api::FulltextApi::inconsistent_indexes`].
+    /// [`VectorApi::rebuild_collection`].
     pub fn inconsistent_indexes(&self) -> Vec<linkrs_core::index_events::RebuildProgress> {
-        let Some(coordinator) = &self.coordinator else {
-            return Vec::new();
-        };
-        coordinator.inconsistent_vector_indexes()
+        self.coordinator.inconsistent_vector_indexes()
     }
 
     /// Insert a vector point with explicit write mode.
@@ -278,11 +203,7 @@ impl VectorApi {
             tag,
             field,
         } = mode;
-        let Some(manager) = self.sync_manager.as_ref() else {
-            return Err(CoreError::VectorError(
-                "Transactional vector writes require a configured SyncManager".to_string(),
-            ));
-        };
+        let manager = &self.sync_manager;
         let vector = point.vector.clone();
         let payload = point.payload.clone().unwrap_or_default();
         let mut properties: Vec<(Arc<str>, linkrs_core::Value)> = Vec::new();
@@ -324,11 +245,7 @@ impl VectorApi {
             tag,
             field,
         } = mode;
-        let Some(manager) = self.sync_manager.as_ref() else {
-            return Err(CoreError::VectorError(
-                "Transactional vector writes require a configured SyncManager".to_string(),
-            ));
-        };
+        let manager = &self.sync_manager;
         for point in points {
             let vector = point.vector.clone();
             let payload = point.payload.clone().unwrap_or_default();
@@ -373,11 +290,7 @@ impl VectorApi {
             tag,
             field,
         } = mode;
-        let Some(manager) = self.sync_manager.as_ref() else {
-            return Err(CoreError::VectorError(
-                "Transactional vector deletes require a configured SyncManager".to_string(),
-            ));
-        };
+        let manager = &self.sync_manager;
         let vertex_id = linkrs_core::Value::string(point_id);
         manager
             .on_vertex_change_with_txn(
@@ -408,11 +321,7 @@ impl VectorApi {
             tag,
             field,
         } = mode;
-        let Some(manager) = self.sync_manager.as_ref() else {
-            return Err(CoreError::VectorError(
-                "Transactional vector deletes require a configured SyncManager".to_string(),
-            ));
-        };
+        let manager = &self.sync_manager;
         for point_id in point_ids {
             let vertex_id = linkrs_core::Value::string(point_id);
             manager
@@ -444,11 +353,7 @@ impl VectorApi {
         source: &mut dyn linkrs_sync::VectorDocSource,
         options: linkrs_sync::VectorRebuildOptions,
     ) -> CoreResult<u64> {
-        let Some(manager) = self.sync_manager.as_ref() else {
-            return Err(CoreError::VectorError(
-                "Vector rebuild requires a configured SyncManager".to_string(),
-            ));
-        };
+        let manager = &self.sync_manager;
         manager
             .rebuild_vector_index(space_id, tag_name, field_name, source, options)
             .await
@@ -480,12 +385,7 @@ impl VectorApi {
             tag_name,
             field_name
         );
-        let Some(coordinator) = &self.coordinator else {
-            return Err(CoreError::VectorError(
-                "Vector clear requires a configured sync coordinator".to_string(),
-            ));
-        };
-        coordinator
+        self.coordinator
             .index_manager()
             .purge_index_data(space_id, tag_name, field_name)
             .await
@@ -497,55 +397,21 @@ impl VectorApi {
         &self,
         options: SearchOptions,
     ) -> CoreResult<Vec<VectorSearchResult>> {
-        if let Some(coordinator) = &self.coordinator {
-            return coordinator
-                .search_with_options(options)
-                .await
-                .map(|results| {
-                    results
-                        .into_iter()
-                        .map(|r| VectorSearchResult {
-                            id: r.id,
-                            score: r.score,
-                            vector: r.vector.map(|v| v.to_vec()),
-                            payload: r.payload.map(|p| p.into_iter().collect()),
-                        })
-                        .collect()
-                })
-                .map_err(|e| CoreError::VectorError(e.to_string()));
-        }
-
-        let collection_name =
-            VectorIndexLocation::new(options.space_id, &options.tag_name, &options.field_name)
-                .to_collection_name();
-
-        let mut query = SearchQuery::new(options.query_vector, options.limit);
-
-        if let Some(threshold) = options.threshold {
-            query = query.with_score_threshold(threshold);
-        }
-
-        // Inject group_id filter
-        let group_id = format!("{}_{}", options.tag_name, options.field_name);
-        let mut filter = options.filter.unwrap_or_default();
-        filter = filter.must(FilterCondition::match_value("group_id", &group_id));
-        query = query.with_filter(filter);
-
-        let results = self
-            .backend
-            .search(&collection_name, query)
+        self.coordinator
+            .search_with_options(options)
             .await
-            .map_err(|e| CoreError::VectorError(e.to_string()))?;
-
-        Ok(results
-            .into_iter()
-            .map(|r| VectorSearchResult {
-                id: r.id,
-                score: r.score,
-                vector: r.vector.map(|v| v.to_vec()),
-                payload: r.payload.map(|p| p.into_iter().collect()),
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(|r| VectorSearchResult {
+                        id: r.id,
+                        score: r.score,
+                        vector: r.vector.map(|v| v.to_vec()),
+                        payload: r.payload.map(|p| p.into_iter().collect()),
+                    })
+                    .collect()
             })
-            .collect())
+            .map_err(|e| CoreError::VectorError(e.to_string()))
     }
 
     /// Get a vector point by ID

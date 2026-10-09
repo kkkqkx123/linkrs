@@ -5,7 +5,7 @@
 use super::cost_profile::cost_config_for_profile;
 use crate::api_core::error::{CoreError, CoreResult};
 use crate::api_core::types::{ExecutionMetadata, QueryRequest, QueryResult};
-use crate::storage::{
+use linkrs_storage::{
     AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
 };
 use linkrs_config::{RuntimeConfig, StorageCostProfile};
@@ -51,47 +51,16 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         }
     }
 
-    /// Create a new QueryApi instance with sync manager support
-    pub fn with_sync_manager(
-        storage: Arc<RwLock<S>>,
-        stats_manager: Arc<StatsManager>,
-        sync_manager: Arc<SyncManager>,
-    ) -> Self {
-        let optimizer_engine = Arc::new(OptimizerEngine::default());
-        Self {
-            pipeline_manager: Self::pipeline_with_engine(storage, stats_manager, optimizer_engine)
-                .with_sync_manager(sync_manager),
-        }
+    /// Attach a schema manager to the pipeline.
+    pub fn with_schema_manager(mut self, schema_manager: Arc<SchemaManager>) -> Self {
+        self.pipeline_manager = self.pipeline_manager.with_schema_manager(schema_manager);
+        self
     }
 
-    /// Create a new QueryApi instance with schema manager support
-    pub fn with_schema_manager(
-        storage: Arc<RwLock<S>>,
-        stats_manager: Arc<StatsManager>,
-        schema_manager: Arc<SchemaManager>,
-    ) -> Self {
-        let optimizer_engine = Arc::new(OptimizerEngine::default());
-
-        Self {
-            pipeline_manager: Self::pipeline_with_engine(storage, stats_manager, optimizer_engine)
-                .with_schema_manager(schema_manager),
-        }
-    }
-
-    /// Create a new QueryApi with both schema manager and sync manager support
-    pub fn with_schema_and_sync_manager(
-        storage: Arc<RwLock<S>>,
-        stats_manager: Arc<StatsManager>,
-        schema_manager: Arc<SchemaManager>,
-        sync_manager: Arc<SyncManager>,
-    ) -> Self {
-        let optimizer_engine = Arc::new(OptimizerEngine::default());
-
-        Self {
-            pipeline_manager: Self::pipeline_with_engine(storage, stats_manager, optimizer_engine)
-                .with_schema_manager(schema_manager)
-                .with_sync_manager(sync_manager),
-        }
+    /// Attach a sync manager to the pipeline.
+    pub fn with_sync_manager(mut self, sync_manager: Arc<SyncManager>) -> Self {
+        self.pipeline_manager = self.pipeline_manager.with_sync_manager(sync_manager);
+        self
     }
 
     /// Create a new QueryApi using an externally configured optimizer engine,
@@ -254,9 +223,11 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     ///
     /// `force` bypasses the schema-version gate so an explicit ANALYZE always
     /// refreshes the statistics. Failures are returned as `Err`, never panic.
-    pub fn collect_statistics(&self, space: &str, force: bool) -> Result<(), String> {
-        self.pipeline_manager.collect_statistics(space, force)?;
-        Ok(())
+    pub fn collect_statistics(&self, space: &str, force: bool) -> CoreResult<()> {
+        self.pipeline_manager
+            .collect_statistics(space, force)
+            .map_err(CoreError::Internal)
+            .map(|_| ())
     }
 
     /// Query-plan-cache hit rate across all executed statements.
@@ -276,7 +247,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         stats_manager: Arc<StatsManager>,
         backend: VectorBackend,
         schema_manager: Option<Arc<SchemaManager>>,
-    ) -> Result<Self, String> {
+    ) -> CoreResult<Self> {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
 
         // Create a VectorSyncCoordinator with the shared backend (no embedding service for query-only use)
@@ -340,15 +311,6 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// Structured Search Results
     pub fn execute(&mut self, query: &str, ctx: QueryRequest) -> CoreResult<QueryResult> {
         self.execute_with_operation_context_and_storage(query, ctx, None, None)
-    }
-
-    pub fn execute_with_operation_context(
-        &mut self,
-        query: &str,
-        ctx: QueryRequest,
-        operation_context: Option<StorageOperationContext>,
-    ) -> CoreResult<QueryResult> {
-        self.execute_with_operation_context_and_storage(query, ctx, operation_context, None)
     }
 
     pub fn execute_with_operation_storage(
@@ -480,15 +442,6 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         self.execute_stream_with_operation_context_and_storage(query, ctx, None, None)
     }
 
-    pub fn execute_stream_with_operation_context(
-        &mut self,
-        query: &str,
-        ctx: QueryRequest,
-        operation_context: Option<StorageOperationContext>,
-    ) -> CoreResult<StreamingQueryResult> {
-        self.execute_stream_with_operation_context_and_storage(query, ctx, operation_context, None)
-    }
-
     pub fn execute_stream_with_operation_storage(
         &mut self,
         query: &str,
@@ -566,29 +519,6 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             }
         }
         Ok(result)
-    }
-
-    /// Execute a parameterized query
-    pub fn execute_with_params(
-        &mut self,
-        query: &str,
-        params: std::collections::HashMap<String, linkrs_core::Value>,
-        ctx: QueryRequest,
-    ) -> CoreResult<QueryResult> {
-        // Create new QueryRequest with parameters
-        let new_ctx = QueryRequest {
-            space_id: ctx.space_id,
-            space_name: ctx.space_name,
-            auto_commit: ctx.auto_commit,
-            transaction_id: ctx.transaction_id,
-            parameters: Some(params),
-            session_variables: ctx.session_variables,
-            query_id: ctx.query_id,
-            isolation_level: ctx.isolation_level,
-            parsed_statement: ctx.parsed_statement,
-            consistency: ctx.consistency,
-        };
-        self.execute(query, new_ctx)
     }
 
     /// Attach API-layer metadata to an engine execution result.
@@ -752,7 +682,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::MockStorage;
+    use linkrs_storage::MockStorage;
 
     fn create_mock_storage() -> Arc<RwLock<MockStorage>> {
         Arc::new(RwLock::new(

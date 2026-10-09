@@ -2,10 +2,10 @@
 //!
 //! Provides full transaction management functionality, including savepoint support
 
-use crate::api_core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
+use crate::api_core::{CoreError, CoreResult, TransactionHandle};
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::Session;
-use crate::storage::StorageClient;
+use linkrs_storage::StorageClient;
 use linkrs_core::Value;
 use linkrs_transaction::types::{SavepointId, SavepointInfo};
 use linkrs_transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
@@ -156,14 +156,14 @@ impl TransactionConfig {
 /// # Ok(())
 /// # }
 /// ```
-pub struct Transaction<'sess, S: StorageClient + Clone + 'static> {
+pub struct Transaction<'sess, S: StorageClient + Clone + Send + Sync + 'static> {
     session: &'sess Session<S>,
     txn_handle: TransactionHandle,
     committed: bool,
     rolled_back: bool,
 }
 
-impl<'sess, S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Transaction<'sess, S> {
+impl<'sess, S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget> Transaction<'sess, S> {
     /// Creating a new transaction
     pub(crate) fn new(session: &'sess Session<S>, txn_handle: TransactionHandle) -> Self {
         Self {
@@ -193,18 +193,12 @@ impl<'sess, S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Tra
         let (ctx, statement_start) = txn_manager.begin_statement(self.txn_handle.0)?;
         let execution = txn_manager.create_execution(self.txn_handle.0, false)?;
 
-        let query_ctx = QueryRequest {
-            space_id: self.session.space_id(),
-            space_name: self.session.space_name().map(|s| s.to_string()),
-            auto_commit: false,
-            transaction_id: Some(self.txn_handle.0),
-            parameters: None,
-            session_variables: Some(self.session.variables_snapshot()),
-            query_id: None,
-            isolation_level: None,
-            parsed_statement: None,
-            consistency: Default::default(),
-        };
+        let query_ctx = self
+            .session
+            .session_query_request()
+            .auto_commit(false)
+            .transaction_id(Some(self.txn_handle.0))
+            .build();
 
         let result = {
             let mut query_api = self.session.query_api_mut();
@@ -235,18 +229,13 @@ impl<'sess, S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Tra
         let (ctx, statement_start) = txn_manager.begin_statement(self.txn_handle.0)?;
         let execution = txn_manager.create_execution(self.txn_handle.0, false)?;
 
-        let query_ctx = QueryRequest {
-            space_id: self.session.space_id(),
-            space_name: self.session.space_name().map(|s| s.to_string()),
-            auto_commit: false,
-            transaction_id: Some(self.txn_handle.0),
-            parameters: Some(params),
-            session_variables: Some(self.session.variables_snapshot()),
-            query_id: None,
-            isolation_level: None,
-            parsed_statement: None,
-            consistency: Default::default(),
-        };
+        let query_ctx = self
+            .session
+            .session_query_request()
+            .auto_commit(false)
+            .transaction_id(Some(self.txn_handle.0))
+            .parameters(Some(params))
+            .build();
 
         let result = {
             let mut query_api = self.session.query_api_mut();
@@ -502,12 +491,13 @@ impl<'sess, S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Tra
     }
 
     /// Get transaction handle (for internal use by C API)
+    #[cfg(feature = "c_api")]
     pub(crate) fn txn_handle(&self) -> TransactionHandle {
         self.txn_handle
     }
 }
 
-impl<'sess, S: StorageClient + Clone + 'static> Drop for Transaction<'sess, S> {
+impl<'sess, S: StorageClient + Clone + Send + Sync + 'static> Drop for Transaction<'sess, S> {
     fn drop(&mut self) {
         // If the transaction is still active, it will be automatically rolled back.
         if self.is_active() {

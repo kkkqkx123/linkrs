@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use linkrs::api::api_core::SpaceConfig;
 use linkrs::api::embedded::{
-    BatchConfig, BatchError, BatchItemType, BatchResult, DatabaseConfig, GraphDatabase,
-    QueryResult, ResultMetadata, Row, SyncMode, TransactionConfig,
+    BatchError, BatchItemType, BatchResult, DatabaseConfig, GraphDatabase, QueryResult,
+    ResultMetadata, Row, SyncMode, TransactionConfig,
 };
 use linkrs::core::types::{DataSet, VertexId};
 use linkrs::core::{Edge, Value, Vertex};
@@ -217,7 +217,7 @@ fn test_session_text_transaction_commands() {
     // bound to it.
     session.execute("BEGIN").expect("BEGIN should succeed");
     session
-        .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30)")
+        .execute("INSERT VERTEX person(name, age) VALUES 'Alice':('Alice', 30)")
         .expect("INSERT inside text transaction should succeed");
 
     // ROLLBACK undoes the transaction writes.
@@ -237,13 +237,13 @@ fn test_session_text_transaction_commands() {
     // SAVEPOINT + ROLLBACK TO keeps the transaction active.
     session.execute("BEGIN").expect("BEGIN should succeed");
     session
-        .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30)")
+        .execute("INSERT VERTEX person(name, age) VALUES 'Alice':('Alice', 30)")
         .expect("INSERT p1 should succeed");
     session
         .execute("SAVEPOINT sp1")
         .expect("SAVEPOINT should succeed");
     session
-        .execute("INSERT VERTEX person(name, age) VALUES 'p2':('Bob', 25)")
+        .execute("INSERT VERTEX person(name, age) VALUES 'Bob':('Bob', 25)")
         .expect("INSERT p2 should succeed");
     session
         .execute("ROLLBACK TO sp1")
@@ -304,10 +304,10 @@ fn test_session_execute_with_params() {
         .execute("CREATE TAG IF NOT EXISTS person(name STRING NOT NULL, age INT)")
         .expect("CREATE TAG failed");
     session
-        .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30)")
+        .execute("INSERT VERTEX person(name, age) VALUES 'Alice':('Alice', 30)")
         .expect("INSERT failed");
     session
-        .execute("INSERT VERTEX person(name, age) VALUES 'p2':('Bob', 25)")
+        .execute("INSERT VERTEX person(name, age) VALUES 'Bob':('Bob', 25)")
         .expect("INSERT failed");
 
     let mut params = HashMap::new();
@@ -634,34 +634,6 @@ fn test_batch_result_merge() {
     assert_eq!(result1.errors.len(), 2);
 }
 
-#[test]
-fn test_batch_config_default() {
-    let config = BatchConfig::default();
-    assert_eq!(config.batch_size, 1000);
-    assert!(config.auto_flush);
-    assert!(config.continue_on_error);
-    assert_eq!(config.max_errors, Some(100));
-}
-
-#[test]
-fn test_batch_config_builder() {
-    let config = BatchConfig::new()
-        .with_batch_size(500)
-        .with_auto_flush(false)
-        .with_continue_on_error(false)
-        .with_max_errors(Some(50));
-
-    assert_eq!(config.batch_size, 500);
-    assert!(!config.auto_flush);
-    assert!(!config.continue_on_error);
-    assert_eq!(config.max_errors, Some(50));
-}
-
-#[test]
-fn test_batch_config_min_batch_size() {
-    let config = BatchConfig::new().with_batch_size(0);
-    assert_eq!(config.batch_size, 1);
-}
 
 #[test]
 fn test_batch_inserter_create() {
@@ -852,8 +824,13 @@ fn test_row_columns() {
 
     let columns = row.columns();
     assert_eq!(columns.len(), 2);
-    assert!(columns.contains(&&"id".to_string()));
-    assert!(columns.contains(&&"name".to_string()));
+    assert_eq!(
+        columns,
+        vec![&"id".to_string(), &"name".to_string()],
+        "column order must match the result layout"
+    );
+    assert_eq!(row.get_by_index(0), Some(&Value::Int(42)));
+    assert_eq!(row.get_by_index(1), Some(&Value::string("测试")));
 }
 
 #[test]
@@ -996,13 +973,15 @@ fn setup_phase4_graph(session: &mut linkrs::api::embedded::Session<linkrs::stora
         .execute("CREATE EDGE works_at(since: INT)")
         .expect("create edge works_at");
     session
-        .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30), 'p2':('Bob', 25)")
+        .execute(
+            "INSERT VERTEX person(name, age) VALUES 'Alice':('Alice', 30), 'Bob':('Bob', 25)",
+        )
         .expect("insert persons");
     session
-        .execute("INSERT VERTEX company(name) VALUES 'c1':('Acme')")
+        .execute("INSERT VERTEX company(name) VALUES 'Acme':('Acme')")
         .expect("insert company");
     session
-        .execute("INSERT EDGE works_at(since) VALUES 'p1' -> 'c1': (2020)")
+        .execute("INSERT EDGE works_at(since) VALUES 'Alice' -> 'Acme': (2020)")
         .expect("insert edge");
 }
 
@@ -1145,8 +1124,8 @@ fn test_copy_multi_file_row_concat() {
     let csv_dir = tempfile::tempdir().expect("create csv dir");
     let f1 = csv_dir.path().join("p10.csv");
     let f2 = csv_dir.path().join("p11.csv");
-    std::fs::write(&f1, "vid,name,age\np10,Carol,28\n").expect("write f1");
-    std::fs::write(&f2, "vid,name,age\np11,Dave,22\n").expect("write f2");
+    std::fs::write(&f1, "vid,name,age\nCarol,Carol,28\n").expect("write f1");
+    std::fs::write(&f2, "vid,name,age\nDave,Dave,22\n").expect("write f2");
 
     session
         .execute(&format!(
@@ -1171,7 +1150,7 @@ fn test_copy_multi_file_by_column() {
     let csv_dir = tempfile::tempdir().expect("create csv dir");
     let f1 = csv_dir.path().join("ids.csv");
     let f2 = csv_dir.path().join("attrs.csv");
-    std::fs::write(&f1, "vid\np20\np21\n").expect("write ids");
+    std::fs::write(&f1, "vid\nErin\nFrank\n").expect("write ids");
     std::fs::write(&f2, "name,age\nErin,31\nFrank,29\n").expect("write attrs");
 
     session
@@ -1312,10 +1291,10 @@ fn test_weighted_shortest_returns_path() {
         .execute("CREATE EDGE road(w: INT)")
         .expect("create edge");
     session
-        .execute("INSERT VERTEX city(name) VALUES 'a':('A'), 'b':('B'), 'c':('C')")
+        .execute("INSERT VERTEX city(name) VALUES 'A':('A'), 'B':('B'), 'C':('C')")
         .expect("insert cities");
     session
-        .execute("INSERT EDGE road(w) VALUES 'a' -> 'b': (10), 'a' -> 'c': (1), 'c' -> 'b': (1)")
+        .execute("INSERT EDGE road(w) VALUES 'A' -> 'B': (10), 'A' -> 'C': (1), 'C' -> 'B': (1)")
         .expect("insert roads");
 
     let result = session

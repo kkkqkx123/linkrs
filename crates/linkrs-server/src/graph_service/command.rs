@@ -30,16 +30,7 @@ impl<
     /// command keyword (used to surface the first specific parse error for
     /// malformed commands instead of the generic recovery abort).
     pub(crate) fn is_command_like(stmt: &str) -> bool {
-        let upper = stmt.trim().to_uppercase();
-        upper == "BEGIN"
-            || upper.starts_with("BEGIN ")
-            || upper.starts_with("START TRANSACTION")
-            || upper.starts_with("COMMIT")
-            || upper.starts_with("ROLLBACK")
-            || upper.starts_with("SAVEPOINT")
-            || upper.starts_with("RELEASE SAVEPOINT")
-            || upper == "LET"
-            || upper.starts_with("LET ")
+        linkrs_api::api_core::is_command_like(stmt)
     }
 
     /// Whether the text holds more than one statement, reusing the parser's
@@ -58,40 +49,20 @@ impl<
     }
 
     /// Unified classification entry: parse the statement and return it when
-    /// it is one of the transaction / session commands.
+    /// it is one of the transaction / session commands. The keyword gate,
+    /// parse, and AST match are shared with the embedded session through
+    /// [`linkrs_api::api_core::classify_session_command`].
     pub(crate) fn parse_command(stmt: &str) -> Result<Option<ParserResult>, GraphServiceError> {
-        if !Self::is_command_like(stmt) {
-            return Ok(None);
-        }
-        let mut parser = Parser::new(stmt);
-        match parser.parse() {
-            Ok(result) if !parser.has_errors() => {
-                let stmt_ast = result.ast.stmt();
-                match stmt_ast {
-                    Stmt::BeginTransaction(_)
-                    | Stmt::CommitTransaction(_)
-                    | Stmt::RollbackTransaction(_)
-                    | Stmt::Savepoint(_)
-                    | Stmt::ReleaseSavepoint(_)
-                    | Stmt::AssignVariable(_) => Ok(Some(result)),
-                    _ => Ok(None),
-                }
-            }
-            Ok(_) => Ok(None),
-            Err(_) => {
-                if let Some(first) = parser.errors().iter().next() {
-                    let position = first.position.is_valid().then_some(first.position);
-                    let position = position.or_else(|| {
-                        first
-                            .offset
-                            .and_then(|offset| offset_to_position(stmt, offset))
-                    });
-                    return Err(GraphServiceError::with_position(
-                        format!("Parse error: {}", first.message),
-                        position,
-                    ));
-                }
-                Ok(None)
+        match linkrs_api::api_core::classify_session_command(stmt) {
+            Ok(classified) => Ok(classified.map(|(parsed, _)| parsed)),
+            Err(error) => {
+                let position = error
+                    .position
+                    .or_else(|| error.offset.and_then(|offset| offset_to_position(stmt, offset)));
+                Err(GraphServiceError::with_position(
+                    error.message,
+                    position,
+                ))
             }
         }
     }
@@ -279,6 +250,9 @@ impl<
                 result
             }
 
+            Stmt::Extension(_) => Err(GraphServiceError::new(
+                "Extension statements are not supported by the network service",
+            )),
             _ => Err(GraphServiceError::new(
                 "Statement is not a transaction command",
             )),

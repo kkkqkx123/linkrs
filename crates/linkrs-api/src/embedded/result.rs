@@ -20,11 +20,64 @@ pub struct QueryResult {
 
 /// result line
 ///
-/// Encapsulates row data at the core level, providing access by column name and index
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Encapsulates row data at the core level, providing access by column
+/// name and index. Column order is preserved; repeated column names keep
+/// their last occurrence for name-based lookups.
+#[derive(Debug, Clone)]
 pub struct Row {
-    values: HashMap<String, Value>,
+    columns: Vec<String>,
+    values: Vec<Value>,
     column_index: HashMap<String, usize>,
+}
+
+impl Serialize for Row {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.columns.len()))?;
+        for (column, value) in self.columns.iter().zip(self.values.iter()) {
+            map.serialize_entry(column, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Row {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct RowVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for RowVisitor {
+            type Value = Row;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a map of column names to values")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut row = Row {
+                    columns: Vec::new(),
+                    values: Vec::new(),
+                    column_index: HashMap::new(),
+                };
+                while let Some((column, value)) = map.next_entry::<String, Value>()? {
+                    row.columns.push(column.clone());
+                    row.values.push(value);
+                    row.column_index.insert(column, row.columns.len() - 1);
+                }
+                Ok(row)
+            }
+        }
+
+        deserializer.deserialize_map(RowVisitor)
+    }
 }
 
 /// Results metadata
@@ -145,37 +198,37 @@ impl<'a> IntoIterator for &'a QueryResult {
 impl Row {
     /// Created from core layer row data (column names + positional values).
     pub fn from_columns(columns: &[String], values: &[Value]) -> Self {
-        let mut column_index = HashMap::new();
-        let mut row_values = HashMap::new();
-
-        for (idx, col) in columns.iter().enumerate() {
-            column_index.insert(col.clone(), idx);
-            if let Some(v) = values.get(idx) {
-                row_values.insert(col.clone(), v.clone());
-            }
+        let mut row = Self {
+            columns: Vec::with_capacity(columns.len()),
+            values: Vec::with_capacity(columns.len()),
+            column_index: HashMap::with_capacity(columns.len()),
+        };
+        for (index, column) in columns.iter().enumerate() {
+            let Some(value) = values.get(index) else {
+                continue;
+            };
+            row.columns.push(column.clone());
+            row.values.push(value.clone());
+            row.column_index.insert(column.clone(), row.columns.len() - 1);
         }
-
-        Self {
-            values: row_values,
-            column_index,
-        }
+        row
     }
 
     /// Getting values by column name
     pub fn get(&self, column: &str) -> Option<&Value> {
-        self.values.get(column)
+        self.column_index
+            .get(column)
+            .and_then(|index| self.values.get(*index))
     }
 
     /// Getting values by index
     pub fn get_by_index(&self, index: usize) -> Option<&Value> {
-        self.columns()
-            .get(index)
-            .and_then(|col| self.values.get(col.as_str()))
+        self.values.get(index)
     }
 
-    /// Get all column names
+    /// Get all column names in result order
     pub fn columns(&self) -> Vec<&String> {
-        self.values.keys().collect()
+        self.columns.iter().collect()
     }
 
     /// Get the number of columns
@@ -190,7 +243,7 @@ impl Row {
 
     /// Checks if the specified column is included
     pub fn has_column(&self, column: &str) -> bool {
-        self.values.contains_key(column)
+        self.column_index.contains_key(column)
     }
 
     // Typed Acquisition Methods
@@ -267,9 +320,9 @@ impl Row {
         })
     }
 
-    /// Get all values
-    pub fn values(&self) -> &HashMap<String, Value> {
-        &self.values
+    /// Get all (column, value) pairs in result order
+    pub fn values(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.columns.iter().map(String::as_str).zip(self.values.iter())
     }
 
     /// Translate from "Convert to JSON string" to English: "Convert to JSON string"
@@ -289,32 +342,58 @@ impl Default for ResultMetadata {
     }
 }
 
-/// Streaming Search Results
-///
-/// Used to process large datasets and avoid loading all data into memory at once
-pub struct StreamingQueryResult {
-    columns: Vec<String>,
-    metadata: ResultMetadata,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl StreamingQueryResult {
-    /// Create streaming query results
-    pub fn new(columns: Vec<String>, metadata: ResultMetadata) -> Self {
-        Self { columns, metadata }
+    #[test]
+    fn row_preserves_column_order_and_positional_access() {
+        let columns = vec!["b".to_string(), "a".to_string()];
+        let values = vec![Value::Int(2), Value::string("x")];
+        let row = Row::from_columns(&columns, &values);
+
+        assert_eq!(row.get_by_index(0), Some(&Value::Int(2)));
+        assert_eq!(row.get_by_index(1), Some(&Value::string("x")));
+        assert_eq!(row.columns(), vec![&"b".to_string(), &"a".to_string()]);
+        assert_eq!(row.get("a"), Some(&Value::string("x")));
+        assert_eq!(row.get("b"), Some(&Value::Int(2)));
+        assert_eq!(row.len(), 2);
+        assert!(!row.is_empty());
+
+        let pairs: Vec<(&str, &Value)> = row.values().collect();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].0, "b");
+        assert_eq!(pairs[1].0, "a");
     }
 
-    /// Get the list of column names
-    pub fn columns(&self) -> &[String] {
-        &self.columns
+    #[test]
+    fn row_skips_columns_without_values() {
+        // The engine row is shorter than the column list: only the
+        // leading columns carry values.
+        let columns = vec!["a".to_string(), "missing".to_string(), "c".to_string()];
+        let values = vec![Value::Int(1)];
+        let row = Row::from_columns(&columns, &values);
+
+        assert_eq!(row.len(), 1);
+        assert!(!row.has_column("missing"));
+        assert!(!row.has_column("c"));
+        assert_eq!(row.get("a"), Some(&Value::Int(1)));
     }
 
-    /// Get metadata
-    pub fn metadata(&self) -> &ResultMetadata {
-        &self.metadata
-    }
+    #[test]
+    fn row_serializes_as_ordered_json_object() {
+        let columns = vec!["b".to_string(), "a".to_string()];
+        let values = vec![Value::Int(2), Value::string("x")];
+        let row = Row::from_columns(&columns, &values);
 
-    /// Get the number of columns
-    pub fn column_count(&self) -> usize {
-        self.columns.len()
+        let json = row.to_json().expect("serialization succeeds");
+        let b_pos = json.find("\"b\"").expect("column b present");
+        let a_pos = json.find("\"a\"").expect("column a present");
+        assert!(b_pos < a_pos, "json keeps column order: {json}");
+
+        let restored: Row =
+            serde_json::from_str(&json).expect("deserialization succeeds");
+        assert_eq!(restored.columns(), vec![&"b".to_string(), &"a".to_string()]);
+        assert_eq!(restored.get("a"), Some(&Value::string("x")));
     }
 }

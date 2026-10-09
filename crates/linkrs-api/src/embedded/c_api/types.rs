@@ -128,4 +128,7 @@ pub enum linkrs_extended_error_code_t {
     GRAPHDB_ERROR_INVALID_VERTEX = 1400,
     GRAPHDB_ERROR_INVALID_EDGE = 1401,
     GRAPHDB_ERROR_PATH_NOT_FOUND = 1402,
+
+    // Internal (1500-1599)
+    GRAPHDB_ERROR_INTERNAL = 1500,
 }

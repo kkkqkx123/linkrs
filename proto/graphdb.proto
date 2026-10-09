@@ -1328,6 +1328,7 @@ message RebuildFulltextIndexRequest {
   uint64 space_id = 1;
   string tag_name = 2;
   string field_name = 3;
+  string session_id = 4;
 }
 
 message RebuildFulltextIndexResponse {
@@ -1338,6 +1339,7 @@ message RebuildFulltextIndexResponse {
 
 message GetFulltextRebuildStatusRequest {
   string rebuild_id = 1;
+  string session_id = 2;
 }
 
 message GetFulltextRebuildStatusResponse {
@@ -1352,6 +1354,7 @@ message ClearFulltextIndexRequest {
   string tag_name = 2;
   string field_name = 3;
   bool force = 4;
+  string session_id = 5;
 }
 
 message ClearFulltextIndexResponse {
@@ -1359,7 +1362,9 @@ message ClearFulltextIndexResponse {
   string error = 2;
 }
 
-message ListInconsistentFulltextRequest {}
+message ListInconsistentFulltextRequest {
+  string session_id = 1;
+}
 
 message ListInconsistentFulltextResponse {
   string indexes_json = 1;

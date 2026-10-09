@@ -3,7 +3,9 @@
 use crate::batch::types::*;
 use crate::storage::StorageClient;
 use dashmap::DashMap;
-use linkrs_api::api_core::{BatchConfig, BatchOperation};
+use linkrs_api::api_core::{
+    BulkInsertConfig, BulkInsertItem, BulkInsertItemType, BulkInsertOperation,
+};
 use linkrs_api::api_core::{CoreError, CoreResult};
 use linkrs_core::types::VertexId;
 use linkrs_core::{Edge, Value, Vertex};
@@ -173,14 +175,14 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
         space_name: &str,
     ) -> CoreResult<BatchResultData> {
         // Partition by kind, keeping original indices for error reporting.
-        let mut insert_items: Vec<linkrs_api::api_core::BatchItem> = Vec::new();
+        let mut insert_items: Vec<BulkInsertItem> = Vec::new();
         let mut mutations: Vec<(usize, Mutation)> = Vec::new();
         for (index, item) in items.into_iter().enumerate() {
             match item {
                 BatchItem::Vertex(data) => {
                     if let Some(core) = self
                         .convert_vertex_data(data)
-                        .map(linkrs_api::api_core::BatchItem::Vertex)
+                        .map(BulkInsertItem::Vertex)
                     {
                         insert_items.push(core);
                     }
@@ -188,7 +190,7 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
                 BatchItem::Edge(data) => {
                     if let Some(core) = self
                         .convert_edge_data(data)
-                        .map(linkrs_api::api_core::BatchItem::Edge)
+                        .map(BulkInsertItem::Edge)
                     {
                         insert_items.push(core);
                     }
@@ -237,9 +239,9 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
             }
         }
 
-        // Inserts go through the core batch operation.
-        let config = BatchConfig::new().with_continue_on_error(true);
-        let mut operation = BatchOperation::new(config);
+        // Inserts go through the core bulk insert path.
+        let config = BulkInsertConfig::new().with_continue_on_error(true);
+        let mut operation = BulkInsertOperation::new(config);
         operation.add_items(insert_items);
 
         // Execute batch operation
@@ -277,8 +279,8 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
                 .map(|e| BatchErrorData {
                     index: e.index,
                     item_type: match e.item_type {
-                        linkrs_api::api_core::BatchItemType::Vertex => BatchItemType::Vertex,
-                        linkrs_api::api_core::BatchItemType::Edge => BatchItemType::Edge,
+                        BulkInsertItemType::Vertex => BatchItemType::Vertex,
+                        BulkInsertItemType::Edge => BatchItemType::Edge,
                     },
                     error: e.message,
                 })

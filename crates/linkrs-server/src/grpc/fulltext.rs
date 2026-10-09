@@ -43,6 +43,7 @@ impl<
         #[cfg(feature = "fulltext")]
         {
             let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
             let wire = linkrs_wire::fulltext::RebuildFulltextIndexRequest {
                 space_id: req.space_id,
                 tag_name: req.tag_name,
@@ -50,6 +51,7 @@ impl<
             };
             match crate::http::handlers::rebuild::rebuild_fulltext(
                 axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
                 axum::Json(wire),
             )
             .await
@@ -76,8 +78,10 @@ impl<
         #[cfg(feature = "fulltext")]
         {
             let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
             match crate::http::handlers::rebuild::fulltext_rebuild_status(
                 axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
                 axum::extract::Path(req.rebuild_id.clone()),
             )
             .await
@@ -109,6 +113,7 @@ impl<
         #[cfg(feature = "fulltext")]
         {
             let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
             if !req.force {
                 return Err(Status::invalid_argument(
                     "Clearing a fulltext index is destructive and requires force=true",
@@ -122,6 +127,7 @@ impl<
             };
             match crate::http::handlers::rebuild::clear_fulltext(
                 axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
                 axum::Json(wire),
             )
             .await
@@ -146,10 +152,12 @@ impl<
     ) -> Result<Response<ListInconsistentFulltextResponse>, Status> {
         #[cfg(feature = "fulltext")]
         {
-            let _ = request;
-            match crate::http::handlers::rebuild::inconsistent_fulltext(axum::extract::State(
-                self.app_state.clone(),
-            ))
+            let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
+            match crate::http::handlers::rebuild::inconsistent_fulltext(
+                axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
+            )
             .await
             {
                 Ok(axum::Json(resp)) => Ok(Response::new(ListInconsistentFulltextResponse {

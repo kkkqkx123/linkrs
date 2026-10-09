@@ -12,7 +12,7 @@ use crate::embedded::c_api::types::{
     linkrs_session_t, linkrs_t, linkrs_trace_callback, linkrs_update_hook_callback,
 };
 use crate::embedded::Session;
-use crate::storage::GraphStorage;
+use linkrs_storage::GraphStorage;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
 

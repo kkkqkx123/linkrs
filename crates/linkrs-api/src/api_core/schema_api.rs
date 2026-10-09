@@ -3,7 +3,7 @@
 //! Provides transport layer-independent Schema management capabilities
 
 use crate::api_core::{CoreError, CoreResult, IndexTarget, PropertyDef, SpaceConfig};
-use crate::storage::StorageClient;
+use linkrs_storage::StorageClient;
 use linkrs_core::types::{
     EdgeTypeInfo, Index, IndexField, IndexStatus, IndexType, SpaceInfo, TagInfo,
 };
@@ -489,104 +489,6 @@ impl<S: StorageClient> SchemaApi<S> {
         )))
     }
 
-    /// View the Schema
-    ///
-    /// # Parameters
-    /// - `space_id`: Space ID
-    ///
-    /// # Back
-    /// The “Schema” describes a string.
-    pub fn describe_schema(&self, space_id: u64) -> CoreResult<String> {
-        let storage = self.storage.read();
-
-        // Obtaining spatial information
-        let space_info = storage
-            .get_space_by_id(space_id)
-            .map_err(|e| CoreError::StorageError(e.to_string()))?
-            .ok_or_else(|| CoreError::NotFound(format!("Space ID {} does not exist", space_id)))?;
-
-        let space_name = &space_info.space_name;
-
-        // Get all tags
-        let tags = storage
-            .list_tags(space_name)
-            .map_err(|e| CoreError::StorageError(e.to_string()))?;
-
-        // Retrieve all edge types
-        let edge_types = storage
-            .list_edge_types(space_name)
-            .map_err(|e| CoreError::StorageError(e.to_string()))?;
-
-        // Retrieve all indexes
-        let tag_indexes = storage
-            .list_tag_indexes(space_name)
-            .map_err(|e| CoreError::StorageError(e.to_string()))?;
-        let edge_indexes = storage
-            .list_edge_indexes(space_name)
-            .map_err(|e| CoreError::StorageError(e.to_string()))?;
-
-        // Construct a descriptive string
-        let mut description = format!("Graph space: {} (ID: {})", space_name, space_id);
-        description.push_str(&format!("VID Type: {:?}", space_info.vid_type));
-        if let Some(ref comment) = space_info.comment {
-            description.push_str(&format!("Comment: {}", comment));
-        }
-        description.push('\n');
-
-        // Tag information
-        description.push_str("Tags:\n");
-        if tags.is_empty() {
-            description.push_str("  (none)\n");
-        } else {
-            for tag in &tags {
-                description.push_str(&format!("  - {}\n", tag.tag_name));
-                for prop in &tag.properties {
-                    description.push_str(&format!(
-                        "      {}: {:?}{}\n",
-                        prop.name,
-                        prop.data_type,
-                        if prop.nullable { " (nullable)" } else { "" }
-                    ));
-                }
-            }
-        }
-        description.push('\n');
-
-        // Edge type information
-        description.push_str("Edge types:\n");
-        if edge_types.is_empty() {
-            description.push_str("  (none)\n");
-        } else {
-            for edge in &edge_types {
-                description.push_str(&format!("  - {}\n", edge.edge_type_name));
-                for prop in &edge.properties {
-                    description.push_str(&format!(
-                        "      {}: {:?}{}\n",
-                        prop.name,
-                        prop.data_type,
-                        if prop.nullable { " (nullable)" } else { "" }
-                    ));
-                }
-            }
-        }
-        description.push('\n');
-
-        // Index information
-        description.push_str("Indexes:\n");
-        if tag_indexes.is_empty() && edge_indexes.is_empty() {
-            description.push_str("  (none)\n");
-        } else {
-            for idx in &tag_indexes {
-                description.push_str(&format!("  - {} (tag: {})\n", idx.name, idx.schema_name));
-            }
-            for idx in &edge_indexes {
-                description.push_str(&format!("  - {} (edge: {})\n", idx.name, idx.schema_name));
-            }
-        }
-
-        log::info!("Viewing Schema: space {}", space_id);
-        Ok(description)
-    }
 }
 
 // Internal auxiliary methods
@@ -695,7 +597,7 @@ impl From<PropertyDef> for linkrs_core::types::PropertyDef {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::MockStorage;
+    use linkrs_storage::MockStorage;
 
     fn create_mock_storage() -> Arc<RwLock<MockStorage>> {
         Arc::new(RwLock::new(

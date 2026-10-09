@@ -1,7 +1,7 @@
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::database::GraphDatabase;
 use crate::migration_online::execute_online_migration;
-use crate::storage::GraphStorage;
+use linkrs_storage::GraphStorage;
 use linkrs_migration::{MigrationConfig, MigrationPlan, MigrationReport};
 
 impl GraphDatabase<GraphStorage> {

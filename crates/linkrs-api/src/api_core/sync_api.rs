@@ -2,6 +2,7 @@
 //!
 //! Provides transport layer independent sync system management operations.
 
+use crate::api_core::error::{CoreError, CoreResult};
 use linkrs_sync::SyncManager;
 use std::sync::Arc;
 
@@ -42,10 +43,10 @@ impl SyncApi {
     }
 
     /// Retry delivery of all pending durable outbox entries.
-    pub fn retry_outbox_projection(&self) -> Result<usize, String> {
+    pub fn retry_outbox_projection(&self) -> CoreResult<usize> {
         self.sync_manager
             .retry_outbox_sync()
-            .map_err(|error| error.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
     /// Get vector coordinator
@@ -60,10 +61,10 @@ impl SyncApi {
         self.sync_manager.sync_coordinator()
     }
 
-    pub fn sync_diagnostics(&self) -> Result<linkrs_sync::SyncDiagnostics, String> {
+    pub fn sync_diagnostics(&self) -> CoreResult<linkrs_sync::SyncDiagnostics> {
         self.sync_manager
             .sync_diagnostics()
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
     /// Fulltext indexes whose engine is in the `Inconsistent` state. These
@@ -76,10 +77,10 @@ impl SyncApi {
 
     /// Fail stranded rebuild generations and collect rebuild scratch state.
     /// Idempotent; safe to run at startup before serving traffic.
-    pub fn recover_stale_rebuilds(&self) -> Result<usize, String> {
+    pub fn recover_stale_rebuilds(&self) -> CoreResult<usize> {
         self.sync_manager
             .recover_stale_rebuilds_sync()
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
     pub fn list_dead_letters(
@@ -89,16 +90,16 @@ impl SyncApi {
         generation: Option<u64>,
         limit: usize,
         offset: usize,
-    ) -> Result<Vec<linkrs_sync::DeadLetterRow>, String> {
+    ) -> CoreResult<Vec<linkrs_sync::DeadLetterRow>> {
         self.sync_manager
             .list_dead_letters(target, index_id, generation, limit, offset)
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
-    pub fn requeue_dead_letter(&self, event_id: i64) -> Result<bool, String> {
+    pub fn requeue_dead_letter(&self, event_id: i64) -> CoreResult<bool> {
         self.sync_manager
             .requeue_dead_letter(event_id)
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
     pub fn requeue_dead_letters_batch(
@@ -107,10 +108,10 @@ impl SyncApi {
         index_id: Option<u64>,
         generation: Option<u64>,
         limit: usize,
-    ) -> Result<usize, String> {
+    ) -> CoreResult<usize> {
         self.sync_manager
             .requeue_dead_letters_batch(target, index_id, generation, limit)
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
     pub fn list_degraded_ranges(
@@ -118,10 +119,10 @@ impl SyncApi {
         target: Option<&linkrs_core::types::TargetId>,
         index_id: Option<u64>,
         generation: Option<u64>,
-    ) -> Result<Vec<linkrs_sync::DegradedRangeRow>, String> {
+    ) -> CoreResult<Vec<linkrs_sync::DegradedRangeRow>> {
         self.sync_manager
             .list_degraded_ranges(target, index_id, generation)
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
     pub fn clear_degraded_range(
@@ -131,32 +132,34 @@ impl SyncApi {
         generation: u64,
         start_lsn: linkrs_core::types::CommitLsn,
         end_lsn: linkrs_core::types::CommitLsn,
-    ) -> Result<bool, String> {
+    ) -> CoreResult<bool> {
         self.sync_manager
             .clear_degraded_range(target, index_id, generation, start_lsn, end_lsn)
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
-    pub fn retention_lsn(&self) -> Result<linkrs_core::types::CommitLsn, String> {
-        self.sync_manager.retention_lsn().map_err(|e| e.to_string())
+    pub fn retention_lsn(&self) -> CoreResult<linkrs_core::types::CommitLsn> {
+        self.sync_manager
+            .retention_lsn()
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
     pub fn prune_applied_events(
         &self,
         retention_lsn: linkrs_core::types::CommitLsn,
-    ) -> Result<u64, String> {
+    ) -> CoreResult<u64> {
         self.sync_manager
             .prune_applied_events(retention_lsn)
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 
     pub fn run_retention_once(
         &self,
         grace_lsn_distance: u64,
         max_age_ms: u64,
-    ) -> Result<(u64, u64, u64), String> {
+    ) -> CoreResult<(u64, u64, u64)> {
         self.sync_manager
             .run_retention_once(grace_lsn_distance, max_age_ms)
-            .map_err(|e| e.to_string())
+            .map_err(|e| CoreError::SyncError(e.to_string()))
     }
 }

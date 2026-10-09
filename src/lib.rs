@@ -8,7 +8,7 @@ pub use linkrs_storage as storage;
 pub use linkrs_sync as sync;
 pub use linkrs_transaction as transaction;
 
-#[cfg(feature = "embedded")]
+#[cfg(feature = "c_api")]
 pub mod c_api;
 
 pub mod test_utils;

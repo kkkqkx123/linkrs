@@ -7,8 +7,8 @@ use crate::embedded::c_api::error::{
     error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
 };
 use crate::embedded::c_api::types::{linkrs_config_t, linkrs_t};
-use crate::embedded::{DatabaseConfig, GraphDatabase};
-use crate::storage::GraphStorage;
+use crate::embedded::GraphDatabase;
+use linkrs_storage::GraphStorage;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
 use std::sync::Arc;

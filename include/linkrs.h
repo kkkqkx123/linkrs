@@ -145,6 +145,7 @@ typedef enum linkrs_extended_error_code_t {
   GRAPHDB_ERROR_INVALID_VERTEX = 1400,
   GRAPHDB_ERROR_INVALID_EDGE = 1401,
   GRAPHDB_ERROR_PATH_NOT_FOUND = 1402,
+  GRAPHDB_ERROR_INTERNAL = 1500,
 } linkrs_extended_error_code_t;
 
 /**

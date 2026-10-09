@@ -242,7 +242,7 @@ impl<
             })),
             Err(e) => Ok(Response::new(ListDegradedRangesResponse {
                 degraded_ranges_json: "[]".to_string(),
-                error: e,
+                error: e.to_string(),
             })),
         }
     }
@@ -271,7 +271,7 @@ impl<
             })),
             Err(e) => Ok(Response::new(ClearDegradedRangeResponse {
                 cleared: false,
-                error: e,
+                error: e.to_string(),
             })),
         }
     }

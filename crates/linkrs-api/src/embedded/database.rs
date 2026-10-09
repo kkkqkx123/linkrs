@@ -8,7 +8,7 @@ use crate::embedded::config::DatabaseConfig;
 use crate::embedded::config::EmbeddedVectorEngine;
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
-use crate::storage::{GraphStorage, StorageClient};
+use linkrs_storage::{GraphStorage, StorageClient};
 use linkrs_core::Value;
 use linkrs_fulltext::FulltextConfig;
 #[cfg(feature = "fulltext")]
@@ -31,7 +31,7 @@ use std::sync::Arc;
 use vector_client::{VectorClientConfig, VectorManager};
 
 #[cfg(test)]
-use crate::storage::MockStorage;
+use linkrs_storage::MockStorage;
 
 /// Create a VectorManager from the default configuration.
 ///
@@ -71,6 +71,7 @@ fn default_local_vector_dir(db_path: &Path) -> std::path::PathBuf {
 #[cfg(feature = "vector")]
 fn create_vector_backend(
     config: &DatabaseConfig,
+    #[cfg_attr(not(feature = "vector-qdrant"), allow(unused_variables))]
     runtime: &tokio::runtime::Handle,
 ) -> CoreResult<Option<VectorBackend>> {
     use std::path::PathBuf;
@@ -103,82 +104,110 @@ fn create_vector_backend(
     }
 }
 
-/// Attach a vector sync coordinator to an existing SyncManager (no-op if vector is disabled).
+/// Build the vector sync coordinator, or `None` when the vector
+/// subsystem is disabled or has no usable backend.
 #[cfg(feature = "vector")]
-fn attach_vector_coordinator(
-    mut sync: SyncManager,
+fn create_vector_coordinator(
     config: &DatabaseConfig,
-    runtime: &tokio::runtime::Handle,
-) -> CoreResult<SyncManager> {
-    if let Some(backend) = create_vector_backend(config, runtime)? {
-        let vector_coordinator = Arc::new(
-            linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-                backend,
-                runtime.clone(),
-            ),
-        );
-        sync = sync.with_vector_coordinator(vector_coordinator);
-    }
-    Ok(sync)
+    runtime: Option<&tokio::runtime::Handle>,
+) -> CoreResult<Option<Arc<linkrs_sync::vector_sync::VectorSyncCoordinator>>> {
+    let Some(runtime) = runtime else {
+        return Ok(None);
+    };
+    let Some(backend) = create_vector_backend(config, runtime)? else {
+        return Ok(None);
+    };
+    Ok(Some(Arc::new(
+        linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
+            backend,
+            runtime.clone(),
+        ),
+    )))
 }
 
+/// Secondary subsystem managers assembled when the database opens.
+///
+/// The fulltext index manager exists only when the fulltext feature is
+/// compiled in and enabled by configuration; the sync manager exists only
+/// when at least one coordinator (fulltext or vector) was attached. An
+/// in-memory database without an explicit vector directory therefore ends
+/// up with neither.
 #[cfg(feature = "fulltext")]
-type InitManagers = (Option<Arc<FulltextIndexManager>>, Option<Arc<SyncManager>>);
-#[cfg(not(feature = "fulltext"))]
-type InitManagers = (Option<Arc<()>>, Option<Arc<SyncManager>>);
-
-/// Full init path when vector is enabled but fulltext is not: create a sync manager
-/// that only hosts the vector coordinator.
-#[cfg(all(feature = "vector", not(feature = "fulltext")))]
-fn setup_sync_with_vector_only(
-    config: &DatabaseConfig,
-    runtime: &tokio::runtime::Handle,
-) -> CoreResult<InitManagers> {
-    let Some(backend) = create_vector_backend(config, runtime)? else {
-        return Ok((None, None));
-    };
-    let vector_coordinator = Arc::new(
-        linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-            backend,
-            runtime.clone(),
-        ),
-    );
-
-    let mut sync = SyncManager::new_without_fulltext();
-    sync = sync.with_vector_coordinator(vector_coordinator);
-    Ok((None, Some(Arc::new(sync))))
+struct SecondaryManagers {
+    fulltext: Option<Arc<FulltextIndexManager>>,
+    sync: Option<Arc<SyncManager>>,
 }
 
-/// Full init path when both vector and fulltext are enabled.
-#[cfg(all(feature = "vector", feature = "fulltext"))]
-fn setup_sync_with_vector_only(
-    config: &DatabaseConfig,
-    runtime: &tokio::runtime::Handle,
-) -> CoreResult<InitManagers> {
-    let Some(backend) = create_vector_backend(config, runtime)? else {
-        return Ok((None, None));
-    };
-    let vector_coordinator = Arc::new(
-        linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-            backend,
-            runtime.clone(),
-        ),
-    );
+#[cfg(not(feature = "fulltext"))]
+struct SecondaryManagers {
+    sync: Option<Arc<SyncManager>>,
+}
 
-    let sync_config = SyncConfig::default();
-    let batch_config = linkrs_sync::batch::BatchConfig::from(sync_config.clone());
-    let manager = Arc::new(
-        FulltextIndexManager::new(FulltextConfig::default()).map_err(|e| {
-            CoreError::Internal(format!("Failed to initialize fulltext manager: {}", e))
-        })?,
-    );
-    let sync_coordinator = Arc::new(linkrs_sync::coordinator::SyncCoordinator::new(
-        manager.clone(),
-        batch_config,
-    ));
-    let mut sync = SyncManager::with_sync_config(sync_coordinator, sync_config);
-    sync = sync.with_vector_coordinator(vector_coordinator);
-    Ok((None, Some(Arc::new(sync))))
+/// Build the fulltext and vector managers for one open.
+fn build_secondary_managers(
+    #[cfg_attr(not(feature = "vector"), allow(unused_variables))]
+    config: &DatabaseConfig,
+    #[cfg_attr(not(feature = "fulltext"), allow(unused_variables))]
+    fulltext_config: &FulltextConfig,
+    #[cfg_attr(not(feature = "vector"), allow(unused_variables))]
+    vector_runtime: Option<&tokio::runtime::Handle>,
+) -> CoreResult<SecondaryManagers> {
+    #[cfg(feature = "fulltext")]
+    if fulltext_config.enabled {
+        let manager: Arc<FulltextIndexManager> = Arc::new(
+            FulltextIndexManager::new(fulltext_config.clone())
+                .map_err(|e| CoreError::Internal(e.to_string()))?,
+        );
+        let sync_config = SyncConfig {
+            queue_size: fulltext_config.sync.queue_size,
+            commit_interval_ms: fulltext_config.sync.commit_interval_ms,
+            batch_size: fulltext_config.sync.batch_size,
+            failure_policy: SyncFailurePolicy::FailOpen,
+        };
+        let batch_config = linkrs_sync::batch::BatchConfig::from(sync_config.clone());
+        let sync_coordinator = Arc::new(linkrs_sync::coordinator::SyncCoordinator::new(
+            manager.clone(),
+            batch_config,
+        ));
+        #[cfg_attr(not(feature = "vector"), allow(unused_mut))]
+        let mut sync = SyncManager::with_sync_config(sync_coordinator, sync_config);
+        #[cfg(feature = "vector")]
+        if let Some(coordinator) = create_vector_coordinator(config, vector_runtime)? {
+            sync = sync.with_vector_coordinator(coordinator);
+        }
+        return Ok(SecondaryManagers {
+            fulltext: Some(manager),
+            sync: Some(Arc::new(sync)),
+        });
+    }
+
+    // Fulltext is off (or not compiled in): the sync manager exists only to
+    // host the vector coordinator.
+    #[cfg(feature = "vector")]
+    {
+        let Some(coordinator) = create_vector_coordinator(config, vector_runtime)? else {
+            return Ok(SecondaryManagers {
+                #[cfg(feature = "fulltext")]
+                fulltext: None,
+                sync: None,
+            });
+        };
+        let mut sync = SyncManager::new_without_fulltext();
+        sync = sync.with_vector_coordinator(coordinator);
+        return Ok(SecondaryManagers {
+            #[cfg(feature = "fulltext")]
+            fulltext: None,
+            sync: Some(Arc::new(sync)),
+        });
+    }
+    #[cfg(not(feature = "vector"))]
+    {
+        Ok(SecondaryManagers {
+            #[cfg(feature = "fulltext")]
+            fulltext: None,
+            sync: None,
+        })
+    }
 }
 
 /// Embedded GraphDB database
@@ -214,7 +243,7 @@ fn setup_sync_with_vector_only(
 /// # Ok(())
 /// # }
 /// ```
-pub struct GraphDatabase<S: StorageClient + Clone + 'static> {
+pub struct GraphDatabase<S: StorageClient + Clone + Send + Sync + 'static> {
     inner: Arc<GraphDatabaseInner<S>>,
     config: DatabaseConfig,
 }
@@ -283,59 +312,16 @@ impl GraphDatabase<GraphStorage> {
         let version_manager = storage.version_manager();
         let storage = Arc::new(RwLock::new(storage));
 
-        let fulltext_config = FulltextConfig::default();
-
-        #[cfg_attr(not(feature = "fulltext"), allow(unused_variables))]
-        let (fulltext_manager, mut sync_manager): InitManagers = if fulltext_config.enabled {
-            #[cfg(feature = "fulltext")]
-            {
-                let manager: Arc<FulltextIndexManager> = Arc::new(
-                    FulltextIndexManager::new(fulltext_config.clone())
-                        .map_err(|e| CoreError::Internal(e.to_string()))?,
-                );
-
-                let sync_config = SyncConfig {
-                    queue_size: fulltext_config.sync.queue_size,
-                    commit_interval_ms: fulltext_config.sync.commit_interval_ms,
-                    batch_size: fulltext_config.sync.batch_size,
-                    failure_policy: SyncFailurePolicy::FailOpen,
-                };
-
-                let batch_config = linkrs_sync::batch::BatchConfig::from(sync_config.clone());
-                let sync_coordinator = Arc::new(linkrs_sync::coordinator::SyncCoordinator::new(
-                    manager.clone(),
-                    batch_config,
-                ));
-
-                let sync = SyncManager::with_sync_config(sync_coordinator.clone(), sync_config);
-
-                #[cfg(feature = "vector")]
-                let sync = attach_vector_coordinator(sync, &config, vector_runtime.handle())?;
-
-                let sync = Arc::new(sync);
-                (Some(manager), Some(sync))
-            }
-            #[cfg(not(feature = "fulltext"))]
-            {
-                #[cfg(feature = "vector")]
-                {
-                    setup_sync_with_vector_only(&config, vector_runtime.handle())?
-                }
-                #[cfg(not(feature = "vector"))]
-                {
-                    (None, None)
-                }
-            }
-        } else {
+        let managers = {
             #[cfg(feature = "vector")]
-            {
-                setup_sync_with_vector_only(&config, vector_runtime.handle())?
-            }
+            let vector_runtime = Some(vector_runtime.handle());
             #[cfg(not(feature = "vector"))]
-            {
-                (None, None)
-            }
+            let vector_runtime = None::<&tokio::runtime::Handle>;
+            build_secondary_managers(&config, &FulltextConfig::default(), vector_runtime)?
         };
+        #[cfg(feature = "fulltext")]
+        let fulltext_manager = managers.fulltext;
+        let mut sync_manager = managers.sync;
 
         if let (Some(path), Some(manager)) = (
             config.path(),
@@ -374,11 +360,9 @@ impl GraphDatabase<GraphStorage> {
         let txn_manager = Arc::new(txn_manager);
 
         let query_api = if let Some(ref sync) = sync_manager {
-            Arc::new(RwLock::new(QueryApi::with_sync_manager(
-                storage.clone(),
-                stats_manager.clone(),
-                sync.clone(),
-            )))
+            Arc::new(RwLock::new(
+                QueryApi::new(storage.clone(), stats_manager.clone()).with_sync_manager(sync.clone()),
+            ))
         } else {
             Arc::new(RwLock::new(QueryApi::new(
                 storage.clone(),
@@ -407,8 +391,6 @@ impl GraphDatabase<GraphStorage> {
             schema_api,
             txn_manager,
             storage,
-            #[cfg(feature = "fulltext")]
-            fulltext_manager,
             sync_manager,
             stats_manager,
             hooks,
@@ -421,7 +403,7 @@ impl GraphDatabase<GraphStorage> {
     }
 }
 
-impl<S: StorageClient + Clone + 'static> GraphDatabase<S> {
+impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
     /// Create a new session.
     ///
     /// # Return
@@ -542,17 +524,6 @@ impl<S: StorageClient + Clone + 'static> GraphDatabase<S> {
     }
 }
 
-// To support Send + Sync
-// Safety Notes:
-// 1. GraphDatabase uses Arc<GraphDatabaseInner<S>> to share data internally, Arc itself is Send + Sync.
-// 2. QueryApi in GraphDatabaseInner is Mutex-protected for thread-safety.
-// 3. StorageClient is required to implement Clone + 'static to ensure safe cross-thread delivery.
-// 4. TransactionManager uses Arc wrappers, which can be safely shared across threads.
-// 5. config is a standalone DatabaseConfig, safe to pass across threads.
-// GraphDatabase can therefore securely implement Send and Sync.
-unsafe impl<S: StorageClient + Clone + 'static> Send for GraphDatabase<S> {}
-unsafe impl<S: StorageClient + Clone + 'static> Sync for GraphDatabase<S> {}
-
 fn sync_mode_to_policy(mode: crate::embedded::config::SyncMode) -> Option<SyncPolicy> {
     match mode {
         crate::embedded::config::SyncMode::Full => Some(SyncPolicy::EveryWrite),
@@ -595,8 +566,6 @@ impl GraphDatabase<MockStorage> {
             schema_api,
             txn_manager,
             storage,
-            #[cfg(feature = "fulltext")]
-            fulltext_manager: None,
             sync_manager: None,
             stats_manager,
             hooks,
@@ -649,6 +618,41 @@ mod tests {
             .begin_transaction_with_config(crate::embedded::TransactionConfig::new().read_only())
             .unwrap();
         txn.rollback().unwrap();
+    }
+
+    #[cfg(feature = "fulltext")]
+    #[test]
+    fn secondary_managers_skip_fulltext_when_disabled() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let config = DatabaseConfig::file(directory.path().join("graph.db"));
+        let managers =
+            build_secondary_managers(&config, &FulltextConfig::default(), None).unwrap();
+        assert!(
+            managers.fulltext.is_none(),
+            "default fulltext config is disabled"
+        );
+    }
+
+    #[cfg(feature = "fulltext")]
+    #[test]
+    fn secondary_managers_surface_setup_failures() {
+        let directory = tempfile::TempDir::new().unwrap();
+        // A regular file cannot host the index directory, so fulltext setup
+        // must fail loudly instead of being silently skipped.
+        let regular_file = directory.path().join("not-a-dir");
+        std::fs::write(&regular_file, b"x").unwrap();
+        let mut fulltext_config = FulltextConfig::default();
+        fulltext_config.enabled = true;
+        fulltext_config.index_path = regular_file.join("index");
+        let config = DatabaseConfig::file(directory.path().join("graph.db"));
+
+        let err = build_secondary_managers(&config, &fulltext_config, None)
+            .err()
+            .expect("invalid index path must fail the setup");
+        assert!(
+            matches!(err, CoreError::Internal(ref msg) if !msg.is_empty()),
+            "setup failure must surface as an internal error: {err}"
+        );
     }
 
     #[cfg(feature = "vector")]

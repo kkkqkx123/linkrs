@@ -50,7 +50,7 @@ fn test_query_api_with_graph_storage_schema_manager() {
     let stats_manager = Arc::new(StatsManager::new());
 
     // Create QueryApi with schema_manager
-    let query_api = QueryApi::with_schema_manager(storage, stats_manager, schema_manager);
+    let query_api = QueryApi::new(storage, stats_manager).with_schema_manager(schema_manager);
 
     // QueryApi should be created successfully
     // We cannot easily test execution here without full setup,
@@ -308,7 +308,8 @@ fn test_complete_storage_to_query_workflow() {
     let stats_manager = Arc::new(StatsManager::new());
 
     // Step 2: Create QueryApi with schema_manager
-    let mut query_api = QueryApi::with_schema_manager(storage, stats_manager, schema_manager);
+    let mut query_api =
+        QueryApi::new(storage, stats_manager).with_schema_manager(schema_manager);
 
     // Step 3: Execute a query request
     let request = linkrs::api::api_core::types::QueryRequest {

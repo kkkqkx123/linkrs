@@ -14,9 +14,10 @@ use linkrs_core::{Value, Vertex};
 use linkrs_sync::{RebuildDoc, RebuildDocSource, RebuildEntity};
 #[cfg(feature = "vector")]
 use linkrs_sync::{VectorDocSource, VectorRebuildDoc};
+#[cfg(feature = "vector")]
 use std::sync::Arc;
 
-use crate::storage::{StorageError, StorageReader};
+use linkrs_storage::{StorageError, StorageReader};
 
 /// Batches text documents out of storage for rebuild backfill.
 #[cfg(feature = "fulltext")]

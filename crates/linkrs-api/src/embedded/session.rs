@@ -2,15 +2,15 @@
 //!
 //! Provide the concept of a "session" as the context in which queries are executed.
 
-use crate::api_core::{CoreError, CoreResult, QueryApi, QueryRequest, SchemaApi};
+use crate::api_core::session_command::classify_session_command;
+use crate::api_core::types::QueryRequestBuilder;
+use crate::api_core::{CoreError, CoreResult, QueryApi, SchemaApi};
 use crate::embedded::batch::BatchInserter;
 use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::{Transaction, TransactionConfig};
-use crate::storage::StorageClient;
+use linkrs_storage::StorageClient;
 use linkrs_core::SessionStatistics;
 use linkrs_core::Value;
-#[cfg(feature = "fulltext")]
-use linkrs_fulltext::FulltextIndexManager;
 use linkrs_metrics::StatsManager;
 use linkrs_query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use linkrs_query::parser::ast::Stmt;
@@ -51,7 +51,7 @@ use std::sync::Arc;
 /// # Ok(())
 /// # }
 /// ```
-pub struct Session<S: StorageClient + Clone + 'static> {
+pub struct Session<S: StorageClient + Clone + Send + Sync + 'static> {
     db: Arc<GraphDatabaseInner<S>>,
     space_id: Arc<RwLock<Option<u64>>>,
     space_name: Arc<RwLock<Option<String>>>,
@@ -73,28 +73,31 @@ pub struct Session<S: StorageClient + Clone + 'static> {
 }
 
 /// Internal structure of the database, used for sharing data between Session and GraphDatabase
-#[repr(C)]
-pub(crate) struct GraphDatabaseInner<S: StorageClient + Clone + 'static> {
+pub(crate) struct GraphDatabaseInner<S: StorageClient + Clone + Send + Sync + 'static> {
     pub(crate) query_api: Arc<RwLock<QueryApi<S>>>,
     pub(crate) schema_api: SchemaApi<S>,
     pub(crate) txn_manager: Arc<TransactionManager>,
     pub(crate) storage: Arc<RwLock<S>>,
-    #[cfg(feature = "fulltext")]
-    pub(crate) fulltext_manager: Option<Arc<FulltextIndexManager>>,
+    /// Read by the vector search paths; kept alive for every other
+    /// feature set so the sync subsystem outlives database assembly.
+    #[cfg_attr(not(feature = "vector"), allow(dead_code))]
     pub(crate) sync_manager: Option<Arc<SyncManager>>,
     pub(crate) stats_manager: Arc<StatsManager>,
     /// Central event-hook facade.
     pub(crate) hooks: crate::embedded::hooks::HookBus,
     /// Tokio runtime for vector operations in embedded mode.
-    /// Stored here to ensure the runtime lives as long as the database.
+    /// Kept alive (never read) for the lifetime of the database: the
+    /// vector coordinator holds a runtime handle, and dropping the
+    /// runtime would shut it down underneath the coordinator.
     #[cfg(feature = "vector")]
+    #[allow(dead_code)]
     pub(crate) vector_runtime: Arc<tokio::runtime::Runtime>,
     /// Whether the database was opened read-only. Sessions consult this
     /// flag to reject mutating statements up front.
     pub(crate) read_only: bool,
 }
 
-impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S> {
+impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget> Session<S> {
     /// Create a new session.
     pub(crate) fn new(db: Arc<GraphDatabaseInner<S>>) -> Self {
         Self {
@@ -217,13 +220,25 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
         ))
     }
 
+    /// Base request carrying the session-scoped context: current space,
+    /// autocommit mode, and the session-variable snapshot. Callers layer
+    /// per-statement fields on top.
+    pub(crate) fn session_query_request(&self) -> QueryRequestBuilder {
+        QueryRequestBuilder::new()
+            .space_id(*self.space_id.read())
+            .space_name(self.space_name.read().clone())
+            .auto_commit(self.auto_commit)
+            .session_variables(Some(self.variables_snapshot()))
+    }
+
     /// Detect `CREATE TAG/EDGE ... AS (query)` statements.
     ///
-    /// Returns the parsed `CreateStmt` when the statement materializes a
-    /// table from a query; regular statements yield `None` and malformed
-    /// input falls through to the normal pipeline for error reporting.
+    /// Gated on the leading `CREATE` keyword so ordinary statements skip the
+    /// API-layer parse; the parsed AST target then decides whether the
+    /// statement materializes a table from a query. Malformed input yields
+    /// `None` and falls through to the normal pipeline for error reporting.
     fn parse_create_as(query: &str) -> Option<linkrs_query::parser::ast::stmt::CreateStmt> {
-        if !Self::is_create_as_query(query) {
+        if !Self::starts_with_create(query) {
             return None;
         }
         let mut parser = Parser::new(query);
@@ -242,25 +257,13 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
         }
     }
 
-    /// Check whether `query` looks like `CREATE TAG/EDGE ... AS (query)`.
-    ///
-    /// Only a cheap keyword prefix check; full validation happens in the
-    /// parser so nested subqueries are never misclassified here.
-    fn is_create_as_query(query: &str) -> bool {
-        let mut words = query.split_whitespace();
-        let head = (
-            words.next().map(|w| w.to_ascii_uppercase()),
-            words.next().map(|w| w.to_ascii_uppercase()),
-            words.next().map(|w| w.to_ascii_uppercase()),
-        );
-        if !matches!(
-            head,
-            (Some(ref a), Some(ref b), _) if a == "CREATE" && (b == "TAG" || b == "EDGE")
-        ) {
-            return false;
-        }
-        let upper = query.to_ascii_uppercase();
-        upper.contains(" AS ") && upper.contains('(')
+    /// Whether the statement opens with the `CREATE` keyword.
+    fn starts_with_create(query: &str) -> bool {
+        query
+            .trim_start()
+            .split_whitespace()
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("CREATE"))
     }
 
     /// Execute `CREATE TAG/EDGE <name> AS (<query>)`.
@@ -303,7 +306,7 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
                 "CREATE ... AS cannot run inside an explicit transaction".to_string(),
             ));
         }
-        if Self::is_create_as_query(&query_text) {
+        if Self::parse_create_as(&query_text).is_some() {
             return Err(CoreError::InvalidParameter(
                 "Nested CREATE ... AS is not supported".to_string(),
             ));
@@ -599,11 +602,19 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
         let space = self
             .current_space()
             .unwrap_or_else(|| "default".to_string());
-        self.db.hooks.emit_dml(op, &space, rows);
+        self.notify_dml_op(op, &space, rows);
         Some(op)
     }
 
-    /// Whether any statement-level DML observer is registered.
+    /// Emit one statement-level DML notification for an operation the
+    /// caller already classified (or that never had statement text).
+    pub(crate) fn notify_dml_op(&self, op: linkrs_query::DmlOp, space: &str, rows: u64) {
+        self.db.hooks.emit_dml(op, space, rows);
+    }
+
+    /// Whether any statement-level DML observer is registered
+    /// (consulted by the C-API update hook fast path).
+    #[cfg(feature = "c_api")]
     pub(crate) fn has_dml_observers(&self) -> bool {
         self.db.hooks.has_dml_observers()
     }
@@ -767,13 +778,12 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
 
         // Transaction / session commands are classified through the unified
         // parser entry: the six transaction commands perform the
+        // Transaction / session commands are classified through the shared
+        // API-layer gate: the six transaction commands perform the
         // TransactionManager side effect and execute the state-machine plan;
-        // `LET` is not supported in embedded sessions (no session-variable
-        // store).
+        // `LET` assigns a session variable.
         match Self::parse_command(query) {
-            Err(parse_error) => {
-                return Err(CoreError::InvalidParameter(parse_error));
-            }
+            Err(error) => return Err(error),
             Ok(Some(parsed)) => {
                 let parsed_ast = parsed.ast;
                 match parsed_ast.stmt() {
@@ -816,18 +826,7 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
             return result;
         }
 
-        let ctx = QueryRequest {
-            space_id: *self.space_id.read(),
-            space_name: self.space_name.read().clone(),
-            auto_commit: self.auto_commit,
-            transaction_id: None,
-            parameters: None,
-            session_variables: Some(self.variables_snapshot()),
-            query_id: None,
-            isolation_level: None,
-            parsed_statement: None,
-            consistency: Default::default(),
-        };
+        let ctx = self.session_query_request().build();
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
@@ -856,55 +855,15 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
 
     // ==================== Unified transaction / session commands ====================
 
-    /// Unified classification entry (same policy as the server
-    /// `GraphService::parse_command`): returns the parsed statement when it
-    /// is one of the transaction / session commands, `Err` with the first
-    /// specific parse error for malformed command-like statements.
-    ///
-    /// The parse is gated behind the zero-cost command-keyword text check:
-    /// regular statements skip the API-layer parse entirely (single-parse
-    /// pipeline — the query engine parses them once on the regular path).
-    fn parse_command(query: &str) -> Result<Option<ParserResult>, String> {
-        let upper = query.trim().to_uppercase();
-        let command_like = upper == "BEGIN"
-            || upper.starts_with("BEGIN ")
-            || upper.starts_with("START TRANSACTION")
-            || upper.starts_with("COMMIT")
-            || upper.starts_with("ROLLBACK")
-            || upper.starts_with("SAVEPOINT")
-            || upper.starts_with("RELEASE SAVEPOINT")
-            || upper == "LET"
-            || upper.starts_with("LET ")
-            || upper.starts_with("LOAD EXTENSION")
-            || upper.starts_with("INSTALL EXTENSION")
-            || upper.starts_with("UPDATE EXTENSION")
-            || upper.starts_with("UNINSTALL EXTENSION");
-        if !command_like {
-            return Ok(None);
-        }
-        let mut parser = Parser::new(query);
-        match parser.parse() {
-            Ok(result) if !parser.has_errors() => {
-                let stmt_ast = result.ast.stmt();
-                match stmt_ast {
-                    Stmt::BeginTransaction(_)
-                    | Stmt::CommitTransaction(_)
-                    | Stmt::RollbackTransaction(_)
-                    | Stmt::Savepoint(_)
-                    | Stmt::ReleaseSavepoint(_)
-                    | Stmt::AssignVariable(_)
-                    | Stmt::Extension(_) => Ok(Some(result)),
-                    _ => Ok(None),
-                }
-            }
-            Ok(_) => Ok(None),
-            Err(_) => {
-                if let Some(first) = parser.errors().iter().next() {
-                    return Err(format!("Parse error: {}", first.message));
-                }
-                Ok(None)
-            }
-        }
+    /// Unified classification entry shared with the network service layer:
+    /// the keyword gate, parse, and AST match live in
+    /// [`crate::api_core::session_command`], so both transports classify
+    /// identically. Returns the parsed statement when it is one of the
+    /// transaction / session commands.
+    fn parse_command(query: &str) -> CoreResult<Option<ParserResult>> {
+        classify_session_command(query)
+            .map(|classified| classified.map(|(parsed, _)| parsed))
+            .map_err(CoreError::from)
     }
 
     /// Execute a transaction command: TransactionManager side effect +
@@ -942,7 +901,15 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
                     .begin_transaction_with_owner(options, "embedded".to_string())
                     .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
                 *self.current_transaction.write() = Some(txn_id);
-                self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
+                let result = self.execute_command_plan(query, parsed_ast, Some(txn_id), true);
+                if result.is_err() {
+                    // A failed BEGIN must not leave a bound transaction
+                    // behind: abort it and release the session binding.
+                    let _ = txn_manager.abort_transaction(txn_id);
+                    *self.current_transaction.write() = None;
+                    self.session_variables.rollback_variables();
+                }
+                result
             }
             Stmt::CommitTransaction(_) => {
                 let txn_id = require_transaction("commit")?;
@@ -1006,9 +973,15 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
                 txn_manager
                     .create_savepoint(txn_id, Some(savepoint_stmt.name.clone()), staged_mark)
                     .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
-                self.session_variables
-                    .push_variable_savepoint(&savepoint_stmt.name);
-                self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
+                // Record the variable-overlay boundary only once the
+                // command plan succeeded, so a failed SAVEPOINT leaves no
+                // half-installed marker behind.
+                let result = self.execute_command_plan(query, parsed_ast, Some(txn_id), true);
+                if result.is_ok() {
+                    self.session_variables
+                        .push_variable_savepoint(&savepoint_stmt.name);
+                }
+                result
             }
             Stmt::ReleaseSavepoint(release_stmt) => {
                 let txn_id = require_transaction("release savepoint")?;
@@ -1026,9 +999,12 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
                 txn_manager
                     .release_savepoint(txn_id, savepoint_info.id)
                     .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
-                self.session_variables
-                    .release_variable_savepoint(&release_stmt.name);
-                self.execute_command_plan(query, parsed_ast, Some(txn_id), true)
+                let result = self.execute_command_plan(query, parsed_ast, Some(txn_id), true);
+                if result.is_ok() {
+                    self.session_variables
+                        .release_variable_savepoint(&release_stmt.name);
+                }
+                result
             }
             _ => Err(CoreError::InvalidParameter(
                 "Statement is not a transaction command".to_string(),
@@ -1048,18 +1024,11 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
         transaction_id: Option<TransactionId>,
         active: bool,
     ) -> CoreResult<QueryResult> {
-        let ctx = QueryRequest {
-            space_id: *self.space_id.read(),
-            space_name: self.space_name.read().clone(),
-            auto_commit: self.auto_commit,
-            transaction_id,
-            parameters: None,
-            session_variables: Some(self.variables_snapshot()),
-            query_id: None,
-            isolation_level: None,
-            parsed_statement: Some(parsed_ast),
-            consistency: Default::default(),
-        };
+        let ctx = self
+            .session_query_request()
+            .transaction_id(transaction_id)
+            .parsed_statement(Some(parsed_ast))
+            .build();
         let mut query_api = self.db.query_api.write();
         if active {
             let txn_manager = self.txn_manager();
@@ -1097,18 +1066,12 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
             .create_execution(txn_id, false)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
 
-        let query_ctx = QueryRequest {
-            space_id: *self.space_id.read(),
-            space_name: self.space_name.read().clone(),
-            auto_commit: false,
-            transaction_id: Some(txn_id),
-            parameters,
-            session_variables: Some(self.variables_snapshot()),
-            query_id: None,
-            isolation_level: None,
-            parsed_statement: None,
-            consistency: Default::default(),
-        };
+        let query_ctx = self
+            .session_query_request()
+            .auto_commit(false)
+            .transaction_id(Some(txn_id))
+            .parameters(parameters)
+            .build();
 
         let result = {
             let mut query_api = self.db.query_api.write();
@@ -1148,18 +1111,13 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
             None => Some(self.variables_snapshot()),
         };
 
-        let ctx = QueryRequest {
-            space_id: *self.space_id.read(),
-            space_name: self.space_name.read().clone(),
-            auto_commit: self.auto_commit,
-            transaction_id: *self.current_transaction.read(),
-            parameters,
-            session_variables: merged_variables,
-            query_id: None,
-            isolation_level: None,
-            parsed_statement: Some(parsed_ast),
-            consistency: Default::default(),
-        };
+        let ctx = self
+            .session_query_request()
+            .transaction_id(*self.current_transaction.read())
+            .parameters(parameters)
+            .session_variables(merged_variables)
+            .parsed_statement(Some(parsed_ast))
+            .build();
 
         let mut query_api = self.db.query_api.write();
         let result = if let Some(txn_id) = *self.current_transaction.read() {
@@ -1243,7 +1201,7 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
         // Transaction / session commands do not consume query parameters;
         // classify and route them through the unified command path.
         match Self::parse_command(query) {
-            Err(parse_error) => return Err(CoreError::InvalidParameter(parse_error)),
+            Err(error) => return Err(error),
             Ok(Some(parsed)) => {
                 let parsed_ast = parsed.ast;
                 match parsed_ast.stmt() {
@@ -1273,18 +1231,10 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
             return self.execute_in_transaction(query, txn_id, Some(params));
         }
 
-        let ctx = QueryRequest {
-            space_id: *self.space_id.read(),
-            space_name: self.space_name.read().clone(),
-            auto_commit: self.auto_commit,
-            transaction_id: None,
-            parameters: Some(params),
-            session_variables: Some(self.variables_snapshot()),
-            query_id: None,
-            isolation_level: None,
-            parsed_statement: None,
-            consistency: Default::default(),
-        };
+        let ctx = self
+            .session_query_request()
+            .parameters(Some(params))
+            .build();
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
@@ -1324,7 +1274,7 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
         // session variables; classify and route them through the unified
         // command path.
         match Self::parse_command(query) {
-            Err(parse_error) => return Err(CoreError::InvalidParameter(parse_error)),
+            Err(error) => return Err(error),
             Ok(Some(parsed)) => {
                 let parsed_ast = parsed.ast;
                 match parsed_ast.stmt() {
@@ -1354,18 +1304,11 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
             return self.execute_in_transaction(query, txn_id, Some(params));
         }
 
-        let ctx = QueryRequest {
-            space_id: *self.space_id.read(),
-            space_name: self.space_name.read().clone(),
-            auto_commit: self.auto_commit,
-            transaction_id: None,
-            parameters: Some(params),
-            session_variables: Some(session_variables),
-            query_id: None,
-            isolation_level: None,
-            parsed_statement: None,
-            consistency: Default::default(),
-        };
+        let ctx = self
+            .session_query_request()
+            .parameters(Some(params))
+            .session_variables(Some(session_variables))
+            .build();
 
         let mut query_api = self.db.query_api.write();
         let result = if self.auto_commit {
@@ -1531,6 +1474,7 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
     }
 
     /// Get space ID (internal use)
+    #[cfg(feature = "c_api")]
     pub(crate) fn space_id(&self) -> Option<u64> {
         *self.space_id.read()
     }
@@ -1565,25 +1509,25 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use linkrs_api::embedded::GraphDatabase;
-    /// use linkrs_api::core::{Tag, Vertex};
-    /// use linkrs_api::core::types::VertexId;
+    /// use linkrs_core::types::VertexId;
+    /// use linkrs_core::{Tag, Vertex};
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let db = GraphDatabase::open("my_db")?;
     /// let session = db.session()?;
     ///
-    // Create a batch inserter that automatically refreshes every 100 entries
+    /// // Create a batch inserter that automatically refreshes every 100 entries
     /// let mut inserter = session.batch_inserter(100);
     ///
-    // Add vertices
+    /// // Add vertices
     /// for i in 0..1000 {
     ///     let vertex = Vertex::new(VertexId::try_from_int64(i).expect("test vertex id"), Tag::new("test".into(), std::collections::HashMap::new()));
     ///     inserter.add_vertex(vertex);
     /// }
     ///
-    // Perform batch insertion
+    /// // Perform batch insertion
     /// let result = inserter.execute()?;
     /// # Ok(())
     /// # }
@@ -1611,7 +1555,11 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
         storage
             .batch_insert_vertices(&space_name, vertices)
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        drop(storage);
 
+        // Bulk inserts bypass the statement pipeline, so the statement-level
+        // DML notification is emitted here instead.
+        self.notify_dml_op(linkrs_query::DmlOp::Insert, &space_name, count as u64);
         Ok(count)
     }
 
@@ -1634,7 +1582,11 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
         storage
             .batch_insert_edges(&space_name, edges)
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        drop(storage);
 
+        // Bulk inserts bypass the statement pipeline, so the statement-level
+        // DML notification is emitted here instead.
+        self.notify_dml_op(linkrs_query::DmlOp::Insert, &space_name, count as u64);
         Ok(count)
     }
 
@@ -1908,7 +1860,7 @@ impl<S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget> Session<S>
     }
 }
 
-impl<S: StorageClient + Clone + 'static> Drop for Session<S> {
+impl<S: StorageClient + Clone + Send + Sync + 'static> Drop for Session<S> {
     fn drop(&mut self) {
         // No special cleanup is required when the session is discarded.
         // Because all transactions are managed through the Transaction object, and Transactions have their own Drop implementation
@@ -1919,16 +1871,6 @@ impl<S: StorageClient + Clone + 'static> Drop for Session<S> {
         );
     }
 }
-
-// In order to support Send + Sync, we need to ensure that S satisfies these constraints
-// Safety Notes:
-// 1. Session uses Arc<GraphDatabaseInner<S>> to share data internally, Arc itself is Send + Sync.
-// 2. QueryApi in GraphDatabaseInner is Mutex-protected for thread-safety.
-// 3. The StorageClient class must implement the Clone method and be marked as ‘static’. This is to ensure that objects can be safely passed between different threads.
-// 4. All internal states (space_id, space_name, auto_commit) are of simple, replicable types.
-// Therefore, the Session can securely implement both the Send and Sync functions.
-unsafe impl<S: StorageClient + Clone + 'static> Send for Session<S> {}
-unsafe impl<S: StorageClient + Clone + 'static> Sync for Session<S> {}
 
 /// Locate a result column by case-insensitive name among several aliases.
 fn find_result_column(columns: &[String], aliases: &[&str]) -> Option<String> {
@@ -2056,7 +1998,26 @@ fn vid_from_value(value: &Value) -> Option<linkrs_core::types::storage_ids::Vert
 mod tests {
     use super::*;
     use crate::embedded::database::GraphDatabase;
-    use crate::storage::MockStorage;
+    use linkrs_storage::{GraphStorage, MockStorage};
+
+    #[test]
+    fn create_as_detection_follows_the_parsed_target() {
+        assert!(Session::<GraphStorage>::parse_create_as(
+            "CREATE TAG adults AS (MATCH (n) RETURN n)"
+        )
+        .is_some());
+        assert!(Session::<GraphStorage>::parse_create_as(
+            "CREATE EDGE worked AS (MATCH (n) RETURN n)"
+        )
+        .is_some());
+
+        // Ordinary CREATE statements are not CREATE ... AS.
+        assert!(Session::<GraphStorage>::parse_create_as("CREATE TAG t(name string)").is_none());
+        // Text that merely contains "AS (" inside a literal is not gated in
+        // and never reaches the parser.
+        assert!(Session::<GraphStorage>::parse_create_as("MATCH (n) RETURN 'AS ('").is_none());
+        assert!(!Session::<GraphStorage>::starts_with_create("MATCH (n) RETURN n"));
+    }
 
     #[test]
     fn interrupt_flag_fails_execute_fast_and_clears() {

@@ -42,11 +42,12 @@ pub mod session;
 pub mod statistics;
 pub mod transaction;
 
-// C API module
+// C API module: compiled only for callers that ask for the FFI surface.
+#[cfg(feature = "c_api")]
 pub mod c_api;
 
 // Re-export the main types
-pub use batch::{BatchConfig, BatchError, BatchInserter, BatchItemType, BatchResult};
+pub use batch::{BatchError, BatchInserter, BatchItemType, BatchResult};
 pub use busy_handler::{BusyConfig, BusyHandler, BusyResult};
 pub use config::{DatabaseConfig, SyncMode};
 pub use database::GraphDatabase;
@@ -60,6 +61,7 @@ pub use transaction::{Transaction, TransactionConfig, TransactionInfo};
 pub use linkrs_core::SessionStatistics;
 
 // C API re-export
+#[cfg(feature = "c_api")]
 pub use c_api::{
     error::linkrs_error_code_t,
     statistics::linkrs_session_statistics_t as CApiSessionStatistics,

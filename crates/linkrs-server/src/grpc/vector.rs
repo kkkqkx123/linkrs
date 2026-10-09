@@ -149,12 +149,7 @@ impl<
                 .vector_api()
                 .cloned()
                 .ok_or_else(|| Status::unavailable("vector API is not available"))?;
-            let Some(coordinator) = vector_api.coordinator().cloned() else {
-                return Ok(Response::new(ListVectorIndexesResponse {
-                    indexes: Vec::new(),
-                    error: String::new(),
-                }));
-            };
+            let coordinator = vector_api.coordinator().clone();
             let filter = req.space_name.filter(|name| !name.is_empty());
             let storage = self.app_state.server.get_storage();
             let storage_read = storage.read();

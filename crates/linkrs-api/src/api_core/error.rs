@@ -36,6 +36,9 @@ pub enum ExtendedErrorCode {
     InvalidVertex = 1400,
     InvalidEdge = 1401,
     PathNotFound = 1402,
+
+    // Inside (1500-1599)
+    Internal = 1500,
 }
 
 impl ExtendedErrorCode {
@@ -133,29 +136,50 @@ impl CoreError {
     }
 }
 
+/// Map the engine's error taxonomy onto the wire-visible extended codes.
+///
+/// Every engine error carries a kind, so the extended code is always
+/// populated instead of collapsing to `None` for non-syntax failures.
+///
+/// The mapping is intentionally coarse: the wire codes are a small fixed
+/// taxonomy, so several kinds share one code. Resist the urge to grow
+/// `ExtendedErrorCode` to make individual kinds distinct.
+fn extended_code_from_query_kind(kind: linkrs_core::error::query::QueryErrorKind) -> ExtendedErrorCode {
+    use linkrs_core::error::query::QueryErrorKind;
+    match kind {
+        QueryErrorKind::Parse => ExtendedErrorCode::SyntaxError,
+        QueryErrorKind::Type => ExtendedErrorCode::TypeMismatch,
+        QueryErrorKind::Transaction => ExtendedErrorCode::Deadlock,
+        QueryErrorKind::Timeout => ExtendedErrorCode::LockTimeout,
+        QueryErrorKind::InvalidQuery
+        | QueryErrorKind::Permission
+        | QueryErrorKind::Session
+        | QueryErrorKind::FeatureDisabled => ExtendedErrorCode::SemanticError,
+        QueryErrorKind::Storage
+        | QueryErrorKind::Planning
+        | QueryErrorKind::Optimization
+        | QueryErrorKind::Execution
+        | QueryErrorKind::Expression
+        | QueryErrorKind::PlanNodeVisit => ExtendedErrorCode::Internal,
+    }
+}
+
 /// Core layer result types
 pub type CoreResult<T> = Result<T, CoreError>;
 
 impl From<linkrs_core::error::QueryError> for CoreError {
     fn from(err: linkrs_core::error::QueryError) -> Self {
-        let position = err.parse_error_position();
-        let offset = err.offset();
-        let message = err.to_string();
-        if position.is_some() || offset.is_some() {
-            CoreError::detailed_query_error_with_position(
-                message,
-                ExtendedErrorCode::SyntaxError,
-                offset,
-                position,
-            )
-        } else {
-            CoreError::QueryExecutionFailed(message)
-        }
+        CoreError::detailed_query_error_with_position(
+            err.to_string(),
+            extended_code_from_query_kind(err.kind()),
+            err.offset(),
+            err.parse_error_position(),
+        )
     }
 }
 
-impl From<crate::storage::StorageError> for CoreError {
-    fn from(err: crate::storage::StorageError) -> Self {
+impl From<linkrs_storage::StorageError> for CoreError {
+    fn from(err: linkrs_storage::StorageError) -> Self {
         CoreError::StorageError(err.to_string())
     }
 }
@@ -183,5 +207,45 @@ impl From<linkrs_core::error::DBError> for CoreError {
 impl From<linkrs_transaction::TransactionError> for CoreError {
     fn from(err: linkrs_transaction::TransactionError) -> Self {
         CoreError::TransactionFailed(err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_error_kinds_map_to_distinct_extended_codes() {
+        use linkrs_core::error::query::QueryErrorKind;
+        let cases = [
+            (QueryErrorKind::Parse, ExtendedErrorCode::SyntaxError),
+            (QueryErrorKind::Type, ExtendedErrorCode::TypeMismatch),
+            (QueryErrorKind::Transaction, ExtendedErrorCode::Deadlock),
+            (QueryErrorKind::Timeout, ExtendedErrorCode::LockTimeout),
+            (QueryErrorKind::InvalidQuery, ExtendedErrorCode::SemanticError),
+            (QueryErrorKind::Execution, ExtendedErrorCode::Internal),
+        ];
+        for (kind, expected) in cases {
+            let error = CoreError::from(linkrs_core::error::QueryError::new(
+                kind,
+                "boom",
+            ));
+            assert_eq!(error.extended_code(), expected, "kind {kind:?}");
+            assert!(
+                error.to_string().contains("boom"),
+                "message survives the mapping: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn converted_query_errors_are_always_detailed() {
+        let error = CoreError::from(linkrs_core::error::QueryError::new(
+            linkrs_core::error::query::QueryErrorKind::Type,
+            "type mismatch",
+        ));
+        assert_eq!(error.extended_code(), ExtendedErrorCode::TypeMismatch);
+        assert!(error.error_offset().is_none());
+        assert!(error.error_position().is_none());
     }
 }

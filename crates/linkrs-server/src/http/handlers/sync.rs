@@ -117,7 +117,7 @@ pub async fn retry_outbox<
         .ok_or_else(|| HttpError::bad_request("Synchronization is not configured"))?;
     let delivered = sync_api
         .retry_outbox_projection()
-        .map_err(HttpError::transaction_message)?;
+        .map_err(HttpError::from)?;
     Ok(JsonResponse(serde_json::json!({
         "delivered": delivered,
         "status": "completed",
@@ -154,7 +154,7 @@ pub async fn diagnostics<
         .ok_or_else(|| HttpError::bad_request("Synchronization is not configured"))?;
     let diag = sync_api
         .sync_diagnostics()
-        .map_err(HttpError::transaction_message)?;
+        .map_err(HttpError::from)?;
     Ok(JsonResponse(serde_json::json!(diag)))
 }
 
@@ -215,7 +215,7 @@ pub async fn dead_letters<
             params.limit.unwrap_or(100),
             params.offset.unwrap_or(0),
         )
-        .map_err(HttpError::transaction_message)?;
+        .map_err(HttpError::from)?;
     Ok(JsonResponse(serde_json::json!({ "dead_letters": rows })))
 }
 
@@ -262,7 +262,7 @@ pub async fn requeue<
         for id in ids {
             if sync_api
                 .requeue_dead_letter(id)
-                .map_err(HttpError::transaction_message)?
+                .map_err(HttpError::from)?
             {
                 requeued += 1;
             }
@@ -281,7 +281,7 @@ pub async fn requeue<
             payload.generation,
             payload.limit.unwrap_or(100),
         )
-        .map_err(HttpError::transaction_message)?;
+        .map_err(HttpError::from)?;
     Ok(JsonResponse(serde_json::json!({ "requeued": requeued })))
 }
 
@@ -332,7 +332,7 @@ pub async fn degraded_ranges<
         .transpose()?;
     let rows = sync_api
         .list_degraded_ranges(target.as_ref(), params.index_id, params.generation)
-        .map_err(HttpError::transaction_message)?;
+        .map_err(HttpError::from)?;
     Ok(JsonResponse(serde_json::json!({ "degraded_ranges": rows })))
 }
 
@@ -384,7 +384,7 @@ pub async fn degraded_clear<
             linkrs_core::types::CommitLsn::new(payload.start_lsn),
             linkrs_core::types::CommitLsn::new(payload.end_lsn),
         )
-        .map_err(HttpError::transaction_message)?;
+        .map_err(HttpError::from)?;
     Ok(JsonResponse(serde_json::json!({ "cleared": cleared })))
 }
 
@@ -427,7 +427,7 @@ pub async fn retention_run<
     let max_age = payload.max_age_ms.unwrap_or(86_400_000 * 30);
     let (pruned, archived, retention_lsn) = sync_api
         .run_retention_once(grace, max_age)
-        .map_err(HttpError::transaction_message)?;
+        .map_err(HttpError::from)?;
     Ok(JsonResponse(serde_json::json!({
         "pruned": pruned,
         "archived": archived,
@@ -464,7 +464,7 @@ pub async fn retention_status<
         .ok_or_else(|| HttpError::bad_request("Synchronization is not configured"))?;
     let retention = sync_api
         .retention_lsn()
-        .map_err(HttpError::transaction_message)?;
+        .map_err(HttpError::from)?;
     Ok(JsonResponse(
         serde_json::json!({ "retention_lsn": retention.get() }),
     ))

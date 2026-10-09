@@ -79,6 +79,79 @@ impl Default for QueryRequest {
     }
 }
 
+/// Builder for [`QueryRequest`].
+///
+/// Callers assemble a request from a handful of fields and rely on
+/// defaults for the rest, so adding a field to the request never requires
+/// touching every construction site.
+#[derive(Debug, Clone, Default)]
+pub struct QueryRequestBuilder {
+    request: QueryRequest,
+}
+
+impl QueryRequestBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn space_id(mut self, space_id: Option<u64>) -> Self {
+        self.request.space_id = space_id;
+        self
+    }
+
+    pub fn space_name(mut self, space_name: Option<String>) -> Self {
+        self.request.space_name = space_name;
+        self
+    }
+
+    pub fn auto_commit(mut self, auto_commit: bool) -> Self {
+        self.request.auto_commit = auto_commit;
+        self
+    }
+
+    pub fn transaction_id(mut self, transaction_id: Option<TransactionId>) -> Self {
+        self.request.transaction_id = transaction_id;
+        self
+    }
+
+    pub fn parameters(mut self, parameters: Option<HashMap<String, Value>>) -> Self {
+        self.request.parameters = parameters;
+        self
+    }
+
+    pub fn session_variables(mut self, session_variables: Option<HashMap<String, Value>>) -> Self {
+        self.request.session_variables = session_variables;
+        self
+    }
+
+    pub fn query_id(mut self, query_id: Option<u64>) -> Self {
+        self.request.query_id = query_id;
+        self
+    }
+
+    pub fn isolation_level(
+        mut self,
+        isolation_level: Option<linkrs_core::types::TransactionIsolationLevel>,
+    ) -> Self {
+        self.request.isolation_level = isolation_level;
+        self
+    }
+
+    pub fn parsed_statement(mut self, parsed_statement: Option<Arc<Ast>>) -> Self {
+        self.request.parsed_statement = parsed_statement;
+        self
+    }
+
+    pub fn consistency(mut self, consistency: ConsistencyLevel) -> Self {
+        self.request.consistency = consistency;
+        self
+    }
+
+    pub fn build(self) -> QueryRequest {
+        self.request
+    }
+}
+
 /// Query results
 ///
 /// Wraps the engine-level [`ExecutionResult`] (the single source of truth for
@@ -140,6 +213,10 @@ impl QueryResult {
     /// The engine executes `USE` as a DataSet with `space_name` / `space_id` /
     /// `vid_type` columns (the `SpaceSwitched` variant is never produced), so
     /// both representations are recognized here.
+    ///
+    /// This column-name sniffing is an adapter over the engine's current
+    /// DataSet-shaped `USE` result; once the engine emits a structured
+    /// `SpaceSwitched` variant, switch to that and delete the DataSet arm.
     pub fn space_summary(&self) -> Option<SpaceSummary> {
         match &self.execution {
             ExecutionResult::SpaceSwitched(summary) => Some(summary.clone()),
@@ -212,6 +289,41 @@ impl From<u64> for TransactionHandle {
 /// Save Point ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SavepointId(pub u64);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_starts_from_request_defaults() {
+        let request = QueryRequestBuilder::new().build();
+        assert!(request.space_id.is_none());
+        assert!(request.space_name.is_none());
+        assert!(request.auto_commit);
+        assert!(request.transaction_id.is_none());
+        assert!(request.parameters.is_none());
+        assert!(request.session_variables.is_none());
+        assert!(request.query_id.is_none());
+        assert!(request.isolation_level.is_none());
+        assert!(request.parsed_statement.is_none());
+        assert_eq!(request.consistency, ConsistencyLevel::Eventual);
+    }
+
+    #[test]
+    fn builder_overrides_only_named_fields() {
+        let request = QueryRequestBuilder::new()
+            .space_id(Some(7))
+            .auto_commit(false)
+            .query_id(Some(42))
+            .build();
+        assert_eq!(request.space_id, Some(7));
+        assert!(!request.auto_commit);
+        assert_eq!(request.query_id, Some(42));
+        // Untouched fields keep their defaults.
+        assert!(request.transaction_id.is_none());
+        assert_eq!(request.consistency, ConsistencyLevel::Eventual);
+    }
+}
 
 /// The Schema attribute is used for definition purposes.
 #[derive(Debug, Clone)]

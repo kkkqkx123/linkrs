@@ -1,15 +1,15 @@
-//! Batch Operation Module
+//! Batch Insertion Module
 //!
-//! Supports efficient high-volume data import
+//! Embedded facade over the core bulk insert path for efficient
+//! high-volume data import
 
-pub use crate::api_core::BatchConfig;
 use crate::api_core::{
-    BatchError as CoreBatchError, BatchItemType as CoreBatchItemType,
-    BatchOperation as CoreBatchOperation, BatchResult as CoreBatchResult,
+    BulkInsertError as CoreBatchError, BulkInsertItemType as CoreBatchItemType,
+    BulkInsertOperation as CoreBatchOperation, BulkInsertResult as CoreBatchResult,
 };
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::session::Session;
-use crate::storage::StorageClient;
+use linkrs_storage::StorageClient;
 use linkrs_core::{Edge, Vertex};
 
 /// Batch Inserter
@@ -18,10 +18,10 @@ use linkrs_core::{Edge, Vertex};
 ///
 /// # Examples
 ///
-/// ```rust
-/// use linkrs_api::embedded::{GraphDatabase, DatabaseConfig};
-/// use linkrs_api::core::{Vertex, Edge, Value, Tag};
-/// use linkrs_api::core::types::VertexId;
+/// ```rust,no_run
+/// use linkrs_api::embedded::GraphDatabase;
+/// use linkrs_core::types::VertexId;
+/// use linkrs_core::{Tag, Vertex};
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = GraphDatabase::open("my_db")?;
@@ -42,7 +42,7 @@ use linkrs_core::{Edge, Vertex};
 /// # Ok(())
 /// # }
 /// ```
-pub struct BatchInserter<'sess, S: StorageClient + Clone + 'static> {
+pub struct BatchInserter<'sess, S: StorageClient + Clone + Send + Sync + 'static> {
     session: &'sess Session<S>,
     core_operation: CoreBatchOperation,
 }
@@ -142,12 +142,12 @@ impl From<CoreBatchItemType> for BatchItemType {
     }
 }
 
-impl<'sess, S: StorageClient + Clone + 'static + linkrs_storage::UndoTarget>
+impl<'sess, S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget>
     BatchInserter<'sess, S>
 {
     /// Creating a new batch inserter
     pub(crate) fn new(session: &'sess Session<S>, batch_size: usize) -> Self {
-        let config = BatchConfig::new().with_batch_size(batch_size);
+        let config = crate::api_core::BulkInsertConfig::new().with_batch_size(batch_size);
         Self {
             session,
             core_operation: CoreBatchOperation::new(config),

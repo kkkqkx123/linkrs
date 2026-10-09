@@ -1,26 +1,34 @@
-//! Batch Operation API - Core Layer
+//! Bulk Insert API - Core Layer
 //!
-//! Provides transport layer-independent batch operation capabilities
-//! Supports both synchronous and asynchronous execution modes
+//! Provides transport layer-independent bulk insert capabilities.
+//! The buffering operation is shared by the embedded layer and the network
+//! service layer.
+//!
+//! Contract: this is a data-level write path. Items go straight to
+//! `storage.batch_insert_vertices` / `batch_insert_edges`, bypassing the
+//! statement pipeline and the `TransactionManager`; secondary-index
+//! synchronization is handled by the storage SyncWrapper. Statement-level
+//! batch execution belongs to `QueryApi::execute_batch` and must not be
+//! mixed with this path.
 
-use crate::storage::StorageClient;
+use linkrs_storage::StorageClient;
 use crate::CoreResult;
 use linkrs_core::{Edge, Vertex};
 
-/// Batch operation configuration
+/// Bulk insert configuration
 #[derive(Debug, Clone)]
-pub struct BatchConfig {
-    /// Batch size for auto-flush
+pub struct BulkInsertConfig {
+    /// Number of buffered items before an automatic flush
     pub batch_size: usize,
-    /// Whether to auto-flush when buffer is full
+    /// Whether to flush automatically when the buffer is full
     pub auto_flush: bool,
-    /// Whether to continue on error
+    /// Whether to continue after a failed chunk
     pub continue_on_error: bool,
-    /// Maximum number of errors before stopping (None means unlimited)
+    /// Maximum number of recorded errors (None means unlimited)
     pub max_errors: Option<usize>,
 }
 
-impl Default for BatchConfig {
+impl Default for BulkInsertConfig {
     fn default() -> Self {
         Self {
             batch_size: 1000,
@@ -31,180 +39,179 @@ impl Default for BatchConfig {
     }
 }
 
-impl BatchConfig {
+impl BulkInsertConfig {
     /// Create default configuration
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set batch size
+    /// Set the buffer size that triggers a flush
     pub fn with_batch_size(mut self, size: usize) -> Self {
         self.batch_size = size.max(1);
         self
     }
 
-    /// Set auto-flush
+    /// Set automatic flushing
     pub fn with_auto_flush(mut self, auto_flush: bool) -> Self {
         self.auto_flush = auto_flush;
         self
     }
 
-    /// Set continue on error
+    /// Set continue-on-error
     pub fn with_continue_on_error(mut self, continue_on_error: bool) -> Self {
         self.continue_on_error = continue_on_error;
         self
     }
 
-    /// Set max errors
+    /// Set the maximum number of recorded errors
     pub fn with_max_errors(mut self, max_errors: Option<usize>) -> Self {
         self.max_errors = max_errors;
         self
     }
 }
 
-/// Batch item type
+/// Item buffered for one bulk insert
 #[derive(Debug, Clone)]
-pub enum BatchItem {
+pub enum BulkInsertItem {
     /// Vertex to insert
     Vertex(Vertex),
     /// Edge to insert
     Edge(Edge),
 }
 
-/// Batch operation result
+/// Bulk insert result
 #[derive(Debug, Clone, Default)]
-pub struct BatchResult {
+pub struct BulkInsertResult {
     /// Number of vertices inserted
     pub vertices_inserted: usize,
     /// Number of edges inserted
     pub edges_inserted: usize,
-    /// Number of failed operations
+    /// Number of failed chunks
     pub failed_count: usize,
-    /// Error messages for failed operations
-    pub errors: Vec<BatchError>,
+    /// Errors recorded for failed chunks
+    pub errors: Vec<BulkInsertError>,
 }
 
-/// Batch error
+/// Error recorded for one failed chunk of a bulk insert
 #[derive(Debug, Clone)]
-pub struct BatchError {
-    /// Index in the batch
+pub struct BulkInsertError {
+    /// Chunk index inside the bulk insert
     pub index: usize,
-    /// Item type
-    pub item_type: BatchItemType,
+    /// Chunk item type
+    pub item_type: BulkInsertItemType,
     /// Error message
     pub message: String,
 }
 
-/// Batch item type
+/// Chunk item type of a bulk insert
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BatchItemType {
-    /// Vertex
+pub enum BulkInsertItemType {
+    /// Vertex chunk
     Vertex,
-    /// Edge
+    /// Edge chunk
     Edge,
 }
 
-/// Core batch operation
+/// Core bulk insert operation
 ///
-/// This struct provides the core batch operation logic that can be used
-/// by both embedded and server layers.
+/// Holds the buffered items and maps them onto the storage batch insert
+/// entry points. Used by both the embedded layer and the network service
+/// layer.
 #[derive(Debug)]
-pub struct BatchOperation {
-    items: Vec<BatchItem>,
-    config: BatchConfig,
+pub struct BulkInsertOperation {
+    items: Vec<BulkInsertItem>,
+    config: BulkInsertConfig,
 }
 
-impl BatchOperation {
-    /// Create a new batch operation
-    pub fn new(config: BatchConfig) -> Self {
+impl BulkInsertOperation {
+    /// Create a new bulk insert operation
+    pub fn new(config: BulkInsertConfig) -> Self {
         Self {
             items: Vec::with_capacity(config.batch_size),
             config,
         }
     }
 
-    /// Add a vertex to the batch
+    /// Buffer a vertex
     pub fn add_vertex(&mut self, vertex: Vertex) {
-        self.items.push(BatchItem::Vertex(vertex));
+        self.items.push(BulkInsertItem::Vertex(vertex));
     }
 
-    /// Add an edge to the batch
+    /// Buffer an edge
     pub fn add_edge(&mut self, edge: Edge) {
-        self.items.push(BatchItem::Edge(edge));
+        self.items.push(BulkInsertItem::Edge(edge));
     }
 
-    /// Add multiple items to the batch
-    pub fn add_items(&mut self, items: Vec<BatchItem>) {
+    /// Buffer multiple items
+    pub fn add_items(&mut self, items: Vec<BulkInsertItem>) {
         self.items.extend(items);
     }
 
-    /// Get current item count
+    /// Number of buffered items
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    /// Check if batch is empty
+    /// Whether the buffer is empty
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
 
-    /// Check if batch should be flushed
+    /// Whether the buffer reached the configured flush size
     pub fn should_flush(&self) -> bool {
         self.config.auto_flush && self.items.len() >= self.config.batch_size
     }
 
-    /// Get batch size
+    /// Configured flush size
     pub fn batch_size(&self) -> usize {
         self.config.batch_size
     }
 
-    /// Clear all items
+    /// Drop all buffered items
     pub fn clear(&mut self) {
         self.items.clear();
     }
 
-    /// Take all items (clears internal buffer)
-    pub fn take_items(&mut self) -> Vec<BatchItem> {
+    /// Take all buffered items, leaving the buffer empty
+    pub fn take_items(&mut self) -> Vec<BulkInsertItem> {
         std::mem::take(&mut self.items)
     }
 
-    /// Execute batch operation synchronously
+    /// Insert every buffered item through one storage call per item kind
     ///
     /// # Parameters
     /// - `storage`: storage client
     /// - `space_name`: graph space name
     ///
     /// # Returns
-    /// Batch operation result
+    /// Bulk insert result; per-chunk failures are recorded in the result
+    /// instead of failing the whole call.
     pub fn execute_sync<S: StorageClient>(
         &mut self,
         storage: &mut S,
         space_name: &str,
-    ) -> CoreResult<BatchResult> {
+    ) -> CoreResult<BulkInsertResult> {
         let items = self.take_items();
         Self::execute_items_sync(storage, space_name, items, &self.config)
     }
 
-    /// Execute batch items synchronously
     fn execute_items_sync<S: StorageClient>(
         storage: &mut S,
         space_name: &str,
-        items: Vec<BatchItem>,
-        config: &BatchConfig,
-    ) -> CoreResult<BatchResult> {
-        let mut result = BatchResult::default();
+        items: Vec<BulkInsertItem>,
+        config: &BulkInsertConfig,
+    ) -> CoreResult<BulkInsertResult> {
+        let mut result = BulkInsertResult::default();
         let mut vertices = Vec::new();
         let mut edges = Vec::new();
 
-        // Separate vertices and edges
         for item in items {
             match item {
-                BatchItem::Vertex(v) => vertices.push(v),
-                BatchItem::Edge(e) => edges.push(e),
+                BulkInsertItem::Vertex(v) => vertices.push(v),
+                BulkInsertItem::Edge(e) => edges.push(e),
             }
         }
 
-        // Insert vertices
         if !vertices.is_empty() {
             let vertex_count = vertices.len();
             match storage.batch_insert_vertices(space_name, vertices) {
@@ -212,9 +219,9 @@ impl BatchOperation {
                     result.vertices_inserted = vertex_count;
                 }
                 Err(e) => {
-                    let error = BatchError {
+                    let error = BulkInsertError {
                         index: 0,
-                        item_type: BatchItemType::Vertex,
+                        item_type: BulkInsertItemType::Vertex,
                         message: format!("Failed to insert vertices: {}", e),
                     };
                     result.errors.push(error);
@@ -226,7 +233,6 @@ impl BatchOperation {
             }
         }
 
-        // Insert edges
         if !edges.is_empty() {
             let edge_count = edges.len();
             match storage.batch_insert_edges(space_name, edges) {
@@ -234,9 +240,9 @@ impl BatchOperation {
                     result.edges_inserted = edge_count;
                 }
                 Err(e) => {
-                    let error = BatchError {
+                    let error = BulkInsertError {
                         index: 0,
-                        item_type: BatchItemType::Edge,
+                        item_type: BulkInsertItemType::Edge,
                         message: format!("Failed to insert edges: {}", e),
                     };
                     result.errors.push(error);
@@ -249,45 +255,45 @@ impl BatchOperation {
     }
 }
 
-/// Batch operation builder
+/// Builder for [`BulkInsertOperation`]
 #[derive(Debug)]
-pub struct BatchOperationBuilder {
-    config: BatchConfig,
+pub struct BulkInsertOperationBuilder {
+    config: BulkInsertConfig,
 }
 
-impl BatchOperationBuilder {
+impl BulkInsertOperationBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
-            config: BatchConfig::default(),
+            config: BulkInsertConfig::default(),
         }
     }
 
-    /// Set batch size
+    /// Set the buffer size that triggers a flush
     pub fn batch_size(mut self, size: usize) -> Self {
         self.config.batch_size = size;
         self
     }
 
-    /// Set auto-flush
+    /// Set automatic flushing
     pub fn auto_flush(mut self, auto_flush: bool) -> Self {
         self.config.auto_flush = auto_flush;
         self
     }
 
-    /// Set continue on error
+    /// Set continue-on-error
     pub fn continue_on_error(mut self, continue_on_error: bool) -> Self {
         self.config.continue_on_error = continue_on_error;
         self
     }
 
-    /// Build batch operation
-    pub fn build(self) -> BatchOperation {
-        BatchOperation::new(self.config)
+    /// Build the bulk insert operation
+    pub fn build(self) -> BulkInsertOperation {
+        BulkInsertOperation::new(self.config)
     }
 }
 
-impl Default for BatchOperationBuilder {
+impl Default for BulkInsertOperationBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -298,16 +304,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_batch_config_default() {
-        let config = BatchConfig::default();
+    fn bulk_insert_config_default() {
+        let config = BulkInsertConfig::default();
         assert_eq!(config.batch_size, 1000);
         assert!(config.auto_flush);
         assert!(config.continue_on_error);
     }
 
     #[test]
-    fn test_batch_config_builder() {
-        let config = BatchConfig::new()
+    fn bulk_insert_config_builder() {
+        let config = BulkInsertConfig::new()
             .with_batch_size(500)
             .with_auto_flush(false)
             .with_continue_on_error(true);
@@ -318,33 +324,33 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_operation_add_items() {
-        let mut batch = BatchOperation::new(BatchConfig::default());
+    fn bulk_insert_operation_add_items() {
+        let mut operation = BulkInsertOperation::new(BulkInsertConfig::default());
 
         let vertex = Vertex::new(
             linkrs_core::types::VertexId::try_from_int64(1).expect("test vertex id"),
             linkrs_core::Tag::new("test".into(), std::collections::HashMap::new()),
         );
-        batch.add_vertex(vertex);
+        operation.add_vertex(vertex);
 
-        assert_eq!(batch.len(), 1);
-        assert!(!batch.is_empty());
+        assert_eq!(operation.len(), 1);
+        assert!(!operation.is_empty());
     }
 
     #[test]
-    fn test_batch_operation_should_flush() {
-        let config = BatchConfig::new().with_batch_size(2);
-        let mut batch = BatchOperation::new(config);
+    fn bulk_insert_operation_should_flush() {
+        let config = BulkInsertConfig::new().with_batch_size(2);
+        let mut operation = BulkInsertOperation::new(config);
 
-        assert!(!batch.should_flush());
+        assert!(!operation.should_flush());
 
         let vertex = Vertex::new(
             linkrs_core::types::VertexId::try_from_int64(1).expect("test vertex id"),
             linkrs_core::Tag::new("test".into(), std::collections::HashMap::new()),
         );
-        batch.add_vertex(vertex.clone());
-        batch.add_vertex(vertex);
+        operation.add_vertex(vertex.clone());
+        operation.add_vertex(vertex);
 
-        assert!(batch.should_flush());
+        assert!(operation.should_flush());
     }
 }

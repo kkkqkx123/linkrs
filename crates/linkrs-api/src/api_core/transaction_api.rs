@@ -52,18 +52,24 @@ impl TransactionApi {
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))
     }
 
-    /// Getting Transaction Status
+    /// Get the current state of a transaction
     ///
     /// # Parameters
     /// - `handle`: transaction handle
     ///
     /// # Return
-    /// Transaction Status String
-    pub fn get_status(&self, handle: TransactionHandle) -> CoreResult<String> {
-        match self.txn_manager.get_transaction_info(handle.0) {
-            Some(info) => Ok(format!("{:?}", info.state)),
-            None => Ok("Unknown".to_string()),
-        }
+    /// The transaction state; an unknown handle is a caller error rather
+    /// than a synthetic "Unknown" state.
+    pub fn get_status(
+        &self,
+        handle: TransactionHandle,
+    ) -> CoreResult<linkrs_transaction::TransactionState> {
+        self.txn_manager
+            .get_transaction_info(handle.0)
+            .map(|info| info.state)
+            .ok_or_else(|| {
+                CoreError::NotFound(format!("Transaction {} does not exist", handle.id()))
+            })
     }
 
     /// Check if a transaction exists and is active

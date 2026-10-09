@@ -235,10 +235,3 @@ mod vector_config_tests {
 
 #[cfg(feature = "embedded")]
 pub use embedded::GraphDatabase;
-
-pub mod storage {
-    pub use linkrs_storage::*;
-
-    #[cfg(test)]
-    pub use linkrs_storage::MockStorage;
-}
