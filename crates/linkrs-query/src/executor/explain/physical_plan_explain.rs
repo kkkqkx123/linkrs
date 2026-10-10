@@ -12,6 +12,35 @@ use crate::executor::streaming::plan::types::{
 };
 use crate::planning::plan::explain::{Pair, PlanDescription, PlanNodeDescription};
 
+/// Flat bypass columns (`{var}.{prop}`) carried by a rowless expand hop, in
+/// layout order (edge properties first, then destination properties).
+fn expand_bypass_display(
+    col_names: &[String],
+    edge_props: &Option<Vec<String>>,
+    dst_props: &Option<Vec<String>>,
+) -> Vec<String> {
+    let Some(edge_var) = col_names.get(1) else {
+        return Vec::new();
+    };
+    let Some(dst_var) = col_names.get(2) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(props) = edge_props {
+        let mut sorted = props.clone();
+        sorted.sort();
+        sorted.dedup();
+        out.extend(sorted.iter().map(|prop| format!("{edge_var}.{prop}")));
+    }
+    if let Some(props) = dst_props {
+        let mut sorted = props.clone();
+        sorted.sort();
+        sorted.dedup();
+        out.extend(sorted.iter().map(|prop| format!("{dst_var}.{prop}")));
+    }
+    out
+}
+
 /// Build a [`PlanDescription`] from an arena [`PhysicalPlan`].
 ///
 /// Walks the fragment DAG in topological order (producers before consumers)
@@ -275,6 +304,9 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                 emit_raw_ids,
                 closed_loop,
                 skip_rows,
+                col_names,
+                edge_required_props,
+                dst_required_props,
                 ..
             },
         ) = &op_spec.spec
@@ -295,10 +327,15 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                     "columnar",
                 ));
                 if *skip_rows {
-                    pairs.push(crate::planning::plan::explain::Pair::new(
-                        "rows",
-                        "skipped",
-                    ));
+                    pairs.push(crate::planning::plan::explain::Pair::new("rows", "skipped"));
+                    let bypass =
+                        expand_bypass_display(col_names, edge_required_props, dst_required_props);
+                    if !bypass.is_empty() {
+                        pairs.push(crate::planning::plan::explain::Pair::new(
+                            "bypass",
+                            bypass.join(","),
+                        ));
+                    }
                 }
             }
         }

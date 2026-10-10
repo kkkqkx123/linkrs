@@ -47,7 +47,9 @@ pub enum GraphSpec {
         /// re-verified against storage at execution with row fallback.
         closed_loop: bool,
         /// Rowless mode: skip the row view and emit typed columns only. Valid
-        /// only with empty demands, closed loop and a column-capable consumer.
+        /// with empty demands or with bypassable property demands served as
+        /// flat `{var}.{prop}` columns, always with a closed loop and a
+        /// column-capable consumer.
         skip_rows: bool,
     },
     Traverse {

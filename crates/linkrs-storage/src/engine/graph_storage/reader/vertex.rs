@@ -181,6 +181,26 @@ pub(crate) fn get_vertices_batch(
     tag: &str,
     ids: &[VertexId],
 ) -> StorageResult<Vec<Option<Vertex>>> {
+    get_vertices_batch_impl(ctx, space, tag, ids, None)
+}
+
+pub(crate) fn get_vertices_projected_batch(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+    ids: &[VertexId],
+    projection: &[std::sync::Arc<str>],
+) -> StorageResult<Vec<Option<Vertex>>> {
+    get_vertices_batch_impl(ctx, space, tag, ids, Some(projection))
+}
+
+fn get_vertices_batch_impl(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+    ids: &[VertexId],
+    projection: Option<&[std::sync::Arc<str>]>,
+) -> StorageResult<Vec<Option<Vertex>>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -213,8 +233,14 @@ pub(crate) fn get_vertices_batch(
             }
         };
         let record = match &routed {
-            RoutedVertexId::Int(id_int) => ctx.get_vertex_by_i64(label_id, *id_int, ts),
-            RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, id_str, ts),
+            RoutedVertexId::Int(id_int) => match projection {
+                Some(proj) => ctx.get_vertex_by_i64_projected(label_id, *id_int, proj, ts),
+                None => ctx.get_vertex_by_i64(label_id, *id_int, ts),
+            },
+            RoutedVertexId::Text(id_str) => match projection {
+                Some(proj) => ctx.get_vertex_projected(label_id, id_str, proj, ts),
+                None => ctx.get_vertex(label_id, id_str, ts),
+            },
         };
         out.push(record.map(|record| {
             let props: HashMap<std::sync::Arc<str>, Value> =

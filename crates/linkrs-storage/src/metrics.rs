@@ -268,6 +268,19 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         self.timed_read(|| self.inner.get_vertices_batch(space, tag, ids))
     }
 
+    fn get_vertices_projected_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+        projection: &[std::sync::Arc<str>],
+    ) -> Result<Vec<Option<Vertex>>, StorageError> {
+        self.timed_read(|| {
+            self.inner
+                .get_vertices_projected_batch(space, tag, ids, projection)
+        })
+    }
+
     fn neighbor_dst_ids_batch(
         &self,
         space: &str,

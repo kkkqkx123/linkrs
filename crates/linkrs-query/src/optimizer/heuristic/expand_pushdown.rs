@@ -664,7 +664,11 @@ fn expand_closed_loop(expand: &ExpandAllNode) -> bool {
 /// Whether the hop may skip its row view. The direct consumer chain through
 /// constant-true residual filters must end at a column-capable terminator:
 /// an all-passthrough/constant project, a bare-variable count aggregate, or a
-/// seed-tolerant next hop. Full-entity demands never skip.
+/// seed-tolerant next hop. Full-entity demands never skip. Non-empty property
+/// demands may skip only as flat bypass columns: the project terminator must
+/// stay passthrough/constant (direct `var.prop` reads hit the compound slot),
+/// the next-hop terminator must stay seed-tolerant, and the count terminator
+/// never carries bypass columns.
 fn expand_skip_rows(
     expand: &ExpandAllNode,
     ancestors: &[&PlanNodeEnum],
@@ -677,9 +681,7 @@ fn expand_skip_rows(
     let Some(dst_needs) = dst_props else {
         return false;
     };
-    if !edge_needs.is_empty() || !dst_needs.is_empty() {
-        return false;
-    }
+    let has_props = !edge_needs.is_empty() || !dst_needs.is_empty();
     if !expand_closed_loop(expand) {
         return false;
     }
@@ -715,6 +717,11 @@ fn expand_skip_rows(
             })
         }
         PlanNodeEnum::Aggregate(agg) => {
+            // The count terminator never carries bypass columns: any property
+            // demand keeps the row path so no useless vertex decode is paid.
+            if has_props {
+                return false;
+            }
             if !agg.group_keys().is_empty() || !agg.grouping_sets().is_empty() {
                 return false;
             }
@@ -745,6 +752,13 @@ fn expand_skip_rows(
                 return false;
             }
             if next.path_semantic().is_some() {
+                return false;
+            }
+            // Chained rowless needs a rowless-capable downstream hop, not
+            // just structural seed tolerance: the next hop must itself be a
+            // syntactic closed loop so it can consume the bypass prefix
+            // without an immediate row fallback.
+            if !expand_closed_loop(next) {
                 return false;
             }
             // Structural seed tolerance only: a count-only tail already has
@@ -1259,6 +1273,125 @@ mod tests {
         assert!(
             hop_by_dst(&hops, "b").skip_rows(),
             "intermediate hop feeding a seed-tolerant hop may skip rows"
+        );
+    }
+
+    #[test]
+    fn skip_rows_with_dst_property_passthrough() {
+        let proj = project_prop_col(
+            hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+            "b",
+            "name",
+            "n",
+        );
+        let (annotated, _) = annotate_expand_all(&proj);
+        let hops = expand_alls(&annotated);
+        let hop = hop_by_dst(&hops, "b");
+        assert_eq!(
+            hop.dst_required_props(),
+            Some(&vec!["name".to_string()]),
+            "destination property demand must be collected"
+        );
+        assert!(
+            hop.skip_rows(),
+            "direct property passthrough may stay rowless via bypass columns"
+        );
+    }
+
+    #[test]
+    fn skip_rows_with_edge_property_passthrough() {
+        let proj = project_prop_col(
+            hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+            "r",
+            "weight",
+            "w",
+        );
+        let (annotated, _) = annotate_expand_all(&proj);
+        let hops = expand_alls(&annotated);
+        let hop = hop_by_dst(&hops, "b");
+        assert_eq!(
+            hop.edge_required_props(),
+            Some(&vec!["weight".to_string()]),
+            "edge property demand must be collected"
+        );
+        assert!(
+            hop.skip_rows(),
+            "direct edge property passthrough may stay rowless via bypass columns"
+        );
+    }
+
+    #[test]
+    fn skip_rows_blocked_for_computed_property() {
+        let expr = Expression::Binary {
+            left: Box::new(Expression::Property {
+                object: Box::new(Expression::Variable("b".to_string())),
+                property: "name".to_string(),
+            }),
+            op: linkrs_core::types::operators::BinaryOperator::Add,
+            right: Box::new(Expression::Literal(Value::Int(1))),
+        };
+        let col = linkrs_core::YieldColumn {
+            expression: ctx_expr(expr),
+            alias: "n".to_string(),
+        };
+        let proj = PlanNodeEnum::Project(
+            ProjectNode::new(
+                hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+                vec![col],
+            )
+            .expect("project should build"),
+        );
+        let (annotated, _) = annotate_expand_all(&proj);
+        assert!(
+            !expand_alls(&annotated)[0].skip_rows(),
+            "computed property projections need rows"
+        );
+    }
+
+    #[test]
+    fn skip_rows_blocked_for_count_with_property_arg() {
+        let hop = hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a"));
+        let mut agg = AggregateNode::new(hop, vec![], vec![AggregateFunction::Count])
+            .expect("aggregate should build");
+        agg.set_aggregation_args(vec![vec![Expression::Property {
+            object: Box::new(Expression::Variable("b".to_string())),
+            property: "name".to_string(),
+        }]]);
+        let (annotated, _) = annotate_expand_all(&PlanNodeEnum::Aggregate(agg));
+        let hops = expand_alls(&annotated);
+        assert_eq!(
+            hop_by_dst(&hops, "b").dst_required_props(),
+            Some(&vec!["name".to_string()]),
+            "count argument property must be audited"
+        );
+        assert!(
+            !hop_by_dst(&hops, "b").skip_rows(),
+            "count over a property keeps the row path"
+        );
+    }
+
+    #[test]
+    fn skip_rows_chained_with_property_tail() {
+        let tail_proj = project_prop_col(
+            hop_tagged(
+                "Link",
+                ["b", "e2", "c"],
+                "Node",
+                hop_tagged("Link", ["a", "e1", "b"], "Node", anchor_scan("a")),
+            ),
+            "c",
+            "name",
+            "n",
+        );
+        let (annotated, _) = annotate_expand_all(&tail_proj);
+        let hops = expand_alls(&annotated);
+        assert!(
+            hop_by_dst(&hops, "c").skip_rows(),
+            "tail hop with property passthrough may skip rows"
+        );
+        assert!(
+            hop_by_dst(&hops, "b").skip_rows(),
+            "intermediate hop feeding a bypass-capable hop may skip rows"
         );
     }
 }

@@ -17,7 +17,7 @@ use crate::storage::QueryStorage;
 use linkrs_core::error::QueryError;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::storage_ids::VertexId;
-use linkrs_core::{Edge, EdgeDirection, EdgeHeader, Value};
+use linkrs_core::{Edge, EdgeDirection, EdgeHeader, Value, Vertex};
 
 use super::super::visited_set::VisitedSet;
 use super::ExpandCtx;
@@ -193,6 +193,7 @@ pub(super) fn expand_single_step(
     lightweight_source: bool,
     ctx: &mut ExpandCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let chunk = materialize_rowless_rows(chunk);
     let space_name = ctx.space_name;
     let edge_types = ctx.edge_types;
     let direction = ctx.direction;
@@ -320,7 +321,49 @@ pub(super) fn expand_single_step(
         }
     }
 
-    let out_rows = buf.finish();
+    let mut out_rows = buf.finish();
+    // Legacy row fallback also honors the bypass layout: demanded properties
+    // ride the same flat suffix so the evaluator's compound-slot reads hit
+    // whether the hop ran columnar or fell back here.
+    let (edge_bypass_opt, dst_bypass_opt) = hop_bypass(
+        &ctx.col_names_template,
+        ctx.edge_required_props.as_ref(),
+        ctx.dst_required_props.as_ref(),
+        &chunk.get_layout(),
+    );
+    let edge_bypass = edge_bypass_opt.unwrap_or_default();
+    let dst_bypass = dst_bypass_opt.unwrap_or_default();
+    if !edge_bypass.is_empty() || !dst_bypass.is_empty() {
+        let mut kept: Vec<&PendingExpand> = Vec::with_capacity(out_rows.len());
+        for req in &pending {
+            if vertex_map.contains_key(&(req.tag.clone(), req.dst)) {
+                kept.push(req);
+            }
+        }
+        debug_assert_eq!(
+            out_rows.len(),
+            kept.len(),
+            "legacy expand rows must align with kept destinations"
+        );
+        for (row, req) in out_rows.iter_mut().zip(kept.iter()) {
+            for prop in &edge_bypass {
+                row.push(edge_bypass_value(&req.edge, prop));
+            }
+            let dst_vertex = vertex_map.get(&(req.tag.clone(), req.dst));
+            for prop in &dst_bypass {
+                let value = match dst_vertex {
+                    Some(Value::Vertex(vertex)) => dst_bypass_value(Some(vertex), prop),
+                    _ => dst_bypass_value(None, prop),
+                };
+                row.push(value);
+            }
+        }
+        check_output_layout(
+            &output_layout,
+            output_layout.len(),
+            out_rows.first().map(Vec::len),
+        )?;
+    }
     if out_rows.is_empty() {
         return Ok(None);
     }
@@ -395,6 +438,147 @@ fn edge_projection(edge_required: Option<&Vec<String>>) -> Option<Vec<std::sync:
     }
 }
 
+/// New flat bypass properties for this hop, excluding columns already present
+/// in the input prefix (upstream bypass passthrough).
+///
+/// Returns `None` per slot when the slot needs the whole entity: the hop must
+/// stay on the row path with boxed values. `Some` (possibly empty) lists the
+/// demanded properties in deterministic sorted order, matching the plan
+/// layout's bypass suffix. Malformed column templates also yield `None` so
+/// the row path keeps entity extraction working.
+fn hop_bypass(
+    col_names: &[String],
+    edge_props: Option<&Vec<String>>,
+    dst_props: Option<&Vec<String>>,
+    input: &SlotLayout,
+) -> (Option<Vec<String>>, Option<Vec<String>>) {
+    let (Some(edge_var), Some(dst_var)) = (col_names.get(1), col_names.get(2)) else {
+        return (None, None);
+    };
+    let mut taken: Vec<String> = Vec::new();
+    let edge = match edge_props {
+        None => None,
+        Some(props) => {
+            let mut sorted = props.clone();
+            sorted.sort();
+            sorted.dedup();
+            let mut out = Vec::new();
+            for prop in sorted {
+                let name = format!("{edge_var}.{prop}");
+                if input.slot_id(&name).is_none() && !taken.contains(&name) {
+                    taken.push(name);
+                    out.push(prop);
+                }
+            }
+            Some(out)
+        }
+    };
+    let dst = match dst_props {
+        None => None,
+        Some(props) => {
+            let mut sorted = props.clone();
+            sorted.sort();
+            sorted.dedup();
+            let mut out = Vec::new();
+            for prop in sorted {
+                let name = format!("{dst_var}.{prop}");
+                if input.slot_id(&name).is_none() && !taken.contains(&name) {
+                    taken.push(name);
+                    out.push(prop);
+                }
+            }
+            Some(out)
+        }
+    };
+    (edge, dst)
+}
+
+/// Edge bypass value: the demanded property or NULL when the edge lacks it,
+/// matching row-path `Edge` property reads.
+fn edge_bypass_value(edge: &Edge, prop: &str) -> Value {
+    edge.props
+        .get(prop)
+        .cloned()
+        .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+}
+
+/// Destination bypass value: the demanded property or NULL when the vertex
+/// lacks it, matching row-path `Vertex` property reads.
+fn dst_bypass_value(vertex: Option<&Vertex>, prop: &str) -> Value {
+    vertex
+        .and_then(|v| v.property_value(prop))
+        .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+}
+
+/// Bypass columns stay `Fallback`: mixed property kinds keep exact `Value`
+/// semantics, and the direct-property consumer reads them through the
+/// compound-slot column path.
+fn bypass_column(values: Vec<Value>) -> TypedColumn {
+    TypedColumn::Fallback(values)
+}
+
+/// Destination batch read honoring the bypass projection.
+///
+/// Non-empty destination demands decode only the demanded properties while
+/// keeping the full batch's timestamp, input order and visibility: one entry
+/// per id, `None` for missing vertices (dangling edges still drop the row).
+/// Anything else keeps the full batch so boxed entity slots observe unchanged
+/// records. Columnar paths never carry a hop filter when this runs, so the
+/// projection only ever trims downstream-demanded properties the demand audit
+/// already proved complete.
+fn read_destinations(
+    reader: &dyn QueryStorage,
+    space_name: &str,
+    dst_tag: &str,
+    ids: &[VertexId],
+    dst_props: Option<&Vec<String>>,
+) -> Result<Vec<Option<Vertex>>, QueryError> {
+    if let Some(props) = dst_props {
+        if !props.is_empty() {
+            let mut sorted = props.clone();
+            sorted.sort();
+            sorted.dedup();
+            let projection: Vec<std::sync::Arc<str>> = sorted
+                .iter()
+                .map(|s| std::sync::Arc::from(s.as_str()))
+                .collect();
+            return Ok(reader.get_vertices_projected_batch(
+                space_name,
+                dst_tag,
+                ids,
+                &projection,
+            )?);
+        }
+    }
+    Ok(reader.get_vertices_batch(space_name, dst_tag, ids)?)
+}
+
+/// Explicit layout lockstep check: typed arms and row width must match the
+/// plan layout exactly instead of silently misaligning.
+fn check_output_layout(
+    output_layout: &SlotLayout,
+    typed_arms: usize,
+    row_width: Option<usize>,
+) -> Result<(), QueryError> {
+    if typed_arms != output_layout.len() {
+        return Err(QueryError::execution(format!(
+            "expand typed arms {} do not match layout width {}",
+            typed_arms,
+            output_layout.len()
+        )));
+    }
+    if let Some(width) = row_width {
+        if width != output_layout.len() {
+            return Err(QueryError::execution(format!(
+                "expand row width {} does not match layout width {}",
+                width,
+                output_layout.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Parse seeds from both row and rowless inputs. Returns the seed ids, the
 /// materialized seed rows for row outputs, and the absolute input positions
 /// for typed gathering in rowless outputs.
@@ -456,6 +640,51 @@ fn parse_seeds(
     (vids, rows, positions)
 }
 
+/// Unified row-materialization boundary for row-path expand operators.
+///
+/// Rowless chunks carry data only in typed columns; a row-path loop over
+/// `chunk.rows` would observe zero seeds and silently drop the input (e.g. an
+/// upstream closed-loop hop feeding a downstream hop that falls back to the
+/// row path on open schemas, filters or path semantics). Every row-path entry
+/// point must call this first: rowless inputs rebuild into a compact row view
+/// with the selection applied and the typed layout gathered in lockstep, row
+/// inputs pass through untouched.
+pub(super) fn materialize_rowless_rows(mut chunk: DataChunk) -> DataChunk {
+    if !chunk.rows.is_empty() || chunk.typed_columns.is_none() {
+        return chunk;
+    }
+    let Some(n) = chunk.typed_len() else {
+        return chunk;
+    };
+    let selected: Vec<usize> = chunk
+        .selection()
+        .map(|s| s.to_vec())
+        .unwrap_or_else(|| (0..n).collect());
+    let width = chunk.get_layout().len();
+    let mut rows = Vec::with_capacity(selected.len());
+    for pos in &selected {
+        let mut row = Vec::with_capacity(width);
+        for slot in 0..width {
+            row.push(
+                chunk
+                    .get_typed_by_slot(*pos, slot)
+                    .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
+            );
+        }
+        rows.push(row);
+    }
+    if let Some(cols) = chunk.typed_columns.take() {
+        chunk.typed_columns = Some(
+            cols.iter()
+                .map(|col| gather_typed_column(col, &selected))
+                .collect(),
+        );
+    }
+    chunk.rows = rows;
+    chunk.selection = None;
+    chunk
+}
+
 /// Destination id on one side of an edge for the hop direction.
 fn edge_neighbor(edge: &Edge, seed: &VertexId, direction: EdgeDirection) -> VertexId {
     match direction {
@@ -476,9 +705,10 @@ fn edge_neighbor(edge: &Edge, seed: &VertexId, direction: EdgeDirection) -> Vert
 /// Uses a projected edge read (topology only when no edge properties are
 /// demanded), filters dangling destinations with one batched vertex read per
 /// tag, and either skips the row view (rowless typed output) or keeps rows
-/// with identity shortcuts for undemanded slots. Falls back to `None` when
-/// there is no output; callers fall back to the legacy row path when the
-/// closed-loop check fails before calling here.
+/// with identity shortcuts for undemanded slots. Demanded properties ride
+/// flat bypass columns (`{var}.{prop}`) in layout order in both modes.
+/// Falls back to `None` when there is no output; callers fall back to the
+/// legacy row path when the closed-loop check fails before calling here.
 pub(super) fn expand_single_step_columnar(
     chunk: DataChunk,
     output_layout: Arc<SlotLayout>,
@@ -501,6 +731,16 @@ pub(super) fn expand_single_step_columnar(
     } else {
         chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
     };
+    let input_layout = chunk.get_layout();
+    let (edge_bypass_opt, dst_bypass_opt) = hop_bypass(
+        &ctx.col_names_template,
+        ctx.edge_required_props.as_ref(),
+        ctx.dst_required_props.as_ref(),
+        &input_layout,
+    );
+    let rowless = ctx.skip_rows && edge_bypass_opt.is_some() && dst_bypass_opt.is_some();
+    let edge_bypass = edge_bypass_opt.clone().unwrap_or_default();
+    let dst_bypass = dst_bypass_opt.clone().unwrap_or_default();
     let input_typed = chunk.typed_columns.clone();
     let (seed_vids, seed_rows, seed_positions) = parse_seeds(&chunk, seed_slot, &src_vids);
     if seed_vids.is_empty() {
@@ -510,7 +750,6 @@ pub(super) fn expand_single_step_columnar(
     let projection_ref = projection.as_deref();
     let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
     let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());
-    let rowless = ctx.skip_rows && edge_empty && dst_empty;
 
     struct PendingEdge {
         seed_idx: usize,
@@ -545,7 +784,13 @@ pub(super) fn expand_single_step_columnar(
         closed_loop_dst_tag(reader, space_name, edge_types, direction, ctx.dst_tag)
             .unwrap_or_else(|| ctx.dst_tag.to_string());
     let dst_tag = dst_tag_owned.as_str();
-    let vertices = reader.get_vertices_batch(space_name, dst_tag, &all_dst)?;
+    let vertices = read_destinations(
+        reader,
+        space_name,
+        dst_tag,
+        &all_dst,
+        ctx.dst_required_props.as_ref(),
+    )?;
     let mut kept: Vec<usize> = Vec::with_capacity(pending.len());
     for (i, vertex) in vertices.iter().enumerate() {
         if vertex.is_some() {
@@ -572,7 +817,8 @@ pub(super) fn expand_single_step_columnar(
             dst_ids.push(req.dst);
             gather_indices.push(seed_positions[req.seed_idx]);
         }
-        let mut typed: Vec<TypedColumn> = Vec::with_capacity(seed_width + 2);
+        let mut typed: Vec<TypedColumn> =
+            Vec::with_capacity(seed_width + 2 + edge_bypass.len() + dst_bypass.len());
         for slot in 0..seed_width {
             if let Some(ref cols) = input_typed {
                 if let Some(col) = cols.get(slot) {
@@ -598,10 +844,25 @@ pub(super) fn expand_single_step_columnar(
             rankings,
         )));
         typed.push(TypedColumn::VertexIdentity(dst_ids));
+        for prop in &edge_bypass {
+            typed.push(bypass_column(
+                kept.iter()
+                    .map(|&i| edge_bypass_value(&pending[i].edge, prop))
+                    .collect(),
+            ));
+        }
+        for prop in &dst_bypass {
+            typed.push(bypass_column(
+                kept.iter()
+                    .map(|&i| dst_bypass_value(vertices.get(i).and_then(|v| v.as_ref()), prop))
+                    .collect(),
+            ));
+        }
         debug_assert!(
             typed.iter().all(|c| c.len() == kept.len()),
             "expand typed arms must stay in lockstep like rows"
         );
+        check_output_layout(&output_layout, typed.len(), None)?;
         let mut out = DataChunk::new_with_layout(Vec::new(), output_layout);
         out.typed_columns = Some(typed);
         return Ok(Some(out));
@@ -638,10 +899,19 @@ pub(super) fn expand_single_step_columnar(
                 None => continue,
             }
         };
-        let mut row = Vec::with_capacity(seed_row.len() + 2);
+        let mut row = Vec::with_capacity(seed_row.len() + 2 + edge_bypass.len() + dst_bypass.len());
         row.extend_from_slice(seed_row);
         row.push(edge_value);
         row.push(dst_value);
+        for prop in &edge_bypass {
+            row.push(edge_bypass_value(&req.edge, prop));
+        }
+        for prop in &dst_bypass {
+            row.push(dst_bypass_value(
+                vertices.get(i).and_then(|v| v.as_ref()),
+                prop,
+            ));
+        }
         out_rows.push(row);
         edge_src.push(*req.edge.src());
         edge_dst.push(*req.edge.dst());
@@ -653,10 +923,16 @@ pub(super) fn expand_single_step_columnar(
     if out_rows.is_empty() {
         return Ok(None);
     }
+    check_output_layout(
+        &output_layout,
+        seed_width + 2 + edge_bypass.len() + dst_bypass.len(),
+        out_rows.first().map(Vec::len),
+    )?;
     let mut out = DataChunk::new_with_layout(out_rows, Arc::clone(&output_layout));
     // Seed arms without an input typed column mirror the row view exactly, so
     // row-based and typed consumers observe the same seed values.
-    let mut typed: Vec<TypedColumn> = Vec::with_capacity(seed_width + 2);
+    let mut typed: Vec<TypedColumn> =
+        Vec::with_capacity(seed_width + 2 + edge_bypass.len() + dst_bypass.len());
     for slot in 0..seed_width {
         if let Some(ref cols) = input_typed {
             if let Some(col) = cols.get(slot) {
@@ -694,10 +970,36 @@ pub(super) fn expand_single_step_columnar(
             out.rows.iter().map(|r| r[seed_width + 1].clone()).collect(),
         ));
     }
+    let bypass_base = seed_width + 2;
+    for (j, _) in edge_bypass.iter().enumerate() {
+        typed.push(bypass_column(
+            out.rows
+                .iter()
+                .map(|r| {
+                    r.get(bypass_base + j)
+                        .cloned()
+                        .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+                })
+                .collect(),
+        ));
+    }
+    for (j, _) in dst_bypass.iter().enumerate() {
+        typed.push(bypass_column(
+            out.rows
+                .iter()
+                .map(|r| {
+                    r.get(bypass_base + edge_bypass.len() + j)
+                        .cloned()
+                        .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+                })
+                .collect(),
+        ));
+    }
     debug_assert!(
         typed.iter().all(|c| c.len() == out.rows.len()),
         "expand typed arms must stay in lockstep like rows"
     );
+    check_output_layout(&output_layout, typed.len(), Some(out.rows[0].len()))?;
     out.typed_columns = Some(typed);
     Ok(Some(out))
 }
@@ -707,7 +1009,8 @@ pub(super) fn expand_single_step_columnar(
 /// Intermediate hops run identifier-only through `neighbor_dst_ids_batch`
 /// with duplicates preserved for walk semantics. The tail hop reuses the
 /// single-step columnar assembly so edge and destination demands apply
-/// unchanged.
+/// unchanged. Only the tail depth assembles bypass columns; intermediate
+/// depths stay pure identifiers.
 pub(super) fn expand_multi_hop_frontier(
     chunk: DataChunk,
     output_layout: Arc<SlotLayout>,
@@ -742,6 +1045,16 @@ pub(super) fn expand_multi_hop_frontier(
     } else {
         chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
     };
+    let input_layout = chunk.get_layout();
+    let (edge_bypass_opt, dst_bypass_opt) = hop_bypass(
+        &ctx.col_names_template,
+        ctx.edge_required_props.as_ref(),
+        ctx.dst_required_props.as_ref(),
+        &input_layout,
+    );
+    let rowless_tail = ctx.skip_rows && edge_bypass_opt.is_some() && dst_bypass_opt.is_some();
+    let edge_bypass = edge_bypass_opt.clone().unwrap_or_default();
+    let dst_bypass = dst_bypass_opt.clone().unwrap_or_default();
     let input_typed = chunk.typed_columns.clone();
     let (seed_vids, seed_rows, seed_positions) = parse_seeds(&chunk, seed_slot, &src_vids);
     if seed_vids.is_empty() {
@@ -782,7 +1095,7 @@ pub(super) fn expand_multi_hop_frontier(
     let projection_ref = projection.as_deref();
     let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
     let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());
-    let rowless = ctx.skip_rows && edge_empty && dst_empty;
+    let rowless = rowless_tail;
     struct TailEdge {
         orig_idx: usize,
         edge: Edge,
@@ -821,7 +1134,13 @@ pub(super) fn expand_multi_hop_frontier(
     )
     .unwrap_or_else(|| ctx.dst_tag.to_string());
     let tail_tag = tail_tag_owned.as_str();
-    let vertices = reader.get_vertices_batch(ctx.space_name, tail_tag, &all_dst)?;
+    let vertices = read_destinations(
+        reader,
+        ctx.space_name,
+        tail_tag,
+        &all_dst,
+        ctx.dst_required_props.as_ref(),
+    )?;
     let mut kept: Vec<usize> = Vec::new();
     for (i, vertex) in vertices.iter().enumerate() {
         if vertex.is_some() {
@@ -847,7 +1166,8 @@ pub(super) fn expand_multi_hop_frontier(
             dst_ids.push(req.dst);
             gather_indices.push(seed_positions[req.orig_idx]);
         }
-        let mut typed: Vec<TypedColumn> = Vec::with_capacity(seed_width + 2);
+        let mut typed: Vec<TypedColumn> =
+            Vec::with_capacity(seed_width + 2 + edge_bypass.len() + dst_bypass.len());
         for slot in 0..seed_width {
             if let Some(ref cols) = input_typed {
                 if let Some(col) = cols.get(slot) {
@@ -873,10 +1193,25 @@ pub(super) fn expand_multi_hop_frontier(
             rankings,
         )));
         typed.push(TypedColumn::VertexIdentity(dst_ids));
+        for prop in &edge_bypass {
+            typed.push(bypass_column(
+                kept.iter()
+                    .map(|&i| edge_bypass_value(&pending[i].edge, prop))
+                    .collect(),
+            ));
+        }
+        for prop in &dst_bypass {
+            typed.push(bypass_column(
+                kept.iter()
+                    .map(|&i| dst_bypass_value(vertices.get(i).and_then(|v| v.as_ref()), prop))
+                    .collect(),
+            ));
+        }
         debug_assert!(
             typed.iter().all(|c| c.len() == kept.len()),
             "expand typed arms must stay in lockstep like rows"
         );
+        check_output_layout(&output_layout, typed.len(), None)?;
         let mut out = DataChunk::new_with_layout(Vec::new(), output_layout);
         out.typed_columns = Some(typed);
         return Ok(Some(out));
@@ -906,15 +1241,29 @@ pub(super) fn expand_multi_hop_frontier(
                 None => continue,
             }
         };
-        let mut row = Vec::with_capacity(seed_row.len() + 2);
+        let mut row = Vec::with_capacity(seed_row.len() + 2 + edge_bypass.len() + dst_bypass.len());
         row.extend_from_slice(seed_row);
         row.push(edge_value);
         row.push(dst_value);
+        for prop in &edge_bypass {
+            row.push(edge_bypass_value(&req.edge, prop));
+        }
+        for prop in &dst_bypass {
+            row.push(dst_bypass_value(
+                vertices.get(i).and_then(|v| v.as_ref()),
+                prop,
+            ));
+        }
         out_rows.push(row);
     }
     if out_rows.is_empty() {
         return Ok(None);
     }
+    check_output_layout(
+        &output_layout,
+        seed_width + 2 + edge_bypass.len() + dst_bypass.len(),
+        out_rows.first().map(Vec::len),
+    )?;
     Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
 }
 
@@ -923,6 +1272,8 @@ pub(super) fn expand_multi_hop_frontier(
 /// Walks depths 1..=max with per-depth edge reads so every emitted depth
 /// carries its own edge header and destination. Only depths listed in
 /// `step_limits` are emitted, matching `[*min..max]` union semantics.
+/// Bypass columns assemble only for emitted depths; non-emitted depths only
+/// advance the frontier without reading properties.
 pub(super) fn expand_variable_frontier(
     chunk: DataChunk,
     output_layout: Arc<SlotLayout>,
@@ -962,6 +1313,16 @@ pub(super) fn expand_variable_frontier(
     } else {
         chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
     };
+    let input_layout = chunk.get_layout();
+    let (edge_bypass_opt, dst_bypass_opt) = hop_bypass(
+        &ctx.col_names_template,
+        ctx.edge_required_props.as_ref(),
+        ctx.dst_required_props.as_ref(),
+        &input_layout,
+    );
+    let rowless_emit = ctx.skip_rows && edge_bypass_opt.is_some() && dst_bypass_opt.is_some();
+    let edge_bypass = edge_bypass_opt.clone().unwrap_or_default();
+    let dst_bypass = dst_bypass_opt.clone().unwrap_or_default();
     let input_typed = chunk.typed_columns.clone();
     let (seed_vids, seed_rows, seed_positions) = parse_seeds(&chunk, seed_slot, &src_vids);
     if seed_vids.is_empty() {
@@ -971,7 +1332,7 @@ pub(super) fn expand_variable_frontier(
     let projection_ref = projection.as_deref();
     let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
     let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());
-    let rowless = ctx.skip_rows && edge_empty && dst_empty;
+    let rowless = rowless_emit;
     struct VarEdge {
         orig_idx: usize,
         edge: Edge,
@@ -1040,7 +1401,13 @@ pub(super) fn expand_variable_frontier(
     )
     .unwrap_or_else(|| ctx.dst_tag.to_string());
     let var_tag = var_tag_owned.as_str();
-    let vertices = reader.get_vertices_batch(ctx.space_name, var_tag, &all_dst)?;
+    let vertices = read_destinations(
+        reader,
+        ctx.space_name,
+        var_tag,
+        &all_dst,
+        ctx.dst_required_props.as_ref(),
+    )?;
     let mut kept: Vec<usize> = Vec::new();
     for (i, vertex) in vertices.iter().enumerate() {
         if vertex.is_some() {
@@ -1066,7 +1433,8 @@ pub(super) fn expand_variable_frontier(
             dst_ids.push(req.dst);
             gather_indices.push(seed_positions[req.orig_idx]);
         }
-        let mut typed: Vec<TypedColumn> = Vec::with_capacity(seed_width + 2);
+        let mut typed: Vec<TypedColumn> =
+            Vec::with_capacity(seed_width + 2 + edge_bypass.len() + dst_bypass.len());
         for slot in 0..seed_width {
             if let Some(ref cols) = input_typed {
                 if let Some(col) = cols.get(slot) {
@@ -1092,10 +1460,25 @@ pub(super) fn expand_variable_frontier(
             rankings,
         )));
         typed.push(TypedColumn::VertexIdentity(dst_ids));
+        for prop in &edge_bypass {
+            typed.push(bypass_column(
+                kept.iter()
+                    .map(|&i| edge_bypass_value(&pending[i].edge, prop))
+                    .collect(),
+            ));
+        }
+        for prop in &dst_bypass {
+            typed.push(bypass_column(
+                kept.iter()
+                    .map(|&i| dst_bypass_value(vertices.get(i).and_then(|v| v.as_ref()), prop))
+                    .collect(),
+            ));
+        }
         debug_assert!(
             typed.iter().all(|c| c.len() == kept.len()),
             "expand typed arms must stay in lockstep like rows"
         );
+        check_output_layout(&output_layout, typed.len(), None)?;
         let mut out = DataChunk::new_with_layout(Vec::new(), output_layout);
         out.typed_columns = Some(typed);
         return Ok(Some(out));
@@ -1125,15 +1508,29 @@ pub(super) fn expand_variable_frontier(
                 None => continue,
             }
         };
-        let mut row = Vec::with_capacity(seed_row.len() + 2);
+        let mut row = Vec::with_capacity(seed_row.len() + 2 + edge_bypass.len() + dst_bypass.len());
         row.extend_from_slice(seed_row);
         row.push(edge_value);
         row.push(dst_value);
+        for prop in &edge_bypass {
+            row.push(edge_bypass_value(&req.edge, prop));
+        }
+        for prop in &dst_bypass {
+            row.push(dst_bypass_value(
+                vertices.get(i).and_then(|v| v.as_ref()),
+                prop,
+            ));
+        }
         out_rows.push(row);
     }
     if out_rows.is_empty() {
         return Ok(None);
     }
+    check_output_layout(
+        &output_layout,
+        seed_width + 2 + edge_bypass.len() + dst_bypass.len(),
+        out_rows.first().map(Vec::len),
+    )?;
     Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
 }
 
@@ -1149,6 +1546,7 @@ pub(super) fn expand_count_only(
     src_vids: Vec<Value>,
     ctx: &mut ExpandCtx,
 ) -> Result<i64, QueryError> {
+    let chunk = materialize_rowless_rows(chunk);
     let space_name = ctx.space_name;
     let edge_types = ctx.edge_types;
     let direction = ctx.direction;
@@ -1226,6 +1624,7 @@ pub(super) fn expand_on_chunk(
     step_limit: u32,
     ctx: &mut ExpandCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let chunk = materialize_rowless_rows(chunk);
     let space_name = ctx.space_name;
     let edge_types = ctx.edge_types;
     let direction = ctx.direction;
@@ -1291,6 +1690,15 @@ pub(super) fn expand_on_chunk(
         }
     }
 
+    let (edge_bypass_opt, dst_bypass_opt) = hop_bypass(
+        &ctx.col_names_template,
+        ctx.edge_required_props.as_ref(),
+        ctx.dst_required_props.as_ref(),
+        &chunk.get_layout(),
+    );
+    let edge_bypass = edge_bypass_opt.unwrap_or_default();
+    let dst_bypass = dst_bypass_opt.unwrap_or_default();
+
     let mut out_rows = Vec::new();
     for ((vid, row), seed_vertex) in seed_vids
         .iter()
@@ -1351,7 +1759,17 @@ pub(super) fn expand_on_chunk(
             } else {
                 out_row.push(Value::Null(linkrs_core::NullType::Null));
             }
-            out_row.push(Value::Vertex(Box::new(event.vertex)));
+            out_row.push(Value::Vertex(Box::new(event.vertex.clone())));
+            for prop in &edge_bypass {
+                let value = match event.edge.as_ref() {
+                    Some(edge) => edge_bypass_value(edge, prop),
+                    None => Value::Null(linkrs_core::NullType::Null),
+                };
+                out_row.push(value);
+            }
+            for prop in &dst_bypass {
+                out_row.push(dst_bypass_value(Some(&event.vertex), prop));
+            }
             let mut out_col_names = ctx.col_names_template.clone();
             out_col_names.push("_expand_edge".to_string());
             out_col_names.push("_expand_dst".to_string());
@@ -1364,6 +1782,11 @@ pub(super) fn expand_on_chunk(
     if out_rows.is_empty() {
         return Ok(None);
     }
+    check_output_layout(
+        &output_layout,
+        output_layout.len(),
+        out_rows.first().map(Vec::len),
+    )?;
 
     Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
 }
@@ -1475,4 +1898,88 @@ pub(super) fn traverse_on_chunk_with_semantic(
     }
 
     Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout_of(names: &[&str]) -> SlotLayout {
+        SlotLayout::from_names(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    fn col_names_of(vars: &[&str]) -> Vec<String> {
+        vars.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn hop_bypass_sorts_and_filters_input_prefix() {
+        let input = layout_of(&["a", "b.name"]);
+        let (edge, dst) = hop_bypass(
+            &col_names_of(&["a", "r", "b"]),
+            Some(&vec!["weight".to_string(), "kind".to_string()]),
+            Some(&vec!["name".to_string(), "age".to_string()]),
+            &input,
+        );
+        assert_eq!(
+            edge,
+            Some(vec!["kind".to_string(), "weight".to_string()]),
+            "edge demands stay sorted"
+        );
+        assert_eq!(
+            dst,
+            Some(vec!["age".to_string()]),
+            "upstream bypass columns are not duplicated"
+        );
+    }
+
+    #[test]
+    fn hop_bypass_full_entity_forces_row_path() {
+        let input = layout_of(&["a"]);
+        let (edge, dst) = hop_bypass(
+            &col_names_of(&["a", "r", "b"]),
+            None,
+            Some(&vec!["name".to_string()]),
+            &input,
+        );
+        assert_eq!(edge, None, "whole-edge use must stay on the row path");
+        assert!(dst.is_some(), "destination bypass alone still resolves");
+    }
+
+    #[test]
+    fn materialize_rowless_rebuilds_visible_rows_in_lockstep() {
+        let layout = Arc::new(layout_of(&["a", "b"]));
+        let mut chunk = DataChunk::new_with_layout(Vec::new(), Arc::clone(&layout));
+        chunk.typed_columns = Some(vec![
+            TypedColumn::Fallback(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            TypedColumn::Fallback(vec![Value::Int(10), Value::Int(20), Value::Int(30)]),
+        ]);
+        chunk.selection = Some(vec![0, 2]);
+        let out = materialize_rowless_rows(chunk);
+        assert_eq!(
+            out.rows,
+            vec![
+                vec![Value::Int(1), Value::Int(10)],
+                vec![Value::Int(3), Value::Int(30)]
+            ],
+            "only visible positions materialize"
+        );
+        assert!(
+            out.selection().is_none(),
+            "materialization consumes the selection"
+        );
+        assert_eq!(
+            out.typed_len(),
+            Some(2),
+            "typed layout stays in lockstep with the rebuilt rows"
+        );
+    }
+
+    #[test]
+    fn materialize_rowless_passes_rows_through() {
+        let layout = Arc::new(layout_of(&["a"]));
+        let chunk = DataChunk::new_with_layout(vec![vec![Value::Int(7)]], layout);
+        let out = materialize_rowless_rows(chunk);
+        assert_eq!(out.rows, vec![vec![Value::Int(7)]]);
+    }
 }

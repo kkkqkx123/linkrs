@@ -61,6 +61,13 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             tag: &str,
             ids: &[VertexId],
         ) -> Result<Vec<Option<Vertex>>, StorageError>;
+        fn get_vertices_projected_batch(
+            &self,
+            space: &str,
+            tag: &str,
+            ids: &[VertexId],
+            projection: &[std::sync::Arc<str>],
+        ) -> Result<Vec<Option<Vertex>>, StorageError>;
         fn neighbor_dst_ids_batch(
             &self,
             space: &str,

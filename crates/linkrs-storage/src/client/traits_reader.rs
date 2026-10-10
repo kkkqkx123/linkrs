@@ -172,6 +172,30 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         Ok(out)
     }
 
+    /// Batch vertex lookups decoding only the requested properties.
+    ///
+    /// Same ordering, timestamp and visibility semantics as
+    /// [`get_vertices_batch`](Self::get_vertices_batch): one entry per input
+    /// id in input order, `None` for missing vertices. An empty projection
+    /// reads the full vertex, matching [`get_vertex_projected`](Self::get_vertex_projected).
+    /// The default implementation loops over `get_vertex_projected` for
+    /// adapters; the native engine overrides with a single-timestamp batched
+    /// path. Query expand hops use this for destination bypass columns so a
+    /// property projection never pays full-attribute decoding per chunk.
+    fn get_vertices_projected_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+        projection: &[std::sync::Arc<str>],
+    ) -> Result<Vec<Option<Vertex>>, StorageError> {
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            out.push(self.get_vertex_projected(space, tag, id, projection)?);
+        }
+        Ok(out)
+    }
+
     /// Lightweight batch neighbor read used by de-materialized expand hops
     /// (`id_only`/`count_only`).  Resolves the edge-type schema once for the
     /// batch and reads MVCC neighbors directly from the CSR, skipping

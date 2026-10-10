@@ -7,7 +7,7 @@ use super::super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
     RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
-use super::super::super::slot::{combine_layouts, SlotLayout};
+use super::super::super::slot::{combine_layouts, SlotInfo, SlotLayout};
 use super::super::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use super::super::types::{
     CapabilitySet, FragmentInput, FragmentSpec, InputContract, InputDistribution, OperatorKindSpec,
@@ -459,6 +459,107 @@ pub(super) fn layout_with_added_names(
     SlotLayout::from_names(&all_names)
 }
 
+/// Rename the two appended expand slots to the hop's edge and destination
+/// variables, preserving the input prefix (including any upstream bypass
+/// columns) untouched.
+fn rename_expand_output(base: SlotLayout, input: &SlotLayout, col_names: &[String]) -> SlotLayout {
+    if col_names.len() < 3 {
+        return base;
+    }
+    let edge_slot_id = base
+        .resolve("_expand_edge")
+        .unwrap_or(base.slots.len().saturating_sub(2));
+    let dst_slot_id = base
+        .resolve("_expand_dst")
+        .unwrap_or(edge_slot_id.saturating_add(1));
+    let mut slots = base.slots;
+    let mut name_to_slot = base.name_to_slot;
+    let src_slot_id = input.resolve(&col_names[0]).unwrap_or(0);
+    name_to_slot.insert(col_names[0].clone(), src_slot_id);
+    if let Some(slot) = slots.get_mut(edge_slot_id) {
+        slot.name = col_names[1].clone();
+    }
+    name_to_slot.insert(col_names[1].clone(), edge_slot_id);
+    if let Some(slot) = slots.get_mut(dst_slot_id) {
+        slot.name = col_names[2].clone();
+    }
+    name_to_slot.insert(col_names[2].clone(), dst_slot_id);
+    name_to_slot.insert("$$".to_string(), dst_slot_id);
+    name_to_slot.insert("$^".to_string(), src_slot_id);
+    name_to_slot.insert("target".into(), dst_slot_id);
+    for extra_name in col_names.iter().skip(3) {
+        if let Some(slot) = slots.get_mut(edge_slot_id) {
+            if slot.alias.is_none() {
+                slot.alias = Some(extra_name.clone());
+            }
+        }
+        name_to_slot.insert(extra_name.clone(), edge_slot_id);
+    }
+    SlotLayout {
+        slots,
+        name_to_slot,
+    }
+}
+
+/// Sorted flat bypass names (`{var}.{prop}`) for the hop's demanded edge and
+/// destination properties. Sorting keeps the layout deterministic regardless
+/// of the demand collection order; the executor assembles bypass columns in
+/// this same order.
+fn expand_bypass_names(
+    col_names: &[String],
+    edge_props: &Option<Vec<String>>,
+    dst_props: &Option<Vec<String>>,
+) -> Vec<String> {
+    let Some(edge_var) = col_names.get(1) else {
+        return Vec::new();
+    };
+    let Some(dst_var) = col_names.get(2) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    if let Some(props) = edge_props {
+        let mut sorted = props.clone();
+        sorted.sort();
+        sorted.dedup();
+        names.extend(sorted.iter().map(|prop| format!("{edge_var}.{prop}")));
+    }
+    if let Some(props) = dst_props {
+        let mut sorted = props.clone();
+        sorted.sort();
+        sorted.dedup();
+        names.extend(sorted.iter().map(|prop| format!("{dst_var}.{prop}")));
+    }
+    names
+}
+
+/// Append flat bypass slots after the three main expand slots so the columnar
+/// evaluator's compound-slot reads (`b.name`) hit without entity extraction.
+/// Names already present (e.g. an upstream bypass column carried in the input
+/// prefix) are never overwritten.
+fn append_expand_bypass(
+    mut layout: SlotLayout,
+    col_names: &[String],
+    edge_props: &Option<Vec<String>>,
+    dst_props: &Option<Vec<String>>,
+) -> SlotLayout {
+    for name in expand_bypass_names(col_names, edge_props, dst_props) {
+        if layout.name_to_slot.contains_key(&name) {
+            continue;
+        }
+        let id = layout.slots.len();
+        layout.slots.push(SlotInfo {
+            slot_id: id,
+            name: name.clone(),
+            alias: None,
+            data_type: None,
+            nullable: true,
+            origin: None,
+        });
+        layout.name_to_slot.insert(name, id);
+    }
+    layout
+}
+
 pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]) -> SlotLayout {
     let input = input_layout(inputs);
     match spec {
@@ -566,50 +667,25 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
             let _ = col_names;
             SlotLayout::from_names(&["_expand_count".to_string()])
         }
-        OperatorKindSpec::Graph(
-            GraphSpec::Expand { col_names, .. } | GraphSpec::ExpandAll { col_names, .. },
-        ) => {
+        OperatorKindSpec::Graph(GraphSpec::Expand { col_names, .. }) => {
             let base = layout_with_added_names(
                 &input,
                 ["_expand_edge".to_string(), "_expand_dst".to_string()],
             );
-            if col_names.len() >= 3 {
-                let edge_slot_id = base
-                    .resolve("_expand_edge")
-                    .unwrap_or(base.slots.len().saturating_sub(2));
-                let dst_slot_id = base
-                    .resolve("_expand_dst")
-                    .unwrap_or(edge_slot_id.saturating_add(1));
-                let mut slots = base.slots;
-                let mut name_to_slot = base.name_to_slot;
-                let src_slot_id = input.resolve(&col_names[0]).unwrap_or(0);
-                name_to_slot.insert(col_names[0].clone(), src_slot_id);
-                if let Some(slot) = slots.get_mut(edge_slot_id) {
-                    slot.name = col_names[1].clone();
-                }
-                name_to_slot.insert(col_names[1].clone(), edge_slot_id);
-                if let Some(slot) = slots.get_mut(dst_slot_id) {
-                    slot.name = col_names[2].clone();
-                }
-                name_to_slot.insert(col_names[2].clone(), dst_slot_id);
-                name_to_slot.insert("$$".to_string(), dst_slot_id);
-                name_to_slot.insert("$^".to_string(), src_slot_id);
-                name_to_slot.insert("target".into(), dst_slot_id);
-                for extra_name in col_names.iter().skip(3) {
-                    if let Some(slot) = slots.get_mut(edge_slot_id) {
-                        if slot.alias.is_none() {
-                            slot.alias = Some(extra_name.clone());
-                        }
-                    }
-                    name_to_slot.insert(extra_name.clone(), edge_slot_id);
-                }
-                SlotLayout {
-                    slots,
-                    name_to_slot,
-                }
-            } else {
-                base
-            }
+            rename_expand_output(base, &input, col_names)
+        }
+        OperatorKindSpec::Graph(GraphSpec::ExpandAll {
+            col_names,
+            edge_required_props,
+            dst_required_props,
+            ..
+        }) => {
+            let base = layout_with_added_names(
+                &input,
+                ["_expand_edge".to_string(), "_expand_dst".to_string()],
+            );
+            let renamed = rename_expand_output(base, &input, col_names);
+            append_expand_bypass(renamed, col_names, edge_required_props, dst_required_props)
         }
         OperatorKindSpec::Graph(GraphSpec::Traverse { .. }) => layout_with_added_names(
             &input,
@@ -915,6 +991,8 @@ pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::streaming::operators::spec::GraphSpec;
+    use linkrs_core::EdgeDirection;
 
     #[test]
     fn source_output_layout_argument_uses_outer_col_names() {
@@ -938,5 +1016,69 @@ mod tests {
             None,
             "unrelated name must not resolve"
         );
+    }
+
+    fn expand_all_spec(
+        col_names: &[&str],
+        edge_props: Option<Vec<String>>,
+        dst_props: Option<Vec<String>>,
+    ) -> OperatorKindSpec {
+        OperatorKindSpec::Graph(GraphSpec::ExpandAll {
+            edge_types: vec!["Link".to_string()],
+            direction: EdgeDirection::Out,
+            filter_expr: None,
+            col_names: col_names.iter().map(|s| s.to_string()).collect(),
+            src_vids: Vec::new(),
+            step_limit: 1,
+            step_limits: None,
+            count_only: false,
+            emit_raw_ids: false,
+            lightweight_source: false,
+            path_semantic: None,
+            dst_tag: "Node".to_string(),
+            edge_required_props: edge_props,
+            dst_required_props: dst_props,
+            closed_loop: true,
+            skip_rows: true,
+        })
+    }
+
+    #[test]
+    fn expand_layout_appends_sorted_bypass_after_main_slots() {
+        let input = SlotLayout::from_names(&["a".to_string()]);
+        let spec = expand_all_spec(
+            &["a", "r", "b"],
+            Some(vec!["weight".to_string()]),
+            Some(vec!["name".to_string(), "age".to_string()]),
+        );
+        let layout = infer_output_layout(&spec, &[input]);
+        assert_eq!(
+            layout.names(),
+            vec!["a", "r", "b", "r.weight", "b.age", "b.name"],
+            "edge bypass precedes destination bypass, each sorted"
+        );
+        assert_eq!(layout.slot_id("r"), Some(1));
+        assert_eq!(layout.slot_id("b"), Some(2));
+        assert_eq!(layout.slot_id("r.weight"), Some(3));
+    }
+
+    #[test]
+    fn expand_layout_skips_conflicting_bypass_names() {
+        let input = SlotLayout::from_names(&["a".to_string(), "b.name".to_string()]);
+        let spec = expand_all_spec(&["a", "r", "b"], None, Some(vec!["name".to_string()]));
+        let layout = infer_output_layout(&spec, &[input]);
+        assert_eq!(
+            layout.names(),
+            vec!["a", "b.name", "r", "b"],
+            "an upstream bypass column is never overwritten"
+        );
+    }
+
+    #[test]
+    fn expand_layout_without_demands_keeps_three_main_slots() {
+        let input = SlotLayout::from_names(&["a".to_string()]);
+        let spec = expand_all_spec(&["a", "r", "b"], Some(vec![]), Some(vec![]));
+        let layout = infer_output_layout(&spec, &[input]);
+        assert_eq!(layout.names(), vec!["a", "r", "b"]);
     }
 }

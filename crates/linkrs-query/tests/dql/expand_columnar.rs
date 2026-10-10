@@ -141,6 +141,104 @@ fn dst_property_projection_exact() {
 }
 
 #[test]
+fn dst_property_rowless_bypass_exact() {
+    let scenario = setup_line();
+    let scenario =
+        scenario.query("EXPLAIN FORMAT = DOT MATCH (a:Node)-[:Link]->(b:Node) RETURN b.name");
+    let plan = plan_of(&scenario);
+    assert!(
+        plan.contains("skipped"),
+        "direct destination property projection must stay rowless, got:\n{plan}"
+    );
+    assert!(
+        plan.contains("bypass") && plan.contains("b.name"),
+        "rowless property bypass must be explain-visible, got:\n{plan}"
+    );
+    let scenario = scenario.assert_success();
+
+    let scenario = scenario.query("MATCH (a:Node)-[:Link]->(b:Node) RETURN b.name");
+    let scenario = scenario.assert_success().assert_result_count(4);
+    let rows = sorted_rows(&scenario);
+    assert_eq!(rows.len(), 4);
+    assert!(
+        rows.iter().any(|r| r[0].contains("\"1\"")),
+        "rowless destination names must project exactly, got {rows:?}"
+    );
+}
+
+#[test]
+fn edge_property_rowless_bypass_exact() {
+    let scenario = setup_line();
+    let scenario =
+        scenario.query("EXPLAIN FORMAT = DOT MATCH (a:Node)-[r:Link]->(b:Node) RETURN r.weight");
+    let plan = plan_of(&scenario);
+    assert!(
+        plan.contains("skipped"),
+        "direct edge property projection must stay rowless, got:\n{plan}"
+    );
+    assert!(
+        plan.contains("bypass") && plan.contains("r.weight"),
+        "rowless edge bypass must be explain-visible, got:\n{plan}"
+    );
+    let scenario = scenario.assert_success();
+
+    let scenario = scenario.query("MATCH (a:Node)-[r:Link]->(b:Node) RETURN r.weight");
+    let scenario = scenario.assert_success().assert_result_count(4);
+    match scenario.last_result() {
+        Some(ExecutionResult::DataSet { data, .. }) => {
+            assert_eq!(data.rows.len(), 4);
+            for row in &data.rows {
+                assert!(
+                    matches!(row.first(), Some(Value::Double(_))),
+                    "rowless edge weight must project exactly, got {row:?}"
+                );
+            }
+        }
+        other => panic!("expected a dataset, got {other:?}"),
+    }
+}
+
+#[test]
+fn chained_property_bypass_passthrough_exact() {
+    let scenario = setup_line();
+    let scenario = scenario
+        .query("MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN b.name, c.name");
+    let scenario = scenario.assert_success().assert_result_count(3);
+    match scenario.last_result() {
+        Some(ExecutionResult::DataSet { data, .. }) => {
+            assert_eq!(data.rows.len(), 3);
+            for row in &data.rows {
+                assert_eq!(row.len(), 2, "chained projection keeps both names, got {row:?}");
+                assert!(
+                    matches!(row[0], Value::String(_)) && matches!(row[1], Value::String(_)),
+                    "upstream and tail bypass columns must both resolve, got {row:?}"
+                );
+            }
+        }
+        other => panic!("expected a dataset, got {other:?}"),
+    }
+}
+
+#[test]
+fn missing_property_bypass_yields_null() {
+    let scenario = setup_line();
+    let scenario = scenario.query("MATCH (a:Node)-[:Link]->(b:Node) RETURN b.missing");
+    let scenario = scenario.assert_success().assert_result_count(4);
+    match scenario.last_result() {
+        Some(ExecutionResult::DataSet { data, .. }) => {
+            assert_eq!(data.rows.len(), 4);
+            for row in &data.rows {
+                assert!(
+                    matches!(row.first(), Some(Value::Null(_))),
+                    "absent properties fill NULL like the row path, got {row:?}"
+                );
+            }
+        }
+        other => panic!("expected a dataset, got {other:?}"),
+    }
+}
+
+#[test]
 fn two_hop_count_matches_chained_shape() {
     let scenario = setup_line();
     let scenario =

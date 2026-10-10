@@ -132,6 +132,16 @@ impl StorageReader for GraphStorage {
         reader::get_vertices_batch(&self.ctx, space, tag, ids)
     }
 
+    fn get_vertices_projected_batch(
+        &self,
+        space: &str,
+        tag: &str,
+        ids: &[VertexId],
+        projection: &[Arc<str>],
+    ) -> Result<Vec<Option<Vertex>>, StorageError> {
+        reader::get_vertices_projected_batch(&self.ctx, space, tag, ids, projection)
+    }
+
     fn neighbor_dst_ids_batch(
         &self,
         space: &str,
