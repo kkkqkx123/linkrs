@@ -14,6 +14,7 @@ toml.workspace = true
 thiserror.workspace = true
 log.workspace = true
 dirs.workspace = true
+rand.workspace = true
 vector-client = { path = "../vector-client", optional = true }
 llm-embedding = { path = "../llm-suite/crates/llm-embedding", optional = true }
 llm-rerank = { path = "../llm-suite/crates/llm-rerank", optional = true }

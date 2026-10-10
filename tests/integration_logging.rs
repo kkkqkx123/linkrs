@@ -23,9 +23,11 @@ fn test_log_config_defaults() {
 
     assert_eq!(config.common.log.level, "info");
     assert_eq!(config.common.log.dir, "logs");
-    assert_eq!(config.common.log.file, "linkrs");
-    assert_eq!(config.common.log.max_file_size, 100 * 1024 * 1024); // 100MB
+    assert_eq!(config.common.log.basename, "linkrs");
+    assert_eq!(config.common.log.max_file_size_mb, 100); // 100MB
     assert_eq!(config.common.log.max_files, 5);
+    assert!(!config.common.log.stdout);
+    assert!(!config.common.log.json_format);
 }
 
 /// Test Log Configuration Serialization and Deserialization
@@ -39,7 +41,7 @@ fn test_log_config_serialization() {
                 host: "127.0.0.1".to_string(),
                 port: 9758,
                 storage_path: "data/linkrs".to_string(),
-                max_connections: 10,
+                max_sessions: 10,
             },
             transaction: linkrs::config::TransactionConfig {
                 default_timeout: 30,
@@ -49,8 +51,8 @@ fn test_log_config_serialization() {
             log: linkrs::config::LogConfig {
                 level: "debug".to_string(),
                 dir: "test_logs".to_string(),
-                file: "test_linkrs".to_string(),
-                max_file_size: 50 * 1024 * 1024,
+                basename: "test_linkrs".to_string(),
+                max_file_size_mb: 50,
                 max_files: 3,
             },
             storage: linkrs::config::StorageConfig::default(),
@@ -71,15 +73,15 @@ fn test_log_config_serialization() {
 
     assert!(toml_str.contains("level = \"debug\""));
     assert!(toml_str.contains("dir = \"test_logs\""));
-    assert!(toml_str.contains("file = \"test_linkrs\""));
-    assert!(toml_str.contains("max_file_size = 52428800"));
+    assert!(toml_str.contains("basename = \"test_linkrs\""));
+    assert!(toml_str.contains("max_file_size_mb = 50"));
     assert!(toml_str.contains("max_files = 3"));
 
     let loaded_config: Config = toml::from_str(&toml_str).expect("Failed to deserialize config");
     assert_eq!(loaded_config.common.log.level, "debug");
     assert_eq!(loaded_config.common.log.dir, "test_logs");
-    assert_eq!(loaded_config.common.log.file, "test_linkrs");
-    assert_eq!(loaded_config.common.log.max_file_size, 52428800);
+    assert_eq!(loaded_config.common.log.basename, "test_linkrs");
+    assert_eq!(loaded_config.common.log.max_file_size_mb, 50);
     assert_eq!(loaded_config.common.log.max_files, 3);
 }
 
@@ -116,7 +118,7 @@ fn test_log_config_from_file() {
 host = "127.0.0.1"
 port = 9758
 storage_path = "data/linkrs"
-max_connections = 10
+max_sessions = 10
 
 [transaction]
 default_timeout = 30
@@ -125,8 +127,8 @@ max_concurrent_transactions = 1000
 [log]
 level = "debug"
 dir = "custom_logs"
-file = "custom_linkrs"
-max_file_size = 52428800
+basename = "custom_linkrs"
+max_file_size_mb = 50
 max_files = 3
 
 [auth]
@@ -135,7 +137,6 @@ failed_login_attempts = 5
 session_idle_timeout_secs = 3600
 force_change_default_password = true
 default_username = "root"
-default_password = "root"
 
 [bootstrap]
 auto_create_default_space = true
@@ -162,8 +163,8 @@ min_iteration_rounds = 1
     // Config::load resolves relative paths to absolute paths relative to the config file location
     let expected_dir = temp_dir.join("custom_logs").to_string_lossy().to_string();
     assert_eq!(config.common.log.dir, expected_dir);
-    assert_eq!(config.common.log.file, "custom_linkrs");
-    assert_eq!(config.common.log.max_file_size, 52428800);
+    assert_eq!(config.common.log.basename, "custom_linkrs");
+    assert_eq!(config.common.log.max_file_size_mb, 50);
     assert_eq!(config.common.log.max_files, 3);
 
     let _ = fs::remove_dir_all(&temp_dir);
@@ -247,7 +248,7 @@ fn test_flexi_logger_integration() {
                 log: linkrs::config::LogConfig {
                     level: "warn".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
-                    file: "level_test".to_string(),
+                    basename: "level_test".to_string(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -270,27 +271,28 @@ fn test_flexi_logger_integration() {
                 log: linkrs::config::LogConfig {
                     level: "info".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
-                    file: "rotation_test".to_string(),
-                    max_file_size: 10 * 1024 * 1024,
+                    basename: "rotation_test".to_string(),
+                    max_file_size_mb: 10,
                     max_files: 3,
+                    ..Default::default()
                 },
                 ..Default::default()
             },
             ..Default::default()
         };
 
-        assert_eq!(config.common.log.max_file_size, 10 * 1024 * 1024);
+        assert_eq!(config.common.log.max_file_size_mb, 10);
         assert_eq!(config.common.log.max_files, 3);
 
         let file_spec = FileSpec::default()
-            .basename(&config.common.log.file)
+            .basename(&config.common.log.basename)
             .directory(&config.common.log.dir);
 
         let _logger_builder = Logger::try_with_str(&config.common.log.level)
             .expect("Failed to create logger")
             .log_to_file(file_spec)
             .rotate(
-                Criterion::Size(config.common.log.max_file_size),
+                Criterion::Size(config.common.log.max_file_size_mb * 1024 * 1024),
                 Naming::Numbers,
                 Cleanup::KeepLogFiles(config.common.log.max_files),
             );
@@ -307,7 +309,7 @@ fn test_flexi_logger_integration() {
                 log: linkrs::config::LogConfig {
                     level: "debug".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
-                    file: "async_test".to_string(),
+                    basename: "async_test".to_string(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -316,7 +318,7 @@ fn test_flexi_logger_integration() {
         };
 
         let file_spec = FileSpec::default()
-            .basename(&config.common.log.file)
+            .basename(&config.common.log.basename)
             .directory(&config.common.log.dir);
 
         let _logger_builder = Logger::try_with_str(&config.common.log.level)
@@ -337,9 +339,10 @@ fn test_flexi_logger_integration() {
                 log: linkrs::config::LogConfig {
                     level: "info".to_string(),
                     dir: test_dir.to_string_lossy().to_string(),
-                    file: "cleanup_test".to_string(),
-                    max_file_size: 1024 * 1024,
+                    basename: "cleanup_test".to_string(),
+                    max_file_size_mb: 1,
                     max_files,
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -349,14 +352,14 @@ fn test_flexi_logger_integration() {
         assert_eq!(config.common.log.max_files, max_files);
 
         let file_spec = FileSpec::default()
-            .basename(&config.common.log.file)
+            .basename(&config.common.log.basename)
             .directory(&config.common.log.dir);
 
         let _logger_builder = Logger::try_with_str(&config.common.log.level)
             .expect("Failed to create logger")
             .log_to_file(file_spec)
             .rotate(
-                Criterion::Size(config.common.log.max_file_size),
+                Criterion::Size(config.common.log.max_file_size_mb * 1024 * 1024),
                 Naming::Numbers,
                 Cleanup::KeepLogFiles(config.common.log.max_files),
             );
@@ -419,7 +422,8 @@ fn test_flexi_logger_integration() {
 fn test_log_file_path_resolution() {
     let config = Config::default();
 
-    let expected_log_path = format!("{}/{}.log", config.common.log.dir, config.common.log.file);
+    let expected_log_path =
+        format!("{}/{}.log", config.common.log.dir, config.common.log.basename);
     assert_eq!(expected_log_path, "logs/linkrs.log");
 
     let custom_config = Config {
@@ -427,7 +431,7 @@ fn test_log_file_path_resolution() {
             migration: linkrs::config::MigrationConfig::default(),
             log: linkrs::config::LogConfig {
                 dir: "/var/log/linkrs".to_string(),
-                file: "app".to_string(),
+                basename: "app".to_string(),
                 ..Default::default()
             },
             ..Default::default()
@@ -441,7 +445,7 @@ fn test_log_file_path_resolution() {
 
     let custom_path = format!(
         "{}/{}.log",
-        custom_config.common.log.dir, custom_config.common.log.file
+        custom_config.common.log.dir, custom_config.common.log.basename
     );
     assert_eq!(custom_path, "/var/log/linkrs/app.log");
 }
@@ -450,33 +454,33 @@ fn test_log_file_path_resolution() {
 #[test]
 fn test_log_file_size_config() {
     let config = Config::default();
-    assert_eq!(config.common.log.max_file_size, 100 * 1024 * 1024);
+    assert_eq!(config.common.log.max_file_size_mb, 100);
 
     let custom_config = Config {
         common: linkrs::config::CommonConfig {
             migration: linkrs::config::MigrationConfig::default(),
             log: linkrs::config::LogConfig {
-                max_file_size: 500 * 1024 * 1024,
+                max_file_size_mb: 500,
                 ..Default::default()
             },
             ..Default::default()
         },
         ..Default::default()
     };
-    assert_eq!(custom_config.common.log.max_file_size, 500 * 1024 * 1024);
+    assert_eq!(custom_config.common.log.max_file_size_mb, 500);
 
     let small_config = Config {
         common: linkrs::config::CommonConfig {
             migration: linkrs::config::MigrationConfig::default(),
             log: linkrs::config::LogConfig {
-                max_file_size: 1024,
+                max_file_size_mb: 1,
                 ..Default::default()
             },
             ..Default::default()
         },
         ..Default::default()
     };
-    assert_eq!(small_config.common.log.max_file_size, 1024);
+    assert_eq!(small_config.common.log.max_file_size_mb, 1);
 }
 
 /// Verification of test log level configuration

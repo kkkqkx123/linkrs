@@ -4,12 +4,13 @@ use serde::{Deserialize, Serialize};
 
 /// Monitoring configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct MonitoringConfig {
     /// Whether to enable monitoring
     pub enabled: bool,
     /// Memory cache size (retains the most recent N queries)
     pub memory_cache_size: usize,
-    /// Slow query threshold (milliseconds)
+    /// Slow query threshold (milliseconds, must be greater than 0)
     pub slow_query_threshold_ms: u64,
     /// Slow query log configuration
     #[serde(default)]
@@ -64,6 +65,9 @@ impl MonitoringConfig {
         if self.memory_cache_size == 0 {
             return Err("Memory cache size must be greater than 0".to_string());
         }
+        if self.slow_query_threshold_ms == 0 {
+            return Err("Slow query threshold must be greater than 0".to_string());
+        }
         if self.histogram_max_samples < 100 || self.histogram_max_samples > 100_000 {
             return Err("Histogram max samples must be within 100..=100000".to_string());
         }
@@ -80,12 +84,14 @@ impl MonitoringConfig {
 
 /// Slow query log configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct SlowQueryLogConfig {
     /// Whether to enable slow query logging
     pub enabled: bool,
     /// Slow query threshold in milliseconds
     pub threshold_ms: u64,
-    /// Log file path
+    /// Log file name or absolute path. A bare file name resolves against
+    /// `[log].dir`, so every log stream shares one root directory.
     pub log_file_path: String,
     /// Maximum file size in MB before rotation
     pub max_file_size_mb: u64,
@@ -104,7 +110,7 @@ impl Default for SlowQueryLogConfig {
         Self {
             enabled: true,
             threshold_ms: 1000,
-            log_file_path: "logs/slow_query.log".to_string(),
+            log_file_path: "slow_query.log".to_string(),
             max_file_size_mb: 100,
             max_files: 5,
             verbose_format: false,
@@ -121,16 +127,15 @@ impl SlowQueryLogConfig {
             return Err("Slow query log file path cannot be empty".to_string());
         }
 
+        crate::validate_log_file_field(
+            "monitoring.slow_query_log.log_file_path",
+            &self.log_file_path,
+            self.max_file_size_mb,
+            self.max_files,
+        )?;
+
         if self.threshold_ms == 0 {
             return Err("Slow query threshold must be greater than 0".to_string());
-        }
-
-        if self.max_file_size_mb == 0 {
-            return Err("Max file size must be greater than 0".to_string());
-        }
-
-        if self.max_files == 0 {
-            return Err("Max files must be greater than 0".to_string());
         }
 
         if self.buffer_size == 0 {
@@ -172,7 +177,7 @@ mod tests {
         let config = SlowQueryLogConfig::default();
         assert!(config.enabled);
         assert_eq!(config.threshold_ms, 1000);
-        assert_eq!(config.log_file_path, "logs/slow_query.log");
+        assert_eq!(config.log_file_path, "slow_query.log");
         assert_eq!(config.max_file_size_mb, 100);
         assert_eq!(config.max_files, 5);
     }
@@ -187,6 +192,12 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid_config.validate().is_err());
+
+        let zero_threshold = MonitoringConfig {
+            slow_query_threshold_ms: 0,
+            ..Default::default()
+        };
+        assert!(zero_threshold.validate().is_err());
 
         let invalid_histogram = MonitoringConfig {
             histogram_max_samples: 10,
@@ -211,5 +222,17 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid_config.validate().is_err());
+
+        let nested_path = SlowQueryLogConfig {
+            log_file_path: "logs/slow_query.log".to_string(),
+            ..Default::default()
+        };
+        assert!(nested_path.validate().is_err());
+
+        let zero_threshold = SlowQueryLogConfig {
+            threshold_ms: 0,
+            ..Default::default()
+        };
+        assert!(zero_threshold.validate().is_err());
     }
 }

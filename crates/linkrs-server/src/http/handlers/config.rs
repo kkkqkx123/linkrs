@@ -43,7 +43,7 @@ pub async fn get<
             "host": config.common.database.host,
             "port": config.common.database.port,
             "storage_path": config.common.database.storage_path,
-            "max_connections": config.common.database.max_connections,
+            "max_sessions": config.common.database.max_sessions,
         },
         "transaction": {
             "default_timeout": config.common.transaction.default_timeout,
@@ -53,9 +53,11 @@ pub async fn get<
         "log": {
             "level": config.common.log.level,
             "dir": config.common.log.dir,
-            "file": config.common.log.file,
-            "max_file_size": config.common.log.max_file_size,
+            "basename": config.common.log.basename,
+            "max_file_size_mb": config.common.log.max_file_size_mb,
             "max_files": config.common.log.max_files,
+            "stdout": config.common.log.stdout,
+            "json_format": config.common.log.json_format,
         },
         "auth": {
             "enable_authorize": config.server.auth.enable_authorize,
@@ -322,7 +324,7 @@ pub(crate) fn get_config_value(
             "host" => serde_json::json!(config.common.database.host),
             "port" => serde_json::json!(config.common.database.port),
             "storage_path" => serde_json::json!(config.common.database.storage_path),
-            "max_connections" => serde_json::json!(config.common.database.max_connections),
+            "max_sessions" => serde_json::json!(config.common.database.max_sessions),
             _ => serde_json::Value::Null,
         },
         "transaction" => match key {
@@ -336,9 +338,11 @@ pub(crate) fn get_config_value(
         "log" => match key {
             "level" => serde_json::json!(config.common.log.level),
             "dir" => serde_json::json!(config.common.log.dir),
-            "file" => serde_json::json!(config.common.log.file),
-            "max_file_size" => serde_json::json!(config.common.log.max_file_size),
+            "basename" => serde_json::json!(config.common.log.basename),
+            "max_file_size_mb" => serde_json::json!(config.common.log.max_file_size_mb),
             "max_files" => serde_json::json!(config.common.log.max_files),
+            "stdout" => serde_json::json!(config.common.log.stdout),
+            "json_format" => serde_json::json!(config.common.log.json_format),
             _ => serde_json::Value::Null,
         },
         "auth" => match key {
@@ -456,7 +460,7 @@ pub(crate) fn get_config_value(
 /// keys are persisted and visible to readers but take effect on restart.
 fn is_restart_required(section: &str, key: &str) -> bool {
     match section {
-        "database" => matches!(key, "host" | "port" | "storage_path" | "max_connections"),
+        "database" => matches!(key, "host" | "port" | "storage_path" | "max_sessions"),
         "transaction" => true,
         "log" => true,
         "auth" => key != "bcrypt_cost",
@@ -494,9 +498,7 @@ pub(crate) fn set_config_value(
             "host" => config.common.database.host = parse_value(&full_key, value)?,
             "port" => config.common.database.port = parse_value(&full_key, value)?,
             "storage_path" => config.common.database.storage_path = parse_value(&full_key, value)?,
-            "max_connections" => {
-                config.common.database.max_connections = parse_value(&full_key, value)?
-            }
+            "max_sessions" => config.common.database.max_sessions = parse_value(&full_key, value)?,
             _ => return Err(format!("unknown configuration key '{full_key}'")),
         },
         "transaction" => match key {
@@ -513,9 +515,13 @@ pub(crate) fn set_config_value(
         "log" => match key {
             "level" => config.common.log.level = parse_value(&full_key, value)?,
             "dir" => config.common.log.dir = parse_value(&full_key, value)?,
-            "file" => config.common.log.file = parse_value(&full_key, value)?,
-            "max_file_size" => config.common.log.max_file_size = parse_value(&full_key, value)?,
+            "basename" => config.common.log.basename = parse_value(&full_key, value)?,
+            "max_file_size_mb" => {
+                config.common.log.max_file_size_mb = parse_value(&full_key, value)?
+            }
             "max_files" => config.common.log.max_files = parse_value(&full_key, value)?,
+            "stdout" => config.common.log.stdout = parse_value(&full_key, value)?,
+            "json_format" => config.common.log.json_format = parse_value(&full_key, value)?,
             _ => return Err(format!("unknown configuration key '{full_key}'")),
         },
         "auth" => match key {
@@ -726,13 +732,21 @@ pub(crate) const CONFIG_SECTIONS: &[&str] = &[
 /// Settable keys per section, mirroring the read/write tables above.
 pub(crate) fn section_keys(section: &str) -> Option<&'static [&'static str]> {
     match section {
-        "database" => Some(&["host", "port", "storage_path", "max_connections"]),
+        "database" => Some(&["host", "port", "storage_path", "max_sessions"]),
         "transaction" => Some(&[
             "default_timeout",
             "max_concurrent_transactions",
             "auto_commit",
         ]),
-        "log" => Some(&["level", "dir", "file", "max_file_size", "max_files"]),
+        "log" => Some(&[
+            "level",
+            "dir",
+            "basename",
+            "max_file_size_mb",
+            "max_files",
+            "stdout",
+            "json_format",
+        ]),
         "auth" => Some(&[
             "enable_authorize",
             "failed_login_attempts",
@@ -968,7 +982,7 @@ mod tests {
             &store,
             None,
             Some("database"),
-            "max_connections",
+            "max_sessions",
             &linkrs_core::Value::Int(512),
         )
         .expect("valid update should apply");
@@ -981,7 +995,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            store.read().common.database.max_connections,
+            store.read().common.database.max_sessions,
             512,
             "live config should reflect the applied intent"
         );
@@ -990,11 +1004,11 @@ mod tests {
             &store,
             None,
             None,
-            "max_connections",
+            "max_sessions",
             &linkrs_core::Value::Int(256),
         )
         .expect("unqualified unique key should resolve");
-        assert_eq!(store.read().common.database.max_connections, 256);
+        assert_eq!(store.read().common.database.max_sessions, 256);
     }
 
     #[test]
@@ -1016,7 +1030,7 @@ mod tests {
             &store,
             None,
             Some("no_such_module"),
-            "max_connections",
+            "max_sessions",
             &linkrs_core::Value::Int(1),
         )
         .unwrap_err();
@@ -1029,18 +1043,18 @@ mod tests {
     #[test]
     fn test_apply_intent_rejects_type_mismatch() {
         let store = test_store();
-        let before = store.read().common.database.max_connections;
+        let before = store.read().common.database.max_sessions;
         let error = apply_config_update_intent(
             &store,
             None,
             Some("database"),
-            "max_connections",
+            "max_sessions",
             &linkrs_core::Value::string("not-a-number"),
         )
         .unwrap_err();
         assert!(error.contains("invalid value"), "unexpected error: {error}");
         assert_eq!(
-            store.read().common.database.max_connections,
+            store.read().common.database.max_sessions,
             before,
             "failed update must not mutate live config"
         );
@@ -1049,7 +1063,7 @@ mod tests {
     #[test]
     fn test_resolve_show_configs_lists_live_values() {
         let store = test_store();
-        store.write().common.database.max_connections = 777;
+        store.write().common.database.max_sessions = 777;
         let rows = resolve_show_configs(&store.read(), None).expect("listing should succeed");
         assert_eq!(
             rows.col_names,
@@ -1069,10 +1083,10 @@ mod tests {
                     .unwrap_or(false)
                     && row
                         .get(1)
-                        .map(|v| v == &linkrs_core::Value::string("max_connections"))
+                        .map(|v| v == &linkrs_core::Value::string("max_sessions"))
                         .unwrap_or(false)
             })
-            .expect("database.max_connections row should be listed");
+            .expect("database.max_sessions row should be listed");
         assert_eq!(
             entry.get(2),
             Some(&linkrs_core::Value::string("777")),

@@ -473,7 +473,7 @@ mod tests {
             failed_login_attempts: 5,
             session_idle_timeout_secs: 3600,
             default_username: "root".to_string(),
-            default_password: "root".to_string(),
+            bootstrap_password: "root".to_string(),
             force_change_default_password: true,
             bcrypt_cost: 12,
         }

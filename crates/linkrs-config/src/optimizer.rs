@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Optimizer rules configuration
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct OptimizerRulesConfig {
     /// Disabled rules
     #[serde(default)]
@@ -17,6 +18,7 @@ pub struct OptimizerRulesConfig {
 
 /// Optimizer configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     /// Maximum iteration rounds
     pub max_iteration_rounds: usize,

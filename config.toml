@@ -1,64 +1,193 @@
+# Linkrs service configuration
+#
+# Every knob is listed with its default value. Uncomment and edit only what
+# you need: missing keys fall back to the defaults shown in the comments.
+# Relative paths resolve against this file's directory; `~` expands to the
+# user home directory; LINKRS_CONFIG_DIR overrides the config directory.
+#
+# Unknown sections and unknown keys inside a section fail startup, so a
+# typo is reported instead of silently keeping the default.
+
 [database]
+# Client-facing address of this instance (informational only; listeners bind
+# from [http] and [grpc])
 host = "127.0.0.1"
+# Client-facing port (informational only)
 port = 9758
+# Data directory (storage, WAL, vector and migration subdirectories)
 storage_path = "~/.linkrs/data"
-max_connections = 100
+# Maximum concurrent client sessions (default 10)
+max_sessions = 100
 
 [transaction]
-# Default transaction timeout (seconds)
+# Default transaction timeout in seconds
 default_timeout = 30
-# Maximum number of concurrent transactions
+# Maximum number of concurrent transactions (default 1000)
 max_concurrent_transactions = 1000
+# Commit each successful statement automatically (default false)
+auto_commit = false
 
 [log]
+# Log level: trace | debug | info | warn | error
 level = "info"
+# Log directory shared by the main, slow-query and audit streams
 dir = "~/.linkrs/logs"
-file = "linkrs"
-max_file_size = 104857600  # 100MB
+# File basename without extension; the library appends `.log` and the
+# rotation numbering (`linkrs.log`, `linkrs_01.log`, ...)
+basename = "linkrs"
+# Rotation threshold in megabytes (default 100)
+max_file_size_mb = 100
+# Rotated files to keep (default 5)
 max_files = 5
+# Mirror records to stdout for container deployments (default false)
+stdout = false
+# Emit one JSON object per line instead of plain text (default false)
+json_format = false
 
-[auth]
-# Whether to enable authorization (when false, all permission checks are skipped)
-enable_authorize = true
-# Login failure limit (0 means no limit)
-failed_login_attempts = 5
-# Session idle timeout (seconds)
-session_idle_timeout_secs = 3600
-# Default username
-default_username = "root"
-# Default password (must be changed in production)
-default_password = "root"
-# Whether to force changing the default password (on first login)
-force_change_default_password = true
-# bcrypt password hash cost (4-12; higher is safer but slower; may be lowered on low-end local machines)
-bcrypt_cost = 12
+[storage]
+# Engine: propertygraph | rocksdb
+engine = "propertygraph"
+# Compression: none | zstd
+compression = "none"
+# Compression level 0-9, engine dependent (default 3)
+compression_level = 3
+# Checkpoint interval in seconds, 0 disables automatic checkpoints (default 300)
+checkpoint_interval_secs = 300
+# Maximum database size in bytes, 0 means unlimited (default 0)
+max_db_size = 0
+# Collect statistics automatically (default true)
+auto_statistics = true
+# Statistics collection interval in seconds (default 60)
+statistics_interval_secs = 60
+# Total storage memory budget in bytes (default 536870912 = 512MB)
+max_memory_bytes = 536870912
+# Independent native-index memory budget in bytes; must not exceed
+# max_memory_bytes (default 134217728 = 128MB)
+index_memory_bytes = 134217728
+# Soft memory pressure ratio, 0 < soft < hard <= 1 (default 0.80)
+memory_soft_ratio = 0.80
+# Hard memory admission ratio (default 0.95)
+memory_hard_ratio = 0.95
+# Maximum number of active snapshots (default 1000)
+max_active_snapshots = 1000
+# Maximum snapshot age in seconds (default 300)
+max_snapshot_age_secs = 300
+# Maximum number of retained tombstones (default 1000000)
+max_tombstones = 1000000
+# Maximum estimated tombstone memory in bytes (default 268435456 = 256MB)
+max_tombstone_bytes = 268435456
+# Index entries processed per GC pass (default 10000)
+index_gc_batch = 10000
+# Maximum maintenance operation duration in seconds (default 30)
+operation_timeout_secs = 30
+# Dirty operations that trigger a flush request (default 50000)
+dirty_flush_operations = 50000
+# Estimated dirty bytes that trigger a flush request (default 67108864 = 64MB)
+dirty_flush_bytes = 67108864
+# Record cache TTL in seconds, 0 disables TTL (default 60)
+cache_ttl_secs = 60
+# Record cache TTI in seconds, 0 disables TTI (default 300)
+cache_tti_secs = 300
+# Per-shard native-index buffer pool capacity in bytes (default 134217728 = 128MB)
+index_pool_capacity_bytes = 134217728
+# Evict chunks under memory pressure (default true)
+index_eviction_enabled = true
+# Eviction high-water ratio, 0 < low < high <= 1 (default 0.85)
+index_eviction_high_ratio = 0.85
+# Eviction low-water target ratio (default 0.65)
+index_eviction_low_ratio = 0.65
 
-[bootstrap]
-# Whether to automatically create the default Space
-auto_create_default_space = true
-# Default Space name
-default_space_name = "default"
-# Single-user mode (skips authentication and always uses the default user; suitable for personal use)
-single_user_mode = false
+[query_resource]
+# Maximum memory per query in bytes, 0 means unlimited (default 0)
+max_memory_per_query = 0
+# Maximum concurrent queries (default 100)
+max_concurrent_queries = 100
+# Query timeout in seconds, 0 means no timeout (default 0)
+query_timeout_secs = 0
+# Maximum result set size in rows, 0 means unlimited (default 0)
+max_result_size = 0
+# Maximum vertices scanned by a single query (default 1000000)
+max_vertex_scan = 1000000
+# Maximum edges scanned by a single query (default 10000000)
+max_edge_scan = 10000000
 
-[http]
-# Whether to enable CORS (when disabled, the CORS layer is not mounted)
-cors_enabled = true
-# CORS allowed origins (empty means permissive development mode; production must list exact origins)
-cors_allowed_origins = []
+[fulltext]
+# Enable the local BM25 fulltext index (default false)
+enabled = false
+# Engine that produced the indexes
+default_engine = "Bm25"
+# Fulltext index directory (defaults to <storage_path>/fulltext)
+index_path = "data/fulltext"
+# Index-manager cache entries (default 100)
+cache_size = 100
+# Cached result sets (default 1000)
+max_result_cache = 1000
+# Result cache TTL in seconds (default 60)
+result_cache_ttl_secs = 60
 
-[security.password_policy]
-# Minimum password length (floor is 8)
-min_length = 8
-# Four character-class requirements
-require_uppercase = true
-require_lowercase = true
-require_digit = true
-require_special = false
-# Maximum password age in days (0 means no expiration)
-max_age_days = 0
-# Number of historical passwords to keep (0 disables reuse checks)
-history_size = 0
+[fulltext.sync]
+# In-memory queue depth before backpressure (default 10000)
+queue_size = 10000
+# Sync batch interval in milliseconds (default 1000)
+commit_interval_ms = 1000
+# Batch size per sync round (default 100)
+batch_size = 100
+# What a failed sync batch does: fail_open | fail_closed (default fail_open)
+failure_policy = "fail_open"
+
+[fulltext.tantivy]
+# Index writer memory budget in bytes (default 50000000)
+writer_memory_budget = 50000000
+# Tokenizer: jieba | raw | default | whitespace
+tokenizer = "default"
+# Document store cache blocks (default 100)
+doc_store_cache_num_blocks = 100
+
+[fulltext.tantivy.bm25_params]
+# BM25 term-frequency saturation
+k1 = 1.2
+# BM25 length normalization, 0.0..=1.0
+b = 0.75
+
+[monitoring]
+# Enable monitoring (default true)
+enabled = true
+# Retained query portraits (default 1000)
+memory_cache_size = 1000
+# Slow query threshold in milliseconds; must be greater than 0 (default 1000)
+slow_query_threshold_ms = 1000
+# Query-progress notification interval in rows, 0 disables (default 0)
+progress_report_rows_interval = 0
+# Latency histogram sample limit, 100..=100000 (default 10000)
+histogram_max_samples = 10000
+# Timeseries ring retention in seconds, 60..=86400 (default 3600)
+timeseries_retention_secs = 3600
+# Resource sampling interval in seconds, 1..=3600 (default 60)
+resource_sample_interval_secs = 60
+
+[monitoring.slow_query_log]
+# Enable the dedicated slow-query stream (default true)
+enabled = true
+# File name or absolute path; a bare name lands in [log].dir
+log_file_path = "slow_query.log"
+# Rotation threshold in megabytes (default 100)
+max_file_size_mb = 100
+# Rotated files to keep (default 5)
+max_files = 5
+# Verbose multi-line format (default false)
+verbose_format = false
+# Async write buffer entries (default 100)
+buffer_size = 100
+# JSON lines format (default false)
+json_format = false
+
+[migration]
+# Rows per migration batch (default 1000)
+batch_size = 1000
+# Drain timeout in milliseconds (default 5000)
+drain_timeout_ms = 5000
+# Minimum free disk bytes required before a backup (default 0)
+min_free_bytes = 0
 
 [optimizer]
 max_iteration_rounds = 5
@@ -69,6 +198,12 @@ enable_property_pruning = true
 enable_adaptive_iteration = true
 stable_threshold = 2
 min_iteration_rounds = 1
+# Rows sampled per tag/edge type per statistics collection (default 10000)
+statistics_sample_limit = 10000
+# Minimum data-epoch advance that triggers an automatic refresh (default 100)
+statistics_min_epoch_delta = 100
+# Cost preset for the storage medium: auto | hdd | ssd | memory
+storage_cost_profile = "auto"
 
 [optimizer.rules]
 # List of disabled rules
@@ -91,17 +226,15 @@ max_buffered_chunks = 10
 # vertex_id_start = 0
 # vertex_id_end = 100000
 
-
-[monitoring]
-enabled = true
-memory_cache_size = 1000
-slow_query_threshold_ms = 1000
-# Row interval for query-progress notifications (0 disables emission).
-progress_report_rows_interval = 0
+[columnar]
+# Storage column-block scan path (default true)
+column_block_enabled = true
 
 [grpc]
 # Whether to enable the gRPC service
 enabled = true
+# Interface the gRPC listener binds to
+bind_address = "127.0.0.1"
 # gRPC service port
 port = 9669
 # Maximum number of concurrent connections
@@ -118,6 +251,122 @@ keepalive_timeout_secs = 10
 connection_timeout_secs = 10
 # Request timeout (seconds, 0 disables)
 request_timeout_secs = 60
+
+# gRPC TLS material. This build does not terminate TLS itself: enable this
+# only behind a load balancer or sidecar that already provides TLS to
+# clients, and leave it disabled otherwise.
+# [grpc.tls]
+# enabled = false
+# cert_file = "~/.linkrs/tls/server.pem"
+# key_file = "~/.linkrs/tls/server.key"
+# ca_file = "~/.linkrs/tls/ca.pem"
+# require_client_cert = false
+
+[http]
+# Whether to enable the HTTP service
+enabled = true
+# Interface the HTTP listener binds to; loopback keeps the management API local
+bind_address = "127.0.0.1"
+# HTTP service port; must differ from grpc.port
+port = 9758
+# Request timeout (seconds)
+request_timeout_secs = 60
+# Maximum request body size (bytes)
+max_request_size = 10485760  # 10MB
+# Whether to enable CORS (when disabled, the CORS layer is not mounted)
+cors_enabled = true
+# CORS allowed origins. Empty keeps the permissive local-development behavior
+# and is rejected when bind_address is not loopback; production must list
+# exact origins such as "https://console.example.com".
+cors_allowed_origins = []
+# Directory serving the built web console (default: not served)
+# static_dir = "~/.linkrs/web"
+# This build does not terminate TLS itself: terminate HTTPS at a reverse
+# proxy and keep this disabled.
+# https_enabled = false
+# https_cert_file = "~/.linkrs/tls/server.pem"
+# https_key_file = "~/.linkrs/tls/server.key"
+
+[auth]
+# Whether to enable authorization (when false, all permission checks are skipped)
+enable_authorize = true
+# Login failure limit (0 means no limit)
+failed_login_attempts = 5
+# Session idle timeout (seconds, 0 disables idle reclamation)
+session_idle_timeout_secs = 3600
+# Default username
+default_username = "root"
+# The bootstrap password is never stored in this file. Resolve it by setting
+# LINKRS_PASSWORD, or let the first start generate a random password and
+# write it to <storage_path>/auth/bootstrap_password with owner-only access.
+# Whether to force changing the default password (on first login)
+force_change_default_password = true
+# bcrypt password hash cost (4-12; higher is safer but slower; may be lowered on low-end local machines)
+bcrypt_cost = 12
+
+[connection_pool]
+# Minimum idle client connections (default 5)
+min_idle = 5
+# Maximum client connections (default 50)
+max_size = 50
+# Connection timeout (seconds)
+connection_timeout_secs = 30
+# Idle timeout (seconds)
+idle_timeout_secs = 600
+# Maximum connection lifetime (seconds)
+max_lifetime_secs = 1800
+# Health check interval (seconds, 0 disables)
+health_check_interval_secs = 30
+# Connection recycling age (seconds, 0 disables)
+max_age_secs = 0
+
+[bootstrap]
+# Whether to automatically create the default Space
+auto_create_default_space = true
+# Default Space name
+default_space_name = "default"
+# Single-user mode (skips authentication and always uses the default user;
+# requires http.bind_address to be loopback)
+single_user_mode = false
+
+# TLS material for the internal security layer. This build does not
+# terminate TLS itself; terminate it at a reverse proxy and keep this
+# disabled.
+[security.ssl]
+enabled = false
+# cert_file = "~/.linkrs/tls/server.pem"
+# key_file = "~/.linkrs/tls/server.key"
+# ca_file = "~/.linkrs/tls/ca.pem"
+# require_client_cert = false
+
+[security.audit]
+# Audit logging is a compliance requirement; disabled by default
+enabled = false
+# File name or absolute path; a bare name lands in [log].dir
+log_file = "audit.log"
+# Log successful operations
+log_success = true
+# Log failed operations
+log_failure = true
+# Log full query text (may contain sensitive literals)
+log_query_content = false
+# Rotation threshold in megabytes (default 100)
+max_file_size_mb = 100
+# Rotated files to keep (default 10)
+max_files = 10
+
+[security.password_policy]
+# Minimum password length (floor is 8)
+min_length = 8
+# Four character-class requirements
+require_uppercase = true
+require_lowercase = true
+require_digit = true
+require_special = false
+# Maximum password age in days (0 means no expiration)
+max_age_days = 0
+# Number of historical passwords to keep (0 disables reuse checks)
+history_size = 0
 
 [vector]
 # Whether to enable vector search (secondary index, disabled by default; must be enabled explicitly)

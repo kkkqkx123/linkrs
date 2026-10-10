@@ -53,7 +53,31 @@ pub async fn start_service_with_config_path(
     config_path: Option<PathBuf>,
 ) -> DBResult<()> {
     info!("Initializing Linkrs service...");
-    info!("Configuration loaded: {:?}", config);
+
+    config.validate().map_err(|error| {
+        linkrs_core::DBError::validation(format!("Invalid configuration: {}", error))
+    })?;
+
+    let mut config = config;
+    match config.resolve_bootstrap_password() {
+        Ok(source) => info!(
+            "Bootstrap account '{}' password source: {:?}",
+            config.server.auth.default_username, source
+        ),
+        Err(error) => {
+            return Err(linkrs_core::DBError::validation(format!(
+                "Failed to resolve the bootstrap password: {}",
+                error
+            )))
+        }
+    }
+    info!(
+        "Listeners: http {}:{}, grpc {}:{}",
+        config.http_bind_address(),
+        config.http_port(),
+        config.grpc_bind_address(),
+        config.grpc_port()
+    );
 
     // Apply the bcrypt cost factor before any password hashing happens.
     // Only the first call in the process takes effect.
@@ -62,7 +86,7 @@ pub async fn start_service_with_config_path(
     info!(
         "Log system has been initialized: {}/{}",
         config.log_dir(),
-        config.log_file()
+        config.log_basename()
     );
 
     // Create shared StatsManager for all components before wiring storage decorators.
@@ -473,8 +497,8 @@ pub async fn start_service_with_config_path(
 
     info!(
         "Starting HTTP server on {}:{}",
-        config.host(),
-        config.port()
+        config.http_bind_address(),
+        config.http_port()
     );
 
     // Start HTTP server

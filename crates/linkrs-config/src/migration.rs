@@ -16,6 +16,7 @@ fn default_drain_timeout_ms() -> u64 {
 /// `migration.lock`); when no data directory is available the
 /// corresponding capability stays disabled instead of failing.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct MigrationConfig {
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,

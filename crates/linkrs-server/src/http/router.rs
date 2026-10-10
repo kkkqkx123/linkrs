@@ -47,6 +47,7 @@ use super::{
 ///
 /// Routing structure:
 /// /v1/health – Health check (public)
+/// – /v1/metrics – Prometheus scrape endpoint (public)
 /// – /v1/auth/* – Related to authentication (public information)
 /// – /v1/sessions/* – Session management (authentication required)
 /// /v1/query – Execution of a query (authentication required)
@@ -73,6 +74,7 @@ pub fn create_router<
     // Public route (no authentication required)
     let public_routes = Router::new()
         .route("/health", get(health::check))
+        .route("/metrics", get(super::handlers::metrics::metrics))
         .route("/auth/login", post(login))
         .route(
             // POST /sessions verifies credentials itself, so it lives in the

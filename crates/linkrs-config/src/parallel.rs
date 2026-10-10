@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Flattened into the top-level `[parallel]` TOML section.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ParallelConfig {
     /// Master switch for intra-query parallel partitioning.
     pub enabled: bool,

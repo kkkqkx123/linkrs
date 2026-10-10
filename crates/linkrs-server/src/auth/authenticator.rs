@@ -57,7 +57,7 @@ impl PasswordAuthenticator {
     /// Create default password authenticator (supports configured username and password)
     pub fn new_default(config: AuthConfig) -> Self {
         let default_username = config.default_username.clone();
-        let default_password = config.default_password.clone();
+        let default_password = config.bootstrap_password.clone();
 
         Self::new(
             move |username: &str, password: &str| {
@@ -210,7 +210,7 @@ mod tests {
             failed_login_attempts: 3,
             session_idle_timeout_secs: 3600,
             default_username: "test".to_string(),
-            default_password: "test123".to_string(),
+            bootstrap_password: "test123".to_string(),
             force_change_default_password: true,
             bcrypt_cost: 12,
         }
@@ -239,7 +239,7 @@ mod tests {
             failed_login_attempts: 0, // Disable Login Restrictions
             session_idle_timeout_secs: 3600,
             default_username: "admin".to_string(),
-            default_password: "admin123".to_string(),
+            bootstrap_password: "admin123".to_string(),
             force_change_default_password: false,
             bcrypt_cost: 12,
         };
@@ -260,7 +260,7 @@ mod tests {
             failed_login_attempts: 2, // Maximum 2 failures
             session_idle_timeout_secs: 3600,
             default_username: "test".to_string(),
-            default_password: "test123".to_string(),
+            bootstrap_password: "test123".to_string(),
             force_change_default_password: false,
             bcrypt_cost: 12,
         };
@@ -303,7 +303,7 @@ mod tests {
             failed_login_attempts: 2,
             session_idle_timeout_secs: 3600,
             default_username: "test".to_string(),
-            default_password: "test123".to_string(),
+            bootstrap_password: "test123".to_string(),
             force_change_default_password: false,
             bcrypt_cost: 12,
         };
@@ -343,7 +343,7 @@ mod tests {
             failed_login_attempts: 0,
             session_idle_timeout_secs: 3600,
             default_username: "test".to_string(),
-            default_password: "test123".to_string(),
+            bootstrap_password: "test123".to_string(),
             force_change_default_password: false,
             bcrypt_cost: 12,
         };

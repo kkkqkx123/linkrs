@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// SSL/TLS configuration
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct SslConfig {
     /// Enable SSL/TLS
     pub enabled: bool,
@@ -39,10 +40,12 @@ impl SslConfig {
 
 /// Audit log configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AuditConfig {
     /// Enable audit logging
     pub enabled: bool,
-    /// Audit log file path
+    /// Audit log file name or absolute path. A bare file name resolves
+    /// against `[log].dir`.
     pub log_file: String,
     /// Log successful operations
     pub log_success: bool,
@@ -50,7 +53,7 @@ pub struct AuditConfig {
     pub log_failure: bool,
     /// Log query content
     pub log_query_content: bool,
-    /// Maximum log file size (MB)
+    /// Maximum log file size in megabytes before rotation
     pub max_file_size_mb: u64,
     /// Maximum number of log files to keep
     pub max_files: u32,
@@ -61,7 +64,7 @@ impl AuditConfig {
     pub fn new() -> Self {
         Self {
             enabled: false,
-            log_file: "logs/audit.log".to_string(),
+            log_file: "audit.log".to_string(),
             log_success: true,
             log_failure: true,
             log_query_content: false,
@@ -84,13 +87,12 @@ impl AuditConfig {
             return Err("Audit log file path cannot be empty".to_string());
         }
 
-        if self.max_file_size_mb == 0 {
-            return Err("Max file size must be greater than 0".to_string());
-        }
-
-        if self.max_files == 0 {
-            return Err("Max files must be greater than 0".to_string());
-        }
+        crate::validate_log_file_field(
+            "security.audit.log_file",
+            &self.log_file,
+            self.max_file_size_mb,
+            self.max_files,
+        )?;
 
         Ok(())
     }
@@ -98,6 +100,7 @@ impl AuditConfig {
 
 /// Password policy configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PasswordPolicyConfig {
     /// Minimum password length
     pub min_length: usize,
@@ -196,6 +199,7 @@ impl PasswordPolicyConfig {
 
 /// Security configuration aggregator
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     /// SSL/TLS configuration
     #[serde(default)]
@@ -265,9 +269,27 @@ mod tests {
     fn test_audit_config_default() {
         let config = AuditConfig::default();
         assert!(!config.enabled);
-        assert_eq!(config.log_file, "logs/audit.log");
+        assert_eq!(config.log_file, "audit.log");
         assert!(config.log_success);
         assert!(config.log_failure);
+    }
+
+    #[test]
+    fn test_audit_config_rejects_relative_directory() {
+        let config = AuditConfig::default();
+        assert!(config.validate().is_ok());
+
+        let nested = AuditConfig {
+            log_file: "logs/audit.log".to_string(),
+            ..Default::default()
+        };
+        assert!(nested.validate().is_err());
+
+        let absolute = AuditConfig {
+            log_file: "/var/log/linkrs/audit.log".to_string(),
+            ..Default::default()
+        };
+        assert!(absolute.validate().is_ok());
     }
 
     #[test]

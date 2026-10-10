@@ -3,18 +3,28 @@
 use serde::{Deserialize, Serialize};
 
 /// Log configuration
+///
+/// `[log]` owns the main log stream: destination directory, file basename,
+/// rotation policy and output format. Slow-query and audit logs share
+/// `dir` and the megabyte rotation unit.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct LogConfig {
     /// Log level
     pub level: String,
-    /// Log directory
+    /// Log directory (absolute after loading; supports `~`)
     pub dir: String,
-    /// Log file name
-    pub file: String,
-    /// Maximum size of a single log file (bytes)
-    pub max_file_size: u64,
-    /// Maximum number of log files
+    /// Log file basename without extension. The `.log` extension and the
+    /// rotation numbering are appended by the log library.
+    pub basename: String,
+    /// Maximum size of a single log file, in megabytes
+    pub max_file_size_mb: u64,
+    /// Maximum number of log files to keep
     pub max_files: usize,
+    /// Mirror log records to stdout in addition to the file
+    pub stdout: bool,
+    /// Emit one JSON object per line instead of the plain-text format
+    pub json_format: bool,
 }
 
 impl Default for LogConfig {
@@ -22,9 +32,11 @@ impl Default for LogConfig {
         Self {
             level: "info".to_string(),
             dir: "logs".to_string(),
-            file: "linkrs".to_string(),
-            max_file_size: 100 * 1024 * 1024, // 100MB
+            basename: "linkrs".to_string(),
+            max_file_size_mb: 100,
             max_files: 5,
+            stdout: false,
+            json_format: false,
         }
     }
 }
@@ -40,11 +52,11 @@ impl LogConfig {
             return Err("Log directory cannot be empty".to_string());
         }
 
-        if self.file.is_empty() {
-            return Err("Log file name cannot be empty".to_string());
+        if self.basename.is_empty() {
+            return Err("Log basename cannot be empty".to_string());
         }
 
-        if self.max_file_size == 0 {
+        if self.max_file_size_mb == 0 {
             return Err("Max file size must be greater than 0".to_string());
         }
 
@@ -65,9 +77,11 @@ mod tests {
         let config = LogConfig::default();
         assert_eq!(config.level, "info");
         assert_eq!(config.dir, "logs");
-        assert_eq!(config.file, "linkrs");
-        assert_eq!(config.max_file_size, 100 * 1024 * 1024);
+        assert_eq!(config.basename, "linkrs");
+        assert_eq!(config.max_file_size_mb, 100);
         assert_eq!(config.max_files, 5);
+        assert!(!config.stdout);
+        assert!(!config.json_format);
     }
 
     #[test]
@@ -80,5 +94,17 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid_config.validate().is_err());
+
+        let invalid_basename = LogConfig {
+            basename: String::new(),
+            ..Default::default()
+        };
+        assert!(invalid_basename.validate().is_err());
+
+        let invalid_size = LogConfig {
+            max_file_size_mb: 0,
+            ..Default::default()
+        };
+        assert!(invalid_size.validate().is_err());
     }
 }

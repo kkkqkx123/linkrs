@@ -38,6 +38,12 @@ pub async fn run_server<
     tracing::info!("Linkrs gRPC service listening on {}", addr);
 
     let grpc_cfg = config.grpc().clone();
+    if grpc_cfg.tls.enabled {
+        return Err(format!(
+            "grpc.tls.enabled is not served by this build; terminate TLS upstream and leave it disabled"
+        )
+        .into());
+    }
     let builder = Server::builder();
     let builder = if grpc_cfg.request_timeout_secs > 0 {
         builder.timeout(std::time::Duration::from_secs(

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// They are on by default; set `column_block_enabled` to false or export
 /// `LINKRS_COLUMN_BLOCK_ENABLED=0` to roll back to the row-based path.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ColumnarConfig {
     /// Enable the storage column-block scan path.
     ///

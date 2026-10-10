@@ -394,7 +394,7 @@ fn create_test_config() -> AuthConfig {
         failed_login_attempts: 5,
         session_idle_timeout_secs: 3600,
         default_username: "root".to_string(),
-        default_password: "root".to_string(),
+        bootstrap_password: "root".to_string(),
         force_change_default_password: true,
         bcrypt_cost: 12,
     }
@@ -656,7 +656,7 @@ fn test_password_authenticator_default() {
         failed_login_attempts: 0, // Disable Login Restrictions
         session_idle_timeout_secs: 3600,
         default_username: "admin".to_string(),
-        default_password: "admin123".to_string(),
+        bootstrap_password: "admin123".to_string(),
         force_change_default_password: false,
         bcrypt_cost: 12,
     };
@@ -706,7 +706,7 @@ fn test_password_authenticator_login_attempts_limit() {
         failed_login_attempts: 3, // Maximum 3 attempts
         session_idle_timeout_secs: 3600,
         default_username: "root".to_string(),
-        default_password: "root".to_string(),
+        bootstrap_password: "root".to_string(),
         force_change_default_password: false,
         bcrypt_cost: 12,
     };

@@ -41,6 +41,7 @@ impl TokenizerKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Bm25Params {
     pub k1: f32,
     pub b: f32,
@@ -53,6 +54,7 @@ impl Default for Bm25Params {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TantivyConfig {
     pub writer_memory_budget: usize,
     #[serde(default)]
@@ -87,6 +89,7 @@ pub enum SyncFailurePolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncConfig {
     #[serde(default = "default_queue_size")]
     pub queue_size: usize,
@@ -122,6 +125,7 @@ fn default_batch_size() -> usize {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FulltextConfig {
     pub enabled: bool,
     /// Engine that produced the indexes. Only the local BM25 engine exists;
@@ -147,5 +151,60 @@ impl Default for FulltextConfig {
             max_result_cache: 1000,
             result_cache_ttl_secs: 60,
         }
+    }
+}
+
+impl FulltextConfig {
+    /// Validate the configuration.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.cache_size == 0 {
+            return Err("fulltext cache_size must be greater than 0".to_string());
+        }
+        if self.max_result_cache == 0 {
+            return Err("fulltext max_result_cache must be greater than 0".to_string());
+        }
+        if self.result_cache_ttl_secs == 0 {
+            return Err("fulltext result_cache_ttl_secs must be greater than 0".to_string());
+        }
+        if self.tantivy.writer_memory_budget == 0 {
+            return Err("fulltext writer_memory_budget must be greater than 0".to_string());
+        }
+        if self.tantivy.doc_store_cache_num_blocks == 0 {
+            return Err("fulltext doc_store_cache_num_blocks must be greater than 0".to_string());
+        }
+        if !self.tantivy.bm25_params.k1.is_finite() || self.tantivy.bm25_params.k1 < 0.0 {
+            return Err("fulltext bm25_params.k1 must be a non-negative number".to_string());
+        }
+        if !self.tantivy.bm25_params.b.is_finite()
+            || !(0.0..=1.0).contains(&self.tantivy.bm25_params.b)
+        {
+            return Err("fulltext bm25_params.b must be within 0.0..=1.0".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fulltext_config_validate() {
+        assert!(FulltextConfig::default().validate().is_ok());
+
+        let zero_cache = FulltextConfig {
+            cache_size: 0,
+            ..Default::default()
+        };
+        assert!(zero_cache.validate().is_err());
+
+        let bm25 = FulltextConfig {
+            tantivy: TantivyConfig {
+                bm25_params: Bm25Params { k1: 1.2, b: 1.5 },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(bm25.validate().is_err());
     }
 }

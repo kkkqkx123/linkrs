@@ -570,7 +570,7 @@ fn test_parse_show_configs_with_module() {
 
 #[test]
 fn test_parse_update_configs() {
-    let mut ctx = create_parser_context("UPDATE CONFIGS max_connections = 100");
+    let mut ctx = create_parser_context("UPDATE CONFIGS max_sessions = 100");
     let result = StmtParser::parse_statement(&mut ctx);
     assert!(
         result.is_ok(),
@@ -580,7 +580,7 @@ fn test_parse_update_configs() {
 
     if let Ok(Stmt::UpdateConfigs(stmt)) = result {
         assert!(stmt.module.is_none());
-        assert_eq!(stmt.config_name, "max_connections");
+        assert_eq!(stmt.config_name, "max_sessions");
     } else {
         panic!("Expected UpdateConfigs statement");
     }

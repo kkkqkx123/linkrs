@@ -36,6 +36,12 @@ pub async fn start_http_server<
     use axum::serve;
     use tokio::net::TcpListener;
 
+    if config.server.http.https_enabled {
+        return Err(linkrs_core::DBError::validation(
+            "http.https_enabled is not served by this build; terminate TLS upstream and leave it disabled",
+        ));
+    }
+
     let state = crate::http::AppState::new(server.clone());
 
     // Create WebState for web management APIs
@@ -53,7 +59,7 @@ pub async fn start_http_server<
 
     let app = crate::http::router::create_router(state, web_router);
 
-    let addr = format!("{}:{}", config.host(), config.port());
+    let addr = format!("{}:{}", config.http_bind_address(), config.http_port());
     let listener = TcpListener::bind(&addr).await?;
 
     info!("HTTP server listening on {}", addr);
@@ -86,6 +92,12 @@ pub async fn start_http_and_grpc_servers<
     use axum::serve;
     use tokio::net::TcpListener;
 
+    if config.server.http.https_enabled {
+        return Err(linkrs_core::DBError::validation(
+            "http.https_enabled is not served by this build; terminate TLS upstream and leave it disabled",
+        ));
+    }
+
     let http_state = crate::http::AppState::new(http_server.clone());
 
     // Create WebState for web management APIs
@@ -104,12 +116,12 @@ pub async fn start_http_and_grpc_servers<
     let http_app = crate::http::router::create_router(http_state.clone(), web_router);
 
     // Setup gRPC address
-    let grpc_addr = format!("{}:{}", config.host(), config.grpc_port())
+    let grpc_addr = format!("{}:{}", config.grpc_bind_address(), config.grpc_port())
         .parse::<std::net::SocketAddr>()
         .map_err(|e| linkrs_core::error::DBError::internal(e.to_string()))?;
 
     // Setup HTTP address
-    let http_addr = format!("{}:{}", config.host(), config.port());
+    let http_addr = format!("{}:{}", config.http_bind_address(), config.http_port());
 
     info!("HTTP server listening on {}", http_addr);
     info!("gRPC server listening on {}", grpc_addr);

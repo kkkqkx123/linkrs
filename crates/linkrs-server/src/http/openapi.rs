@@ -27,6 +27,7 @@ use utoipa::OpenApi;
     info(title = "Linkrs API", version = "1.0.0"),
     paths(
         crate::http::handlers::health::check,
+        crate::http::handlers::metrics::metrics,
         crate::http::handlers::auth::login,
         crate::http::handlers::auth::logout,
         crate::http::handlers::auth::me,

@@ -54,6 +54,7 @@ pub use security::*;
 
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -161,6 +162,33 @@ impl ServerConfig {
         self.auth.validate()?;
         self.connection_pool.validate()?;
         self.security.validate()?;
+        self.validate_listeners()?;
+        Ok(())
+    }
+
+    /// Cross-section rules that only make sense once every listener is known.
+    fn validate_listeners(&self) -> Result<(), String> {
+        if self.grpc.enabled && self.http.enabled && self.http.port == self.grpc.port {
+            return Err(format!(
+                "http.port and grpc.port must differ, both are {}",
+                self.http.port
+            ));
+        }
+
+        let http_loopback = is_loopback_address(&self.http.bind_address);
+        if !http_loopback && self.http.cors_enabled && self.http.cors_allowed_origins.is_empty() {
+            return Err(
+                "http.cors_allowed_origins must list exact origins when http.bind_address is not loopback"
+                    .to_string(),
+            );
+        }
+
+        if !http_loopback && self.bootstrap.single_user_mode {
+            return Err(
+                "bootstrap.single_user_mode requires http.bind_address to be loopback".to_string(),
+            );
+        }
+
         Ok(())
     }
 }
@@ -199,6 +227,7 @@ pub enum VectorEngineKind {
 
 /// IVF settings for the local vector engine (raw TOML surface).
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct IvfSettings {
     #[serde(default)]
     pub auto_promotion: bool,
@@ -257,6 +286,7 @@ fn default_ivf_nprobe() -> usize {
 
 /// HNSW settings for the local vector engine (raw TOML surface).
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HnswSettings {
     #[serde(default = "default_hnsw_m")]
     pub m: usize,
@@ -294,6 +324,7 @@ fn default_hnsw_ef_construct() -> usize {
 
 /// Quantization settings for the local vector engine (raw TOML surface).
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct QuantizationSettings {
     #[serde(default)]
     pub quantization_type: Option<String>,
@@ -309,6 +340,7 @@ pub struct QuantizationSettings {
 
 /// Local vector engine configuration
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct LocalVectorConfig {
     #[serde(default)]
     pub data_dir: Option<PathBuf>,
@@ -322,6 +354,7 @@ pub struct LocalVectorConfig {
 
 /// MVCC settings for vector search (default off).
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct VectorMvccConfig {
     #[serde(default)]
     pub ssi_read_set: bool,
@@ -343,6 +376,7 @@ pub enum VectorCollectionGranularity {
 
 /// Collection settings for vector indexes.
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct VectorCollectionConfig {
     #[serde(default)]
     pub granularity: VectorCollectionGranularity,
@@ -350,6 +384,7 @@ pub struct VectorCollectionConfig {
 
 /// Outbox retention settings.
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct OutboxRetentionConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -436,7 +471,8 @@ impl VectorRerankConfig {
 }
 
 /// Vector search configuration
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct VectorConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -487,6 +523,28 @@ fn default_true() -> bool {
     true
 }
 
+/// Redact every credential-bearing sub-configuration wherever the vector
+/// section is printed. Endpoint addresses stay visible; API keys do not.
+impl fmt::Debug for VectorConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("VectorConfig");
+        debug
+            .field("enabled", &self.enabled)
+            .field("engine", &self.engine)
+            .field("mvcc", &self.mvcc)
+            .field("collection", &self.collection)
+            .field("retention", &self.retention)
+            .field("auto_embed_text", &self.auto_embed_text);
+        #[cfg(feature = "embedding")]
+        debug.field("embedding_configured", &self.embedding.is_some());
+        #[cfg(feature = "vector-qdrant")]
+        debug.field("qdrant_enabled", &self.qdrant.enabled);
+        #[cfg(feature = "rerank")]
+        debug.field("rerank_configured", &self.rerank.is_some());
+        debug.finish()
+    }
+}
+
 impl Default for VectorConfig {
     fn default() -> Self {
         Self {
@@ -520,10 +578,40 @@ impl Config {
         let content = fs::read_to_string(path)?;
         let default_value: toml::Value = toml::from_str(&toml::to_string(&Config::default())?)?;
         let file_value: toml::Value = toml::from_str(&content)?;
+        Self::reject_unknown_sections(&default_value, &file_value)?;
         let merged_value = Self::merge_toml_values(default_value, file_value);
         let mut config: Config = toml::from_str(&toml::to_string(&merged_value)?)?;
         config.resolve_relative_paths(base_dir)?;
         Ok(config)
+    }
+
+    /// Reject top-level keys that are not configuration sections.
+    ///
+    /// `Config` flattens its sub-configurations, so serde itself cannot flag
+    /// unknown top-level keys. The serialized default names every valid
+    /// section, which keeps this list free of duplicated maintenance.
+    fn reject_unknown_sections(
+        default_value: &toml::Value,
+        file_value: &toml::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let known = default_value
+            .as_table()
+            .map(|table| table.keys().cloned().collect::<Vec<String>>())
+            .ok_or("Serialized default configuration is not a table")?;
+        let file_table = file_value
+            .as_table()
+            .ok_or("configuration file must contain a TOML table at the top level")?;
+        for key in file_table.keys() {
+            if !known.contains(key) {
+                return Err(format!(
+                    "unknown configuration section '[{}]': expected one of {}",
+                    key,
+                    known.join(", ")
+                )
+                .into());
+            }
+        }
+        Ok(())
     }
 
     pub fn load_user_config() -> Result<Self, Box<dyn std::error::Error>> {
@@ -568,7 +656,7 @@ impl Config {
 
         let slow_query_log_file = self.common.monitoring.slow_query_log.log_file_path.clone();
         self.common.monitoring.slow_query_log.log_file_path =
-            Self::resolve_string_path(base_dir, &slow_query_log_file)?;
+            Self::resolve_log_file_name(&self.common.log.dir, &slow_query_log_file)?;
 
         self.fulltext.index_path = Self::resolve_path_buf(base_dir, &self.fulltext.index_path)?;
 
@@ -612,7 +700,7 @@ impl Config {
 
             let audit_log_file = self.server.security.audit.log_file.clone();
             self.server.security.audit.log_file =
-                Self::resolve_string_path(base_dir, &audit_log_file)?;
+                Self::resolve_log_file_name(&self.common.log.dir, &audit_log_file)?;
         }
 
         #[cfg(feature = "embedded")]
@@ -629,6 +717,23 @@ impl Config {
         path_value: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
         Ok(Self::resolve_path_buf(base_dir, Path::new(path_value))?
+            .to_string_lossy()
+            .into_owned())
+    }
+
+    /// Resolve a log file field against the main log directory.
+    ///
+    /// Accepts a bare file name or an absolute path. Relative directories are
+    /// rejected so every log stream lands under one configured root.
+    fn resolve_log_file_name(
+        log_dir: &str,
+        path_value: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        if Path::new(path_value).is_absolute() {
+            return Ok(path_value.to_string());
+        }
+        Ok(Path::new(log_dir)
+            .join(path_value)
             .to_string_lossy()
             .into_owned())
     }
@@ -694,6 +799,7 @@ impl Config {
         self.server.validate()?;
         #[cfg(feature = "embedded")]
         self.embedded.validate()?;
+        self.fulltext.validate()?;
         Ok(())
     }
 
@@ -703,8 +809,8 @@ impl Config {
     pub fn log_dir(&self) -> &str {
         &self.common.log.dir
     }
-    pub fn log_file(&self) -> &str {
-        &self.common.log.file
+    pub fn log_basename(&self) -> &str {
+        &self.common.log.basename
     }
     pub fn host(&self) -> &str {
         &self.common.database.host
@@ -728,11 +834,26 @@ impl Config {
         self.server.grpc.enabled
     }
 
+    #[cfg(feature = "server")]
+    pub fn grpc_bind_address(&self) -> &str {
+        &self.server.grpc.bind_address
+    }
+
+    #[cfg(feature = "server")]
+    pub fn http_bind_address(&self) -> &str {
+        &self.server.http.bind_address
+    }
+
+    #[cfg(feature = "server")]
+    pub fn http_port(&self) -> u16 {
+        self.server.http.port
+    }
+
     pub fn storage_path(&self) -> &str {
         &self.common.database.storage_path
     }
-    pub fn max_connections(&self) -> usize {
-        self.common.database.max_connections
+    pub fn max_sessions(&self) -> usize {
+        self.common.database.max_sessions
     }
     pub fn transaction_timeout(&self) -> u64 {
         self.common.transaction.default_timeout
@@ -809,6 +930,159 @@ impl Config {
     }
 }
 
+/// Where the effective bootstrap password came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapPasswordSource {
+    /// Injected through the `LINKRS_PASSWORD` environment variable.
+    Environment,
+    /// Read from the stored owner-only secret file.
+    StoredFile,
+    /// Generated during this startup and persisted with owner-only access.
+    Generated,
+}
+
+/// Environment variable that injects the bootstrap password directly.
+#[cfg(feature = "server")]
+const BOOTSTRAP_PASSWORD_ENV: &str = "LINKRS_PASSWORD";
+
+/// Length of a generated bootstrap password.
+#[cfg(feature = "server")]
+const BOOTSTRAP_PASSWORD_LENGTH: usize = 24;
+
+impl Config {
+    /// Path of the stored bootstrap password, relative to the data directory.
+    pub fn bootstrap_password_path(&self) -> PathBuf {
+        PathBuf::from(&self.common.database.storage_path).join("auth/bootstrap_password")
+    }
+
+    /// Fill the bootstrap password used to seed and authenticate the default
+    /// administrator account.
+    ///
+    /// Precedence: `LINKRS_PASSWORD`, the stored secret file, then a freshly
+    /// generated secret persisted with owner-only permissions. The value is
+    /// held in memory only and never written back to the configuration file.
+    #[cfg(feature = "server")]
+    pub fn resolve_bootstrap_password(&mut self) -> Result<BootstrapPasswordSource, String> {
+        if let Some(password) = env::var(BOOTSTRAP_PASSWORD_ENV)
+            .ok()
+            .filter(|value| !value.is_empty())
+        {
+            self.server.auth.bootstrap_password = password;
+            return Ok(BootstrapPasswordSource::Environment);
+        }
+
+        let path = self.bootstrap_password_path();
+        match fs::read_to_string(&path) {
+            Ok(stored) => {
+                let stored = stored.trim().to_string();
+                if stored.is_empty() {
+                    return Err(format!(
+                        "bootstrap password file {} is empty",
+                        path.display()
+                    ));
+                }
+                self.server.auth.bootstrap_password = stored;
+                Ok(BootstrapPasswordSource::StoredFile)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let generated = generate_bootstrap_password();
+                write_owner_only_file(&path, &generated)?;
+                self.server.auth.bootstrap_password = generated;
+                Ok(BootstrapPasswordSource::Generated)
+            }
+            Err(error) => Err(format!(
+                "failed to read bootstrap password file {}: {}",
+                path.display(),
+                error
+            )),
+        }
+    }
+}
+
+/// Generate a random alphanumeric bootstrap password.
+#[cfg(feature = "server")]
+fn generate_bootstrap_password() -> String {
+    use rand::Rng;
+
+    rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(BOOTSTRAP_PASSWORD_LENGTH)
+        .map(char::from)
+        .collect()
+}
+
+/// Write a secret so only the owning user can read it back.
+#[cfg(feature = "server")]
+fn write_owner_only_file(path: &Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {}", parent.display(), error))?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|error| format!("failed to create {}: {}", path.display(), error))?;
+        file.write_all(contents.as_bytes())
+            .map_err(|error| format!("failed to write {}: {}", path.display(), error))?;
+        // Creation mode is masked by umask; re-apply it so an existing file
+        // cannot keep wider permissions.
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("failed to secure {}: {}", path.display(), error))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, contents)
+            .map_err(|error| format!("failed to write {}: {}", path.display(), error))?;
+    }
+
+    Ok(())
+}
+
+/// Validate a log file field shared by the slow-query and audit streams.
+///
+/// Rotation thresholds are expressed in megabytes to match `[log]`, and a
+/// relative directory is rejected so the file always lands under the
+/// configured log root.
+fn validate_log_file_field(
+    field: &str,
+    path_value: &str,
+    max_file_size_mb: u64,
+    max_files: u32,
+) -> Result<(), String> {
+    if max_file_size_mb == 0 {
+        return Err(format!("{field}: max file size must be greater than 0"));
+    }
+    if max_files == 0 {
+        return Err(format!("{field}: max files must be greater than 0"));
+    }
+    let path = Path::new(path_value);
+    if !path.is_absolute() && path.parent().is_some_and(|parent| parent != Path::new("")) {
+        return Err(format!(
+            "{field} must be a file name or an absolute path, got '{path_value}'"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether the address restricts the listener to the local machine.
+#[cfg(feature = "server")]
+fn is_loopback_address(address: &str) -> bool {
+    match address.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        Err(_) => address == "localhost",
+    }
+}
+
 impl std::ops::Deref for Config {
     type Target = CommonConfig;
     fn deref(&self) -> &Self::Target {
@@ -871,7 +1145,7 @@ mod tests {
 host = "0.0.0.0"
 port = 8080
 storage_path = "/tmp/linkrs"
-max_connections = 100
+max_sessions = 100
 
 [transaction]
 default_timeout = 60
@@ -880,8 +1154,8 @@ max_concurrent_transactions = 500
 [log]
 level = "debug"
 dir = "/var/log/linkrs"
-file = "linkrs"
-max_file_size = 104857600
+basename = "linkrs"
+max_file_size_mb = 100
 max_files = 10
 
 [storage]
@@ -1038,6 +1312,83 @@ storage_path = "data/linkrs"
     }
 
     #[test]
+    fn test_config_load_rejects_unknown_top_level_section() {
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let config_path = temp_dir.path().join("config.toml");
+        std::fs::write(&config_path, "[databse]\nhost = \"127.0.0.1\"\n")
+            .expect("Failed to write config");
+        let error = Config::load(&config_path)
+            .expect_err("a misspelled section must be rejected")
+            .to_string();
+        assert!(
+            error.contains("unknown configuration section '[databse]'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_config_load_rejects_unknown_key_in_section() {
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let config_path = temp_dir.path().join("config.toml");
+        std::fs::write(&config_path, "[database]\nhostname = \"127.0.0.1\"\n")
+            .expect("Failed to write config");
+        let error = Config::load(&config_path)
+            .expect_err("a misspelled key must be rejected")
+            .to_string();
+        assert!(
+            error.contains("hostname"),
+            "unknown key should be named in the error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_slow_query_log_resolves_under_log_dir() {
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let config_path = temp_dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[log]\ndir = \"main_logs\"\n\n[monitoring.slow_query_log]\nlog_file_path = \"slow.log\"\n",
+        )
+        .expect("Failed to write config");
+        let config = Config::load(&config_path).expect("Failed to load config");
+        assert_eq!(
+            config.common.monitoring.slow_query_log.log_file_path,
+            temp_dir.path().join("main_logs/slow.log").to_string_lossy()
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_audit_log_resolves_under_log_dir() {
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let config_path = temp_dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[log]\ndir = \"main_logs\"\n\n[security.audit]\nlog_file = \"audit.log\"\n",
+        )
+        .expect("Failed to write config");
+        let config = Config::load(&config_path).expect("Failed to load config");
+        assert_eq!(
+            config.server.security.audit.log_file,
+            temp_dir.path().join("main_logs/audit.log").to_string_lossy()
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_absolute_audit_log_bypasses_log_dir() {
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let config_path = temp_dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[log]\ndir = \"main_logs\"\n\n[security.audit]\nlog_file = \"/var/audit/audit.log\"\n",
+        )
+        .expect("Failed to write config");
+        let config = Config::load(&config_path).expect("Failed to load config");
+        assert_eq!(config.server.security.audit.log_file, "/var/audit/audit.log");
+    }
+
+    #[test]
     fn test_load_user_config_named_uses_linkrs_config_dir() {
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
         let config_dir = temp_dir.path().join("user-config");
@@ -1104,7 +1455,7 @@ storage_path = "storage"
 host = "127.0.0.1"
 port = 9758
 storage_path = "data/linkrs"
-max_connections = 10
+max_sessions = 10
 
 [vector]
 enabled = true
@@ -1188,5 +1539,151 @@ fusion = "linear_weighted"
             text_field: None,
         };
         assert!(bad_window.validate().is_err());
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_generate_bootstrap_password_has_expected_length() {
+        let first = generate_bootstrap_password();
+        let second = generate_bootstrap_password();
+        assert_eq!(first.chars().count(), BOOTSTRAP_PASSWORD_LENGTH);
+        assert!(first.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_ne!(first, second, "generated passwords must not repeat");
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_resolve_bootstrap_password_prefers_environment() {
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let mut config = Config::default();
+        config.common.database.storage_path = temp_dir.path().to_string_lossy().into_owned();
+        let previous = env::var(BOOTSTRAP_PASSWORD_ENV).ok();
+        env::set_var(BOOTSTRAP_PASSWORD_ENV, "injected-password");
+
+        let source = config
+            .resolve_bootstrap_password()
+            .expect("environment password should resolve");
+
+        if let Some(value) = previous {
+            env::set_var(BOOTSTRAP_PASSWORD_ENV, value);
+        } else {
+            env::remove_var(BOOTSTRAP_PASSWORD_ENV);
+        }
+
+        assert_eq!(source, BootstrapPasswordSource::Environment);
+        assert_eq!(config.server.auth.bootstrap_password, "injected-password");
+        assert!(
+            !config.bootstrap_password_path().exists(),
+            "the environment password must not touch the secret file"
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_resolve_bootstrap_password_generates_and_reuses_secret() {
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let mut config = Config::default();
+        config.common.database.storage_path = temp_dir.path().to_string_lossy().into_owned();
+        let previous = env::var(BOOTSTRAP_PASSWORD_ENV).ok();
+        env::remove_var(BOOTSTRAP_PASSWORD_ENV);
+
+        let first = config
+            .resolve_bootstrap_password()
+            .expect("generation should succeed");
+        let generated = config.server.auth.bootstrap_password.clone();
+        let path = config.bootstrap_password_path();
+        assert_eq!(first, BootstrapPasswordSource::Generated);
+        assert_eq!(generated.chars().count(), BOOTSTRAP_PASSWORD_LENGTH);
+        assert_eq!(fs::read_to_string(&path).expect("read secret"), generated);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path)
+                .expect("stat secret")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "secret file must be owner-only");
+        }
+
+        config.server.auth.bootstrap_password.clear();
+        let second = config
+            .resolve_bootstrap_password()
+            .expect("stored password should resolve");
+        assert_eq!(second, BootstrapPasswordSource::StoredFile);
+        assert_eq!(config.server.auth.bootstrap_password, generated);
+
+        if let Some(value) = previous {
+            env::set_var(BOOTSTRAP_PASSWORD_ENV, value);
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_config_debug_never_prints_bootstrap_password() {
+        let mut config = Config::default();
+        config.server.auth.bootstrap_password = "super-secret-value".to_string();
+        let rendered = format!("{:?}", config);
+        assert!(
+            !rendered.contains("super-secret-value"),
+            "config debug leaked the bootstrap password: {rendered}"
+        );
+    }
+
+    #[cfg(all(feature = "server", feature = "vector-qdrant"))]
+    #[test]
+    fn test_vector_config_debug_hides_api_keys() {
+        let mut config = Config::default();
+        config.vector.enabled = true;
+        config.vector.engine = VectorEngineKind::Qdrant;
+        config.vector.qdrant.enabled = true;
+        config.vector.qdrant.connection.api_key = Some("qdrant-secret".to_string());
+        let rendered = format!("{:?}", config.vector);
+        assert!(
+            !rendered.contains("qdrant-secret"),
+            "vector debug leaked the API key: {rendered}"
+        );
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_validate_rejects_duplicate_listener_ports() {
+        let mut config = Config::default();
+        config.server.grpc.port = config.server.http.port;
+        assert!(config.validate().is_err());
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_validate_rejects_permissive_cors_on_public_bind() {
+        let mut config = Config::default();
+        config.server.http.bind_address = "0.0.0.0".to_string();
+        assert!(
+            config.validate().is_err(),
+            "permissive CORS on a public bind must be rejected"
+        );
+
+        config.server.http.cors_allowed_origins = vec!["https://console.example".to_string()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn test_validate_rejects_single_user_mode_on_public_bind() {
+        let mut config = Config::default();
+        config.server.http.bind_address = "::".to_string();
+        config.server.bootstrap.single_user_mode = true;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_slow_query_threshold() {
+        let mut config = Config::default();
+        config.common.monitoring.slow_query_threshold_ms = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_default_config() {
+        assert!(Config::default().validate().is_ok());
     }
 }

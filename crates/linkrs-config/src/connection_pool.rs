@@ -7,6 +7,7 @@ use std::time::Duration;
 ///
 /// Controls connection pooling behavior for server mode.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectionPoolConfig {
     /// Minimum idle connections
     pub min_idle: usize,

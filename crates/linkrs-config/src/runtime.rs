@@ -38,6 +38,7 @@ impl SyncMode {
 ///
 /// Controls the runtime behavior of the embedded database instance.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     /// Database path; `None` indicates in-memory mode
     pub path: Option<PathBuf>,

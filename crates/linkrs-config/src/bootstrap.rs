@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Controls initial database setup and single-user mode.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct BootstrapConfig {
     /// Whether to automatically create the default Space
     pub auto_create_default_space: bool,

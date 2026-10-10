@@ -4,12 +4,14 @@ use serde::{Deserialize, Serialize};
 
 /// HTTP server configuration
 ///
-/// Configures the HTTP/REST API server behavior.
+/// `[http]` owns the HTTP listener binding. Defaults bind loopback; reaching
+/// the instance from another host requires an explicit bind address.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct HttpServerConfig {
     /// Whether to enable HTTP server
     pub enabled: bool,
-    /// Bind address
+    /// Interface the HTTP listener binds to
     pub bind_address: String,
     /// Port number
     pub port: u16,
@@ -37,7 +39,7 @@ impl Default for HttpServerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            bind_address: "0.0.0.0".to_string(),
+            bind_address: "127.0.0.1".to_string(),
             port: 9758,
             request_timeout_secs: 60,
             max_request_size: 10 * 1024 * 1024, // 10MB
@@ -120,7 +122,7 @@ mod tests {
         let config = HttpServerConfig::default();
         assert!(config.enabled);
         assert_eq!(config.port, 9758);
-        assert_eq!(config.bind_address, "0.0.0.0");
+        assert_eq!(config.bind_address, "127.0.0.1");
         assert!(config.cors_enabled);
         assert!(config.cors_allowed_origins.is_empty());
         assert!(!config.https_enabled);

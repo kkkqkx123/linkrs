@@ -2368,6 +2368,23 @@
         }
       }
     },
+    "/v1/metrics": {
+      "get": {
+        "tags": [
+          "Statistics"
+        ],
+        "summary": "Serve all collected metrics in the Prometheus text format.",
+        "operationId": "get_v1_metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus metrics in the text exposition format"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
     "/v1/migration/dry-run": {
       "post": {
         "tags": [

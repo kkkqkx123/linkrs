@@ -47,6 +47,7 @@ impl std::fmt::Display for CompressionAlgorithm {
 ///
 /// Configures the storage engine behavior and performance characteristics.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct StorageConfig {
     /// Storage engine type (propertygraph, rocksdb, etc.)
     #[serde(default)]
@@ -358,6 +359,7 @@ impl StorageConfig {
 ///
 /// Controls resource limits for query execution.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct QueryResourceConfig {
     /// Maximum memory per query (bytes, 0 = unlimited)
     #[serde(default)]

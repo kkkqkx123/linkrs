@@ -165,7 +165,7 @@ pub(crate) fn build_config_map(
             "host": config.common.database.host,
             "port": config.common.database.port,
             "storage_path": config.common.database.storage_path,
-            "max_connections": config.common.database.max_connections,
+            "max_sessions": config.common.database.max_sessions,
         },
         "transaction": {
             "default_timeout": config.common.transaction.default_timeout,
@@ -175,8 +175,8 @@ pub(crate) fn build_config_map(
         "log": {
             "level": config.common.log.level,
             "dir": config.common.log.dir,
-            "file": config.common.log.file,
-            "max_file_size": config.common.log.max_file_size,
+            "basename": config.common.log.basename,
+            "max_file_size_mb": config.common.log.max_file_size_mb,
             "max_files": config.common.log.max_files,
         },
         "auth": {

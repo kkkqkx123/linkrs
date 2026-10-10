@@ -141,7 +141,7 @@ impl<
         let query_manager = Arc::new(QueryManager::new_with_shared(session_events.clone()));
         let session_manager = GraphSessionManager::new_with_shared(
             format!("{}:{}", config.database.host, config.database.port),
-            config.database.max_connections,
+            config.database.max_sessions,
             session_idle_timeout,
             session_events.clone(),
         );
@@ -416,15 +416,15 @@ impl<
 
     /// Seed the default admin on first start and rebuild role mappings.
     ///
-    /// When the user table is empty, the configured default credentials are
+    /// When the user table is empty, the resolved bootstrap credentials are
     /// hashed into a new admin with the global God role; the plaintext
     /// password is never compared afterwards. Otherwise permission state is
     /// rebuilt from the persisted role segment so restarts keep grants.
     ///
     /// The seed credentials are intentionally exempt from the password
-    /// policy: the default password is weak by design for local bootstrap
-    /// and the account is forced through the must-change flow on first
-    /// login instead.
+    /// policy: the bootstrap password may be weak for local bootstrap and
+    /// the account is forced through the must-change flow on first login
+    /// instead.
     fn ensure_admin_seed_and_rebuild(
         storage: &Arc<S>,
         permission_manager: &Arc<PermissionManager>,
@@ -433,7 +433,7 @@ impl<
         let mut handle = (**storage).clone();
         if handle.list_users().is_empty() {
             let username = config.server.auth.default_username.clone();
-            let password = config.server.auth.default_password.clone();
+            let password = config.server.auth.bootstrap_password.clone();
             if !username.is_empty() && !password.is_empty() {
                 match linkrs_core::types::UserInfo::new(username.clone(), password) {
                     Ok(info) => {

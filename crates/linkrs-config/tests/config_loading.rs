@@ -20,7 +20,7 @@ storage_path = "data/linkrs"
 dir = "logs"
 
 [monitoring.slow_query_log]
-log_file_path = "logs/slow_query.log"
+log_file_path = "slow_query.log"
 
 [fulltext]
 index_path = "fulltext"

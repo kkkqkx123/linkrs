@@ -904,7 +904,7 @@ fn test_kill_query_execution() {
 
 #[test]
 fn test_update_configs_parser_basic() {
-    let query = "UPDATE CONFIGS max_connections = 100";
+    let query = "UPDATE CONFIGS max_sessions = 100";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -936,7 +936,7 @@ fn test_update_configs_parser_with_module() {
 
 #[test]
 fn test_update_configs_parser_multiple() {
-    let query = "UPDATE CONFIGS max_connections = 100, timeout = 30";
+    let query = "UPDATE CONFIGS max_sessions = 100, timeout = 30";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();
@@ -966,7 +966,7 @@ fn test_update_configs_execution() {
         Arc::new(OptimizerEngine::default()),
     );
 
-    let result = pipeline_manager.execute_query("UPDATE CONFIGS max_connections = 100");
+    let result = pipeline_manager.execute_query("UPDATE CONFIGS max_sessions = 100");
     match result {
         Ok(linkrs_query::executor::base::ExecutionResult::ConfigUpdate {
             module,
@@ -974,7 +974,7 @@ fn test_update_configs_execution() {
             value,
         }) => {
             assert_eq!(module, None);
-            assert_eq!(name, "max_connections");
+            assert_eq!(name, "max_sessions");
             assert_eq!(value, linkrs_core::Value::Int(100));
         }
         other => panic!("UPDATE CONFIGS should return an application intent, got: {other:?}"),
@@ -995,7 +995,7 @@ fn test_update_configs_with_module_and_expression() {
         Arc::new(OptimizerEngine::default()),
     );
 
-    let result = pipeline_manager.execute_query("UPDATE CONFIGS database max_connections = 50 * 2");
+    let result = pipeline_manager.execute_query("UPDATE CONFIGS database max_sessions = 50 * 2");
     match result {
         Ok(linkrs_query::executor::base::ExecutionResult::ConfigUpdate {
             module,
@@ -1003,7 +1003,7 @@ fn test_update_configs_with_module_and_expression() {
             value,
         }) => {
             assert_eq!(module, Some("database".to_string()));
-            assert_eq!(name, "max_connections");
+            assert_eq!(name, "max_sessions");
             assert_eq!(value, linkrs_core::Value::Int(100));
         }
         other => panic!("UPDATE CONFIGS should return an application intent, got: {other:?}"),
@@ -1024,7 +1024,7 @@ fn test_update_configs_non_constant_value_reports_error() {
         Arc::new(OptimizerEngine::default()),
     );
 
-    let result = pipeline_manager.execute_query("UPDATE CONFIGS max_connections = missing_var");
+    let result = pipeline_manager.execute_query("UPDATE CONFIGS max_sessions = missing_var");
     assert!(
         result.is_err(),
         "non-constant UPDATE CONFIGS value should fail, got: {result:?}"
@@ -1436,7 +1436,7 @@ fn test_management_update_configs_operations() {
     );
 
     let update_configs_queries = [
-        "UPDATE CONFIGS max_connections = 100",
+        "UPDATE CONFIGS max_sessions = 100",
         "UPDATE CONFIGS timeout = 30",
         "UPDATE CONFIGS storage cache_size = 1024",
     ];
@@ -1830,7 +1830,7 @@ fn test_show_configs_with_module() {
 
 #[test]
 fn test_update_configs() {
-    let query = "UPDATE CONFIGS max_connections = 100";
+    let query = "UPDATE CONFIGS max_sessions = 100";
     let mut parser = Parser::new(query);
 
     let result = parser.parse();

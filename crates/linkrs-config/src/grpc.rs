@@ -2,11 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::security::SslConfig;
+
 /// gRPC server configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct GrpcConfig {
     /// Whether to enable gRPC server
     pub enabled: bool,
+    /// Interface the gRPC listener binds to
+    pub bind_address: String,
     /// gRPC server port
     pub port: u16,
     /// Maximum concurrent connections
@@ -23,12 +28,17 @@ pub struct GrpcConfig {
     pub connection_timeout_secs: u64,
     /// Request timeout (seconds, 0 to disable)
     pub request_timeout_secs: u64,
+    /// TLS material for the gRPC listener. Leave disabled for loopback
+    /// deployments; a production listener must supply cert and key.
+    #[serde(default)]
+    pub tls: SslConfig,
 }
 
 impl Default for GrpcConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            bind_address: "127.0.0.1".to_string(),
             port: 9669,
             max_connections: 100,
             max_request_size: 10 * 1024 * 1024,  // 10MB
@@ -37,6 +47,7 @@ impl Default for GrpcConfig {
             keepalive_timeout_secs: 10,
             connection_timeout_secs: 10,
             request_timeout_secs: 60,
+            tls: SslConfig::default(),
         }
     }
 }
@@ -60,6 +71,8 @@ impl GrpcConfig {
             return Err("Max response size must be greater than 0".to_string());
         }
 
+        self.tls.validate()?;
+
         Ok(())
     }
 }
@@ -73,6 +86,7 @@ mod tests {
         let config = GrpcConfig::default();
         assert!(config.enabled);
         assert_eq!(config.port, 9669);
+        assert_eq!(config.bind_address, "127.0.0.1");
         assert_eq!(config.max_connections, 100);
         assert_eq!(config.max_request_size, 10 * 1024 * 1024);
         assert_eq!(config.max_response_size, 10 * 1024 * 1024);
@@ -80,6 +94,7 @@ mod tests {
         assert_eq!(config.keepalive_timeout_secs, 10);
         assert_eq!(config.connection_timeout_secs, 10);
         assert_eq!(config.request_timeout_secs, 60);
+        assert!(!config.tls.enabled);
     }
 
     #[test]
@@ -98,5 +113,25 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid_config.validate().is_err());
+    }
+
+    #[test]
+    fn test_grpc_tls_requires_cert_and_key() {
+        let mut config = GrpcConfig::default();
+        assert!(config.validate().is_ok());
+
+        config.tls = SslConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+
+        config.tls = SslConfig {
+            enabled: true,
+            cert_file: "cert.pem".to_string(),
+            key_file: "key.pem".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
     }
 }

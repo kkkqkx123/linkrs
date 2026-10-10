@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Transaction configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct TransactionConfig {
     /// Default transaction timeout (seconds)
     pub default_timeout: u64,

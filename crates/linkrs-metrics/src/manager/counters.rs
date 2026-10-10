@@ -156,6 +156,23 @@ impl StatsManager {
         })
     }
 
+    /// Every space-scoped metric set, keyed by space key.
+    pub fn all_space_metrics(&self) -> HashMap<String, HashMap<MetricType, u64>> {
+        self.space_metrics
+            .iter()
+            .map(|entry| {
+                (
+                    entry.key().clone(),
+                    entry
+                        .value()
+                        .iter()
+                        .map(|metric| (*metric.key(), metric.value().get()))
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
     pub fn reset_metric(&self, metric_type: MetricType) {
         if let Some(metric) = self.metrics.get(&metric_type) {
             metric.set(0);

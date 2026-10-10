@@ -3,16 +3,20 @@
 use serde::{Deserialize, Serialize};
 
 /// Database configuration
+///
+/// `host` and `port` describe how clients reach this instance; they no
+/// longer drive any listener binding (see `[http]` and `[grpc]`).
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
-    /// Host address
+    /// Client-facing host address (informational only)
     pub host: String,
-    /// Port
+    /// Client-facing port (informational only)
     pub port: u16,
     /// Storage path
     pub storage_path: String,
-    /// Maximum connections
-    pub max_connections: usize,
+    /// Maximum concurrent client sessions
+    pub max_sessions: usize,
 }
 
 impl Default for DatabaseConfig {
@@ -21,7 +25,7 @@ impl Default for DatabaseConfig {
             host: "127.0.0.1".to_string(),
             port: 9758,
             storage_path: "data/linkrs".to_string(),
-            max_connections: 10,
+            max_sessions: 10,
         }
     }
 }
@@ -33,8 +37,8 @@ impl DatabaseConfig {
             return Err("Database port cannot be 0".to_string());
         }
 
-        if self.max_connections == 0 {
-            return Err("Max connections must be greater than 0".to_string());
+        if self.max_sessions == 0 {
+            return Err("Max sessions must be greater than 0".to_string());
         }
 
         if self.storage_path.is_empty() {
@@ -55,7 +59,7 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 9758);
         assert_eq!(config.storage_path, "data/linkrs");
-        assert_eq!(config.max_connections, 10);
+        assert_eq!(config.max_sessions, 10);
     }
 
     #[test]
@@ -70,7 +74,7 @@ mod tests {
         assert!(invalid_config.validate().is_err());
 
         let invalid_config = DatabaseConfig {
-            max_connections: 0,
+            max_sessions: 0,
             ..Default::default()
         };
         assert!(invalid_config.validate().is_err());
