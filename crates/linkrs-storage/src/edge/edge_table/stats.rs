@@ -563,7 +563,7 @@ pub fn estimate_value_bytes(value: &Value) -> u64 {
         Value::Vector(v) => (v.dimension() as u64).saturating_mul(4),
         Value::DataSet(_) => 32,
         Value::Struct(_) | Value::Array(_) => 32,
-        Value::Vertex(_) | Value::Edge(_) | Value::Path(_) => 32,
+        Value::Vertex(_) | Value::Edge(_) | Value::EdgeHeader(_) | Value::Path(_) => 32,
         Value::VertexId(_) | Value::EdgeId(_) => 8,
     }
 }

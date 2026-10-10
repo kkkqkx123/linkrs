@@ -214,6 +214,9 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
             Ok(Value::map(props))
         }
         Value::Edge(e) => Ok(Value::string_map(e.props.clone())),
+        Value::EdgeHeader(_) => Err(ExpressionError::type_error(
+            "properties requires a materialized edge: the edge identity reference carries no properties",
+        )),
         Value::Map(m) => Ok(Value::map((**m).clone())),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -225,6 +228,7 @@ fn execute_properties(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_edge_type(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Edge(e) => Ok(Value::string(e.edge_type.clone())),
+        Value::EdgeHeader(h) => Ok(Value::string(h.edge_type.clone())),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The type function requires an edge type",
@@ -235,6 +239,7 @@ fn execute_edge_type(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_src(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Edge(e) => Ok(Value::from(e.src)),
+        Value::EdgeHeader(h) => Ok(Value::from(h.src)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The src function requires the edge type",
@@ -245,6 +250,7 @@ fn execute_src(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_dst(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Edge(e) => Ok(Value::from(e.dst)),
+        Value::EdgeHeader(h) => Ok(Value::from(h.dst)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The dst function requires an edge type",
@@ -255,6 +261,7 @@ fn execute_dst(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_rank(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Edge(e) => Ok(Value::BigInt(e.ranking)),
+        Value::EdgeHeader(h) => Ok(Value::BigInt(h.ranking)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The rank function requires an edge type",
@@ -264,7 +271,7 @@ fn execute_rank(args: &[Value]) -> Result<Value, ExpressionError> {
 
 fn execute_startnode(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
-        Value::Edge(_) => Err(ExpressionError::function_error(
+        Value::Edge(_) | Value::EdgeHeader(_) => Err(ExpressionError::function_error(
             "startnode() requires graph storage access to resolve the endpoint label; use within a query context",
         )),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -276,7 +283,7 @@ fn execute_startnode(args: &[Value]) -> Result<Value, ExpressionError> {
 
 fn execute_endnode(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
-        Value::Edge(_) => Err(ExpressionError::function_error(
+        Value::Edge(_) | Value::EdgeHeader(_) => Err(ExpressionError::function_error(
             "endnode() requires graph storage access to resolve the endpoint label; use within a query context",
         )),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
@@ -290,16 +297,17 @@ fn execute_endnode(args: &[Value]) -> Result<Value, ExpressionError> {
 /// schema. Returns Null when the endpoint vertex no longer exists; errors
 /// when the edge type or its endpoint labels are unknown.
 fn endpoint_vertex_with_storage(
-    edge: &linkrs_core::vertex_edge_path::Edge,
+    edge_type: &str,
+    vid: VertexId,
     endpoint_src: bool,
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
     let reader = storage.storage.read();
     let info = reader
-        .get_edge_type(&storage.space, &edge.edge_type)
+        .get_edge_type(&storage.space, edge_type)
         .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?
         .ok_or_else(|| {
-            ExpressionError::function_error(format!("Edge type '{}' not found", edge.edge_type))
+            ExpressionError::function_error(format!("Edge type '{edge_type}' not found"))
         })?;
     let tag = if endpoint_src {
         &info.src_tag_name
@@ -308,11 +316,9 @@ fn endpoint_vertex_with_storage(
     };
     if tag.is_empty() {
         return Err(ExpressionError::function_error(format!(
-            "Edge type '{}' declares no endpoint label",
-            edge.edge_type
+            "Edge type '{edge_type}' declares no endpoint label"
         )));
     }
-    let vid = if endpoint_src { edge.src } else { edge.dst };
     let vertex = reader
         .get_vertex(&storage.space, tag, &vid)
         .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
@@ -327,7 +333,8 @@ fn execute_startnode_with_storage(
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
     match &args[0] {
-        Value::Edge(e) => endpoint_vertex_with_storage(e, true, storage),
+        Value::Edge(e) => endpoint_vertex_with_storage(&e.edge_type, e.src, true, storage),
+        Value::EdgeHeader(h) => endpoint_vertex_with_storage(&h.edge_type, h.src, true, storage),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The startnode function requires the edge type",
@@ -340,7 +347,8 @@ fn execute_endnode_with_storage(
     storage: &GraphStorageRef,
 ) -> Result<Value, ExpressionError> {
     match &args[0] {
-        Value::Edge(e) => endpoint_vertex_with_storage(e, false, storage),
+        Value::Edge(e) => endpoint_vertex_with_storage(&e.edge_type, e.dst, false, storage),
+        Value::EdgeHeader(h) => endpoint_vertex_with_storage(&h.edge_type, h.dst, false, storage),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The endnode function requires an edge type",

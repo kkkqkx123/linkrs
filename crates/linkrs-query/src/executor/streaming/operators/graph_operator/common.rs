@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
-use crate::executor::streaming::chunk::DataChunk;
+use crate::executor::streaming::chunk::{DataChunk, TypedColumn};
 use crate::executor::streaming::context::ValueRowContext;
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::streaming::slot::SlotLayout;
@@ -90,6 +90,37 @@ pub(super) fn visible_rows(chunk: &DataChunk) -> VisibleRows<'_> {
     VisibleRows { chunk, pos: 0 }
 }
 
+/// Read the seed id array when the seed slot carries a vertex identity
+/// column, so seed parsing skips cloning and parsing the row value.
+/// Typed columns stay in lockstep with rows across selection and gather
+/// transforms, so the absolute row index addresses the id array directly.
+pub(super) fn identity_seed_ids(chunk: &DataChunk, seed_slot: usize) -> Option<&[VertexId]> {
+    match chunk.typed_column(seed_slot) {
+        Some(TypedColumn::VertexIdentity(ids)) => Some(ids),
+        _ => None,
+    }
+}
+
+/// Resolve the seed id for one visible row: identity scan output reads the
+/// dense id array positionally, anything else parses the row value with the
+/// historical seed-slot priority. Returns `None` for unparseable seeds.
+fn seed_vid(
+    identity_seeds: Option<&[VertexId]>,
+    index: usize,
+    row: &[Value],
+    seed_slot: usize,
+) -> Option<VertexId> {
+    if let Some(ids) = identity_seeds {
+        return Some(ids[index]);
+    }
+    let vid_val = row
+        .get(seed_slot)
+        .or_else(|| row.first())
+        .cloned()
+        .unwrap_or(Value::Null(linkrs_core::NullType::Null));
+    VertexId::try_from(&vid_val).ok()
+}
+
 pub(super) fn row_passes_filter(
     row: &[Value],
     col_names: &[String],
@@ -167,15 +198,10 @@ pub(super) fn expand_single_step(
 
     let mut seed_vids: Vec<VertexId> = Vec::new();
     let mut seed_rows: Vec<Vec<Value>> = Vec::new();
+    let identity_seeds = identity_seed_ids(&chunk, seed_slot);
 
-    for (_, row) in visible_rows(&chunk) {
-        let vid_val = row
-            .get(seed_slot)
-            .or_else(|| row.first())
-            .cloned()
-            .unwrap_or(Value::Null(linkrs_core::NullType::Null));
-
-        if let Ok(vid) = VertexId::try_from(&vid_val) {
+    for (index, row) in visible_rows(&chunk) {
+        if let Some(vid) = seed_vid(identity_seeds, index, row, seed_slot) {
             seed_vids.push(vid);
             // Raw-id path: forward a lightweight seed row (the source column
             // replaced by `Value::VertexId`) so the output never deep-clones
@@ -318,15 +344,10 @@ pub(super) fn expand_count_only(
     let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
 
     let mut seed_vids: Vec<VertexId> = Vec::new();
+    let identity_seeds = identity_seed_ids(&chunk, seed_slot);
 
-    for (_, row) in visible_rows(&chunk) {
-        let vid_val = row
-            .get(seed_slot)
-            .or_else(|| row.first())
-            .cloned()
-            .unwrap_or(Value::Null(linkrs_core::NullType::Null));
-
-        if let Ok(vid) = VertexId::try_from(&vid_val) {
+    for (index, row) in visible_rows(&chunk) {
+        if let Some(vid) = seed_vid(identity_seeds, index, row, seed_slot) {
             seed_vids.push(vid);
         }
     }

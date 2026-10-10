@@ -318,8 +318,16 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                 } => col_names.clone(),
                 crate::executor::streaming::operators::spec::SourceSpec::StorageScanEdges {
                     col_names,
+                    identity_only,
                     ..
-                } => col_names.clone(),
+                } => {
+                    if *identity_only {
+                        pairs.push(crate::planning::plan::explain::Pair::new(
+                            "mode", "identity",
+                        ));
+                    }
+                    col_names.clone()
+                }
                 _ => vec![],
             };
             if !col_names.is_empty() {

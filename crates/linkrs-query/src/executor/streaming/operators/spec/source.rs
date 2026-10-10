@@ -100,6 +100,10 @@ pub enum SourceSpec {
         edge_type: Option<String>,
         col_names: Vec<String>,
         projected_properties: Vec<String>,
+        /// Identity mode: the scan variable is never consumed as a whole
+        /// entity downstream, so the entity column carries lightweight
+        /// `Value::EdgeHeader` instead of boxed edges.
+        identity_only: bool,
         /// Scan predicates pushed into the storage layer (pure pre-filter;
         /// the original filter still runs on top).
         predicate: Vec<ScanPredicate>,

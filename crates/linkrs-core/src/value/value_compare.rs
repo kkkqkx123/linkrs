@@ -28,6 +28,7 @@ impl PartialEq for Value {
             (Value::DateTime(a), Value::DateTime(b)) => a == b,
             (Value::Vertex(a), Value::Vertex(b)) => a == b,
             (Value::Edge(a), Value::Edge(b)) => a == b,
+            (Value::EdgeHeader(a), Value::EdgeHeader(b)) => a == b,
             (Value::Path(a), Value::Path(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Map(a), Value::Map(b)) => a == b,
@@ -107,6 +108,7 @@ impl Ord for Value {
             (Value::DateTime(a), Value::DateTime(b)) => Self::cmp_datetime(a, b),
             (Value::Vertex(a), Value::Vertex(b)) => a.cmp(b),
             (Value::Edge(a), Value::Edge(b)) => a.cmp(b),
+            (Value::EdgeHeader(a), Value::EdgeHeader(b)) => a.cmp(b),
             (Value::Path(a), Value::Path(b)) => a.cmp(b),
             (Value::List(a), Value::List(b)) => Self::cmp_list(a, b),
             (Value::Map(a), Value::Map(b)) => Self::cmp_map(a, b),
@@ -275,6 +277,10 @@ impl Hash for Value {
             Value::Edge(e) => {
                 16u8.hash(state);
                 e.hash(state);
+            }
+            Value::EdgeHeader(h) => {
+                32u8.hash(state);
+                h.hash(state);
             }
             Value::Path(p) => {
                 17u8.hash(state);
@@ -712,6 +718,7 @@ impl Value {
             Value::Blob(_) => 14,
             Value::Vertex(_) => 15,
             Value::Edge(_) => 16,
+            Value::EdgeHeader(_) => 32,
             Value::Path(_) => 17,
             Value::List(_) => 18,
             Value::Map(_) => 19,

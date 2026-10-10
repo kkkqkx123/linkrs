@@ -562,7 +562,9 @@ impl BatchOptimizer {
             | EnrichScanSlotsWithFilterProps(_) => OptimizationBatch::PropertyPruning,
 
             // Expand pushdown batch: whole-plan annotation of traversal hops.
-            ExpandPushdownAnnotate(_) | ScanIdentityAnnotate(_) => OptimizationBatch::ExpandPushdown,
+            ExpandPushdownAnnotate(_) | ScanIdentityAnnotate(_) | ScanEdgeIdentityAnnotate(_) => {
+                OptimizationBatch::ExpandPushdown
+            }
 
             // Limit pushdown (part of normalize)
             PushLimitDownGetVertices(_)

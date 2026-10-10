@@ -32,6 +32,7 @@ pub fn to_json(value: Value) -> serde_json::Value {
         Value::DateTime(dt) => serde_json::Value::String(dt.to_string()),
         Value::Vertex(v) => serde_json::json!(v),
         Value::Edge(e) => serde_json::json!(e),
+        Value::EdgeHeader(h) => serde_json::json!(h),
         Value::Path(p) => serde_json::json!(p),
         Value::List(list) => serde_json::Value::Array(list.into_iter().map(to_json).collect()),
         Value::Map(map) => {

@@ -4,7 +4,10 @@ use std::sync::Arc;
 use super::*;
 use crate::executor::streaming::chunk::core::DataChunk;
 use crate::executor::streaming::chunk::schema::{ColumnInfo, Schema};
+use crate::executor::streaming::chunk::{EdgeHeaderColumn, TypedColumn};
 use crate::executor::streaming::helpers::compare_values;
+use linkrs_core::types::storage_ids::VertexId;
+use linkrs_core::EdgeHeader;
 use linkrs_core::Value;
 
 fn chunk_of(rows: Vec<Vec<Value>>) -> DataChunk {
@@ -191,4 +194,129 @@ fn test_estimated_size() {
     ]);
     batch.append_chunk(&chunk);
     assert!(batch.estimated_size() >= 3 * std::mem::size_of::<i64>());
+}
+
+fn vid(i: i64) -> VertexId {
+    VertexId::try_from_int64(i).expect("valid vertex id")
+}
+
+fn identity_chunk(ids: Vec<VertexId>) -> DataChunk {
+    let rows: Vec<Vec<Value>> = ids.iter().map(|&id| vec![Value::VertexId(id)]).collect();
+    let mut chunk = DataChunk::new(
+        rows,
+        Arc::new(Schema::new(vec![ColumnInfo {
+            name: "v".to_string(),
+            data_type: "vertex".to_string(),
+        }])),
+    );
+    chunk.typed_columns = Some(vec![TypedColumn::VertexIdentity(ids)]);
+    chunk
+}
+
+fn header_chunk() -> DataChunk {
+    let mut chunk = DataChunk::new(
+        vec![
+            vec![Value::edge_header(EdgeHeader::new(
+                vid(1),
+                vid(2),
+                "rated".to_string(),
+                0,
+            ))],
+            vec![Value::edge_header(EdgeHeader::new(
+                vid(2),
+                vid(3),
+                "knows".to_string(),
+                1,
+            ))],
+        ],
+        Arc::new(Schema::new(vec![ColumnInfo {
+            name: "e".to_string(),
+            data_type: "edge".to_string(),
+        }])),
+    );
+    chunk.typed_columns = Some(vec![TypedColumn::EdgeHeader(EdgeHeaderColumn::from_parts(
+        vec![vid(1), vid(2)],
+        vec![vid(2), vid(3)],
+        vec!["rated".to_string(), "knows".to_string()],
+        vec![0, 1],
+    ))]);
+    chunk
+}
+
+#[test]
+fn test_identity_columns_accumulate_typed() {
+    let mut batch = ColumnarBatch::new(1);
+    batch.append_chunk(&identity_chunk(vec![vid(2), vid(1)]));
+    assert_eq!(batch.num_rows(), 2);
+    assert!(batch.column(0).is_typed());
+    assert_eq!(batch.column(0).value_at(0), Value::VertexId(vid(2)));
+    assert_eq!(batch.column(0).compare_at(0, 1), Ordering::Greater);
+
+    // Same-kind appends extend the id vector without materializing.
+    batch.append_chunk(&identity_chunk(vec![vid(3)]));
+    assert_eq!(batch.num_rows(), 3);
+    assert!(batch.column(0).is_typed());
+    assert_eq!(
+        batch.to_rows(),
+        vec![
+            vec![Value::VertexId(vid(2))],
+            vec![Value::VertexId(vid(1))],
+            vec![Value::VertexId(vid(3))],
+        ]
+    );
+
+    batch.truncate(2);
+    assert_eq!(batch.num_rows(), 2);
+    batch.permute(&[1, 0]);
+    assert_eq!(
+        batch.to_rows(),
+        vec![vec![Value::VertexId(vid(1))], vec![Value::VertexId(vid(2))]]
+    );
+}
+
+#[test]
+fn test_edge_header_column_accumulates_typed() {
+    let mut batch = ColumnarBatch::new(1);
+    batch.append_chunk(&header_chunk());
+    assert_eq!(batch.num_rows(), 2);
+    assert!(batch.column(0).is_typed());
+    assert_eq!(
+        batch.column(0).value_at(1),
+        Value::edge_header(EdgeHeader::new(vid(2), vid(3), "knows".to_string(), 1))
+    );
+    assert_eq!(batch.column(0).compare_at(1, 1), Ordering::Equal);
+    assert_eq!(batch.to_rows()[0][0], batch.column(0).value_at(0));
+}
+
+#[test]
+fn test_identity_column_degrades_on_kind_mismatch() {
+    let mut batch = ColumnarBatch::new(1);
+    batch.append_chunk(&identity_chunk(vec![vid(1), vid(2)]));
+    assert!(batch.column(0).is_typed());
+    // A later chunk carries headers in the same column: degrade to
+    // `Fallback`, preserving accumulated values.
+    batch.append_chunk(&header_chunk());
+    assert!(!batch.column(0).is_typed());
+    assert_eq!(batch.num_rows(), 4);
+    let rows = batch.to_rows();
+    assert_eq!(rows[0][0], Value::VertexId(vid(1)));
+    assert_eq!(
+        rows[2][0],
+        Value::edge_header(EdgeHeader::new(vid(1), vid(2), "rated".to_string(), 0))
+    );
+}
+
+#[test]
+fn test_identity_column_row_appends() {
+    let mut batch = ColumnarBatch::new(1);
+    batch.append_chunk(&identity_chunk(vec![vid(1)]));
+    // Matching row values extend the id vector.
+    batch.append_row(&[Value::VertexId(vid(9))]);
+    assert!(batch.column(0).is_typed());
+    assert_eq!(batch.num_rows(), 2);
+    // Anything else degrades to `Fallback` with rows preserved.
+    batch.append_row(&[Value::Int(0)]);
+    assert!(!batch.column(0).is_typed());
+    assert_eq!(batch.num_rows(), 3);
+    assert_eq!(batch.to_rows()[2][0], Value::Int(0));
 }

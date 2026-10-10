@@ -558,6 +558,7 @@ impl OrderedCodec {
             // encoding them as NULL would create false index matches.
             Value::Vertex(_)
             | Value::Edge(_)
+            | Value::EdgeHeader(_)
             | Value::Path(_)
             | Value::List(_)
             | Value::Map(_)

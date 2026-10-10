@@ -57,7 +57,7 @@ impl ValueType {
             Value::Time(_) => ValueType::Time,
             Value::DateTime(_) => ValueType::DateTime,
             Value::Vertex(_) => ValueType::Vertex,
-            Value::Edge(_) => ValueType::Edge,
+            Value::Edge(_) | Value::EdgeHeader(_) => ValueType::Edge,
             Value::Path(_) => ValueType::Path,
             Value::List(_) => ValueType::List,
             Value::Map(_) => ValueType::Map,

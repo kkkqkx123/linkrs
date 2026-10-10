@@ -1,4 +1,5 @@
 use crate::executor::streaming::chunk::DataChunk;
+use crate::executor::streaming::chunk::TypedColumn;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
@@ -11,6 +12,30 @@ pub(super) struct BlockingContext<'a> {
     pub runtime: &'a Option<Arc<ExecutionRuntime>>,
     pub output_layout: &'a Arc<SlotLayout>,
     pub config: &'a OperatorConfig,
+}
+
+/// Whether a `Count` over a bare variable can skip argument evaluation for
+/// this chunk: identity typed columns are provably non-null, and `Count`
+/// only observes null-ness, so every visible row counts without evaluating
+/// or materializing the argument.
+pub(super) fn count_identity_arg(
+    func: &AggregateFunction,
+    args: &[Expression],
+    chunk: &DataChunk,
+) -> bool {
+    if !matches!(func, AggregateFunction::Count) {
+        return false;
+    }
+    let Some(Expression::Variable(name)) = args.first() else {
+        return false;
+    };
+    let Some(slot) = chunk.get_layout().slot_id(name) else {
+        return false;
+    };
+    matches!(
+        chunk.typed_column(slot),
+        Some(TypedColumn::VertexIdentity(_)) | Some(TypedColumn::EdgeHeader(_))
+    )
 }
 
 /// Extract the field name from an aggregate function's args, if any.

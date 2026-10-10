@@ -265,6 +265,8 @@ pub(super) fn resolve_edge_endpoints(
     match (src_val, dst_val) {
         (Value::Edge(edge), _) => Some((edge.src, edge.dst)),
         (_, Value::Edge(edge)) => Some((edge.src, edge.dst)),
+        (Value::EdgeHeader(header), _) => Some((header.src, header.dst)),
+        (_, Value::EdgeHeader(header)) => Some((header.src, header.dst)),
         _ => {
             let src = VertexId::try_from(src_val).ok()?;
             let dst = VertexId::try_from(dst_val).ok()?;

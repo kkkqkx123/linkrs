@@ -117,6 +117,21 @@ fn identity_seed_only_scan_for_count() {
 }
 
 #[test]
+fn identity_count_bare_variable_exact() {
+    // `count(a)` observes only null-ness, so the identity scan feeds the
+    // aggregate without evaluating or materializing the argument.
+    let scenario = setup();
+    let scenario = scenario.query("MATCH (a:person) RETURN count(a)");
+    let scenario = scenario.assert_success().assert_result_count(1);
+    match scenario.last_result() {
+        Some(ExecutionResult::DataSet { data, .. }) => {
+            assert_eq!(data.rows, vec![vec![Value::BigInt(20)]]);
+        }
+        other => panic!("expected a count dataset, got {other:?}"),
+    }
+}
+
+#[test]
 fn identity_blocked_for_whole_entity_return() {
     let scenario = setup();
     let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH (a:person) RETURN a");

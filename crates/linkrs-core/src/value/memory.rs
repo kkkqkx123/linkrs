@@ -36,6 +36,7 @@ impl MemoryEstimatable for Value {
             // Graph types
             Value::Vertex(v) => base_size + std::mem::size_of_val(v.as_ref()),
             Value::Edge(e) => base_size + std::mem::size_of_val(e.as_ref()),
+            Value::EdgeHeader(h) => base_size + std::mem::size_of_val(h.as_ref()),
             Value::Path(p) => base_size + std::mem::size_of_val(p.as_ref()),
 
             // Collection types (recursive)

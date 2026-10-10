@@ -590,7 +590,7 @@ fn execute_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Map(_) => "map",
         Value::Set(_) => "set",
         Value::Vertex(_) => "vertex",
-        Value::Edge(_) => "edge",
+        Value::Edge(_) | Value::EdgeHeader(_) => "edge",
         Value::Path(_) => "path",
         Value::Uuid(_) => "uuid",
         Value::Vector(_) => "vector",

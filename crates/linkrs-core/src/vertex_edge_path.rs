@@ -369,6 +369,90 @@ impl EdgeDeleteKey {
     }
 }
 
+/// Lightweight read-only view of the query-visible edge identity.
+///
+/// Carries the `(src, dst, edge_type, ranking)` tuple with no property map
+/// and no storage-internal table-scoped identifier. Scan sources emit this
+/// when the planner proves no downstream consumer needs the boxed entity;
+/// any property or endpoint-label resolution against it is a planner
+/// miss and must surface as an explicit error, never a silent null.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EdgeHeader {
+    pub src: VertexId,
+    pub dst: VertexId,
+    pub edge_type: String,
+    pub ranking: i64,
+}
+
+impl EdgeHeader {
+    pub fn new(src: VertexId, dst: VertexId, edge_type: String, ranking: i64) -> Self {
+        Self {
+            src,
+            dst,
+            edge_type,
+            ranking,
+        }
+    }
+
+    pub fn from_edge(edge: &Edge) -> Self {
+        Self {
+            src: edge.src,
+            dst: edge.dst,
+            edge_type: edge.edge_type.clone(),
+            ranking: edge.ranking,
+        }
+    }
+
+    pub fn src(&self) -> &VertexId {
+        &self.src
+    }
+
+    pub fn dst(&self) -> &VertexId {
+        &self.dst
+    }
+
+    pub fn edge_type(&self) -> &str {
+        &self.edge_type
+    }
+
+    pub fn ranking(&self) -> i64 {
+        self.ranking
+    }
+
+    pub fn estimated_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.src.len()
+            + self.dst.len()
+            + std::mem::size_of::<String>()
+            + self.edge_type.capacity()
+    }
+}
+
+impl std::hash::Hash for EdgeHeader {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.src.hash(state);
+        self.dst.hash(state);
+        self.edge_type.hash(state);
+        self.ranking.hash(state);
+    }
+}
+
+impl Ord for EdgeHeader {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.src
+            .cmp(&other.src)
+            .then_with(|| self.dst.cmp(&other.dst))
+            .then_with(|| self.edge_type.cmp(&other.edge_type))
+            .then_with(|| self.ranking.cmp(&other.ranking))
+    }
+}
+
+impl PartialOrd for EdgeHeader {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Represents a step in a path
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Step {

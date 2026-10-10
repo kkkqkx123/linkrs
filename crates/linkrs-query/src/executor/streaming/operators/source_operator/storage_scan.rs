@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
-use crate::executor::streaming::chunk::{use_columnar_path, DataChunk, TypedColumn};
+use crate::executor::streaming::chunk::{
+    use_columnar_path, DataChunk, EdgeHeaderColumn, TypedColumn,
+};
 use crate::executor::streaming::operators::state::SourceState;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
@@ -15,8 +17,9 @@ use linkrs_core::error::QueryError;
 use linkrs_core::Value;
 
 use super::util::{
-    attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_identity_row,
-    make_flat_vertex_record_row, make_flat_vertex_row, reserve_memory_with_extra, storage_error,
+    attach_columnar_stats, make_flat_edge_identity_row, make_flat_edge_row,
+    make_flat_vertex_record_identity_row, make_flat_vertex_record_row, make_flat_vertex_row,
+    reserve_memory_with_extra, storage_error,
 };
 use super::SourceOperator;
 use super::SourceOperatorKind;
@@ -130,12 +133,20 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             partition_range,
             col_names,
             projected_properties,
+            identity_only,
             predicate,
             cursor,
         } => {
             let storage_ref = storage.as_ref().ok_or_else(|| {
                 QueryError::execution("StorageScanEdges requires storage".to_string())
             })?;
+            // Topology-only scan: identity mode with zero flat reads and no
+            // pushed predicates needs no property at all, so the cursor
+            // skips property decode instead of full-row decoding. Gated on
+            // the identity annotation like the vertex path: whole-entity
+            // consumers still need the properties decoded.
+            let edge_topology_only =
+                *identity_only && projected_properties.is_empty() && predicate.is_empty();
             *cursor = Some(
                 open_edge_scan(
                     storage_ref,
@@ -144,12 +155,17 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
                         limit: *limit,
                         edge_type: edge_type.clone(),
                         edge_src_id_range: partition_range.clone(),
-                        projection: (!projected_properties.is_empty()).then(|| {
-                            projected_properties
-                                .iter()
-                                .map(|n| RequiredProperty::new(n.clone()))
-                                .collect()
-                        }),
+                        projection: if edge_topology_only {
+                            Some(Vec::new())
+                        } else {
+                            (!projected_properties.is_empty()).then(|| {
+                                projected_properties
+                                    .iter()
+                                    .map(|n| RequiredProperty::new(n.clone()))
+                                    .collect()
+                            })
+                        },
+                        topology_only: edge_topology_only,
                         predicate: (!predicate.is_empty()).then(|| predicate.clone()),
                         column_block_mode: column_block_enabled(),
                         batch_size: fixed_batch,
@@ -217,15 +233,22 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
         ),
         SourceOperatorKind::StorageScanEdges {
             projected_properties,
+            identity_only,
             ..
-        } => (projected_properties.clone(), false),
+        } => (
+            projected_properties.clone(),
+            // The annotation guarantees every downstream property read is
+            // flat-served (or none exists); the header reference then needs
+            // no box at all.
+            *identity_only,
+        ),
         _ => unreachable!("storage_scan::next called for a non-scan source"),
     };
     if column_block_enabled() {
         if is_vertex_scan {
             return next_column_chunk(op, "StorageScanVertices", &flatten, identity_only);
         }
-        return next_edge_column_chunk(op, "StorageScanEdges", &flatten);
+        return next_edge_column_chunk(op, "StorageScanEdges", &flatten, identity_only);
     }
     if is_vertex_scan {
         let (cursor, space_name) = match &mut op.kind {
@@ -289,16 +312,36 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
             } => (cursor, &*space_name),
             _ => unreachable!("storage_scan::next called for a non-edge scan"),
         };
-        next_cursor_chunk_inner(
-            cursor,
-            space_name,
-            "StorageScanEdges",
-            &op.runtime,
-            op.config.chunk_size,
-            &op.output_layout,
-            move |edge| make_flat_edge_row(edge, &flatten),
-            |cur: &mut Box<dyn crate::storage::EdgeCursor>, batch_size| cur.next_batch(batch_size),
-        )
+        if identity_only {
+            // Identity path: emit the edge header without building the
+            // per-row property map or boxing an Edge; flat property columns
+            // come straight from the decoded properties.
+            next_cursor_chunk_inner(
+                cursor,
+                space_name,
+                "StorageScanEdges",
+                &op.runtime,
+                op.config.chunk_size,
+                &op.output_layout,
+                move |edge| make_flat_edge_identity_row(edge, &flatten),
+                |cur: &mut Box<dyn crate::storage::EdgeCursor>, batch_size| {
+                    cur.next_batch(batch_size)
+                },
+            )
+        } else {
+            next_cursor_chunk_inner(
+                cursor,
+                space_name,
+                "StorageScanEdges",
+                &op.runtime,
+                op.config.chunk_size,
+                &op.output_layout,
+                move |edge| make_flat_edge_row(edge, &flatten),
+                |cur: &mut Box<dyn crate::storage::EdgeCursor>, batch_size| {
+                    cur.next_batch(batch_size)
+                },
+            )
+        }
     }
 }
 
@@ -481,16 +524,28 @@ fn build_column_chunk(
     let mut chunk = DataChunk::new_with_layout(rows, layout);
     if use_columnar_path(runtime) {
         let mut typed: Vec<TypedColumn> = Vec::with_capacity(output_layout.len());
-        typed.push(TypedColumn::Fallback(
-            chunk.rows.iter().map(|r| r[0].clone()).collect(),
-        ));
+        if identity_only {
+            // Identity entity layout: take over the batch id vector instead
+            // of cloning one id per row out of the row view.
+            typed.push(TypedColumn::VertexIdentity(batch.vids));
+        } else {
+            typed.push(TypedColumn::Fallback(
+                chunk.rows.iter().map(|r| r[0].clone()).collect(),
+            ));
+        }
+        // The row view above is the last borrower of the batch columns:
+        // move each matched column into the typed layout instead of
+        // cloning its dense vectors.
+        let mut columns = batch.columns;
         for prop in flatten {
-            match batch
-                .columns
+            match columns
                 .iter()
-                .find(|c| c.name.as_ref() == prop.as_ref())
+                .position(|c| c.name.as_ref() == prop.as_ref())
             {
-                Some(column) => typed.push(typed_from_storage_column(&column.values)),
+                Some(index) => {
+                    let column = columns.remove(index);
+                    typed.push(typed_from_storage_column(column.values));
+                }
                 None => typed.push(TypedColumn::Fallback(
                     (0..row_count)
                         .map(|_| Value::Null(linkrs_core::value::NullType::Null))
@@ -524,54 +579,58 @@ fn build_column_chunk(
 
 /// Convert a storage [`ColumnValues`] into the chunk's [`TypedColumn`].
 ///
-/// Validity bitmaps carry nulls so nullable columns stay typed instead of
-/// degrading to `Fallback`; narrow ints and floats widen to the evaluator
-/// layouts with the same null handling.
-fn typed_from_storage_column(values: &crate::storage::ColumnValues) -> TypedColumn {
+/// Takes the column by value so the dense vectors move into the typed
+/// layout instead of cloning: the batch is owned by the assembly and no
+/// consumer needs the storage form afterwards. Validity bitmaps carry
+/// nulls so nullable columns stay typed instead of degrading to
+/// `Fallback`; narrow ints and floats widen to the evaluator layouts with
+/// the same null handling.
+fn typed_from_storage_column(values: crate::storage::ColumnValues) -> TypedColumn {
+    let all_valid = values.all_valid();
     match values {
         crate::storage::ColumnValues::I64 { values: v, valid } => {
-            if values.all_valid() {
-                TypedColumn::I64(v.clone())
+            if all_valid {
+                TypedColumn::I64(v)
             } else {
-                TypedColumn::NullableI64(v.clone(), valid_to_bitmap(valid))
+                TypedColumn::NullableI64(v, valid_to_bitmap(&valid))
             }
         }
         crate::storage::ColumnValues::F64 { values: v, valid } => {
-            if values.all_valid() {
-                TypedColumn::F64(v.clone())
+            if all_valid {
+                TypedColumn::F64(v)
             } else {
-                TypedColumn::NullableF64(v.clone(), valid_to_bitmap(valid))
+                TypedColumn::NullableF64(v, valid_to_bitmap(&valid))
             }
         }
         crate::storage::ColumnValues::I32 { values: v, valid } => {
-            if values.all_valid() {
-                TypedColumn::I32(v.clone())
+            if all_valid {
+                TypedColumn::I32(v)
             } else {
-                TypedColumn::NullableI32(v.clone(), valid_to_bitmap(valid))
+                TypedColumn::NullableI32(v, valid_to_bitmap(&valid))
             }
         }
         crate::storage::ColumnValues::Bool { values: v, valid } => {
-            let bools: Vec<bool> = v.iter().map(|&x| x != 0).collect();
-            if values.all_valid() {
+            let bools: Vec<bool> = v.into_iter().map(|x| x != 0).collect();
+            if all_valid {
                 TypedColumn::Bool(bools)
             } else {
-                TypedColumn::NullableBool(bools, valid_to_bitmap(valid))
+                TypedColumn::NullableBool(bools, valid_to_bitmap(&valid))
             }
         }
         crate::storage::ColumnValues::I16 { values: v, valid } => {
-            let widened: Vec<i32> = v.iter().map(|&x| i32::from(x)).collect();
-            if values.all_valid() {
+            let widened: Vec<i32> = v.into_iter().map(i32::from).collect();
+            if all_valid {
                 TypedColumn::I32(widened)
             } else {
-                TypedColumn::NullableI32(widened, valid_to_bitmap(valid))
+                TypedColumn::NullableI32(widened, valid_to_bitmap(&valid))
             }
         }
         crate::storage::ColumnValues::F32 { values: v, valid } => {
-            let widened: Vec<f64> = v.iter().map(|&x| f64::from(x)).collect();
-            if values.all_valid() {
+            let widened: Vec<f64> = v.into_iter().map(f64::from).collect();
+            if all_valid {
                 TypedColumn::F64(widened)
             } else {
-                TypedColumn::NullableF64(widened, valid_to_bitmap(valid))
+                TypedColumn::NullableF64(widened, valid_to_bitmap(&valid))
             }
         }
         crate::storage::ColumnValues::General(general) => typed_from_general_values(general),
@@ -580,7 +639,9 @@ fn typed_from_storage_column(values: &crate::storage::ColumnValues) -> TypedColu
 
 /// Convert a `General` per-row column into a typed column when every
 /// non-null value shares one Date/String kind; otherwise `Fallback`.
-fn typed_from_general_values(general: &[Option<Value>]) -> TypedColumn {
+///
+/// Takes the cells by value so the fallback moves them instead of cloning.
+fn typed_from_general_values(general: Vec<Option<Value>>) -> TypedColumn {
     let mut has_null = false;
     let mut is_date = true;
     let mut is_string = true;
@@ -631,11 +692,8 @@ fn typed_from_general_values(general: &[Option<Value>]) -> TypedColumn {
     }
     TypedColumn::Fallback(
         general
-            .iter()
-            .map(|cell| {
-                cell.clone()
-                    .unwrap_or_else(|| Value::Null(linkrs_core::value::NullType::Null))
-            })
+            .into_iter()
+            .map(|cell| cell.unwrap_or_else(|| Value::Null(linkrs_core::value::NullType::Null)))
             .collect(),
     )
 }
@@ -660,6 +718,7 @@ fn next_edge_column_chunk(
     op: &mut SourceOperator,
     source: &str,
     projected_properties: &[Arc<str>],
+    identity_only: bool,
 ) -> Result<Option<DataChunk>, QueryError> {
     let (cursor, space_name) = match &mut op.kind {
         SourceOperatorKind::StorageScanEdges {
@@ -683,8 +742,13 @@ fn next_edge_column_chunk(
     if batch.is_empty() {
         return Ok(None);
     }
-    let chunk =
-        build_edge_column_chunk(&op.runtime, &op.output_layout, batch, projected_properties)?;
+    let chunk = build_edge_column_chunk(
+        &op.runtime,
+        &op.output_layout,
+        batch,
+        projected_properties,
+        identity_only,
+    )?;
     *cursor = Some(cur);
     Ok(Some(chunk))
 }
@@ -696,6 +760,7 @@ fn build_edge_column_chunk(
     output_layout: &Arc<SlotLayout>,
     batch: EdgeColumnBatch,
     flatten: &[Arc<str>],
+    identity_only: bool,
 ) -> Result<DataChunk, QueryError> {
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
@@ -725,25 +790,42 @@ fn build_edge_column_chunk(
         .map(|(((src, dst), edge_type), ranking)| (src, dst, edge_type, ranking))
         .enumerate()
     {
-        let mut properties = std::collections::HashMap::with_capacity(batch.columns.len());
+        let mut properties = if identity_only {
+            None
+        } else {
+            Some(std::collections::HashMap::with_capacity(
+                batch.columns.len(),
+            ))
+        };
         let mut flat_values = vec![None; flatten.len()];
         for (col_idx, column) in batch.columns.iter().enumerate() {
             if let Some(value) = column.values.value_at(row) {
                 if let Some(flat_pos) = col_to_flat[col_idx] {
                     flat_values[flat_pos] = Some(value.clone());
                 }
-                properties.insert(column.name.clone(), value);
+                if let Some(map) = properties.as_mut() {
+                    map.insert(column.name.clone(), value);
+                }
             }
         }
-        let edge = linkrs_core::Edge {
-            src: *src,
-            dst: *dst,
-            edge_type: edge_type.clone(),
-            ranking: *ranking,
-            props: properties,
-        };
         let mut row_vec = Vec::with_capacity(flatten.len() + 1);
-        row_vec.push(Value::Edge(Box::new(edge)));
+        if identity_only {
+            row_vec.push(Value::edge_header(linkrs_core::EdgeHeader::new(
+                *src,
+                *dst,
+                edge_type.clone(),
+                *ranking,
+            )));
+        } else {
+            let edge = linkrs_core::Edge {
+                src: *src,
+                dst: *dst,
+                edge_type: edge_type.clone(),
+                ranking: *ranking,
+                props: properties.unwrap_or_default(),
+            };
+            row_vec.push(Value::Edge(Box::new(edge)));
+        }
         row_vec.extend(
             flat_values
                 .into_iter()
@@ -755,16 +837,35 @@ fn build_edge_column_chunk(
     let mut chunk = DataChunk::new_with_layout(rows, layout);
     if use_columnar_path(runtime) {
         let mut typed: Vec<TypedColumn> = Vec::with_capacity(output_layout.len());
-        typed.push(TypedColumn::Fallback(
-            chunk.rows.iter().map(|r| r[0].clone()).collect(),
-        ));
+        if identity_only {
+            // Identity entity layout: take over the batch topology vectors
+            // instead of cloning one boxed header per row out of the row
+            // view. The storage batch guarantees equal lengths, matching
+            // the row view one to one.
+            typed.push(TypedColumn::EdgeHeader(EdgeHeaderColumn::from_parts(
+                batch.srcs,
+                batch.dsts,
+                batch.edge_types,
+                batch.rankings,
+            )));
+        } else {
+            typed.push(TypedColumn::Fallback(
+                chunk.rows.iter().map(|r| r[0].clone()).collect(),
+            ));
+        }
+        // The row view above is the last borrower of the batch columns:
+        // move each matched column into the typed layout instead of
+        // cloning its dense vectors.
+        let mut columns = batch.columns;
         for prop in flatten {
-            match batch
-                .columns
+            match columns
                 .iter()
-                .find(|c| c.name.as_ref() == prop.as_ref())
+                .position(|c| c.name.as_ref() == prop.as_ref())
             {
-                Some(column) => typed.push(typed_from_storage_column(&column.values)),
+                Some(index) => {
+                    let column = columns.remove(index);
+                    typed.push(typed_from_storage_column(column.values));
+                }
                 None => typed.push(TypedColumn::Fallback(
                     (0..row_count)
                         .map(|_| Value::Null(linkrs_core::value::NullType::Null))

@@ -94,6 +94,28 @@ pub(crate) fn make_edge_row(edge: Edge) -> Vec<Value> {
     vec![Value::Edge(Box::new(edge))]
 }
 
+/// Identity variant of [`make_flat_edge_row`]: the entity column carries
+/// the edge header without building the per-row property map or boxing an
+/// `Edge`. Flat property columns are read straight from the edge's decoded
+/// properties. Only valid when every downstream property read is served by
+/// the flat slots (enforced by the scan edge identity annotation).
+pub(crate) fn make_flat_edge_identity_row(edge: Edge, flatten: &[Arc<str>]) -> Vec<Value> {
+    let null = Value::Null(linkrs_core::value::NullType::Null);
+    let mut row = Vec::with_capacity(flatten.len() + 1);
+    row.push(Value::edge_header(linkrs_core::EdgeHeader::from_edge(
+        &edge,
+    )));
+    for prop in flatten {
+        let value = edge
+            .properties()
+            .get(prop.as_ref())
+            .cloned()
+            .unwrap_or_else(|| null.clone());
+        row.push(value);
+    }
+    row
+}
+
 pub(crate) fn make_flat_edge_row(edge: Edge, flatten: &[Arc<str>]) -> Vec<Value> {
     let props: Vec<Value> = flatten
         .iter()
@@ -321,6 +343,33 @@ mod tests {
             Value::VertexId(VertexId::try_from_int64(42).expect("valid vertex id"))
         );
         assert_eq!(row[1], Value::string("Alice"));
+    }
+
+    #[test]
+    fn flat_edge_identity_row_emits_header_without_boxing() {
+        let mut edge = Edge::new_empty(
+            VertexId::try_from_int64(1).expect("valid vertex id"),
+            VertexId::try_from_int64(2).expect("valid vertex id"),
+            "friend".to_string(),
+            3,
+        );
+        edge.set_property("since".into(), Value::BigInt(2024));
+        let row = make_flat_edge_identity_row(edge, &[Arc::from("since")]);
+        assert_eq!(row.len(), 2);
+        let Value::EdgeHeader(header) = &row[0] else {
+            panic!("slot 0 must hold the edge header");
+        };
+        assert_eq!(
+            header.src,
+            VertexId::try_from_int64(1).expect("valid vertex id")
+        );
+        assert_eq!(
+            header.dst,
+            VertexId::try_from_int64(2).expect("valid vertex id")
+        );
+        assert_eq!(header.edge_type, "friend");
+        assert_eq!(header.ranking, 3);
+        assert_eq!(row[1], Value::BigInt(2024));
     }
 
     #[test]

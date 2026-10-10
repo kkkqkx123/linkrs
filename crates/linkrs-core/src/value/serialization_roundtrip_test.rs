@@ -21,7 +21,7 @@ use super::uuid::UuidValue;
 use super::vector::VectorValue;
 use super::{ArrayValue, StructValue};
 use crate::types::storage_ids::{EdgeId, VertexId};
-use crate::vertex_edge_path::{Edge, Path, Tag, Vertex};
+use crate::vertex_edge_path::{Edge, EdgeHeader, Path, Tag, Vertex};
 use crate::DataSet;
 use crate::Value;
 use std::collections::{HashMap, HashSet};
@@ -48,6 +48,7 @@ fn exhaustive_variant_check(value: &Value) {
             | Value::DateTime(_)
             | Value::Vertex(_)
             | Value::Edge(_)
+            | Value::EdgeHeader(_)
             | Value::Path(_)
             | Value::List(_)
             | Value::Map(_)
@@ -87,6 +88,12 @@ fn all_sample_values() -> Vec<Value> {
         Tag::new("Person".into(), HashMap::new()),
     );
     let edge = Edge::new_empty(
+        VertexId::try_from_int64(1).expect("test vertex id"),
+        VertexId::try_from_int64(2).expect("test vertex id"),
+        "KNOWS".to_string(),
+        0,
+    );
+    let edge_header = EdgeHeader::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
         "KNOWS".to_string(),
@@ -132,6 +139,7 @@ fn all_sample_values() -> Vec<Value> {
         }),
         Value::Vertex(Box::new(vertex)),
         Value::Edge(Box::new(edge)),
+        Value::EdgeHeader(Box::new(edge_header)),
         Value::Path(Box::new(path)),
         Value::list(list),
         Value::map(map),

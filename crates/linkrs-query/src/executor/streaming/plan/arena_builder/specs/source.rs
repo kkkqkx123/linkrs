@@ -63,6 +63,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                 edge_type: scan_node.edge_type().map(|s| s.to_string()),
                 col_names: scan_node.col_names().to_vec(),
                 projected_properties,
+                identity_only: scan_node.identity_only(),
                 predicate,
                 partition_range: None,
             })

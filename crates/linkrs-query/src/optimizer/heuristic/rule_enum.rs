@@ -37,6 +37,7 @@ use crate::optimizer::heuristic::predicate_pushdown;
 use crate::optimizer::heuristic::projection_pushdown;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule as RewriteRuleTrait;
+use crate::optimizer::heuristic::scan_edge_identity;
 use crate::optimizer::heuristic::scan_identity;
 use crate::optimizer::heuristic::slot_coverage;
 use crate::planning::plan::PlanNodeEnum;
@@ -199,6 +200,7 @@ define_rewrite_rules! {
         // final; annotates ScanVertices with identity_only so the executor
         // can emit lightweight vertex ids instead of boxed vertices.
         ScanIdentityAnnotate(scan_identity::ScanIdentityAnnotateRule),
+        ScanEdgeIdentityAnnotate(scan_edge_identity::ScanEdgeIdentityAnnotateRule),
 
         // ==================== Decorrelation Rules ====================
         // Stat-free gate: converts simple deterministic PatternApply
@@ -394,6 +396,9 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::ScanIdentityAnnotate(
             scan_identity::ScanIdentityAnnotateRule::new(),
         ));
+        registry.add(RewriteRule::ScanEdgeIdentityAnnotate(
+            scan_edge_identity::ScanEdgeIdentityAnnotateRule::new(),
+        ));
         registry.add(RewriteRule::UnnestSimplePatternApply(
             decorrelation::UnnestSimplePatternApplyRule::new(),
         ));
@@ -438,7 +443,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 57);
+        assert_eq!(registry.len(), 58);
     }
 
     #[test]

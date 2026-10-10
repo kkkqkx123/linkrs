@@ -61,7 +61,7 @@ pub fn core_value_to_linkrs_type(value: &Value) -> linkrs_value_type_t {
         Value::List(_) => linkrs_value_type_t::LINKRS_LIST,
         Value::Map(_) => linkrs_value_type_t::LINKRS_MAP,
         Value::Vertex(_) => linkrs_value_type_t::LINKRS_VERTEX,
-        Value::Edge(_) => linkrs_value_type_t::LINKRS_EDGE,
+        Value::Edge(_) | Value::EdgeHeader(_) => linkrs_value_type_t::LINKRS_EDGE,
         Value::Path(_) => linkrs_value_type_t::LINKRS_PATH,
         _ => linkrs_value_type_t::LINKRS_NULL,
     }

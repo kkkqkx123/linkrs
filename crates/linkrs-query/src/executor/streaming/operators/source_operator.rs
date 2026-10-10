@@ -118,6 +118,10 @@ pub enum SourceOperatorKind {
         partition_range: Option<std::ops::Range<i64>>,
         col_names: Vec<String>,
         projected_properties: Vec<Arc<str>>,
+        /// Identity mode (from the scan annotation): emit
+        /// `Value::EdgeHeader` in the entity column and skip the per-row
+        /// property map.
+        identity_only: bool,
         /// Scan predicates pushed into the storage layer.
         predicate: Vec<ScanPredicate>,
         cursor: Option<Box<dyn EdgeCursor>>,
@@ -273,6 +277,7 @@ impl SourceOperator {
                 edge_type,
                 col_names,
                 projected_properties,
+                identity_only,
                 predicate,
                 partition_range,
             } => SourceOperatorKind::StorageScanEdges {
@@ -283,6 +288,7 @@ impl SourceOperator {
                 partition_range: partition_range.clone(),
                 col_names: col_names.clone(),
                 projected_properties: shared_names(projected_properties),
+                identity_only: *identity_only,
                 predicate: predicate.clone(),
                 cursor: None,
             },

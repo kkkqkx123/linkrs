@@ -534,6 +534,7 @@ define_plan_node! {
         filter: Option<ContextualExpression>,
         limit: Option<i64>,
         projected_properties: Vec<String>,
+        identity_only: bool,
     }
     enum: ScanEdges
     input: ZeroInputNode
@@ -548,6 +549,7 @@ impl ScanEdgesNode {
             filter: None,
             limit: None,
             projected_properties: Vec::new(),
+            identity_only: false,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -584,5 +586,13 @@ impl ScanEdgesNode {
 
     pub fn set_projected_properties(&mut self, properties: Vec<String>) {
         self.projected_properties = properties;
+    }
+
+    pub fn identity_only(&self) -> bool {
+        self.identity_only
+    }
+
+    pub fn set_identity_only(&mut self, identity_only: bool) {
+        self.identity_only = identity_only;
     }
 }

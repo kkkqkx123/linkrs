@@ -862,7 +862,7 @@ impl CostCalculator {
             | Value::DateTime(_) => self.config.complex_type_cost_factor,
 
             // Graph types
-            Value::Vertex(_) | Value::Edge(_) | Value::Path(_) => {
+            Value::Vertex(_) | Value::Edge(_) | Value::EdgeHeader(_) | Value::Path(_) => {
                 self.config.graph_type_cost_factor
             }
 

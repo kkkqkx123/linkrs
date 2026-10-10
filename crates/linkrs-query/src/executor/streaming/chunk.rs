@@ -59,6 +59,7 @@ mod typed;
 // Re-export public API
 pub use collector::{LocalChunkCollector, COLLECTOR_BLOCK_ROWS};
 pub use columnar_batch::{BatchColumn, ColumnarBatch};
+pub use columnar_common::EdgeHeaderColumn;
 pub use core::DataChunk;
 pub(crate) use policy::use_columnar_path;
 pub use policy::{ColumnarPolicy, QueryColumnarOverride};

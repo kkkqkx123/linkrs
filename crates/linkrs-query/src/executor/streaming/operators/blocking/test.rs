@@ -506,3 +506,64 @@ fn test_columnar_batch_fallback_compare_semantics() {
     assert_eq!(batch.column(0).value_at(1), Value::Int(5));
     let _ = NullType::Null;
 }
+
+#[test]
+fn test_count_identity_arg_flags() {
+    use super::helpers::count_identity_arg;
+    use crate::executor::streaming::chunk::{EdgeHeaderColumn, TypedColumn};
+    use crate::executor::streaming::slot::SlotLayout;
+    use linkrs_core::types::expr::Expression;
+    use linkrs_core::types::operators::AggregateFunction;
+    use linkrs_core::types::storage_ids::VertexId;
+
+    let vid = VertexId::try_from_int64(7).expect("valid vertex id");
+    let layout = Arc::new(SlotLayout::from_names(&["a".to_string()]));
+    let mut chunk = DataChunk::new_with_layout(
+        vec![vec![Value::VertexId(vid)], vec![Value::VertexId(vid)]],
+        Arc::clone(&layout),
+    );
+    chunk.typed_columns = Some(vec![TypedColumn::VertexIdentity(vec![vid, vid])]);
+    let count_a = Expression::Variable("a".to_string());
+    assert!(count_identity_arg(
+        &AggregateFunction::Count,
+        std::slice::from_ref(&count_a),
+        &chunk
+    ));
+    // Non-count functions still evaluate their arguments.
+    assert!(!count_identity_arg(
+        &AggregateFunction::Sum,
+        std::slice::from_ref(&count_a),
+        &chunk
+    ));
+    // COUNT(*) has no argument to skip.
+    assert!(!count_identity_arg(&AggregateFunction::Count, &[], &chunk));
+    // Unknown variables resolve to no slot.
+    let count_b = Expression::Variable("b".to_string());
+    assert!(!count_identity_arg(
+        &AggregateFunction::Count,
+        std::slice::from_ref(&count_b),
+        &chunk
+    ));
+    // Fallback columns carry no non-null guarantee.
+    chunk.typed_columns = Some(vec![TypedColumn::Fallback(vec![
+        Value::VertexId(vid),
+        Value::VertexId(vid),
+    ])]);
+    assert!(!count_identity_arg(
+        &AggregateFunction::Count,
+        std::slice::from_ref(&count_a),
+        &chunk
+    ));
+    // Edge identity columns qualify as well.
+    chunk.typed_columns = Some(vec![TypedColumn::EdgeHeader(EdgeHeaderColumn::from_parts(
+        vec![vid],
+        vec![vid],
+        vec!["rated".to_string()],
+        vec![0],
+    ))]);
+    assert!(count_identity_arg(
+        &AggregateFunction::Count,
+        std::slice::from_ref(&count_a),
+        &chunk
+    ));
+}

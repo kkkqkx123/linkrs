@@ -1,5 +1,6 @@
 use super::collector::LocalChunkCollector;
-use super::{DataChunk, TypedColumn};
+use super::gather_typed_column;
+use super::{DataChunk, EdgeHeaderColumn, TypedColumn};
 use crate::executor::streaming::slot::SlotLayout;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::operators::BinaryOperator;
@@ -8,6 +9,7 @@ use linkrs_core::value::date_time::DateTimeValue;
 use linkrs_core::value::decimal128::Decimal128Value;
 use linkrs_core::value::DateValue;
 use linkrs_core::vertex_edge_path::Tag;
+use linkrs_core::EdgeHeader;
 use linkrs_core::Value;
 use linkrs_core::Vertex;
 use std::collections::HashMap;
@@ -1430,4 +1432,72 @@ fn deferred_build_skipped_for_unsupported_expression() {
     assert!(out.is_none(), "function call stays outside the typed set");
     assert!(chunk.columnar_build_deferred, "no build was triggered");
     assert!(chunk.typed_columns.is_none());
+}
+
+#[test]
+fn typed_columns_identity_layouts() {
+    let vid = |i: i64| VertexId::try_from_int64(i).expect("valid vertex id");
+
+    let identity = TypedColumn::VertexIdentity(vec![vid(1), vid(2), vid(3)]);
+    assert_eq!(identity.len(), 3);
+    assert!(identity.is_typed());
+    assert_eq!(identity.value_at(1), Some(Value::VertexId(vid(2))));
+    assert_eq!(identity.value_at(3), None);
+    assert_eq!(
+        identity.to_values(),
+        vec![
+            Value::VertexId(vid(1)),
+            Value::VertexId(vid(2)),
+            Value::VertexId(vid(3))
+        ]
+    );
+    assert!(identity.estimated_size() >= 3 * std::mem::size_of::<VertexId>());
+
+    let headers = EdgeHeaderColumn::from_parts(
+        vec![vid(1), vid(2)],
+        vec![vid(2), vid(3)],
+        vec!["rated".to_string(), "knows".to_string()],
+        vec![0, 1],
+    );
+    let edge_col = TypedColumn::EdgeHeader(headers);
+    assert_eq!(edge_col.len(), 2);
+    assert!(edge_col.is_typed());
+    assert_eq!(
+        edge_col.value_at(0),
+        Some(Value::edge_header(EdgeHeader::new(
+            vid(1),
+            vid(2),
+            "rated".to_string(),
+            0
+        )))
+    );
+    assert_eq!(edge_col.value_at(2), None);
+    assert_eq!(
+        edge_col.to_values(),
+        vec![
+            Value::edge_header(EdgeHeader::new(vid(1), vid(2), "rated".to_string(), 0)),
+            Value::edge_header(EdgeHeader::new(vid(2), vid(3), "knows".to_string(), 1)),
+        ]
+    );
+
+    // Gather keeps identity columns narrow end to end.
+    let gathered = gather_typed_column(&edge_col, &[1, 0]);
+    assert!(matches!(gathered, TypedColumn::EdgeHeader(_)));
+    assert_eq!(
+        gathered.value_at(0),
+        Some(Value::edge_header(EdgeHeader::new(
+            vid(2),
+            vid(3),
+            "knows".to_string(),
+            1
+        )))
+    );
+    let gathered_ids = gather_typed_column(&identity, &[2]);
+    assert!(matches!(gathered_ids, TypedColumn::VertexIdentity(_)));
+    assert_eq!(gathered_ids.to_values(), vec![Value::VertexId(vid(3))]);
+
+    // Identity columns are not scalar-evaluable: expression evaluation
+    // materializes them through `value_at` / `to_values` instead.
+    assert!(super::typed::typed_column_batch(&identity).is_none());
+    assert!(super::typed::typed_column_batch(&edge_col).is_none());
 }

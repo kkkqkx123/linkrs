@@ -91,6 +91,7 @@ pub(crate) fn value_payload_bytes(value: &Value) -> usize {
         Value::Array(av) => av.values.len() * std::mem::size_of::<Value>(),
         Value::Vertex(_) => 64,         // fixed-size vertex record
         Value::Edge(_) => 64,           // fixed-size edge record
+        Value::EdgeHeader(_) => 64,     // fixed-size edge header record
         Value::Path(p) => p.len() * 32, // per-hop estimate
         _ => 0, // fixed-width types (Bool, Int, Float, etc.) have no heap payload
     }

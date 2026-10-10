@@ -80,6 +80,10 @@ pub(crate) struct GraphEdgeCursor {
     /// Property names referenced by `predicate`; they are decoded even when
     /// absent from the projection so predicates can be evaluated.
     predicate_columns: Vec<Arc<str>>,
+    /// Topology-only scan: resolve edge headers with zero property decode.
+    /// Set from `ScanOptions`; only valid with an empty projection and no
+    /// pushed predicates (rejected in `new`).
+    topology_only: bool,
     exhausted: bool,
     /// Malformed/unparseable entries skipped so far, exposed through
     /// `EdgeCursor::malformed_skipped` for diagnostics.
@@ -131,6 +135,15 @@ impl GraphEdgeCursor {
             collect_predicate_columns(pred, &mut predicate_columns);
         }
 
+        if options.topology_only {
+            let projection_non_empty = options.projection.as_ref().is_some_and(|p| !p.is_empty());
+            if projection_non_empty || !predicate.is_empty() {
+                return Err(StorageError::invalid_operation(
+                    "topology_only requires an empty projection and no predicates",
+                ));
+            }
+        }
+
         Ok(Self {
             ctx,
             limit: options.limit,
@@ -143,6 +156,7 @@ impl GraphEdgeCursor {
                 .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
             predicate,
             predicate_columns,
+            topology_only: options.topology_only,
             exhausted: targets.is_empty(),
             malformed_skipped: 0,
             ts,
@@ -244,8 +258,7 @@ impl GraphEdgeCursor {
                 let mut raw_rank: Vec<i64> = Vec::new();
                 let mut raw_edge: Vec<linkrs_core::types::EdgeId> = Vec::new();
                 let mut raw_row: Vec<u32> = Vec::new();
-                let raw_count = std::cell::Cell::new(0usize);
-                let mut capacity_full = || out_srcs.len() + raw_count.get() >= batch_size;
+                let mut no_stop = || false;
                 let table_done = walk_mutable_entries(
                     &WalkContext {
                         store,
@@ -259,15 +272,18 @@ impl GraphEdgeCursor {
                     },
                     &mut self.table_state,
                     &mut self.malformed_skipped,
-                    &mut capacity_full,
+                    &mut no_stop,
                     |global, nbr, _| {
                         raw_src.push(global);
                         raw_dst.push(nbr.endpoint);
                         raw_rank.push(nbr.rank);
                         raw_edge.push(nbr.edge_id);
                         raw_row.push(global);
-                        raw_count.set(raw_src.len());
-                        EntryVerdict::Take
+                        if out_srcs.len() + raw_src.len() >= batch_size {
+                            EntryVerdict::BatchFull
+                        } else {
+                            EntryVerdict::Take
+                        }
                     },
                 );
 
@@ -279,6 +295,53 @@ impl GraphEdgeCursor {
                         self.table_idx += 1;
                         self.table_state = TableScanState::new();
                         continue;
+                    }
+                    continue;
+                }
+
+                if self.topology_only {
+                    if self.offset_remaining > 0 {
+                        let skip = self.offset_remaining.min(raw_src.len());
+                        raw_src.drain(..skip);
+                        raw_dst.drain(..skip);
+                        raw_rank.drain(..skip);
+                        raw_edge.drain(..skip);
+                        raw_row.drain(..skip);
+                        self.offset_remaining -= skip;
+                    }
+                    if raw_src.is_empty() {
+                        if table_done {
+                            self.table_state.phase = TablePhase::Done;
+                        }
+                        continue;
+                    }
+                    for (src, dst, rank) in raw_src
+                        .iter()
+                        .zip(raw_dst.iter())
+                        .zip(raw_rank.iter())
+                        .map(|((s, d), r)| (*s, *d, *r))
+                    {
+                        let src_ext = resolve_vertex_id(&ctx, src, td.tbl_src, ts)
+                            .unwrap_or(VertexId::from_u32(src));
+                        let dst_ext = resolve_vertex_id(&ctx, dst, td.tbl_dst, ts)
+                            .unwrap_or(VertexId::from_u32(dst));
+                        out_srcs.push(src_ext);
+                        out_dsts.push(dst_ext);
+                        out_types.push(target.edge_type_name.clone());
+                        out_ranks.push(rank);
+                    }
+                    if table_done {
+                        self.table_state.phase = TablePhase::Done;
+                    }
+                    if matches!(self.table_state.phase, TablePhase::Done) {
+                        self.table_idx += 1;
+                        self.table_state = TableScanState::new();
+                    }
+                    if let Some(limit) = self.limit {
+                        if self.emitted + out_srcs.len() >= limit {
+                            self.exhausted = true;
+                            break;
+                        }
                     }
                     continue;
                 }

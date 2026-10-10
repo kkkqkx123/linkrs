@@ -22,7 +22,9 @@ use super::aggregate::{
     value_to_partial_accumulator, AggregateState, FinalAggregateState, GroupByState,
     PartialAggregateState, ACCUMULATOR_OVERHEAD_BYTES,
 };
-use super::helpers::{aggregate_arg_field_name, emit_batch_slice, BlockingContext};
+use super::helpers::{
+    aggregate_arg_field_name, count_identity_arg, emit_batch_slice, BlockingContext,
+};
 
 type BatchEvalResult = Option<(Vec<Vec<Value>>, Vec<Vec<Value>>)>;
 
@@ -211,6 +213,13 @@ pub(super) fn next_aggregate(
                     // accumulates once. The selection vector stays in place (consumed via
                     // `visible_indices` below with no compaction benefit).
                     let _ = chunk.expand_multiplicity_in_place();
+                    // Per-chunk fast path flags: a `Count` over a bare
+                    // variable backed by an identity column counts every
+                    // visible row without evaluating its argument.
+                    let count_units: Vec<bool> = aggregate_functions
+                        .iter()
+                        .map(|(func, func_args)| count_identity_arg(func, func_args, &chunk))
+                        .collect();
                     if state.col_names.is_empty() {
                         state.col_names = chunk.col_names();
                     }
@@ -221,7 +230,16 @@ pub(super) fn next_aggregate(
                                 Ok(keys) => {
                                     let mut args = Vec::with_capacity(aggregate_functions.len());
                                     let mut ok = true;
-                                    for (_func, func_args) in aggregate_functions.iter() {
+                                    for (i, (_func, func_args)) in
+                                        aggregate_functions.iter().enumerate()
+                                    {
+                                        if count_units[i] {
+                                            // Identity columns are provably non-null and
+                                            // `Count` only observes null-ness: feed one
+                                            // unit per row without evaluating the argument.
+                                            args.push(vec![Value::Int(1); chunk.rows.len()]);
+                                            continue;
+                                        }
                                         if let Some(expr) = func_args.first() {
                                             match chunk.evaluate_expression(expr, None) {
                                                 Ok(col) => args.push(col),
@@ -257,7 +275,13 @@ pub(super) fn next_aggregate(
                             Some((_, args)) => args.iter().map(|c| c[idx].clone()).collect(),
                             None => {
                                 let mut values = Vec::with_capacity(aggregate_functions.len());
-                                for (_func, func_args) in aggregate_functions.iter() {
+                                for (i, (_func, func_args)) in
+                                    aggregate_functions.iter().enumerate()
+                                {
+                                    if count_units[i] {
+                                        values.push(Value::Int(1));
+                                        continue;
+                                    }
                                     let mut ctx = ValueRowContext::from_names(
                                         row.to_vec(),
                                         state.col_names.clone(),

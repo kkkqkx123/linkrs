@@ -15,7 +15,7 @@ use crate::{
         uuid::UuidValue,
         vector::VectorValue,
     },
-    vertex_edge_path::{Edge, Path, Vertex},
+    vertex_edge_path::{Edge, EdgeHeader, Path, Vertex},
     ArrayTypeInfo, StructTypeInfo,
 };
 use compact_str::CompactString;
@@ -53,6 +53,7 @@ pub enum Value {
     DateTime(DateTimeValue),
     Vertex(Box<Vertex>),
     Edge(Box<Edge>),
+    EdgeHeader(Box<EdgeHeader>),
     Path(Box<Path>),
     List(Box<List>),
     /// Map with generalized keys: any hashable `Value` (string keys remain
@@ -143,7 +144,7 @@ impl Value {
             Value::Time(_) => DataType::Time,
             Value::DateTime(_) => DataType::DateTime,
             Value::Vertex(_) => DataType::Vertex,
-            Value::Edge(_) => DataType::Edge,
+            Value::Edge(_) | Value::EdgeHeader(_) => DataType::Edge,
             Value::Path(_) => DataType::Path,
             Value::List(l) => DataType::List(Box::new(Self::container_element_type(l.iter()))),
             Value::Map(m) => DataType::Map(Box::new(Self::container_element_type(m.values()))),
@@ -349,6 +350,7 @@ impl Value {
             Value::DateTime(_) => std::mem::size_of::<Self>(),
             Value::Vertex(v) => std::mem::size_of::<Self>() + v.estimated_size(),
             Value::Edge(e) => std::mem::size_of::<Self>() + e.estimated_size(),
+            Value::EdgeHeader(h) => std::mem::size_of::<Self>() + h.estimated_size(),
             Value::Path(p) => std::mem::size_of::<Self>() + p.estimated_size(),
             Value::List(l) => std::mem::size_of::<Self>() + l.estimated_size(),
             Value::Map(m) => {
@@ -441,6 +443,11 @@ impl Value {
         Value::Edge(Box::new(edge))
     }
 
+    /// Create a new edge header value (wraps in Box)
+    pub fn edge_header(header: EdgeHeader) -> Self {
+        Value::EdgeHeader(Box::new(header))
+    }
+
     /// Create a new Path value (wraps in Box)
     pub fn path(path: Path) -> Self {
         Value::Path(Box::new(path))
@@ -492,6 +499,14 @@ impl std::fmt::Display for Value {
             ),
             Value::Vertex(v) => write!(f, "Vertex({:?})", v.vid()),
             Value::Edge(e) => write!(f, "Edge({:?} -> {:?})", e.src(), e.dst()),
+            Value::EdgeHeader(h) => write!(
+                f,
+                "EdgeHeader({:?} -> {:?}, {}, {})",
+                h.src(),
+                h.dst(),
+                h.edge_type(),
+                h.ranking()
+            ),
             Value::Path(p) => write!(f, "Path({:?})", p),
             Value::List(list) => {
                 write!(f, "[")?;

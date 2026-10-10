@@ -31,6 +31,7 @@
 use std::sync::Arc;
 
 use crate::executor::streaming::chunk::columnar_common::column_variants;
+use crate::executor::streaming::chunk::columnar_common::EdgeHeaderColumn;
 use linkrs_core::value::decimal128::Decimal128Value;
 use linkrs_core::Value;
 

@@ -30,6 +30,9 @@ pub(crate) fn typed_column_batch(column: &TypedColumn) -> Option<TypedBatch> {
         TypedColumn::NullableDecimal(v, b) => {
             Some(TypedBatch::NullableDecimal(v.clone(), b.clone()))
         }
+        // Identity columns are not scalar-evaluable: expression evaluation
+        // materializes them through `value_at` / `to_values` instead.
+        TypedColumn::VertexIdentity(_) | TypedColumn::EdgeHeader(_) => None,
         TypedColumn::Fallback(_) => None,
     }
 }

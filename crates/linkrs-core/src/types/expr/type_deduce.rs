@@ -89,7 +89,7 @@ impl Expression {
             Value::Time(_) => DataType::Time,
             Value::DateTime(_) => DataType::DateTime,
             Value::Vertex(_) => DataType::Vertex,
-            Value::Edge(_) => DataType::Edge,
+            Value::Edge(_) | Value::EdgeHeader(_) => DataType::Edge,
             Value::Path(_) => DataType::Path,
             Value::List(_) | Value::Map(_) | Value::Set(_) => value.get_type(),
             Value::Geography(_) => DataType::Geography,

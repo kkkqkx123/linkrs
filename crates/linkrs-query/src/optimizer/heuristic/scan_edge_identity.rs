@@ -1,19 +1,22 @@
-//! Scan identity annotation batch.
+//! Scan edge identity annotation batch.
 //!
-//! Annotates `ScanVertices` nodes with `identity_only` so the streaming
-//! executor can skip boxing a full `Value::Vertex` per row: the entity
-//! column carries a lightweight `Value::VertexId` and the per-row property
-//! map is never built. Flat property columns are unaffected.
+//! Annotates `ScanEdges` nodes with `identity_only` so the streaming
+//! executor can skip boxing a full `Value::Edge` per row: the entity
+//! column carries a lightweight `Value::EdgeHeader` (the query-visible
+//! `(src, dst, edge_type, ranking)` tuple with no property map) and the
+//! per-row property map is never built. Flat property columns are
+//! unaffected.
 //!
 //! The annotation is valid only when the scan's entity variable is never
-//! consumed as a whole value downstream: every ancestor reference must be a
-//! `var.prop` access served by the scan's flat slots, and no ancestor may
-//! structurally require boxed seeds (multi-hop/filtered expands, traversals,
+//! consumed as a whole value downstream: every ancestor reference must be
+//! an `edge.prop` access served by the scan's flat slots (or no property
+//! read at all for pure-count plans), and no ancestor may structurally
+//! require boxed edges (multi-hop/filtered expands, traversals,
 //! whole-entity consumers). Anything unauditable blocks the annotation.
 //!
-//! The rule is a whole-plan pass mirroring `ExpandPushdownAnnotateRule` and
-//! runs in the same batch, after it, so expand `id_only`/`count_only` flags
-//! are already final when seed tolerance is judged.
+//! The rule is a whole-plan pass mirroring `ScanIdentityAnnotateRule` and
+//! runs in the same batch, after it, so vertex identity flags are already
+//! final when edge eligibility is judged.
 //!
 //! The walk mutates the tree in place and never keys decisions by node id:
 //! macro-generated plan nodes regenerate ids on clone, so id-keyed matching
@@ -31,27 +34,28 @@ use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use linkrs_core::types::expr::visitor::ExpressionVisitor;
+use linkrs_core::types::operators::AggregateFunction;
 use linkrs_core::Expression;
 
-/// Whole-plan rule that annotates `ScanVertices` nodes with `identity_only`.
+/// Whole-plan rule that annotates `ScanEdges` nodes with `identity_only`.
 #[derive(Debug)]
-pub struct ScanIdentityAnnotateRule;
+pub struct ScanEdgeIdentityAnnotateRule;
 
-impl ScanIdentityAnnotateRule {
+impl ScanEdgeIdentityAnnotateRule {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for ScanIdentityAnnotateRule {
+impl Default for ScanEdgeIdentityAnnotateRule {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RewriteRule for ScanIdentityAnnotateRule {
+impl RewriteRule for ScanEdgeIdentityAnnotateRule {
     fn name(&self) -> &'static str {
-        "ScanIdentityAnnotateRule"
+        "ScanEdgeIdentityAnnotateRule"
     }
 
     /// Matches any node; the rule only acts at the plan root.
@@ -68,7 +72,7 @@ impl RewriteRule for ScanIdentityAnnotateRule {
         if ctx.current_node_id() != 0 {
             return Ok(None);
         }
-        let (new_root, changed) = annotate_scan_identity(node);
+        let (new_root, changed) = annotate_scan_edge_identity(node);
         if !changed {
             return Ok(None);
         }
@@ -79,8 +83,8 @@ impl RewriteRule for ScanIdentityAnnotateRule {
     }
 }
 
-/// Annotate every eligible `ScanVertices` in `root` and return the tree.
-fn annotate_scan_identity(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
+/// Annotate every eligible `ScanEdges` in `root` and return the tree.
+fn annotate_scan_edge_identity(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
     let mut new_root = root.clone();
     let changed = annotate_mut(&mut new_root, &mut Vec::new());
     (new_root, changed)
@@ -92,9 +96,9 @@ fn annotate_scan_identity(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
 /// ids are irrelevant.
 fn annotate_mut(node: &mut PlanNodeEnum, ancestors: &mut Vec<PlanNodeEnum>) -> bool {
     let mut changed = false;
-    if let PlanNodeEnum::ScanVertices(scan) = node {
+    if let PlanNodeEnum::ScanEdges(scan) = node {
         let ancestor_refs: Vec<&PlanNodeEnum> = ancestors.iter().collect();
-        if !scan.identity_only() && scan_identity_eligible(scan, &ancestor_refs) {
+        if !scan.identity_only() && scan_edge_identity_eligible(scan, &ancestor_refs) {
             scan.set_identity_only(true);
             changed = true;
         }
@@ -112,11 +116,10 @@ fn annotate_mut(node: &mut PlanNodeEnum, ancestors: &mut Vec<PlanNodeEnum>) -> b
     changed
 }
 
-/// Whether the scan may emit identity references: the entity variable must
-/// have a flat layout (non-empty projection) and every ancestor must pass
-/// the audit below.
-fn scan_identity_eligible(
-    scan: &crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode,
+/// Whether the scan may emit edge header references: every ancestor must
+/// pass the audit below.
+fn scan_edge_identity_eligible(
+    scan: &crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode,
     ancestors: &[&PlanNodeEnum],
 ) -> bool {
     let Some(var) = scan.col_names().first() else {
@@ -130,14 +133,7 @@ fn scan_identity_eligible(
     }
     // No minimum projection: with an empty projection every property read
     // fails the flat-service check below, so only plans with zero property
-    // reads (pure seeds, row counts) can pass the audit — all safe.
-    // CTE-tagged scans lower to a working-table source, not storage: the
-    // flag would be meaningless there.
-    if let Some(tag) = scan.tag() {
-        if crate::cte::is_cte_tag(tag) {
-            return false;
-        }
-    }
+    // reads (pure edge counts) can pass the audit — all safe.
     let projected: HashSet<&str> = scan
         .projected_properties()
         .iter()
@@ -149,8 +145,8 @@ fn scan_identity_eligible(
 }
 
 /// Audit one ancestor against the scan variable: every expression reference
-/// must be a flat-served property access, and no structural consumer may
-/// require boxed seeds.
+/// must be a flat-served edge property access, and no structural consumer
+/// may require boxed edges.
 fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> bool {
     if !known_reference_ancestor(anc) {
         return false;
@@ -182,7 +178,27 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> b
             if agg.group_keys().iter().any(|key| key == var) {
                 return false;
             }
-            agg.aggregation_args()
+            if agg.grouping_sets().iter().flatten().any(|key| key == var) {
+                return false;
+            }
+            // A bare-variable `count(var)` only observes null-ness, which
+            // the header reference preserves; every other aggregate needs
+            // real values. Per-function filters are audited strictly.
+            let funcs = agg.aggregation_functions();
+            for (index, arg_list) in agg.aggregation_args().iter().enumerate() {
+                let is_count = funcs
+                    .get(index)
+                    .is_some_and(|func| matches!(func, AggregateFunction::Count));
+                for expr in arg_list {
+                    if is_count && matches!(expr, Expression::Variable(name) if name == var) {
+                        continue;
+                    }
+                    if !entity_use_safe(expr, var, projected) {
+                        return false;
+                    }
+                }
+            }
+            agg.aggregation_filters()
                 .iter()
                 .flatten()
                 .all(|expr| entity_use_safe(expr, var, projected))
@@ -211,9 +227,10 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> b
             if !filter_safe {
                 return false;
             }
-            // The expand consumes the scan variable as its seed only through
-            // its first column; a seed-tolerant hop accepts identity rows,
-            // anything else needs boxed vertices with tags.
+            // Edge scan variables never seed an expand hop (seeds are
+            // vertices); the hop carries the edge column through only when
+            // it does not consume it as a seed. A seed-tolerant hop accepts
+            // identity rows, anything else needs boxed values with tags.
             if expand.col_names().first().map(String::as_str) == Some(var)
                 && !seed_tolerant_expand(expand)
             {
@@ -248,8 +265,8 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> b
             })
             .all(|expr| entity_use_safe(expr, var, projected)),
         // Flatten replays child rows without evaluating columns; Limit and
-        // Dedup preserve row identity (Dedup hashes rows, and the identity
-        // reference hashes like the vertex id it stands for).
+        // Dedup preserve row identity (Dedup hashes rows, and the header
+        // reference hashes like the edge identity it stands for).
         PlanNodeEnum::Flatten(_) | PlanNodeEnum::Limit(_) | PlanNodeEnum::Dedup(_) => true,
         _ => false,
     }
@@ -268,7 +285,7 @@ fn seed_tolerant_expand(expand: &ExpandAllNode) -> bool {
             && expand.src_vids().is_empty())
 }
 
-/// True when `expr` uses `var` only through `var.prop` accesses whose
+/// True when `expr` uses `var` only through `edge.prop` accesses whose
 /// property is served by the scan's flat slots. Any other occurrence (bare
 /// reference, function argument, opaque object, subquery body, struct field)
 /// needs the whole entity value.
@@ -320,8 +337,10 @@ impl ExpressionVisitor for EntityUseAudit<'_> {
         }
     }
 
-    fn visit_edge_property(&mut self, edge_name: &str, _property: &str) {
-        if edge_name == self.var {
+    fn visit_edge_property(&mut self, edge_name: &str, property: &str) {
+        if edge_name == self.var && !self.projected.contains(property) {
+            // Served by neither flat slot: the evaluator would fall
+            // back to the boxed entity.
             self.full_value = true;
         }
     }
@@ -367,7 +386,7 @@ fn audit_join_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode;
     use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
     use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
     use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
@@ -383,28 +402,27 @@ mod tests {
         ContextualExpression::new(id, ctx)
     }
 
-    fn prop_expr(var: &str, prop: &str) -> Expression {
-        Expression::Property {
-            object: Box::new(Expression::Variable(var.to_string())),
+    fn edge_prop_expr(var: &str, prop: &str) -> Expression {
+        Expression::EdgeProperty {
+            edge_name: var.to_string(),
             property: prop.to_string(),
         }
     }
 
     fn flat_scan(var: &str, props: &[&str]) -> PlanNodeEnum {
-        let mut scan = ScanVerticesNode::new(1, "space");
-        scan.set_tag("Node");
+        let mut scan = ScanEdgesNode::new(1, "Link");
         scan.set_col_names(vec![var.to_string()]);
         scan.set_projected_properties(props.iter().map(|s| s.to_string()).collect());
-        PlanNodeEnum::ScanVertices(scan)
+        PlanNodeEnum::ScanEdges(scan)
     }
 
     fn project_cols(input: PlanNodeEnum, cols: Vec<linkrs_core::YieldColumn>) -> PlanNodeEnum {
         PlanNodeEnum::Project(ProjectNode::new(input, cols).expect("project should build"))
     }
 
-    fn project_prop(input: PlanNodeEnum, var: &str, prop: &str) -> PlanNodeEnum {
+    fn project_edge_prop(input: PlanNodeEnum, var: &str, prop: &str) -> PlanNodeEnum {
         let col = linkrs_core::YieldColumn {
-            expression: ctx_expr(prop_expr(var, prop)),
+            expression: ctx_expr(edge_prop_expr(var, prop)),
             alias: prop.to_string(),
         };
         project_cols(input, vec![col])
@@ -418,18 +436,10 @@ mod tests {
         project_cols(input, vec![col])
     }
 
-    fn hop(vars: [&str; 3], input: PlanNodeEnum) -> PlanNodeEnum {
-        let mut expand = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
-        expand.set_step_limit(1);
-        expand.set_col_names(vars.iter().map(|s| s.to_string()).collect());
-        expand.add_input(input);
-        PlanNodeEnum::ExpandAll(expand)
-    }
-
     fn scan_flag(root: &PlanNodeEnum) -> bool {
         let mut found = Vec::new();
         fn walk(node: &PlanNodeEnum, out: &mut Vec<bool>) {
-            if let PlanNodeEnum::ScanVertices(scan) = node {
+            if let PlanNodeEnum::ScanEdges(scan) = node {
                 out.push(scan.identity_only());
             }
             for child in node.children() {
@@ -443,92 +453,107 @@ mod tests {
 
     #[test]
     fn flat_projection_enables_identity() {
-        // MATCH (a:Node) RETURN a.name
-        let plan = project_prop(flat_scan("a", &["name"]), "a", "name");
-        let (annotated, changed) = annotate_scan_identity(&plan);
+        let plan = project_edge_prop(flat_scan("e", &["weight"]), "e", "weight");
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
         assert!(changed, "annotation must change the plan");
         assert!(scan_flag(&annotated));
     }
 
     #[test]
     fn whole_entity_projection_blocks_identity() {
-        // MATCH (a:Node) RETURN a
-        let plan = project_var(flat_scan("a", &["name"]), "a");
-        let (annotated, changed) = annotate_scan_identity(&plan);
+        let plan = project_var(flat_scan("e", &["weight"]), "e");
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
         assert!(!changed, "annotation must not change the plan");
         assert!(!scan_flag(&annotated));
     }
 
     #[test]
     fn unprojected_property_use_blocks_identity() {
-        // RETURN a.missing served by no flat slot falls back to the box.
-        let plan = project_prop(flat_scan("a", &["name"]), "a", "missing");
-        let (annotated, changed) = annotate_scan_identity(&plan);
+        let plan = project_edge_prop(flat_scan("e", &["weight"]), "e", "missing");
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
         assert!(!changed);
         assert!(!scan_flag(&annotated));
     }
 
     #[test]
-    fn entity_only_scan_blocks_identity_on_whole_use() {
-        // RETURN a still needs the box even with an entity-only layout.
-        let plan = project_var(flat_scan("a", &[]), "a");
-        let (annotated, changed) = annotate_scan_identity(&plan);
+    fn count_over_edge_keeps_identity() {
+        // `count(e)` only observes null-ness, which the header reference
+        // preserves, so a bare-variable count argument is safe.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg =
+            AggregateNode::new(flat_scan("e", &[]), vec![], vec![AggregateFunction::Count])
+                .expect("aggregate should build");
+        agg.set_aggregation_args(vec![vec![Expression::Variable("e".to_string())]]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
+        assert!(changed, "count over the edge must enable identity");
+        assert!(scan_flag(&annotated));
+    }
+
+    #[test]
+    fn sum_over_edge_blocks_identity() {
+        // Any other aggregate needs real values: a bare-variable argument
+        // blocks the annotation.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg = AggregateNode::new(flat_scan("e", &[]), vec![], vec![AggregateFunction::Sum])
+            .expect("aggregate should build");
+        agg.set_aggregation_args(vec![vec![Expression::Variable("e".to_string())]]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
         assert!(!changed);
         assert!(!scan_flag(&annotated));
     }
 
     #[test]
-    fn seed_only_scan_without_projection_keeps_identity() {
-        // No property reads at all: the scan only feeds a single-step hop
-        // seed, so nothing needs the box.
-        let plan = hop(["a", "e", "b"], flat_scan("a", &[]));
-        let (annotated, changed) = annotate_scan_identity(&plan);
-        assert!(changed);
-        assert!(scan_flag(&annotated));
-    }
-
-    #[test]
-    fn single_step_expand_seed_keeps_identity() {
-        // MATCH (a)-[:Link]->(b) RETURN b.name: the scan only feeds a
-        // single-step hop seed plus flat uses.
-        let plan = project_prop(hop(["a", "e", "b"], flat_scan("a", &["name"])), "b", "name");
-        let (annotated, changed) = annotate_scan_identity(&plan);
-        assert!(changed);
-        assert!(scan_flag(&annotated));
+    fn group_by_edge_blocks_identity() {
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let agg = AggregateNode::new(
+            flat_scan("e", &[]),
+            vec!["e".to_string()],
+            vec![AggregateFunction::Count],
+        )
+        .expect("aggregate should build");
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
+        assert!(!changed);
+        assert!(!scan_flag(&annotated));
     }
 
     #[test]
     fn filtered_expand_seed_blocks_identity() {
-        // A filtered hop takes the generic walk, which needs tagged seeds.
         let mut expand = ExpandAllNode::new(1, vec!["Link".to_string()], "OUT");
         expand.set_step_limit(1);
-        expand.set_col_names(vec!["a".to_string(), "e".to_string(), "b".to_string()]);
+        expand.set_col_names(vec!["e".to_string(), "f".to_string(), "b".to_string()]);
         expand.set_filter(ctx_expr(Expression::Binary {
-            left: Box::new(prop_expr("a", "age")),
+            left: Box::new(edge_prop_expr("e", "weight")),
             op: BinaryOperator::GreaterThan,
             right: Box::new(Expression::Literal(Value::Int(3))),
         }));
-        expand.add_input(flat_scan("a", &["age"]));
+        expand.add_input(flat_scan("e", &["weight"]));
         let plan = PlanNodeEnum::ExpandAll(expand);
-        let (annotated, changed) = annotate_scan_identity(&plan);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
         assert!(!changed);
         assert!(!scan_flag(&annotated));
     }
 
     #[test]
     fn function_argument_blocks_identity() {
-        // RETURN labels(a): the function needs the whole entity.
+        // RETURN src(e): the function needs the whole entity under the
+        // conservative audit even though the evaluator tolerates headers.
         let col = linkrs_core::YieldColumn {
             expression: ctx_expr(Expression::Function {
-                name: "labels".to_string(),
+                name: "src".to_string(),
                 args: vec![linkrs_core::types::expr::FunctionArg::positional(
-                    Expression::Variable("a".to_string()),
+                    Expression::Variable("e".to_string()),
                 )],
             }),
-            alias: "labels".to_string(),
+            alias: "src".to_string(),
         };
-        let plan = project_cols(flat_scan("a", &["name"]), vec![col]);
-        let (annotated, changed) = annotate_scan_identity(&plan);
+        let plan = project_cols(flat_scan("e", &["weight"]), vec![col]);
+        let (annotated, changed) = annotate_scan_edge_identity(&plan);
         assert!(!changed);
         assert!(!scan_flag(&annotated));
     }

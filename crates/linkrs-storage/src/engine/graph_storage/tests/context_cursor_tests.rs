@@ -655,3 +655,112 @@ fn cursor_topology_only_rejects_predicates_and_projections() {
         "projection with topology_only must name the contract: {err}"
     );
 }
+
+#[test]
+fn edge_cursor_topology_only_skips_property_decode() {
+    use linkrs_core::vertex_edge_path::Edge;
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    setup_knows_edge(&mut storage);
+    insert_test_vertex(&mut storage, 1, "Alice");
+    insert_test_vertex(&mut storage, 2, "Bob");
+    storage
+        .insert_edge(
+            "test_space",
+            Edge::new(
+                VertexId::try_from_int64(1).expect("test vertex id"),
+                VertexId::try_from_int64(2).expect("test vertex id"),
+                "KNOWS".into(),
+                0,
+                [("since".into(), Value::Int(2020))].into_iter().collect(),
+            ),
+        )
+        .expect("insert should succeed");
+    storage
+        .insert_edge(
+            "test_space",
+            Edge::new(
+                VertexId::try_from_int64(2).expect("test vertex id"),
+                VertexId::try_from_int64(1).expect("test vertex id"),
+                "KNOWS".into(),
+                1,
+                [("since".into(), Value::Int(2025))].into_iter().collect(),
+            ),
+        )
+        .expect("insert should succeed");
+
+    let topology = ScanOptions {
+        topology_only: true,
+        projection: Some(Vec::new()),
+        edge_type: Some("KNOWS".to_string()),
+        ..ScanOptions::default()
+    };
+    // Column-block path: headers resolve with zero property columns.
+    let mut columns = storage
+        .create_edge_cursor("test_space", &topology)
+        .expect("topology edge cursor should open");
+    let batch = columns
+        .next_column_batch(&[], 16)
+        .expect("topology edge column batch");
+    assert_eq!(batch.len(), 2);
+    assert!(
+        batch.columns.is_empty(),
+        "topology edge batches carry no property columns"
+    );
+    assert_eq!(
+        batch.edge_types,
+        vec!["KNOWS".to_string(), "KNOWS".to_string()]
+    );
+
+    // Row path: edges resolve with empty property maps.
+    let mut rows = storage
+        .create_edge_cursor("test_space", &topology)
+        .expect("topology edge row cursor should open");
+    let flat = rows.next_batch(16).expect("topology edge batch");
+    assert_eq!(flat.len(), 2);
+    assert!(
+        flat.iter().all(|edge| edge.props.is_empty()),
+        "topology edges carry no properties"
+    );
+}
+
+#[test]
+fn edge_cursor_topology_only_rejects_predicates_and_projections() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    setup_knows_edge(&mut storage);
+    insert_test_vertex(&mut storage, 1, "Alice");
+
+    let with_predicate = ScanOptions {
+        topology_only: true,
+        projection: Some(Vec::new()),
+        edge_type: Some("KNOWS".to_string()),
+        predicate: Some(vec![crate::cursor::ScanPredicate::ColumnEqual {
+            column: "since".into(),
+            value: Value::Int(2020),
+        }]),
+        ..ScanOptions::default()
+    };
+    let err = storage
+        .create_edge_cursor("test_space", &with_predicate)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("topology_only"),
+        "predicate with topology_only must name the contract: {err}"
+    );
+
+    let with_projection = ScanOptions {
+        topology_only: true,
+        edge_type: Some("KNOWS".to_string()),
+        ..ScanOptions::default().with_projection_named(vec!["since".into()])
+    };
+    let err = storage
+        .create_edge_cursor("test_space", &with_projection)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("topology_only"),
+        "projection with topology_only must name the contract: {err}"
+    );
+}

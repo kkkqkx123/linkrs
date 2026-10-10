@@ -20,7 +20,7 @@ use linkrs_core::value::decimal128::Decimal128Value;
 use linkrs_core::value::NullType;
 use linkrs_core::Value;
 
-use super::columnar_common::{bitmap_is_valid, column_variants};
+use super::columnar_common::{bitmap_is_valid, column_variants, EdgeHeaderColumn};
 
 mod evaluation;
 mod operations;
@@ -142,6 +142,8 @@ impl TypedColumn {
                     null()
                 }
             }
+            TypedColumn::VertexIdentity(v) => v.get(idx).map(|&id| Value::VertexId(id)),
+            TypedColumn::EdgeHeader(v) => v.header_at(idx).map(Value::edge_header),
             TypedColumn::Fallback(v) => v.get(idx).cloned(),
         }
     }
@@ -251,6 +253,8 @@ impl TypedColumn {
                     }
                 })
                 .collect(),
+            TypedColumn::VertexIdentity(v) => v.iter().map(|&id| Value::VertexId(id)).collect(),
+            TypedColumn::EdgeHeader(v) => v.to_values(),
             TypedColumn::Fallback(v) => v.clone(),
         }
     }

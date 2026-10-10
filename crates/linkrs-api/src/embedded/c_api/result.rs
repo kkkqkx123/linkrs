@@ -706,7 +706,9 @@ pub unsafe extern "C" fn linkrs_column_type(
                     linkrs_core::Value::List(_) => linkrs_value_type_t::LINKRS_LIST,
                     linkrs_core::Value::Map(_) => linkrs_value_type_t::LINKRS_MAP,
                     linkrs_core::Value::Vertex(_) => linkrs_value_type_t::LINKRS_VERTEX,
-                    linkrs_core::Value::Edge(_) => linkrs_value_type_t::LINKRS_EDGE,
+                    linkrs_core::Value::Edge(_) | linkrs_core::Value::EdgeHeader(_) => {
+                        linkrs_value_type_t::LINKRS_EDGE
+                    }
                     linkrs_core::Value::Path(_) => linkrs_value_type_t::LINKRS_PATH,
                     _ => linkrs_value_type_t::LINKRS_NULL,
                 },

@@ -94,6 +94,7 @@ pub(crate) fn overflow_payload_bytes(value: &linkrs_core::Value) -> Option<Vec<u
         | Value::DataSet(_)
         | Value::Vertex(_)
         | Value::Edge(_)
+        | Value::EdgeHeader(_)
         | Value::Path(_)
         | Value::Interval(_)
         | Value::Decimal128(_)

@@ -52,10 +52,14 @@ impl BatchColumn {
         !matches!(self, BatchColumn::Empty | BatchColumn::Fallback(_))
     }
 
-    /// The raw kind of a typed column (None for Empty/Fallback).
+    /// The raw kind of a typed column (None for Empty/Fallback and for the
+    /// identity columns, which have no scalar `TypedKind`).
     pub fn kind(&self) -> Option<TypedKind> {
         match self {
-            BatchColumn::Empty | BatchColumn::Fallback(_) => None,
+            BatchColumn::Empty
+            | BatchColumn::Fallback(_)
+            | BatchColumn::VertexIdentity(_)
+            | BatchColumn::EdgeHeader(_) => None,
             BatchColumn::I64(_) | BatchColumn::NullableI64(..) => Some(TypedKind::I64),
             BatchColumn::F64(_) | BatchColumn::NullableF64(..) => Some(TypedKind::F64),
             BatchColumn::I32(_) | BatchColumn::NullableI32(..) => Some(TypedKind::I32),
@@ -138,6 +142,14 @@ impl BatchColumn {
                     Value::Null(NullType::Null)
                 }
             }
+            BatchColumn::VertexIdentity(v) => v
+                .get(idx)
+                .map(|&id| Value::VertexId(id))
+                .unwrap_or(Value::Null(NullType::Null)),
+            BatchColumn::EdgeHeader(v) => v
+                .header_at(idx)
+                .map(Value::edge_header)
+                .unwrap_or(Value::Null(NullType::Null)),
             BatchColumn::Fallback(v) => v[idx].clone(),
         }
     }
@@ -208,6 +220,17 @@ impl BatchColumn {
             BatchColumn::NullableDecimal(v, bm) => {
                 nullable_cmp_at(bm, &v[a], &v[b], a, b, |x, y| x.cmp(y))
             }
+            BatchColumn::VertexIdentity(v) => v[a].cmp(&v[b]),
+            // Edge headers have no raw `Ord`: compare the materialized
+            // values exactly as the `Fallback` path does.
+            BatchColumn::EdgeHeader(v) => compare_values(
+                &v.header_at(a)
+                    .map(Value::edge_header)
+                    .unwrap_or(Value::Null(NullType::Null)),
+                &v.header_at(b)
+                    .map(Value::edge_header)
+                    .unwrap_or(Value::Null(NullType::Null)),
+            ),
             BatchColumn::Fallback(v) => compare_values(&v[a], &v[b]),
         }
     }
@@ -540,6 +563,14 @@ impl BatchColumn {
                 }
                 _ => *self = Self::degraded_append(self, col, indices),
             },
+            BatchColumn::VertexIdentity(buf) => match col {
+                TypedColumn::VertexIdentity(src) => buf.extend(indices.iter().map(|&i| src[i])),
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
+            BatchColumn::EdgeHeader(buf) => match col {
+                TypedColumn::EdgeHeader(src) => buf.extend_indexed(src, indices),
+                _ => *self = Self::degraded_append(self, col, indices),
+            },
             BatchColumn::Fallback(buf) => {
                 buf.extend(indices.iter().map(|&i| {
                     col.value_at(i)
@@ -725,6 +756,20 @@ impl BatchColumn {
                     *self = BatchColumn::degraded_push(self, value);
                 }
             }
+            BatchColumn::VertexIdentity(buf) => {
+                if let Value::VertexId(id) = value {
+                    buf.push(*id);
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
+            BatchColumn::EdgeHeader(buf) => {
+                if let Value::EdgeHeader(header) = value {
+                    buf.push(header.src, header.dst, &header.edge_type, header.ranking);
+                } else {
+                    *self = BatchColumn::degraded_push(self, value);
+                }
+            }
             BatchColumn::Fallback(buf) => buf.push(value.clone()),
         }
     }
@@ -778,6 +823,8 @@ impl BatchColumn {
                 v.truncate(len);
                 bm.truncate(len.div_ceil(64));
             }
+            BatchColumn::VertexIdentity(v) => v.truncate(len),
+            BatchColumn::EdgeHeader(v) => v.truncate(len),
             BatchColumn::Fallback(v) => v.truncate(len),
         }
     }
@@ -857,6 +904,11 @@ impl BatchColumn {
                 *v = perm.iter().map(|&i| old_v[i].clone()).collect();
                 *bm = gather_bitmap(&old_bm, perm);
             }
+            BatchColumn::VertexIdentity(v) => {
+                let old = std::mem::take(v);
+                *v = perm.iter().map(|&i| old[i]).collect();
+            }
+            BatchColumn::EdgeHeader(v) => v.permute(perm),
             BatchColumn::Fallback(v) => {
                 let old = std::mem::take(v);
                 *v = perm.iter().map(|&i| old[i].clone()).collect();

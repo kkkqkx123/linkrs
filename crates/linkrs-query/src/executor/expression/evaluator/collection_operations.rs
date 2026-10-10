@@ -336,6 +336,9 @@ impl CollectionOperationEvaluator {
                 .get(property)
                 .cloned()
                 .unwrap_or(Value::Null(linkrs_core::value::NullType::Null))),
+            Value::EdgeHeader(_) => Err(ExpressionError::type_error(
+                "Property access on an edge identity reference is not supported: the reference carries no properties",
+            )),
             Value::Map(map) => Ok(map
                 .get(&Value::string(property))
                 .cloned()
