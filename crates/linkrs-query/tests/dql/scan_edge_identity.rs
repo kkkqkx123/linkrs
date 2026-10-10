@@ -178,3 +178,44 @@ fn edge_identity_blocked_for_entity_function() {
         other => panic!("expected a dataset, got {other:?}"),
     }
 }
+
+#[test]
+fn anonymous_edge_count_exact_on_tagged_schema() {
+    // MATCH with anonymous endpoints lowers to a seed scan plus expand: the
+    // seed scan keeps identity (the intermediate project only forwards the
+    // seed variable) and the expand resolves neighbors through the edge
+    // schema endpoint tags. A tagless schema skips every hop by design, so
+    // this pins the tagged-schema count end to end.
+    let mut scenario = TestScenario::new()
+        .expect("scenario")
+        .setup_space("edge_count_tagged")
+        .exec_ddl("CREATE TAG person(name STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE knows() FROM person TO person")
+        .assert_success();
+    for i in 0..10 {
+        scenario = scenario.exec_dml(&format!("INSERT VERTEX person(name) VALUES {i}:(\"{i}\")",));
+    }
+    scenario = scenario.assert_success();
+    for i in 0..10 {
+        scenario =
+            scenario.exec_dml(&format!("INSERT EDGE knows VALUES {i} -> {}", (i + 1) % 10));
+    }
+    let scenario = scenario.assert_success();
+
+    let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH ()-[e:knows]->() RETURN count(e)");
+    assert!(
+        plan_of(&scenario).contains("mode: identity"),
+        "seed scan keeps identity through the forwarding project"
+    );
+    let scenario = scenario.assert_success();
+
+    let scenario = scenario.query("MATCH ()-[e:knows]->() RETURN count(e)");
+    let scenario = scenario.assert_success().assert_result_count(1);
+    match scenario.last_result() {
+        Some(ExecutionResult::DataSet { data, .. }) => {
+            assert_eq!(data.rows, vec![vec![Value::BigInt(10)]]);
+        }
+        other => panic!("expected a count dataset, got {other:?}"),
+    }
+}

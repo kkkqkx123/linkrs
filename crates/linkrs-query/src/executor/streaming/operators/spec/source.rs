@@ -78,6 +78,11 @@ pub enum SourceSpec {
         /// entity downstream, so the entity column carries lightweight
         /// `Value::VertexId` instead of boxed vertices.
         identity_only: bool,
+        /// Rowless mode (set with `identity_only` by the planner when the
+        /// direct consumer is column-capable): skip the row view entirely
+        /// and emit typed columns only. Valid only when the columnar path
+        /// is on; the scan falls back to rows when it is off.
+        skip_rows: bool,
         /// Scan predicates pushed into the storage layer (pure pre-filter;
         /// the original filter still runs on top).
         predicate: Vec<ScanPredicate>,

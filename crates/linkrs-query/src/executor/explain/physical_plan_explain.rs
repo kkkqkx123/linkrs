@@ -303,12 +303,16 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                 crate::executor::streaming::operators::spec::SourceSpec::StorageScanVertices {
                     col_names,
                     identity_only,
+                    skip_rows,
                     ..
                 } => {
                     if *identity_only {
                         pairs.push(crate::planning::plan::explain::Pair::new(
                             "mode", "identity",
                         ));
+                    }
+                    if *skip_rows {
+                        pairs.push(crate::planning::plan::explain::Pair::new("rows", "skipped"));
                     }
                     col_names.clone()
                 }

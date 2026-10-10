@@ -224,49 +224,88 @@ pub(super) fn next_aggregate(
                         state.col_names = chunk.col_names();
                     }
                     let sm = ctx.runtime.as_ref().and_then(|rt| rt.get_spill_manager());
-                    let batch_eval: BatchEvalResult =
-                        if chunk.selection.is_none() && !chunk.rows.is_empty() {
-                            match chunk.evaluate_expressions(group_by_expressions, None) {
-                                Ok(keys) => {
-                                    let mut args = Vec::with_capacity(aggregate_functions.len());
-                                    let mut ok = true;
-                                    for (i, (_func, func_args)) in
-                                        aggregate_functions.iter().enumerate()
-                                    {
-                                        if count_units[i] {
-                                            // Identity columns are provably non-null and
-                                            // `Count` only observes null-ness: feed one
-                                            // unit per row without evaluating the argument.
-                                            args.push(vec![Value::Int(1); chunk.rows.len()]);
-                                            continue;
-                                        }
-                                        if let Some(expr) = func_args.first() {
-                                            match chunk.evaluate_expression(expr, None) {
-                                                Ok(col) => args.push(col),
-                                                Err(_) => {
-                                                    ok = false;
-                                                    break;
-                                                }
-                                            }
-                                        } else {
-                                            ok = false;
-                                            break;
-                                        }
+                    // Rowless positions: the scan skipped the row view, so the
+                    // chunk carries data only in typed columns. With no group
+                    // keys and every aggregate a row-counting `Count`
+                    // (identity-backed, hence a unit, or argument-free), each
+                    // typed position contributes one unit through the shared
+                    // loop below: group keys stay empty and args stay units,
+                    // so no row is ever dereferenced. Any other rowless shape
+                    // is a planner-contract violation and panics loudly at
+                    // the row access instead of silently dropping input.
+                    let rowless_units: Option<usize> = if chunk.rows.is_empty()
+                        && !has_group_keys
+                        && aggregate_functions
+                            .iter()
+                            .enumerate()
+                            .all(|(i, (func, args))| {
+                                matches!(func, AggregateFunction::Count)
+                                    && (count_units[i] || args.is_empty())
+                            }) {
+                        chunk.typed_len()
+                    } else {
+                        None
+                    };
+                    let batch_eval: BatchEvalResult = if chunk.selection.is_none()
+                        && (!chunk.rows.is_empty() || rowless_units.is_some())
+                    {
+                        match chunk.evaluate_expressions(group_by_expressions, None) {
+                            Ok(keys) => {
+                                let mut args = Vec::with_capacity(aggregate_functions.len());
+                                let mut ok = true;
+                                for (i, (_func, func_args)) in
+                                    aggregate_functions.iter().enumerate()
+                                {
+                                    if count_units[i] {
+                                        // Identity columns are provably non-null and
+                                        // `Count` only observes null-ness: feed one
+                                        // unit per row without evaluating the argument.
+                                        // Rowless chunks contribute one unit per
+                                        // typed position.
+                                        args.push(vec![
+                                            Value::Int(1);
+                                            rowless_units.unwrap_or(chunk.rows.len())
+                                        ]);
+                                        continue;
                                     }
-                                    if ok {
-                                        Some((keys, args))
+                                    if let Some(expr) = func_args.first() {
+                                        match chunk.evaluate_expression(expr, None) {
+                                            Ok(col) => args.push(col),
+                                            Err(_) => {
+                                                ok = false;
+                                                break;
+                                            }
+                                        }
                                     } else {
-                                        None
+                                        ok = false;
+                                        break;
                                     }
                                 }
-                                Err(_) => None,
+                                if ok {
+                                    Some((keys, args))
+                                } else {
+                                    None
+                                }
                             }
-                        } else {
-                            None
-                        };
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
 
-                    for idx in chunk.visible_indices() {
-                        let row = &chunk.rows[idx];
+                    let empty_row: Vec<Value> = Vec::new();
+                    let visit: Vec<usize> = match rowless_units {
+                        Some(n) if chunk.selection.is_none() => (0..n).collect(),
+                        _ => chunk.visible_indices(),
+                    };
+                    for idx in visit {
+                        let row: &[Value] = match (rowless_units, chunk.rows.get(idx)) {
+                            (_, Some(stored)) => stored,
+                            (Some(_), None) => &empty_row,
+                            (None, None) => panic!(
+                                "rowless chunk reached the row loop outside the audited count morphology"
+                            ),
+                        };
                         let group_key: Vec<Value> = match &batch_eval {
                             Some((keys, _)) => keys.iter().map(|c| c[idx].clone()).collect(),
                             None => eval_group_key(row, &state.col_names, group_by_expressions),

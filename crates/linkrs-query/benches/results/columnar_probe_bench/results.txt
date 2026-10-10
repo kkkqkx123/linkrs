@@ -1,0 +1,10 @@
+columnar probe gate (bench profile)
+dataset: 5000 vertices, 20000 edges, string vids
+manual median loop: 31 iters per probe
+
+| probe | rows/value | median wall ms | median alloc bytes | parse+bind ms |
+|---|---|---|---|---|
+| seed_count | 5000 | 1.311 | 4741223 | 0.004 |
+| flat_projection | 5000 | 2.355 | 5315351 | 0.010 |
+| edge_count_narrow | 20000 | 131.831 | 165383113 | 0.005 |
+| edge_count_wide | 20000 | 22.875 | 27184653 | 0.002 |

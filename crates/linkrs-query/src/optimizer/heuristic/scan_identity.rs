@@ -5,6 +5,14 @@
 //! column carries a lightweight `Value::VertexId` and the per-row property
 //! map is never built. Flat property columns are unaffected.
 //!
+//! A scan that is additionally `skip_rows` emits no row view at all, only
+//! typed columns. That is valid only when the direct consumer provably never
+//! reads rows: an all-passthrough/constant `Project` (it evaluates from the
+//! typed layout and rebuilds its own rows), or a `Count`-only `Aggregate`
+//! with no group keys (it folds units per typed position). The executor
+//! re-verifies per chunk and keeps rows whenever the columnar path is off,
+//! so the flag can never drop data outside these two morphologies.
+//!
 //! The annotation is valid only when the scan's entity variable is never
 //! consumed as a whole value downstream: every ancestor reference must be a
 //! `var.prop` access served by the scan's flat slots, and no ancestor may
@@ -31,7 +39,9 @@ use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use linkrs_core::types::expr::visitor::ExpressionVisitor;
+use linkrs_core::types::operators::AggregateFunction;
 use linkrs_core::Expression;
+use linkrs_core::Value;
 
 /// Whole-plan rule that annotates `ScanVertices` nodes with `identity_only`.
 #[derive(Debug)]
@@ -98,6 +108,10 @@ fn annotate_mut(node: &mut PlanNodeEnum, ancestors: &mut Vec<PlanNodeEnum>) -> b
             scan.set_identity_only(true);
             changed = true;
         }
+        if scan.identity_only() && !scan.skip_rows() && skip_rows_eligible(&ancestor_refs) {
+            scan.set_skip_rows(true);
+            changed = true;
+        }
     }
     // Snapshot before descending: the borrow ends before any mutation.
     let snapshot = node.clone();
@@ -145,13 +159,98 @@ fn scan_identity_eligible(
         .collect();
     ancestors
         .iter()
-        .all(|anc| audit_ancestor(anc, var, &projected))
+        .enumerate()
+        .all(|(index, anc)| audit_ancestor(anc, var, &projected, index == 0))
 }
 
+/// Whether the scan may additionally skip its row view: walk up from the
+/// direct consumer through constant-true residual filters (tag-elimination
+/// leftovers that select every row and pass the chunk through untouched),
+/// then require a column-capable terminator. Anything above the terminator
+/// sees rebuilt rows (project) or aggregate output, so a longer transitive
+/// audit is unneeded. Any other filter shape blocks: only provable no-ops
+/// may stand between the scan and its consumer.
+fn skip_rows_eligible(ancestors: &[&PlanNodeEnum]) -> bool {
+    let mut rest = ancestors.iter().rev();
+    let terminator = loop {
+        match rest.next() {
+            None => return false,
+            Some(PlanNodeEnum::Filter(filter)) => {
+                if !filter.subqueries().is_empty() {
+                    return false;
+                }
+                let is_true = filter
+                    .condition()
+                    .get_expression()
+                    .is_some_and(|expr| matches!(expr, Expression::Literal(Value::Bool(true))));
+                if !is_true {
+                    return false;
+                }
+            }
+            Some(node) => break node,
+        }
+    };
+    match terminator {
+        PlanNodeEnum::Project(project) => {
+            if !project.subqueries().is_empty() {
+                return false;
+            }
+            project.columns().iter().all(|col| {
+                col.expression
+                    .expression()
+                    .map(|meta| is_passthrough_or_const(meta.inner()))
+                    .unwrap_or(true)
+            })
+        }
+        PlanNodeEnum::Aggregate(agg) => {
+            if !agg.group_keys().is_empty() || !agg.grouping_sets().is_empty() {
+                return false;
+            }
+            if agg.aggregation_distinct().iter().any(|d| *d) {
+                return false;
+            }
+            if agg.aggregation_filters().iter().any(|f| f.is_some()) {
+                return false;
+            }
+            let funcs = agg.aggregation_functions();
+            let args = agg.aggregation_args();
+            if funcs.is_empty() || funcs.len() != args.len() {
+                return false;
+            }
+            funcs.iter().zip(args.iter()).all(|(func, arg)| {
+                matches!(func, AggregateFunction::Count)
+                    && (arg.is_empty()
+                        || (arg.len() == 1 && matches!(arg[0], Expression::Variable(_))))
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Mirrors the executor `Project` fast-path predicate: a bare column
+/// passthrough, a constant, or a property over a bare variable. These
+/// evaluate from the typed layout without reading rows, so a rowless scan
+/// chunk feeds them losslessly.
+fn is_passthrough_or_const(expression: &Expression) -> bool {
+    match expression {
+        Expression::Variable(_) | Expression::Literal(_) => true,
+        Expression::Property { object, .. } => {
+            matches!(object.as_ref(), Expression::Variable(_))
+        }
+        _ => false,
+    }
+}
 /// Audit one ancestor against the scan variable: every expression reference
 /// must be a flat-served property access, and no structural consumer may
 /// require boxed seeds.
-fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> bool {
+///
+/// A non-root `Project` that passes the variable through under its own name
+/// is representation-preserving (ids stay ids, boxes stay boxes), so it is
+/// transparent and the ancestors above judge the actual uses. The root
+/// project still blocks whole-entity output: the client contract for a
+/// bare-entity return is the boxed value. Renames also block: downstream
+/// references use the alias, which this variable-scoped audit cannot see.
+fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>, is_root: bool) -> bool {
     if !known_reference_ancestor(anc) {
         return false;
     }
@@ -171,6 +270,13 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> b
                 return false;
             }
             project.columns().iter().all(|col| {
+                let pure_passthrough = col.alias == var
+                    && col.expression.expression().is_some_and(
+                        |meta| matches!(meta.inner(), Expression::Variable(name) if name == var),
+                    );
+                if pure_passthrough && !is_root {
+                    return true;
+                }
                 col.expression
                     .expression()
                     .map(|meta| entity_use_safe(meta.inner(), var, projected))
@@ -182,10 +288,24 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>) -> b
             if agg.group_keys().iter().any(|key| key == var) {
                 return false;
             }
-            agg.aggregation_args()
-                .iter()
-                .flatten()
-                .all(|expr| entity_use_safe(expr, var, projected))
+            // A bare-variable `count(var)` only observes null-ness, which
+            // the identity reference preserves; every other aggregate needs
+            // real values. Mirrors the edge-scan audit.
+            let funcs = agg.aggregation_functions();
+            for (index, arg_list) in agg.aggregation_args().iter().enumerate() {
+                let is_count = funcs
+                    .get(index)
+                    .is_some_and(|func| matches!(func, AggregateFunction::Count));
+                for expr in arg_list {
+                    if is_count && matches!(expr, Expression::Variable(name) if name == var) {
+                        continue;
+                    }
+                    if !entity_use_safe(expr, var, projected) {
+                        return false;
+                    }
+                }
+            }
+            true
         }
         PlanNodeEnum::InnerJoin(join) => {
             audit_join_keys(join.hash_keys(), join.probe_keys(), var, projected)
@@ -441,6 +561,30 @@ mod tests {
         found[0]
     }
 
+    fn skip_flag(root: &PlanNodeEnum) -> bool {
+        let mut found = Vec::new();
+        fn walk(node: &PlanNodeEnum, out: &mut Vec<bool>) {
+            if let PlanNodeEnum::ScanVertices(scan) = node {
+                out.push(scan.skip_rows());
+            }
+            for child in node.children() {
+                walk(child, out);
+            }
+        }
+        walk(root, &mut found);
+        assert_eq!(found.len(), 1, "test plans hold exactly one scan");
+        found[0]
+    }
+
+    fn count_agg(input: PlanNodeEnum, var: &str) -> PlanNodeEnum {
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg =
+            AggregateNode::new(input, vec![], vec![AggregateFunction::Count]).expect("agg builds");
+        agg.set_aggregation_args(vec![vec![Expression::Variable(var.to_string())]]);
+        PlanNodeEnum::Aggregate(agg)
+    }
+
     #[test]
     fn flat_projection_enables_identity() {
         // MATCH (a:Node) RETURN a.name
@@ -531,5 +675,164 @@ mod tests {
         let (annotated, changed) = annotate_scan_identity(&plan);
         assert!(!changed);
         assert!(!scan_flag(&annotated));
+    }
+
+    #[test]
+    fn non_root_passthrough_project_is_transparent_for_identity() {
+        // An intermediate same-name passthrough forwards the representation
+        // untouched, so the aggregate above judges the actual use: count(a)
+        // observes only null-ness and keeps identity.
+        let plan = count_agg(project_var(flat_scan("a", &[]), "a"), "a");
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed);
+        assert!(scan_flag(&annotated));
+        assert!(skip_flag(&annotated));
+    }
+
+    #[test]
+    fn renamed_passthrough_project_blocks_identity() {
+        // WITH a AS b hides downstream uses behind the alias, so the audit
+        // cannot see them: the box stays.
+        let renamed = linkrs_core::YieldColumn {
+            expression: ctx_expr(Expression::Variable("a".to_string())),
+            alias: "b".to_string(),
+        };
+        let plan = count_agg(project_cols(flat_scan("a", &[]), vec![renamed]), "a");
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(!changed);
+        assert!(!scan_flag(&annotated));
+        assert!(!skip_flag(&annotated));
+    }
+
+    #[test]
+    fn passthrough_project_parent_enables_skip_rows() {
+        // MATCH (a:Node) RETURN a.name: the direct consumer only gathers
+        // the flat column and rebuilds its own rows.
+        let plan = project_prop(flat_scan("a", &["name"]), "a", "name");
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed);
+        assert!(scan_flag(&annotated));
+        assert!(skip_flag(&annotated), "rowless scan must skip rows");
+    }
+
+    #[test]
+    fn function_project_parent_blocks_skip_rows() {
+        // RETURN a.name + 1 needs per-row evaluation: rows stay.
+        let col = linkrs_core::YieldColumn {
+            expression: ctx_expr(Expression::Binary {
+                left: Box::new(prop_expr("a", "name")),
+                op: BinaryOperator::Add,
+                right: Box::new(Expression::Literal(Value::Int(1))),
+            }),
+            alias: "inc".to_string(),
+        };
+        let plan = project_cols(flat_scan("a", &["name"]), vec![col]);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed, "identity still applies");
+        assert!(scan_flag(&annotated));
+        assert!(!skip_flag(&annotated), "non-passthrough project keeps rows");
+    }
+
+    #[test]
+    fn filter_parent_blocks_skip_rows() {
+        // A filter between scan and project reads rows this round.
+        let plan = project_prop(
+            PlanNodeEnum::Filter(
+                crate::planning::plan::core::nodes::operation::filter_node::FilterNode::new(
+                    flat_scan("a", &["name"]),
+                    ctx_expr(prop_expr("a", "name")),
+                )
+                .expect("filter builds"),
+            ),
+            "a",
+            "name",
+        );
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed, "identity still applies");
+        assert!(scan_flag(&annotated));
+        assert!(!skip_flag(&annotated), "filter parent keeps rows");
+    }
+
+    #[test]
+    fn true_filter_parent_lets_skip_rows_through() {
+        // A constant-true residual filter (tag-elimination leftover)
+        // selects every row and passes the chunk through untouched, so the
+        // scan may still skip rows for the project above it.
+        use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        let filter = FilterNode::new(
+            flat_scan("a", &["name"]),
+            ctx_expr(Expression::Literal(Value::Bool(true))),
+        )
+        .expect("filter builds");
+        let plan = project_prop(PlanNodeEnum::Filter(filter), "a", "name");
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed);
+        assert!(scan_flag(&annotated));
+        assert!(skip_flag(&annotated), "true filter must be transparent");
+    }
+
+    #[test]
+    fn true_filter_then_count_aggregate_enables_skip_rows() {
+        // Scan -> true filter -> count aggregate: the chain ends at a
+        // row-counting aggregate, so rows stay skipped end to end.
+        use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+        let filter = FilterNode::new(
+            flat_scan("a", &[]),
+            ctx_expr(Expression::Literal(Value::Bool(true))),
+        )
+        .expect("filter builds");
+        let plan = count_agg(PlanNodeEnum::Filter(filter), "a");
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed);
+        assert!(scan_flag(&annotated));
+        assert!(skip_flag(&annotated));
+    }
+
+    #[test]
+    fn bare_variable_count_enables_identity_and_skip_rows() {
+        // MATCH (a:Node) RETURN count(a): null-ness-only counting needs no
+        // box and no rows.
+        let plan = count_agg(flat_scan("a", &[]), "a");
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed);
+        assert!(scan_flag(&annotated));
+        assert!(skip_flag(&annotated), "rowless count must skip rows");
+    }
+
+    #[test]
+    fn group_by_aggregate_blocks_skip_rows() {
+        // Grouping by the whole entity needs the full value: no identity,
+        // hence no skip.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg = AggregateNode::new(
+            flat_scan("a", &["name"]),
+            vec!["a".to_string()],
+            vec![AggregateFunction::Count],
+        )
+        .expect("agg builds");
+        agg.set_aggregation_args(vec![vec![Expression::Variable("a".to_string())]]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(!changed);
+        assert!(!scan_flag(&annotated));
+        assert!(!skip_flag(&annotated));
+    }
+
+    #[test]
+    fn distinct_count_blocks_skip_rows() {
+        // COUNT(DISTINCT a) needs real values downstream.
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        use linkrs_core::types::operators::AggregateFunction;
+        let mut agg =
+            AggregateNode::new(flat_scan("a", &[]), vec![], vec![AggregateFunction::Count])
+                .expect("agg builds");
+        agg.set_aggregation_args(vec![vec![Expression::Variable("a".to_string())]]);
+        agg.set_aggregation_distinct(vec![true]);
+        let plan = PlanNodeEnum::Aggregate(agg);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed, "identity still applies to the scan");
+        assert!(scan_flag(&annotated));
+        assert!(!skip_flag(&annotated), "distinct keeps rows");
     }
 }

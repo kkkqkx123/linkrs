@@ -21,12 +21,23 @@ use super::typed::{
 impl DataChunk {
     // ── Batch expression evaluation ──
 
+    /// Evaluation length: row count, falling back to the typed layout for
+    /// rowless chunks whose scan skipped the row view. Typed arms stay in
+    /// lockstep like rows, so either source addresses the same positions.
+    fn eval_len(&self) -> usize {
+        if self.rows.is_empty() {
+            self.typed_len().unwrap_or(0)
+        } else {
+            self.rows.len()
+        }
+    }
+
     pub fn evaluate_expressions(
         &mut self,
         expressions: &[Expression],
         env: Option<&EvalEnv>,
     ) -> Result<Vec<Vec<Value>>, ExpressionError> {
-        if self.rows.is_empty() {
+        if self.eval_len() == 0 {
             return Ok(vec![Vec::new(); expressions.len()]);
         }
         if expressions
@@ -56,9 +67,10 @@ impl DataChunk {
             .all(|e| matches!(e, Expression::Literal(_)))
         {
             let mut columns = Vec::with_capacity(expressions.len());
+            let len = self.eval_len();
             for expr in expressions {
                 if let Expression::Literal(v) = expr {
-                    columns.push(vec![v.clone(); self.rows.len()]);
+                    columns.push(vec![v.clone(); len]);
                 }
             }
             for _ in 0..expressions.len() {
@@ -87,7 +99,7 @@ impl DataChunk {
         expressions: &[Expression],
         env: Option<&EvalEnv>,
     ) -> Result<Option<Vec<Vec<Value>>>, ExpressionError> {
-        if self.rows.is_empty() {
+        if self.eval_len() == 0 {
             return Ok(Some(vec![Vec::new(); expressions.len()]));
         }
         let mut out = Vec::with_capacity(expressions.len());
@@ -105,7 +117,7 @@ impl DataChunk {
         expression: &Expression,
         env: Option<&EvalEnv>,
     ) -> Result<Vec<Value>, ExpressionError> {
-        if self.rows.is_empty() {
+        if self.eval_len() == 0 {
             return Ok(Vec::new());
         }
         if let Ok((result, typed_hit)) = self.try_evaluate_columnar(expression, env) {
@@ -276,7 +288,7 @@ impl DataChunk {
                     .and_then(|env| env.params.as_ref())
                     .and_then(|p| p.get(name).cloned())
                     .ok_or_else(|| ExpressionError::undefined_parameter(name))?;
-                Ok(vec![val; self.rows.len()])
+                Ok(vec![val; self.eval_len()])
             }
 
             Expression::SessionVariable(name) => {
@@ -289,7 +301,7 @@ impl DataChunk {
                             name
                         ))
                     })?;
-                Ok(vec![val; self.rows.len()])
+                Ok(vec![val; self.eval_len()])
             }
 
             Expression::Unary { op, operand } => {
@@ -369,13 +381,13 @@ impl DataChunk {
         env: Option<&EvalEnv>,
     ) -> Result<Option<TypedBatch>, ExpressionError> {
         match expression {
-            Expression::Literal(v) => Ok(typed_literal_batch(v, self.rows.len())),
+            Expression::Literal(v) => Ok(typed_literal_batch(v, self.eval_len())),
             Expression::Parameter(name) => {
                 let val = env
                     .and_then(|env| env.params.as_ref())
                     .and_then(|p| p.get(name).cloned())
                     .ok_or_else(|| ExpressionError::undefined_parameter(name))?;
-                Ok(typed_literal_batch(&val, self.rows.len()))
+                Ok(typed_literal_batch(&val, self.eval_len()))
             }
             Expression::SessionVariable(name) => {
                 let val = env
@@ -387,7 +399,7 @@ impl DataChunk {
                             name
                         ))
                     })?;
-                Ok(typed_literal_batch(&val, self.rows.len()))
+                Ok(typed_literal_batch(&val, self.eval_len()))
             }
             Expression::Variable(name) => {
                 let slot = match self.layout.slot_id(name) {

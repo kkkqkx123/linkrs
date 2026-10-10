@@ -527,6 +527,27 @@ impl DataChunk {
         self.typed_columns.as_ref().and_then(|cols| cols.get(slot))
     }
 
+    /// Row count served by the typed layout when the row view was skipped.
+    ///
+    /// Rowless chunks (storage scans whose planner annotation proved the
+    /// direct consumer never reads rows) carry data only in `typed_columns`;
+    /// every typed arm implements `len`, and assembly keeps the arms in
+    /// lockstep exactly like rows. Returns `None` when there is no typed
+    /// layout, so row-based consumers keep their existing empty semantics.
+    pub fn typed_len(&self) -> Option<usize> {
+        let cols = self.typed_columns.as_ref()?;
+        let mut len: Option<usize> = None;
+        for col in cols {
+            let arm = col.len();
+            debug_assert!(
+                len.is_none_or(|n| n == arm),
+                "typed arms must stay in lockstep like rows"
+            );
+            len = Some(len.unwrap_or(arm));
+        }
+        len
+    }
+
     /// Rebuild the typed layout when construction deferred it.
     ///
     /// Join outputs skip the eager build and set the deferred flag; the

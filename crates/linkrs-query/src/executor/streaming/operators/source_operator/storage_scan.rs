@@ -219,10 +219,11 @@ fn vertex_row_path(identity_only: bool, flatten_is_empty: bool) -> VertexRowPath
 /// single-entity column layout.
 pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
     let is_vertex_scan = matches!(&op.kind, SourceOperatorKind::StorageScanVertices { .. });
-    let (flatten, identity_only) = match &op.kind {
+    let (flatten, identity_only, skip_rows) = match &op.kind {
         SourceOperatorKind::StorageScanVertices {
             projected_properties,
             identity_only,
+            skip_rows,
             ..
         } => (
             projected_properties.clone(),
@@ -230,6 +231,7 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
             // flat-served (or none exists); an entity-only layout then
             // needs no box at all.
             *identity_only,
+            *skip_rows,
         ),
         SourceOperatorKind::StorageScanEdges {
             projected_properties,
@@ -241,12 +243,21 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
             // flat-served (or none exists); the header reference then needs
             // no box at all.
             *identity_only,
+            // Edge scans never skip the row view in this round: no audited
+            // rowless consumer exists for them yet.
+            false,
         ),
         _ => unreachable!("storage_scan::next called for a non-scan source"),
     };
     if column_block_enabled() {
         if is_vertex_scan {
-            return next_column_chunk(op, "StorageScanVertices", &flatten, identity_only);
+            return next_column_chunk(
+                op,
+                "StorageScanVertices",
+                &flatten,
+                identity_only,
+                skip_rows,
+            );
         }
         return next_edge_column_chunk(op, "StorageScanEdges", &flatten, identity_only);
     }
@@ -414,6 +425,7 @@ fn next_column_chunk(
     source: &str,
     projected_properties: &[Arc<str>],
     identity_only: bool,
+    skip_rows: bool,
 ) -> Result<Option<DataChunk>, QueryError> {
     let (cursor, space_name) = match &mut op.kind {
         SourceOperatorKind::StorageScanVertices {
@@ -441,6 +453,7 @@ fn next_column_chunk(
         batch,
         projected_properties,
         identity_only,
+        skip_rows,
     )?;
     *cursor = Some(cur);
     Ok(Some(chunk))
@@ -454,9 +467,15 @@ fn build_column_chunk(
     batch: VertexColumnBatch,
     flatten: &[Arc<str>],
     identity_only: bool,
+    skip_rows: bool,
 ) -> Result<DataChunk, QueryError> {
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
+    // Rowless mode: the planner proved the direct consumer never reads the
+    // row view, so skip it and emit typed columns only. Gated on the
+    // columnar path actually being on: without a typed layout to serve the
+    // consumer, rows stay mandatory.
+    let skip_rows = skip_rows && use_columnar_path(runtime);
 
     // Flat-column routing resolved once per batch: column index -> flat
     // output position, so per-row assembly reads each needed column value
@@ -482,43 +501,47 @@ fn build_column_chunk(
     // Identity mode skips the per-row property map and the boxed vertex
     // entirely: the entity column carries the vertex id, which seed-tolerant
     // downstream operators resolve without materializing the entity.
+    // Rowless mode skips the row view itself: the typed layout below is the
+    // only downstream-readable state.
     let null = Value::Null(linkrs_core::value::NullType::Null);
-    let mut rows = Vec::with_capacity(row_count);
-    for (row, tag_name) in batch.tag_names.iter().enumerate() {
-        let mut flat_values = vec![None; flatten.len()];
-        let mut properties = if identity_only {
-            None
-        } else {
-            Some(std::collections::HashMap::with_capacity(
-                batch.columns.len(),
-            ))
-        };
-        for (col_idx, column) in batch.columns.iter().enumerate() {
-            if let Some(value) = column.values.value_at(row) {
-                if let Some(flat_pos) = col_to_flat[col_idx] {
-                    flat_values[flat_pos] = Some(value.clone());
-                }
-                if let Some(map) = properties.as_mut() {
-                    map.insert(column.name.clone(), value);
+    let mut rows = Vec::with_capacity(if skip_rows { 0 } else { row_count });
+    if !skip_rows {
+        for (row, tag_name) in batch.tag_names.iter().enumerate() {
+            let mut flat_values = vec![None; flatten.len()];
+            let mut properties = if identity_only {
+                None
+            } else {
+                Some(std::collections::HashMap::with_capacity(
+                    batch.columns.len(),
+                ))
+            };
+            for (col_idx, column) in batch.columns.iter().enumerate() {
+                if let Some(value) = column.values.value_at(row) {
+                    if let Some(flat_pos) = col_to_flat[col_idx] {
+                        flat_values[flat_pos] = Some(value.clone());
+                    }
+                    if let Some(map) = properties.as_mut() {
+                        map.insert(column.name.clone(), value);
+                    }
                 }
             }
-        }
-        let mut row_vec = Vec::with_capacity(flatten.len() + 1);
-        if identity_only {
-            row_vec.push(Value::VertexId(batch.vids[row]));
-        } else {
-            let vertex = linkrs_core::Vertex::new(
-                batch.vids[row],
-                linkrs_core::Tag::new(tag_name.clone(), properties.unwrap_or_default()),
+            let mut row_vec = Vec::with_capacity(flatten.len() + 1);
+            if identity_only {
+                row_vec.push(Value::VertexId(batch.vids[row]));
+            } else {
+                let vertex = linkrs_core::Vertex::new(
+                    batch.vids[row],
+                    linkrs_core::Tag::new(tag_name.clone(), properties.unwrap_or_default()),
+                );
+                row_vec.push(Value::Vertex(Box::new(vertex)));
+            }
+            row_vec.extend(
+                flat_values
+                    .into_iter()
+                    .map(|v| v.unwrap_or_else(|| null.clone())),
             );
-            row_vec.push(Value::Vertex(Box::new(vertex)));
+            rows.push(row_vec);
         }
-        row_vec.extend(
-            flat_values
-                .into_iter()
-                .map(|v| v.unwrap_or_else(|| null.clone())),
-        );
-        rows.push(row_vec);
     }
 
     let mut chunk = DataChunk::new_with_layout(rows, layout);

@@ -114,8 +114,15 @@ pub(super) fn handle(
                     continue;
                 }
                 // All visible rows selected — hand the chunk through
-                // as-is, keeping any existing selection.
-                if selected.len() == chunk.visible_count() {
+                // as-is, keeping any existing selection. Rowless chunks
+                // report no stored rows, so count the typed positions the
+                // predicate actually evaluated.
+                let total_visible = match (chunk.selection(), chunk.rows.is_empty()) {
+                    (Some(sel), _) => sel.len(),
+                    (None, false) => chunk.rows.len(),
+                    (None, true) => chunk.typed_len().unwrap_or(0),
+                };
+                if selected.len() == total_visible {
                     return Ok(Some(chunk));
                 }
                 // Attach the selection vector instead of moving rows;

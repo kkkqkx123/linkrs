@@ -93,6 +93,9 @@ pub enum SourceOperatorKind {
         /// Identity mode (from the scan annotation): emit `Value::VertexId`
         /// in the entity column and skip the per-row property map.
         identity_only: bool,
+        /// Rowless mode: skip the row view, emit typed columns only.
+        /// Honored only when the columnar path is on.
+        skip_rows: bool,
         /// Scan predicates pushed into the storage layer.
         predicate: Vec<ScanPredicate>,
         /// Tag-restricted scan: only rows of this tag are scanned at the
@@ -248,6 +251,7 @@ impl SourceOperator {
                 col_names,
                 projected_properties,
                 identity_only,
+                skip_rows,
                 predicate,
                 tag,
                 partition_range,
@@ -259,6 +263,7 @@ impl SourceOperator {
                 col_names: col_names.clone(),
                 projected_properties: shared_names(projected_properties),
                 identity_only: *identity_only,
+                skip_rows: *skip_rows,
                 predicate: predicate.clone(),
                 tag: tag.clone(),
                 semi_mask: None,

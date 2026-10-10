@@ -1501,3 +1501,61 @@ fn typed_columns_identity_layouts() {
     assert!(super::typed::typed_column_batch(&identity).is_none());
     assert!(super::typed::typed_column_batch(&edge_col).is_none());
 }
+
+#[test]
+fn rowless_chunk_evaluates_from_typed_layout() {
+    // A scan that skipped its row view carries data only in typed columns:
+    // passthrough and constant evaluation serve the typed length.
+    let vid = |i: i64| VertexId::try_from_int64(i).expect("valid vertex id");
+    let layout = Arc::new(SlotLayout::from_names(&[
+        "n".to_string(),
+        "n.name".to_string(),
+    ]));
+    let mut chunk = DataChunk::new_with_layout(Vec::new(), Arc::clone(&layout));
+    chunk.typed_columns = Some(vec![
+        TypedColumn::VertexIdentity(vec![vid(1), vid(2)]),
+        TypedColumn::Fallback(vec![Value::string("a"), Value::string("b")]),
+    ]);
+    assert_eq!(chunk.typed_len(), Some(2));
+    assert!(chunk.rows.is_empty());
+
+    let var = Expression::variable("n");
+    let cols = chunk
+        .evaluate_expressions(std::slice::from_ref(&var), None)
+        .expect("rowless variable eval must succeed");
+    assert_eq!(
+        cols,
+        vec![vec![Value::VertexId(vid(1)), Value::VertexId(vid(2))]]
+    );
+
+    let prop = Expression::Property {
+        object: Box::new(Expression::variable("n")),
+        property: "name".to_string(),
+    };
+    assert_eq!(
+        chunk
+            .evaluate_expression(&prop, None)
+            .expect("rowless property eval must succeed"),
+        vec![Value::string("a"), Value::string("b")]
+    );
+
+    let lit = Expression::Literal(Value::Int(7));
+    let cols = chunk
+        .evaluate_expressions(std::slice::from_ref(&lit), None)
+        .expect("rowless literal eval must succeed");
+    assert_eq!(cols, vec![vec![Value::Int(7), Value::Int(7)]]);
+    let typed = chunk
+        .try_evaluate_expressions_typed(std::slice::from_ref(&lit), None)
+        .expect("rowless typed eval must succeed")
+        .expect("literal is in the typed set");
+    assert_eq!(typed, vec![vec![Value::Int(7), Value::Int(7)]]);
+
+    // No typed layout and no rows still means an empty chunk.
+    let mut bare = DataChunk::new_with_layout(Vec::new(), Arc::clone(&layout));
+    assert_eq!(bare.typed_len(), None);
+    assert_eq!(
+        bare.evaluate_expressions(std::slice::from_ref(&var), None)
+            .expect("empty eval must succeed"),
+        vec![Vec::new()]
+    );
+}

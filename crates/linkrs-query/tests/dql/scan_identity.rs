@@ -132,6 +132,55 @@ fn identity_count_bare_variable_exact() {
 }
 
 #[test]
+fn skip_rows_flat_projection_annotated_with_exact_results() {
+    // The rowless scan serves the passthrough project from typed columns;
+    // the project rebuilds rows for the client, so results are identical.
+    let scenario = setup();
+    let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH (a:person) RETURN a.name");
+    let plan = plan_of(&scenario);
+    assert!(plan.contains("mode: identity"), "flat scan keeps identity");
+    assert!(
+        plan.contains("skipped"),
+        "passthrough project must let the scan skip rows, got:\n{plan}"
+    );
+    let scenario = scenario.assert_success();
+
+    let scenario = scenario.query("MATCH (a:person) RETURN a.name ORDER BY a.name");
+    let scenario = scenario.assert_success().assert_result_count(20);
+    assert_eq!(
+        first_string_cell(&scenario),
+        Some("String(\"0\")".to_string())
+    );
+}
+
+#[test]
+fn skip_rows_bare_variable_count_annotated_with_exact_value() {
+    // The rowless scan folds count units per typed position; the total is
+    // exact and the plan shows both annotations.
+    let scenario = setup();
+    let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH (a:person) RETURN count(a)");
+    let plan = plan_of(&scenario);
+    assert!(
+        plan.contains("mode: identity"),
+        "bare-variable count keeps identity, got:\n{plan}"
+    );
+    assert!(
+        plan.contains("skipped"),
+        "count-only aggregate must let the scan skip rows, got:\n{plan}"
+    );
+    let scenario = scenario.assert_success();
+
+    let scenario = scenario.query("MATCH (a:person) RETURN count(a)");
+    let scenario = scenario.assert_success().assert_result_count(1);
+    match scenario.last_result() {
+        Some(ExecutionResult::DataSet { data, .. }) => {
+            assert_eq!(data.rows, vec![vec![Value::BigInt(20)]]);
+        }
+        other => panic!("expected a count dataset, got {other:?}"),
+    }
+}
+
+#[test]
 fn identity_blocked_for_whole_entity_return() {
     let scenario = setup();
     let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH (a:person) RETURN a");

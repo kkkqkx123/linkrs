@@ -452,6 +452,7 @@ define_plan_node! {
         limit: Option<i64>,
         projected_properties: Vec<String>,
         identity_only: bool,
+        skip_rows: bool,
     }
     enum: ScanVertices
     input: ZeroInputNode
@@ -468,6 +469,7 @@ impl ScanVerticesNode {
             limit: None,
             projected_properties: Vec::new(),
             identity_only: false,
+            skip_rows: false,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -524,6 +526,14 @@ impl ScanVerticesNode {
 
     pub fn set_identity_only(&mut self, identity_only: bool) {
         self.identity_only = identity_only;
+    }
+
+    pub fn skip_rows(&self) -> bool {
+        self.skip_rows
+    }
+
+    pub fn set_skip_rows(&mut self, skip_rows: bool) {
+        self.skip_rows = skip_rows;
     }
 }
 
