@@ -35,6 +35,30 @@ pub(crate) fn make_flat_vertex_record_row(
     make_flat_vertex_row(vertex, flatten)
 }
 
+/// Identity variant of [`make_flat_vertex_record_row`]: the entity column
+/// carries the vertex id without building the per-row property map or
+/// boxing a `Vertex`. Flat property columns are read straight from the
+/// record's property list. Only valid when every downstream property read
+/// is served by the flat slots (enforced by the scan identity annotation).
+pub(crate) fn make_flat_vertex_record_identity_row(
+    record: FlatVertexRecord,
+    flatten: &[Arc<str>],
+) -> Vec<Value> {
+    let null = Value::Null(linkrs_core::value::NullType::Null);
+    let mut row = Vec::with_capacity(flatten.len() + 1);
+    row.push(Value::VertexId(record.vid));
+    for prop in flatten {
+        let value = record
+            .props
+            .iter()
+            .find(|(name, _)| name.as_ref() == prop.as_ref())
+            .map(|(_, value)| value.clone())
+            .unwrap_or_else(|| null.clone());
+        row.push(value);
+    }
+    row
+}
+
 pub(crate) fn make_flat_vertex_row(vertex: Vertex, flatten: &[Arc<str>]) -> Vec<Value> {
     let props: Vec<Value> = flatten
         .iter()
@@ -277,6 +301,26 @@ mod tests {
         assert_eq!(vertex.property_value("age"), Some(Value::BigInt(30)));
         assert_eq!(row[1], Value::string("Alice"));
         assert_eq!(row[2], Value::BigInt(30));
+    }
+
+    #[test]
+    fn flat_vertex_record_identity_row_emits_id_without_boxing() {
+        let record = FlatVertexRecord {
+            vid: VertexId::try_from_int64(42).expect("valid vertex id"),
+            internal_id: 7,
+            tag_name: "person".to_string(),
+            props: vec![
+                ("age".into(), Value::BigInt(30)),
+                ("name".into(), Value::string("Alice")),
+            ],
+        };
+        let row = make_flat_vertex_record_identity_row(record, &[Arc::from("name")]);
+        assert_eq!(row.len(), 2);
+        assert_eq!(
+            row[0],
+            Value::VertexId(VertexId::try_from_int64(42).expect("valid vertex id"))
+        );
+        assert_eq!(row[1], Value::string("Alice"));
     }
 
     #[test]

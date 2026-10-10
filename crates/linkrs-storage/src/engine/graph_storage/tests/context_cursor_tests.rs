@@ -572,3 +572,86 @@ fn cursor_allowlist_decodes_exact_id_set() {
     batch_vids.sort_unstable();
     assert_eq!(batch_vids, expected);
 }
+
+#[test]
+fn cursor_topology_only_skips_property_decode() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    insert_test_vertex(&mut storage, 1, "Alice");
+    insert_test_vertex(&mut storage, 2, "Bob");
+    insert_test_vertex(&mut storage, 3, "Carol");
+
+    let topology = ScanOptions {
+        topology_only: true,
+        projection: Some(Vec::new()),
+        ..ScanOptions::default()
+    };
+    // Column-block path: identities resolve with zero property columns.
+    let mut columns = storage
+        .create_vertex_cursor("test_space", &topology)
+        .expect("topology cursor should open");
+    let batch = columns
+        .next_column_batch(&[], 16)
+        .expect("topology column batch");
+    assert_eq!(batch.len(), 3);
+    assert!(
+        batch.columns.is_empty(),
+        "topology batches carry no property columns"
+    );
+    let mut vids: Vec<i64> = batch.vids.iter().filter_map(|v| v.as_int64()).collect();
+    vids.sort_unstable();
+    assert_eq!(vids, vec![1, 2, 3]);
+    assert_eq!(batch.tag_names.len(), 3);
+
+    // Row path: flat records resolve with empty property lists.
+    let mut rows = storage
+        .create_vertex_cursor("test_space", &topology)
+        .expect("topology row cursor should open");
+    let flat = rows.next_flat_batch(16).expect("topology flat batch");
+    assert_eq!(flat.len(), 3);
+    assert!(
+        flat.iter().all(|record| record.props.is_empty()),
+        "topology records carry no properties"
+    );
+}
+
+#[test]
+fn cursor_topology_only_rejects_predicates_and_projections() {
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    insert_test_vertex(&mut storage, 1, "Alice");
+
+    // A pushed predicate needs its column decoded, which contradicts the
+    // zero-decode contract: fail at open instead of dropping every row.
+    let with_predicate = ScanOptions {
+        topology_only: true,
+        projection: Some(Vec::new()),
+        predicate: Some(vec![crate::cursor::ScanPredicate::ColumnEqual {
+            column: "age".into(),
+            value: Value::BigInt(30),
+        }]),
+        ..ScanOptions::default()
+    };
+    let err = storage
+        .create_vertex_cursor("test_space", &with_predicate)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("topology_only"),
+        "predicate with topology_only must name the contract: {err}"
+    );
+
+    // A non-empty projection likewise contradicts zero decode.
+    let with_projection = ScanOptions {
+        topology_only: true,
+        ..ScanOptions::default().with_projection_named(vec!["name".into()])
+    };
+    let err = storage
+        .create_vertex_cursor("test_space", &with_projection)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("topology_only"),
+        "projection with topology_only must name the contract: {err}"
+    );
+}

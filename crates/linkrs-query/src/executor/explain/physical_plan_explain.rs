@@ -279,6 +279,9 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                     "mode",
                     "count_only",
                 ));
+                // A count-only expand emits one partial-count row per input
+                // chunk: its estimate counts chunks, not edges.
+                pairs.push(crate::planning::plan::explain::Pair::new("unit", "chunks"));
             } else if *emit_raw_ids {
                 pairs.push(crate::planning::plan::explain::Pair::new("mode", "id_only"));
             }
@@ -299,8 +302,16 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                 } => col_names.clone(),
                 crate::executor::streaming::operators::spec::SourceSpec::StorageScanVertices {
                     col_names,
+                    identity_only,
                     ..
-                } => col_names.clone(),
+                } => {
+                    if *identity_only {
+                        pairs.push(crate::planning::plan::explain::Pair::new(
+                            "mode", "identity",
+                        ));
+                    }
+                    col_names.clone()
+                }
                 crate::executor::streaming::operators::spec::SourceSpec::ScanEdges {
                     col_names,
                     ..

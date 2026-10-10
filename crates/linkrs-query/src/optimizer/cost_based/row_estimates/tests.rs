@@ -398,6 +398,36 @@ fn expand_applies_skew_row_factor() {
 }
 
 #[test]
+fn count_only_expand_estimates_chunks_not_edges() {
+    use crate::executor::streaming::chunk::VECTORIZED_BATCH_SIZE;
+    use crate::planning::plan::core::nodes::base::plan_node_traits::{MultipleInputNode, PlanNode};
+    use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
+
+    let (manager, selectivity) = setup();
+    let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
+    tag_stats.vertex_count = 100_000;
+    manager.update_tag_stats("test", tag_stats);
+    let mut edge_stats = crate::optimizer::stats::EdgeTypeStatistics::new("knows".to_string());
+    edge_stats.avg_out_degree = 4.0;
+    manager.update_edge_stats("test", edge_stats);
+    let view = StatsView::new(&manager, Some("test"));
+
+    let mut scan = ScanVerticesNode::new(1, "test");
+    scan.set_tag("person");
+    let mut expand = ExpandAllNode::new(1, vec!["knows".to_string()], "OUT");
+    expand.set_step_limit(1);
+    expand.set_col_names(vec!["a".to_string(), "e".to_string(), "b".to_string()]);
+    expand.add_input(PlanNodeEnum::ScanVertices(scan));
+    expand.set_count_only(true);
+    let plan = PlanNodeEnum::ExpandAll(expand);
+    // One partial-count row per input chunk, not one row per edge.
+    assert_eq!(
+        estimate_node_output_rows(&plan, &view, &selectivity),
+        100_000u64.div_ceil(VECTORIZED_BATCH_SIZE as u64)
+    );
+}
+
+#[test]
 fn logical_wco_intersect_is_bounded_by_stats() {
     use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
     use crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode;

@@ -329,6 +329,36 @@ impl ShardedVertexTable {
         (kept_ids, kept_vids, merged)
     }
 
+    /// Topology resolution for paginated scans: the same visibility and
+    /// identity gate as [`Self::scan_columns`] with zero property decode.
+    /// Returns surviving global ids and external vertex ids in input order.
+    pub fn scan_topology(
+        &self,
+        global_ids: &[u32],
+        guard: &VisibilityGuard<'_>,
+    ) -> (Vec<u32>, Vec<VertexId>) {
+        let mut resolved: Vec<(usize, u32, VertexId)> = Vec::new();
+        for (shard_idx, group) in self.group_by_shard(global_ids) {
+            if group.is_empty() {
+                continue;
+            }
+            let table = self.shards[shard_idx].read();
+            for (slot, local_id) in group {
+                if !Self::shard_row_visible(&table, local_id, guard) {
+                    continue;
+                }
+                let Some(vid) = table.get_external_id_raw(local_id).and_then(vertex_id_of) else {
+                    continue;
+                };
+                resolved.push((slot, global_ids[slot], vid));
+            }
+        }
+        resolved.sort_by_key(|(slot, _, _)| *slot);
+        let ids = resolved.iter().map(|(_, id, _)| *id).collect();
+        let vids = resolved.into_iter().map(|(_, _, vid)| vid).collect();
+        (ids, vids)
+    }
+
     /// Group input slots by shard so each shard is locked once per batch.
     ///
     /// The result is indexed by shard order; the tuple pairs the output slot

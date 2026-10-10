@@ -13,6 +13,7 @@ use crate::planning::plan::PlanNodeEnum;
 
 use super::cardinality::corrected_rows;
 use super::stats::{stats_fanout_skewed, DEFAULT_FILTER_SELECTIVITY, DEFAULT_NEIGHBORHOOD_FANOUT};
+use crate::executor::streaming::chunk::VECTORIZED_BATCH_SIZE;
 
 /// Estimate the output row count of a logical node, post-order.
 ///
@@ -274,9 +275,16 @@ fn estimate_node_output_rows_impl(
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         ExpandAll(n) => {
-            let fanout = stats_fanout_skewed(stats, n.edge_types());
-            let raw =
-                child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
+            // A count-only expand emits one partial-count row per input
+            // chunk, so its estimate counts chunks (input rows over the
+            // execution batch), not edges.
+            let raw = if n.count_only() {
+                child_rows_of_impl(node, stats, selectivity, cardinality)
+                    .div_ceil(VECTORIZED_BATCH_SIZE as u64)
+            } else {
+                let fanout = stats_fanout_skewed(stats, n.edge_types());
+                child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout)
+            };
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         Traverse(n) => {

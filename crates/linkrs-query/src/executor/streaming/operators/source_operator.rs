@@ -90,6 +90,9 @@ pub enum SourceOperatorKind {
         partition_range: Option<std::ops::Range<i64>>,
         col_names: Vec<String>,
         projected_properties: Vec<Arc<str>>,
+        /// Identity mode (from the scan annotation): emit `Value::VertexId`
+        /// in the entity column and skip the per-row property map.
+        identity_only: bool,
         /// Scan predicates pushed into the storage layer.
         predicate: Vec<ScanPredicate>,
         /// Tag-restricted scan: only rows of this tag are scanned at the
@@ -240,6 +243,7 @@ impl SourceOperator {
                 limit,
                 col_names,
                 projected_properties,
+                identity_only,
                 predicate,
                 tag,
                 partition_range,
@@ -250,6 +254,7 @@ impl SourceOperator {
                 partition_range: partition_range.clone(),
                 col_names: col_names.clone(),
                 projected_properties: shared_names(projected_properties),
+                identity_only: *identity_only,
                 predicate: predicate.clone(),
                 tag: tag.clone(),
                 semi_mask: None,

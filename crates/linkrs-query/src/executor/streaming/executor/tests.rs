@@ -183,6 +183,7 @@ fn failed_open_closes_children_opened_before_the_failure() {
                 partition_range: None,
                 col_names: vec![],
                 projected_properties: vec![],
+                identity_only: false,
                 predicate: Vec::new(),
                 tag: None,
                 semi_mask: None,

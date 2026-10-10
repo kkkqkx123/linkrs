@@ -101,6 +101,7 @@ pub mod limit_pushdown;
 pub mod merge;
 pub mod predicate_pushdown;
 pub mod projection_pushdown;
+pub mod scan_identity;
 pub mod slot_coverage;
 
 // ==================== Exporting Core Types =====================

@@ -15,8 +15,8 @@ use linkrs_core::error::QueryError;
 use linkrs_core::Value;
 
 use super::util::{
-    attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_row, make_flat_vertex_row,
-    reserve_memory_with_extra, storage_error,
+    attach_columnar_stats, make_flat_edge_row, make_flat_vertex_record_identity_row,
+    make_flat_vertex_record_row, make_flat_vertex_row, reserve_memory_with_extra, storage_error,
 };
 use super::SourceOperator;
 use super::SourceOperatorKind;
@@ -69,23 +69,38 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             partition_range,
             col_names,
             projected_properties,
+            identity_only,
             predicate,
             tag,
             semi_mask,
             cursor,
+            ..
         } => {
             let storage_ref = storage.as_ref().ok_or_else(|| {
                 QueryError::execution("StorageScanVertices requires storage".to_string())
             })?;
+            // Topology-only scan: identity mode with zero flat reads and no
+            // pushed predicates needs no property at all, so the cursor
+            // skips property decode instead of full-row decoding. The
+            // explicit flag keeps the empty-projection-means-everything
+            // contract untouched; the row path below takes the matching
+            // explicit-empty projection.
+            let topology_only =
+                *identity_only && projected_properties.is_empty() && predicate.is_empty();
             let mut options = ScanOptions {
                 limit: *limit,
                 vertex_id_range: partition_range.clone(),
-                projection: (!projected_properties.is_empty()).then(|| {
-                    projected_properties
-                        .iter()
-                        .map(|n| RequiredProperty::new(n.clone()))
-                        .collect()
-                }),
+                projection: if topology_only {
+                    Some(Vec::new())
+                } else {
+                    (!projected_properties.is_empty()).then(|| {
+                        projected_properties
+                            .iter()
+                            .map(|n| RequiredProperty::new(n.clone()))
+                            .collect()
+                    })
+                },
+                topology_only,
                 predicate: (!predicate.is_empty()).then(|| predicate.clone()),
                 tag: tag.clone(),
                 column_block_mode: column_block_enabled(),
@@ -160,24 +175,55 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
     Ok(())
 }
 
+/// Row-path selection for a vertex scan under the row fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VertexRowPath {
+    /// Identity mode: decode flat records and emit ids, never boxed.
+    Identity,
+    /// Entity-only layout: decode full vertices and box them.
+    Boxed,
+    /// Flat layout: decode flat records and rebuild boxes from them.
+    Flat,
+}
+
+/// Row-path selection for a vertex scan: identity mode always decodes flat
+/// records and emits ids, so the annotation contract holds under the row
+/// fallback exactly as under the column-block path.
+fn vertex_row_path(identity_only: bool, flatten_is_empty: bool) -> VertexRowPath {
+    if identity_only {
+        VertexRowPath::Identity
+    } else if flatten_is_empty {
+        VertexRowPath::Boxed
+    } else {
+        VertexRowPath::Flat
+    }
+}
+
 /// Emit the next chunk from the storage cursor, translating rows into the
 /// single-entity column layout.
 pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryError> {
     let is_vertex_scan = matches!(&op.kind, SourceOperatorKind::StorageScanVertices { .. });
-    let flatten = match &op.kind {
+    let (flatten, identity_only) = match &op.kind {
         SourceOperatorKind::StorageScanVertices {
             projected_properties,
+            identity_only,
             ..
-        }
-        | SourceOperatorKind::StorageScanEdges {
+        } => (
+            projected_properties.clone(),
+            // The annotation guarantees every downstream property read is
+            // flat-served (or none exists); an entity-only layout then
+            // needs no box at all.
+            *identity_only,
+        ),
+        SourceOperatorKind::StorageScanEdges {
             projected_properties,
             ..
-        } => projected_properties.clone(),
+        } => (projected_properties.clone(), false),
         _ => unreachable!("storage_scan::next called for a non-scan source"),
     };
     if column_block_enabled() {
         if is_vertex_scan {
-            return next_column_chunk(op, "StorageScanVertices", &flatten);
+            return next_column_chunk(op, "StorageScanVertices", &flatten, identity_only);
         }
         return next_edge_column_chunk(op, "StorageScanEdges", &flatten);
     }
@@ -188,8 +234,25 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
             } => (cursor, &*space_name),
             _ => unreachable!("storage_scan::next called for a non-vertex scan"),
         };
-        if flatten.is_empty() {
-            next_cursor_chunk_inner(
+        match vertex_row_path(identity_only, flatten.is_empty()) {
+            VertexRowPath::Identity => {
+                // Identity path: emit the vertex id without building the
+                // per-row property map or boxing a Vertex; flat property
+                // columns come straight from the record.
+                next_cursor_chunk_inner(
+                    cursor,
+                    space_name,
+                    "StorageScanVertices",
+                    &op.runtime,
+                    op.config.chunk_size,
+                    &op.output_layout,
+                    move |record| make_flat_vertex_record_identity_row(record, &flatten),
+                    |cur: &mut Box<dyn crate::storage::VertexCursor>, batch_size| {
+                        cur.next_flat_batch(batch_size)
+                    },
+                )
+            }
+            VertexRowPath::Boxed => next_cursor_chunk_inner(
                 cursor,
                 space_name,
                 "StorageScanVertices",
@@ -200,23 +263,24 @@ pub(crate) fn next(op: &mut SourceOperator) -> Result<Option<DataChunk>, QueryEr
                 |cur: &mut Box<dyn crate::storage::VertexCursor>, batch_size| {
                     cur.next_batch(batch_size)
                 },
-            )
-        } else {
-            // Flat path: pull records directly from storage (skipping
-            // per-row Vertex/HashMap boxing) and widen them into the flat
-            // property layout.
-            next_cursor_chunk_inner(
-                cursor,
-                space_name,
-                "StorageScanVertices",
-                &op.runtime,
-                op.config.chunk_size,
-                &op.output_layout,
-                move |record| make_flat_vertex_record_row(record, &flatten),
-                |cur: &mut Box<dyn crate::storage::VertexCursor>, batch_size| {
-                    cur.next_flat_batch(batch_size)
-                },
-            )
+            ),
+            VertexRowPath::Flat => {
+                // Flat path: pull records directly from storage (skipping
+                // per-row Vertex/HashMap boxing) and widen them into the flat
+                // property layout.
+                next_cursor_chunk_inner(
+                    cursor,
+                    space_name,
+                    "StorageScanVertices",
+                    &op.runtime,
+                    op.config.chunk_size,
+                    &op.output_layout,
+                    move |record| make_flat_vertex_record_row(record, &flatten),
+                    |cur: &mut Box<dyn crate::storage::VertexCursor>, batch_size| {
+                        cur.next_flat_batch(batch_size)
+                    },
+                )
+            }
         }
     } else {
         let (cursor, space_name) = match &mut op.kind {
@@ -306,6 +370,7 @@ fn next_column_chunk(
     op: &mut SourceOperator,
     source: &str,
     projected_properties: &[Arc<str>],
+    identity_only: bool,
 ) -> Result<Option<DataChunk>, QueryError> {
     let (cursor, space_name) = match &mut op.kind {
         SourceOperatorKind::StorageScanVertices {
@@ -327,7 +392,13 @@ fn next_column_chunk(
     if batch.is_empty() {
         return Ok(None);
     }
-    let chunk = build_column_chunk(&op.runtime, &op.output_layout, batch, projected_properties)?;
+    let chunk = build_column_chunk(
+        &op.runtime,
+        &op.output_layout,
+        batch,
+        projected_properties,
+        identity_only,
+    )?;
     *cursor = Some(cur);
     Ok(Some(chunk))
 }
@@ -339,6 +410,7 @@ fn build_column_chunk(
     output_layout: &Arc<SlotLayout>,
     batch: VertexColumnBatch,
     flatten: &[Arc<str>],
+    identity_only: bool,
 ) -> Result<DataChunk, QueryError> {
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
@@ -363,25 +435,41 @@ fn build_column_chunk(
     // intermediate per-cell `Value` matrix: rows read via `value_at` once,
     // typed columns convert straight from `ColumnValues` with validity
     // bitmaps.
+    //
+    // Identity mode skips the per-row property map and the boxed vertex
+    // entirely: the entity column carries the vertex id, which seed-tolerant
+    // downstream operators resolve without materializing the entity.
     let null = Value::Null(linkrs_core::value::NullType::Null);
     let mut rows = Vec::with_capacity(row_count);
     for (row, tag_name) in batch.tag_names.iter().enumerate() {
-        let mut properties = std::collections::HashMap::with_capacity(batch.columns.len());
         let mut flat_values = vec![None; flatten.len()];
+        let mut properties = if identity_only {
+            None
+        } else {
+            Some(std::collections::HashMap::with_capacity(
+                batch.columns.len(),
+            ))
+        };
         for (col_idx, column) in batch.columns.iter().enumerate() {
             if let Some(value) = column.values.value_at(row) {
                 if let Some(flat_pos) = col_to_flat[col_idx] {
                     flat_values[flat_pos] = Some(value.clone());
                 }
-                properties.insert(column.name.clone(), value);
+                if let Some(map) = properties.as_mut() {
+                    map.insert(column.name.clone(), value);
+                }
             }
         }
-        let vertex = linkrs_core::Vertex::new(
-            batch.vids[row],
-            linkrs_core::Tag::new(tag_name.clone(), properties),
-        );
         let mut row_vec = Vec::with_capacity(flatten.len() + 1);
-        row_vec.push(Value::Vertex(Box::new(vertex)));
+        if identity_only {
+            row_vec.push(Value::VertexId(batch.vids[row]));
+        } else {
+            let vertex = linkrs_core::Vertex::new(
+                batch.vids[row],
+                linkrs_core::Tag::new(tag_name.clone(), properties.unwrap_or_default()),
+            );
+            row_vec.push(Value::Vertex(Box::new(vertex)));
+        }
         row_vec.extend(
             flat_values
                 .into_iter()
@@ -703,4 +791,23 @@ fn build_edge_column_chunk(
     } else {
         chunk
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_mode_wins_over_empty_flatten() {
+        // Seed-only identity scans carry no flat columns: the row fallback
+        // must still emit ids, never boxed vertices.
+        assert_eq!(vertex_row_path(true, true), VertexRowPath::Identity);
+        assert_eq!(vertex_row_path(true, false), VertexRowPath::Identity);
+    }
+
+    #[test]
+    fn boxed_and_flat_paths_keep_their_layouts() {
+        assert_eq!(vertex_row_path(false, true), VertexRowPath::Boxed);
+        assert_eq!(vertex_row_path(false, false), VertexRowPath::Flat);
+    }
 }

@@ -37,6 +37,7 @@ use crate::optimizer::heuristic::predicate_pushdown;
 use crate::optimizer::heuristic::projection_pushdown;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule as RewriteRuleTrait;
+use crate::optimizer::heuristic::scan_identity;
 use crate::optimizer::heuristic::slot_coverage;
 use crate::planning::plan::PlanNodeEnum;
 
@@ -194,6 +195,10 @@ define_rewrite_rules! {
         // scans/expands; annotates ExpandAll hops with id_only/count_only so
         // the executor can skip full vertex/edge materialization.
         ExpandPushdownAnnotate(expand_pushdown::ExpandPushdownAnnotateRule),
+        // Runs after ExpandPushdownAnnotate so expand seed tolerance is
+        // final; annotates ScanVertices with identity_only so the executor
+        // can emit lightweight vertex ids instead of boxed vertices.
+        ScanIdentityAnnotate(scan_identity::ScanIdentityAnnotateRule),
 
         // ==================== Decorrelation Rules ====================
         // Stat-free gate: converts simple deterministic PatternApply
@@ -386,6 +391,9 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::ExpandPushdownAnnotate(
             expand_pushdown::ExpandPushdownAnnotateRule::new(),
         ));
+        registry.add(RewriteRule::ScanIdentityAnnotate(
+            scan_identity::ScanIdentityAnnotateRule::new(),
+        ));
         registry.add(RewriteRule::UnnestSimplePatternApply(
             decorrelation::UnnestSimplePatternApplyRule::new(),
         ));
@@ -430,7 +438,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 56);
+        assert_eq!(registry.len(), 57);
     }
 
     #[test]

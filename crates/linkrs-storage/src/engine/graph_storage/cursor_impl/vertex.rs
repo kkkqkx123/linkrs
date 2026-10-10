@@ -46,6 +46,10 @@ pub(crate) struct GraphVertexCursor {
     emitted: usize,
     id_range: Option<Range<i64>>,
     projection: Option<Vec<Arc<str>>>,
+    /// Topology-only scan: resolve identities with zero property decode.
+    /// Set from `ScanOptions`; only valid with an empty projection and no
+    /// pushed predicates (rejected in `new`).
+    topology_only: bool,
     /// Pushed conjunctive scan predicates evaluated on decoded rows.
     predicate: Vec<crate::cursor::ScanPredicate>,
     exhausted: bool,
@@ -121,6 +125,18 @@ impl GraphVertexCursor {
             ));
         }
 
+        // Topology-only scans carry no properties and no predicates by
+        // construction; anything else is a planner bug and must surface at
+        // open instead of silently producing wrong rows.
+        if options.topology_only {
+            let projection_non_empty = options.projection.as_ref().is_some_and(|p| !p.is_empty());
+            if projection_non_empty || options.predicate.as_ref().is_some_and(|p| !p.is_empty()) {
+                return Err(StorageError::invalid_operation(
+                    "topology_only requires an empty projection and no predicates",
+                ));
+            }
+        }
+
         // A transaction with staged rows must scan even when every global
         // table is empty: its own rows only exist in staging until commit.
         // Exhaustiveness must never rely on cross-shard approximate counts:
@@ -159,6 +175,7 @@ impl GraphVertexCursor {
                 .projection
                 .as_ref()
                 .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
+            topology_only: options.topology_only,
             predicate: options.predicate.clone().unwrap_or_default(),
             exhausted,
             ts,
@@ -273,6 +290,15 @@ impl GraphVertexCursor {
         }
         self.staged_idx = end;
         if rows_sel.is_empty() {
+            return;
+        }
+        // Topology-only drain: staged properties live in memory already, so
+        // skipping their collection is pure savings with identical rows.
+        if self.topology_only {
+            let run_rows = rows_sel.len();
+            internal_ids.extend(rows_sel.iter().map(|&index| self.staged_rows[index].id));
+            vids.extend(rows_sel.iter().map(|&index| self.staged_rows[index].vid));
+            tag_names.extend(std::iter::repeat_n(tag_name.to_string(), run_rows));
             return;
         }
         let mut decoded_names: Vec<std::sync::Arc<str>> = Vec::new();
@@ -474,6 +500,34 @@ impl GraphVertexCursor {
                         .filter_map(|(&id, &keep)| keep.then_some(id))
                         .collect()
                 };
+
+                // Topology-only run: resolve identities with zero property
+                // decode. Predicates are empty by construction (rejected in
+                // `new`), so no predicate filtering applies here.
+                if self.topology_only {
+                    let (run_internal, run_vids) = table.scan_topology(&candidates, &guard);
+                    if run_internal.is_empty() {
+                        continue;
+                    }
+                    let mut kept = 0usize;
+                    for (row, vid) in run_vids.iter().enumerate() {
+                        if let Some(ref range) = self.id_range {
+                            match vid.as_int64() {
+                                Some(vid) if (range.start..range.end).contains(&vid) => {}
+                                _ => continue,
+                            }
+                        }
+                        if self.offset_remaining > 0 {
+                            self.offset_remaining -= 1;
+                            continue;
+                        }
+                        internal_ids.push(run_internal[row]);
+                        vids.push(*vid);
+                        kept += 1;
+                    }
+                    tag_names.extend(std::iter::repeat_n(tag_name.to_string(), kept));
+                    continue;
+                }
 
                 // Guarded decode: a property covered by a foreign uncommitted
                 // write is read at the version below it, so the scan never

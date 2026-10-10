@@ -29,6 +29,8 @@ mod lookup;
 mod match_query;
 #[path = "dql/optimizer.rs"]
 mod optimizer;
+#[path = "dql/scan_identity.rs"]
+mod scan_identity;
 #[path = "dql/set_operations.rs"]
 mod set_operations;
 #[path = "dql/subgraph.rs"]

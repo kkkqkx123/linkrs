@@ -138,6 +138,11 @@ pub struct ScanOptions {
     pub tag: Option<String>,
     /// Optional property projection pushed into the physical scan.
     pub projection: Option<Vec<RequiredProperty>>,
+    /// Topology-only vertex scan: return vertex identities and tags with
+    /// zero property decode. Only valid with an empty projection and no
+    /// pushed predicates; the cursor rejects any other combination at open
+    /// so misuse surfaces as an error instead of silently wrong rows.
+    pub topology_only: bool,
     /// Read timestamp captured by the caller.
     pub read_timestamp: Option<Timestamp>,
     /// Optional conjunctive scan predicates pushed from the query layer.

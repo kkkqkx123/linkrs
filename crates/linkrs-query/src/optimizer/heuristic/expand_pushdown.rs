@@ -166,7 +166,10 @@ fn source_unreferenced(expand: &ExpandAllNode, ancestors: &[&PlanNodeEnum]) -> b
 /// `Flatten` is row-preserving (it replays child rows without evaluating
 /// any column), so it neither consumes the destination/edge/source
 /// variables nor blocks the raw-id fast path.
-fn known_reference_ancestor(anc: &PlanNodeEnum) -> bool {
+///
+/// Shared with the scan identity annotation, which audits the same ancestor
+/// domain for whole-entity uses of the scan variable.
+pub(crate) fn known_reference_ancestor(anc: &PlanNodeEnum) -> bool {
     matches!(
         anc,
         PlanNodeEnum::Filter(_)
