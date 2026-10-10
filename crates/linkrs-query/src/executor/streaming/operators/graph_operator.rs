@@ -17,7 +17,12 @@ use super::super::runtime::ExecutionRuntime;
 use super::spec::GraphSpec;
 use super::visited_set::VisitedSet;
 
-mod common;
+mod expand_buffer;
+mod expand_columnar;
+mod expand_dispatch;
+mod expand_frontier;
+mod expand_row_path;
+mod expand_seeds;
 pub(crate) mod expand;
 mod subgraph;
 mod traverse;
@@ -35,6 +40,8 @@ pub(super) struct ExpandCtx<'a> {
     pub(super) dst_required_props: Option<Vec<String>>,
     pub(super) closed_loop: bool,
     pub(super) skip_rows: bool,
+    pub(super) emit_raw_ids: bool,
+    pub(super) lightweight_source: bool,
 }
 
 #[derive(Debug)]

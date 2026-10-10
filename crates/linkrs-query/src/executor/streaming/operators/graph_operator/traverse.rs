@@ -10,7 +10,9 @@ use linkrs_core::error::QueryError;
 use linkrs_core::{EdgeDirection, Value};
 
 use super::super::visited_set::VisitedSet;
-use super::common;
+use super::{
+    expand_buffer, expand_dispatch,
+};
 use super::{GraphOperator, GraphOperatorKind};
 
 pub(super) fn handle_traverse(
@@ -65,7 +67,7 @@ pub(super) fn handle_traverse(
             );
             tc.vertex_tag = dst_tag.to_string();
             tc.path_semantic = path_semantic.clone();
-            if let Some(output) = common::traverse_on_chunk_with_semantic(
+            if let Some(output) = expand_dispatch::traverse_on_chunk_with_semantic(
                 chunk,
                 Arc::clone(&op.output_layout),
                 &*reader,
@@ -99,7 +101,7 @@ pub(super) fn handle_traverse(
                 data_type: "bigint".to_string(),
             });
             let _schema = Arc::new(Schema::new(new_cols));
-            let mut rows = common::visible_rows(&chunk)
+            let mut rows = expand_buffer::visible_rows(&chunk)
                 .map(|(_, row)| row.clone())
                 .collect::<Vec<_>>();
             for row in rows.iter_mut() {
@@ -152,7 +154,7 @@ pub(super) fn handle_bi_expand(
             let col_names = chunk.col_names();
 
             let mut out_rows = Vec::new();
-            for (_, row) in common::visible_rows(&chunk) {
+            for (_, row) in expand_buffer::visible_rows(&chunk) {
                 if let Some(rt) = op.runtime.as_ref() {
                     rt.ensure_not_cancelled()?;
                 }
@@ -279,7 +281,7 @@ pub(super) fn handle_bi_traverse(
             let col_names = chunk.col_names();
 
             let mut out_rows = Vec::new();
-            for (_, row) in common::visible_rows(&chunk) {
+            for (_, row) in expand_buffer::visible_rows(&chunk) {
                 if let Some(rt) = op.runtime.as_ref() {
                     rt.ensure_not_cancelled()?;
                 }

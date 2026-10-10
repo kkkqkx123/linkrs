@@ -5,7 +5,10 @@ use crate::executor::streaming::executor::StreamingExecutor;
 use linkrs_core::error::QueryError;
 use linkrs_core::Value;
 
-use super::common;
+use super::{
+    expand_buffer, expand_columnar, expand_dispatch, expand_frontier, expand_row_path, expand_seeds,
+};
+use super::expand_dispatch::ColumnarOutcome;
 use super::{ExpandCtx, GraphOperator, GraphOperatorKind};
 
 pub(super) fn handle(
@@ -35,7 +38,7 @@ pub(super) fn handle(
     while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
-            if let Some(output) = common::expand_on_chunk(
+            if let Some(output) = expand_dispatch::expand_on_chunk(
                 chunk,
                 Arc::clone(&op.output_layout),
                 &*reader,
@@ -54,6 +57,8 @@ pub(super) fn handle(
                     dst_required_props: None,
                     closed_loop: false,
                     skip_rows: false,
+                    emit_raw_ids: false,
+                    lightweight_source: false,
                 },
             )? {
                 return Ok(Some(output));
@@ -77,7 +82,7 @@ pub(super) fn handle(
                 data_type: "vertex".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
-            let mut rows = common::visible_rows(&chunk)
+            let mut rows = expand_buffer::visible_rows(&chunk)
                 .map(|(_, row)| row.clone())
                 .collect::<Vec<_>>();
             for row in rows.iter_mut() {
@@ -89,7 +94,7 @@ pub(super) fn handle(
                 .iter()
                 .map(|c| c.name.clone())
                 .collect::<Vec<_>>();
-            rows.retain(|row| common::row_passes_filter(row, &out_col_names, filter_expr));
+            rows.retain(|row| expand_seeds::row_passes_filter(row, &out_col_names, filter_expr));
             if !rows.is_empty() {
                 return Ok(Some(DataChunk::new_with_layout(
                     rows,
@@ -167,9 +172,20 @@ pub(super) fn handle_all(
             let reader = storage_lock.read();
 
             // The degree-batch count path ignores per-path repeat rules,
-            // so it only applies when no semantic constrains the walk.
+            // so it only applies when no semantic constrains the walk. A
+            // count-only plan with property demands is a contract error:
+            // attribute counts observe nullability, not edge degrees.
             if count_only && path_semantic.is_none() {
-                let count = common::expand_count_only(
+                let edge_empty =
+                    matches!(edge_required_props.as_ref(), Some(v) if v.is_empty());
+                let dst_empty = matches!(dst_required_props.as_ref(), Some(v) if v.is_empty());
+                if !edge_empty || !dst_empty {
+                    return Err(linkrs_core::error::QueryError::execution(
+                        "count-only expand with property demands violates the plan contract"
+                            .to_string(),
+                    ));
+                }
+                let count = expand_frontier::expand_count_only(
                     chunk,
                     &*reader,
                     src_vids.clone(),
@@ -186,6 +202,8 @@ pub(super) fn handle_all(
                         dst_required_props: dst_required_props.clone(),
                         closed_loop,
                         skip_rows,
+                        emit_raw_ids,
+                        lightweight_source,
                     },
                 )?;
                 if count > 0 {
@@ -211,6 +229,8 @@ pub(super) fn handle_all(
                 dst_required_props: dst_required_props.clone(),
                 closed_loop,
                 skip_rows,
+                emit_raw_ids,
+                lightweight_source,
             };
             let expand_result = if let Some(limits) = step_limits.clone() {
                 let var_eligible = !limits.is_empty()
@@ -221,7 +241,7 @@ pub(super) fn handle_all(
                         None | Some(crate::parser::ast::pattern::PathSemantic::Walk)
                     )
                     && closed_loop
-                    && common::is_closed_loop_storage(
+                    && expand_dispatch::is_closed_loop_storage(
                         &*reader,
                         space_name,
                         edge_types,
@@ -229,16 +249,27 @@ pub(super) fn handle_all(
                         dst_tag,
                     );
                 if var_eligible {
-                    common::expand_variable_frontier(
-                        chunk,
+                    match expand_frontier::expand_variable_frontier(
+                        &chunk,
                         Arc::clone(&op.output_layout),
                         &*reader,
                         src_vids.clone(),
                         &limits,
                         &mut ctx,
-                    )?
+                    )? {
+                        ColumnarOutcome::Produced(out) => Some(out),
+                        ColumnarOutcome::Empty => None,
+                        ColumnarOutcome::Declined => expand_frontier::expand_variable_row_union(
+                            chunk,
+                            Arc::clone(&op.output_layout),
+                            &*reader,
+                            src_vids.clone(),
+                            &limits,
+                            &mut ctx,
+                        )?,
+                    }
                 } else {
-                    common::expand_variable_row_union(
+                    expand_frontier::expand_variable_row_union(
                         chunk,
                         Arc::clone(&op.output_layout),
                         &*reader,
@@ -255,7 +286,7 @@ pub(super) fn handle_all(
                         None | Some(crate::parser::ast::pattern::PathSemantic::Walk)
                     )
                     && closed_loop
-                    && common::is_closed_loop_storage(
+                    && expand_dispatch::is_closed_loop_storage(
                         &*reader,
                         space_name,
                         edge_types,
@@ -263,16 +294,27 @@ pub(super) fn handle_all(
                         dst_tag,
                     );
                 if multi_eligible {
-                    common::expand_multi_hop_frontier(
-                        chunk,
+                    match expand_frontier::expand_multi_hop_frontier(
+                        &chunk,
                         Arc::clone(&op.output_layout),
                         &*reader,
                         src_vids.clone(),
                         step_limit,
                         &mut ctx,
-                    )?
+                    )? {
+                        ColumnarOutcome::Produced(out) => Some(out),
+                        ColumnarOutcome::Empty => None,
+                        ColumnarOutcome::Declined => expand_dispatch::expand_on_chunk(
+                            chunk,
+                            Arc::clone(&op.output_layout),
+                            &*reader,
+                            src_vids.clone(),
+                            step_limit,
+                            &mut ctx,
+                        )?,
+                    }
                 } else {
-                    common::expand_on_chunk(
+                    expand_dispatch::expand_on_chunk(
                         chunk,
                         Arc::clone(&op.output_layout),
                         &*reader,
@@ -284,36 +326,41 @@ pub(super) fn handle_all(
             } else if use_fast_path {
                 if !emit_raw_ids
                     && closed_loop
-                    && common::is_closed_loop_storage(
+                    && expand_dispatch::is_closed_loop_storage(
                         &*reader,
                         space_name,
                         edge_types,
                         direction,
                         dst_tag,
                     ) {
-                    match common::expand_single_step_columnar(
-                        chunk,
+                    match expand_columnar::expand_single_step_columnar(
+                        &chunk,
                         Arc::clone(&op.output_layout),
                         &*reader,
                         src_vids.clone(),
                         &mut ctx,
                     )? {
-                        Some(out) => Some(out),
-                        None => None,
+                        ColumnarOutcome::Produced(out) => Some(out),
+                        ColumnarOutcome::Empty => None,
+                        ColumnarOutcome::Declined => expand_row_path::expand_single_step(
+                            chunk,
+                            Arc::clone(&op.output_layout),
+                            &*reader,
+                            src_vids.clone(),
+                            &mut ctx,
+                        )?,
                     }
                 } else {
-                    common::expand_single_step(
+                    expand_row_path::expand_single_step(
                         chunk,
                         Arc::clone(&op.output_layout),
                         &*reader,
                         src_vids.clone(),
-                        emit_raw_ids,
-                        lightweight_source,
                         &mut ctx,
                     )?
                 }
             } else {
-                common::expand_on_chunk(
+                expand_dispatch::expand_on_chunk(
                     chunk,
                     Arc::clone(&op.output_layout),
                     &*reader,
@@ -344,7 +391,7 @@ pub(super) fn handle_all(
                 data_type: "vertex".to_string(),
             });
             let _schema = Arc::new(Schema::new(new_cols));
-            let mut rows = common::visible_rows(&chunk)
+            let mut rows = expand_buffer::visible_rows(&chunk)
                 .map(|(_, row)| row.clone())
                 .collect::<Vec<_>>();
             for row in rows.iter_mut() {

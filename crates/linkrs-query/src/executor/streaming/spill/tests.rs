@@ -1,6 +1,8 @@
 use super::*;
 
+use linkrs_core::columnar::MaterializedBatch;
 use linkrs_core::value::NullType;
+use linkrs_core::Value;
 
 fn sample_rows(n: usize) -> Vec<Vec<Value>> {
     (0..n)
