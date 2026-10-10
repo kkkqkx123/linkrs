@@ -30,6 +30,20 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
 use linkrs_core::types::expr::Expression;
+use linkrs_core::Value;
+
+/// Columnar expand decision for one hop, applied together with the legacy
+/// `id_only` / `count_only` flags.
+#[derive(Debug, Clone)]
+struct ExpandDecision {
+    id_only: bool,
+    count_only: bool,
+    lightweight_source: bool,
+    edge_props: Option<Vec<String>>,
+    dst_props: Option<Vec<String>>,
+    closed_loop: bool,
+    skip_rows: bool,
+}
 
 /// Whole-plan rule that annotates `ExpandAll` hops with id_only/count_only.
 #[derive(Debug)]
@@ -82,16 +96,35 @@ fn annotate_expand_all(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
     let mut candidates: Vec<(ExpandAllNode, Vec<&PlanNodeEnum>)> = Vec::new();
     collect_expand_alls(root, &mut Vec::new(), &mut candidates);
 
-    let mut decisions: HashMap<i64, (bool, bool, bool)> = HashMap::new();
+    let mut decisions: HashMap<i64, ExpandDecision> = HashMap::new();
     for (expand, ancestors) in &candidates {
         let id_only = expand_id_only(expand, ancestors);
         let count_only = expand_count_only(expand, ancestors);
         let lightweight_source = id_only && source_unreferenced(expand, ancestors);
-        if id_only != expand.id_only()
+        let (edge_props, dst_props) = expand_prop_needs(expand, ancestors);
+        let closed_loop = expand_closed_loop(expand);
+        let skip_rows =
+            expand_skip_rows(expand, ancestors, edge_props.as_ref(), dst_props.as_ref());
+        let changed = id_only != expand.id_only()
             || count_only != expand.count_only()
             || lightweight_source != expand.lightweight_source()
-        {
-            decisions.insert(expand.id(), (id_only, count_only, lightweight_source));
+            || edge_props.as_ref() != expand.edge_required_props()
+            || dst_props.as_ref() != expand.dst_required_props()
+            || closed_loop != expand.closed_loop()
+            || skip_rows != expand.skip_rows();
+        if changed {
+            decisions.insert(
+                expand.id(),
+                ExpandDecision {
+                    id_only,
+                    count_only,
+                    lightweight_source,
+                    edge_props,
+                    dst_props,
+                    closed_loop,
+                    skip_rows,
+                },
+            );
         }
     }
     if decisions.is_empty() {
@@ -222,6 +255,7 @@ fn expand_count_only(expand: &ExpandAllNode, ancestors: &[&PlanNodeEnum]) -> boo
 /// the expand has no filter, no literal source ids and a step limit of one.
 fn fast_path_compatible(expand: &ExpandAllNode) -> bool {
     expand.step_limit().unwrap_or(1) == 1
+        && expand.step_limits().is_none()
         && expand.filter().is_none()
         && expand.src_vids().is_empty()
 }
@@ -335,18 +369,427 @@ fn is_count_only_aggregate(agg: &AggregateNode) -> bool {
             .all(|f| matches!(f, linkrs_core::types::operators::AggregateFunction::Count))
 }
 
+/// Collect the downstream property demand for one hop's edge and destination
+/// slots. `None` means the whole entity is needed (bare use outside a bare
+/// count), `Some(vec)` lists the demanded property names with empty meaning
+/// topology or identity only.
+fn expand_prop_needs(
+    expand: &ExpandAllNode,
+    ancestors: &[&PlanNodeEnum],
+) -> (Option<Vec<String>>, Option<Vec<String>>) {
+    use std::collections::BTreeSet;
+    let Some(edge_var) = expand.col_names().get(1).cloned() else {
+        return (None, None);
+    };
+    let Some(dst_var) = expand.col_names().get(2).cloned() else {
+        return (None, None);
+    };
+    let mut edge_props: BTreeSet<String> = BTreeSet::new();
+    let mut dst_props: BTreeSet<String> = BTreeSet::new();
+    let mut edge_full = false;
+    let mut dst_full = false;
+    for (pos, anc) in ancestors.iter().enumerate() {
+        let is_root = pos == 0;
+        if !known_reference_ancestor(anc) {
+            edge_full = true;
+            dst_full = true;
+            break;
+        }
+        match anc {
+            PlanNodeEnum::Project(project) => {
+                for col in project.columns() {
+                    let Some(meta) = col.expression.expression() else {
+                        continue;
+                    };
+                    let expr = meta.inner();
+                    if let Expression::Variable(name) = expr {
+                        if name == &edge_var || name == &dst_var {
+                            if col.alias == *name && !is_root {
+                                continue;
+                            }
+                            if name == &edge_var {
+                                edge_full = true;
+                            } else {
+                                dst_full = true;
+                            }
+                            continue;
+                        }
+                    }
+                    collect_expr_needs(
+                        expr,
+                        &edge_var,
+                        &dst_var,
+                        &mut edge_props,
+                        &mut dst_props,
+                        &mut edge_full,
+                        &mut dst_full,
+                    );
+                }
+            }
+            PlanNodeEnum::Aggregate(agg) => {
+                if agg.group_keys().iter().any(|k| k == &edge_var) {
+                    edge_full = true;
+                }
+                if agg.group_keys().iter().any(|k| k == &dst_var) {
+                    dst_full = true;
+                }
+                let funcs = agg.aggregation_functions();
+                for (idx, arg_list) in agg.aggregation_args().iter().enumerate() {
+                    let is_count = funcs
+                        .get(idx)
+                        .is_some_and(|f| {
+                            matches!(f, linkrs_core::types::operators::AggregateFunction::Count)
+                        });
+                    for arg in arg_list {
+                        if is_count && matches!(arg, Expression::Variable(n) if n == &edge_var || n == &dst_var)
+                        {
+                            continue;
+                        }
+                        collect_expr_needs(
+                            arg,
+                            &edge_var,
+                            &dst_var,
+                            &mut edge_props,
+                            &mut dst_props,
+                            &mut edge_full,
+                            &mut dst_full,
+                        );
+                    }
+                }
+            }
+            PlanNodeEnum::Filter(filter) => {
+                if let Some(expr) = filter.condition().get_expression() {
+                    collect_expr_needs(
+                        &expr,
+                        &edge_var,
+                        &dst_var,
+                        &mut edge_props,
+                        &mut dst_props,
+                        &mut edge_full,
+                        &mut dst_full,
+                    );
+                }
+            }
+            PlanNodeEnum::ExpandAll(next) => {
+                if let Some(expr) = next.filter().and_then(|f| f.get_expression()) {
+                    collect_expr_needs(
+                        &expr,
+                        &edge_var,
+                        &dst_var,
+                        &mut edge_props,
+                        &mut dst_props,
+                        &mut edge_full,
+                        &mut dst_full,
+                    );
+                }
+            }
+            PlanNodeEnum::Sort(sort) => {
+                for item in sort.sort_items() {
+                    collect_expr_needs(
+                        &item.expression,
+                        &edge_var,
+                        &dst_var,
+                        &mut edge_props,
+                        &mut dst_props,
+                        &mut edge_full,
+                        &mut dst_full,
+                    );
+                }
+            }
+            PlanNodeEnum::TopN(topn) => {
+                for item in topn.sort_items() {
+                    collect_expr_needs(
+                        &item.expression,
+                        &edge_var,
+                        &dst_var,
+                        &mut edge_props,
+                        &mut dst_props,
+                        &mut edge_full,
+                        &mut dst_full,
+                    );
+                }
+            }
+            PlanNodeEnum::Window(window) => {
+                for wf in window.window_functions() {
+                    for expr in wf
+                        .args
+                        .iter()
+                        .chain(wf.partition_by.iter())
+                        .chain(wf.order_by.iter())
+                    {
+                        collect_expr_needs(
+                            expr,
+                            &edge_var,
+                            &dst_var,
+                            &mut edge_props,
+                            &mut dst_props,
+                            &mut edge_full,
+                            &mut dst_full,
+                        );
+                    }
+                }
+            }
+            PlanNodeEnum::InnerJoin(_)
+            | PlanNodeEnum::LeftJoin(_)
+            | PlanNodeEnum::RightJoin(_)
+            | PlanNodeEnum::FullOuterJoin(_)
+            | PlanNodeEnum::SemiJoin(_) => {
+                if node_references_var(anc, &edge_var) {
+                    edge_full = true;
+                }
+                if node_references_var(anc, &dst_var) {
+                    dst_full = true;
+                }
+            }
+            PlanNodeEnum::Flatten(_)
+            | PlanNodeEnum::Limit(_)
+            | PlanNodeEnum::Dedup(_) => {}
+            _ => {}
+        }
+        if edge_full && dst_full {
+            break;
+        }
+    }
+    let edge_out = if edge_full {
+        None
+    } else {
+        Some(edge_props.into_iter().collect())
+    };
+    let dst_out = if dst_full {
+        None
+    } else {
+        Some(dst_props.into_iter().collect())
+    };
+    (edge_out, dst_out)
+}
+
+/// Collect property versus whole-value uses of the hop variables inside one
+/// expression. A `var.prop` or `EdgeProperty(var, prop)` records a prunable
+/// demand, any other occurrence of the variable marks the whole value.
+fn collect_expr_needs(
+    expr: &Expression,
+    edge_var: &str,
+    dst_var: &str,
+    edge_props: &mut std::collections::BTreeSet<String>,
+    dst_props: &mut std::collections::BTreeSet<String>,
+    edge_full: &mut bool,
+    dst_full: &mut bool,
+) {
+    match expr {
+        Expression::Variable(name) => {
+            if name == edge_var {
+                *edge_full = true;
+            }
+            if name == dst_var {
+                *dst_full = true;
+            }
+        }
+        Expression::Property { object, property } => {
+            if let Expression::Variable(name) = object.as_ref() {
+                if name == edge_var {
+                    edge_props.insert(property.clone());
+                    return;
+                }
+                if name == dst_var {
+                    dst_props.insert(property.clone());
+                    return;
+                }
+            }
+            collect_expr_needs(
+                object, edge_var, dst_var, edge_props, dst_props, edge_full, dst_full,
+            );
+        }
+        Expression::EdgeProperty {
+            edge_name,
+            property,
+        } => {
+            if edge_name == edge_var {
+                edge_props.insert(property.clone());
+            } else if edge_name == dst_var {
+                dst_props.insert(property.clone());
+            } else {
+                if edge_name.as_str() == edge_var {
+                    *edge_full = true;
+                }
+                if edge_name.as_str() == dst_var {
+                    *dst_full = true;
+                }
+            }
+        }
+        Expression::TagProperty { tag_name, property } => {
+            if tag_name == edge_var {
+                edge_props.insert(property.clone());
+            } else if tag_name == dst_var {
+                dst_props.insert(property.clone());
+            }
+        }
+        Expression::StructField { base, .. } => {
+            if let Expression::Variable(name) = base.as_ref() {
+                if name == edge_var {
+                    *edge_full = true;
+                    return;
+                }
+                if name == dst_var {
+                    *dst_full = true;
+                    return;
+                }
+            }
+            collect_expr_needs(
+                base, edge_var, dst_var, edge_props, dst_props, edge_full, dst_full,
+            );
+        }
+        _ => {
+            for child in expr.children() {
+                collect_expr_needs(
+                    child, edge_var, dst_var, edge_props, dst_props, edge_full, dst_full,
+                );
+                if *edge_full && *dst_full {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Syntactic closed-loop check: typed edge fanout with a planned destination
+/// tag. Storage schemas are verified at execution time with a row-path
+/// fallback, so the planner only gates the obvious open shapes.
+fn expand_closed_loop(expand: &ExpandAllNode) -> bool {
+    if expand.any_edge_type() || expand.edge_types().is_empty() {
+        return false;
+    }
+    true
+}
+
+/// Whether the hop may skip its row view. The direct consumer chain through
+/// constant-true residual filters must end at a column-capable terminator:
+/// an all-passthrough/constant project, a bare-variable count aggregate, or a
+/// seed-tolerant next hop. Full-entity demands never skip.
+fn expand_skip_rows(
+    expand: &ExpandAllNode,
+    ancestors: &[&PlanNodeEnum],
+    edge_props: Option<&Vec<String>>,
+    dst_props: Option<&Vec<String>>,
+) -> bool {
+    let Some(edge_needs) = edge_props else {
+        return false;
+    };
+    let Some(dst_needs) = dst_props else {
+        return false;
+    };
+    if !edge_needs.is_empty() || !dst_needs.is_empty() {
+        return false;
+    }
+    if !expand_closed_loop(expand) {
+        return false;
+    }
+    let mut rest = ancestors.iter().rev();
+    let terminator = loop {
+        match rest.next() {
+            None => return false,
+            Some(PlanNodeEnum::Filter(filter)) => {
+                if !filter.subqueries().is_empty() {
+                    return false;
+                }
+                let is_true = filter
+                    .condition()
+                    .get_expression()
+                    .is_some_and(|expr| matches!(expr, Expression::Literal(Value::Bool(true))));
+                if !is_true {
+                    return false;
+                }
+            }
+            Some(node) => break node,
+        }
+    };
+    match terminator {
+        PlanNodeEnum::Project(project) => {
+            if !project.subqueries().is_empty() {
+                return false;
+            }
+            project.columns().iter().all(|col| {
+                col.expression
+                    .expression()
+                    .map(|meta| is_passthrough_or_const(meta.inner()))
+                    .unwrap_or(true)
+            })
+        }
+        PlanNodeEnum::Aggregate(agg) => {
+            if !agg.group_keys().is_empty() || !agg.grouping_sets().is_empty() {
+                return false;
+            }
+            if agg.aggregation_distinct().iter().any(|d| *d) {
+                return false;
+            }
+            if agg.aggregation_filters().iter().any(|f| f.is_some()) {
+                return false;
+            }
+            let funcs = agg.aggregation_functions();
+            let args = agg.aggregation_args();
+            if funcs.is_empty() || funcs.len() != args.len() {
+                return false;
+            }
+            funcs.iter().zip(args.iter()).all(|(func, arg)| {
+                matches!(
+                    func,
+                    linkrs_core::types::operators::AggregateFunction::Count
+                ) && (arg.is_empty()
+                    || (arg.len() == 1 && matches!(arg[0], Expression::Variable(_))))
+            })
+        }
+        PlanNodeEnum::ExpandAll(next) => {
+            let Some(dst_var) = expand.col_names().get(2) else {
+                return false;
+            };
+            if next.col_names().first().map(String::as_str) != Some(dst_var.as_str()) {
+                return false;
+            }
+            if next.path_semantic().is_some() {
+                return false;
+            }
+            // Structural seed tolerance only: a count-only tail already has
+            // the single-step filter-free shape, so reading its not-yet
+            // computed flag here is unnecessary.
+            next.step_limit().unwrap_or(1) == 1
+                && next.step_limits().is_none()
+                && next.filter().is_none()
+                && next.src_vids().is_empty()
+        }
+        _ => false,
+    }
+}
+
+/// Project shape that evaluates from the typed layout without reading rows.
+fn is_passthrough_or_const(expression: &Expression) -> bool {
+    match expression {
+        Expression::Variable(_) | Expression::Literal(_) => true,
+        Expression::Property { object, .. } => {
+            matches!(object.as_ref(), Expression::Variable(_))
+        }
+        _ => false,
+    }
+}
+
 /// Apply the flag decisions to the matching `ExpandAll` nodes in place.
-fn apply_decisions(root: &mut PlanNodeEnum, decisions: &HashMap<i64, (bool, bool, bool)>) -> bool {
+fn apply_decisions(root: &mut PlanNodeEnum, decisions: &HashMap<i64, ExpandDecision>) -> bool {
     let mut changed = false;
     if let PlanNodeEnum::ExpandAll(expand) = root {
-        if let Some((id_only, count_only, lightweight_source)) = decisions.get(&expand.id()) {
-            if expand.id_only() != *id_only
-                || expand.count_only() != *count_only
-                || expand.lightweight_source() != *lightweight_source
+        if let Some(decision) = decisions.get(&expand.id()) {
+            if expand.id_only() != decision.id_only
+                || expand.count_only() != decision.count_only
+                || expand.lightweight_source() != decision.lightweight_source
+                || expand.edge_required_props() != decision.edge_props.as_ref()
+                || expand.dst_required_props() != decision.dst_props.as_ref()
+                || expand.closed_loop() != decision.closed_loop
+                || expand.skip_rows() != decision.skip_rows
             {
-                expand.set_id_only(*id_only);
-                expand.set_count_only(*count_only);
-                expand.set_lightweight_source(*lightweight_source);
+                expand.set_id_only(decision.id_only);
+                expand.set_count_only(decision.count_only);
+                expand.set_lightweight_source(decision.lightweight_source);
+                expand.set_edge_required_props(decision.edge_props.clone());
+                expand.set_dst_required_props(decision.dst_props.clone());
+                expand.set_closed_loop(decision.closed_loop);
+                expand.set_skip_rows(decision.skip_rows);
                 changed = true;
             }
         }
@@ -647,6 +1090,175 @@ mod tests {
         assert!(
             !hop.id_only(),
             "edge variable is referenced by count(f), so id_only must be blocked"
+        );
+    }
+
+    fn hop_tagged(edge: &str, vars: [&str; 3], dst_tag: &str, input: PlanNodeEnum) -> PlanNodeEnum {
+        let mut expand = ExpandAllNode::new(1, vec![edge.to_string()], "OUT");
+        expand.set_step_limit(1);
+        expand.set_col_names(vars.iter().map(|s| s.to_string()).collect());
+        expand.set_dst_tag(dst_tag.to_string());
+        expand.add_input(input);
+        PlanNodeEnum::ExpandAll(expand)
+    }
+
+    fn project_prop_col(
+        input: PlanNodeEnum,
+        var: &str,
+        prop: &str,
+        alias: &str,
+    ) -> PlanNodeEnum {
+        let col = linkrs_core::YieldColumn {
+            expression: ctx_expr(Expression::Property {
+                object: Box::new(Expression::Variable(var.to_string())),
+                property: prop.to_string(),
+            }),
+            alias: alias.to_string(),
+        };
+        PlanNodeEnum::Project(ProjectNode::new(input, vec![col]).expect("project should build"))
+    }
+
+    #[test]
+    fn prop_needs_empty_when_only_counted() {
+        let chain = count_field_agg(
+            project_pass_var(
+                hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+                "r",
+            ),
+            "r",
+        );
+        let (annotated, _) = annotate_expand_all(&chain);
+        let hops = expand_alls(&annotated);
+        let hop = hop_by_dst(&hops, "b");
+        assert_eq!(
+            hop.edge_required_props(),
+            Some(&vec![]),
+            "counted edge needs no properties"
+        );
+        assert_eq!(
+            hop.dst_required_props(),
+            Some(&vec![]),
+            "uncounted destination needs no properties"
+        );
+    }
+
+    #[test]
+    fn prop_needs_collects_edge_and_dst_props() {
+        let proj = project_prop_col(
+            hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+            "r",
+            "weight",
+            "w",
+        );
+        let (annotated, _) = annotate_expand_all(&proj);
+        let hops = expand_alls(&annotated);
+        let hop = hop_by_dst(&hops, "b");
+        assert_eq!(
+            hop.edge_required_props(),
+            Some(&vec!["weight".to_string()]),
+            "edge property demand must be collected"
+        );
+        let proj2 = project_prop_col(
+            hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+            "b",
+            "name",
+            "n",
+        );
+        let (annotated2, _) = annotate_expand_all(&proj2);
+        let hops2 = expand_alls(&annotated2);
+        assert_eq!(
+            hop_by_dst(&hops2, "b").dst_required_props(),
+            Some(&vec!["name".to_string()]),
+            "destination property demand must be collected"
+        );
+    }
+
+    #[test]
+    fn full_edge_use_blocks_narrowing() {
+        let chain = project_pass_var(
+            hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+            "r",
+        );
+        let (annotated, _) = annotate_expand_all(&chain);
+        let hops = expand_alls(&annotated);
+        assert_eq!(
+            hop_by_dst(&hops, "b").edge_required_props(),
+            None,
+            "whole-edge return needs the full value"
+        );
+    }
+
+    #[test]
+    fn closed_loop_needs_dst_tag_and_typed_edges() {
+        let tagged = hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a"));
+        let (annotated, _) = annotate_expand_all(&tagged);
+        assert!(
+            expand_alls(&annotated)[0].closed_loop(),
+            "typed edges with a destination tag form a closed loop"
+        );
+        let untagged = hop("Link", ["a", "r", "b"], anchor_scan("a"));
+        let (annotated2, _) = annotate_expand_all(&untagged);
+        assert!(
+            expand_alls(&annotated2)[0].closed_loop(),
+            "typed edges stay closed-loop syntactically; storage re-verifies schemas"
+        );
+        let mut open = ExpandAllNode::new(1, vec![], "OUT");
+        open.set_step_limit(1);
+        open.set_col_names(vec!["a".to_string(), "r".to_string(), "b".to_string()]);
+        open.set_dst_tag("Node".to_string());
+        open.add_input(anchor_scan("a"));
+        let (annotated3, _) =
+            annotate_expand_all(&PlanNodeEnum::ExpandAll(open));
+        assert!(
+            !expand_alls(&annotated3)[0].closed_loop(),
+            "untyped fanout is not a closed loop"
+        );
+    }
+
+    #[test]
+    fn skip_rows_for_passthrough_and_count_but_not_sort() {
+        let count_chain = count_field_agg(
+            project_pass_var(
+                hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+                "r",
+            ),
+            "r",
+        );
+        let (annotated, _) = annotate_expand_all(&count_chain);
+        assert!(
+            expand_alls(&annotated)[0].skip_rows(),
+            "bare count terminator is column-capable"
+        );
+        let sort_chain = PlanNodeEnum::Sort(
+            crate::planning::plan::core::nodes::operation::sort_node::SortNode::new(
+                hop_tagged("Link", ["a", "r", "b"], "Node", anchor_scan("a")),
+                vec![crate::planning::plan::core::nodes::operation::sort_node::SortItem {
+                    expression: Expression::Variable("r".to_string()),
+                    direction: linkrs_core::types::graph_schema::OrderDirection::Asc,
+                }],
+            )
+            .expect("sort should build"),
+        );
+        let (annotated2, _) = annotate_expand_all(&sort_chain);
+        assert!(
+            !expand_alls(&annotated2)[0].skip_rows(),
+            "sort needs rows and blocks the rowless path"
+        );
+    }
+
+    #[test]
+    fn skip_rows_for_chained_seed_hop() {
+        let chain = hop_tagged(
+            "Link",
+            ["b", "e2", "c"],
+            "Node",
+            hop_tagged("Link", ["a", "e1", "b"], "Node", anchor_scan("a")),
+        );
+        let (annotated, _) = annotate_expand_all(&chain);
+        let hops = expand_alls(&annotated);
+        assert!(
+            hop_by_dst(&hops, "b").skip_rows(),
+            "intermediate hop feeding a seed-tolerant hop may skip rows"
         );
     }
 }

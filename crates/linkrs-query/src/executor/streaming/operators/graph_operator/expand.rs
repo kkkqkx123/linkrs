@@ -8,16 +8,6 @@ use linkrs_core::Value;
 use super::common;
 use super::{ExpandCtx, GraphOperator, GraphOperatorKind};
 
-/// Execution-path note for `ExpandAll` under factorization.
-///
-/// The columnar batch path for `ExpandAll` is intentionally not rebuilt on
-/// the removed heap row store; until a `DataChunk` columnar rebuild lands,
-/// `ExpandAll` stays on the row path. Optimizer callers record this string
-/// in `cbo_notes` so the degradation is observable rather than silent.
-pub fn expand_all_row_path_note() -> &'static str {
-    "ExpandAll: row path retained (columnar batch pending DataChunk rebuild)"
-}
-
 pub(super) fn handle(
     op: &mut GraphOperator,
     input: &mut StreamingExecutor,
@@ -60,6 +50,10 @@ pub(super) fn handle(
                     col_names_template: Vec::new(),
                     cancel_token: cancel_token.clone(),
                     path_semantic: None,
+                    edge_required_props: None,
+                    dst_required_props: None,
+                    closed_loop: false,
+                    skip_rows: false,
                 },
             )? {
                 return Ok(Some(output));
@@ -121,10 +115,15 @@ pub(super) fn handle_all(
         col_names,
         src_vids,
         step_limit,
+        step_limits,
         count_only,
         emit_raw_ids,
         lightweight_source,
         path_semantic,
+        edge_required_props,
+        dst_required_props,
+        closed_loop,
+        skip_rows,
     } = &mut op.kind
     else {
         return Err(QueryError::execution(
@@ -140,17 +139,27 @@ pub(super) fn handle_all(
     let col_names = col_names.clone();
     let src_vids = src_vids.clone();
     let step_limit = *step_limit;
+    let step_limits = step_limits.clone();
     let count_only = *count_only;
     let emit_raw_ids = *emit_raw_ids;
     let lightweight_source = *lightweight_source;
     let path_semantic = path_semantic.clone();
+    let edge_required_props = edge_required_props.clone();
+    let dst_required_props = dst_required_props.clone();
+    let closed_loop = *closed_loop;
+    let mut skip_rows = *skip_rows;
+    if skip_rows
+        && !crate::executor::streaming::chunk::use_columnar_path(&op.runtime)
+    {
+        skip_rows = false;
+    }
 
     // The raw-id fast path (`emit_raw_ids`) is handled inside
     // `expand_single_step`; it is not a reason to fall back to the generic
     // runtime path. Only a real filter, literal seed ids or a path semantic
     // require the generic walk.
     let use_fast_path =
-        step_limit == 1 && filter_expr.is_none() && src_vids.is_empty() && path_semantic.is_none();
+        step_limit == 1 && step_limits.is_none() && filter_expr.is_none() && src_vids.is_empty() && path_semantic.is_none();
 
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(chunk) = input.advance()? {
@@ -173,6 +182,10 @@ pub(super) fn handle_all(
                         col_names_template: col_names.clone(),
                         cancel_token: cancel_token.clone(),
                         path_semantic: path_semantic.clone(),
+                        edge_required_props: edge_required_props.clone(),
+                        dst_required_props: dst_required_props.clone(),
+                        closed_loop,
+                        skip_rows,
                     },
                 )?;
                 if count > 0 {
@@ -185,25 +198,120 @@ pub(super) fn handle_all(
                 continue;
             }
 
-            let expand_result = if use_fast_path {
-                common::expand_single_step(
-                    chunk,
-                    Arc::clone(&op.output_layout),
-                    &*reader,
-                    src_vids.clone(),
-                    emit_raw_ids,
-                    lightweight_source,
-                    &mut ExpandCtx {
+            let mut ctx = ExpandCtx {
+                space_name,
+                dst_tag,
+                edge_types,
+                direction,
+                filter_expr,
+                col_names_template: col_names.clone(),
+                cancel_token: cancel_token.clone(),
+                path_semantic: path_semantic.clone(),
+                edge_required_props: edge_required_props.clone(),
+                dst_required_props: dst_required_props.clone(),
+                closed_loop,
+                skip_rows,
+            };
+            let expand_result = if let Some(limits) = step_limits.clone() {
+                let var_eligible = !limits.is_empty()
+                    && src_vids.is_empty()
+                    && filter_expr.is_none()
+                    && matches!(
+                        path_semantic,
+                        None | Some(crate::parser::ast::pattern::PathSemantic::Walk)
+                    )
+                    && closed_loop
+                    && common::is_closed_loop_storage(
+                        &*reader,
                         space_name,
-                        dst_tag,
                         edge_types,
                         direction,
-                        filter_expr,
-                        col_names_template: col_names.clone(),
-                        cancel_token: cancel_token.clone(),
-                        path_semantic: path_semantic.clone(),
-                    },
-                )?
+                        dst_tag,
+                    );
+                if var_eligible {
+                    common::expand_variable_frontier(
+                        chunk,
+                        Arc::clone(&op.output_layout),
+                        &*reader,
+                        src_vids.clone(),
+                        &limits,
+                        &mut ctx,
+                    )?
+                } else {
+                    common::expand_variable_row_union(
+                        chunk,
+                        Arc::clone(&op.output_layout),
+                        &*reader,
+                        src_vids.clone(),
+                        &limits,
+                        &mut ctx,
+                    )?
+                }
+            } else if !use_fast_path && step_limit > 1 {
+                let multi_eligible = src_vids.is_empty()
+                    && filter_expr.is_none()
+                    && matches!(
+                        path_semantic,
+                        None | Some(crate::parser::ast::pattern::PathSemantic::Walk)
+                    )
+                    && closed_loop
+                    && common::is_closed_loop_storage(
+                        &*reader,
+                        space_name,
+                        edge_types,
+                        direction,
+                        dst_tag,
+                    );
+                if multi_eligible {
+                    common::expand_multi_hop_frontier(
+                        chunk,
+                        Arc::clone(&op.output_layout),
+                        &*reader,
+                        src_vids.clone(),
+                        step_limit,
+                        &mut ctx,
+                    )?
+                } else {
+                    common::expand_on_chunk(
+                        chunk,
+                        Arc::clone(&op.output_layout),
+                        &*reader,
+                        src_vids.clone(),
+                        step_limit,
+                        &mut ctx,
+                    )?
+                }
+            } else if use_fast_path {
+                if !emit_raw_ids
+                    && closed_loop
+                    && common::is_closed_loop_storage(
+                        &*reader,
+                        space_name,
+                        edge_types,
+                        direction,
+                        dst_tag,
+                    ) {
+                    match common::expand_single_step_columnar(
+                        chunk,
+                        Arc::clone(&op.output_layout),
+                        &*reader,
+                        src_vids.clone(),
+                        &mut ctx,
+                    )? {
+                        Some(out) => Some(out),
+                        None => None,
+                    }
+                } else {
+                    common::expand_single_step(
+                        chunk,
+                        Arc::clone(&op.output_layout),
+                        &*reader,
+                        src_vids.clone(),
+                        emit_raw_ids,
+                        lightweight_source,
+                        &mut ctx,
+                    )?
+                }
             } else {
                 common::expand_on_chunk(
                     chunk,
@@ -211,16 +319,7 @@ pub(super) fn handle_all(
                     &*reader,
                     src_vids.clone(),
                     step_limit,
-                    &mut ExpandCtx {
-                        space_name,
-                        dst_tag,
-                        edge_types,
-                        direction,
-                        filter_expr,
-                        col_names_template: col_names.clone(),
-                        cancel_token: cancel_token.clone(),
-                        path_semantic: path_semantic.clone(),
-                    },
+                    &mut ctx,
                 )?
             };
             if let Some(output) = expand_result {

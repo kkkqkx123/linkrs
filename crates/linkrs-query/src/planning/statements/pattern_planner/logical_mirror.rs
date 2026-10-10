@@ -50,6 +50,7 @@ pub(super) fn logical_filter(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub(super) fn logical_expand_all(
     space_id: u64,
     edge_types: Vec<String>,
@@ -60,6 +61,60 @@ pub(super) fn logical_expand_all(
     path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
     dst_tag: Option<String>,
 ) -> LogicalNodeEnum {
+    logical_expand_all_with_range(
+        space_id,
+        edge_types,
+        direction,
+        any_edge_type,
+        input_var,
+        col_names,
+        path_semantic,
+        dst_tag,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn logical_expand_all_with_range(
+    space_id: u64,
+    edge_types: Vec<String>,
+    direction: &str,
+    any_edge_type: bool,
+    input_var: Option<String>,
+    col_names: Vec<String>,
+    path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
+    dst_tag: Option<String>,
+    range: Option<crate::parser::ast::pattern::EdgeRange>,
+) -> LogicalNodeEnum {
+    let (step_limit, step_limits) = match range {
+        None => (Some(1), None),
+        Some(r) => match (r.min, r.max) {
+            (Some(min), Some(max)) if min == max => (Some(min.max(1) as u32), None),
+            (Some(min), Some(max)) if max > min => {
+                let lo = min.max(1);
+                if max - lo > 64 {
+                    (Some(1), None)
+                } else {
+                    (None, Some((lo..=max).map(|v| v as u32).collect()))
+                }
+            }
+            (None, Some(max)) if max >= 1 => {
+                if max > 64 {
+                    (Some(1), None)
+                } else {
+                    (None, Some((1..=max).map(|v| v as u32).collect()))
+                }
+            }
+            (Some(min), None) => {
+                if min <= 1 {
+                    (Some(1), None)
+                } else {
+                    (Some(min as u32), None)
+                }
+            }
+            _ => (Some(1), None),
+        },
+    };
     LogicalNodeEnum::ExpandAll(LogicalExpandAllNode {
         id: next_node_id(),
         deps: vec![],
@@ -67,8 +122,8 @@ pub(super) fn logical_expand_all(
         edge_types,
         direction: direction.to_string(),
         any_edge_type,
-        step_limit: Some(1),
-        step_limits: None,
+        step_limit,
+        step_limits,
         join_input: false,
         sample: false,
         edge_props: vec![],

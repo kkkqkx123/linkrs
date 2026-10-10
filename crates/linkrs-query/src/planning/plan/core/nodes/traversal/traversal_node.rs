@@ -240,6 +240,22 @@ pub struct ExpandAllNode {
     /// from `EdgePattern::path_semantic` through the logical node.
     path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
     dst_tag: Option<String>,
+    /// Columnar expand annotation: edge property demand (`None` means the
+    /// whole edge value is needed, `Some(vec)` lists the demanded property
+    /// names with empty meaning topology only). Annotated by `ExpandPushdown`.
+    edge_required_props: Option<Box<Vec<String>>>,
+    /// Columnar expand annotation: destination property demand, same encoding
+    /// as the edge demand. Empty when the destination is only counted or only
+    /// feeds the next hop seed.
+    dst_required_props: Option<Box<Vec<String>>>,
+    /// Columnar expand annotation: every involved edge type declares endpoint
+    /// labels compatible with the plan `dst_tag`, so neighbor labels are fully
+    /// determined by schema without per-edge checks.
+    closed_loop: bool,
+    /// Columnar expand annotation: the direct consumer chain is column-capable
+    /// (passthrough/constant project, next seed-tolerant hop, bare count), so
+    /// the hop may skip the row view and emit typed columns only.
+    skip_rows: bool,
 }
 
 impl ExpandAllNode {
@@ -269,6 +285,10 @@ impl ExpandAllNode {
             lightweight_source: false,
             path_semantic: None,
             dst_tag: None,
+            edge_required_props: None,
+            dst_required_props: None,
+            closed_loop: false,
+            skip_rows: false,
         }
     }
 
@@ -426,6 +446,38 @@ impl ExpandAllNode {
 
     pub fn set_lightweight_source(&mut self, lightweight_source: bool) {
         self.lightweight_source = lightweight_source;
+    }
+
+    pub fn edge_required_props(&self) -> Option<&Vec<String>> {
+        self.edge_required_props.as_deref()
+    }
+
+    pub fn set_edge_required_props(&mut self, props: Option<Vec<String>>) {
+        self.edge_required_props = props.map(Box::new);
+    }
+
+    pub fn dst_required_props(&self) -> Option<&Vec<String>> {
+        self.dst_required_props.as_deref()
+    }
+
+    pub fn set_dst_required_props(&mut self, props: Option<Vec<String>>) {
+        self.dst_required_props = props.map(Box::new);
+    }
+
+    pub fn closed_loop(&self) -> bool {
+        self.closed_loop
+    }
+
+    pub fn set_closed_loop(&mut self, closed: bool) {
+        self.closed_loop = closed;
+    }
+
+    pub fn skip_rows(&self) -> bool {
+        self.skip_rows
+    }
+
+    pub fn set_skip_rows(&mut self, skip: bool) {
+        self.skip_rows = skip;
     }
 
     pub fn path_semantic(&self) -> Option<crate::parser::ast::pattern::PathSemantic> {

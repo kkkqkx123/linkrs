@@ -29,6 +29,8 @@ mod lookup;
 mod match_query;
 #[path = "dql/optimizer.rs"]
 mod optimizer;
+#[path = "dql/expand_columnar.rs"]
+mod expand_columnar;
 #[path = "dql/scan_edge_identity.rs"]
 mod scan_edge_identity;
 #[path = "dql/scan_identity.rs"]

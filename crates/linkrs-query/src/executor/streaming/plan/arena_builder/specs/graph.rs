@@ -404,11 +404,16 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
         col_names: node.col_names().to_vec(),
         src_vids: node.src_vids().to_vec(),
         step_limit: node.step_limit().unwrap_or(1),
+        step_limits: node.step_limits().cloned(),
         count_only,
         emit_raw_ids: node.id_only() || node.count_only(),
         lightweight_source: node.lightweight_source(),
         path_semantic: node.path_semantic(),
         dst_tag: node.dst_tag().unwrap_or_default().to_string(),
+        edge_required_props: node.edge_required_props().cloned(),
+        dst_required_props: node.dst_required_props().cloned(),
+        closed_loop: node.closed_loop(),
+        skip_rows: node.skip_rows(),
     })
 }
 

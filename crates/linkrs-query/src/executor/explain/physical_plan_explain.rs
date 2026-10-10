@@ -266,10 +266,15 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         }
 
         // Annotated ExpandAll hops surface their de-materialization mode.
+        // The columnar marker reflects the planner closed-loop claim; the
+        // executor re-verifies it against storage schemas per chunk and falls
+        // back to the row path on mismatch.
         if let crate::executor::streaming::plan::types::OperatorKindSpec::Graph(
             crate::executor::streaming::operators::spec::GraphSpec::ExpandAll {
                 count_only,
                 emit_raw_ids,
+                closed_loop,
+                skip_rows,
                 ..
             },
         ) = &op_spec.spec
@@ -284,6 +289,17 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                 pairs.push(crate::planning::plan::explain::Pair::new("unit", "chunks"));
             } else if *emit_raw_ids {
                 pairs.push(crate::planning::plan::explain::Pair::new("mode", "id_only"));
+            } else if *closed_loop {
+                pairs.push(crate::planning::plan::explain::Pair::new(
+                    "mode",
+                    "columnar",
+                ));
+                if *skip_rows {
+                    pairs.push(crate::planning::plan::explain::Pair::new(
+                        "rows",
+                        "skipped",
+                    ));
+                }
             }
         }
 

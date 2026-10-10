@@ -54,12 +54,6 @@ impl OptimizerEngine {
                     );
                 }
             }
-            if Self::logical_contains_expand_all(&logical.root) {
-                plan.cbo_notes.push(
-                    crate::executor::streaming::operators::graph_operator::expand::expand_all_row_path_note()
-                        .to_string(),
-                );
-            }
             if plan
                 .cbo_notes
                 .iter()
@@ -353,19 +347,5 @@ impl OptimizerEngine {
             | LogicalNodeEnum::VectorLookup(_)
             | LogicalNodeEnum::VectorMatch(_) => vec![],
         }
-    }
-
-    pub(super) fn logical_contains_expand_all(
-        node: &crate::planning::plan::logical::LogicalNodeEnum,
-    ) -> bool {
-        if matches!(
-            node,
-            crate::planning::plan::logical::LogicalNodeEnum::ExpandAll(_)
-        ) {
-            return true;
-        }
-        crate::planning::physical_mapper::logical_children(node)
-            .iter()
-            .any(|child| Self::logical_contains_expand_all(child))
     }
 }

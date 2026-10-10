@@ -70,6 +70,13 @@ const PROBES: &[(&str, &str, usize)] = &[
         EDGE_COUNT,
     ),
     ("edge_count_wide", "LOOKUP ON Link", EDGE_COUNT),
+    // Fixed two-hop chain: every vertex fans out to EDGES_PER_VERTEX
+    // neighbors per hop with duplicates preserved, so the count is exact.
+    (
+        "two_hop",
+        "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)",
+        VERTEX_COUNT * EDGES_PER_VERTEX * EDGES_PER_VERTEX,
+    ),
 ];
 
 fn setup_graph() -> GraphStorage {
@@ -256,7 +263,7 @@ fn bench_probes(c: &mut Criterion) {
             if *label == "flat_projection" || *label == "edge_count_wide" {
                 assert_eq!(rows, *expected, "probe {label} row count changed");
             }
-            if *label == "seed_count" || *label == "edge_count_narrow" {
+            if *label == "seed_count" || *label == "edge_count_narrow" || *label == "two_hop" {
                 assert_eq!(
                     run_count_value(&mut pipeline, query, &space),
                     *expected,

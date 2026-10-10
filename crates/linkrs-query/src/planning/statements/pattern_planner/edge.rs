@@ -11,7 +11,51 @@ use crate::planning::planner::PlannerError;
 use crate::planning::statements::expression_helpers;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 
-use super::logical_mirror::{logical_expand_all, logical_filter, neighbor_tag};
+use super::logical_mirror::{logical_filter, neighbor_tag};
+
+/// Map an edge range to fixed or variable expand steps. Unbounded or illegal
+/// ranges keep the legacy single-hop shape so execution falls back to the row
+/// path instead of changing results.
+fn apply_edge_range(
+    expand_node: &mut ExpandAllNode,
+    range: Option<&crate::parser::ast::pattern::EdgeRange>,
+) {
+    let Some(range) = range else {
+        expand_node.set_step_limit(1);
+        return;
+    };
+    match (range.min, range.max) {
+        (Some(min), Some(max)) if min == max => {
+            expand_node.set_step_limit(min.max(1) as u32);
+        }
+        (Some(min), Some(max)) if max > min => {
+            let lo = min.max(1);
+            let hi = max;
+            if hi - lo > 64 {
+                expand_node.set_step_limit(1);
+                return;
+            }
+            expand_node.set_step_limits((lo..=hi).map(|v| v as u32).collect());
+        }
+        (None, Some(max)) if max >= 1 => {
+            if max > 64 {
+                expand_node.set_step_limit(1);
+                return;
+            }
+            expand_node.set_step_limits((1..=max).map(|v| v as u32).collect());
+        }
+        (Some(min), None) => {
+            if min <= 1 {
+                expand_node.set_step_limit(1);
+            } else {
+                expand_node.set_step_limit(min as u32);
+            }
+        }
+        _ => {
+            expand_node.set_step_limit(1);
+        }
+    }
+}
 
 pub fn plan_pattern_edge(
     edge: &EdgePattern,
@@ -41,14 +85,14 @@ pub fn plan_pattern_edge(
         expand_node.set_any_edge_type(true);
     }
 
-    expand_node.set_step_limit(1);
+    apply_edge_range(&mut expand_node, edge.range.as_ref());
     expand_node.set_path_semantic(edge.path_semantic.clone());
 
     let edge_var = edge.variable.clone().unwrap_or_else(|| "e".to_string());
     expand_node.set_col_names(vec![edge_var.clone()]);
 
     let expand_root = expand_node.into_enum();
-    let mut logical_root = logical_expand_all(
+    let mut logical_root = super::logical_mirror::logical_expand_all_with_range(
         space_id,
         edge.edge_types.clone(),
         direction,
@@ -57,6 +101,7 @@ pub fn plan_pattern_edge(
         vec![edge_var.clone()],
         edge.path_semantic.clone(),
         None,
+        edge.range.clone(),
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),
@@ -144,7 +189,7 @@ pub fn plan_pattern_edge_with_input(
         expand_node.set_any_edge_type(true);
     }
 
-    expand_node.set_step_limit(1);
+    apply_edge_range(&mut expand_node, edge.range.as_ref());
     expand_node.set_path_semantic(edge.path_semantic.clone());
     let dst_tag = neighbor_tag(dst_labels)?;
     expand_node.set_dst_tag(dst_tag.clone());
@@ -163,7 +208,7 @@ pub fn plan_pattern_edge_with_input(
     expand_node.set_include_empty_paths(false);
 
     let expand_root = expand_node.into_enum();
-    let mut logical_root = logical_expand_all(
+    let mut logical_root = super::logical_mirror::logical_expand_all_with_range(
         space_id,
         edge.edge_types.clone(),
         direction,
@@ -172,6 +217,7 @@ pub fn plan_pattern_edge_with_input(
         vec![src_col_name, edge_col_name, dst_col_name],
         edge.path_semantic.clone(),
         Some(dst_tag),
+        edge.range.clone(),
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),

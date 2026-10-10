@@ -375,7 +375,8 @@ impl PartitioningPlanner {
         }
         // C1: every ExpandAll hop must be de-materialized (id_only/count_only)
         // and filter-free, so each partition runs the full bounded chain over
-        // its anchor subrange without changing row semantics.
+        // its anchor subrange without changing row semantics. Other columnar
+        // hops stay on the non-partitioned path by design.
         let hops_ok = chain.iter().all(|n| match n {
             PlanNodeEnum::ExpandAll(expand) => {
                 expand.filter().is_none()
@@ -386,7 +387,7 @@ impl PartitioningPlanner {
         });
         if !hops_ok {
             return Some(Self::fallback(
-                "anchored traversal hops must be filter-free and de-materialized (id_only/count_only)",
+                "anchored traversal hops must be filter-free and de-materialized (id_only/count_only); other columnar hops run unpartitioned",
             ));
         }
         let PlanNodeEnum::ScanVertices(scan) = chain[chain.len() - 1] else {

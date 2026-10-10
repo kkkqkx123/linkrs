@@ -22,6 +22,7 @@ pub enum GraphSpec {
         col_names: Vec<String>,
         src_vids: Vec<Value>,
         step_limit: u32,
+        step_limits: Option<Vec<u32>>,
         /// When true, the expand operator only counts output rows instead of
         /// materializing them. Used when the downstream is a simple COUNT(*)
         /// aggregate with no GROUP BY or other aggregation functions.
@@ -37,6 +38,17 @@ pub enum GraphSpec {
         lightweight_source: bool,
         path_semantic: Option<PathSemantic>,
         dst_tag: String,
+        /// Demanded edge properties (`None` means whole edge, empty means
+        /// topology only). Drives storage projection pushdown.
+        edge_required_props: Option<Vec<String>>,
+        /// Demanded destination properties, same encoding as the edge demand.
+        dst_required_props: Option<Vec<String>>,
+        /// Single-label closed loop proven by the planner syntactically and
+        /// re-verified against storage at execution with row fallback.
+        closed_loop: bool,
+        /// Rowless mode: skip the row view and emit typed columns only. Valid
+        /// only with empty demands, closed loop and a column-capable consumer.
+        skip_rows: bool,
     },
     Traverse {
         edge_types: Vec<String>,

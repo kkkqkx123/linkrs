@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
-use crate::executor::streaming::chunk::{DataChunk, TypedColumn};
+use crate::executor::streaming::chunk::{
+    gather_typed_column, DataChunk, EdgeHeaderColumn, TypedColumn,
+};
 use crate::executor::streaming::context::ValueRowContext;
 use crate::executor::streaming::query_registry::CancelToken;
 use crate::executor::streaming::slot::SlotLayout;
@@ -15,7 +17,7 @@ use crate::storage::QueryStorage;
 use linkrs_core::error::QueryError;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::storage_ids::VertexId;
-use linkrs_core::{Edge, EdgeDirection, Value};
+use linkrs_core::{Edge, EdgeDirection, EdgeHeader, Value};
 
 use super::super::visited_set::VisitedSet;
 use super::ExpandCtx;
@@ -326,6 +328,815 @@ pub(super) fn expand_single_step(
     Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
 }
 
+/// Verify the planner closed-loop claim against storage schemas. Every edge
+/// type must declare endpoint labels and the planned `dst_tag` must match the
+/// neighbor side. An empty plan tag is allowed when all edge types agree on
+/// one neighbor label, which the executor then derives from schema.
+/// Anything else falls back to the row path.
+pub(super) fn is_closed_loop_storage(
+    reader: &dyn QueryStorage,
+    space_name: &str,
+    edge_types: &[String],
+    direction: EdgeDirection,
+    dst_tag: &str,
+) -> bool {
+    closed_loop_dst_tag(reader, space_name, edge_types, direction, dst_tag).is_some()
+}
+
+/// The single agreed neighbor label for a closed loop, or `None` when the
+/// schemas disagree or are untyped. An empty plan tag falls back to the schema
+/// label so anonymous endpoints stay closed-loop.
+pub(super) fn closed_loop_dst_tag(
+    reader: &dyn QueryStorage,
+    space_name: &str,
+    edge_types: &[String],
+    direction: EdgeDirection,
+    dst_tag: &str,
+) -> Option<String> {
+    if edge_types.is_empty() {
+        return None;
+    }
+    let mut agreed: Option<String> = None;
+    for edge_type in edge_types {
+        let Ok(Some(info)) = reader.get_edge_type(space_name, edge_type) else {
+            return None;
+        };
+        if info.src_tag_name.is_empty() || info.dst_tag_name.is_empty() {
+            return None;
+        }
+        let neighbor = match direction {
+            EdgeDirection::Out => info.dst_tag_name.clone(),
+            EdgeDirection::In => info.src_tag_name.clone(),
+            EdgeDirection::Both => {
+                if info.src_tag_name != info.dst_tag_name {
+                    return None;
+                }
+                info.src_tag_name.clone()
+            }
+        };
+        if !dst_tag.is_empty() && neighbor != dst_tag {
+            return None;
+        }
+        match agreed.as_ref() {
+            None => agreed = Some(neighbor),
+            Some(prev) if prev == &neighbor => {}
+            _ => return None,
+        }
+    }
+    agreed
+}
+
+/// Convert the planner edge demand into a storage projection. `None` means the
+/// whole edge (all properties), `Some([])` means topology only.
+fn edge_projection(edge_required: Option<&Vec<String>>) -> Option<Vec<std::sync::Arc<str>>> {
+    match edge_required {
+        None => None,
+        Some(props) => Some(props.iter().map(|s| std::sync::Arc::from(s.as_str())).collect()),
+    }
+}
+
+/// Parse seeds from both row and rowless inputs. Returns the seed ids, the
+/// materialized seed rows for row outputs, and the absolute input positions
+/// for typed gathering in rowless outputs.
+fn parse_seeds(
+    chunk: &DataChunk,
+    seed_slot: usize,
+    src_vids: &[Value],
+) -> (Vec<VertexId>, Vec<Vec<Value>>, Vec<usize>) {
+    let mut vids = Vec::new();
+    let mut rows = Vec::new();
+    let mut positions = Vec::new();
+    let identity = identity_seed_ids(chunk, seed_slot);
+    if !chunk.rows.is_empty() {
+        for (index, row) in visible_rows(chunk) {
+            if let Some(vid) = seed_vid(identity, index, row, seed_slot) {
+                vids.push(vid);
+                rows.push(row.clone());
+                positions.push(index);
+            }
+        }
+    } else if let Some(n) = chunk.typed_len() {
+        let selected: Vec<usize> = chunk
+            .selection()
+            .map(|s| s.to_vec())
+            .unwrap_or_else(|| (0..n).collect());
+        let width = chunk.get_layout().len();
+        for pos in selected {
+            let vid_opt = if let Some(ids) = identity {
+                ids.get(pos).copied()
+            } else {
+                chunk
+                    .get_typed_by_slot(pos, seed_slot)
+                    .and_then(|v| VertexId::try_from(&v).ok())
+            };
+            if let Some(vid) = vid_opt {
+                vids.push(vid);
+                let mut row = Vec::with_capacity(width);
+                for slot in 0..width {
+                    row.push(
+                        chunk
+                            .get_typed_by_slot(pos, slot)
+                            .unwrap_or(Value::Null(linkrs_core::NullType::Null)),
+                    );
+                }
+                rows.push(row);
+                positions.push(pos);
+            }
+        }
+    }
+    if vids.is_empty() && !src_vids.is_empty() {
+        for vid_val in src_vids {
+            if let Ok(vid) = VertexId::try_from(vid_val) {
+                vids.push(vid);
+                rows.push(Vec::new());
+                positions.push(0);
+            }
+        }
+    }
+    (vids, rows, positions)
+}
+
+/// Destination id on one side of an edge for the hop direction.
+fn edge_neighbor(edge: &Edge, seed: &VertexId, direction: EdgeDirection) -> VertexId {
+    match direction {
+        EdgeDirection::Out => *edge.dst(),
+        EdgeDirection::In => *edge.src(),
+        EdgeDirection::Both => {
+            if edge.src() == seed {
+                *edge.dst()
+            } else {
+                *edge.src()
+            }
+        }
+    }
+}
+
+/// Single-step columnar assembly for closed-loop materialized hops.
+///
+/// Uses a projected edge read (topology only when no edge properties are
+/// demanded), filters dangling destinations with one batched vertex read per
+/// tag, and either skips the row view (rowless typed output) or keeps rows
+/// with identity shortcuts for undemanded slots. Falls back to `None` when
+/// there is no output; callers fall back to the legacy row path when the
+/// closed-loop check fails before calling here.
+pub(super) fn expand_single_step_columnar(
+    chunk: DataChunk,
+    output_layout: Arc<SlotLayout>,
+    reader: &dyn QueryStorage,
+    src_vids: Vec<Value>,
+    ctx: &mut ExpandCtx,
+) -> Result<Option<DataChunk>, QueryError> {
+    if !ctx.closed_loop {
+        return Ok(None);
+    }
+    let space_name = ctx.space_name;
+    let edge_types = ctx.edge_types;
+    let direction = ctx.direction;
+    let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
+    let seed_width = if chunk.rows.is_empty() {
+        chunk
+            .typed_len()
+            .map(|_| chunk.get_layout().len())
+            .unwrap_or(0)
+    } else {
+        chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
+    };
+    let input_typed = chunk.typed_columns.clone();
+    let (seed_vids, seed_rows, seed_positions) = parse_seeds(&chunk, seed_slot, &src_vids);
+    if seed_vids.is_empty() {
+        return Ok(None);
+    }
+    let projection = edge_projection(ctx.edge_required_props.clone().as_ref().map(|v| v));
+    let projection_ref = projection.as_deref();
+    let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
+    let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());
+    let rowless = ctx.skip_rows && edge_empty && dst_empty;
+
+    struct PendingEdge {
+        seed_idx: usize,
+        edge: Edge,
+        dst: VertexId,
+    }
+    let mut pending: Vec<PendingEdge> = Vec::new();
+    let mut all_dst: Vec<VertexId> = Vec::new();
+    for (seed_idx, vid) in seed_vids.iter().enumerate() {
+        let edges = reader.get_node_edges_projected(
+            space_name,
+            vid,
+            direction,
+            edge_types,
+            projection_ref,
+            None,
+        )?;
+        for edge in edges {
+            let dst = edge_neighbor(&edge, vid, direction);
+            pending.push(PendingEdge {
+                seed_idx,
+                edge,
+                dst,
+            });
+            all_dst.push(dst);
+        }
+    }
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let dst_tag_owned =
+        closed_loop_dst_tag(reader, space_name, edge_types, direction, ctx.dst_tag)
+            .unwrap_or_else(|| ctx.dst_tag.to_string());
+    let dst_tag = dst_tag_owned.as_str();
+    let vertices = reader.get_vertices_batch(space_name, dst_tag, &all_dst)?;
+    let mut kept: Vec<usize> = Vec::with_capacity(pending.len());
+    for (i, vertex) in vertices.iter().enumerate() {
+        if vertex.is_some() {
+            kept.push(i);
+        }
+    }
+    if kept.is_empty() {
+        return Ok(None);
+    }
+
+    if rowless {
+        let mut edge_src = Vec::with_capacity(kept.len());
+        let mut edge_dst = Vec::with_capacity(kept.len());
+        let mut edge_types_out = Vec::with_capacity(kept.len());
+        let mut rankings = Vec::with_capacity(kept.len());
+        let mut dst_ids = Vec::with_capacity(kept.len());
+        let mut gather_indices = Vec::with_capacity(kept.len());
+        for &i in &kept {
+            let req = &pending[i];
+            edge_src.push(*req.edge.src());
+            edge_dst.push(*req.edge.dst());
+            edge_types_out.push(req.edge.edge_type().to_string());
+            rankings.push(req.edge.ranking());
+            dst_ids.push(req.dst);
+            gather_indices.push(seed_positions[req.seed_idx]);
+        }
+        let mut typed: Vec<TypedColumn> = Vec::with_capacity(seed_width + 2);
+        for slot in 0..seed_width {
+            if let Some(ref cols) = input_typed {
+                if let Some(col) = cols.get(slot) {
+                    typed.push(gather_typed_column(col, &gather_indices));
+                    continue;
+                }
+            }
+            typed.push(TypedColumn::Fallback(
+                kept.iter()
+                    .map(|&i| {
+                        seed_rows[pending[i].seed_idx]
+                            .get(slot)
+                            .cloned()
+                            .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+                    })
+                    .collect(),
+            ));
+        }
+        typed.push(TypedColumn::EdgeHeader(EdgeHeaderColumn::from_parts(
+            edge_src,
+            edge_dst,
+            edge_types_out,
+            rankings,
+        )));
+        typed.push(TypedColumn::VertexIdentity(dst_ids));
+        debug_assert!(
+            typed.iter().all(|c| c.len() == kept.len()),
+            "expand typed arms must stay in lockstep like rows"
+        );
+        let mut out = DataChunk::new_with_layout(Vec::new(), output_layout);
+        out.typed_columns = Some(typed);
+        return Ok(Some(out));
+    }
+
+    let mut out_rows: Vec<Vec<Value>> = Vec::with_capacity(kept.len());
+    let mut edge_src = Vec::with_capacity(kept.len());
+    let mut edge_dst = Vec::with_capacity(kept.len());
+    let mut edge_types_out = Vec::with_capacity(kept.len());
+    let mut rankings = Vec::with_capacity(kept.len());
+    let mut dst_ids = Vec::with_capacity(kept.len());
+    let mut gather_indices = Vec::with_capacity(kept.len());
+    // Destination assembly reuses the batched existence read above: it was
+    // issued with the schema-resolved tag and is aligned with `pending`, so
+    // no per-row point lookup is needed for any demand shape.
+    for &i in &kept {
+        let req = &pending[i];
+        let seed_row = &seed_rows[req.seed_idx];
+        let edge_value = if edge_empty {
+            Value::edge_header(EdgeHeader::new(
+                *req.edge.src(),
+                *req.edge.dst(),
+                req.edge.edge_type().to_string(),
+                req.edge.ranking(),
+            ))
+        } else {
+            Value::Edge(Box::new(req.edge.clone()))
+        };
+        let dst_value = if dst_empty {
+            Value::VertexId(req.dst)
+        } else {
+            match vertices.get(i).and_then(|v| v.clone()) {
+                Some(v) => Value::Vertex(Box::new(v)),
+                None => continue,
+            }
+        };
+        let mut row = Vec::with_capacity(seed_row.len() + 2);
+        row.extend_from_slice(seed_row);
+        row.push(edge_value);
+        row.push(dst_value);
+        out_rows.push(row);
+        edge_src.push(*req.edge.src());
+        edge_dst.push(*req.edge.dst());
+        edge_types_out.push(req.edge.edge_type().to_string());
+        rankings.push(req.edge.ranking());
+        dst_ids.push(req.dst);
+        gather_indices.push(seed_positions[req.seed_idx]);
+    }
+    if out_rows.is_empty() {
+        return Ok(None);
+    }
+    let mut out = DataChunk::new_with_layout(out_rows, Arc::clone(&output_layout));
+    // Seed arms without an input typed column mirror the row view exactly, so
+    // row-based and typed consumers observe the same seed values.
+    let mut typed: Vec<TypedColumn> = Vec::with_capacity(seed_width + 2);
+    for slot in 0..seed_width {
+        if let Some(ref cols) = input_typed {
+            if let Some(col) = cols.get(slot) {
+                typed.push(gather_typed_column(col, &gather_indices));
+                continue;
+            }
+        }
+        typed.push(TypedColumn::Fallback(
+            out.rows
+                .iter()
+                .map(|r| {
+                    r.get(slot)
+                        .cloned()
+                        .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+                })
+                .collect(),
+        ));
+    }
+    if edge_empty {
+        typed.push(TypedColumn::EdgeHeader(EdgeHeaderColumn::from_parts(
+            edge_src,
+            edge_dst,
+            edge_types_out,
+            rankings,
+        )));
+    } else {
+        typed.push(TypedColumn::Fallback(
+            out.rows.iter().map(|r| r[seed_width].clone()).collect(),
+        ));
+    }
+    if dst_empty {
+        typed.push(TypedColumn::VertexIdentity(dst_ids));
+    } else {
+        typed.push(TypedColumn::Fallback(
+            out.rows.iter().map(|r| r[seed_width + 1].clone()).collect(),
+        ));
+    }
+    debug_assert!(
+        typed.iter().all(|c| c.len() == out.rows.len()),
+        "expand typed arms must stay in lockstep like rows"
+    );
+    out.typed_columns = Some(typed);
+    Ok(Some(out))
+}
+
+/// Fixed multi-hop frontier loop for `step_limit = k > 1`.
+///
+/// Intermediate hops run identifier-only through `neighbor_dst_ids_batch`
+/// with duplicates preserved for walk semantics. The tail hop reuses the
+/// single-step columnar assembly so edge and destination demands apply
+/// unchanged.
+pub(super) fn expand_multi_hop_frontier(
+    chunk: DataChunk,
+    output_layout: Arc<SlotLayout>,
+    reader: &dyn QueryStorage,
+    src_vids: Vec<Value>,
+    step_limit: u32,
+    ctx: &mut ExpandCtx,
+) -> Result<Option<DataChunk>, QueryError> {
+    if !ctx.closed_loop {
+        return Ok(None);
+    }
+    if step_limit <= 1 || !src_vids.is_empty() || ctx.filter_expr.is_some() {
+        return Ok(None);
+    }
+    if let Some(sem) = ctx.path_semantic.clone() {
+        if !matches!(sem, PathSemantic::Walk) {
+            return Ok(None);
+        }
+    }
+    if !is_closed_loop_storage(
+        reader,
+        ctx.space_name,
+        ctx.edge_types,
+        ctx.direction,
+        ctx.dst_tag,
+    ) {
+        return Ok(None);
+    }
+    let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
+    let seed_width = if chunk.rows.is_empty() {
+        chunk.get_layout().len()
+    } else {
+        chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
+    };
+    let input_typed = chunk.typed_columns.clone();
+    let (seed_vids, seed_rows, seed_positions) = parse_seeds(&chunk, seed_slot, &src_vids);
+    if seed_vids.is_empty() {
+        return Ok(None);
+    }
+    let mut frontier: Vec<(usize, VertexId)> = seed_vids
+        .iter()
+        .enumerate()
+        .map(|(i, vid)| (i, *vid))
+        .collect();
+    for _ in 1..step_limit {
+        if frontier.is_empty() {
+            return Ok(None);
+        }
+        let ids: Vec<VertexId> = frontier.iter().map(|(_, vid)| *vid).collect();
+        let batches =
+            reader.neighbor_dst_ids_batch(ctx.space_name, &ids, ctx.direction, ctx.edge_types)?;
+        let mut next: Vec<(usize, VertexId)> = Vec::with_capacity(frontier.len().saturating_mul(2));
+        for ((seed_idx, _), neighbors) in frontier.iter().zip(batches.iter()) {
+            for dst in neighbors {
+                next.push((*seed_idx, *dst));
+            }
+        }
+        frontier = next;
+        if frontier.is_empty() {
+            return Ok(None);
+        }
+        if frontier.len() > 1_000_000 {
+            return Err(QueryError::execution(
+                "multi-hop frontier exceeded the in-memory fanout budget".to_string(),
+            ));
+        }
+    }
+    if frontier.is_empty() {
+        return Ok(None);
+    }
+    let projection = edge_projection(ctx.edge_required_props.clone().as_ref().map(|v| v));
+    let projection_ref = projection.as_deref();
+    let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
+    let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());
+    let rowless = ctx.skip_rows && edge_empty && dst_empty;
+    struct TailEdge {
+        orig_idx: usize,
+        edge: Edge,
+        dst: VertexId,
+    }
+    let mut pending: Vec<TailEdge> = Vec::new();
+    let mut all_dst: Vec<VertexId> = Vec::new();
+    for (orig_idx, vid) in frontier.iter() {
+        let edges = reader.get_node_edges_projected(
+            ctx.space_name,
+            vid,
+            ctx.direction,
+            ctx.edge_types,
+            projection_ref,
+            None,
+        )?;
+        for edge in edges {
+            let dst = edge_neighbor(&edge, vid, ctx.direction);
+            pending.push(TailEdge {
+                orig_idx: *orig_idx,
+                edge,
+                dst,
+            });
+            all_dst.push(dst);
+        }
+    }
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let tail_tag_owned = closed_loop_dst_tag(
+        reader,
+        ctx.space_name,
+        ctx.edge_types,
+        ctx.direction,
+        ctx.dst_tag,
+    )
+    .unwrap_or_else(|| ctx.dst_tag.to_string());
+    let tail_tag = tail_tag_owned.as_str();
+    let vertices = reader.get_vertices_batch(ctx.space_name, tail_tag, &all_dst)?;
+    let mut kept: Vec<usize> = Vec::new();
+    for (i, vertex) in vertices.iter().enumerate() {
+        if vertex.is_some() {
+            kept.push(i);
+        }
+    }
+    if kept.is_empty() {
+        return Ok(None);
+    }
+    if rowless {
+        let mut edge_src = Vec::with_capacity(kept.len());
+        let mut edge_dst = Vec::with_capacity(kept.len());
+        let mut edge_types_out = Vec::with_capacity(kept.len());
+        let mut rankings = Vec::with_capacity(kept.len());
+        let mut dst_ids = Vec::with_capacity(kept.len());
+        let mut gather_indices = Vec::with_capacity(kept.len());
+        for &i in &kept {
+            let req = &pending[i];
+            edge_src.push(*req.edge.src());
+            edge_dst.push(*req.edge.dst());
+            edge_types_out.push(req.edge.edge_type().to_string());
+            rankings.push(req.edge.ranking());
+            dst_ids.push(req.dst);
+            gather_indices.push(seed_positions[req.orig_idx]);
+        }
+        let mut typed: Vec<TypedColumn> = Vec::with_capacity(seed_width + 2);
+        for slot in 0..seed_width {
+            if let Some(ref cols) = input_typed {
+                if let Some(col) = cols.get(slot) {
+                    typed.push(gather_typed_column(col, &gather_indices));
+                    continue;
+                }
+            }
+            typed.push(TypedColumn::Fallback(
+                kept.iter()
+                    .map(|&i| {
+                        seed_rows[pending[i].orig_idx]
+                            .get(slot)
+                            .cloned()
+                            .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+                    })
+                    .collect(),
+            ));
+        }
+        typed.push(TypedColumn::EdgeHeader(EdgeHeaderColumn::from_parts(
+            edge_src,
+            edge_dst,
+            edge_types_out,
+            rankings,
+        )));
+        typed.push(TypedColumn::VertexIdentity(dst_ids));
+        debug_assert!(
+            typed.iter().all(|c| c.len() == kept.len()),
+            "expand typed arms must stay in lockstep like rows"
+        );
+        let mut out = DataChunk::new_with_layout(Vec::new(), output_layout);
+        out.typed_columns = Some(typed);
+        return Ok(Some(out));
+    }
+    let mut out_rows: Vec<Vec<Value>> = Vec::with_capacity(kept.len());
+    // Tail destinations reuse the batched read above, which already ran under
+    // the schema-resolved tag. This also keeps anonymous endpoints working:
+    // the plan tag may be empty while the batch tag is resolved.
+    for &i in &kept {
+        let req = &pending[i];
+        let seed_row = &seed_rows[req.orig_idx];
+        let edge_value = if edge_empty {
+            Value::edge_header(EdgeHeader::new(
+                *req.edge.src(),
+                *req.edge.dst(),
+                req.edge.edge_type().to_string(),
+                req.edge.ranking(),
+            ))
+        } else {
+            Value::Edge(Box::new(req.edge.clone()))
+        };
+        let dst_value = if dst_empty {
+            Value::VertexId(req.dst)
+        } else {
+            match vertices.get(i).and_then(|v| v.clone()) {
+                Some(v) => Value::Vertex(Box::new(v)),
+                None => continue,
+            }
+        };
+        let mut row = Vec::with_capacity(seed_row.len() + 2);
+        row.extend_from_slice(seed_row);
+        row.push(edge_value);
+        row.push(dst_value);
+        out_rows.push(row);
+    }
+    if out_rows.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
+}
+
+/// Variable-length frontier loop for `step_limits` ranges.
+///
+/// Walks depths 1..=max with per-depth edge reads so every emitted depth
+/// carries its own edge header and destination. Only depths listed in
+/// `step_limits` are emitted, matching `[*min..max]` union semantics.
+pub(super) fn expand_variable_frontier(
+    chunk: DataChunk,
+    output_layout: Arc<SlotLayout>,
+    reader: &dyn QueryStorage,
+    src_vids: Vec<Value>,
+    step_limits: &[u32],
+    ctx: &mut ExpandCtx,
+) -> Result<Option<DataChunk>, QueryError> {
+    if !ctx.closed_loop {
+        return Ok(None);
+    }
+    if step_limits.is_empty() || !src_vids.is_empty() || ctx.filter_expr.is_some() {
+        return Ok(None);
+    }
+    if let Some(sem) = ctx.path_semantic.clone() {
+        if !matches!(sem, PathSemantic::Walk) {
+            return Ok(None);
+        }
+    }
+    if !is_closed_loop_storage(
+        reader,
+        ctx.space_name,
+        ctx.edge_types,
+        ctx.direction,
+        ctx.dst_tag,
+    ) {
+        return Ok(None);
+    }
+    let max_depth = *step_limits.iter().max().unwrap_or(&0);
+    if max_depth == 0 || max_depth > 64 {
+        return Ok(None);
+    }
+    let wanted: std::collections::HashSet<u32> = step_limits.iter().copied().collect();
+    let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
+    let seed_width = if chunk.rows.is_empty() {
+        chunk.get_layout().len()
+    } else {
+        chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
+    };
+    let input_typed = chunk.typed_columns.clone();
+    let (seed_vids, seed_rows, seed_positions) = parse_seeds(&chunk, seed_slot, &src_vids);
+    if seed_vids.is_empty() {
+        return Ok(None);
+    }
+    let projection = edge_projection(ctx.edge_required_props.clone().as_ref().map(|v| v));
+    let projection_ref = projection.as_deref();
+    let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
+    let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());
+    let rowless = ctx.skip_rows && edge_empty && dst_empty;
+    struct VarEdge {
+        orig_idx: usize,
+        edge: Edge,
+        dst: VertexId,
+    }
+    let mut frontier: Vec<(usize, VertexId)> = seed_vids
+        .iter()
+        .enumerate()
+        .map(|(i, vid)| (i, *vid))
+        .collect();
+    let mut pending: Vec<VarEdge> = Vec::new();
+    let mut all_dst: Vec<VertexId> = Vec::new();
+    for depth in 1..=max_depth {
+        if frontier.is_empty() {
+            break;
+        }
+        let mut next: Vec<(usize, VertexId)> = Vec::new();
+        let mut depth_edges: Vec<VarEdge> = Vec::new();
+        for (orig_idx, vid) in frontier.iter() {
+            let edges = reader.get_node_edges_projected(
+                ctx.space_name,
+                vid,
+                ctx.direction,
+                ctx.edge_types,
+                projection_ref,
+                None,
+            )?;
+            for edge in edges {
+                let dst = edge_neighbor(&edge, vid, ctx.direction);
+                depth_edges.push(VarEdge {
+                    orig_idx: *orig_idx,
+                    edge,
+                    dst,
+                });
+                next.push((*orig_idx, dst));
+            }
+        }
+        if wanted.contains(&depth) {
+            for e in depth_edges.into_iter() {
+                all_dst.push(e.dst);
+                pending.push(e);
+            }
+        }
+        frontier = next;
+        if frontier.len() > 1_000_000 {
+            return Err(QueryError::execution(
+                "variable-length frontier exceeded the in-memory fanout budget".to_string(),
+            ));
+        }
+        if depth == max_depth {
+            break;
+        }
+        if frontier.is_empty() {
+            break;
+        }
+    }
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let var_tag_owned = closed_loop_dst_tag(
+        reader,
+        ctx.space_name,
+        ctx.edge_types,
+        ctx.direction,
+        ctx.dst_tag,
+    )
+    .unwrap_or_else(|| ctx.dst_tag.to_string());
+    let var_tag = var_tag_owned.as_str();
+    let vertices = reader.get_vertices_batch(ctx.space_name, var_tag, &all_dst)?;
+    let mut kept: Vec<usize> = Vec::new();
+    for (i, vertex) in vertices.iter().enumerate() {
+        if vertex.is_some() {
+            kept.push(i);
+        }
+    }
+    if kept.is_empty() {
+        return Ok(None);
+    }
+    if rowless {
+        let mut edge_src = Vec::with_capacity(kept.len());
+        let mut edge_dst = Vec::with_capacity(kept.len());
+        let mut edge_types_out = Vec::with_capacity(kept.len());
+        let mut rankings = Vec::with_capacity(kept.len());
+        let mut dst_ids = Vec::with_capacity(kept.len());
+        let mut gather_indices = Vec::with_capacity(kept.len());
+        for &i in &kept {
+            let req = &pending[i];
+            edge_src.push(*req.edge.src());
+            edge_dst.push(*req.edge.dst());
+            edge_types_out.push(req.edge.edge_type().to_string());
+            rankings.push(req.edge.ranking());
+            dst_ids.push(req.dst);
+            gather_indices.push(seed_positions[req.orig_idx]);
+        }
+        let mut typed: Vec<TypedColumn> = Vec::with_capacity(seed_width + 2);
+        for slot in 0..seed_width {
+            if let Some(ref cols) = input_typed {
+                if let Some(col) = cols.get(slot) {
+                    typed.push(gather_typed_column(col, &gather_indices));
+                    continue;
+                }
+            }
+            typed.push(TypedColumn::Fallback(
+                kept.iter()
+                    .map(|&i| {
+                        seed_rows[pending[i].orig_idx]
+                            .get(slot)
+                            .cloned()
+                            .unwrap_or(Value::Null(linkrs_core::NullType::Null))
+                    })
+                    .collect(),
+            ));
+        }
+        typed.push(TypedColumn::EdgeHeader(EdgeHeaderColumn::from_parts(
+            edge_src,
+            edge_dst,
+            edge_types_out,
+            rankings,
+        )));
+        typed.push(TypedColumn::VertexIdentity(dst_ids));
+        debug_assert!(
+            typed.iter().all(|c| c.len() == kept.len()),
+            "expand typed arms must stay in lockstep like rows"
+        );
+        let mut out = DataChunk::new_with_layout(Vec::new(), output_layout);
+        out.typed_columns = Some(typed);
+        return Ok(Some(out));
+    }
+    let mut out_rows: Vec<Vec<Value>> = Vec::with_capacity(kept.len());
+    // Destinations reuse the batched read above, which already ran under the
+    // schema-resolved tag. This also keeps anonymous endpoints working: the
+    // plan tag may be empty while the batch tag is resolved.
+    for &i in &kept {
+        let req = &pending[i];
+        let seed_row = &seed_rows[req.orig_idx];
+        let edge_value = if edge_empty {
+            Value::edge_header(EdgeHeader::new(
+                *req.edge.src(),
+                *req.edge.dst(),
+                req.edge.edge_type().to_string(),
+                req.edge.ranking(),
+            ))
+        } else {
+            Value::Edge(Box::new(req.edge.clone()))
+        };
+        let dst_value = if dst_empty {
+            Value::VertexId(req.dst)
+        } else {
+            match vertices.get(i).and_then(|v| v.clone()) {
+                Some(v) => Value::Vertex(Box::new(v)),
+                None => continue,
+            }
+        };
+        let mut row = Vec::with_capacity(seed_row.len() + 2);
+        row.extend_from_slice(seed_row);
+        row.push(edge_value);
+        row.push(dst_value);
+        out_rows.push(row);
+    }
+    if out_rows.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
+}
+
 /// Count-only fast path for single-step expand.
 ///
 /// When the downstream is a simple COUNT(*) aggregate, this function avoids
@@ -362,6 +1173,49 @@ pub(super) fn expand_count_only(
 
     let degrees = reader.out_degree_batch(space_name, &seed_vids, direction, edge_types)?;
     Ok(degrees.iter().map(|&d| d as i64).sum())
+}
+
+/// Row-path union for `step_limits` ranges when the frontier loop declines.
+///
+/// Replays the generic single-depth path once per wanted depth and
+/// concatenates the per-depth rows, preserving `[*min..max]` union semantics
+/// on shapes the identifier frontier cannot serve (open schema, literal
+/// seeds, constrained path semantics). Depths are deduplicated; each replay
+/// is an independent chunk so no cross-depth state leaks.
+pub(super) fn expand_variable_row_union(
+    chunk: DataChunk,
+    output_layout: Arc<SlotLayout>,
+    reader: &dyn QueryStorage,
+    src_vids: Vec<Value>,
+    step_limits: &[u32],
+    ctx: &mut ExpandCtx,
+) -> Result<Option<DataChunk>, QueryError> {
+    let mut wanted: Vec<u32> = step_limits.to_vec();
+    wanted.sort_unstable();
+    wanted.dedup();
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    let mut all_rows: Vec<Vec<Value>> = Vec::new();
+    for depth in wanted {
+        if depth == 0 {
+            continue;
+        }
+        if let Some(out) = expand_on_chunk(
+            chunk.clone(),
+            Arc::clone(&output_layout),
+            reader,
+            src_vids.clone(),
+            depth,
+            &mut *ctx,
+        )? {
+            all_rows.extend(out.rows);
+        }
+    }
+    if all_rows.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(DataChunk::new_with_layout(all_rows, output_layout)))
 }
 
 pub(super) fn expand_on_chunk(
