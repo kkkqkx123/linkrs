@@ -355,7 +355,7 @@ impl SelectivityEstimator {
             }
             Expression::Function { name, args } => {
                 let exprs: Vec<Expression> = args.iter().map(|a| a.as_expr().clone()).collect();
-                self.estimate_function_expression(name, &exprs)
+                self.estimate_function_expression(space, tag_name, name, &exprs)
             }
             Expression::Literal(_) => {
                 // The selectivity of literal value conditions depends on the specific values; such conditions are generally considered to be highly selective.
@@ -463,8 +463,16 @@ impl SelectivityEstimator {
                 combined.clamp(0.01, 0.99)
             }
             BinaryOperator::In => {
-                // Estimating the size of the IN list
+                // Estimating the size of the IN list, narrowed by the
+                // property NDV when column statistics are available.
                 let list_size = self.estimate_list_size(right);
+                if let Some(prop) = self
+                    .extract_property_name(left)
+                    .or_else(|| self.extract_property_name(right))
+                {
+                    return self
+                        .estimate_in_selectivity_for_property(space, tag_name, &prop, list_size);
+                }
                 self.estimate_in_selectivity(list_size)
             }
             _ => defaults::EQUALITY,
@@ -511,24 +519,99 @@ impl SelectivityEstimator {
             .and_then(|s| s.null_fraction())
     }
 
+    /// Equality selectivity floor for a property from collected NDV.
+    ///
+    /// Returns `0.0` when no usable statistics exist so callers can keep
+    /// their pattern heuristic untouched. Otherwise `1 / NDV`: a fuzzy or
+    /// prefix match cannot be more selective than the equality on the same
+    /// column, so the heuristic is floored (never shrunk) by this value.
+    /// This only corrects underestimation on low-cardinality columns; on
+    /// high-cardinality columns the pattern heuristic stays as the
+    /// conservative upper bound.
+    fn ndv_equality_floor(
+        &self,
+        space: Option<&str>,
+        tag_name: Option<&str>,
+        property: Option<&str>,
+    ) -> f64 {
+        let Some(prop) = property else {
+            return 0.0;
+        };
+        let Some(space) = space else {
+            return 0.0;
+        };
+        self.stats_manager
+            .get_property_stats(space, tag_name, prop)
+            .map(|s| s.distinct_values)
+            .filter(|ndv| *ndv > 0)
+            .map(|ndv| 1.0 / ndv as f64)
+            .unwrap_or(0.0)
+    }
+
+    /// NDV-aware IN-list selectivity for one property column.
+    ///
+    /// `list_size / NDV` capped at 0.9 when statistics exist; otherwise the
+    /// fixed per-value heuristic.
+    fn estimate_in_selectivity_for_property(
+        &self,
+        space: Option<&str>,
+        tag_name: Option<&str>,
+        property_name: &str,
+        list_size: usize,
+    ) -> f64 {
+        if let Some(space) = space {
+            if let Some(stats) =
+                self.stats_manager
+                    .get_property_stats(space, tag_name, property_name)
+            {
+                if stats.distinct_values > 0 {
+                    return (list_size as f64 / stats.distinct_values as f64).clamp(0.001, 0.9);
+                }
+            }
+        }
+        self.estimate_in_selectivity(list_size)
+    }
+
     /// Estimating the selectivity of function expressions
-    fn estimate_function_expression(&self, name: &str, args: &[Expression]) -> f64 {
+    fn estimate_function_expression(
+        &self,
+        space: Option<&str>,
+        tag_name: Option<&str>,
+        name: &str,
+        args: &[Expression],
+    ) -> f64 {
         let name_lower = name.to_lowercase();
+        let first_property = args.first().and_then(|a| self.extract_property_name(a));
 
         match name_lower.as_str() {
             "like" | "ilike" if args.len() >= 2 => {
                 // Try to extract the LIKE pattern.
                 if let Expression::Literal(linkrs_core::value::Value::String(pattern)) = &args[1] {
-                    return self.estimate_like_selectivity(pattern);
+                    let heuristic = self.estimate_like_selectivity(pattern);
+                    let floor = self.ndv_equality_floor(space, tag_name, first_property.as_deref());
+                    return heuristic.max(floor);
                 }
                 defaults::EQUALITY
             }
             "exists" => defaults::EXISTS,
-            "contains" | "has" => 0.2, // The content to be translated usually has a high degree of selectivity (i.e., only certain parts of the text are to be translated).
-            "starts_with" => 0.1,      // Prefix matching
-            "ends_with" => 0.2,        // Suffix matching
+            "contains" | "has" => {
+                let floor = self.ndv_equality_floor(space, tag_name, first_property.as_deref());
+                0.2_f64.max(floor)
+            }
+            "starts_with" => {
+                let floor = self.ndv_equality_floor(space, tag_name, first_property.as_deref());
+                0.1_f64.max(floor)
+            }
+            "ends_with" => {
+                let floor = self.ndv_equality_floor(space, tag_name, first_property.as_deref());
+                0.2_f64.max(floor)
+            }
             "in" => {
                 let list_size = args.len().saturating_sub(1);
+                if let Some(prop) = first_property {
+                    return self
+                        .estimate_in_selectivity_for_property(space, tag_name, &prop, list_size);
+                }
                 self.estimate_in_selectivity(list_size)
             }
             _ => defaults::EQUALITY,
@@ -654,5 +737,74 @@ mod tests {
             Some("person"),
         );
         assert!((sel - defaults::COMPARISON).abs() < 1e-9, "sel={sel}");
+    }
+
+    fn estimator_with_ndv(
+        space: &str,
+        tag: &str,
+        prop: &str,
+        distinct: u64,
+    ) -> SelectivityEstimator {
+        let manager = Arc::new(StatisticsManager::new());
+        let mut stat = PropertyStatistics::new(prop.to_string(), Some(tag.to_string()));
+        stat.distinct_values = distinct;
+        manager.update_property_stats(space, stat);
+        SelectivityEstimator::new(manager)
+    }
+
+    fn property_expr(prop: &str) -> Expression {
+        Expression::Property {
+            object: Box::new(Expression::Variable("n".to_string())),
+            property: prop.to_string(),
+        }
+    }
+
+    #[test]
+    fn in_list_uses_ndv_when_available() {
+        let est = estimator_with_ndv("s", "person", "age", 100);
+        let expr = Expression::Binary {
+            op: BinaryOperator::In,
+            left: Box::new(property_expr("age")),
+            right: Box::new(Expression::List(vec![
+                Expression::Literal(Value::Int(1)),
+                Expression::Literal(Value::Int(2)),
+                Expression::Literal(Value::Int(3)),
+            ])),
+        };
+        let sel = est.estimate_from_expression(Some("s"), &expr, Some("person"));
+        // 3 / 100 = 0.03, far below the fixed 0.3 heuristic.
+        assert!((sel - 0.03).abs() < 1e-9, "sel={sel}");
+    }
+
+    #[test]
+    fn in_list_without_stats_keeps_heuristic() {
+        let manager = Arc::new(StatisticsManager::new());
+        let est = SelectivityEstimator::new(manager);
+        let expr = Expression::Binary {
+            op: BinaryOperator::In,
+            left: Box::new(property_expr("age")),
+            right: Box::new(Expression::List(vec![
+                Expression::Literal(Value::Int(1)),
+                Expression::Literal(Value::Int(2)),
+                Expression::Literal(Value::Int(3)),
+            ])),
+        };
+        let sel = est.estimate_from_expression(Some("s"), &expr, Some("person"));
+        assert!((sel - 0.3).abs() < 1e-9, "sel={sel}");
+    }
+
+    #[test]
+    fn fuzzy_match_floored_by_ndv_on_low_cardinality() {
+        // Prefix heuristic is 0.1, but with only 2 distinct values the match
+        // cannot be more selective than the 0.5 equality floor.
+        let est = estimator_with_ndv("s", "person", "name", 2);
+        let expr = Expression::Function {
+            name: "starts_with".to_string(),
+            args: vec![linkrs_core::types::expr::FunctionArg::positional(
+                property_expr("name"),
+            )],
+        };
+        let sel = est.estimate_from_expression(Some("s"), &expr, Some("person"));
+        assert!((sel - 0.5).abs() < 1e-9, "sel={sel}");
     }
 }

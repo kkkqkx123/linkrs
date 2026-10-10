@@ -296,6 +296,108 @@ fn logical_expand_applies_stats_fanout_like_physical() {
 }
 
 #[test]
+fn expand_rounds_fractional_degree_instead_of_truncating() {
+    use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+    use crate::planning::plan::logical::logical_nodes::traversal::LogicalExpandNode;
+    use crate::planning::plan::logical::LogicalNodeEnum;
+    use linkrs_core::types::EdgeDirection;
+
+    let (manager, selectivity) = setup();
+    let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
+    tag_stats.vertex_count = 100;
+    manager.update_tag_stats("test", tag_stats);
+    let mut edge_stats = crate::optimizer::stats::EdgeTypeStatistics::new("knows".to_string());
+    edge_stats.avg_out_degree = 2.9;
+    manager.update_edge_stats("test", edge_stats);
+    let view = StatsView::new(&manager, Some("test"));
+
+    let scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+        id: 1,
+        space_id: 1,
+        space_name: "test".to_string(),
+        tag: Some("person".to_string()),
+        expression: None,
+        limit: None,
+        projected_properties: vec![],
+        index_hint: None,
+        estimated_cardinality: None,
+        output_var: None,
+        col_names: vec![],
+        column_types: vec![],
+    });
+    let expand = LogicalNodeEnum::Expand(LogicalExpandNode {
+        id: 2,
+        deps: vec![scan],
+        space_id: 1,
+        edge_types: vec!["knows".to_string()],
+        direction: EdgeDirection::Out,
+        step_limit: None,
+        filter: None,
+        dst_tag: None,
+        output_var: None,
+        col_names: vec![],
+        column_types: vec![],
+    });
+    // Rounded fanout 3, not truncated 2.
+    assert_eq!(
+        estimate_node_output_rows_logical(&expand, &view, &selectivity),
+        300
+    );
+}
+
+#[test]
+fn expand_applies_skew_row_factor() {
+    use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+    use crate::planning::plan::logical::logical_nodes::traversal::LogicalExpandNode;
+    use crate::planning::plan::logical::LogicalNodeEnum;
+    use linkrs_core::types::EdgeDirection;
+
+    let (manager, selectivity) = setup();
+    let mut tag_stats = crate::optimizer::stats::TagStatistics::new("person".to_string());
+    tag_stats.vertex_count = 100;
+    manager.update_tag_stats("test", tag_stats);
+    let mut edge_stats = crate::optimizer::stats::EdgeTypeStatistics::new("knows".to_string());
+    edge_stats.avg_out_degree = 4.0;
+    edge_stats.degree_gini_coefficient = 0.8;
+    edge_stats.max_out_degree = 100;
+    manager.update_edge_stats("test", edge_stats);
+    let view = StatsView::new(&manager, Some("test"));
+
+    let scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
+        id: 1,
+        space_id: 1,
+        space_name: "test".to_string(),
+        tag: Some("person".to_string()),
+        expression: None,
+        limit: None,
+        projected_properties: vec![],
+        index_hint: None,
+        estimated_cardinality: None,
+        output_var: None,
+        col_names: vec![],
+        column_types: vec![],
+    });
+    let expand = LogicalNodeEnum::Expand(LogicalExpandNode {
+        id: 2,
+        deps: vec![scan],
+        space_id: 1,
+        edge_types: vec!["knows".to_string()],
+        direction: EdgeDirection::Out,
+        step_limit: None,
+        filter: None,
+        dst_tag: None,
+        output_var: None,
+        col_names: vec![],
+        column_types: vec![],
+    });
+    // Base fanout 4 times the severe skew row factor 1.5.
+    assert_eq!(
+        estimate_node_output_rows_logical(&expand, &view, &selectivity),
+        600
+    );
+}
+
+#[test]
 fn logical_wco_intersect_is_bounded_by_stats() {
     use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
     use crate::planning::plan::logical::logical_nodes::wco_intersect::LogicalWcoIntersectNode;

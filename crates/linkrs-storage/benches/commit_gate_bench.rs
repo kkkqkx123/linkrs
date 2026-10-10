@@ -18,6 +18,16 @@
 //! Reservation sizing stays at the fixed packed density target; the
 //! reserve-versus-rebuild trade-off is covered by `csr_perf_bench`.
 //!
+//! Two thresholds with different owners: the < 5% verdict below only gates
+//! whether per-key sharding of the commit path is worth reviewing (the gate
+//! is intentionally global-serial, and commit ordering plus WAL durability
+//! serialize below it regardless, so sharding needs true-machine data, never
+//! a constrained-box number alone). The >= 20% batching guidance printed
+//! alongside it (shared with `WriteGateStats::contention_advice`) tells
+//! callers when to prefer `batch_insert_edges` or a `begin_auto_commit_group`
+//! window over per-statement auto-commit. A high gate share means "batch your
+//! writes", not "shard the gate".
+//!
 //! Capacity contract, frozen for all callers: one batch is one atomic unit;
 //! a batch holds the table lock for the whole apply with prefix rollback on
 //! failure; batches of tens of thousands of entries are correct but callers
@@ -41,7 +51,9 @@ use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{DataType, Value, Vertex};
 use linkrs_storage::edge::edge_table::config::EdgeTableConfig;
 use linkrs_storage::edge::{EdgeSchema, EdgeStore, RecordForm};
-use linkrs_storage::{GraphStorage, StorageOperationContextOps, StorageSchemaOps, StorageWriter};
+use linkrs_storage::{
+    GraphStorage, StorageOperationContextOps, StorageSchemaOps, StorageWriter, WriteGateStats,
+};
 
 // ── staging leg ─────────────────────────────────────────────────────────────
 
@@ -294,12 +306,13 @@ fn run_gate_share() {
     let mut share_at_max = 0.0;
     for &threads in &THREADS {
         let r = run_concurrent_writers(&storage, threads, &next_id);
-        let total_thread_time_ns = r.wall.as_nanos() as u64 * threads as u64;
-        let share = if total_thread_time_ns > 0 {
-            r.gate_wait_nanos as f64 / total_thread_time_ns as f64
-        } else {
-            0.0
+        // Single share definition shared with the engine advice helper:
+        // waited nanos over wall * threads.
+        let after = WriteGateStats {
+            acquisitions: r.acquisitions,
+            wait_nanos: r.gate_wait_nanos,
         };
+        let share = after.share_since(&WriteGateStats::default(), r.wall, threads);
         if threads == THREADS[THREADS.len() - 1] {
             share_at_max = share;
         }
@@ -326,6 +339,10 @@ fn run_gate_share() {
             THREADS[THREADS.len() - 1]
         );
     }
+    println!(
+        "guidance: {}",
+        WriteGateStats::contention_advice(share_at_max)
+    );
 }
 
 fn main() {

@@ -59,6 +59,17 @@ impl OptimizerEngine {
 
         current_plan = self.apply_partitioning_selection(current_plan, space, layout);
 
+        // Row estimates are collected last so the per-node map keys match the
+        // final plan ids: physical mapping and the physical heuristic rebuild
+        // scan/filter nodes with fresh ids after cost-based decisions, and a
+        // mid-pipeline map misses them (scan est_rows=1, filter est_rows=0.5
+        // fallbacks in EXPLAIN). Decisions already consumed direct estimator
+        // calls, so only the writeback map and feedback baselines move here.
+        {
+            let stats = StatsView::new(&self.stats_manager, space);
+            self.apply_row_estimates(&mut current_plan, &stats);
+        }
+
         Ok(current_plan)
     }
 
@@ -226,7 +237,6 @@ impl OptimizerEngine {
         self.apply_topn_wiring(space, plan, stats);
         self.apply_topn_wiring_logical(stats, space, plan);
         self.apply_aggregate_strategy_logical(stats, space, plan);
-        self.apply_row_estimates(plan, stats);
         self.apply_precompute_notes(space, plan);
         Ok(())
     }
@@ -283,7 +293,6 @@ impl OptimizerEngine {
             plan.cbo_notes.extend(notes);
         }
 
-        self.apply_row_estimates(plan, stats);
         self.apply_precompute_notes(space, plan);
         Ok(())
     }

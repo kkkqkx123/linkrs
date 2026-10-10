@@ -12,7 +12,7 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::PlanNodeEnum;
 
 use super::cardinality::corrected_rows;
-use super::stats::{stats_fanout, DEFAULT_FILTER_SELECTIVITY, DEFAULT_NEIGHBORHOOD_FANOUT};
+use super::stats::{stats_fanout_skewed, DEFAULT_FILTER_SELECTIVITY, DEFAULT_NEIGHBORHOOD_FANOUT};
 
 /// Estimate the output row count of a logical node, post-order.
 ///
@@ -265,32 +265,34 @@ fn estimate_node_output_rows_impl(
         }
 
         // ── Traversal / apply operators ──
+        // Expansion fanouts are skew-aware so skewed neighborhoods price
+        // like the traversal cost estimator; uniform graphs are unaffected.
         Expand(n) => {
-            let fanout = stats_fanout(stats, n.edge_types());
+            let fanout = stats_fanout_skewed(stats, n.edge_types());
             let raw =
                 child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         ExpandAll(n) => {
-            let fanout = stats_fanout(stats, n.edge_types());
+            let fanout = stats_fanout_skewed(stats, n.edge_types());
             let raw =
                 child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         Traverse(n) => {
-            let fanout = stats_fanout(stats, n.edge_types());
+            let fanout = stats_fanout_skewed(stats, n.edge_types());
             let raw =
                 child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         BiExpand(n) => {
-            let fanout = stats_fanout(stats, n.edge_types());
+            let fanout = stats_fanout_skewed(stats, n.edge_types());
             let raw =
                 child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
             corrected_rows(node, raw, stats.space(), cardinality)
         }
         BiTraverse(n) => {
-            let fanout = stats_fanout(stats, n.edge_types());
+            let fanout = stats_fanout_skewed(stats, n.edge_types());
             let raw =
                 child_rows_of_impl(node, stats, selectivity, cardinality).saturating_mul(fanout);
             corrected_rows(node, raw, stats.space(), cardinality)

@@ -89,7 +89,7 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
             .find_map(|edge_type| {
                 stats
                     .edge_stats(edge_type)
-                    .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+                    .map(|s| (s.avg_out_degree.round().max(0.0)) as u64)
             })
             .filter(|fanout| *fanout > 0)
             .unwrap_or(DEFAULT_FANOUT)
@@ -474,7 +474,7 @@ fn estimate_leaf_rows_logical(node: &LogicalNodeEnum, stats: &StatsView) -> u64 
                 .find_map(|edge_type| {
                     stats
                         .edge_stats(edge_type)
-                        .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+                        .map(|s| (s.avg_out_degree.round().max(0.0)) as u64)
                 })
                 .filter(|fanout| *fanout > 0)
                 .unwrap_or(DEFAULT_FANOUT);
@@ -489,7 +489,7 @@ fn estimate_leaf_rows_logical(node: &LogicalNodeEnum, stats: &StatsView) -> u64 
                 .find_map(|edge_type| {
                     stats
                         .edge_stats(edge_type)
-                        .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+                        .map(|s| (s.avg_out_degree.round().max(0.0)) as u64)
                 })
                 .filter(|fanout| *fanout > 0)
                 .unwrap_or(DEFAULT_FANOUT);
@@ -507,7 +507,7 @@ fn estimate_leaf_rows_logical(node: &LogicalNodeEnum, stats: &StatsView) -> u64 
                 .find_map(|edge_type| {
                     stats
                         .edge_stats(edge_type)
-                        .map(|s| (s.avg_out_degree.max(0.0)) as u64)
+                        .map(|s| (s.avg_out_degree.round().max(0.0)) as u64)
                 })
                 .filter(|fanout| *fanout > 0)
                 .unwrap_or(DEFAULT_FANOUT);

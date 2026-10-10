@@ -10,7 +10,7 @@ use crate::optimizer::stats::StatsView;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 
-use super::stats::{stats_fanout, DEFAULT_FILTER_SELECTIVITY, DEFAULT_NEIGHBORHOOD_FANOUT};
+use super::stats::{stats_fanout_skewed, DEFAULT_FILTER_SELECTIVITY, DEFAULT_NEIGHBORHOOD_FANOUT};
 
 /// Estimate the output row count of a logical node, post-order.
 ///
@@ -205,23 +205,23 @@ pub fn estimate_node_output_rows_logical(
         // ── Traversal operators (mirror the physical fanout arms so logical
         // decisions such as aggregate strategy price the same expansion) ──
         Expand(n) => {
-            let fanout = stats_fanout(stats, &n.edge_types);
+            let fanout = stats_fanout_skewed(stats, &n.edge_types);
             child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
         }
         ExpandAll(n) => {
-            let fanout = stats_fanout(stats, &n.edge_types);
+            let fanout = stats_fanout_skewed(stats, &n.edge_types);
             child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
         }
         Traverse(n) => {
-            let fanout = stats_fanout(stats, &n.edge_types);
+            let fanout = stats_fanout_skewed(stats, &n.edge_types);
             child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
         }
         BiExpand(n) => {
-            let fanout = stats_fanout(stats, &n.edge_types);
+            let fanout = stats_fanout_skewed(stats, &n.edge_types);
             child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
         }
         BiTraverse(n) => {
-            let fanout = stats_fanout(stats, &n.edge_types);
+            let fanout = stats_fanout_skewed(stats, &n.edge_types);
             child_rows_of_logical(node, stats, selectivity).saturating_mul(fanout)
         }
         AppendVertices(_) => child_rows_of_logical(node, stats, selectivity)

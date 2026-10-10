@@ -43,6 +43,13 @@
 //! per-batch commit times across distributions and sizes, and the write-gate
 //! bench records the gate-wait share bounding the sharding decision;
 //! chunking follows those measurements, never a parallel-write change.
+//! Per-statement auto-commit stays global-serial by design; at or above 20%
+//! gate-wait share callers batch through `batch_insert_edges` or a
+//! `begin_auto_commit_group` window instead of adding finer locks below the
+//! gate (see `WriteGateStats::contention_advice`). Sharding the gate itself
+//! is only reviewed against true-machine data, never a constrained-box
+//! share alone, since commit ordering and WAL durability serialize below it
+//! regardless.
 
 use linkrs_core::types::{EdgeId, Timestamp};
 use linkrs_core::Value;

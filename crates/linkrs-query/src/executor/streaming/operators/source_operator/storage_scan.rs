@@ -343,16 +343,36 @@ fn build_column_chunk(
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
 
+    // Flat-column routing resolved once per batch: column index -> flat
+    // output position, so per-row assembly reads each needed column value
+    // directly instead of re-scanning the column list and hashing through
+    // the freshly built vertex properties per projected property.
+    let mut col_to_flat: Vec<Option<usize>> = vec![None; batch.columns.len()];
+    for (flat_pos, prop) in flatten.iter().enumerate() {
+        if let Some(col_idx) = batch
+            .columns
+            .iter()
+            .position(|c| c.name.as_ref() == prop.as_ref())
+        {
+            col_to_flat[col_idx] = Some(flat_pos);
+        }
+    }
+
     // Row view is still emitted for downstream operators, but the typed
     // layout is converted directly from the storage batch without an
     // intermediate per-cell `Value` matrix: rows read via `value_at` once,
     // typed columns convert straight from `ColumnValues` with validity
     // bitmaps.
+    let null = Value::Null(linkrs_core::value::NullType::Null);
     let mut rows = Vec::with_capacity(row_count);
     for (row, tag_name) in batch.tag_names.iter().enumerate() {
         let mut properties = std::collections::HashMap::with_capacity(batch.columns.len());
-        for column in batch.columns.iter() {
+        let mut flat_values = vec![None; flatten.len()];
+        for (col_idx, column) in batch.columns.iter().enumerate() {
             if let Some(value) = column.values.value_at(row) {
+                if let Some(flat_pos) = col_to_flat[col_idx] {
+                    flat_values[flat_pos] = Some(value.clone());
+                }
                 properties.insert(column.name.clone(), value);
             }
         }
@@ -361,16 +381,12 @@ fn build_column_chunk(
             linkrs_core::Tag::new(tag_name.clone(), properties),
         );
         let mut row_vec = Vec::with_capacity(flatten.len() + 1);
-        let flat_values: Vec<Value> = flatten
-            .iter()
-            .map(|prop| {
-                vertex
-                    .property_value(prop)
-                    .unwrap_or_else(|| Value::Null(linkrs_core::value::NullType::Null))
-            })
-            .collect();
         row_vec.push(Value::Vertex(Box::new(vertex)));
-        row_vec.extend(flat_values);
+        row_vec.extend(
+            flat_values
+                .into_iter()
+                .map(|v| v.unwrap_or_else(|| null.clone())),
+        );
         rows.push(row_vec);
     }
 
@@ -570,8 +586,11 @@ fn next_edge_column_chunk(
         Some(c) => c,
         None => return Ok(None),
     };
+    // Same fixed execution batch as the vertex path so vectorized batches
+    // stay aligned end to end.
+    let fixed_batch = op.config.chunk_size.clamp(1, 2048);
     let batch = cur
-        .next_column_batch(projected_properties, op.config.chunk_size)
+        .next_column_batch(projected_properties, fixed_batch)
         .map_err(|error| storage_error(source, "read edge column batch", space_name, error))?;
     if batch.is_empty() {
         return Ok(None);
@@ -593,6 +612,21 @@ fn build_edge_column_chunk(
     let layout = Arc::clone(output_layout);
     let row_count = batch.len();
 
+    // Same per-batch flat-column routing as the vertex path: resolve the
+    // projected property -> column index mapping once instead of hashing
+    // through the freshly built edge properties per row per property.
+    let mut col_to_flat: Vec<Option<usize>> = vec![None; batch.columns.len()];
+    for (flat_pos, prop) in flatten.iter().enumerate() {
+        if let Some(col_idx) = batch
+            .columns
+            .iter()
+            .position(|c| c.name.as_ref() == prop.as_ref())
+        {
+            col_to_flat[col_idx] = Some(flat_pos);
+        }
+    }
+
+    let null = Value::Null(linkrs_core::value::NullType::Null);
     let mut rows = Vec::with_capacity(row_count);
     for (row, (src, dst, edge_type, ranking)) in batch
         .srcs
@@ -604,8 +638,12 @@ fn build_edge_column_chunk(
         .enumerate()
     {
         let mut properties = std::collections::HashMap::with_capacity(batch.columns.len());
-        for column in batch.columns.iter() {
+        let mut flat_values = vec![None; flatten.len()];
+        for (col_idx, column) in batch.columns.iter().enumerate() {
             if let Some(value) = column.values.value_at(row) {
+                if let Some(flat_pos) = col_to_flat[col_idx] {
+                    flat_values[flat_pos] = Some(value.clone());
+                }
                 properties.insert(column.name.clone(), value);
             }
         }
@@ -616,17 +654,13 @@ fn build_edge_column_chunk(
             ranking: *ranking,
             props: properties,
         };
-        let flat_values: Vec<Value> = flatten
-            .iter()
-            .map(|prop| {
-                edge.get_property(prop)
-                    .cloned()
-                    .unwrap_or_else(|| Value::Null(linkrs_core::value::NullType::Null))
-            })
-            .collect();
         let mut row_vec = Vec::with_capacity(flatten.len() + 1);
         row_vec.push(Value::Edge(Box::new(edge)));
-        row_vec.extend(flat_values);
+        row_vec.extend(
+            flat_values
+                .into_iter()
+                .map(|v| v.unwrap_or_else(|| null.clone())),
+        );
         rows.push(row_vec);
     }
 
