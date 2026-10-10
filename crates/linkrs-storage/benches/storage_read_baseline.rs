@@ -163,9 +163,16 @@ fn main() {
             let space = format!("read_{label}");
             let limit = n as usize;
 
+            let proj_col = if label == "narrow" { "v" } else { "v0" };
             let (full_256_us, full_256_rows) = bench_scan(&storage, &space, limit, None, 256, 7);
-            let (proj_256_us, proj_256_rows) =
-                bench_scan(&storage, &space, limit, Some(&["v0".to_string()]), 256, 7);
+            let (proj_256_us, proj_256_rows) = bench_scan(
+                &storage,
+                &space,
+                limit,
+                Some(&[proj_col.to_string()]),
+                256,
+                7,
+            );
             let (full_4096_us, full_4096_rows) = bench_scan(&storage, &space, limit, None, 4096, 7);
 
             let proj_ratio = full_256_us / proj_256_us;

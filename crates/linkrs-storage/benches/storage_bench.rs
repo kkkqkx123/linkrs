@@ -669,7 +669,7 @@ fn build_indexed_vertex(id: i64) -> Vertex {
         Tag::new(
             "Node".to_string(),
             [
-                ("name".into(), Value::string(format!("node_{id}"))),
+                ("name".into(), Value::string(format!("{id}"))),
                 ("age".into(), Value::Int(id as i32)),
                 (
                     Arc::from("city"),

@@ -951,7 +951,8 @@ impl HashPartitionSpiller {
 /// Manages spill-file creation, cleanup, and tracking for one query execution.
 ///
 /// Creates a unique subdirectory under `temp_dir` on construction and removes
-/// it (including all spill files) on drop.
+/// it on drop only when empty; recursive cleanup is explicit via
+/// `register_cleanup` at query end.
 #[derive(Debug)]
 pub struct SpillManager {
     pub(crate) config: SpillConfig,
@@ -1001,6 +1002,8 @@ impl SpillManager {
                 self.config.max_spill_files,
             )));
         }
+        std::fs::create_dir_all(&self.base_dir)
+            .map_err(|e| QueryError::execution(format!("recreate spill dir: {}", e)))?;
         let path = self.base_dir.join(format!("run_{:016x}.run", id));
         let file = std::fs::File::create(&path)
             .map_err(|e| QueryError::execution(format!("create run file: {}", e)))?;
@@ -1114,7 +1117,7 @@ pub fn finalize_partitions_with_runtime(
 
 impl Drop for SpillManager {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.base_dir);
+        let _ = std::fs::remove_dir(&self.base_dir);
     }
 }
 

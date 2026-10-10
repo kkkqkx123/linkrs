@@ -42,6 +42,7 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
             b.to_async(&rt).iter(|| {
                 let mgr = m.clone();
                 async move {
+                    let _ = mgr.drop_index(1, "Article", "content").await;
                     mgr.create_index(1, "Article", "content", Some(EngineType::Bm25))
                         .await
                         .expect("create");
@@ -67,6 +68,7 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
 
 #[cfg(not(feature = "fulltext"))]
 fn bench_fulltext_index_build(c: &mut Criterion) {
+    eprintln!("fulltext feature disabled: index_build bench is a placeholder, run with --features fulltext");
     let mut group = c.benchmark_group("fulltext_index_build");
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(50);
@@ -140,6 +142,9 @@ fn bench_fulltext_search(c: &mut Criterion) {
 
 #[cfg(not(feature = "fulltext"))]
 fn bench_fulltext_search(c: &mut Criterion) {
+    eprintln!(
+        "fulltext feature disabled: search bench is a placeholder, run with --features fulltext"
+    );
     let mut group = c.benchmark_group("fulltext_search");
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(50);

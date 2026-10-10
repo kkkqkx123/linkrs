@@ -291,6 +291,7 @@ fn run_gate_share() {
     );
     let storage = gate_setup();
     let next_id = Arc::new(AtomicU64::new(1));
+    let mut share_at_max = 0.0;
     for &threads in &THREADS {
         let r = run_concurrent_writers(&storage, threads, &next_id);
         let total_thread_time_ns = r.wall.as_nanos() as u64 * threads as u64;
@@ -299,6 +300,9 @@ fn run_gate_share() {
         } else {
             0.0
         };
+        if threads == THREADS[THREADS.len() - 1] {
+            share_at_max = share;
+        }
         println!(
             "{:>7} | {:>10.2} | {:>12.0} | {:>11.2} | {:>10} | {:>8.2}%",
             threads,
@@ -309,7 +313,19 @@ fn run_gate_share() {
             share * 100.0
         );
     }
-    println!("\nresult: gate wait share < 5% at N=16 -> sharding not justified");
+    if share_at_max < 0.05 {
+        println!(
+            "\nresult: gate wait share {:.2}% at N={} (< 5%) -> sharding not justified",
+            share_at_max * 100.0,
+            THREADS[THREADS.len() - 1]
+        );
+    } else {
+        println!(
+            "\nresult: gate wait share {:.2}% at N={} (>= 5%) -> review sharding",
+            share_at_max * 100.0,
+            THREADS[THREADS.len() - 1]
+        );
+    }
 }
 
 fn main() {

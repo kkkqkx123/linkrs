@@ -76,9 +76,12 @@ fn build_data(partitions: usize) -> Arc<RwLock<GraphStorage>> {
                         .expect("valid vertex id"),
                     Tag::new(
                         tag.clone(),
-                        [("value".into(), Value::BigInt(i as i64))]
-                            .into_iter()
-                            .collect(),
+                        [(
+                            "value".into(),
+                            Value::BigInt(p as i64 * TOTAL_EDGES as i64 + i as i64),
+                        )]
+                        .into_iter()
+                        .collect(),
                     ),
                 )
             })

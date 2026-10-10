@@ -58,7 +58,7 @@ fn setup_graph(vertex_count: usize, edges_per_vertex: usize) -> GraphStorage {
             Tag::new(
                 "Node".to_string(),
                 vec![
-                    ("name".into(), Value::string(format!("node_{}", i))),
+                    ("name".into(), Value::string(format!("n{i}"))),
                     ("value".into(), Value::Double(i as f64 * 0.1)),
                 ]
                 .into_iter()
@@ -121,7 +121,7 @@ fn setup_large_graph(vertex_count: u64, edges_per_vertex: usize) -> GraphStorage
             Tag::new(
                 "Node".to_string(),
                 vec![
-                    ("name".into(), Value::string(format!("node_{}", i))),
+                    ("name".into(), Value::string(format!("{i}"))),
                     ("value".into(), Value::Double(i as f64 * 0.1)),
                 ]
                 .into_iter()
@@ -518,7 +518,7 @@ fn setup_query_graph() -> Arc<RwLock<GraphStorage>> {
             Tag::new(
                 "Node".to_string(),
                 vec![
-                    ("name".into(), Value::string(format!("node_{}", i))),
+                    ("name".into(), Value::string(format!("{i}"))),
                     ("value".into(), Value::Double(i as f64 * 0.1)),
                 ]
                 .into_iter()

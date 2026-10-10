@@ -17,7 +17,7 @@ fn setup_vertices(storage: &mut GraphStorage, space: &str, count: usize) {
             Tag::new(
                 "Node".to_string(),
                 vec![
-                    ("name".into(), Value::string(format!("vertex_{}", i))),
+                    ("name".into(), Value::string(format!("v{i}"))),
                     ("value".into(), Value::Int(i as i32)),
                 ]
                 .into_iter()
