@@ -41,6 +41,11 @@ pub async fn start_http_server<
             "http.https_enabled is not served by this build; terminate TLS upstream and leave it disabled",
         ));
     }
+    if !config.server.http.enabled {
+        return Err(linkrs_core::DBError::validation(
+            "http.enabled is false; nothing to serve in http-only mode",
+        ));
+    }
 
     let state = crate::http::AppState::new(server.clone());
 
@@ -113,34 +118,51 @@ pub async fn start_http_and_grpc_servers<
         }
     };
 
+    let http_enabled = config.server.http.enabled;
+    let grpc_enabled = config.server.grpc.enabled;
+    if !http_enabled && !grpc_enabled {
+        return Err(linkrs_core::DBError::validation(
+            "at least one of http.enabled and grpc.enabled must be true",
+        ));
+    }
+
     let http_app = crate::http::router::create_router(http_state.clone(), web_router);
-
-    // Setup gRPC address
-    let grpc_addr = format!("{}:{}", config.grpc_bind_address(), config.grpc_port())
-        .parse::<std::net::SocketAddr>()
-        .map_err(|e| linkrs_core::error::DBError::internal(e.to_string()))?;
-
-    // Setup HTTP address
-    let http_addr = format!("{}:{}", config.http_bind_address(), config.http_port());
-
-    info!("HTTP server listening on {}", http_addr);
-    info!("gRPC server listening on {}", grpc_addr);
 
     // Clone state for gRPC server
     let grpc_state = http_state.clone();
     let grpc_config = config.clone();
+    let http_bind = config.http_bind_address().to_string();
+    let http_port = config.http_port();
 
-    // Start HTTP server
+    // Start HTTP server when enabled, otherwise wait for shutdown only.
     let http_future = async move {
+        if !http_enabled {
+            async_shutdown_signal().await;
+            return Ok::<(), linkrs_core::error::DBError>(());
+        }
+        let http_addr = format!("{}:{}", http_bind, http_port);
         let http_listener = TcpListener::bind(&http_addr).await?;
+        info!("HTTP server listening on {}", http_addr);
         serve(http_listener, http_app)
             .with_graceful_shutdown(async_shutdown_signal())
             .await?;
         Ok::<(), linkrs_core::error::DBError>(())
     };
 
-    // Start gRPC server
+    // Start gRPC server when enabled, otherwise wait for shutdown only.
     let grpc_future = async move {
+        if !grpc_enabled {
+            async_shutdown_signal().await;
+            return Ok::<(), linkrs_core::error::DBError>(());
+        }
+        let grpc_addr = format!(
+            "{}:{}",
+            grpc_state.server.get_config().grpc_bind_address(),
+            grpc_state.server.get_config().grpc_port()
+        )
+        .parse::<std::net::SocketAddr>()
+        .map_err(|e| linkrs_core::error::DBError::internal(e.to_string()))?;
+        info!("gRPC server listening on {}", grpc_addr);
         crate::grpc::run_server(grpc_state, grpc_config, grpc_addr)
             .await
             .map_err(|e| linkrs_core::error::DBError::internal(e.to_string()))?;

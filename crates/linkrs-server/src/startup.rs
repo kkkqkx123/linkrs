@@ -222,13 +222,13 @@ pub async fn start_service_with_config_path(
                         .expect("Failed to create FulltextIndexManager"),
                 );
 
-                use linkrs_fulltext::{SyncConfig, SyncFailurePolicy};
+                use linkrs_fulltext::SyncConfig;
 
                 let sync_config = SyncConfig {
-                    queue_size: 10000,
-                    commit_interval_ms: 1000,
-                    batch_size: 100,
-                    failure_policy: SyncFailurePolicy::FailOpen,
+                    queue_size: config.fulltext.sync.queue_size,
+                    commit_interval_ms: config.fulltext.sync.commit_interval_ms,
+                    batch_size: config.fulltext.sync.batch_size,
+                    failure_policy: config.fulltext.sync.failure_policy,
                 };
 
                 let batch_config = linkrs_sync::batch::BatchConfig::from(sync_config.clone());
@@ -495,13 +495,43 @@ pub async fn start_service_with_config_path(
     ));
     info!("HTTP server created");
 
-    info!(
-        "Starting HTTP server on {}:{}",
-        config.http_bind_address(),
-        config.http_port()
-    );
+    let http_enabled = config.server.http.enabled;
+    let grpc_enabled = {
+        #[cfg(feature = "grpc")]
+        {
+            config.server.grpc.enabled
+        }
+        #[cfg(not(feature = "grpc"))]
+        {
+            false
+        }
+    };
+    if !http_enabled && !grpc_enabled {
+        return Err(linkrs_core::DBError::validation(
+            "at least one of http.enabled and grpc.enabled must be true",
+        ));
+    }
 
-    // Start HTTP server
+    if http_enabled {
+        info!(
+            "Starting HTTP server on {}:{}",
+            config.http_bind_address(),
+            config.http_port()
+        );
+    }
+    if grpc_enabled {
+        info!(
+            "Starting gRPC server on {}:{}",
+            config.grpc_bind_address(),
+            config.grpc_port()
+        );
+    }
+
+    #[cfg(feature = "grpc")]
+    if let Err(e) = super::start_http_and_grpc_servers(http_server, &config).await {
+        error!("HTTP/gRPC server error: {}", e);
+    }
+    #[cfg(not(feature = "grpc"))]
     if let Err(e) = super::start_http_server(http_server, &config).await {
         error!("HTTP server error: {}", e);
     }

@@ -201,10 +201,6 @@ impl PasswordPolicyConfig {
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
-    /// SSL/TLS configuration
-    #[serde(default)]
-    pub ssl: SslConfig,
-
     /// Audit logging configuration
     #[serde(default)]
     pub audit: AuditConfig,
@@ -217,15 +213,9 @@ pub struct SecurityConfig {
 impl SecurityConfig {
     /// Validate all security configurations
     pub fn validate(&self) -> Result<(), String> {
-        self.ssl.validate()?;
         self.audit.validate()?;
         self.password_policy.validate()?;
         Ok(())
-    }
-
-    /// Check if SSL is properly configured
-    pub fn is_ssl_configured(&self) -> bool {
-        self.ssl.is_configured()
     }
 
     /// Check if audit logging is enabled
@@ -339,7 +329,6 @@ mod tests {
     #[test]
     fn test_security_config_default() {
         let config = SecurityConfig::default();
-        assert!(!config.is_ssl_configured());
         assert!(!config.is_audit_enabled());
         assert!(config.validate().is_ok());
     }

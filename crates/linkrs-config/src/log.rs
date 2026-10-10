@@ -44,8 +44,13 @@ impl Default for LogConfig {
 impl LogConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
-        if self.level.is_empty() {
-            return Err("Log level cannot be empty".to_string());
+        match self.level.as_str() {
+            "trace" | "debug" | "info" | "warn" | "error" => {}
+            _ => {
+                return Err(
+                    "Log level must be one of trace | debug | info | warn | error".to_string(),
+                );
+            }
         }
 
         if self.dir.is_empty() {

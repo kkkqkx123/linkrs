@@ -17,8 +17,6 @@ pub mod auth;
 #[cfg(feature = "server")]
 pub mod bootstrap;
 #[cfg(feature = "server")]
-pub mod connection_pool;
-#[cfg(feature = "server")]
 pub mod grpc;
 #[cfg(feature = "server")]
 pub mod http;
@@ -43,8 +41,6 @@ pub use transaction::*;
 pub use auth::*;
 #[cfg(feature = "server")]
 pub use bootstrap::*;
-#[cfg(feature = "server")]
-pub use connection_pool::*;
 #[cfg(feature = "server")]
 pub use grpc::*;
 #[cfg(feature = "server")]
@@ -144,9 +140,6 @@ pub struct ServerConfig {
     pub bootstrap: BootstrapConfig,
     #[cfg(feature = "server")]
     #[serde(default)]
-    pub connection_pool: ConnectionPoolConfig,
-    #[cfg(feature = "server")]
-    #[serde(default)]
     pub security: SecurityConfig,
 }
 
@@ -160,7 +153,6 @@ impl ServerConfig {
         self.grpc.validate()?;
         self.http.validate()?;
         self.auth.validate()?;
-        self.connection_pool.validate()?;
         self.security.validate()?;
         self.validate_listeners()?;
         Ok(())
@@ -168,6 +160,9 @@ impl ServerConfig {
 
     /// Cross-section rules that only make sense once every listener is known.
     fn validate_listeners(&self) -> Result<(), String> {
+        if !self.grpc.enabled && !self.http.enabled {
+            return Err("at least one of grpc.enabled and http.enabled must be true".to_string());
+        }
         if self.grpc.enabled && self.http.enabled && self.http.port == self.grpc.port {
             return Err(format!(
                 "http.port and grpc.port must differ, both are {}",
@@ -582,6 +577,7 @@ impl Config {
         let merged_value = Self::merge_toml_values(default_value, file_value);
         let mut config: Config = toml::from_str(&toml::to_string(&merged_value)?)?;
         config.resolve_relative_paths(base_dir)?;
+        config.apply_env_overrides()?;
         Ok(config)
     }
 
@@ -644,6 +640,48 @@ impl Config {
         Err("Failed to determine user configuration directory".into())
     }
 
+    fn apply_env_overrides(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Ok(value) = env::var("LINKRS_STORAGE_PATH") {
+            if !value.is_empty() {
+                self.common.database.storage_path = value;
+            }
+        }
+        if let Ok(value) = env::var("LINKRS_LOG_DIR") {
+            if !value.is_empty() {
+                self.common.log.dir = value;
+            }
+        }
+        if let Ok(value) = env::var("LINKRS_LOG_LEVEL") {
+            if !value.is_empty() {
+                self.common.log.level = value;
+            }
+        }
+        #[cfg(feature = "server")]
+        {
+            if let Ok(value) = env::var("LINKRS_HTTP_PORT") {
+                self.server.http.port = value
+                    .parse()
+                    .map_err(|_| "LINKRS_HTTP_PORT must be a valid port number")?;
+            }
+            if let Ok(value) = env::var("LINKRS_GRPC_PORT") {
+                self.server.grpc.port = value
+                    .parse()
+                    .map_err(|_| "LINKRS_GRPC_PORT must be a valid port number")?;
+            }
+            if let Ok(value) = env::var("LINKRS_HTTP_BIND") {
+                if !value.is_empty() {
+                    self.server.http.bind_address = value;
+                }
+            }
+            if let Ok(value) = env::var("LINKRS_GRPC_BIND") {
+                if !value.is_empty() {
+                    self.server.grpc.bind_address = value;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_relative_paths(
         &mut self,
         base_dir: &Path,
@@ -681,22 +719,6 @@ impl Config {
             let https_key_file = self.server.http.https_key_file.clone();
             self.server.http.https_key_file =
                 Self::resolve_optional_string_path(base_dir, https_key_file)?;
-
-            let ssl_cert_file = self.server.security.ssl.cert_file.clone();
-            if !self.server.security.ssl.cert_file.is_empty() {
-                self.server.security.ssl.cert_file =
-                    Self::resolve_string_path(base_dir, &ssl_cert_file)?;
-            }
-
-            let ssl_key_file = self.server.security.ssl.key_file.clone();
-            if !self.server.security.ssl.key_file.is_empty() {
-                self.server.security.ssl.key_file =
-                    Self::resolve_string_path(base_dir, &ssl_key_file)?;
-            }
-
-            let ssl_ca_file = self.server.security.ssl.ca_file.clone();
-            self.server.security.ssl.ca_file =
-                Self::resolve_optional_string_path(base_dir, ssl_ca_file)?;
 
             let audit_log_file = self.server.security.audit.log_file.clone();
             self.server.security.audit.log_file =

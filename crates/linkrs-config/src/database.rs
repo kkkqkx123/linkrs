@@ -25,7 +25,7 @@ impl Default for DatabaseConfig {
             host: "127.0.0.1".to_string(),
             port: 9758,
             storage_path: "data/linkrs".to_string(),
-            max_sessions: 10,
+            max_sessions: 100,
         }
     }
 }
@@ -59,7 +59,7 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 9758);
         assert_eq!(config.storage_path, "data/linkrs");
-        assert_eq!(config.max_sessions, 10);
+        assert_eq!(config.max_sessions, 100);
     }
 
     #[test]

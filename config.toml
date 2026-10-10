@@ -4,6 +4,8 @@
 # you need: missing keys fall back to the defaults shown in the comments.
 # Relative paths resolve against this file's directory; `~` expands to the
 # user home directory; LINKRS_CONFIG_DIR overrides the config directory.
+# Container overrides: LINKRS_STORAGE_PATH, LINKRS_LOG_DIR, LINKRS_LOG_LEVEL,
+# LINKRS_HTTP_PORT, LINKRS_GRPC_PORT, LINKRS_HTTP_BIND, LINKRS_GRPC_BIND.
 #
 # Unknown sections and unknown keys inside a section fail startup, so a
 # typo is reported instead of silently keeping the default.
@@ -16,7 +18,7 @@ host = "127.0.0.1"
 port = 9758
 # Data directory (storage, WAL, vector and migration subdirectories)
 storage_path = "~/.linkrs/data"
-# Maximum concurrent client sessions (default 10)
+# Maximum concurrent client sessions (default 100)
 max_sessions = 100
 
 [transaction]
@@ -304,22 +306,6 @@ force_change_default_password = true
 # bcrypt password hash cost (4-12; higher is safer but slower; may be lowered on low-end local machines)
 bcrypt_cost = 12
 
-[connection_pool]
-# Minimum idle client connections (default 5)
-min_idle = 5
-# Maximum client connections (default 50)
-max_size = 50
-# Connection timeout (seconds)
-connection_timeout_secs = 30
-# Idle timeout (seconds)
-idle_timeout_secs = 600
-# Maximum connection lifetime (seconds)
-max_lifetime_secs = 1800
-# Health check interval (seconds, 0 disables)
-health_check_interval_secs = 30
-# Connection recycling age (seconds, 0 disables)
-max_age_secs = 0
-
 [bootstrap]
 # Whether to automatically create the default Space
 auto_create_default_space = true
@@ -328,16 +314,6 @@ default_space_name = "default"
 # Single-user mode (skips authentication and always uses the default user;
 # requires http.bind_address to be loopback)
 single_user_mode = false
-
-# TLS material for the internal security layer. This build does not
-# terminate TLS itself; terminate it at a reverse proxy and keep this
-# disabled.
-[security.ssl]
-enabled = false
-# cert_file = "~/.linkrs/tls/server.pem"
-# key_file = "~/.linkrs/tls/server.key"
-# ca_file = "~/.linkrs/tls/ca.pem"
-# require_client_cert = false
 
 [security.audit]
 # Audit logging is a compliance requirement; disabled by default

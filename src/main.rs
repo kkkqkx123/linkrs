@@ -12,6 +12,14 @@ mod server_main {
         Serve {
             #[clap(short, long)]
             config: Option<String>,
+            #[clap(long)]
+            data_dir: Option<String>,
+            #[clap(long)]
+            http_port: Option<u16>,
+            #[clap(long)]
+            grpc_port: Option<u16>,
+            #[clap(long)]
+            log_level: Option<String>,
         },
         /// Execute a query directly
         Query {
@@ -24,7 +32,13 @@ mod server_main {
         let cli = Cli::parse();
 
         let result = match cli {
-            Cli::Serve { config } => {
+            Cli::Serve {
+                config,
+                data_dir,
+                http_port,
+                grpc_port,
+                log_level,
+            } => {
                 println!("Starting Linkrs service");
                 println!("Process ID: {}", std::process::id());
 
@@ -58,6 +72,24 @@ mod server_main {
                         }
                     },
                 };
+
+                let mut cfg = cfg;
+                if let Some(dir) = data_dir {
+                    cfg.common.database.storage_path = dir;
+                }
+                if let Some(port) = http_port {
+                    cfg.server.http.port = port;
+                }
+                if let Some(port) = grpc_port {
+                    cfg.server.grpc.port = port;
+                }
+                if let Some(level) = log_level {
+                    cfg.common.log.level = level;
+                }
+                if let Err(error) = cfg.validate() {
+                    eprintln!("Invalid effective configuration: {}", error);
+                    std::process::exit(1);
+                }
 
                 // Initialize logging system
                 if let Err(e) = logging::init(&cfg) {
