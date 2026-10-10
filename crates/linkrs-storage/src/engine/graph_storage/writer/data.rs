@@ -327,6 +327,10 @@ pub(crate) fn insert_edge_data(
         }
         Err(e) => Err(e),
     };
+    // Explicit transactions settle once at their commit point.
+    if ctx.is_online_write() {
+        return final_result;
+    }
     if final_result.is_ok() {
         ctx.commit_write_timestamp_ordered(ts)?;
     } else {
@@ -436,6 +440,10 @@ pub(crate) fn delete_edge_data(
         }
     }
 
+    // Explicit transactions settle once at their commit point.
+    if ctx.is_online_write() {
+        return Ok(deleted);
+    }
     ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(deleted)

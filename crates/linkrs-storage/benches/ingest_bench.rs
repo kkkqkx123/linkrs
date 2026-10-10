@@ -17,12 +17,21 @@
 //! per-edge cost dominates the memory cost, callers should batch instead of
 //! asking for vertex-level locks or shard-parallel writes.
 //!
+//! Scale notes: the 1M single batch is the heaviest write issued here and
+//! runs under a WAL-growth watchdog that fails fast with stall evidence
+//! instead of hanging constrained machines. Callers on constrained machines
+//! should chunk at or below 100k rows per batch; the single-batch path
+//! stays as the throughput baseline.
+//!
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench -p linkrs-storage --bench ingest_bench
 
 use std::collections::HashMap;
 use std::hint::black_box;
-use std::time::Instant;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
@@ -38,6 +47,103 @@ const BATCH_SIZES: [usize; 3] = [10_000, 100_000, 1_000_000];
 const EDGE_COUNT: usize = 1000;
 /// Measurement repetitions per configuration (median reported).
 const ITERATIONS: usize = 3;
+/// Largest batch size: the only leg that ever approaches resource limits.
+/// Smaller legs run unwatched.
+const WATCHED_SIZE: usize = 1_000_000;
+/// Watchdog polls WAL growth this often and fails the bench when the WAL
+/// shows no growth for this long (stalled batch, not slow batch).
+const WATCHDOG_POLL: Duration = Duration::from_secs(5);
+const WATCHDOG_STALL_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Stall watchdog for million-row persistent legs.
+///
+/// The 1M single batch is the heaviest write the bench issues; on a
+/// resource-constrained machine it can stall behind memory/IO pressure with
+/// no CPU signal. The watchdog polls the active WAL directory size and
+/// proves monotonic WAL growth in the log; when growth stalls past
+/// [`WATCHDOG_STALL_TIMEOUT`] it prints the stall evidence and exits
+/// non-zero instead of hanging CI forever. The measured closure reports
+/// each fresh WAL directory through `current_wal` (one TempDir per
+/// iteration); a replaced or vanished directory resets the baseline.
+struct StallWatchdog {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl StallWatchdog {
+    fn start(current_wal: Arc<Mutex<Option<PathBuf>>>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            let mut baseline: Option<(PathBuf, u64)> = None;
+            let mut stalled_since = Instant::now();
+            let mut last_report = Instant::now();
+            while !flag.load(Ordering::Acquire) {
+                std::thread::sleep(WATCHDOG_POLL);
+                let dir = current_wal.lock().expect("watchdog state").clone();
+                let Some(dir) = dir else {
+                    continue;
+                };
+                let size = dir_size(&dir);
+                match &baseline {
+                    Some((watched, known)) if *watched == dir && *known == size => {
+                        if last_report.elapsed() >= Duration::from_secs(30) {
+                            eprintln!(
+                                "watchdog: WAL stalled at {size} bytes for {:?} ({})",
+                                stalled_since.elapsed(),
+                                dir.display()
+                            );
+                            last_report = Instant::now();
+                        }
+                        if stalled_since.elapsed() >= WATCHDOG_STALL_TIMEOUT {
+                            eprintln!(
+                                "watchdog: no WAL growth for {:?} at {} bytes ({}); failing fast instead of hanging",
+                                stalled_since.elapsed(),
+                                size,
+                                dir.display()
+                            );
+                            std::process::exit(42);
+                        }
+                    }
+                    _ => {
+                        baseline = Some((dir, size));
+                        stalled_since = Instant::now();
+                    }
+                }
+            }
+        });
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn dir_size(dir: &PathBuf) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![dir.clone()];
+    while let Some(path) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
 
 fn new_storage(persistent: bool) -> (GraphStorage, Option<TempDir>) {
     let (mut storage, dir) = if persistent {
@@ -178,8 +284,21 @@ fn main() {
             black_box(());
             start.elapsed().as_secs_f64() * 1000.0
         });
+        // Million-row persistent legs run under the stall watchdog: each
+        // iteration reports its fresh WAL directory, and a stall (no WAL
+        // growth) fails fast with evidence instead of hanging the bench.
+        // On constrained machines prefer caller chunking at or below 100k
+        // rows per batch; the single-batch path stays for baseline duty.
+        let watched = size == WATCHED_SIZE;
+        let current_wal = Arc::new(Mutex::new(None));
+        let watchdog = watched.then(|| StallWatchdog::start(Arc::clone(&current_wal)));
         let wal_ms = measure(|| {
-            let (mut storage, _dir) = new_storage(true);
+            let (mut storage, dir) = new_storage(true);
+            if watched {
+                if let Some(d) = dir.as_ref() {
+                    *current_wal.lock().expect("watchdog state") = Some(d.path().join("wal"));
+                }
+            }
             let start = Instant::now();
             storage
                 .batch_insert_vertices(SPACE, vertices.clone())
@@ -187,6 +306,9 @@ fn main() {
             black_box(());
             start.elapsed().as_secs_f64() * 1000.0
         });
+        if let Some(watchdog) = watchdog {
+            watchdog.stop();
+        }
         let share = cpu_share(cpu_ms, wal_ms);
         println!(
             "{:>10} | {:>10.2} | {:>10.2} | {:>8.1}% | {:>8.1}%",
@@ -218,8 +340,19 @@ fn main() {
             black_box(());
             start.elapsed().as_secs_f64() * 1000.0
         });
+        // Same watchdog cover as leg 1: the 1M persistent setup plus the
+        // 1M edge batch both run inside the measured closure.
+        let watched_edge = size == WATCHED_SIZE;
+        let current_wal_edge = Arc::new(Mutex::new(None));
+        let watchdog_edge =
+            watched_edge.then(|| StallWatchdog::start(Arc::clone(&current_wal_edge)));
         let wal_ms = measure(|| {
-            let (mut storage, _dir) = new_storage(true);
+            let (mut storage, dir) = new_storage(true);
+            if watched_edge {
+                if let Some(d) = dir.as_ref() {
+                    *current_wal_edge.lock().expect("watchdog state") = Some(d.path().join("wal"));
+                }
+            }
             storage
                 .batch_insert_vertices(SPACE, build_vertices(size))
                 .expect("setup vertices");
@@ -230,6 +363,9 @@ fn main() {
             black_box(());
             start.elapsed().as_secs_f64() * 1000.0
         });
+        if let Some(watchdog_edge) = watchdog_edge {
+            watchdog_edge.stop();
+        }
         let share = cpu_share(cpu_ms, wal_ms);
         println!(
             "{:>10} | {:>10.2} | {:>10.2} | {:>8.1}% | {:>8.1}%",

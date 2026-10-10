@@ -301,3 +301,56 @@ fn read_your_own_staged_writes_covers_merged_forms() {
         .expect("read after commit")
         .is_none());
 }
+
+#[test]
+fn staged_edge_writes_commit_exactly_once() {
+    // Multi-row explicit edge transactions stage every row under one shared
+    // timestamp; the commit point settles it exactly once. Per-row writers
+    // must not settle early, or the commit point fails closed with
+    // InvalidTimestamp (the long-sequence rollback bench hit this).
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    let edge = EdgeTypeInfo::new("KNOWS".to_string())
+        .with_src_tag("Person".to_string())
+        .with_dst_tag("Person".to_string());
+    storage
+        .create_edge_type("test_space", &edge)
+        .expect("create edge type");
+    insert_test_vertex(&mut storage, 1, "alice");
+    insert_test_vertex(&mut storage, 2, "bob");
+    insert_test_vertex(&mut storage, 3, "carol");
+
+    let ts = next_ts(&storage);
+    let mut writer = writer_handle(&storage, 100, ts);
+    for (src, dst) in [(1, 2), (2, 3), (1, 3)] {
+        writer
+            .insert_edge(
+                "test_space",
+                Edge::new(
+                    vid(src),
+                    vid(dst),
+                    "KNOWS".to_string(),
+                    0,
+                    Default::default(),
+                ),
+            )
+            .expect("staged edge");
+    }
+    drop(writer);
+    storage
+        .commit_staged_writes(TransactionId::from(100), &[])
+        .expect("commit apply");
+    publish(&storage, ts);
+
+    let reader = reader_handle(&storage, 200);
+    for (src, dst) in [(1, 2), (2, 3), (1, 3)] {
+        assert!(
+            reader
+                .get_edge("test_space", &vid(src), &vid(dst), "KNOWS", 0)
+                .expect("read after publish")
+                .is_some(),
+            "edge {src}->[KNOWS]->{dst} visible after the single publish"
+        );
+    }
+}

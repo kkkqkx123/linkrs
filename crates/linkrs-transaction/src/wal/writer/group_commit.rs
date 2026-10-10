@@ -37,6 +37,7 @@ struct GroupCommitState {
     sync_in_progress: AtomicBool,
     commit_mutex: Mutex<()>,
     commit_condvar: Condvar,
+    default_timeout: Duration,
 }
 
 impl GroupCommitCoordinator {
@@ -53,7 +54,6 @@ impl GroupCommitCoordinator {
     }
 
     pub fn with_timeout(file: File, start_lsn: u64, timeout: Duration) -> Self {
-        let _ = timeout;
         Self {
             inner: Arc::new(GroupCommitState {
                 file: Mutex::new(file),
@@ -62,6 +62,7 @@ impl GroupCommitCoordinator {
                 sync_in_progress: AtomicBool::new(false),
                 commit_mutex: Mutex::new(()),
                 commit_condvar: Condvar::new(),
+                default_timeout: timeout,
             }),
         }
     }
@@ -155,12 +156,13 @@ impl GroupCommitCoordinator {
         }
     }
 
-    /// Wait until durable with default timeout (30s).
+    /// Wait until durable with the coordinator's configured default timeout.
     ///
     /// Returns `WalError::GroupCommitTimeout` if the sync leader fails to complete
     /// within the timeout, preventing indefinite blocking on leader failure.
     pub fn append_and_wait(&self, appended_lsn: u64) -> WalResult<()> {
-        self.append_and_wait_timeout(appended_lsn, GROUP_COMMIT_TIMEOUT)
+        let timeout = self.inner.default_timeout;
+        self.append_and_wait_timeout(appended_lsn, timeout)
     }
 
     /// Current durable sequence number.

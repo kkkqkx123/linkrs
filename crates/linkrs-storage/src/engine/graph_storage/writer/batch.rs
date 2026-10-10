@@ -173,6 +173,10 @@ pub(crate) fn batch_insert_edges(
         }
     }
 
+    // Explicit transactions settle once at their commit point.
+    if ctx.is_online_write() {
+        return Ok(());
+    }
     ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(())
@@ -398,6 +402,10 @@ pub(crate) fn batch_delete_edges(
         return Err(e);
     }
 
+    // Explicit transactions settle once at their commit point.
+    if ctx.is_online_write() {
+        return Ok(deleted);
+    }
     ctx.commit_write_timestamp_ordered(ts)?;
 
     Ok(deleted)

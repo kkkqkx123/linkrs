@@ -572,6 +572,9 @@ fn batch_insert_vertices_offline_chunked(
     let chunk = crate::vertex::MAX_WRITE_SCOPE_KEYS;
     let mut ids = Vec::with_capacity(total);
     let mut committed = 0usize;
+    let total_chunks = total.div_ceil(chunk);
+    let batch_start = std::time::Instant::now();
+    let mut chunk_no = 0usize;
     for window in vertices.chunks(chunk) {
         match batch_insert_vertices(ctx, space, window.to_vec()) {
             Ok(mut chunk_ids) => {
@@ -586,6 +589,18 @@ fn batch_insert_vertices_offline_chunked(
                 }
                 return Err(batch_prefix_error(committed, total, &cause));
             }
+        }
+        chunk_no += 1;
+        // Throttled progress for long bulk batches: silent without a logger,
+        // one line per 25 chunks so a stalled batch leaves a last-good mark.
+        if chunk_no % 25 == 0 || chunk_no == total_chunks {
+            log::info!(
+                "offline batch progress: {}/{} chunks ({} rows) in {:?}",
+                chunk_no,
+                total_chunks,
+                committed,
+                batch_start.elapsed()
+            );
         }
     }
     Ok(ids)

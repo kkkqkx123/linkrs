@@ -111,6 +111,12 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
     }
 
     if result.is_ok() {
+        // Explicit transactions own the timestamp settle at their commit
+        // point; per-row settling here would publish the first row early
+        // and break the later commit_ordered reservation.
+        if ctx.is_online_write() {
+            return result;
+        }
         ctx.commit_write_timestamp_ordered(ts)?;
     } else {
         ctx.abort_write_timestamp(ts);
@@ -328,6 +334,10 @@ pub(crate) fn delete_edge(
         }
     }
     if result.is_ok() {
+        // Explicit transactions settle once at their commit point.
+        if ctx.is_online_write() {
+            return result.map(|_| ());
+        }
         ctx.commit_write_timestamp_ordered(ts)?;
     } else {
         ctx.abort_write_timestamp(ts);
@@ -406,6 +416,10 @@ fn update_edge_inner(
                 current_props.clone().into_iter().collect(),
                 delete_redo,
             )?;
+            // Explicit transactions settle once at their commit point.
+            if ctx.is_online_write() {
+                return Ok(());
+            }
             ctx.commit_write_timestamp_ordered(ts)?;
             Ok(())
         }

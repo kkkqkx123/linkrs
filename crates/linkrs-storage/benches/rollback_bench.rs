@@ -9,6 +9,14 @@
 //! WAL with Sync durability (fsync); abort drops the staged WAL and releases
 //! the MVCC write timestamp.
 //!
+//! Ordering contract: row writers stage under the bound timestamp without
+//! settling it, so the commit point (`commit_staged_writes` then
+//! `commit_ordered`) settles each timestamp exactly once. The bound handle
+//! holds no timestamp lease, so dropping it before the commit point is safe
+//! and never aborts the timestamp. Commit and abort are measured on
+//! separate transactions: settling one timestamp twice is a double settle
+//! and fails closed.
+//!
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench -p linkrs-storage --bench rollback_bench
 
@@ -82,9 +90,25 @@ struct RunResult {
     abort_us: u64,
 }
 
+fn build_edges(edge_count: usize, tx_seq: u64) -> Vec<Edge> {
+    (0..edge_count)
+        .map(|i| Edge {
+            src: VertexId::try_from_int64(i as i64 % VERTEX_COUNT as i64).expect("valid vertex id"),
+            dst: VertexId::try_from_int64((i as i64 + 1) % VERTEX_COUNT as i64)
+                .expect("valid vertex id"),
+            edge_type: EDGE.to_string(),
+            ranking: tx_seq as i64 * 2_000_000 + i as i64,
+            props: Default::default(),
+        })
+        .collect::<Vec<_>>()
+}
+
 fn run_transaction(storage: &GraphStorage, edge_count: usize, tx_seq: u64) -> RunResult {
     // Explicit transaction: bind the storage handle with the transaction's
-    // write timestamp (no auto-commit gate involved).
+    // write timestamp (no auto-commit gate involved). Row writers stage
+    // under this timestamp without settling it; the commit point below
+    // settles exactly once. The bound handle holds no timestamp lease, so
+    // dropping it before the commit point is safe.
     let ts = storage
         .version_manager()
         .acquire_insert_timestamp()
@@ -95,16 +119,7 @@ fn run_transaction(storage: &GraphStorage, edge_count: usize, tx_seq: u64) -> Ru
         StorageOperationContext::transaction_with_timestamps(txid, ts, Some(ts), false, false),
     );
 
-    let edges: Vec<Edge> = (0..edge_count)
-        .map(|i| Edge {
-            src: VertexId::try_from_int64(i as i64 % VERTEX_COUNT as i64).expect("valid vertex id"),
-            dst: VertexId::try_from_int64((i as i64 + 1) % VERTEX_COUNT as i64)
-                .expect("valid vertex id"),
-            edge_type: EDGE.to_string(),
-            ranking: tx_seq as i64 * 2_000_000 + i as i64,
-            props: Default::default(),
-        })
-        .collect::<Vec<_>>();
+    let edges = build_edges(edge_count, tx_seq);
 
     let write_start = Instant::now();
     for edge in edges {
@@ -124,13 +139,33 @@ fn run_transaction(storage: &GraphStorage, edge_count: usize, tx_seq: u64) -> Ru
         .expect("ordered commit");
     let commit_us = commit_start.elapsed().as_micros() as u64;
 
-    // Abort path: drop staged WAL + release timestamp (undo for insert-only
-    // transactions is visibility-based via the aborted timestamp).
+    // Abort path runs as a separate transaction: settling the committed
+    // timestamp above a second time would be a double settle, so the abort
+    // measurement writes its own staged rows and aborts them instead.
+    let abort_ts = storage
+        .version_manager()
+        .acquire_insert_timestamp()
+        .expect("acquire abort timestamp");
+    let abort_txid = TransactionId::from(tx_seq | (1 << 60));
+    let mut abort_txn =
+        storage.bind_operation_context(StorageOperationContext::transaction_with_timestamps(
+            abort_txid,
+            abort_ts,
+            Some(abort_ts),
+            false,
+            false,
+        ));
+    for edge in build_edges(edge_count, tx_seq.wrapping_add(1_000_000)) {
+        abort_txn
+            .insert_edge(SPACE, edge)
+            .expect("stage abort edge");
+    }
+    drop(abort_txn);
     let abort_start = Instant::now();
     storage
-        .abort_staged_writes(txid)
+        .abort_staged_writes(abort_txid)
         .expect("abort staged writes");
-    storage.version_manager().abort_write_timestamp(ts);
+    storage.version_manager().abort_write_timestamp(abort_ts);
     let abort_us = abort_start.elapsed().as_micros() as u64;
 
     RunResult {
