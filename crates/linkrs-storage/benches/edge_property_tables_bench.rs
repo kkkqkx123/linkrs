@@ -4,7 +4,7 @@
 //! about edge property tables. Small data on purpose: only the contrast
 //! matters, not absolute throughput.
 //!
-//! Convention: 11 iterations, median reported, machine + core count printed.
+//! Convention: 5 iterations, median reported, machine + core count printed.
 //! Run with:
 //!   cargo bench -p linkrs-storage --bench edge_property_tables_bench
 
@@ -23,7 +23,7 @@ use linkrs_storage::{
     GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
 
-const ITERATIONS: usize = 11;
+const ITERATIONS: usize = 5;
 
 fn machine_name() -> String {
     std::fs::read_to_string("/proc/cpuinfo")

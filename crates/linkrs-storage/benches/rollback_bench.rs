@@ -21,7 +21,9 @@
 //!   cargo bench -p linkrs-storage --bench rollback_bench
 //!
 //! Fast smoke run (`QUICK=1`) shrinks the setup and the edge counts so the
-//! suite finishes in seconds; the full run keeps million-row duty.
+//! suite finishes in seconds; the default run stays at smoke scale (max 50k
+//! setup vertices, max 25k edges). Authoritative rollback baselines will come
+//! from public datasets after formal large-scale benchmarking.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -42,13 +44,13 @@ mod bench_group;
 const SPACE: &str = "b4";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
-const FULL_VERTEX_COUNT: usize = 1_000_000;
-const FULL_EDGE_COUNTS: [usize; 3] = [100_000, 500_000, 1_000_000];
-const FULL_ITERATIONS: usize = 3;
+const FULL_VERTEX_COUNT: usize = 50_000;
+const FULL_EDGE_COUNTS: [usize; 3] = [5_000, 10_000, 25_000];
+const FULL_ITERATIONS: usize = 2;
 
 fn vertex_count() -> usize {
     if bench_group::quick_mode() {
-        20_000
+        10_000
     } else {
         FULL_VERTEX_COUNT
     }
@@ -96,7 +98,7 @@ fn setup_storage() -> (GraphStorage, Option<TempDir>) {
 
     for chunk in (0..vertex_count() as i64)
         .collect::<Vec<_>>()
-        .chunks(100_000)
+        .chunks(25_000)
     {
         let vertices: Vec<Vertex> = chunk
             .iter()

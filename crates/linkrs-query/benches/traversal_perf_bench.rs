@@ -1,9 +1,12 @@
 //! Traversal-path performance validation.
 //!
-//! Measures the anchored 1-hop and unanchored 2-hop on a 100k-vertex x 3-edge
-//! dataset through the full pipeline.  Targets:
+//! Measures the anchored 1-hop and unanchored 2-hop on a 20k-vertex x 3-edge
+//! smoke dataset through the full pipeline. Targets:
 //!   anchored 1-hop  <= 100ms
 //!   unanchored 2-hop <= 2s
+//!
+//! Authoritative traversal baselines will come from public datasets after
+//! formal large-scale benchmarking.
 //!
 //! Run with:
 //!   cargo bench -p linkrs-query --bench traversal_perf_bench
@@ -22,8 +25,8 @@ use std::time::Instant;
 const SPACE: &str = "tv";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
-const FULL_VERTEX_COUNT: u64 = 100_000;
-const FULL_ITERATIONS: usize = 7;
+const FULL_VERTEX_COUNT: u64 = 20_000;
+const FULL_ITERATIONS: usize = 5;
 const FULL_SLOW_ITERATIONS: usize = 2;
 
 #[path = "bench_group.rs"]

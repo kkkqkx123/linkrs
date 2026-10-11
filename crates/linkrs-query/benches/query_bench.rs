@@ -215,7 +215,7 @@ fn bench_aggregation_queries(c: &mut Criterion) {
 
 fn bench_large_vertex_scan(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "large_vertex_scan", SAMPLE_SIZE);
-    for &vertex_count in &[10_000u64, 100_000] {
+    for &vertex_count in &[2_000u64, 10_000] {
         let space_name = format!("large_q{}e3", vertex_count);
         let storage = setup_large_graph(vertex_count, 3);
         group.throughput(Throughput::Elements(vertex_count));
@@ -242,7 +242,7 @@ fn bench_large_vertex_scan(c: &mut Criterion) {
 
 fn bench_large_count_operations(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "large_count", SAMPLE_SIZE);
-    for &vertex_count in &[10_000u64, 100_000] {
+    for &vertex_count in &[2_000u64, 10_000] {
         let space_name = format!("large_q{}e3", vertex_count);
         let storage = setup_large_graph(vertex_count, 3);
         group.bench_function(BenchmarkId::new("count_vertices", vertex_count), |b| {

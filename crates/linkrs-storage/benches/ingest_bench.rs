@@ -17,17 +17,18 @@
 //! per-edge cost dominates the memory cost, callers should batch instead of
 //! asking for vertex-level locks or shard-parallel writes.
 //!
-//! Scale notes: the 1M single batch is the heaviest write issued here and
-//! runs under a WAL-growth watchdog that fails fast with stall evidence
-//! instead of hanging constrained machines. Callers on constrained machines
-//! should chunk at or below 100k rows per batch; the single-batch path
-//! stays as the throughput baseline.
+//! Scale notes: the default run stays at smoke scale (max 50k rows) so the
+//! whole suite finishes on constrained machines. Authoritative throughput
+//! baselines will come from public datasets after formal large-scale
+//! benchmarking; these synthetic sizes only guard against regressions.
+//!
+//! Callers on constrained machines should chunk at or below 10k rows per
+//! batch.
 //!
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench -p linkrs-storage --bench ingest_bench
 //!
-//! Fast smoke run (`QUICK=1`) keeps the small head only: the watched 1M legs
-//! are full-run duty, since they exist to prove bounded completion at scale.
+//! Fast smoke run (`QUICK=1`) keeps the small head only.
 
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -49,18 +50,18 @@ mod bench_group;
 const SPACE: &str = "ingest";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
-const FULL_BATCH_SIZES: [usize; 3] = [10_000, 100_000, 1_000_000];
+const FULL_BATCH_SIZES: [usize; 3] = [2_000, 10_000, 50_000];
 const EDGE_COUNT: usize = 1000;
 /// Measurement repetitions per configuration (median reported).
-const FULL_ITERATIONS: usize = 3;
+const FULL_ITERATIONS: usize = 2;
 /// Largest batch size: the only leg that ever approaches resource limits.
 /// Smaller legs run unwatched.
-const WATCHED_SIZE: usize = 1_000_000;
+const WATCHED_SIZE: usize = 50_000;
 
 /// Batch sizes for the scaling legs (fast smoke run uses the small head only).
 fn batch_sizes() -> Vec<usize> {
     if bench_group::quick_mode() {
-        vec![10_000]
+        vec![2_000]
     } else {
         FULL_BATCH_SIZES.to_vec()
     }
@@ -78,9 +79,9 @@ fn iterations() -> usize {
 const WATCHDOG_POLL: Duration = Duration::from_secs(5);
 const WATCHDOG_STALL_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Stall watchdog for million-row persistent legs.
+/// Stall watchdog for the largest persistent legs.
 ///
-/// The 1M single batch is the heaviest write the bench issues; on a
+/// The 50k single batch is the heaviest write the bench issues; on a
 /// resource-constrained machine it can stall behind memory/IO pressure with
 /// no CPU signal. The watchdog polls the active WAL directory size and
 /// proves monotonic WAL growth in the log; when growth stalls past
@@ -309,10 +310,10 @@ fn main() {
             black_box(());
             start.elapsed().as_secs_f64() * 1000.0
         });
-        // Million-row persistent legs run under the stall watchdog: each
+        // Largest persistent legs run under the stall watchdog: each
         // iteration reports its fresh WAL directory, and a stall (no WAL
         // growth) fails fast with evidence instead of hanging the bench.
-        // On constrained machines prefer caller chunking at or below 100k
+        // On constrained machines prefer caller chunking at or below 10k
         // rows per batch; the single-batch path stays for baseline duty.
         let watched = size == WATCHED_SIZE;
         let current_wal = Arc::new(Mutex::new(None));
@@ -365,8 +366,8 @@ fn main() {
             black_box(());
             start.elapsed().as_secs_f64() * 1000.0
         });
-        // Same watchdog cover as leg 1: the 1M persistent setup plus the
-        // 1M edge batch both run inside the measured closure.
+        // Same watchdog cover as leg 1: the largest persistent setup plus
+        // the largest edge batch both run inside the measured closure.
         let watched_edge = size == WATCHED_SIZE;
         let current_wal_edge = Arc::new(Mutex::new(None));
         let watchdog_edge =

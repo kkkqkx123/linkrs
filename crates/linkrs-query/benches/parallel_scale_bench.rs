@@ -5,6 +5,10 @@
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench -p linkrs-query --bench parallel_scale_bench
 //!
+//! Default runs at smoke scale (20k vertices) so the suite finishes on
+//! constrained machines. Authoritative parallel-speedup baselines will come
+//! from public datasets after formal large-scale benchmarking.
+//!
 //! Outputs T(n) medians, speedup E(n) = T(1)/T(n), parallel efficiency
 //! eta(n) = parallel_work_time/parallel_wall_time, actual worker count and
 //! fallback reason from `EXPLAIN ANALYZE`, plus storage-read share R.
@@ -23,9 +27,9 @@ use std::time::Instant;
 const SPACE: &str = "pb";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
-const FULL_VERTEX_COUNT: u64 = 100_000;
+const FULL_VERTEX_COUNT: u64 = 20_000;
 const FULL_WORKERS: [usize; 4] = [1, 2, 4, 8];
-const FULL_ITERATIONS: usize = 11;
+const FULL_ITERATIONS: usize = 5;
 
 #[path = "bench_group.rs"]
 mod bench_group;
@@ -54,13 +58,13 @@ fn iterations() -> usize {
     }
 }
 
-const Q1: &str = "MATCH (n:Node) WHERE n.value < 50000 RETURN count(n)";
+const Q1: &str = "MATCH (n:Node) WHERE n.value < 10000 RETURN count(n)";
 const Q2: &str = "MATCH (n:Node) RETURN n.group_id, count(*)";
 const Q3: &str = "MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 100 RETURN count(b)";
 // E1: multi-scan (independent tagged vertex scans, E1a) union.
-const E1: &str = "MATCH (a:Node) WHERE a.value < 50000 RETURN a.group_id \
+const E1: &str = "MATCH (a:Node) WHERE a.value < 10000 RETURN a.group_id \
                   UNION ALL \
-                  MATCH (b:Node) WHERE b.value >= 50000 RETURN b.group_id";
+                  MATCH (b:Node) WHERE b.value >= 10000 RETURN b.group_id";
 // E2: pure edge-table scan partitioned by src-id ranges (E2).
 const E2: &str = "LOOKUP ON EDGE Link YIELD Link.src";
 

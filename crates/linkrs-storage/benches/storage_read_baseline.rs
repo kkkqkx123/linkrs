@@ -154,8 +154,8 @@ fn main() {
     println!("== storage read baseline ==");
 
     for (label, props, sizes) in [
-        ("wide", &WIDE_PROPS[..], &[10_000u64, 100_000][..]),
-        ("narrow", &NARROW_PROPS[..], &[10_000u64, 100_000][..]),
+        ("wide", &WIDE_PROPS[..], &[2_000u64, 10_000][..]),
+        ("narrow", &NARROW_PROPS[..], &[2_000u64, 10_000][..]),
     ] {
         for &n in sizes {
             println!("\n-- {label} table, {n} rows --");

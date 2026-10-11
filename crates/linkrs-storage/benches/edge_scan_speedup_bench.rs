@@ -7,6 +7,11 @@
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench -p linkrs-storage --bench edge_scan_speedup_bench
 //!
+//! Default runs at smoke scale (100k edges) so the suite finishes on
+//! constrained machines; `QUICK=1` drops to 20k edges. Authoritative scan
+//! baselines will come from public datasets after formal large-scale
+//! benchmarking.
+//!
 //! Machine requirement: >= 8 cores. Record CPU model and core count for
 //! reproducibility.
 
@@ -22,14 +27,33 @@ use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{DataType, Edge, Value, Vertex};
 use linkrs_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 
+#[path = "bench_group.rs"]
+mod bench_group;
+
 const SPACE: &str = "b1";
 const EDGE: &str = "Link";
 /// Edge partitions (distinct (src,dst) tag pairs) per dataset.
 const PARTITIONS: [usize; 3] = [1, 4, 16];
 /// Rayon pool sizes used for the scan.
 const WORKERS: [usize; 4] = [1, 2, 4, 8];
-const TOTAL_EDGES: u64 = 1_000_000;
-const ITERATIONS: usize = 11;
+const FULL_TOTAL_EDGES: u64 = 100_000;
+const FULL_ITERATIONS: usize = 5;
+
+fn total_edges() -> u64 {
+    if bench_group::quick_mode() {
+        20_000
+    } else {
+        FULL_TOTAL_EDGES
+    }
+}
+
+fn iterations() -> usize {
+    if bench_group::quick_mode() {
+        3
+    } else {
+        FULL_ITERATIONS
+    }
+}
 
 fn create_storage() -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage init");
@@ -40,12 +64,13 @@ fn create_storage() -> GraphStorage {
 
 fn build_data(partitions: usize) -> Arc<RwLock<GraphStorage>> {
     let mut storage = create_storage();
+    let total_edges = total_edges();
 
     // Tag count: 1 partition uses two tags (one pair); N >= 2 uses N tags with
     // cyclic pairs (T_p, T_{p+1}) so every pair is distinct -> N partitions.
     let tag_count = partitions.max(2);
     let pair_count = partitions;
-    let edges_per_partition = TOTAL_EDGES / pair_count as u64;
+    let edges_per_partition = total_edges / pair_count as u64;
 
     for p in 0..tag_count {
         storage
@@ -72,13 +97,13 @@ fn build_data(partitions: usize) -> Arc<RwLock<GraphStorage>> {
         let vertices: Vec<Vertex> = (0..edges_per_partition)
             .map(|i| {
                 Vertex::new(
-                    VertexId::try_from_int64((p as i64) * TOTAL_EDGES as i64 + i as i64)
+                    VertexId::try_from_int64((p as i64) * total_edges as i64 + i as i64)
                         .expect("valid vertex id"),
                     Tag::new(
                         tag.clone(),
                         [(
                             "value".into(),
-                            Value::BigInt(p as i64 * TOTAL_EDGES as i64 + i as i64),
+                            Value::BigInt(p as i64 * total_edges as i64 + i as i64),
                         )]
                         .into_iter()
                         .collect(),
@@ -92,15 +117,15 @@ fn build_data(partitions: usize) -> Arc<RwLock<GraphStorage>> {
     }
 
     // Edges: pair p connects tag p -> tag (p+1), one edge per vertex index.
-    let mut edges: Vec<Edge> = Vec::with_capacity(TOTAL_EDGES as usize);
+    let mut edges: Vec<Edge> = Vec::with_capacity(total_edges as usize);
     for p in 0..pair_count {
         let src_tag = p;
         let dst_tag = (p + 1) % tag_count;
         for i in 0..edges_per_partition {
             edges.push(Edge {
-                src: VertexId::try_from_int64(src_tag as i64 * TOTAL_EDGES as i64 + i as i64)
+                src: VertexId::try_from_int64(src_tag as i64 * total_edges as i64 + i as i64)
                     .expect("valid vertex id"),
-                dst: VertexId::try_from_int64(dst_tag as i64 * TOTAL_EDGES as i64 + i as i64)
+                dst: VertexId::try_from_int64(dst_tag as i64 * total_edges as i64 + i as i64)
                     .expect("valid vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
@@ -108,7 +133,7 @@ fn build_data(partitions: usize) -> Arc<RwLock<GraphStorage>> {
             });
         }
     }
-    for chunk in edges.chunks(100_000) {
+    for chunk in edges.chunks(25_000) {
         storage
             .batch_insert_edges(SPACE, chunk.to_vec())
             .expect("batch insert edges");
@@ -152,8 +177,9 @@ fn measure_scan(storage: &Arc<RwLock<GraphStorage>>, workers: usize) -> u64 {
             black_box(edges.len());
         });
     }
-    let mut samples = Vec::with_capacity(ITERATIONS);
-    for _ in 0..ITERATIONS {
+    let rounds = iterations();
+    let mut samples = Vec::with_capacity(rounds);
+    for _ in 0..rounds {
         let start = Instant::now();
         pool.install(|| {
             let edges = storage
@@ -177,13 +203,16 @@ fn main() {
             .unwrap_or(0)
     );
     println!(
-        "total edges = {TOTAL_EDGES}, iterations = {ITERATIONS}, partitions = {:?}, workers = {:?}",
-        PARTITIONS, WORKERS
+        "total edges = {}, iterations = {}, partitions = {:?}, workers = {:?}",
+        total_edges(),
+        iterations(),
+        PARTITIONS,
+        WORKERS
     );
 
     for &partitions in &PARTITIONS {
         let storage = build_data(partitions);
-        let edges_per_partition = TOTAL_EDGES / partitions as u64;
+        let edges_per_partition = total_edges() / partitions as u64;
         println!(
             "\n### partitions N = {partitions} ({} edges per partition)",
             edges_per_partition
@@ -207,7 +236,7 @@ fn main() {
             );
         }
     }
-    println!("\nresult: N >= 4 and >= 1M edges -> E(8) >= 3");
+    println!("\nresult: N >= 4 -> E(8) >= 3 (smoke scale; authoritative numbers come from public datasets)");
 }
 
 fn machine_name() -> String {

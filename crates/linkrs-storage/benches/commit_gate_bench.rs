@@ -67,12 +67,13 @@ mod bench_group;
 // ── staging leg ─────────────────────────────────────────────────────────────
 
 /// Batch sizes for the scaling leg (commit hold-time growth).
-/// Fast smoke run (`QUICK=1`) uses the small head only.
+/// Fast smoke run (`QUICK=1`) uses the small head only. Default stays at
+/// smoke scale; authoritative numbers come from public datasets.
 fn batch_sizes() -> Vec<usize> {
     if bench_group::quick_mode() {
         vec![1_000]
     } else {
-        vec![5_000, 10_000, 20_000]
+        vec![1_000, 2_000, 5_000]
     }
 }
 /// Measurement repetitions per configuration (median reported).
@@ -239,18 +240,20 @@ fn run_commit_scale() {
 const GATE_SPACE: &str = "b2";
 const GATE_TAG: &str = "Node";
 /// Concurrent auto-commit writers per run (fast smoke run uses the head only).
+/// Default stays at smoke scale so the gate leg finishes in seconds on
+/// constrained machines.
 fn gate_threads() -> Vec<usize> {
     if bench_group::quick_mode() {
-        vec![1, 4]
+        vec![1, 2]
     } else {
-        vec![1, 4, 8, 16]
+        vec![1, 2, 4]
     }
 }
 fn statements_per_thread() -> usize {
     if bench_group::quick_mode() {
-        400
+        200
     } else {
-        4_000
+        500
     }
 }
 

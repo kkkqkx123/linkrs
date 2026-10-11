@@ -297,7 +297,7 @@ fn bench_real_cursor_scan(c: &mut Criterion) {
 
 fn bench_scaled_cursor_scan(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "storage_scaled_cursor_scan", SAMPLE_SIZE);
-    for &vertex_count in &[10_000u64, 100_000] {
+    for &vertex_count in &[2_000u64, 10_000] {
         let name = format!("full_scan_{}", vertex_count);
         let storage = build_vertices(vertex_count);
         group.throughput(Throughput::Elements(vertex_count));
@@ -324,7 +324,7 @@ fn bench_scaled_cursor_scan(c: &mut Criterion) {
 
 fn bench_scan_all_vertices(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "storage_scan_all_vertices", SAMPLE_SIZE);
-    for &vertex_count in &[10_000u64, 100_000] {
+    for &vertex_count in &[2_000u64, 10_000] {
         let storage = build_vertices(vertex_count);
         group.throughput(Throughput::Elements(vertex_count));
         group.bench_function(BenchmarkId::from_parameter(vertex_count), |b| {
@@ -383,7 +383,7 @@ fn bench_real_checkpoint(c: &mut Criterion) {
 
 fn bench_scaled_checkpoint(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "storage_scaled_checkpoint", SAMPLE_SIZE);
-    for &vertex_count in &[10_000u64, 100_000] {
+    for &vertex_count in &[2_000u64, 10_000] {
         let root = TempDir::new().expect("temp directory");
         let mut storage = GraphStorage::new_with_path(root.path().to_path_buf())
             .expect("persistent storage should initialize");
@@ -469,7 +469,7 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
         ("sparse_1M", &[1_000_000i64][..]),
         ("sparse_4M", &[1_000_000i64, 2_000_000, 4_000_000][..]),
     ] {
-        let n = 100_000u64;
+        let n = 10_000u64;
         let total_edges = n + high_ids.len() as u64;
         group.throughput(Throughput::Elements(total_edges));
         group.bench_function(BenchmarkId::new("insert_edges", label), |b| {
@@ -560,7 +560,7 @@ fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
 /// rather than a single hot shard.
 fn bench_vertex_point_lookup(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "storage_vertex_point_lookup", SAMPLE_SIZE);
-    for &vertex_count in &[10_000u64, 100_000] {
+    for &vertex_count in &[2_000u64, 10_000] {
         let storage = build_vertices(vertex_count);
         group.throughput(Throughput::Elements(1000));
         group.bench_function(BenchmarkId::from_parameter(vertex_count), |b| {

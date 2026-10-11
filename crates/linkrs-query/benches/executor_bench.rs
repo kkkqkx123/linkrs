@@ -313,7 +313,7 @@ fn bench_materialize_columns(c: &mut Criterion) {
 
 // ── accumulation paths ──────────────────────────────────────────────────────
 
-const ROW_SIZES: [usize; 2] = [100_000, 1_000_000];
+const ROW_SIZES: [usize; 2] = [10_000, 100_000];
 
 /// Current operator pattern (hash_join.rs build loop): key from materialized
 /// columns, row cloned twice (bucket + all_right_rows).

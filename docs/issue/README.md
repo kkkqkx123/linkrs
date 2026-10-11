@@ -25,7 +25,7 @@
 | simvec | 8 | 全 OK | avx512 无收益、upsert_wal 批量反慢、filter 选择性反慢 |
 | linkrs-core | 1 | OK | serde 基线（serialize_vertex 280ns） |
 | linkrs-fulltext | 1 | OK* | 需本地补丁才能编译；index_build 100/500 均 ~31ms（零缩放可疑） |
-| linkrs-storage | 13 | **EXIT=124 超时挂死** | commit gate 1→16 线程吞吐跌 65×；边扫描并行加速比≈1.0；ingest WAL 挂死复现 |
+| linkrs-storage | 13 | **EXIT=124 超时（bench 超时，非数据面挂死，见下）** | commit gate 1→16 线程吞吐跌 65×；边扫描并行加速比≈1.0 |
 | linkrs-transaction | 2 | OK | begin_read 2.12µs，write_set/build 线性偏超线性 |
 | linkrs-query | 6 | **EXIT=101 panic** | parallel_scale 在 `collector.rs:458` panic；并行效率崩溃 |
 
@@ -34,8 +34,10 @@
 
 ## 发现索引（按严重级）
 
-### P0 — 数据面挂死
-- [storage-ingest-wal-hang.md](storage-ingest-wal-hang.md)：`linkrs-storage` 整包 bench `EXIT=124`（超时挂死），与更早一轮记录的 1M 顶点 WAL 持久化挂死一致，本次复现但未捕获 ingest 指标（进程在超时前被杀）。
+> 注（2026-10-11 复核）：原 P0 `storage-ingest-wal-hang.md` 已删除，见下文结论摘要第 1 条。
+> `linkrs-storage` 的 EXIT=124 是 bench 总耗时超过外层超时（edge_scan 未跑完即被 kill，
+> ingest 根本未启动），且 `ingest_bench` 全量（10k/100k/1M）直跑可完成（1M 持久批约 53s），
+> 离线批路径不经过组提交等待，不存在 WAL 挂死证据。P0 级别空缺。
 
 ### P1 — 正确性 / bench 基础设施破裂
 - [query-parallel-collector-panic.md](query-parallel-collector-panic.md)：`parallel_scale_bench` 在 `collector.rs:458` panic `writer must exist`，整包 `EXIT=101`，并行扩展类覆盖缺口。
@@ -56,7 +58,13 @@
 
 ## 结论摘要
 
-1. **最严重的是数据面挂死（P0）**：`linkrs-storage` 整包在 `cargo bench` 下超时挂死（EXIT=124），与更早一轮 1M WAL 挂死一致。优先在开发板用 `RUST_BACKTRACE=1` + debug 构建定位 WAL 段边界轮转 / 组提交协调。
+1. **P0 空缺：EXIT=124 是 bench 超时而非数据面挂死**：`linkrs-storage.log` 止于 `edge_scan_speedup_bench` 的 N=1/3 分区（3 分区只跑完 1 个），
+   按 cargo bench 字母序 ingest 在 edge_scan 之后，ingest 缺席只能证明 kill 发生在 edge_scan 内部，不能作为 ingest 挂死的证据；
+   直接重跑 `ingest_bench` 全量 10k/100k/1M 全部完成（本机 1M 持久批顶点 leg 约 53s，CPU/WAL 约 54s/53s），无挂死；
+   且离线批路径（`new_with_path`，无事务上下文）走 `append_entry_buffered`（纯内存缓冲 + 原子 LSN，无 fsync/轮转/condvar 等待）
+   与 `VersionManager::commit_ordered`（非阻塞 reserve+publish），疑似的“段边界轮转 / 组提交死锁”在此路径上根本不可达；
+   引用的 `bench_results/*.exit` 与 `docs/issue/ingest-1m-wal-hang.md` 在本仓库均不存在，本次亦无栈（原文自述“未深入定位，无栈”），故 P0 指控无负载证据，予以删除。
+   真因是 bench 工作量超出外层 25 分钟超时（edge_scan 3 分区 × 建 1–2M 顶点 + 1M 边 + 52 次全表扫描 + ingest 1M × 3 轮），后续应拆分慢 bench / 缩小默认规模 / 延长超时，而非修 WAL。
 2. **写扩展性崩溃（P2）是最大性能改进抓手**：commit gate 在 16 线程时吞吐跌 65×、gate 等待占 57%，且与 bench 自带 "review sharding" 文案自相矛盾——写路径的集中式 gate 是瓶颈，应评估细粒度分片锁或批提交。
 3. **查询并行不仅没加速反而更慢**：并行效率在 8 worker 时跌到 0.04–0.12，且并行扩展 bench 直接 panic，说明并行执行框架（collector/writer 生命周期、分区 fallback）有正确性+扩展性双重缺陷。
 4. **向量算子是"看起来 SIMD 实则没吃满"**：avx512 路径基本无收益甚至回退，批量 WAL upsert 与低选择性 filter 存在反常回归，是 simvec 热路径最该修的两处。
