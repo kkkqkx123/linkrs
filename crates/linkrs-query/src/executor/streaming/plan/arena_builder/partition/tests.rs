@@ -1,15 +1,15 @@
 use super::*;
 use crate::executor::base::ExecutionContext;
 use crate::executor::streaming::plan::arena_builder::PhysicalPlanBuilder;
-use crate::executor::streaming::{BlockingSpec, JoinSpec, SourceSpec};
-use linkrs_core::types::operators::AggregateFunction;
 use crate::executor::streaming::plan::context::PhysicalPlanBuildContext;
 use crate::executor::streaming::plan::types::InputContract;
+use crate::executor::streaming::{BlockingSpec, JoinSpec, SourceSpec};
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::planning::plan::core::nodes::ScanVerticesNode;
 use crate::planning::plan::{PartitionSource, PartitionSpec};
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use linkrs_core::types::expr::{ContextualExpression, ExpressionMeta};
+use linkrs_core::types::operators::AggregateFunction;
 use linkrs_core::Expression;
 use std::sync::Arc;
 

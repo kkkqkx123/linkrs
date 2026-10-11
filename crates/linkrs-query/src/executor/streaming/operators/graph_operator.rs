@@ -17,13 +17,13 @@ use super::super::runtime::ExecutionRuntime;
 use super::spec::GraphSpec;
 use super::visited_set::VisitedSet;
 
+pub(crate) mod expand;
 mod expand_buffer;
 mod expand_columnar;
 mod expand_dispatch;
 mod expand_frontier;
 mod expand_row_path;
 mod expand_seeds;
-pub(crate) mod expand;
 mod subgraph;
 mod traverse;
 

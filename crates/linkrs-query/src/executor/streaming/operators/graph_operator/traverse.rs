@@ -10,9 +10,7 @@ use linkrs_core::error::QueryError;
 use linkrs_core::{EdgeDirection, Value};
 
 use super::super::visited_set::VisitedSet;
-use super::{
-    expand_buffer, expand_dispatch,
-};
+use super::{expand_buffer, expand_dispatch};
 use super::{GraphOperator, GraphOperatorKind};
 
 pub(super) fn handle_traverse(

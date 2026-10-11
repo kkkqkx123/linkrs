@@ -50,9 +50,11 @@ impl From<CommandParseError> for CoreError {
                 offset,
                 Some(position),
             ),
-            (None, Some(offset)) => {
-                CoreError::detailed_query_error(error.message, ExtendedErrorCode::SyntaxError, Some(offset))
-            }
+            (None, Some(offset)) => CoreError::detailed_query_error(
+                error.message,
+                ExtendedErrorCode::SyntaxError,
+                Some(offset),
+            ),
             (None, None) => CoreError::QueryExecutionFailed(error.message),
         }
     }
@@ -120,23 +122,20 @@ mod tests {
     use super::*;
 
     fn kind_of(text: &str) -> Option<SessionCommand> {
-        classify_session_command(text).ok().flatten().map(|(_, k)| k)
+        classify_session_command(text)
+            .ok()
+            .flatten()
+            .map(|(_, k)| k)
     }
 
     #[test]
     fn classifies_every_transaction_and_session_command() {
         assert_eq!(kind_of("BEGIN"), Some(SessionCommand::Begin));
         assert_eq!(kind_of("BEGIN TRANSACTION"), Some(SessionCommand::Begin));
-        assert_eq!(
-            kind_of("BEGIN READ ONLY"),
-            Some(SessionCommand::Begin)
-        );
+        assert_eq!(kind_of("BEGIN READ ONLY"), Some(SessionCommand::Begin));
         assert_eq!(kind_of("COMMIT"), Some(SessionCommand::Commit));
         assert_eq!(kind_of("ROLLBACK"), Some(SessionCommand::Rollback));
-        assert_eq!(
-            kind_of("ROLLBACK TO sp1"),
-            Some(SessionCommand::Rollback)
-        );
+        assert_eq!(kind_of("ROLLBACK TO sp1"), Some(SessionCommand::Rollback));
         assert_eq!(kind_of("SAVEPOINT sp1"), Some(SessionCommand::Savepoint));
         assert_eq!(
             kind_of("RELEASE SAVEPOINT sp1"),
@@ -175,8 +174,7 @@ mod tests {
         let error = classify_session_command("BEGIN").expect("bare BEGIN parses");
         assert_eq!(error.map(|(_, kind)| kind), Some(SessionCommand::Begin));
 
-        let error =
-            classify_session_command("SAVEPOINT").expect_err("savepoint needs a name");
+        let error = classify_session_command("SAVEPOINT").expect_err("savepoint needs a name");
         assert!(!error.message.is_empty());
         assert!(error.offset.is_some() || error.position.is_some());
     }

@@ -3,10 +3,17 @@
 //! Covers fulltext index building and search. Without the `fulltext` feature
 //! the groups compile to inert placeholders; run with:
 //!   cargo bench -p linkrs-fulltext --features fulltext --bench fulltext_bench
-
-use std::time::Duration;
+//!
+//! Run convention follows the shared bench-group helper: default is the full
+//! run (minutes per suite), `QUICK=1` is the fast smoke run (seconds).
+//! The placeholder run keeps the same shape so both modes stay runnable
+//! without the feature.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+
+#[path = "../../linkrs-core/benches/bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
 
 #[cfg(feature = "fulltext")]
 fn bench_fulltext_index_build(c: &mut Criterion) {
@@ -17,10 +24,7 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
     use tempfile::TempDir;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let mut group = c.benchmark_group("fulltext_index_build");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(30);
-    group.warm_up_time(Duration::from_secs(1));
+    let mut group = create_benchmark_group(c, "fulltext_index_build", 30);
 
     for doc_count in &[100, 500] {
         let temp_dir = TempDir::new().expect("temp dir");
@@ -69,10 +73,7 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
 #[cfg(not(feature = "fulltext"))]
 fn bench_fulltext_index_build(c: &mut Criterion) {
     eprintln!("fulltext feature disabled: index_build bench is a placeholder, run with --features fulltext");
-    let mut group = c.benchmark_group("fulltext_index_build");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(50);
-    group.warm_up_time(Duration::from_secs(1));
+    let mut group = create_benchmark_group(c, "fulltext_index_build", 50);
 
     group.bench_function("index_100", |b| b.iter(|| black_box(100)));
     group.bench_function("index_500", |b| b.iter(|| black_box(500)));
@@ -115,10 +116,7 @@ fn bench_fulltext_search(c: &mut Criterion) {
         }
     });
 
-    let mut group = c.benchmark_group("fulltext_search");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(50);
-    group.warm_up_time(Duration::from_secs(1));
+    let mut group = create_benchmark_group(c, "fulltext_search", 50);
 
     for query in &["rust", "database performance", "search query"] {
         let m = manager.clone();
@@ -145,10 +143,7 @@ fn bench_fulltext_search(c: &mut Criterion) {
     eprintln!(
         "fulltext feature disabled: search bench is a placeholder, run with --features fulltext"
     );
-    let mut group = c.benchmark_group("fulltext_search");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(50);
-    group.warm_up_time(Duration::from_secs(1));
+    let mut group = create_benchmark_group(c, "fulltext_search", 50);
 
     group.bench_function("search_rust", |b| b.iter(|| black_box(10usize)));
     group.finish();

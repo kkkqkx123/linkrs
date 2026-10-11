@@ -20,9 +20,7 @@ fn setup_line() -> TestScenario {
         .exec_ddl("CREATE EDGE Link(weight DOUBLE) FROM Node TO Node")
         .assert_success();
     for i in 0..5 {
-        scenario = scenario.exec_dml(&format!(
-            "INSERT VERTEX Node(name) VALUES {i}:(\"{i}\")"
-        ));
+        scenario = scenario.exec_dml(&format!("INSERT VERTEX Node(name) VALUES {i}:(\"{i}\")"));
     }
     scenario = scenario.assert_success();
     for i in 0..4 {
@@ -43,15 +41,11 @@ fn setup_hub() -> TestScenario {
         .exec_ddl("CREATE EDGE Link(weight DOUBLE) FROM Node TO Node")
         .assert_success();
     for i in 0..6 {
-        scenario = scenario.exec_dml(&format!(
-            "INSERT VERTEX Node(name) VALUES {i}:(\"{i}\")"
-        ));
+        scenario = scenario.exec_dml(&format!("INSERT VERTEX Node(name) VALUES {i}:(\"{i}\")"));
     }
     scenario = scenario.assert_success();
     for dst in 1..6 {
-        scenario = scenario.exec_dml(&format!(
-            "INSERT EDGE Link(weight) VALUES 0 -> {dst}:(1.0)"
-        ));
+        scenario = scenario.exec_dml(&format!("INSERT EDGE Link(weight) VALUES 0 -> {dst}:(1.0)"));
     }
     scenario.assert_success()
 }
@@ -92,8 +86,7 @@ fn sorted_rows(scenario: &TestScenario) -> Vec<Vec<String>> {
 #[test]
 fn narrow_count_matches_edges_with_columnar_marker() {
     let scenario = setup_line();
-    let scenario =
-        scenario.query("EXPLAIN FORMAT = DOT MATCH ()-[r:Link]->() RETURN count(r)");
+    let scenario = scenario.query("EXPLAIN FORMAT = DOT MATCH ()-[r:Link]->() RETURN count(r)");
     let plan = plan_of(&scenario);
     assert!(
         plan.contains("columnar"),
@@ -129,8 +122,7 @@ fn edge_property_projection_exact() {
 #[test]
 fn dst_property_projection_exact() {
     let scenario = setup_line();
-    let scenario =
-        scenario.query("MATCH (a:Node)-[:Link]->(b:Node) RETURN b.name ORDER BY b.name");
+    let scenario = scenario.query("MATCH (a:Node)-[:Link]->(b:Node) RETURN b.name ORDER BY b.name");
     let scenario = scenario.assert_success().assert_result_count(4);
     let rows = sorted_rows(&scenario);
     assert_eq!(rows.len(), 4);
@@ -201,14 +193,18 @@ fn edge_property_rowless_bypass_exact() {
 #[test]
 fn chained_property_bypass_passthrough_exact() {
     let scenario = setup_line();
-    let scenario = scenario
-        .query("MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN b.name, c.name");
+    let scenario =
+        scenario.query("MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN b.name, c.name");
     let scenario = scenario.assert_success().assert_result_count(3);
     match scenario.last_result() {
         Some(ExecutionResult::DataSet { data, .. }) => {
             assert_eq!(data.rows.len(), 3);
             for row in &data.rows {
-                assert_eq!(row.len(), 2, "chained projection keeps both names, got {row:?}");
+                assert_eq!(
+                    row.len(),
+                    2,
+                    "chained projection keeps both names, got {row:?}"
+                );
                 assert!(
                     matches!(row[0], Value::String(_)) && matches!(row[1], Value::String(_)),
                     "upstream and tail bypass columns must both resolve, got {row:?}"
@@ -250,8 +246,7 @@ fn two_hop_count_matches_chained_shape() {
 #[test]
 fn two_hop_fixed_range_matches_chained_shape() {
     let scenario = setup_line();
-    let scenario =
-        scenario.query("MATCH (a:Node)-[:Link*2]->(c:Node) RETURN count(c)");
+    let scenario = scenario.query("MATCH (a:Node)-[:Link*2]->(c:Node) RETURN count(c)");
     let scenario = scenario.assert_success().assert_result_count(1);
     assert_eq!(
         count_value(&scenario),
@@ -267,8 +262,7 @@ fn hub_two_hop_terminates_with_exact_count() {
         scenario.query("MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)");
     let scenario = scenario.assert_success().assert_result_count(1);
     assert_eq!(count_value(&scenario), 0);
-    let scenario =
-        scenario.query("MATCH (a:Node)-[:Link*2]->(c:Node) RETURN count(c)");
+    let scenario = scenario.query("MATCH (a:Node)-[:Link*2]->(c:Node) RETURN count(c)");
     let scenario = scenario.assert_success().assert_result_count(1);
     assert_eq!(count_value(&scenario), 0);
 }
@@ -276,21 +270,22 @@ fn hub_two_hop_terminates_with_exact_count() {
 #[test]
 fn variable_length_union_matches_depths() {
     let scenario = setup_line();
-    let scenario =
-        scenario.query("MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c)");
+    let scenario = scenario.query("MATCH (a:Node)-[:Link*1..2]->(c:Node) RETURN count(c)");
     let scenario = scenario.assert_success().assert_result_count(1);
     assert_eq!(
         count_value(&scenario),
         7,
         "depths 1..2 from all seeds give 4 + 3"
     );
-    let scenario =
-        scenario.query("MATCH (a:Node)-[:Link*1..2]->(c:Node) WHERE a.name == \"0\" RETURN c.name ORDER BY c.name");
+    let scenario = scenario.query(
+        "MATCH (a:Node)-[:Link*1..2]->(c:Node) WHERE a.name == \"0\" RETURN c.name ORDER BY c.name",
+    );
     let scenario = scenario.assert_success().assert_result_count(2);
     let rows = sorted_rows(&scenario);
     assert_eq!(rows.len(), 2);
-    let scenario =
-        scenario.query("MATCH (a:Node)-[:Link*1..3]->(c:Node) WHERE a.name == \"0\" RETURN c.name ORDER BY c.name");
+    let scenario = scenario.query(
+        "MATCH (a:Node)-[:Link*1..3]->(c:Node) WHERE a.name == \"0\" RETURN c.name ORDER BY c.name",
+    );
     let scenario = scenario.assert_success().assert_result_count(3);
     assert_eq!(sorted_rows(&scenario).len(), 3);
 }

@@ -106,22 +106,16 @@ fn extended_error_code_from_internal(code: ExtendedErrorCode) -> linkrs_extended
         ExtendedErrorCode::UnterminatedLiteral => {
             linkrs_extended_error_code_t::LINKRS_ERROR_UNTERMINATED_LITERAL
         }
-        ExtendedErrorCode::TypeMismatch => {
-            linkrs_extended_error_code_t::LINKRS_ERROR_TYPE_MISMATCH
-        }
+        ExtendedErrorCode::TypeMismatch => linkrs_extended_error_code_t::LINKRS_ERROR_TYPE_MISMATCH,
         ExtendedErrorCode::DivisionByZero => {
             linkrs_extended_error_code_t::LINKRS_ERROR_DIVISION_BY_ZERO
         }
         ExtendedErrorCode::OutOfRange => linkrs_extended_error_code_t::LINKRS_ERROR_OUT_OF_RANGE,
-        ExtendedErrorCode::DuplicateKey => {
-            linkrs_extended_error_code_t::LINKRS_ERROR_DUPLICATE_KEY
-        }
+        ExtendedErrorCode::DuplicateKey => linkrs_extended_error_code_t::LINKRS_ERROR_DUPLICATE_KEY,
         ExtendedErrorCode::ForeignKeyConstraint => {
             linkrs_extended_error_code_t::LINKRS_ERROR_FOREIGN_KEY
         }
-        ExtendedErrorCode::NotNullConstraint => {
-            linkrs_extended_error_code_t::LINKRS_ERROR_NOT_NULL
-        }
+        ExtendedErrorCode::NotNullConstraint => linkrs_extended_error_code_t::LINKRS_ERROR_NOT_NULL,
         ExtendedErrorCode::UniqueConstraint => linkrs_extended_error_code_t::LINKRS_ERROR_UNIQUE,
         ExtendedErrorCode::CheckConstraint => linkrs_extended_error_code_t::LINKRS_ERROR_CHECK,
         ExtendedErrorCode::ConnectionLost => {
@@ -258,9 +252,7 @@ pub fn error_code_from_core_error(error: &CoreError) -> (i32, linkrs_extended_er
                 ExtendedErrorCode::UniqueConstraint => {
                     linkrs_error_code_t::LINKRS_CONSTRAINT as i32
                 }
-                ExtendedErrorCode::CheckConstraint => {
-                    linkrs_error_code_t::LINKRS_CONSTRAINT as i32
-                }
+                ExtendedErrorCode::CheckConstraint => linkrs_error_code_t::LINKRS_CONSTRAINT as i32,
                 ExtendedErrorCode::ConnectionLost => linkrs_error_code_t::LINKRS_IOERR as i32,
                 ExtendedErrorCode::Deadlock => linkrs_error_code_t::LINKRS_BUSY as i32,
                 ExtendedErrorCode::LockTimeout => linkrs_error_code_t::LINKRS_BUSY as i32,

@@ -5,8 +5,8 @@
 use crate::api_core::{CoreError, CoreResult, TransactionHandle};
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::Session;
-use linkrs_storage::StorageClient;
 use linkrs_core::Value;
+use linkrs_storage::StorageClient;
 use linkrs_transaction::types::{SavepointId, SavepointInfo};
 use linkrs_transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
 use std::collections::HashMap;
@@ -163,7 +163,9 @@ pub struct Transaction<'sess, S: StorageClient + Clone + Send + Sync + 'static> 
     rolled_back: bool,
 }
 
-impl<'sess, S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget> Transaction<'sess, S> {
+impl<'sess, S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget>
+    Transaction<'sess, S>
+{
     /// Creating a new transaction
     pub(crate) fn new(session: &'sess Session<S>, txn_handle: TransactionHandle) -> Self {
         Self {

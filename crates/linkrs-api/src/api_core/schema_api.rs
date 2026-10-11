@@ -3,10 +3,10 @@
 //! Provides transport layer-independent Schema management capabilities
 
 use crate::api_core::{CoreError, CoreResult, IndexTarget, PropertyDef, SpaceConfig};
-use linkrs_storage::StorageClient;
 use linkrs_core::types::{
     EdgeTypeInfo, Index, IndexField, IndexStatus, IndexType, SpaceInfo, TagInfo,
 };
+use linkrs_storage::StorageClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -488,7 +488,6 @@ impl<S: StorageClient> SchemaApi<S> {
             index_name
         )))
     }
-
 }
 
 // Internal auxiliary methods

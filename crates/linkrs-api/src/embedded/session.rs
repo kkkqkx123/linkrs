@@ -8,13 +8,13 @@ use crate::api_core::{CoreError, CoreResult, QueryApi, SchemaApi};
 use crate::embedded::batch::BatchInserter;
 use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::{Transaction, TransactionConfig};
-use linkrs_storage::StorageClient;
 use linkrs_core::SessionStatistics;
 use linkrs_core::Value;
 use linkrs_metrics::StatsManager;
 use linkrs_query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use linkrs_query::parser::ast::Stmt;
 use linkrs_query::parser::{Parser, ParserResult};
+use linkrs_storage::StorageClient;
 #[cfg(feature = "vector")]
 use linkrs_sync::vector_sync::SearchOptions;
 use linkrs_sync::SyncManager;
@@ -2016,7 +2016,9 @@ mod tests {
         // Text that merely contains "AS (" inside a literal is not gated in
         // and never reaches the parser.
         assert!(Session::<GraphStorage>::parse_create_as("MATCH (n) RETURN 'AS ('").is_none());
-        assert!(!Session::<GraphStorage>::starts_with_create("MATCH (n) RETURN n"));
+        assert!(!Session::<GraphStorage>::starts_with_create(
+            "MATCH (n) RETURN n"
+        ));
     }
 
     #[test]

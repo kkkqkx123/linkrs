@@ -634,7 +634,6 @@ fn test_batch_result_merge() {
     assert_eq!(result1.errors.len(), 2);
 }
 
-
 #[test]
 fn test_batch_inserter_create() {
     let test_db = create_test_database();
@@ -973,9 +972,7 @@ fn setup_phase4_graph(session: &mut linkrs::api::embedded::Session<linkrs::stora
         .execute("CREATE EDGE works_at(since: INT)")
         .expect("create edge works_at");
     session
-        .execute(
-            "INSERT VERTEX person(name, age) VALUES 'Alice':('Alice', 30), 'Bob':('Bob', 25)",
-        )
+        .execute("INSERT VERTEX person(name, age) VALUES 'Alice':('Alice', 30), 'Bob':('Bob', 25)")
         .expect("insert persons");
     session
         .execute("INSERT VERTEX company(name) VALUES 'Acme':('Acme')")

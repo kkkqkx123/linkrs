@@ -15,8 +15,8 @@ use super::expand_columnar::{
     check_output_layout, check_rowless_lockstep, edge_neighbor, read_destinations,
 };
 use super::expand_dispatch::{
-    ColumnarOutcome, bypass_column, closed_loop_dst_tag, dst_bypass_value, edge_bypass_value,
-    edge_projection, expand_on_chunk, has_bypass_conflict, hop_bypass, is_closed_loop_storage,
+    bypass_column, closed_loop_dst_tag, dst_bypass_value, edge_bypass_value, edge_projection,
+    expand_on_chunk, has_bypass_conflict, hop_bypass, is_closed_loop_storage, ColumnarOutcome,
 };
 use super::expand_seeds::{
     identity_seed_ids, materialize_rowless_rows, parse_seeds, seed_slot, seed_vid,
@@ -62,7 +62,10 @@ pub(super) fn expand_multi_hop_frontier(
     let seed_width = if chunk.rows.is_empty() {
         chunk.get_layout().len()
     } else {
-        chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
+        chunk
+            .rows
+            .first()
+            .map_or(chunk.get_layout().len(), |r| r.len())
     };
     let input_layout = chunk.get_layout();
     let (edge_bypass_opt, dst_bypass_opt) = hop_bypass(
@@ -73,8 +76,7 @@ pub(super) fn expand_multi_hop_frontier(
     );
     if ctx.skip_rows && (edge_bypass_opt.is_none() || dst_bypass_opt.is_none()) {
         return Err(QueryError::execution(
-            "rowless expand without complete bypass columns violates the plan contract"
-                .to_string(),
+            "rowless expand without complete bypass columns violates the plan contract".to_string(),
         ));
     }
     let conflict = has_bypass_conflict(
@@ -348,7 +350,10 @@ pub(super) fn expand_variable_frontier(
     let seed_width = if chunk.rows.is_empty() {
         chunk.get_layout().len()
     } else {
-        chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
+        chunk
+            .rows
+            .first()
+            .map_or(chunk.get_layout().len(), |r| r.len())
     };
     let input_layout = chunk.get_layout();
     let (edge_bypass_opt, dst_bypass_opt) = hop_bypass(
@@ -359,8 +364,7 @@ pub(super) fn expand_variable_frontier(
     );
     if ctx.skip_rows && (edge_bypass_opt.is_none() || dst_bypass_opt.is_none()) {
         return Err(QueryError::execution(
-            "rowless expand without complete bypass columns violates the plan contract"
-                .to_string(),
+            "rowless expand without complete bypass columns violates the plan contract".to_string(),
         ));
     }
     let conflict = has_bypass_conflict(

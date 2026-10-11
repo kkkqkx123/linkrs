@@ -144,7 +144,9 @@ impl CoreError {
 /// The mapping is intentionally coarse: the wire codes are a small fixed
 /// taxonomy, so several kinds share one code. Resist the urge to grow
 /// `ExtendedErrorCode` to make individual kinds distinct.
-fn extended_code_from_query_kind(kind: linkrs_core::error::query::QueryErrorKind) -> ExtendedErrorCode {
+fn extended_code_from_query_kind(
+    kind: linkrs_core::error::query::QueryErrorKind,
+) -> ExtendedErrorCode {
     use linkrs_core::error::query::QueryErrorKind;
     match kind {
         QueryErrorKind::Parse => ExtendedErrorCode::SyntaxError,
@@ -222,14 +224,14 @@ mod tests {
             (QueryErrorKind::Type, ExtendedErrorCode::TypeMismatch),
             (QueryErrorKind::Transaction, ExtendedErrorCode::Deadlock),
             (QueryErrorKind::Timeout, ExtendedErrorCode::LockTimeout),
-            (QueryErrorKind::InvalidQuery, ExtendedErrorCode::SemanticError),
+            (
+                QueryErrorKind::InvalidQuery,
+                ExtendedErrorCode::SemanticError,
+            ),
             (QueryErrorKind::Execution, ExtendedErrorCode::Internal),
         ];
         for (kind, expected) in cases {
-            let error = CoreError::from(linkrs_core::error::QueryError::new(
-                kind,
-                "boom",
-            ));
+            let error = CoreError::from(linkrs_core::error::QueryError::new(kind, "boom"));
             assert_eq!(error.extended_code(), expected, "kind {kind:?}");
             assert!(
                 error.to_string().contains("boom"),

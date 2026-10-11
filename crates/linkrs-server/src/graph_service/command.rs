@@ -56,13 +56,12 @@ impl<
         match linkrs_api::api_core::classify_session_command(stmt) {
             Ok(classified) => Ok(classified.map(|(parsed, _)| parsed)),
             Err(error) => {
-                let position = error
-                    .position
-                    .or_else(|| error.offset.and_then(|offset| offset_to_position(stmt, offset)));
-                Err(GraphServiceError::with_position(
-                    error.message,
-                    position,
-                ))
+                let position = error.position.or_else(|| {
+                    error
+                        .offset
+                        .and_then(|offset| offset_to_position(stmt, offset))
+                });
+                Err(GraphServiceError::with_position(error.message, position))
             }
         }
     }

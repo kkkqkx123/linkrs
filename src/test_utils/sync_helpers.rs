@@ -514,10 +514,7 @@ pub fn create_test_vertex_with_vector(
     // Convert Vec<f32> to VectorValue
     use crate::core::VectorValue;
     let vector_value = VectorValue::Dense(vector_prop.1);
-    properties.insert(
-        Arc::from(vector_prop.0),
-        Value::Vector(vector_value),
-    );
+    properties.insert(Arc::from(vector_prop.0), Value::Vector(vector_value));
 
     let tag = Tag::new(tag_name.to_string(), properties);
     Vertex::new(VertexId::try_from_int64(vid).expect("test vertex id"), tag)

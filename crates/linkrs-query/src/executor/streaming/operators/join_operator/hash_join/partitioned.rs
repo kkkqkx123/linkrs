@@ -12,12 +12,12 @@ use linkrs_core::types::expr::Expression;
 use linkrs_core::value::NullType;
 use linkrs_core::Value;
 
-use super::build_side::{evaluate_join_key, HashJoinBuildSide};
 use super::super::grace_join::{
     hash_join_key_partition, spill_build_side, GraceJoinState, PartitionedJoinState,
     PendingBuildSpill, RotatingPartitionWriter,
 };
 use super::super::{build_combined_names, finalize_join_output};
+use super::build_side::{evaluate_join_key, HashJoinBuildSide};
 
 /// Rows emitted per partitioned-serve batch.
 const PARTITIONED_BATCH_ROWS: usize = 1024;

@@ -4,8 +4,8 @@ use linkrs_core::Value;
 
 use super::manager::SpillManager;
 use super::run_format::fnv1a_64_update;
-use super::run_io::{RunReader, RunWriter};
 use super::run_format::SpilledRun;
+use super::run_io::{RunReader, RunWriter};
 
 // ── Hash partition spill ─────────────────────────────────────────────────────
 

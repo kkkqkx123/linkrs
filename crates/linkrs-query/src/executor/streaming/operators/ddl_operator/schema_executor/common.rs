@@ -1,7 +1,6 @@
 use linkrs_core::types::edge::EdgeTypeInfo;
 use linkrs_core::Value;
 
-
 /// Describe rows for an edge type's endpoint constraints.
 ///
 /// The two leading `DESC EDGE` rows expose the current `src_tag` /

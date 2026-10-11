@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::runtime::SyncMode;
+
 /// Storage engine type
 #[derive(Debug, Default, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -64,6 +66,10 @@ pub struct StorageConfig {
     /// Checkpoint interval (seconds, 0 = disabled)
     #[serde(default = "default_checkpoint_interval")]
     pub checkpoint_interval_secs: u64,
+
+    /// WAL synchronization policy applied at storage startup.
+    #[serde(default = "default_sync_mode")]
+    pub sync_mode: SyncMode,
 
     /// Maximum database size (bytes, 0 = unlimited)
     #[serde(default)]
@@ -266,6 +272,10 @@ fn default_index_eviction_low_ratio() -> f64 {
     0.65
 }
 
+fn default_sync_mode() -> SyncMode {
+    SyncMode::Full
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
@@ -273,6 +283,7 @@ impl Default for StorageConfig {
             compression: CompressionAlgorithm::default(),
             compression_level: default_compression_level(),
             checkpoint_interval_secs: default_checkpoint_interval(),
+            sync_mode: default_sync_mode(),
             max_db_size: 0, // Unlimited
             auto_statistics: true,
             statistics_interval_secs: default_statistics_interval(),
@@ -448,6 +459,7 @@ mod tests {
         assert_eq!(config.compression, CompressionAlgorithm::None);
         assert_eq!(config.compression_level, 3);
         assert_eq!(config.checkpoint_interval_secs, 300);
+        assert_eq!(config.sync_mode, SyncMode::Full);
         assert!(config.auto_statistics);
     }
 

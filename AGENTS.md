@@ -48,7 +48,12 @@ Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/linkrs-cli`, `cra
 
 ## Building and Running
 
-Prerequisites: rustc 1.88.0, cargo 1.88.0
+Prerequisites: rustc 1.97.1, cargo 1.97.1 (recent stable; 1.88-era pins are
+stale). The `jitexpr` member inside the `crates/tantivy` sub-workspace pins
+cranelift 0.134.x, which needs this newer toolchain; the root workspace
+never resolves or benches it (patched dependency, feature off, root lock
+carries no cranelift entries), so root builds stay unaffected. The planned
+gpui client has the same recent-stable requirement.
 
 SIMD note (Phase 0): `.cargo/config.toml` sets `-C target-cpu=x86-64-v3`
 (AVX2, Haswell+ 2013) for auto-vectorization. **A v3-built binary requires

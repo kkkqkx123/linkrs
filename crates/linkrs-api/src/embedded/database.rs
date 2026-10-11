@@ -8,7 +8,6 @@ use crate::embedded::config::DatabaseConfig;
 use crate::embedded::config::EmbeddedVectorEngine;
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
-use linkrs_storage::{GraphStorage, StorageClient};
 use linkrs_core::Value;
 use linkrs_fulltext::FulltextConfig;
 #[cfg(feature = "fulltext")]
@@ -16,6 +15,7 @@ use linkrs_fulltext::FulltextIndexManager;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::SyncFailurePolicy;
 use linkrs_metrics::StatsManager;
+use linkrs_storage::{GraphStorage, StorageClient};
 #[cfg(feature = "vector")]
 use linkrs_sync::backend::VectorBackend;
 #[cfg(feature = "fulltext")]
@@ -145,12 +145,12 @@ struct SecondaryManagers {
 
 /// Build the fulltext and vector managers for one open.
 fn build_secondary_managers(
-    #[cfg_attr(not(feature = "vector"), allow(unused_variables))]
-    config: &DatabaseConfig,
+    #[cfg_attr(not(feature = "vector"), allow(unused_variables))] config: &DatabaseConfig,
     #[cfg_attr(not(feature = "fulltext"), allow(unused_variables))]
     fulltext_config: &FulltextConfig,
-    #[cfg_attr(not(feature = "vector"), allow(unused_variables))]
-    vector_runtime: Option<&tokio::runtime::Handle>,
+    #[cfg_attr(not(feature = "vector"), allow(unused_variables))] vector_runtime: Option<
+        &tokio::runtime::Handle,
+    >,
 ) -> CoreResult<SecondaryManagers> {
     #[cfg(feature = "fulltext")]
     if fulltext_config.enabled {
@@ -300,7 +300,7 @@ impl GraphDatabase<GraphStorage> {
                 .path()
                 .ok_or_else(|| CoreError::StorageError("Database path is empty".to_string()))?;
             let enable_wal = config.enable_wal;
-            let sync_policy = sync_mode_to_policy(config.sync_mode);
+            let sync_policy = Some(config.sync_mode.to_sync_policy());
             let storage =
                 GraphStorage::open_with_persistence(path.to_path_buf(), enable_wal, sync_policy)
                     .map_err(|e| {
@@ -361,7 +361,8 @@ impl GraphDatabase<GraphStorage> {
 
         let query_api = if let Some(ref sync) = sync_manager {
             Arc::new(RwLock::new(
-                QueryApi::new(storage.clone(), stats_manager.clone()).with_sync_manager(sync.clone()),
+                QueryApi::new(storage.clone(), stats_manager.clone())
+                    .with_sync_manager(sync.clone()),
             ))
         } else {
             Arc::new(RwLock::new(QueryApi::new(
@@ -524,14 +525,6 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
     }
 }
 
-fn sync_mode_to_policy(mode: crate::embedded::config::SyncMode) -> Option<SyncPolicy> {
-    match mode {
-        crate::embedded::config::SyncMode::Full => Some(SyncPolicy::EveryWrite),
-        crate::embedded::config::SyncMode::Normal => Some(SyncPolicy::EveryWrite),
-        crate::embedded::config::SyncMode::Off => Some(SyncPolicy::Never),
-    }
-}
-
 #[cfg(test)]
 impl GraphDatabase<MockStorage> {
     /// Create database for testing (using Mock storage)
@@ -625,8 +618,7 @@ mod tests {
     fn secondary_managers_skip_fulltext_when_disabled() {
         let directory = tempfile::TempDir::new().unwrap();
         let config = DatabaseConfig::file(directory.path().join("graph.db"));
-        let managers =
-            build_secondary_managers(&config, &FulltextConfig::default(), None).unwrap();
+        let managers = build_secondary_managers(&config, &FulltextConfig::default(), None).unwrap();
         assert!(
             managers.fulltext.is_none(),
             "default fulltext config is disabled"

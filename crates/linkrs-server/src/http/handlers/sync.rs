@@ -152,9 +152,7 @@ pub async fn diagnostics<
     let sync_api = graph_service
         .sync_api()
         .ok_or_else(|| HttpError::bad_request("Synchronization is not configured"))?;
-    let diag = sync_api
-        .sync_diagnostics()
-        .map_err(HttpError::from)?;
+    let diag = sync_api.sync_diagnostics().map_err(HttpError::from)?;
     Ok(JsonResponse(serde_json::json!(diag)))
 }
 
@@ -260,10 +258,7 @@ pub async fn requeue<
     if let Some(ids) = payload.event_ids {
         let mut requeued = 0usize;
         for id in ids {
-            if sync_api
-                .requeue_dead_letter(id)
-                .map_err(HttpError::from)?
-            {
+            if sync_api.requeue_dead_letter(id).map_err(HttpError::from)? {
                 requeued += 1;
             }
         }
@@ -462,9 +457,7 @@ pub async fn retention_status<
     let sync_api = graph_service
         .sync_api()
         .ok_or_else(|| HttpError::bad_request("Synchronization is not configured"))?;
-    let retention = sync_api
-        .retention_lsn()
-        .map_err(HttpError::from)?;
+    let retention = sync_api.retention_lsn().map_err(HttpError::from)?;
     Ok(JsonResponse(
         serde_json::json!({ "retention_lsn": retention.get() }),
     ))

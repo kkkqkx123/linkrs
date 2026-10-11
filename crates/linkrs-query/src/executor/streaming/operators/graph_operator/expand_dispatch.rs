@@ -91,10 +91,17 @@ pub(super) fn closed_loop_dst_tag(
 
 /// Convert the planner edge demand into a storage projection. `None` means the
 /// whole edge (all properties), `Some([])` means topology only.
-pub(super) fn edge_projection(edge_required: Option<&Vec<String>>) -> Option<Vec<std::sync::Arc<str>>> {
+pub(super) fn edge_projection(
+    edge_required: Option<&Vec<String>>,
+) -> Option<Vec<std::sync::Arc<str>>> {
     match edge_required {
         None => None,
-        Some(props) => Some(props.iter().map(|s| std::sync::Arc::from(s.as_str())).collect()),
+        Some(props) => Some(
+            props
+                .iter()
+                .map(|s| std::sync::Arc::from(s.as_str()))
+                .collect(),
+        ),
     }
 }
 
@@ -256,11 +263,7 @@ pub(super) fn expand_on_chunk(
     // of guessing a label. Missing seeds walk nothing.
     if seed_vertices.iter().any(|v| v.is_none()) && !seed_vids.is_empty() {
         let seed_tag = crate::executor::traversal::graph_reader::resolve_seed_tag(
-            reader,
-            space_name,
-            edge_types,
-            direction,
-            "",
+            reader, space_name, edge_types, direction, "",
         )?;
         let mut bare_ids: Vec<VertexId> = Vec::new();
         let mut bare_pos: Vec<usize> = Vec::new();
@@ -277,7 +280,8 @@ pub(super) fn expand_on_chunk(
                 match vertex {
                     Some(v) => {
                         seed_vertices[*pos] = Some(v.clone());
-                        if let Some(slot) = seed_rows.get_mut(*pos).and_then(|r| r.get_mut(seed_slot))
+                        if let Some(slot) =
+                            seed_rows.get_mut(*pos).and_then(|r| r.get_mut(seed_slot))
                         {
                             *slot = Value::Vertex(Box::new(v));
                         }
@@ -286,12 +290,10 @@ pub(super) fn expand_on_chunk(
                 }
             }
             if !missing.is_empty() {
-                let drop: std::collections::HashSet<usize> =
-                    missing.into_iter().collect();
+                let drop: std::collections::HashSet<usize> = missing.into_iter().collect();
                 let mut kept_vids = Vec::with_capacity(seed_vids.len() - drop.len());
                 let mut kept_rows = Vec::with_capacity(seed_rows.len() - drop.len());
-                let mut kept_vertices =
-                    Vec::with_capacity(seed_vertices.len() - drop.len());
+                let mut kept_vertices = Vec::with_capacity(seed_vertices.len() - drop.len());
                 for (idx, ((vid, row), vertex)) in seed_vids
                     .into_iter()
                     .zip(seed_rows.into_iter())

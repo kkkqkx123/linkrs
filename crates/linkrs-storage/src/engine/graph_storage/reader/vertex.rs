@@ -227,7 +227,9 @@ fn get_vertices_batch_impl(
                 Ok(_) => {
                     let key = match vid.as_int64() {
                         Some(i) => Some(crate::vertex::IdKey::Int(i)),
-                        None => vid.as_str().map(|s| crate::vertex::IdKey::Text(s.to_string())),
+                        None => vid
+                            .as_str()
+                            .map(|s| crate::vertex::IdKey::Text(s.to_string())),
                     };
                     normalized.push(Some(vid));
                     keys.push(key);
@@ -274,19 +276,22 @@ fn get_vertices_batch_impl(
     let mut out: Vec<Option<Vertex>> = vec![None; ids.len()];
     if !batchable.is_empty() {
         let guard = ctx.visibility_guard(ts);
-        let internal_ids: Vec<Option<u32>> = ctx.data_store().with_vertex_tables(|tables| {
-            let table = tables.get(&label_id)?;
-            let mut resolved = Vec::with_capacity(batchable.len());
-            for idx in &batchable {
-                let key = keys.get(*idx)?.as_ref()?;
-                let internal = match key {
-                    crate::vertex::IdKey::Int(i) => table.get_internal_id_by_i64(*i, ts),
-                    crate::vertex::IdKey::Text(s) => table.get_internal_id(s, ts),
-                };
-                resolved.push(internal);
-            }
-            Some(resolved)
-        }).unwrap_or_default();
+        let internal_ids: Vec<Option<u32>> = ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                let table = tables.get(&label_id)?;
+                let mut resolved = Vec::with_capacity(batchable.len());
+                for idx in &batchable {
+                    let key = keys.get(*idx)?.as_ref()?;
+                    let internal = match key {
+                        crate::vertex::IdKey::Int(i) => table.get_internal_id_by_i64(*i, ts),
+                        crate::vertex::IdKey::Text(s) => table.get_internal_id(s, ts),
+                    };
+                    resolved.push(internal);
+                }
+                Some(resolved)
+            })
+            .unwrap_or_default();
         if internal_ids.len() != batchable.len() {
             staged.extend(batchable.iter().copied());
             batchable.clear();

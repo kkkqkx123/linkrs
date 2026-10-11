@@ -9,8 +9,8 @@ use crate::api_core::{
 };
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::session::Session;
-use linkrs_storage::StorageClient;
 use linkrs_core::{Edge, Vertex};
+use linkrs_storage::StorageClient;
 
 /// Batch Inserter
 ///

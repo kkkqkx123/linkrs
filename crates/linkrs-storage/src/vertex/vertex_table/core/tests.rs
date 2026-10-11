@@ -1216,3 +1216,39 @@ fn test_compact_preserves_moved_row_history() {
     assert_eq!(name_at(150), Some(Value::string("Alice")));
     assert_eq!(name_at(300), Some(Value::string("Alice2")));
 }
+
+#[test]
+fn test_primary_key_mirror_errors_share_got_expected_shape() {
+    let schema = create_test_schema();
+    let table = new_table(0, "person", schema);
+    let internal_id = table
+        .insert("v1", &[("name".into(), Value::string("Alice"))], 100)
+        .expect("insert");
+    let write_err = table
+        .insert(
+            "v2",
+            &[
+                ("id".into(), Value::string("other")),
+                ("name".into(), Value::string("Bob")),
+            ],
+            200,
+        )
+        .expect_err("divergent mirror on insert must fail");
+    let write_message = write_err.to_string();
+    assert!(
+        write_message.contains("must mirror the vertex id")
+            && write_message.contains("got")
+            && write_message.contains("expected"),
+        "insert mirror error must carry both values, got: {write_message}"
+    );
+    let update_err = table
+        .validate_update_value(internal_id, "id", &Value::string("other"))
+        .expect_err("divergent mirror on update must fail");
+    let update_message = update_err.to_string();
+    assert!(
+        update_message.contains("must mirror the vertex id")
+            && update_message.contains("got")
+            && update_message.contains("expected"),
+        "update mirror error must carry both values, got: {update_message}"
+    );
+}

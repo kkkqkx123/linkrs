@@ -5,10 +5,10 @@ use crate::executor::streaming::executor::StreamingExecutor;
 use linkrs_core::error::QueryError;
 use linkrs_core::Value;
 
+use super::expand_dispatch::ColumnarOutcome;
 use super::{
     expand_buffer, expand_columnar, expand_dispatch, expand_frontier, expand_row_path, expand_seeds,
 };
-use super::expand_dispatch::ColumnarOutcome;
 use super::{ExpandCtx, GraphOperator, GraphOperatorKind};
 
 pub(super) fn handle(
@@ -153,9 +153,7 @@ pub(super) fn handle_all(
     let dst_required_props = dst_required_props.clone();
     let closed_loop = *closed_loop;
     let mut skip_rows = *skip_rows;
-    if skip_rows
-        && !crate::executor::streaming::chunk::use_columnar_path(&op.runtime)
-    {
+    if skip_rows && !crate::executor::streaming::chunk::use_columnar_path(&op.runtime) {
         skip_rows = false;
     }
 
@@ -163,8 +161,11 @@ pub(super) fn handle_all(
     // `expand_single_step`; it is not a reason to fall back to the generic
     // runtime path. Only a real filter, literal seed ids or a path semantic
     // require the generic walk.
-    let use_fast_path =
-        step_limit == 1 && step_limits.is_none() && filter_expr.is_none() && src_vids.is_empty() && path_semantic.is_none();
+    let use_fast_path = step_limit == 1
+        && step_limits.is_none()
+        && filter_expr.is_none()
+        && src_vids.is_empty()
+        && path_semantic.is_none();
 
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
     while let Some(chunk) = input.advance()? {
@@ -176,8 +177,7 @@ pub(super) fn handle_all(
             // count-only plan with property demands is a contract error:
             // attribute counts observe nullability, not edge degrees.
             if count_only && path_semantic.is_none() {
-                let edge_empty =
-                    matches!(edge_required_props.as_ref(), Some(v) if v.is_empty());
+                let edge_empty = matches!(edge_required_props.as_ref(), Some(v) if v.is_empty());
                 let dst_empty = matches!(dst_required_props.as_ref(), Some(v) if v.is_empty());
                 if !edge_empty || !dst_empty {
                     return Err(linkrs_core::error::QueryError::execution(
@@ -242,11 +242,7 @@ pub(super) fn handle_all(
                     )
                     && closed_loop
                     && expand_dispatch::is_closed_loop_storage(
-                        &*reader,
-                        space_name,
-                        edge_types,
-                        direction,
-                        dst_tag,
+                        &*reader, space_name, edge_types, direction, dst_tag,
                     );
                 if var_eligible {
                     match expand_frontier::expand_variable_frontier(
@@ -287,11 +283,7 @@ pub(super) fn handle_all(
                     )
                     && closed_loop
                     && expand_dispatch::is_closed_loop_storage(
-                        &*reader,
-                        space_name,
-                        edge_types,
-                        direction,
-                        dst_tag,
+                        &*reader, space_name, edge_types, direction, dst_tag,
                     );
                 if multi_eligible {
                     match expand_frontier::expand_multi_hop_frontier(
@@ -327,12 +319,9 @@ pub(super) fn handle_all(
                 if !emit_raw_ids
                     && closed_loop
                     && expand_dispatch::is_closed_loop_storage(
-                        &*reader,
-                        space_name,
-                        edge_types,
-                        direction,
-                        dst_tag,
-                    ) {
+                        &*reader, space_name, edge_types, direction, dst_tag,
+                    )
+                {
                     match expand_columnar::expand_single_step_columnar(
                         &chunk,
                         Arc::clone(&op.output_layout),

@@ -49,9 +49,10 @@ pub mod c_api;
 // Re-export the main types
 pub use batch::{BatchError, BatchInserter, BatchItemType, BatchResult};
 pub use busy_handler::{BusyConfig, BusyHandler, BusyResult};
-pub use config::{DatabaseConfig, SyncMode};
+pub use config::DatabaseConfig;
 pub use database::GraphDatabase;
 pub use hooks::HookBus;
+pub use linkrs_config::SyncMode;
 pub use result::{QueryResult, ResultMetadata, Row};
 pub use session::Session;
 pub use statistics::QueryStatistics;

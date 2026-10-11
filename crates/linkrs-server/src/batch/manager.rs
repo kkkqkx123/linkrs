@@ -180,18 +180,12 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
         for (index, item) in items.into_iter().enumerate() {
             match item {
                 BatchItem::Vertex(data) => {
-                    if let Some(core) = self
-                        .convert_vertex_data(data)
-                        .map(BulkInsertItem::Vertex)
-                    {
+                    if let Some(core) = self.convert_vertex_data(data).map(BulkInsertItem::Vertex) {
                         insert_items.push(core);
                     }
                 }
                 BatchItem::Edge(data) => {
-                    if let Some(core) = self
-                        .convert_edge_data(data)
-                        .map(BulkInsertItem::Edge)
-                    {
+                    if let Some(core) = self.convert_edge_data(data).map(BulkInsertItem::Edge) {
                         insert_items.push(core);
                     }
                 }

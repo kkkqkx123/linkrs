@@ -1,8 +1,8 @@
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::database::GraphDatabase;
 use crate::migration_online::execute_online_migration;
-use linkrs_storage::GraphStorage;
 use linkrs_migration::{MigrationConfig, MigrationPlan, MigrationReport};
+use linkrs_storage::GraphStorage;
 
 impl GraphDatabase<GraphStorage> {
     pub fn generate_vertex_migration_plan(

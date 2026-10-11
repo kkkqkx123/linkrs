@@ -198,8 +198,7 @@ fn anonymous_edge_count_exact_on_tagged_schema() {
     }
     scenario = scenario.assert_success();
     for i in 0..10 {
-        scenario =
-            scenario.exec_dml(&format!("INSERT EDGE knows VALUES {i} -> {}", (i + 1) % 10));
+        scenario = scenario.exec_dml(&format!("INSERT EDGE knows VALUES {i} -> {}", (i + 1) % 10));
     }
     let scenario = scenario.assert_success();
 

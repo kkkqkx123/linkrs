@@ -11,9 +11,9 @@
 //! batch execution belongs to `QueryApi::execute_batch` and must not be
 //! mixed with this path.
 
-use linkrs_storage::StorageClient;
 use crate::CoreResult;
 use linkrs_core::{Edge, Vertex};
+use linkrs_storage::StorageClient;
 
 /// Bulk insert configuration
 #[derive(Debug, Clone)]

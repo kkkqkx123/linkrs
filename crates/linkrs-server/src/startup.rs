@@ -107,6 +107,7 @@ pub async fn start_service_with_config_path(
     let storage_path = PathBuf::from(config.storage_path());
     let mut persistence_config = PersistenceConfig::for_work_dir(&storage_path)
         .with_property_graph_config(property_graph_config_from_config(&config.storage));
+    persistence_config.sync_policy = Some(config.storage.sync_mode.to_sync_policy());
     if config.storage.checkpoint_interval_secs > 0 {
         persistence_config.auto_checkpoint_interval =
             Duration::from_secs(config.storage.checkpoint_interval_secs);

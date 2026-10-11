@@ -323,8 +323,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
                 pairs.push(crate::planning::plan::explain::Pair::new("mode", "id_only"));
             } else if *closed_loop {
                 pairs.push(crate::planning::plan::explain::Pair::new(
-                    "mode",
-                    "columnar",
+                    "mode", "columnar",
                 ));
                 if *skip_rows {
                     pairs.push(crate::planning::plan::explain::Pair::new("rows", "skipped"));

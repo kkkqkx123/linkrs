@@ -17,6 +17,8 @@ mod aggregation;
 mod common;
 #[path = "dql/constant_folding.rs"]
 mod constant_folding;
+#[path = "dql/expand_columnar.rs"]
+mod expand_columnar;
 #[path = "dql/fetch.rs"]
 mod fetch;
 #[path = "dql/find_path.rs"]
@@ -29,8 +31,6 @@ mod lookup;
 mod match_query;
 #[path = "dql/optimizer.rs"]
 mod optimizer;
-#[path = "dql/expand_columnar.rs"]
-mod expand_columnar;
 #[path = "dql/scan_edge_identity.rs"]
 mod scan_edge_identity;
 #[path = "dql/scan_identity.rs"]

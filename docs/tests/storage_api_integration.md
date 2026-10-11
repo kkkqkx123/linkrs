@@ -272,10 +272,10 @@ async fn test_fulltext_with_storage() {
 
 ```rust
 let sync_config = SyncConfig {
-    mode: SyncMode::Async,
-    batch_size: 100,
-    commit_interval_ms: 100,
     queue_size: 10000,
+    commit_interval_ms: 100,
+    batch_size: 100,
+    failure_policy: SyncFailurePolicy::FailOpen,
 };
 
 let sync_manager = SyncManager::with_sync_config(
@@ -629,7 +629,7 @@ pub fn get_storage(
 ### 5. 性能考虑
 
 - **批量操作**：使用 `batch_insert_vertices` 等批量 API
-- **异步模式**：使用 `SyncMode::Async` 提高性能
+- **持久化策略**：为在线服务配置 `[storage] sync_mode = "full"`，为批量导入场景可评估 `"off"`（以 WAL 组提交证据为前提）
 - **合理批处理**：设置合适的 `batch_size` 和 `commit_interval_ms`
 
 ---

@@ -39,6 +39,12 @@
 //!
 //! Machine requirement: >= 8 cores for the gate leg. Record CPU model and
 //! core count for reproducibility.
+//!
+//! Measurement envelope: numbers taken on a constrained box (small memory or
+//! cgroup quota) are labeled as such and never mixed with true-machine
+//! numbers. The sharding review gate stays closed until true-machine data
+//! crosses the thresholds below; constrained-box data only sizes caller
+//! chunking.
 
 use std::hint::black_box;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,12 +61,28 @@ use linkrs_storage::{
     GraphStorage, StorageOperationContextOps, StorageSchemaOps, StorageWriter, WriteGateStats,
 };
 
+#[path = "bench_group.rs"]
+mod bench_group;
+
 // ── staging leg ─────────────────────────────────────────────────────────────
 
 /// Batch sizes for the scaling leg (commit hold-time growth).
-const SIZES: [usize; 3] = [5_000, 10_000, 20_000];
+/// Fast smoke run (`QUICK=1`) uses the small head only.
+fn batch_sizes() -> Vec<usize> {
+    if bench_group::quick_mode() {
+        vec![1_000]
+    } else {
+        vec![5_000, 10_000, 20_000]
+    }
+}
 /// Measurement repetitions per configuration (median reported).
-const ITERATIONS: usize = 3;
+fn iterations() -> usize {
+    if bench_group::quick_mode() {
+        1
+    } else {
+        3
+    }
+}
 /// Skewed leg reuses one owner group; uniform spreads across this many rows.
 const UNIFORM_SPAN: u32 = 200_000;
 
@@ -111,8 +133,9 @@ struct CommitSample {
 }
 
 fn measure_commit(keys: &[(u32, u32)]) -> CommitSample {
-    let mut samples = Vec::with_capacity(ITERATIONS);
-    for _ in 0..ITERATIONS {
+    let rounds = iterations();
+    let mut samples = Vec::with_capacity(rounds);
+    for _ in 0..rounds {
         let table = make_table();
         // Distribution check first: the owner partition of the raw keys must
         // agree with the staging plan of the buffered batch, since an
@@ -147,7 +170,7 @@ fn measure_commit(keys: &[(u32, u32)]) -> CommitSample {
         });
     }
     samples.sort_by(|a, b| a.commit_ms.partial_cmp(&b.commit_ms).expect("finite"));
-    samples.swap_remove(ITERATIONS / 2)
+    samples.swap_remove(rounds / 2)
 }
 
 fn make_hot_summary(n: usize, skewed: bool) -> String {
@@ -174,7 +197,7 @@ fn run_commit_scale() {
         "{:>12} | {:>12} | {:>7} | {:>7} | {:>10} | {:>7} | {:>5}",
         "workload", "commit ms", "groups", "total", "max/group", "skew", "hot"
     );
-    for &n in &SIZES {
+    for &n in &batch_sizes() {
         let keys = uniform_keys(n);
         let s = measure_commit(&keys);
         let hot = make_hot_summary(n, false);
@@ -190,12 +213,14 @@ fn run_commit_scale() {
         );
         assert_eq!(s.skew_groups, s.plan_groups);
     }
-    let skewed = skewed_keys(SIZES[2]);
+    let sizes = batch_sizes();
+    let skewed_size = *sizes.last().expect("at least one batch size");
+    let skewed = skewed_keys(skewed_size);
     let s = measure_commit(&skewed);
-    let hot = make_hot_summary(SIZES[2], true);
+    let hot = make_hot_summary(skewed_size, true);
     println!(
         "{:>12} | {:>12.2} | {:>7} | {:>7} | {:>10} | {:>6.2}x | {:>5}",
-        format!("skewed/{}", SIZES[2]),
+        format!("skewed/{skewed_size}"),
         s.commit_ms,
         s.plan_groups,
         s.skew_total,
@@ -213,9 +238,21 @@ fn run_commit_scale() {
 
 const GATE_SPACE: &str = "b2";
 const GATE_TAG: &str = "Node";
-/// Concurrent auto-commit writers per run.
-const THREADS: [usize; 4] = [1, 4, 8, 16];
-const STATEMENTS_PER_THREAD: usize = 4_000;
+/// Concurrent auto-commit writers per run (fast smoke run uses the head only).
+fn gate_threads() -> Vec<usize> {
+    if bench_group::quick_mode() {
+        vec![1, 4]
+    } else {
+        vec![1, 4, 8, 16]
+    }
+}
+fn statements_per_thread() -> usize {
+    if bench_group::quick_mode() {
+        400
+    } else {
+        4_000
+    }
+}
 
 fn gate_setup() -> GraphStorage {
     let mut storage = GraphStorage::new().expect("storage init");
@@ -245,6 +282,7 @@ fn run_concurrent_writers(
     threads: usize,
     next_id: &Arc<AtomicU64>,
 ) -> GateRunResult {
+    let statements = statements_per_thread();
     let before = storage.write_gate_stats();
     let barrier = Arc::new(Barrier::new(threads));
     let start = Instant::now();
@@ -255,7 +293,7 @@ fn run_concurrent_writers(
             let next_id = next_id.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                for _ in 0..STATEMENTS_PER_THREAD {
+                for _ in 0..statements {
                     // Mirror the session write path: one gate acquisition per
                     // auto-commit statement, released at finalize.
                     let id = next_id.fetch_add(1, Ordering::Relaxed) as i64;
@@ -287,15 +325,17 @@ fn run_concurrent_writers(
         wall,
         gate_wait_nanos: after.wait_nanos - before.wait_nanos,
         acquisitions: after.acquisitions - before.acquisitions,
-        total_statements: threads * STATEMENTS_PER_THREAD,
+        total_statements: threads * statements,
     }
 }
 
 fn run_gate_share() {
+    let threads_list = gate_threads();
+    let statements = statements_per_thread();
     println!("== write-path gate contention share ==");
     println!(
-        "statements per thread = {STATEMENTS_PER_THREAD}, threads = {:?}",
-        THREADS
+        "statements per thread = {statements}, threads = {:?}",
+        threads_list
     );
     println!(
         "{:>7} | {:>10} | {:>12} | {:>11} | {:>10} | {:>9}",
@@ -304,7 +344,7 @@ fn run_gate_share() {
     let storage = gate_setup();
     let next_id = Arc::new(AtomicU64::new(1));
     let mut share_at_max = 0.0;
-    for &threads in &THREADS {
+    for &threads in &threads_list {
         let r = run_concurrent_writers(&storage, threads, &next_id);
         // Single share definition shared with the engine advice helper:
         // waited nanos over wall * threads.
@@ -313,7 +353,7 @@ fn run_gate_share() {
             wait_nanos: r.gate_wait_nanos,
         };
         let share = after.share_since(&WriteGateStats::default(), r.wall, threads);
-        if threads == THREADS[THREADS.len() - 1] {
+        if threads == threads_list[threads_list.len() - 1] {
             share_at_max = share;
         }
         println!(
@@ -330,13 +370,13 @@ fn run_gate_share() {
         println!(
             "\nresult: gate wait share {:.2}% at N={} (< 5%) -> sharding not justified",
             share_at_max * 100.0,
-            THREADS[THREADS.len() - 1]
+            threads_list[threads_list.len() - 1]
         );
     } else {
         println!(
             "\nresult: gate wait share {:.2}% at N={} (>= 5%) -> review sharding",
             share_at_max * 100.0,
-            THREADS[THREADS.len() - 1]
+            threads_list[threads_list.len() - 1]
         );
     }
     println!(

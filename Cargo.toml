@@ -194,6 +194,9 @@ winapi = { version = "0.3", features = ["processthreadsapi", "psapi", "sysinfoap
 [features]
 default = ["server", "vector"]
 server = ["linkrs-config/server"]
+# fulltext stays opt-in (not in default): it pulls the tantivy stack and
+# grows the default build, while the placeholder bench keeps both run modes
+# usable without the feature.
 fulltext = ["linkrs-api/fulltext", "linkrs-server/fulltext", "linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
 jieba = ["linkrs-fulltext/jieba"]
 vector = ["linkrs-api/vector", "linkrs-server/vector", "linkrs-config/vector", "linkrs-sync/vector", "linkrs-query/vector"]

@@ -5,9 +5,6 @@
 use super::cost_profile::cost_config_for_profile;
 use crate::api_core::error::{CoreError, CoreResult};
 use crate::api_core::types::{ExecutionMetadata, QueryRequest, QueryResult};
-use linkrs_storage::{
-    AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
-};
 use linkrs_config::{RuntimeConfig, StorageCostProfile};
 use linkrs_core::metadata::SchemaManager;
 use linkrs_metrics::StatsManager;
@@ -18,6 +15,9 @@ use linkrs_query::experimental_pipeline_extensions::ExtensionRegistry;
 use linkrs_query::optimizer::CostModelConfig;
 use linkrs_query::query_manager::QueryManager;
 use linkrs_query::{OptimizerEngine, QueryPipelineManager};
+use linkrs_storage::{
+    AutoCommitBatchOps, AutoCommitGroupOps, QueryStorage, StorageClient, StorageOperationContext,
+};
 #[cfg(feature = "vector")]
 use linkrs_sync::backend::VectorBackend;
 use linkrs_sync::SyncManager;

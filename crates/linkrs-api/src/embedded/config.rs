@@ -5,6 +5,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub use linkrs_config::SyncMode;
+
 /// Database configuration
 ///
 /// Used to configure the behavior of the embedded Linkrs database.
@@ -81,18 +83,6 @@ impl Default for VectorConfig {
             local_data_dir: None,
         }
     }
-}
-
-/// Synchronization Mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SyncMode {
-    /// Complete synchronization: Every write operation is immediately synchronized to the disk (the safest method, but also the slowest).
-    Full,
-    /// Normal synchronization, periodic synchronization (balancing)
-    #[default]
-    Normal,
-    /// Asynchronous mode: The operating system determines when to perform synchronization (the fastest option, but it carries certain risks).
-    Off,
 }
 
 impl DatabaseConfig {

@@ -538,11 +538,18 @@ pub(crate) fn update_vertex_replace(
             continue;
         }
         if Some(prop_name) == pk_name.as_ref() {
+            let (provided, expected) = match pk_mirror.as_ref() {
+                Some((_, pk_type, mirror)) => {
+                    let provided = value.try_cast_to(pk_type).unwrap_or_else(|_| value.clone());
+                    (provided, mirror.clone())
+                }
+                None => (value.clone(), value.clone()),
+            };
             return Err(unwind(
                 ctx,
                 StorageError::invalid_operation(format!(
-                    "Primary key column '{}' must mirror the vertex id",
-                    prop_name
+                    "Primary key column '{}' must mirror the vertex id: got {:?}, expected {:?}",
+                    prop_name, provided, expected
                 )),
             ));
         }

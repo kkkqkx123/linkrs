@@ -8,12 +8,18 @@ use std::time::Duration;
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncMode {
-    /// Complete synchronization: Every write operation is immediately synchronized to disk
+    /// Complete synchronization: every write is flushed and fsynced before the
+    /// commit is acknowledged (the safest method, but also the slowest).
     Full,
-    /// Normal synchronization, periodic synchronization (default)
+    /// Normal synchronization. Maps to the same per-write durability as
+    /// [`SyncMode::Full`] today; the periodic/batched policy is a planned
+    /// follow-up that needs real-machine WAL evidence before it can become
+    /// the default.
     #[default]
     Normal,
-    /// Asynchronous mode: The operating system determines when to synchronize
+    /// Asynchronous mode: durability is left to the operating system, so the
+    /// WAL is written without an fsync barrier (the fastest option, but it
+    /// carries the risk of losing recent commits on a crash).
     Off,
 }
 
@@ -31,6 +37,20 @@ impl SyncMode {
     /// Check if this is off sync mode
     pub fn is_off(&self) -> bool {
         matches!(self, Self::Off)
+    }
+
+    /// Map the user-facing sync mode onto the engine durability policy.
+    ///
+    /// `Normal` intentionally resolves to [`SyncPolicy::EveryWrite`]: the
+    /// engine has no periodic-sync policy wired yet, and silently weakening
+    /// the default durability is worse than an honest 1:1 mapping. When a
+    /// batched policy is introduced behind bench evidence, this is the only
+    /// place that has to change.
+    pub fn to_sync_policy(self) -> linkrs_core::wal::SyncPolicy {
+        match self {
+            Self::Full | Self::Normal => linkrs_core::wal::SyncPolicy::EveryWrite,
+            Self::Off => linkrs_core::wal::SyncPolicy::Never,
+        }
     }
 }
 
@@ -54,10 +74,6 @@ pub struct RuntimeConfig {
     /// Should WAL (Write-Ahead Logging) be enabled?
     #[serde(default = "default_true")]
     pub enable_wal: bool,
-
-    /// Synchronization mode
-    #[serde(default)]
-    pub sync_mode: SyncMode,
 
     /// Is it read-only?
     #[serde(default)]
@@ -99,7 +115,6 @@ impl Default for RuntimeConfig {
             cache_size_mb: default_cache_size(),
             default_timeout_secs: default_timeout_secs(),
             enable_wal: true,
-            sync_mode: SyncMode::default(),
             read_only: false,
             create_if_missing: true,
             max_open_files: default_max_open_files(),
@@ -116,7 +131,6 @@ impl RuntimeConfig {
             cache_size_mb: default_cache_size(),
             default_timeout_secs: default_timeout_secs(),
             enable_wal: true,
-            sync_mode: SyncMode::Normal,
             read_only: false,
             create_if_missing: true,
             max_open_files: default_max_open_files(),
@@ -131,7 +145,6 @@ impl RuntimeConfig {
             cache_size_mb: default_cache_size(),
             default_timeout_secs: default_timeout_secs(),
             enable_wal: true,
-            sync_mode: SyncMode::Normal,
             read_only: false,
             create_if_missing: true,
             max_open_files: default_max_open_files(),
@@ -154,12 +167,6 @@ impl RuntimeConfig {
     /// Set whether to enable WAL (Write-Ahead Logging)
     pub fn with_wal(mut self, enable: bool) -> Self {
         self.enable_wal = enable;
-        self
-    }
-
-    /// Set the synchronization mode
-    pub fn with_sync_mode(mut self, mode: SyncMode) -> Self {
-        self.sync_mode = mode;
         self
     }
 
@@ -236,7 +243,6 @@ mod tests {
         assert_eq!(config.cache_size_mb, 64);
         assert_eq!(config.default_timeout_secs, 30);
         assert!(config.enable_wal);
-        assert_eq!(config.sync_mode, SyncMode::Normal);
         assert!(!config.read_only);
         assert!(config.create_if_missing);
         assert_eq!(config.max_open_files, 100);
@@ -263,7 +269,6 @@ mod tests {
             .with_cache_size(128)
             .with_timeout(Duration::from_secs(60))
             .with_wal(false)
-            .with_sync_mode(SyncMode::Full)
             .with_read_only(true)
             .with_max_open_files(200)
             .with_worker_threads(4);
@@ -271,7 +276,6 @@ mod tests {
         assert_eq!(config.cache_size_mb, 128);
         assert_eq!(config.default_timeout_secs, 60);
         assert!(!config.enable_wal);
-        assert_eq!(config.sync_mode, SyncMode::Full);
         assert!(config.read_only);
         assert_eq!(config.max_open_files, 200);
         assert_eq!(config.worker_threads, 4);
@@ -303,9 +307,15 @@ mod tests {
 
     #[test]
     fn test_sync_mode() {
+        use linkrs_core::wal::SyncPolicy;
+
         assert_eq!(SyncMode::default(), SyncMode::Normal);
         assert!(SyncMode::Normal.is_normal());
         assert!(SyncMode::Full.is_full());
         assert!(SyncMode::Off.is_off());
+
+        assert_eq!(SyncMode::Full.to_sync_policy(), SyncPolicy::EveryWrite);
+        assert_eq!(SyncMode::Normal.to_sync_policy(), SyncPolicy::EveryWrite);
+        assert_eq!(SyncMode::Off.to_sync_policy(), SyncPolicy::Never);
     }
 }

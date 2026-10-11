@@ -10,8 +10,8 @@ use linkrs_core::types::storage_ids::VertexId;
 use linkrs_core::{Edge, EdgeDirection, EdgeHeader, Value, Vertex};
 
 use super::expand_dispatch::{
-    ColumnarOutcome, closed_loop_dst_tag, edge_projection, has_bypass_conflict, hop_bypass,
-    bypass_column, dst_bypass_value, edge_bypass_value,
+    bypass_column, closed_loop_dst_tag, dst_bypass_value, edge_bypass_value, edge_projection,
+    has_bypass_conflict, hop_bypass, ColumnarOutcome,
 };
 use super::expand_seeds::{parse_seeds, seed_slot};
 use super::ExpandCtx;
@@ -171,7 +171,10 @@ pub(super) fn expand_single_step_columnar(
             .map(|_| chunk.get_layout().len())
             .unwrap_or(0)
     } else {
-        chunk.rows.first().map_or(chunk.get_layout().len(), |r| r.len())
+        chunk
+            .rows
+            .first()
+            .map_or(chunk.get_layout().len(), |r| r.len())
     };
     let input_layout = chunk.get_layout();
     let (edge_bypass_opt, dst_bypass_opt) = hop_bypass(
@@ -182,8 +185,7 @@ pub(super) fn expand_single_step_columnar(
     );
     if ctx.skip_rows && (edge_bypass_opt.is_none() || dst_bypass_opt.is_none()) {
         return Err(QueryError::execution(
-            "rowless expand without complete bypass columns violates the plan contract"
-                .to_string(),
+            "rowless expand without complete bypass columns violates the plan contract".to_string(),
         ));
     }
     let conflict = has_bypass_conflict(
@@ -235,9 +237,8 @@ pub(super) fn expand_single_step_columnar(
     if pending.is_empty() {
         return Ok(ColumnarOutcome::Empty);
     }
-    let dst_tag_owned =
-        closed_loop_dst_tag(reader, space_name, edge_types, direction, ctx.dst_tag)
-            .unwrap_or_else(|| ctx.dst_tag.to_string());
+    let dst_tag_owned = closed_loop_dst_tag(reader, space_name, edge_types, direction, ctx.dst_tag)
+        .unwrap_or_else(|| ctx.dst_tag.to_string());
     let dst_tag = dst_tag_owned.as_str();
     let vertices = read_destinations(
         reader,

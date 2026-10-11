@@ -21,11 +21,9 @@ mod partitioned;
 #[cfg(test)]
 mod tests;
 
-pub use build_side::{HashJoinBuildSide, JoinKeyValue};
 pub(in crate::executor::streaming::operators::join_operator) use build_side::evaluate_join_key;
-use partitioned::{
-    build_side_loop, enter_partitioned_mode, next_partitioned, sync_grace_counters,
-};
+pub use build_side::{HashJoinBuildSide, JoinKeyValue};
+use partitioned::{build_side_loop, enter_partitioned_mode, next_partitioned, sync_grace_counters};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn next_hash_join(
@@ -368,4 +366,3 @@ pub(super) fn close(
     build_side.clear();
     Ok(())
 }
-

@@ -1392,7 +1392,10 @@ storage_path = "data/linkrs"
         let config = Config::load(&config_path).expect("Failed to load config");
         assert_eq!(
             config.server.security.audit.log_file,
-            temp_dir.path().join("main_logs/audit.log").to_string_lossy()
+            temp_dir
+                .path()
+                .join("main_logs/audit.log")
+                .to_string_lossy()
         );
     }
 
@@ -1407,7 +1410,10 @@ storage_path = "data/linkrs"
         )
         .expect("Failed to write config");
         let config = Config::load(&config_path).expect("Failed to load config");
-        assert_eq!(config.server.security.audit.log_file, "/var/audit/audit.log");
+        assert_eq!(
+            config.server.security.audit.log_file,
+            "/var/audit/audit.log"
+        );
     }
 
     #[test]

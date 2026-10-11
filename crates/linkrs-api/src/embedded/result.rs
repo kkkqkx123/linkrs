@@ -209,7 +209,8 @@ impl Row {
             };
             row.columns.push(column.clone());
             row.values.push(value.clone());
-            row.column_index.insert(column.clone(), row.columns.len() - 1);
+            row.column_index
+                .insert(column.clone(), row.columns.len() - 1);
         }
         row
     }
@@ -322,7 +323,10 @@ impl Row {
 
     /// Get all (column, value) pairs in result order
     pub fn values(&self) -> impl Iterator<Item = (&str, &Value)> {
-        self.columns.iter().map(String::as_str).zip(self.values.iter())
+        self.columns
+            .iter()
+            .map(String::as_str)
+            .zip(self.values.iter())
     }
 
     /// Translate from "Convert to JSON string" to English: "Convert to JSON string"
@@ -391,8 +395,7 @@ mod tests {
         let a_pos = json.find("\"a\"").expect("column a present");
         assert!(b_pos < a_pos, "json keeps column order: {json}");
 
-        let restored: Row =
-            serde_json::from_str(&json).expect("deserialization succeeds");
+        let restored: Row = serde_json::from_str(&json).expect("deserialization succeeds");
         assert_eq!(restored.columns(), vec![&"b".to_string(), &"a".to_string()]);
         assert_eq!(restored.get("a"), Some(&Value::string("x")));
     }

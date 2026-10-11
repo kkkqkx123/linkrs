@@ -1,5 +1,6 @@
 use super::*;
 use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
 use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
@@ -9,7 +10,6 @@ use linkrs_core::types::operators::AggregateFunction;
 use linkrs_core::Expression;
 use linkrs_core::Value;
 use std::sync::Arc;
-use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
 
 fn ctx_expr(expr: Expression) -> ContextualExpression {
     let ctx = Arc::new(ExpressionAnalysisContext::new());
@@ -473,5 +473,30 @@ fn skip_rows_chained_with_property_tail() {
     assert!(
         hop_by_dst(&hops, "b").skip_rows(),
         "intermediate hop feeding a bypass-capable hop may skip rows"
+    );
+}
+
+#[test]
+fn skip_rows_falls_back_when_next_hop_is_open() {
+    let mut open = ExpandAllNode::new(1, Vec::new(), "OUT");
+    open.set_step_limit(1);
+    open.set_col_names(vec!["b".to_string(), "e2".to_string(), "c".to_string()]);
+    open.set_dst_tag("Node".to_string());
+    open.add_input(hop_tagged(
+        "Link",
+        ["a", "e1", "b"],
+        "Node",
+        anchor_scan("a"),
+    ));
+    let tail_proj = project_prop_col(PlanNodeEnum::ExpandAll(open), "c", "name", "n");
+    let (annotated, _) = annotate_expand_all(&tail_proj);
+    let hops = expand_alls(&annotated);
+    assert!(
+        !hop_by_dst(&hops, "c").skip_rows(),
+        "open downstream hop cannot stay rowless"
+    );
+    assert!(
+        !hop_by_dst(&hops, "b").skip_rows(),
+        "upstream hop falls back to the row path when the next hop is not closed"
     );
 }

@@ -422,8 +422,10 @@ fn test_flexi_logger_integration() {
 fn test_log_file_path_resolution() {
     let config = Config::default();
 
-    let expected_log_path =
-        format!("{}/{}.log", config.common.log.dir, config.common.log.basename);
+    let expected_log_path = format!(
+        "{}/{}.log",
+        config.common.log.dir, config.common.log.basename
+    );
     assert_eq!(expected_log_path, "logs/linkrs.log");
 
     let custom_config = Config {
