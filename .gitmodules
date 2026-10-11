@@ -1,6 +1,7 @@
 [submodule "crates/tantivy"]
 	path = crates/tantivy
 	url = https://github.com/kkkqkx123/tantivy.git
+	branch = feat/add-configurable-k1-b
 [submodule "crates/simvec"]
 	path = crates/simvec
 	url = https://github.com/kkkqkx123/simvec.git

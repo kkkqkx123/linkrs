@@ -9,7 +9,7 @@
 //! The placeholder run keeps the same shape so both modes stay runnable
 //! without the feature.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 
 #[path = "../../linkrs-core/benches/bench_group.rs"]
 mod bench_group;
@@ -43,13 +43,18 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
         let id = *doc_count;
 
         group.bench_with_input(BenchmarkId::from_parameter(doc_count), doc_count, |b, _| {
-            b.to_async(&rt).iter(|| {
-                let mgr = m.clone();
-                async move {
-                    let _ = mgr.drop_index(1, "Article", "content").await;
-                    mgr.create_index(1, "Article", "content", Some(EngineType::Bm25))
-                        .await
-                        .expect("create");
+            b.to_async(&rt).iter_batched(
+                || {
+                    let mgr = m.clone();
+                    rt.block_on(async move {
+                        let _ = mgr.drop_index(1, "Article", "content").await;
+                        mgr.create_index(1, "Article", "content", Some(EngineType::Bm25))
+                            .await
+                            .expect("create");
+                        mgr
+                    })
+                },
+                |mgr| async move {
                     for i in 0..id {
                         mgr.index_edge_property(
                             1,
@@ -61,9 +66,11 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
                         .await
                         .expect("index");
                     }
+                    mgr.commit_all().await.expect("commit");
                     black_box(id)
-                }
-            });
+                },
+                BatchSize::SmallInput,
+            );
         });
     }
 

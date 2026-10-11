@@ -53,6 +53,23 @@ fn build_schema(config: &TantivyConfig) -> (Schema, Field, Field) {
     (schema, id_field, text_field)
 }
 
+/// Build index settings carrying the configured BM25 parameters.
+///
+/// This is the only place that depends on the pinned tantivy revision
+/// exposing `Bm25Params` and `IndexSettings::bm25_params`; keep all
+/// version-sensitive construction here so a future upstream change only
+/// touches this helper.
+fn build_index_settings(config: &TantivyConfig) -> IndexSettings {
+    let bm25_params = TantivyBm25Params {
+        k1: config.bm25_params.k1,
+        b: config.bm25_params.b,
+    };
+    IndexSettings {
+        bm25_params: Some(bm25_params),
+        ..Default::default()
+    }
+}
+
 /// Collect top-k search results with highlights from a tantivy query.
 ///
 /// Shared by both the grammar-string path and the structured-query path so
@@ -164,16 +181,10 @@ impl TantivySearchEngine {
         let index = if path.join("meta.json").exists() {
             tantivy::Index::open_in_dir(path)?
         } else {
-            let bm25_params = TantivyBm25Params {
-                k1: config.bm25_params.k1,
-                b: config.bm25_params.b,
-            };
+            let settings = build_index_settings(&config);
             IndexBuilder::new()
                 .schema(schema.clone())
-                .settings(IndexSettings {
-                    bm25_params: Some(bm25_params),
-                    ..Default::default()
-                })
+                .settings(settings)
                 .create_in_dir(path)?
         };
 

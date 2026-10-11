@@ -147,7 +147,11 @@ pub(super) fn enter_partitioned_mode(
                     &col_names,
                     num_partitions,
                 )?);
-                probe_writer.as_mut().expect("writer must exist")
+                probe_writer.as_mut().ok_or_else(|| {
+                    QueryError::execution(
+                        "spill run: probe partition writer missing after init".to_string(),
+                    )
+                })?
             }
         };
         for row in chunk.visible_rows() {

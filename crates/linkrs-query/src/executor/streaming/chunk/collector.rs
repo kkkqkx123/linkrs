@@ -456,7 +456,9 @@ impl LocalChunkCollector {
         // size in `finalize_active_writer`.
         let estimate = MemoryBudget::estimate_row_memory(&row) as u64;
         manager.disk_quota().try_reserve(estimate)?;
-        let active = self.active_writer.as_mut().expect("writer must exist");
+        let active = self.active_writer.as_mut().ok_or_else(|| {
+            QueryError::execution("spill run: collector writer missing after ensure".to_string())
+        })?;
         active.writer.write_row(&row)?;
         active.rows += 1;
         active.reserved_bytes += estimate;
