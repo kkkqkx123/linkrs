@@ -665,24 +665,65 @@ impl GraphStorageContext {
     /// against writers. Handles are collected under a brief catalog lock and
     /// the catalog is released before any table is touched, so DDL is never
     /// blocked by a long fan-out.
-    pub fn visit_out_nbrs<F>(
+    /// Resolve many endpoint ids under a single vertex-catalog lock.
+    ///
+    /// Batch counterpart of [`Self::resolve_node_endpoint`]: one catalog
+    /// acquisition serves the whole seed list instead of one per seed.
+    /// Positions of unresolvable ids stay `None` so callers keep input order.
+    fn resolve_node_endpoints(
+        &self,
+        label: LabelId,
+        ids: &[VertexId],
+        ts: Timestamp,
+    ) -> Vec<Option<(u32, LabelId)>> {
+        self.persistent
+            .data_store
+            .with_vertex_tables(|vertex_tables| {
+                ids.iter()
+                    .map(|id| {
+                        let internal =
+                            self.resolve_endpoint_id(vertex_tables, label, *id, ts, false)?;
+                        let actual = if label == 0 {
+                            helpers::resolve_internal_id_label(self, vertex_tables, id, ts)
+                                .unwrap_or(label)
+                        } else {
+                            label
+                        };
+                        Some((internal, actual))
+                    })
+                    .collect()
+            })
+    }
+
+    /// Visit raw out-edge neighbors for a whole seed batch.
+    ///
+    /// Each edge table is locked once for all seeds instead of once per
+    /// seed. The visitor reports the seed index with every neighbor so
+    /// callers can accumulate per-seed state.
+    ///
+    /// Lock contract: the visitor runs under one table read lock at a time
+    /// and must never acquire a vertex, catalog or second table lock
+    /// (no vertex-id resolution inside the callback). Stage neighbor ids in
+    /// the callback and resolve them after the visit returns; reversing the
+    /// order inverts the vertex-before-edge discipline and can deadlock
+    /// against writers. Handles are collected under a brief catalog lock and
+    /// the catalog is released before any table is touched, so DDL is never
+    /// blocked by a long fan-out.
+    pub fn visit_out_nbrs_batched<F>(
         &self,
         edge_label: LabelId,
         src_label: LabelId,
         _dst_label: LabelId,
-        src_id: VertexId,
+        seeds: &[VertexId],
         ts: Timestamp,
         mut f: F,
-    ) -> Option<u32>
-    where
-        F: FnMut(u32, LabelId, HotNbr),
+    ) where
+        F: FnMut(usize, u32, LabelId, HotNbr),
     {
         if !self.persistent.is_open.load(Ordering::Acquire) {
-            return None;
+            return;
         }
-
-        let (src_internal, actual_src) = self.resolve_node_endpoint(src_label, src_id, ts)?;
-
+        let resolved = self.resolve_node_endpoints(src_label, seeds, ts);
         let arcs = self
             .persistent
             .data_store
@@ -690,44 +731,43 @@ impl GraphStorageContext {
         let gate = self.pending_gate();
         for arc in &arcs {
             let table = self.persistent.data_store.read_edge_table(arc);
-            if table.label() != edge_label || table.src_label() != actual_src {
+            if table.label() != edge_label {
                 continue;
             }
             let far_label = table.dst_label();
-            table.visit_out_with_gate(src_internal, ts, &gate, |nbr| {
-                f(src_internal, far_label, nbr)
-            });
+            for (index, seed) in resolved.iter().enumerate() {
+                let Some((src_internal, actual_src)) = seed else {
+                    continue;
+                };
+                if table.src_label() != *actual_src {
+                    continue;
+                }
+                table.visit_out_with_gate(*src_internal, ts, &gate, |nbr| {
+                    f(index, *src_internal, far_label, nbr)
+                });
+            }
         }
-        Some(src_internal)
     }
 
-    /// Visit raw in-edge neighbors of `dst` without building a vector.
+    /// Visit raw in-edge neighbors for a whole seed batch.
     ///
-    /// In-direction counterpart of `visit_out_nbrs`, streaming
-    /// `(dst_internal, far_label, nbr)` pairs where `far_label` is the
-    /// table's owning src label. Returns the resolved internal dst id.
-    ///
-    /// Same lock contract as `visit_out_nbrs`: the visitor must never
-    /// acquire a vertex, catalog or second table lock; stage and resolve
-    /// after the visit returns.
-    pub fn visit_in_nbrs<F>(
+    /// In-direction counterpart of [`Self::visit_out_nbrs_batched`] with the
+    /// same single-lock-per-table behavior and lock contract.
+    pub fn visit_in_nbrs_batched<F>(
         &self,
         edge_label: LabelId,
         _src_label: LabelId,
         dst_label: LabelId,
-        dst_id: VertexId,
+        seeds: &[VertexId],
         ts: Timestamp,
         mut f: F,
-    ) -> Option<u32>
-    where
-        F: FnMut(u32, LabelId, HotNbr),
+    ) where
+        F: FnMut(usize, u32, LabelId, HotNbr),
     {
         if !self.persistent.is_open.load(Ordering::Acquire) {
-            return None;
+            return;
         }
-
-        let (dst_internal, actual_dst) = self.resolve_node_endpoint(dst_label, dst_id, ts)?;
-
+        let resolved = self.resolve_node_endpoints(dst_label, seeds, ts);
         let arcs = self
             .persistent
             .data_store
@@ -735,15 +775,22 @@ impl GraphStorageContext {
         let gate = self.pending_gate();
         for arc in &arcs {
             let table = self.persistent.data_store.read_edge_table(arc);
-            if table.label() != edge_label || table.dst_label() != actual_dst {
+            if table.label() != edge_label {
                 continue;
             }
             let far_label = table.src_label();
-            table.visit_in_with_gate(dst_internal, ts, &gate, |nbr| {
-                f(dst_internal, far_label, nbr)
-            });
+            for (index, seed) in resolved.iter().enumerate() {
+                let Some((dst_internal, actual_dst)) = seed else {
+                    continue;
+                };
+                if table.dst_label() != *actual_dst {
+                    continue;
+                }
+                table.visit_in_with_gate(*dst_internal, ts, &gate, |nbr| {
+                    f(index, *dst_internal, far_label, nbr)
+                });
+            }
         }
-        Some(dst_internal)
     }
 
     pub fn out_edges_projected(

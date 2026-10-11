@@ -261,6 +261,21 @@ impl OperatorBase {
         }
     }
 
+    /// Mark this operator instance as ran-to-exhaustion in the profile.
+    ///
+    /// Called when `advance` returns `None`: operators that never exhaust
+    /// were starved (Limit / early termination) and their partial counts
+    /// must not train the feedback loop.
+    pub fn mark_profile_exhausted(&self) {
+        if let Some(rt) = &self.runtime {
+            if let Some(entry) = rt.profile().get_entry(&self.profile_key()) {
+                entry
+                    .exhausted
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
     pub fn register_resource<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,

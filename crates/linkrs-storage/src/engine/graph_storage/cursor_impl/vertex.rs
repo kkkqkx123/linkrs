@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::cursor::{ColumnValues, FlatVertexRecord, ScanOptions, VertexCursor};
+use crate::cursor::{ColumnValues, FlatVertexRecord, ScanOptions, ShardSlice, VertexCursor};
 use crate::engine::graph_storage::context::vertex_ops::StagedRow;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::vertex::ShardedVertexTable;
@@ -45,6 +45,10 @@ pub(crate) struct GraphVertexCursor {
     offset_remaining: usize,
     emitted: usize,
     id_range: Option<Range<i64>>,
+    /// Owned slice of every table's shard-local id space. Set for
+    /// partitioned scans; enumeration then covers roughly `1/N` of each
+    /// table instead of a full walk per partition.
+    slice: Option<ShardSlice>,
     projection: Option<Vec<Arc<str>>>,
     /// Topology-only scan: resolve identities with zero property decode.
     /// Set from `ScanOptions`; only valid with an empty projection and no
@@ -125,6 +129,16 @@ impl GraphVertexCursor {
             ));
         }
 
+        // A slice selects one of a non-empty division; anything else
+        // addresses no well-defined owned set.
+        if options.shard_slice.is_some_and(|slice| {
+            slice.partition_count == 0 || slice.partition_id >= slice.partition_count
+        }) {
+            return Err(StorageError::invalid_operation(
+                "shard_slice requires partition_id < partition_count with a non-zero count",
+            ));
+        }
+
         // Topology-only scans carry no properties and no predicates by
         // construction; anything else is a planner bug and must surface at
         // open instead of silently producing wrong rows.
@@ -171,6 +185,7 @@ impl GraphVertexCursor {
             offset_remaining: options.offset,
             emitted: 0,
             id_range: options.vertex_id_range.clone(),
+            slice: options.shard_slice,
             projection: options
                 .projection
                 .as_ref()
@@ -219,9 +234,17 @@ impl GraphVertexCursor {
                 // staged inserts (which have none) cannot join it; staged
                 // deletes still veto their resolved ids.
                 let merge = self.ctx.staged_scan_merge(*label_id, table, guard);
+                let owned: Option<(&ShardSlice, Vec<u32>)> = self
+                    .slice
+                    .as_ref()
+                    .map(|slice| (slice, table.shard_universes()));
                 let ids: Vec<u32> = ids
                     .into_iter()
                     .filter(|id| !merge.dropped_ids.contains(id))
+                    .filter(|id| match owned.as_ref() {
+                        None => true,
+                        Some((slice, universes)) => table.slice_owns_id(*id, slice, universes),
+                    })
                     .collect();
                 self.pending_ids = ids;
                 self.current_label = Some(*label_id);
@@ -238,15 +261,34 @@ impl GraphVertexCursor {
                 continue;
             };
             let merge = self.ctx.staged_scan_merge(label_id, table, guard);
-            let ids: Vec<u32> = table
-                .live_ids(guard)
-                .into_iter()
-                .filter(|id| !merge.dropped_ids.contains(id))
-                .collect();
-            if !ids.is_empty() || !merge.rows.is_empty() {
+            // Sliced enumeration covers roughly `1/N` of the table: the
+            // walk skips foreign chunks before any visibility or identity
+            // work, so sibling slices share nothing but the table. Staged
+            // ids decode to their routing shard exactly like base ids, so
+            // the same ownership rule keeps every staged row on one slice.
+            let owned: Option<(&ShardSlice, Vec<u32>)> = self
+                .slice
+                .as_ref()
+                .map(|slice| (slice, table.shard_universes()));
+            let ids: Vec<u32> = match owned.as_ref() {
+                Some((slice, universes)) => table.live_ids_in_slice(guard, slice, universes),
+                None => table.live_ids(guard),
+            }
+            .into_iter()
+            .filter(|id| !merge.dropped_ids.contains(id))
+            .collect();
+            let staged_rows: Vec<StagedRow> = match owned.as_ref() {
+                None => merge.rows,
+                Some((slice, universes)) => merge
+                    .rows
+                    .into_iter()
+                    .filter(|row| table.slice_owns_id(row.id, slice, universes))
+                    .collect(),
+            };
+            if !ids.is_empty() || !staged_rows.is_empty() {
                 self.current_label = Some(label_id);
                 self.pending_ids = ids;
-                self.staged_rows = merge.rows;
+                self.staged_rows = staged_rows;
                 self.current_table = Some(Arc::clone(table));
                 return;
             }
@@ -463,6 +505,27 @@ impl GraphVertexCursor {
 
                 let Some(table) = self.current_table.clone() else {
                     continue;
+                };
+                // Partition-range pre-filter before zone pruning and decode
+                // (same rationale as the row path): a fragment keeps roughly
+                // 1/P of the window, and decoding the rest only to drop it
+                // repeats every sibling fragment's work.
+                let ranged: Vec<u32>;
+                let ids: &[u32] = match self.id_range.as_ref() {
+                    Some(range) => {
+                        let (topo_ids, topo_vids) = table.scan_topology(ids, &guard);
+                        ranged = topo_ids
+                            .into_iter()
+                            .zip(topo_vids)
+                            .filter_map(|(id, vid)| {
+                                vid.as_int64()
+                                    .filter(|v| (range.start..range.end).contains(v))
+                                    .map(|_| id)
+                            })
+                            .collect();
+                        &ranged
+                    }
+                    None => ids,
                 };
                 let label_id = self.current_label;
                 let tag_name = label_id
@@ -774,11 +837,34 @@ impl GraphVertexCursor {
 
                 let end =
                     (self.pending_idx + (batch_size - batch.len())).min(self.pending_ids.len());
-                let ids = &self.pending_ids[self.pending_idx..end];
+                let window = &self.pending_ids[self.pending_idx..end];
                 self.pending_idx = end;
 
                 let Some(table) = self.current_table.clone() else {
                     continue;
+                };
+                // Partition-range pre-filter before property decode: identity
+                // resolution is far cheaper than versioned column reads, and
+                // a partitioned fragment keeps roughly 1/P of the window, so
+                // decoding the full window would repeat every sibling
+                // fragment's decode work. Order-preserving, same guard, so
+                // the decoded set is identical to decode-then-filter.
+                let ranged: Vec<u32>;
+                let ids: &[u32] = match self.id_range.as_ref() {
+                    Some(range) => {
+                        let (topo_ids, topo_vids) = table.scan_topology(window, &guard);
+                        ranged = topo_ids
+                            .into_iter()
+                            .zip(topo_vids)
+                            .filter_map(|(id, vid)| {
+                                vid.as_int64()
+                                    .filter(|v| (range.start..range.end).contains(v))
+                                    .map(|_| id)
+                            })
+                            .collect();
+                        &ranged
+                    }
+                    None => window,
                 };
                 let label_id = self.current_label;
                 let records =

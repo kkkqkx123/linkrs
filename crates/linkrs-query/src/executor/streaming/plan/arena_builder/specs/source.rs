@@ -47,6 +47,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                 predicate,
                 tag: scan_node.tag().map(|s| s.to_string()),
                 partition_range: None,
+                shard_slice: None,
             })
         }
         PlanNodeEnum::ScanEdges(scan_node) => {
@@ -66,7 +67,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_source_spec(
                 projected_properties,
                 identity_only: scan_node.identity_only(),
                 predicate,
-                partition_range: None,
+                shard_slice: None,
             })
         }
         PlanNodeEnum::GetVertices(get_node) => {

@@ -769,6 +769,10 @@ impl StreamingExecutor {
         }
         if matches!(&result, Ok(None)) || (one_shot && matches!(&result, Ok(Some(_)))) {
             self.base_mut().lifecycle.mark_exhausted();
+            // Ran to exhaustion: this instance's row counts are complete
+            // and safe for the feedback loop. Instances that never exhaust
+            // were starved downstream (Limit / early termination).
+            self.base().mark_profile_exhausted();
         }
         self.record_profile_timing("next", elapsed);
         if result.is_err() {

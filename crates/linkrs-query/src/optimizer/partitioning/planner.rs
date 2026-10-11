@@ -1,9 +1,15 @@
+use std::sync::Arc;
+
 use super::config::{PartitioningConfig, PartitioningDecision, PartitioningLayoutInfo};
+use crate::optimizer::cost::config::DEFAULT_FANOUT;
+use crate::optimizer::cost::SelectivityEstimator;
+use crate::optimizer::stats::feedback::selectivity::SelectivitySnapshot;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
 use crate::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, PlanNodeEnum};
+use linkrs_core::types::expr::Expression;
 
 /// Chooses a partition layout only for a single tagged vertex scan. More
 /// complex source topologies retain the existing single-tree path until they
@@ -11,15 +17,112 @@ use crate::planning::plan::{PartitionSource, PartitionSpec, PartitionStrategy, P
 #[derive(Debug, Clone)]
 pub struct PartitioningPlanner {
     config: PartitioningConfig,
+    selectivity: Option<Arc<SelectivityEstimator>>,
 }
 
 impl PartitioningPlanner {
     pub fn new(config: PartitioningConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            selectivity: None,
+        }
+    }
+
+    /// Attach the shared selectivity estimator so partition decisions can
+    /// weigh post-filter row counts. Without it every decision falls back to
+    /// the table-total behavior it had before selectivity awareness existed.
+    pub fn with_selectivity(mut self, selectivity: Arc<SelectivityEstimator>) -> Self {
+        self.selectivity = Some(selectivity);
+        self
     }
 
     pub fn config(&self) -> &PartitioningConfig {
         &self.config
+    }
+
+    /// Estimate the rows surviving the filters on an anchor chain.
+    ///
+    /// The chain runs root-first and ends in the anchor scan. Filters below
+    /// the first graph expansion filter anchor rows, so each partition does
+    /// less work; filters above an expansion apply after fan-out and do not
+    /// shrink the per-partition scan, so estimation stops there. A filter is
+    /// only trusted when at least one property it references has collected
+    /// statistics — purely heuristic estimates keep the previous behavior
+    /// instead of flipping plans on guesses.
+    fn estimate_filtered_rows(
+        &self,
+        chain: &[&PlanNodeEnum],
+        rows: u64,
+        tag: &str,
+        statistics: &StatsView,
+        snapshot: &SelectivitySnapshot,
+    ) -> u64 {
+        let Some(selectivity) = &self.selectivity else {
+            return rows;
+        };
+        let mut combined = 1.0f64;
+        let mut trusted = false;
+        for node in chain.iter().rev().skip(1) {
+            match node {
+                PlanNodeEnum::ExpandAll(_) => break,
+                PlanNodeEnum::Filter(filter) => {
+                    let Some(meta) = filter.condition().expression() else {
+                        continue;
+                    };
+                    let mut properties = Vec::new();
+                    collect_condition_properties(meta.inner(), &mut properties);
+                    let backed = properties
+                        .iter()
+                        .any(|property| statistics.property_stats(Some(tag), property).is_some());
+                    if !backed {
+                        continue;
+                    }
+                    // Read-only estimate through the decision snapshot: the
+                    // recording entry point would register conditions and
+                    // refresh baselines, making identical plans decide
+                    // differently depending on planning order.
+                    combined *= selectivity.estimate_readonly(
+                        statistics.space(),
+                        meta.inner(),
+                        Some(tag),
+                        snapshot,
+                    );
+                    trusted = true;
+                }
+                _ => {}
+            }
+        }
+        if !trusted {
+            return rows;
+        }
+        (rows as f64 * combined.clamp(0.0, 1.0)).clamp(1.0, rows as f64) as u64
+    }
+
+    /// Economic gate: partition only when the parallel saving exceeds the
+    /// fixed plus exchange overhead, all in row-equivalents. Returns a
+    /// fallback reason when serial wins. All-zero cost params disable the
+    /// comparison and leave the row-count threshold as the only gate.
+    fn cost_gate_reason(&self, work: u64, output_rows: u64, partitions: usize) -> Option<String> {
+        let fixed = self.config.fixed_overhead_rows;
+        let per_partition = self.config.per_partition_rows;
+        let per_mille = self.config.exchange_row_per_mille;
+        if fixed == 0 && per_partition == 0 && per_mille == 0 {
+            return None;
+        }
+        let count = partitions as u64;
+        let saving = work.saturating_sub(work / count.max(1));
+        let exchange = output_rows.saturating_mul(per_mille as u64) / 1000;
+        let overhead = fixed
+            .saturating_add(count.saturating_mul(per_partition))
+            .saturating_add(exchange);
+        if saving > overhead {
+            None
+        } else {
+            Some(format!(
+                "parallel cost ({overhead}) exceeds the serial saving ({saving}) \
+                 for {work} rows over {partitions} partitions"
+            ))
+        }
     }
 
     /// Deterministic layout signature for the current partitioning config and
@@ -115,6 +218,14 @@ impl PartitioningPlanner {
             return Self::fallback("vertex-id range is empty");
         }
 
+        // One snapshot per decision: every estimate below reads it, so the
+        // decision is self-consistent and never mutates shared feedback.
+        let snapshot = self
+            .selectivity
+            .as_ref()
+            .map(|estimator| estimator.snapshot())
+            .unwrap_or_default();
+
         // Reject plans with unsupported node categories.
         if Self::has_write_operation(root) {
             return Self::fallback("plan contains write operations; partitioning not supported");
@@ -129,7 +240,8 @@ impl PartitioningPlanner {
             // above the anchor vertex scan). The anchor is partitioned by
             // vertex-id range and each partition expands locally; only
             // recursive / path-algorithm traversals are rejected outright.
-            if let Some(decision) = self.decide_anchored_traversal(root, statistics, &range, layout)
+            if let Some(decision) =
+                self.decide_anchored_traversal(root, statistics, &range, layout, &snapshot)
             {
                 return decision;
             }
@@ -150,13 +262,33 @@ impl PartitioningPlanner {
                     "missing statistics for vertex tag '{tag}'; cannot estimate row count"
                 ));
             }
-            if rows < self.config.min_rows_per_partition.saturating_mul(2) {
+            let threshold = self.config.min_rows_per_partition.saturating_mul(2);
+            if rows < threshold {
                 return Self::fallback(format!(
                     "estimated vertex rows ({rows}) are below the partition threshold"
                 ));
             }
+            let mut chain = Vec::new();
+            // Size partitions by the rows that actually flow through them,
+            // not the table total: a filter just above the gate must not cut
+            // the same partition count as the unfiltered table.
+            let work = if Self::collect_vertex_chain(root, &mut chain) {
+                let filtered =
+                    self.estimate_filtered_rows(&chain, rows, tag, statistics, &snapshot);
+                if filtered < threshold {
+                    return Self::fallback(format!(
+                        "estimated filtered rows ({filtered}) are below the partition threshold"
+                    ));
+                }
+                filtered
+            } else {
+                rows
+            };
 
-            let desired = self.desired_partition_count(rows);
+            let desired = self.desired_partition_count(work);
+            if let Some(reason) = self.cost_gate_reason(work, work, desired) {
+                return Self::fallback(reason);
+            }
             let ranges = split_range(&range, desired);
             let source = PartitionSource::VertexId {
                 tag: tag.to_string(),
@@ -185,7 +317,7 @@ impl PartitioningPlanner {
         } else if scans.is_empty() {
             self.decide_edge_scan(root, statistics, &range, layout)
         } else {
-            self.decide_multi_scan(root, statistics, &range, layout)
+            self.decide_multi_scan(root, statistics, &range, layout, &snapshot)
         }
     }
 
@@ -205,6 +337,7 @@ impl PartitioningPlanner {
         statistics: &StatsView,
         range: &std::ops::Range<i64>,
         layout: &PartitioningLayoutInfo,
+        snapshot: &SelectivitySnapshot,
     ) -> PartitioningDecision {
         let Some((left, right, kind)) = Self::split_independent_branches(root) else {
             return Self::fallback(
@@ -241,14 +374,30 @@ impl PartitioningPlanner {
             ));
         }
         let threshold = self.config.min_rows_per_partition.saturating_mul(2);
-        if left_rows < threshold || right_rows < threshold {
+        let left_filtered =
+            self.estimate_filtered_rows(&left_chain, left_rows, left_tag, statistics, snapshot);
+        let right_filtered =
+            self.estimate_filtered_rows(&right_chain, right_rows, right_tag, statistics, snapshot);
+        // Branches run independently under one shared layout and gather
+        // afterwards, so the dominant branch decides: a tiny branch must not
+        // veto partitioning that pays off for the branch holding the work.
+        // (Co-partitioned joins stay correct regardless of branch sizes —
+        // fragment pairing only needs the shared layout, not balanced rows.)
+        // There is intentionally no per-branch raw gate: without a trusted
+        // filter the filtered estimate degrades to the raw count, so the
+        // single dominant-branch gate below subsumes it.
+        let work = left_filtered.max(right_filtered);
+        if work < threshold {
             return Self::fallback(format!(
-                "estimated vertex rows ({left_rows}/{right_rows}) are below the partition threshold"
+                "estimated filtered rows ({left_filtered}/{right_filtered}) are below the partition threshold"
             ));
         }
 
-        let rows = left_rows.max(right_rows);
-        let desired = self.desired_partition_count(rows);
+        let desired = self.desired_partition_count(work);
+        let output_rows = left_filtered.saturating_add(right_filtered);
+        if let Some(reason) = self.cost_gate_reason(work, output_rows, desired) {
+            return Self::fallback(reason);
+        }
         let ranges = split_range(range, desired);
         let representative = left_tag.to_string();
         let source = PartitionSource::VertexId {
@@ -358,6 +507,7 @@ impl PartitioningPlanner {
         statistics: &StatsView,
         range: &std::ops::Range<i64>,
         layout: &PartitioningLayoutInfo,
+        snapshot: &SelectivitySnapshot,
     ) -> Option<PartitioningDecision> {
         let mut chain = Vec::new();
         if !Self::collect_anchored_chain(root, &mut chain) {
@@ -406,13 +556,38 @@ impl PartitioningPlanner {
                 "missing statistics for anchor tag '{tag}'; cannot estimate row count"
             )));
         }
-        if rows < self.config.min_rows_per_partition.saturating_mul(2) {
+        let threshold = self.config.min_rows_per_partition.saturating_mul(2);
+        if rows < threshold {
             return Some(Self::fallback(format!(
                 "estimated anchor rows ({rows}) are below the partition threshold"
             )));
         }
+        let filtered = self.estimate_filtered_rows(&chain, rows, tag, statistics, snapshot);
+        // Each partition expands its own anchor slice, so the gate input is
+        // the expanded work, not the anchor count: a small anchor with a
+        // high fanout still pays off partitioned.
+        let fanout = chain
+            .iter()
+            .filter_map(|node| match node {
+                PlanNodeEnum::ExpandAll(expand) => {
+                    Some(hop_fanout(statistics, expand.edge_types()))
+                }
+                _ => None,
+            })
+            .fold(1u64, |accumulated, hop| {
+                accumulated.saturating_mul(hop).max(1)
+            });
+        let work = filtered.saturating_mul(fanout);
+        if work < threshold {
+            return Some(Self::fallback(format!(
+                "estimated expanded rows ({work}) are below the partition threshold"
+            )));
+        }
 
-        let desired = self.desired_partition_count(rows);
+        let desired = self.desired_partition_count(work);
+        if let Some(reason) = self.cost_gate_reason(work, work, desired) {
+            return Some(Self::fallback(reason));
+        }
         let ranges = split_range(range, desired);
         let source = PartitionSource::VertexId {
             tag: tag.to_string(),
@@ -589,6 +764,9 @@ impl PartitioningPlanner {
         }
 
         let desired = self.desired_partition_count(rows);
+        if let Some(reason) = self.cost_gate_reason(rows, rows, desired) {
+            return Self::fallback(reason);
+        }
         let ranges = split_range(range, desired);
         let source = PartitionSource::EdgeId {
             edge_type: edge_type.to_string(),
@@ -696,6 +874,45 @@ impl PartitioningPlanner {
             partition_spec: None,
             reason: reason.into(),
         }
+    }
+}
+
+/// Expansion fanout of one traversal hop for partition work estimates.
+///
+/// Takes the largest rounded average degree across the hop's edge types so a
+/// low first type cannot shrink the estimate, and falls back to the single
+/// no-statistics default shared with the row estimators.
+fn hop_fanout(statistics: &StatsView, edge_types: &[String]) -> u64 {
+    edge_types
+        .iter()
+        .filter_map(|edge_type| statistics.edge_stats(edge_type))
+        .map(|stats| {
+            stats
+                .avg_out_degree
+                .max(stats.avg_in_degree)
+                .round()
+                .max(0.0) as u64
+        })
+        .max()
+        .filter(|fanout| *fanout > 0)
+        .unwrap_or(DEFAULT_FANOUT)
+}
+
+/// Property names referenced anywhere inside a filter condition.
+fn collect_condition_properties(expr: &Expression, out: &mut Vec<String>) {
+    match expr {
+        Expression::Property { property, .. } => out.push(property.clone()),
+        Expression::Binary { left, right, .. } => {
+            collect_condition_properties(left, out);
+            collect_condition_properties(right, out);
+        }
+        Expression::Unary { operand, .. } => collect_condition_properties(operand, out),
+        Expression::Function { args, .. } => {
+            for arg in args {
+                collect_condition_properties(arg.as_expr(), out);
+            }
+        }
+        _ => {}
     }
 }
 

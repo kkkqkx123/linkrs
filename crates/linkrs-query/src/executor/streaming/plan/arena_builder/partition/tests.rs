@@ -60,19 +60,28 @@ fn partitionable_scan_chain_produces_partition_and_exchange_fragments() {
         crate::executor::streaming::plan::types::FragmentId(2)
     );
 
-    // Every partition scan carries its own vertex-id range.
-    let mut partition_ranges = Vec::new();
+    // Every partition scan carries its own shard slice and no value range:
+    // slices divide enumeration, ranges would repeat full-table walks.
+    let mut shard_slices = Vec::new();
     for op in &plan.operators {
         if let crate::executor::streaming::plan::types::OperatorKindSpec::Source(
             SourceSpec::StorageScanVertices {
-                partition_range, ..
+                partition_range,
+                shard_slice,
+                ..
             },
         ) = &op.spec
         {
-            partition_ranges.push(partition_range.clone());
+            assert!(partition_range.is_none());
+            shard_slices.push(*shard_slice);
         }
     }
-    assert_eq!(partition_ranges, vec![Some(0..5), Some(5..10)]);
+    assert_eq!(shard_slices.len(), 2);
+    for (index, slice) in shard_slices.iter().enumerate() {
+        let slice = slice.expect("partition scan must carry a shard slice");
+        assert_eq!(slice.partition_id, index);
+        assert_eq!(slice.partition_count, 2);
+    }
 
     // The exchange operator consumes both partitions through a
     // PartitionedInputs contract.

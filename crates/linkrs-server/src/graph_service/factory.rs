@@ -385,6 +385,11 @@ impl<
             vertex_id_range: parallel.vertex_id_range(),
             max_workers: parallel.workers,
             max_buffered_chunks: parallel.max_buffered_chunks,
+            // Economic gate stays inert in production until the overhead
+            // terms are calibrated per hardware (follow-up config knobs).
+            fixed_overhead_rows: 0,
+            per_partition_rows: 0,
+            exchange_row_per_mille: 0,
         }
     }
 

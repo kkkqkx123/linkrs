@@ -31,6 +31,9 @@ fn selects_only_with_trusted_range_and_sufficient_statistics() {
         vertex_id_range: Some(0i64..10_000),
         max_workers: 4,
         max_buffered_chunks: 10,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -146,6 +149,9 @@ fn storage_self_proven_domain_overrides_config_range() {
         vertex_id_range: Some(0i64..10_000),
         max_workers: 4,
         max_buffered_chunks: 10,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
     });
 
     // A narrower proven domain must be used (not the config range).
@@ -230,6 +236,9 @@ fn make_planner() -> PartitioningPlanner {
         vertex_id_range: Some(0i64..10_000),
         max_workers: 4,
         max_buffered_chunks: 10,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
     })
 }
 
@@ -585,6 +594,9 @@ fn partition_count_is_capped_by_available_workers() {
         vertex_id_range: Some(0i64..10_000),
         max_workers: 2,
         max_buffered_chunks: 10,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -606,6 +618,9 @@ fn partition_count_is_capped_by_max_partitions() {
         vertex_id_range: Some(0i64..10_000),
         max_workers: 8,
         max_buffered_chunks: 10,
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
     });
 
     let decision = planner.decide(&tagged_scan(), &view_of(&stats));
@@ -716,6 +731,323 @@ fn recursive_traversal_is_rejected() {
     assert!(
         decision.reason.contains("recursive graph traversal"),
         "vertex-property-fetch traversals must be rejected, got: {}",
+        decision.reason
+    );
+}
+
+fn filter_over_scan(bound: i64) -> PlanNodeEnum {
+    let mut scan = ScanVerticesNode::new(1, "space");
+    scan.set_tag("person");
+    filter_node_over(PlanNodeEnum::ScanVertices(scan), bound)
+}
+
+fn stats_with_value_range() -> Arc<StatisticsManager> {
+    let stats = Arc::new(make_stats());
+    let mut prop = crate::optimizer::stats::PropertyStatistics::new(
+        "value".to_string(),
+        Some("person".to_string()),
+    );
+    prop.min_value = Some(linkrs_core::Value::BigInt(0));
+    prop.max_value = Some(linkrs_core::Value::BigInt(10_000));
+    stats.update_property_stats(TEST_SPACE, prop);
+    stats
+}
+
+fn planner_with_selectivity(stats: &Arc<StatisticsManager>) -> PartitioningPlanner {
+    use crate::optimizer::cost::SelectivityEstimator;
+    make_planner().with_selectivity(Arc::new(SelectivityEstimator::new(Arc::clone(stats))))
+}
+
+#[test]
+fn falls_back_when_filter_keeps_too_few_rows() {
+    let stats = stats_with_value_range();
+    let plan = filter_over_scan(100);
+    let decision =
+        planner_with_selectivity(&stats).decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    assert!(
+        decision.partition_spec.is_none(),
+        "a filter keeping ~100 of 10000 rows must stay serial, got: {}",
+        decision.reason
+    );
+    assert!(
+        decision.reason.contains("filtered"),
+        "fallback must name the filtered-row cause, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn partitions_when_filter_keeps_enough_rows() {
+    let stats = stats_with_value_range();
+    let plan = filter_over_scan(9_000);
+    let decision =
+        planner_with_selectivity(&stats).decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    assert!(
+        decision.partition_spec.is_some(),
+        "a filter keeping ~9000 of 10000 rows must still partition, got: {}",
+        decision.reason
+    );
+}
+
+fn filter_node_over(plan: PlanNodeEnum, bound: i64) -> PlanNodeEnum {
+    use linkrs_core::types::expr::Expression;
+
+    let condition = Expression::Binary {
+        left: Box::new(Expression::Property {
+            object: Box::new(Expression::Variable("n".to_string())),
+            property: "value".to_string(),
+        }),
+        op: linkrs_core::BinaryOperator::LessThan,
+        right: Box::new(Expression::Literal(linkrs_core::Value::BigInt(bound))),
+    };
+    filter_node_with(plan, condition)
+}
+
+fn filter_node_with(
+    plan: PlanNodeEnum,
+    condition: linkrs_core::types::expr::Expression,
+) -> PlanNodeEnum {
+    use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
+    use linkrs_core::types::expr::contextual::ContextualExpression;
+    use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
+    use linkrs_core::types::expr::ExpressionMeta;
+
+    let context = Arc::new(ExpressionAnalysisContext::new());
+    let id = context.register_expression(ExpressionMeta::new(condition));
+    let filter = FilterNode::new(plan, ContextualExpression::new(id, context))
+        .expect("filter node builds over a scan");
+    PlanNodeEnum::Filter(filter)
+}
+
+#[test]
+fn union_partitions_when_dominant_branch_is_wide() {
+    use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::UnionNode;
+
+    let stats = stats_with_value_range();
+    let mut narrow = ScanVerticesNode::new(1, "space");
+    narrow.set_tag("person");
+    let mut wide = ScanVerticesNode::new(2, "space");
+    wide.set_tag("person");
+    let union = UnionNode::new(
+        filter_node_over(PlanNodeEnum::ScanVertices(narrow), 100),
+        filter_node_over(PlanNodeEnum::ScanVertices(wide), 9_000),
+        false,
+    )
+    .expect("union plan should build");
+    let plan = PlanNodeEnum::Union(union);
+
+    let decision =
+        planner_with_selectivity(&stats).decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    assert!(
+        decision.partition_spec.is_some(),
+        "a tiny branch must not veto partitioning for the dominant branch, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn multi_scan_partitions_when_small_branch_is_dominated() {
+    use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::UnionNode;
+
+    // The company branch is raw-small (300 rows, below the gate) but holds
+    // almost no work; the wide person branch must decide alone.
+    let stats = stats_with_value_range();
+    let mut small = TagStatistics::new("company".to_string());
+    small.vertex_count = 300;
+    stats.update_tag_stats(TEST_SPACE, small);
+    let mut wide = ScanVerticesNode::new(1, "space");
+    wide.set_tag("person");
+    let mut narrow = ScanVerticesNode::new(2, "space");
+    narrow.set_tag("company");
+    let union = UnionNode::new(
+        filter_node_over(PlanNodeEnum::ScanVertices(wide), 9_000),
+        PlanNodeEnum::ScanVertices(narrow),
+        false,
+    )
+    .expect("union plan should build");
+    let plan = PlanNodeEnum::Union(union);
+
+    let decision =
+        planner_with_selectivity(&stats).decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    assert!(
+        decision.partition_spec.is_some(),
+        "a raw-small branch must not veto the dominant branch, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn partition_count_follows_filtered_rows_not_table_total() {
+    // 2500 of 10000 rows survive: two threshold buckets, not the ten the
+    // table total would cut.
+    let stats = stats_with_value_range();
+    let plan = filter_over_scan(2_500);
+    let decision =
+        planner_with_selectivity(&stats).decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    let spec = decision
+        .partition_spec
+        .as_ref()
+        .expect("a filter keeping ~2500 rows must still partition");
+    assert_eq!(
+        spec.partition_count(),
+        2,
+        "partition count must follow filtered rows, got: {}",
+        decision.reason
+    );
+}
+
+fn expand_over(plan: PlanNodeEnum, edge_type: &str) -> PlanNodeEnum {
+    use crate::planning::plan::core::nodes::base::plan_node_traits::MultipleInputNode;
+    use crate::planning::plan::core::nodes::traversal::traversal_node::ExpandAllNode;
+
+    let mut expand = ExpandAllNode::new(1, vec![edge_type.to_string()], "OUT");
+    expand.set_step_limit(1);
+    expand.set_id_only(true);
+    expand.add_input(plan);
+    PlanNodeEnum::ExpandAll(expand)
+}
+
+fn stats_with_fanout(avg_out_degree: f64) -> Arc<StatisticsManager> {
+    let stats = stats_with_value_range();
+    let mut edge = crate::optimizer::stats::EdgeTypeStatistics::new("follows".to_string());
+    edge.edge_count = 30_000;
+    edge.avg_out_degree = avg_out_degree;
+    stats.update_edge_stats(TEST_SPACE, edge);
+    stats
+}
+
+#[test]
+fn anchored_traversal_partitions_when_fanout_expands_small_anchor() {
+    // 100 anchor rows would stay serial on their own, but a fanout of 50
+    // expands them to ~5000 rows of partitionable work.
+    let stats = stats_with_fanout(50.0);
+    let plan = expand_over(filter_node_over(tagged_scan(), 100), "follows");
+    let decision =
+        planner_with_selectivity(&stats).decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    assert!(
+        decision.partition_spec.is_some(),
+        "high-fanout expansion of a small anchor must partition, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn anchored_traversal_stays_serial_when_expanded_work_is_small() {
+    // No edge statistics: the shared default fanout expands 100 anchor rows
+    // to ~1000 rows of work, still below the gate.
+    let stats = stats_with_value_range();
+    let plan = expand_over(filter_node_over(tagged_scan(), 100), "follows");
+    let decision =
+        planner_with_selectivity(&stats).decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    assert!(
+        decision.partition_spec.is_none(),
+        "low-fanout expansion of a small anchor must stay serial, got: {}",
+        decision.reason
+    );
+    assert!(
+        decision.reason.contains("expanded"),
+        "fallback must name the expanded-work cause, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn in_list_filter_counts_through_readonly_path() {
+    use linkrs_core::types::expr::Expression;
+
+    // 3000 rows, IN-list keeping ~900: below the gate. The retired
+    // second estimator ignored IN shapes and would have partitioned.
+    let stats = Arc::new(StatisticsManager::new());
+    let mut tag = TagStatistics::new("person".to_string());
+    tag.vertex_count = 3_000;
+    stats.update_tag_stats(TEST_SPACE, tag);
+    let mut prop = crate::optimizer::stats::PropertyStatistics::new(
+        "value".to_string(),
+        Some("person".to_string()),
+    );
+    prop.min_value = Some(linkrs_core::Value::BigInt(0));
+    prop.max_value = Some(linkrs_core::Value::BigInt(10_000));
+    stats.update_property_stats(TEST_SPACE, prop);
+
+    let condition = Expression::Binary {
+        left: Box::new(Expression::Property {
+            object: Box::new(Expression::Variable("n".to_string())),
+            property: "value".to_string(),
+        }),
+        op: linkrs_core::BinaryOperator::In,
+        right: Box::new(Expression::List(vec![
+            Expression::Literal(linkrs_core::Value::BigInt(1)),
+            Expression::Literal(linkrs_core::Value::BigInt(2)),
+            Expression::Literal(linkrs_core::Value::BigInt(3)),
+        ])),
+    };
+    let plan = filter_node_with(tagged_scan(), condition);
+    let decision =
+        planner_with_selectivity(&stats).decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    assert!(
+        decision.partition_spec.is_none(),
+        "an IN-list keeping ~900 of 3000 rows must stay serial, got: {}",
+        decision.reason
+    );
+    assert!(
+        decision.reason.contains("filtered"),
+        "fallback must name the filtered-row cause, got: {}",
+        decision.reason
+    );
+}
+
+fn costed_planner(fixed: u64, per_partition: u64, per_mille: u32) -> PartitioningPlanner {
+    PartitioningPlanner::new(PartitioningConfig {
+        enabled: true,
+        min_rows_per_partition: 1_000,
+        max_partitions: 4,
+        vertex_id_range: Some(0i64..10_000),
+        max_workers: 4,
+        max_buffered_chunks: 10,
+        fixed_overhead_rows: fixed,
+        per_partition_rows: per_partition,
+        exchange_row_per_mille: per_mille,
+    })
+}
+
+#[test]
+fn cost_gate_serializes_when_overhead_dominates() {
+    // 10000 rows over 4 partitions save 7500 row-equivalents, far below a
+    // 20000-row fixed overhead: serial wins despite passing the row gate.
+    let stats = make_stats();
+    let decision = costed_planner(20_000, 256, 50).decide(&tagged_scan(), &view_of(&stats));
+    assert!(
+        decision.partition_spec.is_none(),
+        "dominant fixed overhead must serialize, got: {}",
+        decision.reason
+    );
+    assert!(
+        decision.reason.contains("parallel cost"),
+        "fallback must name the economic cause, got: {}",
+        decision.reason
+    );
+}
+
+#[test]
+fn cost_gate_allows_profitable_partition() {
+    // Saving 7500 against 2048 + 4*256 + 500 exchange: parallel wins.
+    let stats = make_stats();
+    let decision = costed_planner(2_048, 256, 50).decide(&tagged_scan(), &view_of(&stats));
+    let spec = decision
+        .partition_spec
+        .as_ref()
+        .expect("profitable parallelism must partition");
+    assert_eq!(spec.partition_count(), 4);
+}
+
+#[test]
+fn keeps_table_total_behavior_without_selectivity_estimator() {
+    let stats = stats_with_value_range();
+    let plan = filter_over_scan(100);
+    let decision = make_planner().decide(&plan, &StatsView::new(&stats, Some(TEST_SPACE)));
+    assert!(
+        decision.partition_spec.is_some(),
+        "without an estimator the old table-total decision must stand, got: {}",
         decision.reason
     );
 }

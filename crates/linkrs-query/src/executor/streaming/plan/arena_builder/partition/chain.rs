@@ -34,8 +34,22 @@ pub(super) struct PartitionedChain<'a> {
     /// partial accumulation.
     pub(super) aggregate_split: Option<&'a AggregateNode>,
 }
+/// How one partition-local scan copy divides the table among fragments.
+///
+/// Value ranges filter by external id; every copy still walks the whole
+/// table, so ranges divide output rows but never enumeration work. Shard
+/// slices divide the physical enumeration space, so the union of copies
+/// costs a single full walk. Co-partitioned joins need value ranges (both
+/// sides must observe the same key range); every other partitioned scan
+/// uses shard slices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScanDivision {
+    ByValueRange,
+    ByShardSlice,
+}
+
 /// Build one partition group for a linear scan chain: one local fragment per
-/// range (scan + local Filter/Project + optional PartialAggregate), a
+/// partition (scan + local Filter/Project + optional PartialAggregate), a
 /// Concatenate exchange, then the chain's global operators (including a
 /// FinalAggregate for split aggregates). Returns the group root.
 #[allow(clippy::too_many_arguments)]
@@ -50,11 +64,19 @@ pub(super) fn build_chain_group(
     exec_ctx: &ExecutionContext,
 ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
     // 1. One local fragment per partition: StorageScanVertices bound to the
-    //    partition's vertex-id range (or StorageScanEdges bound to a src-id
-    //    range for edge scans), followed by the local Filter/Project pipeline
-    //    and, for split aggregates, the PartialAggregate phase.
+    //    partition's shard slice (or StorageScanEdges bound to a source-id
+    //    shard slice for edge scans), followed by the local Filter/Project
+    //    pipeline and, for split aggregates, the PartialAggregate phase.
     let partition_fids = build_partition_local_fragments(
-        operators, fragments, op_alloc, frag_alloc, chain, scan, spec, exec_ctx,
+        operators,
+        fragments,
+        op_alloc,
+        frag_alloc,
+        chain,
+        scan,
+        spec,
+        ScanDivision::ByShardSlice,
+        exec_ctx,
     )?;
 
     // 2. Exchange fragment: Concatenate over all partition fragments.
@@ -102,12 +124,14 @@ pub(super) fn build_chain_group(
 }
 
 /// Build one partition-local scan chain fragment per configured range: the
-/// storage scan bound to that range plus the chain's local operators
+/// storage scan bound to that partition plus the chain's local operators
 /// (Filter/Project/ExpandAll) and, for split aggregates, the PartialAggregate
 /// phase. Returns the fragment id per range in partition order.
 ///
-/// Shared by the single-chain [`build_chain_group`] and the E1b co-partition
-/// direct join, which pairs the left/right partition fragments by index.
+/// Shared by the single-chain [`build_chain_group`], the E1b co-partition
+/// direct join (which pairs the left/right partition fragments by index and
+/// needs value ranges on both sides), and the hash-exchange join (whose
+/// exchange repartitions by key, so any disjoint division works).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_partition_local_fragments(
     operators: &mut Vec<PhysicalOperatorSpec>,
@@ -117,18 +141,32 @@ pub(super) fn build_partition_local_fragments(
     chain: &PartitionedChain,
     scan: &PlanNodeEnum,
     spec: &crate::planning::plan::PartitionSpec,
+    division: ScanDivision,
     exec_ctx: &ExecutionContext,
 ) -> Result<Vec<FragmentId>, PlanBuildError> {
     let mut partition_fids = Vec::with_capacity(spec.partition_count());
-    for range in spec.ranges() {
+    for (index, range) in spec.ranges().iter().enumerate() {
         let mut scan_spec = build_source_spec(scan, exec_ctx)?;
         match &mut scan_spec {
             SourceSpec::StorageScanVertices {
-                partition_range, ..
-            } => *partition_range = Some(range.clone()),
-            SourceSpec::StorageScanEdges {
-                partition_range, ..
-            } => *partition_range = Some(range.clone()),
+                partition_range,
+                shard_slice,
+                ..
+            } => match division {
+                ScanDivision::ByValueRange => *partition_range = Some(range.clone()),
+                ScanDivision::ByShardSlice => {
+                    *shard_slice = Some(crate::storage::ShardSlice::new(
+                        index,
+                        spec.partition_count(),
+                    ));
+                }
+            },
+            SourceSpec::StorageScanEdges { shard_slice, .. } => {
+                *shard_slice = Some(crate::storage::ShardSlice::new(
+                    index,
+                    spec.partition_count(),
+                ));
+            }
             _ => {
                 return Err(PlanBuildError::unsupported(
                     "PhysicalPlan",

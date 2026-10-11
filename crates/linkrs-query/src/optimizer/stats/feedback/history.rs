@@ -5,6 +5,7 @@
 use crate::optimizer::stats::feedback::query::QueryExecutionFeedback;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Query feedback history
@@ -27,6 +28,9 @@ use std::time::Instant;
 pub struct QueryFeedbackHistory {
     /// The mapping from fingerprints to the feedback list
     feedbacks: RwLock<HashMap<String, Vec<QueryExecutionFeedback>>>,
+    /// Monotonic sequence stamped onto each inserted execution so the
+    /// fold loop can consume new entries exactly once.
+    next_sequence: AtomicU64,
     /// Maximum number of historical records per query
     max_history_per_query: usize,
 }
@@ -39,12 +43,14 @@ impl QueryFeedbackHistory {
     pub fn new(max_history_per_query: usize) -> Self {
         Self {
             feedbacks: RwLock::new(HashMap::new()),
+            next_sequence: AtomicU64::new(1),
             max_history_per_query: max_history_per_query.max(1),
         }
     }
 
     /// Add feedback on the execution of the query.
-    pub fn add_feedback(&self, feedback: QueryExecutionFeedback) {
+    pub fn add_feedback(&self, mut feedback: QueryExecutionFeedback) {
+        feedback.sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         let mut feedbacks = self.feedbacks.write();
         let entry = feedbacks
             .entry(feedback.query_fingerprint.clone())
@@ -185,6 +191,7 @@ impl Clone for QueryFeedbackHistory {
     fn clone(&self) -> Self {
         Self {
             feedbacks: RwLock::new(self.feedbacks.read().clone()),
+            next_sequence: AtomicU64::new(self.next_sequence.load(Ordering::Relaxed)),
             max_history_per_query: self.max_history_per_query,
         }
     }
@@ -285,5 +292,17 @@ mod tests {
         assert_eq!(history.get_feedback_count("nonexistent"), 0);
         assert!(history.get_feedback_for_query("nonexistent").is_empty());
         assert!(history.get_avg_row_error("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_insert_assigns_monotonic_sequences() {
+        let history = QueryFeedbackHistory::new(10);
+        history.add_feedback(QueryExecutionFeedback::new("fp_1".to_string()));
+        history.add_feedback(QueryExecutionFeedback::new("fp_1".to_string()));
+
+        let feedbacks = history.get_feedback_for_query("fp_1");
+        assert_eq!(feedbacks.len(), 2);
+        assert!(feedbacks[0].sequence > 0);
+        assert_eq!(feedbacks[1].sequence, feedbacks[0].sequence + 1);
     }
 }

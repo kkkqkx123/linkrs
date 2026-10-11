@@ -369,15 +369,19 @@ fn run_gate_share() {
             share * 100.0
         );
     }
+    // Single conclusion: batching is always the first action when the gate
+    // binds; sharding the gate is never justified from constrained-box data
+    // alone (commit ordering plus WAL durability serialize below the gate
+    // regardless) and needs >= 8-core true-machine evidence.
     if share_at_max < 0.05 {
         println!(
-            "\nresult: gate wait share {:.2}% at N={} (< 5%) -> sharding not justified",
+            "\nresult: gate wait share {:.2}% at N={} (< 5%) -> per-statement auto-commit is fine; sharding not justified",
             share_at_max * 100.0,
             threads_list[threads_list.len() - 1]
         );
     } else {
         println!(
-            "\nresult: gate wait share {:.2}% at N={} (>= 5%) -> review sharding",
+            "\nresult: gate wait share {:.2}% at N={} (>= 5%) -> batch writes via batch_insert_edges or begin_auto_commit_group; gate sharding review only on true-machine (>= 8 cores) data",
             share_at_max * 100.0,
             threads_list[threads_list.len() - 1]
         );

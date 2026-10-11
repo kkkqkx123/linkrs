@@ -1,3 +1,6 @@
+use std::sync::atomic::Ordering;
+
+use super::super::super::runtime::OperatorProfileKey;
 use super::*;
 
 /// Convert a Value to a boolean for filter predicate evaluation.
@@ -80,6 +83,11 @@ pub(super) fn handle(
     op: &mut UnaryOperator,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
+    // Snapshot the profile target before borrowing the operator state:
+    // consumed input rows pair with outputs for selectivity feedback.
+    let runtime = op.runtime.clone();
+    let profile_key =
+        OperatorProfileKey::new(op.config.physical_operator_id, op.config.partition_id);
     let UnaryOperatorKind::Filter { predicate, state } = &mut op.kind else {
         return Err(QueryError::execution(
             "filter::handle called for a non-filter unary operator".to_string(),
@@ -88,6 +96,16 @@ pub(super) fn handle(
     loop {
         match input.advance()? {
             Some(mut chunk) => {
+                // Every consumed visible row counts, including chunks
+                // rejected entirely below (the central advance path only
+                // records this operator's outputs).
+                if let Some(rt) = &runtime {
+                    if let Some(entry) = rt.profile().get_entry(&profile_key) {
+                        entry
+                            .input_rows
+                            .fetch_add(chunk.logical_len(), Ordering::Relaxed);
+                    }
+                }
                 let results =
                     UnaryOperator::evaluate_filter_predicate(&mut chunk, predicate, state)?;
                 // Build a selection vector restricted to the

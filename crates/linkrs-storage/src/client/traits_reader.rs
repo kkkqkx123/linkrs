@@ -222,6 +222,20 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     ) -> Result<Vec<usize>, StorageError>;
 
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
+    /// Table-sharded parallel variant of [`Self::scan_edges_by_type`]: the
+    /// type's edge tables fan out across `shards` rayon shards sharing one
+    /// read timestamp, concatenated in key order. Single-table types fall
+    /// back to the serial scan internally. The default body is the serial
+    /// scan, so adapters and test doubles inherit it unchanged.
+    fn scan_edges_by_type_parallel(
+        &self,
+        space: &str,
+        edge_type: &str,
+        shards: usize,
+    ) -> Result<Vec<Edge>, StorageError> {
+        let _ = shards;
+        self.scan_edges_by_type(space, edge_type)
+    }
     fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
     fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
     fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;

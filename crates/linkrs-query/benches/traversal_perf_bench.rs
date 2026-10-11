@@ -140,6 +140,10 @@ fn build_pipeline(
             vertex_id_range: Some(0i64..vertex_count() as i64),
             max_workers: workers,
             max_buffered_chunks: 10,
+            // Preserve the historical threshold-only behavior in this bench.
+            fixed_overhead_rows: 0,
+            per_partition_rows: 0,
+            exchange_row_per_mille: 0,
         });
     }
     let stats = Arc::new(StatsManager::new());

@@ -345,24 +345,32 @@ pub(crate) fn neighbor_dst_ids_batch(
         resolved.push((edge_info.edge_type_id, src_label_id, dst_label_id));
     }
 
-    let mut results = Vec::with_capacity(src_ids.len());
-    let mut seen: HashSet<(u32, u32, i64)> = HashSet::new();
     for src_id in src_ids {
         record_vertex_read(ctx, *src_id);
-        let mut neighbors: Vec<VertexId> = Vec::new();
-        seen.clear();
-        for (edge_label_id, src_label_id, dst_label_id) in &resolved {
-            append_hot_neighbors(
-                ctx,
-                &mut neighbors,
-                Some(&mut seen),
-                src_id,
-                *edge_label_id,
-                *src_label_id,
-                *dst_label_id,
-                direction,
-                ts,
-            );
+    }
+    let mut staged: Vec<Vec<(LabelId, u32)>> = vec![Vec::new(); src_ids.len()];
+    let mut seen: Vec<HashSet<(u32, u32, i64)>> =
+        (0..src_ids.len()).map(|_| HashSet::new()).collect();
+    for (edge_label_id, src_label_id, dst_label_id) in &resolved {
+        stage_hot_neighbors(
+            ctx,
+            &mut staged,
+            &mut seen,
+            src_ids,
+            *edge_label_id,
+            *src_label_id,
+            *dst_label_id,
+            direction,
+            ts,
+        );
+    }
+    let mut results = Vec::with_capacity(src_ids.len());
+    for staged_seed in &staged {
+        let mut neighbors = Vec::with_capacity(staged_seed.len());
+        for (far_label, endpoint) in staged_seed {
+            if let Some(ext) = internal_to_external_vertex_id(ctx, *far_label, *endpoint, ts) {
+                neighbors.push(ext);
+            }
         }
         results.push(neighbors);
     }
@@ -396,197 +404,123 @@ pub(crate) fn out_degree_batch(
         resolved.push((edge_info.edge_type_id, src_label_id, dst_label_id));
     }
 
-    let mut results = Vec::with_capacity(src_ids.len());
-    let mut seen: HashSet<(u32, u32, i64)> = HashSet::new();
     for src_id in src_ids {
         record_vertex_read(ctx, *src_id);
-        seen.clear();
-        for (edge_label_id, src_label_id, dst_label_id) in &resolved {
-            count_hot_neighbors(
-                ctx,
-                &mut seen,
-                src_id,
-                *edge_label_id,
-                *src_label_id,
-                *dst_label_id,
-                direction,
-                ts,
-            );
-        }
-        results.push(seen.len());
     }
-    Ok(results)
+    let mut seen: Vec<HashSet<(u32, u32, i64)>> =
+        (0..src_ids.len()).map(|_| HashSet::new()).collect();
+    for (edge_label_id, src_label_id, dst_label_id) in &resolved {
+        count_hot_neighbors_batched(
+            ctx,
+            &mut seen,
+            src_ids,
+            *edge_label_id,
+            *src_label_id,
+            *dst_label_id,
+            direction,
+            ts,
+        );
+    }
+    Ok(seen.iter().map(HashSet::len).collect())
 }
 
-/// Append hot-CSR neighbors of `src_id` (direction-dependent endpoint) to
-/// `neighbors`. Deduplicated by `(src, dst, rank)` across tables.
+/// Stage hot-CSR neighbors for a whole seed batch, one edge type at a time.
+///
+/// Batch counterpart of the former per-seed staging: each edge table is
+/// locked once for all seeds instead of once per seed. Deduplicated by
+/// `(src, dst, rank)` across tables into the per-seed `seen` sets, which the
+/// caller keeps alive across edge types.
 ///
 /// Two-phase to avoid holding an edge-table read lock while resolving
 /// vertex ids: the adjacency callback only stages `(far_label, endpoint)`
 /// pairs, and external resolution runs after the edge lock is released.
 #[allow(clippy::too_many_arguments)]
-fn append_hot_neighbors(
+fn stage_hot_neighbors(
     ctx: &GraphStorageContext,
-    neighbors: &mut Vec<VertexId>,
-    mut seen: Option<&mut HashSet<(u32, u32, i64)>>,
-    src_id: &VertexId,
+    staged: &mut [Vec<(LabelId, u32)>],
+    seen: &mut [HashSet<(u32, u32, i64)>],
+    seeds: &[VertexId],
     edge_label_id: LabelId,
     src_label_id: LabelId,
     dst_label_id: LabelId,
     direction: EdgeDirection,
     ts: Timestamp,
 ) {
-    let mut unique = |key: (u32, u32, i64)| -> bool {
-        match seen.as_deref_mut() {
-            Some(seen) => seen.insert(key),
-            None => true,
-        }
-    };
-    let mut staged: Vec<(LabelId, u32)> = Vec::new();
-    match direction {
-        EdgeDirection::Out => {
-            ctx.visit_out_nbrs(
-                edge_label_id,
-                src_label_id,
-                dst_label_id,
-                *src_id,
-                ts,
-                |src_internal, far_label, nbr| {
-                    let rank = nbr.rank;
-                    if unique((src_internal, nbr.endpoint, rank)) {
-                        staged.push((far_label, nbr.endpoint));
-                    }
-                },
-            );
-        }
-        EdgeDirection::In => {
-            ctx.visit_in_nbrs(
-                edge_label_id,
-                src_label_id,
-                dst_label_id,
-                *src_id,
-                ts,
-                |dst_internal, far_label, nbr| {
-                    let rank = nbr.rank;
-                    if unique((nbr.endpoint, dst_internal, rank)) {
-                        staged.push((far_label, nbr.endpoint));
-                    }
-                },
-            );
-        }
-        EdgeDirection::Both => {
-            ctx.visit_out_nbrs(
-                edge_label_id,
-                src_label_id,
-                dst_label_id,
-                *src_id,
-                ts,
-                |src_internal, far_label, nbr| {
-                    let rank = nbr.rank;
-                    if unique((src_internal, nbr.endpoint, rank)) {
-                        staged.push((far_label, nbr.endpoint));
-                    }
-                },
-            );
-            ctx.visit_in_nbrs(
-                edge_label_id,
-                src_label_id,
-                dst_label_id,
-                *src_id,
-                ts,
-                |dst_internal, far_label, nbr| {
-                    let rank = nbr.rank;
-                    if unique((nbr.endpoint, dst_internal, rank)) {
-                        staged.push((far_label, nbr.endpoint));
-                    }
-                },
-            );
-        }
+    if direction == EdgeDirection::Out || direction == EdgeDirection::Both {
+        ctx.visit_out_nbrs_batched(
+            edge_label_id,
+            src_label_id,
+            dst_label_id,
+            seeds,
+            ts,
+            |index, src_internal, far_label, nbr| {
+                if seen[index].insert((src_internal, nbr.endpoint, nbr.rank)) {
+                    staged[index].push((far_label, nbr.endpoint));
+                }
+            },
+        );
     }
-    neighbors.reserve(staged.len());
-    for (far_label, endpoint) in staged {
-        if let Some(ext) = internal_to_external_vertex_id(ctx, far_label, endpoint, ts) {
-            neighbors.push(ext);
-        }
+    if direction == EdgeDirection::In || direction == EdgeDirection::Both {
+        ctx.visit_in_nbrs_batched(
+            edge_label_id,
+            src_label_id,
+            dst_label_id,
+            seeds,
+            ts,
+            |index, dst_internal, far_label, nbr| {
+                if seen[index].insert((nbr.endpoint, dst_internal, nbr.rank)) {
+                    staged[index].push((far_label, nbr.endpoint));
+                }
+            },
+        );
     }
 }
 
-/// Count hot-CSR neighbors of `src_id` into `seen` (dedup by full edge
-/// identity `(src_internal, dst_internal, rank)`).
+/// Count hot-CSR neighbors for a whole seed batch into the per-seed `seen`
+/// sets (dedup by full edge identity `(src_internal, dst_internal, rank)`).
+///
+/// Batch counterpart of the former per-seed counting with the same
+/// single-lock-per-table behavior as [`stage_hot_neighbors`].
 #[allow(clippy::too_many_arguments)]
-fn count_hot_neighbors(
+fn count_hot_neighbors_batched(
     ctx: &GraphStorageContext,
-    seen: &mut HashSet<(u32, u32, i64)>,
-    src_id: &VertexId,
+    seen: &mut [HashSet<(u32, u32, i64)>],
+    seeds: &[VertexId],
     edge_label_id: LabelId,
     src_label_id: LabelId,
     dst_label_id: LabelId,
     direction: EdgeDirection,
     ts: Timestamp,
 ) {
-    match direction {
-        EdgeDirection::Out => {
-            ctx.visit_out_nbrs(
-                edge_label_id,
-                src_label_id,
-                dst_label_id,
-                *src_id,
-                ts,
-                |src_internal, _far_label, nbr| {
-                    let rank = nbr.rank;
-                    let dst_internal_vid = VertexId::from_u32(nbr.endpoint);
-                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
-                        seen.insert((src_internal, dst_internal as u32, rank));
-                    }
-                },
-            );
-        }
-        EdgeDirection::In => {
-            ctx.visit_in_nbrs(
-                edge_label_id,
-                src_label_id,
-                dst_label_id,
-                *src_id,
-                ts,
-                |dst_internal, _far_label, nbr| {
-                    let rank = nbr.rank;
-                    let src_internal_vid = VertexId::from_u32(nbr.endpoint);
-                    if let Some(src_internal) = src_internal_vid.as_int64() {
-                        seen.insert((src_internal as u32, dst_internal, rank));
-                    }
-                },
-            );
-        }
-        EdgeDirection::Both => {
-            ctx.visit_out_nbrs(
-                edge_label_id,
-                src_label_id,
-                dst_label_id,
-                *src_id,
-                ts,
-                |src_internal, _far_label, nbr| {
-                    let rank = nbr.rank;
-                    let dst_internal_vid = VertexId::from_u32(nbr.endpoint);
-                    if let Some(dst_internal) = dst_internal_vid.as_int64() {
-                        seen.insert((src_internal, dst_internal as u32, rank));
-                    }
-                },
-            );
-            ctx.visit_in_nbrs(
-                edge_label_id,
-                src_label_id,
-                dst_label_id,
-                *src_id,
-                ts,
-                |dst_internal, _far_label, nbr| {
-                    let rank = nbr.rank;
-                    let src_internal_vid = VertexId::from_u32(nbr.endpoint);
-                    if let Some(src_internal) = src_internal_vid.as_int64() {
-                        seen.insert((src_internal as u32, dst_internal, rank));
-                    }
-                },
-            );
-        }
+    if direction == EdgeDirection::Out || direction == EdgeDirection::Both {
+        ctx.visit_out_nbrs_batched(
+            edge_label_id,
+            src_label_id,
+            dst_label_id,
+            seeds,
+            ts,
+            |index, src_internal, _far_label, nbr| {
+                let dst_internal_vid = VertexId::from_u32(nbr.endpoint);
+                if let Some(dst_internal) = dst_internal_vid.as_int64() {
+                    seen[index].insert((src_internal, dst_internal as u32, nbr.rank));
+                }
+            },
+        );
+    }
+    if direction == EdgeDirection::In || direction == EdgeDirection::Both {
+        ctx.visit_in_nbrs_batched(
+            edge_label_id,
+            src_label_id,
+            dst_label_id,
+            seeds,
+            ts,
+            |index, dst_internal, _far_label, nbr| {
+                let src_internal_vid = VertexId::from_u32(nbr.endpoint);
+                if let Some(src_internal) = src_internal_vid.as_int64() {
+                    seen[index].insert((src_internal as u32, dst_internal, nbr.rank));
+                }
+            },
+        );
     }
 }
 
@@ -640,6 +574,116 @@ pub(crate) fn scan_edges_by_type(
             break;
         }
         for edge in batch {
+            record_edge_read(
+                ctx,
+                linkrs_core::types::EdgeIdentifier::new(
+                    src_label_id,
+                    edge.src,
+                    dst_label_id,
+                    edge.dst,
+                    edge_label_id,
+                    edge.ranking,
+                ),
+            );
+            edges.push(edge);
+        }
+    }
+    Ok(edges)
+}
+
+/// Table-sharded parallel full scan of one edge type.
+///
+/// Splits the type's edge tables across `shards` rayon shards (one cursor
+/// per shard, each with its own table locks) and concatenates the shards in
+/// key order, so the result multiset matches [`scan_edges_by_type`]. Read-set
+/// recording runs once, serially, over the collected edges with the same
+/// identifier mapping as the serial scan.
+///
+/// Shards share one read timestamp captured up front, so concurrent commits
+/// cannot skew shards across snapshots. With fewer than two tables (or fewer
+/// than two shards) this falls back to the serial scan: a single table has
+/// no fan-out to parallelize, and its speedup row is expected to stay at 1.
+pub(crate) fn scan_edges_by_type_parallel(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+    shards: usize,
+) -> StorageResult<Vec<Edge>> {
+    use crate::engine::data_store::EdgeTableKey;
+    use rayon::prelude::*;
+
+    record_schema_read(ctx, space);
+    let edge_info = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type)?
+        .ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Edge type {} not found in space {}",
+                edge_type, space
+            ))
+        })?;
+    let edge_label_id = edge_info.edge_type_id;
+    let src_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.src_tag_name)? {
+        Some(id) => id,
+        None => return Ok(Vec::new()),
+    };
+    let dst_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? {
+        Some(id) => id,
+        None => return Ok(Vec::new()),
+    };
+    // Same table enumeration as the cursor target resolution: unconstrained
+    // types (no src/dst tag) fan out over every table carrying the label, a
+    // constrained type is exactly one table and stays serial.
+    let mut keys: Vec<EdgeTableKey> = if src_label_id == 0 && dst_label_id == 0 {
+        ctx.data_store().with_edge_tables(|tables| {
+            tables
+                .iter()
+                .filter(|(_, arc)| arc.read().label() == edge_label_id)
+                .map(|(key, _)| *key)
+                .collect()
+        })
+    } else {
+        vec![EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id)]
+    };
+    keys.sort_by_key(|key| (key.src_label, key.dst_label, key.edge_label));
+    let width = shards.max(1).min(keys.len().max(1));
+    if keys.len() < 2 || width < 2 {
+        return scan_edges_by_type(ctx, space, edge_type);
+    }
+    // One snapshot for every shard: capture the read timestamp before the
+    // fan-out so shards cannot observe different commit frontiers.
+    let ts = ctx.get_read_timestamp();
+    let chunk = keys.len().div_ceil(width);
+    let key_groups: Vec<Vec<EdgeTableKey>> =
+        keys.chunks(chunk).map(<[EdgeTableKey]>::to_vec).collect();
+    let per_shard: Vec<Vec<Edge>> = key_groups
+        .into_par_iter()
+        .map(|group| {
+            let options = crate::cursor::ScanOptions {
+                edge_type: Some(edge_type.to_string()),
+                edge_table_allowlist: Some(group),
+                read_timestamp: Some(ts),
+                ..Default::default()
+            };
+            let mut cursor = super::super::cursor_impl::edge::create_edge_cursor(
+                Arc::new(ctx.clone()),
+                space,
+                &options,
+            )?;
+            let mut edges = Vec::new();
+            loop {
+                let batch = cursor.next_batch(SCAN_PAGE)?;
+                if batch.is_empty() {
+                    break;
+                }
+                edges.extend(batch);
+            }
+            Ok(edges)
+        })
+        .collect::<StorageResult<Vec<Vec<Edge>>>>()?;
+    let mut edges = Vec::new();
+    for shard in per_shard {
+        for edge in shard {
             record_edge_read(
                 ctx,
                 linkrs_core::types::EdgeIdentifier::new(

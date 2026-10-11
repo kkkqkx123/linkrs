@@ -166,6 +166,14 @@ fn build_pipeline(
             vertex_id_range: Some(0i64..vertex_count() as i64),
             max_workers: workers,
             max_buffered_chunks: 10,
+            // Economic gate calibration for the 20k bench: the fixed term
+            // covers fragment startup plus exchange coordination at the
+            // measured ~100us scale; the per-partition and exchange terms
+            // keep barely-profitable slicings serial. Recalibrate per
+            // hardware with the procedure in the cost-gating plan doc.
+            fixed_overhead_rows: 2_048,
+            per_partition_rows: 256,
+            exchange_row_per_mille: 50,
         });
     } else {
         engine.set_partitioning_config(PartitioningConfig {
@@ -314,6 +322,8 @@ fn measure(
     pipeline: &mut QueryPipelineManager<GraphStorage>,
     query: &str,
     space: &SpaceInfo,
+    q_name: &str,
+    workers: usize,
 ) -> (u64, ExplainMetrics) {
     for _ in 0..3 {
         run_query(pipeline, query, space).expect("warmup query");
@@ -341,6 +351,14 @@ fn measure(
     {
         if let Some(row) = data.rows.first() {
             if let Some(Value::String(text)) = row.first() {
+                // LINKRS_DUMP_DOT=1 prints the full per-node graph per
+                // (query, workers) cell so a single smoke run attributes
+                // operator costs without re-running the whole matrix.
+                if std::env::var("LINKRS_DUMP_DOT").is_ok() {
+                    println!(
+                        "--- DOT BEGIN [{q_name} workers={workers}] ---\n{text}\n--- DOT END ---"
+                    );
+                }
                 let dot_metrics = parse_explain_dot(text);
                 last_metrics.storage_read_us = dot_metrics.storage_read_us;
                 last_metrics.total_operator_us = dot_metrics.total_operator_us;
@@ -384,7 +402,7 @@ fn main() {
         let work_list = worker_list();
         for &workers in &work_list {
             let mut pipeline = build_pipeline(&storage, workers);
-            let (median, metrics) = measure(&mut pipeline, query, &space);
+            let (median, metrics) = measure(&mut pipeline, query, &space, q_name, workers);
             medians.push(median);
             metrics_list.push(metrics);
         }
@@ -406,7 +424,13 @@ fn main() {
                 0.0
             };
             let extra = if m.fallback_reason.is_empty() {
-                format!("storage R={:.0}%", r * 100.0)
+                format!(
+                    "storage R={:.0}% (ops_total={}us root={}us storage={}us)",
+                    r * 100.0,
+                    m.total_operator_us,
+                    m.root_total_us,
+                    m.storage_read_us
+                )
             } else {
                 format!("fallback=\"{}\"", m.fallback_reason)
             };

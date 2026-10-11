@@ -6,7 +6,7 @@
 //! EXPLAIN / PROFILE output.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -27,6 +27,15 @@ pub struct OperatorProfile {
     pub next_time_us: u64,
     pub close_time_us: u64,
     pub output_rows: u64,
+    /// Rows consumed from the input (visible rows pulled from the child).
+    /// Recorded only by operators whose feedback needs an input/output
+    /// pair (currently Filter); zero means unmeasured, not empty input.
+    pub input_rows: u64,
+    /// Whether this operator instance ran to exhaustion (`advance`
+    /// returned `None`). Operators starved by an upstream Limit or by
+    /// early termination never exhaust; their partial row counts must
+    /// not train the feedback loop.
+    pub exhausted: bool,
     /// Number of chunks produced (advances).  Used as the per-operator
     /// execution loop count in the feedback path.
     pub advance_count: u64,
@@ -77,6 +86,8 @@ pub struct ProfileEntry {
     pub next_time_us: AtomicU64,
     pub close_time_us: AtomicU64,
     pub output_rows: AtomicU64,
+    pub input_rows: AtomicU64,
+    pub exhausted: AtomicBool,
     pub advance_count: AtomicU64,
     pub peak_memory_bytes: AtomicU64,
     pub spilled_bytes: AtomicU64,
@@ -95,6 +106,8 @@ impl ProfileEntry {
             next_time_us: AtomicU64::new(profile.next_time_us),
             close_time_us: AtomicU64::new(profile.close_time_us),
             output_rows: AtomicU64::new(profile.output_rows),
+            input_rows: AtomicU64::new(profile.input_rows),
+            exhausted: AtomicBool::new(profile.exhausted),
             advance_count: AtomicU64::new(profile.advance_count),
             peak_memory_bytes: AtomicU64::new(profile.peak_memory_bytes),
             spilled_bytes: AtomicU64::new(profile.spilled_bytes),
@@ -114,6 +127,8 @@ impl ProfileEntry {
             next_time_us: self.next_time_us.load(Ordering::Relaxed),
             close_time_us: self.close_time_us.load(Ordering::Relaxed),
             output_rows: self.output_rows.load(Ordering::Relaxed),
+            input_rows: self.input_rows.load(Ordering::Relaxed),
+            exhausted: self.exhausted.load(Ordering::Relaxed),
             advance_count: self.advance_count.load(Ordering::Relaxed),
             peak_memory: self.peak_memory_bytes.load(Ordering::Relaxed),
             peak_memory_bytes: self.peak_memory_bytes.load(Ordering::Relaxed),
@@ -297,12 +312,18 @@ impl ProfileCollector {
                         node_id: op.node_id,
                         partition_id: key.partition_id,
                         name: op.name.clone(),
+                        // AND-fold below: start exhausted so the first
+                        // partition decides instead of a false default.
+                        exhausted: true,
                         ..OperatorProfile::default()
                     });
                 entry.open_time_us += op.open_time_us;
                 entry.next_time_us += op.next_time_us;
                 entry.close_time_us += op.close_time_us;
                 entry.output_rows += op.output_rows;
+                entry.input_rows += op.input_rows;
+                // One starved partition truncates the whole operator sample.
+                entry.exhausted = entry.exhausted && op.exhausted;
                 entry.advance_count += op.advance_count;
                 entry.peak_memory_bytes = entry.peak_memory_bytes.max(op.peak_memory_bytes);
                 entry.spill_count += op.spill_count;
@@ -409,5 +430,46 @@ mod tests {
             .get(&OperatorProfileKey::new(PhysicalOperatorId(9), Some(1)))
             .expect("partition one profile");
         assert_eq!(entry.spilled_rows, 50);
+    }
+
+    #[test]
+    fn test_partition_profile_aggregation_sums_input_and_ands_exhausted() {
+        let mut first = ProfileCollector::new();
+        first.record_operator_profile(OperatorProfile {
+            physical_operator_id: PhysicalOperatorId(11),
+            node_id: 11,
+            partition_id: Some(0),
+            name: "Filter".to_string(),
+            output_rows: 800,
+            input_rows: 1000,
+            exhausted: true,
+            ..OperatorProfile::default()
+        });
+        let mut second = ProfileCollector::new();
+        second.record_operator_profile(OperatorProfile {
+            physical_operator_id: PhysicalOperatorId(11),
+            node_id: 11,
+            partition_id: Some(1),
+            name: "Filter".to_string(),
+            output_rows: 0,
+            input_rows: 1000,
+            exhausted: false,
+            ..OperatorProfile::default()
+        });
+
+        let mut aggregate = ProfileCollector::new();
+        aggregate.aggregate_partition_profiles(&[first, second]);
+
+        // Partition identity is preserved for EXPLAIN output ...
+        assert_eq!(aggregate.operators.len(), 2);
+        // ... but totals are available for one-sample-per-operator
+        // feedback: inputs sum, and one starved partition truncates
+        // the whole operator sample.
+        let total_input: u64 = aggregate.operators.values().map(|op| op.input_rows).sum();
+        assert_eq!(total_input, 2000);
+        assert!(
+            aggregate.operators.values().any(|op| !op.exhausted),
+            "a starved partition must stay visible to the feedback fold"
+        );
     }
 }

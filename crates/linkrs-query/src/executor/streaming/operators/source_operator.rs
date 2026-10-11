@@ -12,6 +12,7 @@ use crate::storage::EdgeCursor;
 use crate::storage::IndexCursor;
 use crate::storage::IndexRow;
 use crate::storage::ScanPredicate;
+use crate::storage::ShardSlice;
 use crate::storage::VertexCursor;
 use linkrs_core::error::QueryError;
 use linkrs_core::types::storage_ids::VertexId;
@@ -88,6 +89,9 @@ pub enum SourceOperatorKind {
         space_name: String,
         limit: Option<usize>,
         partition_range: Option<std::ops::Range<i64>>,
+        /// Shard slice dividing enumeration across partitions (see the spec
+        /// field): forwarded into the storage scan options at open.
+        shard_slice: Option<crate::storage::ShardSlice>,
         col_names: Vec<String>,
         projected_properties: Vec<Arc<str>>,
         /// Identity mode (from the scan annotation): emit `Value::VertexId`
@@ -118,7 +122,7 @@ pub enum SourceOperatorKind {
         space_name: String,
         limit: Option<usize>,
         edge_type: Option<String>,
-        partition_range: Option<std::ops::Range<i64>>,
+        shard_slice: Option<ShardSlice>,
         col_names: Vec<String>,
         projected_properties: Vec<Arc<str>>,
         /// Identity mode (from the scan annotation): emit
@@ -255,11 +259,13 @@ impl SourceOperator {
                 predicate,
                 tag,
                 partition_range,
+                shard_slice,
             } => SourceOperatorKind::StorageScanVertices {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 limit: *limit,
                 partition_range: partition_range.clone(),
+                shard_slice: *shard_slice,
                 col_names: col_names.clone(),
                 projected_properties: shared_names(projected_properties),
                 identity_only: *identity_only,
@@ -284,13 +290,13 @@ impl SourceOperator {
                 projected_properties,
                 identity_only,
                 predicate,
-                partition_range,
+                shard_slice,
             } => SourceOperatorKind::StorageScanEdges {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 limit: *limit,
                 edge_type: edge_type.clone(),
-                partition_range: partition_range.clone(),
+                shard_slice: *shard_slice,
                 col_names: col_names.clone(),
                 projected_properties: shared_names(projected_properties),
                 identity_only: *identity_only,

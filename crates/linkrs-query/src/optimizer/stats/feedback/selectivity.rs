@@ -48,7 +48,33 @@ pub struct FeedbackDrivenSelectivity {
     cumulative_estimation_error: f64,
     /// Sum of the squared errors (used to calculate the standard deviation)
     error_sum_squares: f64,
+    /// Total measured input rows across applied samples. Small samples
+    /// move the factor conservatively (see [`Self::update_with_measured_ratio`]).
+    total_input_rows: u64,
+    /// One staged outlier sample awaiting corroboration by an independent
+    /// execution before it may move the factor.
+    pending_outlier: Option<MeasuredSample>,
 }
+
+/// One measured execution sample: observed local-parameter ratio plus the
+/// input rows it was measured over.
+#[derive(Debug, Clone, Copy)]
+struct MeasuredSample {
+    ratio: f64,
+    input_rows: u64,
+}
+
+/// Samples deviating from the learned factor by more than this are staged
+/// instead of applied: a lone distorted measurement (truncated run,
+/// misattributed upstream error) must not yank the correction.
+const OUTLIER_DEVIATION: f64 = 4.0;
+/// A staged sample is adopted once an independent execution agrees with it
+/// within this factor.
+const CORROBORATION_AGREEMENT: f64 = 2.0;
+/// Input rows at which a sample earns the full EWMA step; smaller samples
+/// move the factor proportionally less. Keeps tiny measurements from
+/// flipping corrections while letting table-scale runs learn normally.
+const FULL_WEIGHT_INPUT_ROWS: f64 = 1000.0;
 
 impl FeedbackDrivenSelectivity {
     /// Create a new feedback-driven, selective estimation method
@@ -64,6 +90,8 @@ impl FeedbackDrivenSelectivity {
             selectivity_cap: 0.99,
             cumulative_estimation_error: 0.0,
             error_sum_squares: 0.0,
+            total_input_rows: 0,
+            pending_outlier: None,
         }
     }
 
@@ -85,6 +113,8 @@ impl FeedbackDrivenSelectivity {
             selectivity_cap: 0.99,
             cumulative_estimation_error: 0.0,
             error_sum_squares: 0.0,
+            total_input_rows: 0,
+            pending_outlier: None,
         }
     }
 
@@ -104,10 +134,14 @@ impl FeedbackDrivenSelectivity {
 
     /// Obtain the corrected version of the selective content.
     pub fn corrected_selectivity(&self) -> f64 {
-        (self.estimated_selectivity * self.correction_factor).clamp(
-            self.min_correction * self.estimated_selectivity,
-            self.selectivity_cap,
-        )
+        self.corrected_for_estimate(self.estimated_selectivity)
+    }
+
+    /// Correct a fresh estimate with the learned factor without touching the
+    /// stored baseline, so snapshot reads stay free of planning-order drift.
+    pub fn corrected_for_estimate(&self, estimated: f64) -> f64 {
+        (estimated * self.correction_factor)
+            .clamp(self.min_correction * estimated, self.selectivity_cap)
     }
 
     /// Obtain the correction factor
@@ -118,6 +152,11 @@ impl FeedbackDrivenSelectivity {
     /// Number of times feedback was obtained
     pub fn feedback_count(&self) -> u64 {
         self.feedback_count
+    }
+
+    /// Total measured input rows across applied samples.
+    pub fn total_input_rows(&self) -> u64 {
+        self.total_input_rows
     }
 
     /// Obtaining the confidence level for the selected estimate
@@ -210,6 +249,68 @@ impl FeedbackDrivenSelectivity {
         self.feedback_count += 1;
     }
 
+    /// Update the correction factor from a measured local-parameter ratio
+    /// over a known number of input rows.
+    ///
+    /// This is the feedback loop's write path. Unlike [`update_with_ratio`],
+    /// the ratio must already isolate the operator-local parameter
+    /// (e.g. observed-vs-estimated *selectivity*, not output rows), because
+    /// output ratios conflate upstream cardinality error. Two guards keep
+    /// distorted measurements out of the factor:
+    ///
+    /// - samples deviating from the learned factor by more than
+    ///   [`OUTLIER_DEVIATION`] are staged until an independent execution
+    ///   corroborates them (the first sample has no baseline and applies);
+    /// - the EWMA step scales with measured input rows, so tiny samples
+    ///   move the factor conservatively.
+    pub fn update_with_measured_ratio(&mut self, ratio: f64, input_rows: u64) {
+        if self.estimated_selectivity <= 0.0 || !ratio.is_finite() || ratio < 0.0 {
+            return;
+        }
+        let sample = MeasuredSample { ratio, input_rows };
+        if self.feedback_count > 0 && self.deviates(sample.ratio) {
+            if let Some(staged) = self.pending_outlier {
+                if agrees(staged.ratio, sample.ratio) {
+                    self.pending_outlier = None;
+                    self.apply_measured(staged);
+                    self.apply_measured(sample);
+                } else {
+                    self.pending_outlier = Some(sample);
+                }
+            } else {
+                self.pending_outlier = Some(sample);
+            }
+            return;
+        }
+        self.apply_measured(sample);
+    }
+
+    /// Relative deviation of a sample from the learned factor.
+    fn deviates(&self, ratio: f64) -> bool {
+        let factor = self.correction_factor;
+        if factor <= 0.0 || ratio <= 0.0 {
+            return ratio != factor;
+        }
+        ratio.max(factor) / ratio.min(factor) > OUTLIER_DEVIATION
+    }
+
+    /// Fold one corroborated sample into the factor with a step
+    /// proportional to its measured input rows.
+    fn apply_measured(&mut self, sample: MeasuredSample) {
+        let weight = (sample.input_rows as f64).max(1.0);
+        let step = self.alpha * weight / (weight + FULL_WEIGHT_INPUT_ROWS);
+        let error = (sample.ratio - self.correction_factor).abs();
+        self.cumulative_estimation_error += error;
+        self.error_sum_squares += error * error;
+        self.correction_factor = (1.0 - step) * self.correction_factor + step * sample.ratio;
+        self.correction_factor = self
+            .correction_factor
+            .clamp(self.min_correction, self.max_correction);
+        self.actual_selectivity_ewma = self.estimated_selectivity * self.correction_factor;
+        self.total_input_rows += sample.input_rows;
+        self.feedback_count += 1;
+    }
+
     /// Batch update of feedback
     pub fn update_with_batch(&mut self, actual_selectivities: &[f64]) {
         for &selectivity in actual_selectivities {
@@ -224,6 +325,8 @@ impl FeedbackDrivenSelectivity {
         self.feedback_count = 0;
         self.cumulative_estimation_error = 0.0;
         self.error_sum_squares = 0.0;
+        self.total_input_rows = 0;
+        self.pending_outlier = None;
     }
 
     /// Setting the EWMA smoothing factor
@@ -333,6 +436,14 @@ impl SelectivityFeedbackManager {
             .map(|f| f.corrected_selectivity())
     }
 
+    /// Capture an immutable snapshot of the current learned corrections for
+    /// one planning decision to read through without mutating shared state.
+    pub fn snapshot(&self) -> SelectivitySnapshot {
+        SelectivitySnapshot {
+            corrections: self.feedbacks.read().clone(),
+        }
+    }
+
     /// Update feedback
     pub fn update_feedback(&self, key: &str, actual_selectivity: f64) -> bool {
         let mut feedbacks = self.feedbacks.write();
@@ -352,6 +463,22 @@ impl SelectivityFeedbackManager {
         let mut feedbacks = self.feedbacks.write();
         if let Some(feedback) = feedbacks.get_mut(key) {
             feedback.update_with_ratio(ratio);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Update feedback from a measured local-parameter ratio over a known
+    /// number of input rows (the feedback loop's write path).
+    ///
+    /// Returns `false` when the key has not been registered; staged
+    /// outliers still return `true` (the sample was recorded, just not
+    /// applied yet).
+    pub fn update_measured_ratio(&self, key: &str, ratio: f64, input_rows: u64) -> bool {
+        let mut feedbacks = self.feedbacks.write();
+        if let Some(feedback) = feedbacks.get_mut(key) {
+            feedback.update_with_measured_ratio(ratio, input_rows);
             true
         } else {
             false
@@ -419,6 +546,56 @@ impl SelectivityFeedbackManager {
 impl Default for SelectivityFeedbackManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Whether two independent samples agree closely enough for the staged
+/// one to be adopted.
+fn agrees(first: f64, second: f64) -> bool {
+    if first <= 0.0 || second <= 0.0 {
+        return first == second;
+    }
+    first.max(second) / first.min(second) <= CORROBORATION_AGREEMENT
+}
+
+/// Minimum execution samples before a learned correction is served to
+/// planning decisions. A single sample (possibly distorted by per-operator
+/// cardinality mismatch) must not flip structural go/no-go gates; repeated
+/// consistent executions promote the correction to trusted.
+pub const MIN_STABLE_FEEDBACK_COUNT: u64 = 3;
+
+/// Immutable point-in-time copy of the learned selectivity corrections.
+///
+/// Planning reads through a snapshot taken at the start of one decision, so
+/// repeated estimation of the same predicate can neither register new state
+/// nor move baselines: a decision is a pure function of the statistics plus
+/// the snapshot. Execution feedback keeps writing to the live manager, which
+/// later snapshots pick up as legitimate learning.
+#[derive(Debug, Clone, Default)]
+pub struct SelectivitySnapshot {
+    corrections: HashMap<String, FeedbackDrivenSelectivity>,
+}
+
+impl SelectivitySnapshot {
+    /// Correct a fresh estimate with the snapshotted factor, if the
+    /// condition had learned a stable correction (enough execution samples)
+    /// when the snapshot was taken. Otherwise `None`, and the caller keeps
+    /// the fresh statistics estimate.
+    pub fn corrected(&self, key: &str, fresh_estimate: f64) -> Option<f64> {
+        self.corrections
+            .get(key)
+            .filter(|feedback| feedback.feedback_count() >= MIN_STABLE_FEEDBACK_COUNT)
+            .map(|feedback| feedback.corrected_for_estimate(fresh_estimate))
+    }
+
+    /// Number of corrected conditions captured by the snapshot.
+    pub fn len(&self) -> usize {
+        self.corrections.len()
+    }
+
+    /// Whether the snapshot carries no learned corrections.
+    pub fn is_empty(&self) -> bool {
+        self.corrections.is_empty()
     }
 }
 
@@ -528,5 +705,51 @@ mod tests {
 
         // The corrected selectivity should not exceed the upper limit.
         assert!(feedback.corrected_selectivity() <= 0.95);
+    }
+
+    #[test]
+    fn test_measured_ratio_stages_outlier_until_corroborated() {
+        let mut feedback = FeedbackDrivenSelectivity::new(0.5);
+        // Establish a baseline near 1.0 with consistent samples.
+        for _ in 0..3 {
+            feedback.update_with_measured_ratio(1.0, 2000);
+        }
+        let baseline = feedback.correction_factor();
+        assert!((baseline - 1.0).abs() < 1e-9);
+        assert_eq!(feedback.feedback_count(), 3);
+
+        // A lone distorted sample (e.g. a truncated partition slice)
+        // must not move the factor by itself.
+        feedback.update_with_measured_ratio(0.0, 2000);
+        assert!((feedback.correction_factor() - baseline).abs() < 1e-9);
+        assert_eq!(feedback.feedback_count(), 3);
+
+        // An independent execution agreeing with the staged sample
+        // adopts both: the factor moves and both samples count.
+        feedback.update_with_measured_ratio(0.0, 2000);
+        assert!(feedback.correction_factor() < baseline);
+        assert_eq!(feedback.feedback_count(), 5);
+    }
+
+    #[test]
+    fn test_measured_ratio_weights_step_by_input_rows() {
+        let mut tiny = FeedbackDrivenSelectivity::new(0.5);
+        tiny.update_with_measured_ratio(0.1, 10);
+        let mut large = FeedbackDrivenSelectivity::new(0.5);
+        large.update_with_measured_ratio(0.1, 100_000);
+        // Same ratio, same single sample: the table-scale measurement
+        // moves the factor far more than the tiny one.
+        assert!(large.correction_factor() < tiny.correction_factor());
+        assert_eq!(tiny.total_input_rows(), 10);
+        assert_eq!(large.total_input_rows(), 100_000);
+    }
+
+    #[test]
+    fn test_measured_ratio_rejects_invalid_samples() {
+        let mut feedback = FeedbackDrivenSelectivity::new(0.5);
+        feedback.update_with_measured_ratio(f64::NAN, 100);
+        feedback.update_with_measured_ratio(-1.0, 100);
+        assert_eq!(feedback.feedback_count(), 0);
+        assert!((feedback.correction_factor() - 1.0).abs() < 1e-9);
     }
 }

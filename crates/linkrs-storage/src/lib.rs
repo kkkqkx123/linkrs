@@ -40,7 +40,7 @@ pub use cursor::{
     open_edge_scan, open_index_cursor, open_vertex_scan, ColumnValues, EdgeColumnBatch, EdgeCursor,
     FlatVertexRecord, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector,
     PredicateRange, PropertyColumn, RequiredProperty, ScanOptions, ScanPredicate, ScanTarget,
-    VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
+    ShardSlice, VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
 pub use engine::config::{PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage, WriteGateStats};

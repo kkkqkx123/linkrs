@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::executor::streaming::slot::SlotLayout;
-use crate::storage::ScanPredicate;
+use crate::storage::{ScanPredicate, ShardSlice};
 use linkrs_core::types::expr::ContextualExpression;
 use linkrs_core::Value;
 
@@ -94,6 +94,11 @@ pub enum SourceSpec {
         /// Set only on per-partition copies produced by the partitioned
         /// physical-plan builder; `None` means a full scan.
         partition_range: Option<std::ops::Range<i64>>,
+        /// Optional shard slice dividing a partitioned scan's enumeration
+        /// across partitions. Set together with a cleared `partition_range`
+        /// on per-partition copies whose union must cover the table without
+        /// repeating full-table walks; `None` enumerates the whole table.
+        shard_slice: Option<ShardSlice>,
     },
     ScanEdges {
         rows: Vec<Vec<Value>>,
@@ -112,8 +117,11 @@ pub enum SourceSpec {
         /// Scan predicates pushed into the storage layer (pure pre-filter;
         /// the original filter still runs on top).
         predicate: Vec<ScanPredicate>,
-        /// Optional source-id range restricting the scan to one partition.
-        partition_range: Option<std::ops::Range<i64>>,
+        /// Optional shard slice dividing a partitioned edge scan's source
+        /// enumeration across partitions. Set on per-partition copies whose
+        /// union must cover every edge without repeating full-table walks;
+        /// `None` walks the whole source space.
+        shard_slice: Option<ShardSlice>,
     },
     GetVertices {
         space_name: String,

@@ -325,8 +325,12 @@ fn choice_reason_for_spec(spec: &OperatorKindSpec) -> Option<String> {
                 partition_range: Some(_),
                 ..
             }
+            | SourceSpec::StorageScanVertices {
+                shard_slice: Some(_),
+                ..
+            }
             | SourceSpec::StorageScanEdges {
-                partition_range: Some(_),
+                shard_slice: Some(_),
                 ..
             } => "partitioned_full_scan".to_string(),
             SourceSpec::StorageScanVertices { .. } | SourceSpec::StorageScanEdges { .. } => {

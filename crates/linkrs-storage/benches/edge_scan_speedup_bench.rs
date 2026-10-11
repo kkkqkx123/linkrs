@@ -1,8 +1,11 @@
 //! Edge-table scan parallel speedup.
 //!
-//! Measures `scan_edges_by_type` full-table scan speedup E(n) = T(1)/T(n) as a
-//! function of the number of (src,dst) edge partitions (N) and the rayon
-//! worker count (n):
+//! Measures full edge-type scan speedup E(n) = T(1)/T(n) as a function of
+//! the number of (src,dst) edge partitions (N) and the rayon worker count
+//! (n). The n=1 baseline is the serial `scan_edges_by_type`; n>1 runs
+//! `scan_edges_by_type_parallel`, which shards tables across the pool under
+//! one read timestamp. N=1 (single table) has no fan-out by construction,
+//! so its row is expected to stay at E(n) ~= 1; only N >= n can speed up.
 //!
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench -p linkrs-storage --bench edge_scan_speedup_bench
@@ -162,19 +165,36 @@ fn median_us(samples: &[u64]) -> u64 {
     v[v.len() / 2]
 }
 
-/// Full `scan_edges_by_type` scan inside a rayon pool with `workers` threads.
+/// Full edge-type scan inside a rayon pool with `workers` threads.
+/// `workers == 1` runs the serial `scan_edges_by_type` baseline; larger
+/// pools run `scan_edges_by_type_parallel`, which shards the type's edge
+/// tables across the pool (nested rayon fan-out, one snapshot for all
+/// shards). A single-table dataset (partitions N=1) has no fan-out and is
+/// expected to stay at E(n) ~= 1; speedup only materializes when the table
+/// count covers the worker count.
 fn measure_scan(storage: &Arc<RwLock<GraphStorage>>, workers: usize) -> u64 {
+    fn run_once(storage: &Arc<RwLock<GraphStorage>>, workers: usize) -> usize {
+        if workers <= 1 {
+            storage
+                .read()
+                .scan_edges_by_type(SPACE, EDGE)
+                .expect("scan")
+                .len()
+        } else {
+            storage
+                .read()
+                .scan_edges_by_type_parallel(SPACE, EDGE, workers)
+                .expect("scan")
+                .len()
+        }
+    }
     let pool = ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .expect("build rayon pool");
     for _ in 0..2 {
         pool.install(|| {
-            let edges = storage
-                .read()
-                .scan_edges_by_type(SPACE, EDGE)
-                .expect("scan");
-            black_box(edges.len());
+            black_box(run_once(storage, workers));
         });
     }
     let rounds = iterations();
@@ -182,11 +202,7 @@ fn measure_scan(storage: &Arc<RwLock<GraphStorage>>, workers: usize) -> u64 {
     for _ in 0..rounds {
         let start = Instant::now();
         pool.install(|| {
-            let edges = storage
-                .read()
-                .scan_edges_by_type(SPACE, EDGE)
-                .expect("scan");
-            black_box(edges.len());
+            black_box(run_once(storage, workers));
         });
         samples.push(start.elapsed().as_micros() as u64);
     }
@@ -221,6 +237,25 @@ fn main() {
             "{:>7} | {:>8} | {:>9} | {:>7}",
             "workers", "T(n) us", "E(n)", "eta"
         );
+        // Coverage guard: the sharded scan must cover exactly the serial
+        // scan's edges before any timing row is trusted.
+        {
+            let serial = storage
+                .read()
+                .scan_edges_by_type(SPACE, EDGE)
+                .expect("serial scan")
+                .len();
+            let parallel = storage
+                .read()
+                .scan_edges_by_type_parallel(SPACE, EDGE, WORKERS.last().copied().unwrap_or(1))
+                .expect("parallel scan")
+                .len();
+            assert_eq!(
+                serial, parallel,
+                "parallel scan must cover the same edges as the serial scan"
+            );
+            println!("(edge count check: serial == parallel == {serial})");
+        }
         let mut medians = Vec::with_capacity(WORKERS.len());
         for &workers in &WORKERS {
             medians.push(measure_scan(&storage, workers));
@@ -236,7 +271,7 @@ fn main() {
             );
         }
     }
-    println!("\nresult: N >= 4 -> E(8) >= 3 (smoke scale; authoritative numbers come from public datasets)");
+    println!("\nresult: N=1 is expected at E(n) ~= 1 (single table, serial fallback); N >= workers -> E(n) grows with the table fan-out (smoke scale; authoritative numbers come from public datasets)");
 }
 
 fn machine_name() -> String {

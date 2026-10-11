@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use crate::optimizer::stats::feedback::selectivity::SelectivityFeedbackManager;
+use crate::optimizer::stats::feedback::selectivity::{
+    SelectivityFeedbackManager, SelectivitySnapshot,
+};
 use crate::optimizer::stats::{RangeCondition, StatisticsManager};
 use linkrs_core::types::BinaryOperator;
 use linkrs_core::types::Expression;
@@ -18,13 +20,85 @@ use linkrs_core::value::Value;
 /// predicates with different constants aggregate to the same key. When a
 /// space is present the key is prefixed with `"{space}:"` so corrections are
 /// scoped to a space and can be invalidated per space.
+///
+/// Ordered range comparisons additionally carry a coarse bound bucket
+/// (`~8e2`): selectivity is a function of the bound, so `value < 800` must
+/// not share corrections with `value < 10`, while nearby bounds
+/// (`value < 801`) still aggregate. Equality and other shapes keep the
+/// purely structural key.
 pub fn condition_key(space: Option<&str>, expr: &Expression) -> String {
     let normalized =
         crate::optimizer::stats::feedback::fingerprint::normalize_query(&format!("{:?}", expr));
-    match space {
+    let key = match space {
         Some(space) => format!("{}:{}", space, normalized),
         None => normalized,
+    };
+    match range_bound_bucket(expr) {
+        Some(bucket) => format!("{key}~{bucket}"),
+        None => key,
     }
+}
+
+/// Coarse bound bucket for ordered property-vs-literal comparisons.
+///
+/// Quantizes the literal to one significant digit so structurally identical
+/// range predicates with very different bounds learn separately while
+/// nearby bounds still share. Returns `None` for non-ordered shapes
+/// (equality keeps the structural key) and non-numeric bounds.
+fn range_bound_bucket(expr: &Expression) -> Option<String> {
+    let Expression::Binary { op, left, right } = expr else {
+        return None;
+    };
+    if !matches!(
+        op,
+        BinaryOperator::LessThan
+            | BinaryOperator::LessThanOrEqual
+            | BinaryOperator::GreaterThan
+            | BinaryOperator::GreaterThanOrEqual
+    ) {
+        return None;
+    }
+    let bound = [left.as_ref(), right.as_ref()]
+        .into_iter()
+        .find_map(|side| match side {
+            Expression::Literal(value) => numeric_as_f64(value),
+            _ => None,
+        })?;
+    let other_is_property = [left.as_ref(), right.as_ref()].iter().any(|side| {
+        matches!(
+            side,
+            Expression::Property { .. }
+                | Expression::TagProperty { .. }
+                | Expression::EdgeProperty { .. }
+                | Expression::LabelTagProperty { .. }
+        )
+    });
+    if !other_is_property {
+        return None;
+    }
+    Some(format!("bound{}", quantize_bound(bound)))
+}
+
+/// Quantize a bound to one significant digit (`800` and `801` share
+/// `8e2`; `10` maps to `1e1`).
+fn quantize_bound(bound: f64) -> String {
+    if bound == 0.0 {
+        return "0".to_string();
+    }
+    if !bound.is_finite() {
+        return "nonfinite".to_string();
+    }
+    let sign = if bound < 0.0 { "-" } else { "" };
+    let abs = bound.abs();
+    let mut exponent = abs.log10().floor() as i32;
+    let mut base = (abs / 10f64.powi(exponent)).floor() as i32;
+    // Floating-point edge at exact powers of ten (e.g. 1000.0 may
+    // quantize as base 10): renormalize instead of emitting `10eN`.
+    if base >= 10 {
+        base = 1;
+        exponent += 1;
+    }
+    format!("{sign}{base}e{exponent}")
 }
 
 /// Selective Estimator
@@ -91,6 +165,31 @@ impl SelectivityEstimator {
     /// Return the underlying feedback correction manager, if any.
     pub fn feedback_manager(&self) -> Option<&Arc<SelectivityFeedbackManager>> {
         self.feedback.as_ref()
+    }
+
+    /// Capture the learned corrections for one planning decision to read
+    /// through. Empty when no feedback manager is attached.
+    pub fn snapshot(&self) -> SelectivitySnapshot {
+        self.feedback
+            .as_ref()
+            .map(|feedback| feedback.snapshot())
+            .unwrap_or_default()
+    }
+
+    /// Estimate a predicate without touching shared feedback state.
+    ///
+    /// Unlike [`estimate_from_expression`](Self::estimate_from_expression),
+    /// this neither registers the condition nor refreshes its baseline: the
+    /// snapshotted correction (if any) applies to the fresh estimate, so
+    /// repeated calls stay identical until execution feedback lands.
+    pub fn estimate_readonly(
+        &self,
+        space: Option<&str>,
+        expr: &Expression,
+        tag_name: Option<&str>,
+        snapshot: &SelectivitySnapshot,
+    ) -> f64 {
+        self.estimate_inner(space, expr, tag_name, Some(snapshot))
     }
 
     /// Estimated Equivalence Condition Selectivity
@@ -345,13 +444,26 @@ impl SelectivityEstimator {
         expr: &Expression,
         tag_name: Option<&str>,
     ) -> f64 {
+        self.estimate_inner(space, expr, tag_name, None)
+    }
+
+    /// Shared estimate body. `None` snapshot is the recording path used by
+    /// the row estimators (the feedback loop's write path); `Some` is the
+    /// read-only path used by planning decisions.
+    fn estimate_inner(
+        &self,
+        space: Option<&str>,
+        expr: &Expression,
+        tag_name: Option<&str>,
+        snapshot: Option<&SelectivitySnapshot>,
+    ) -> f64 {
         let key = condition_key(space, expr);
         let estimated = match expr {
             Expression::Binary { op, left, right } => {
-                self.estimate_binary_expression(space, op, left, right, tag_name)
+                self.estimate_binary_expression(space, op, left, right, tag_name, snapshot)
             }
             Expression::Unary { op, operand } => {
-                self.estimate_unary_expression(space, op, operand, tag_name)
+                self.estimate_unary_expression(space, op, operand, tag_name, snapshot)
             }
             Expression::Function { name, args } => {
                 let exprs: Vec<Expression> = args.iter().map(|a| a.as_expr().clone()).collect();
@@ -369,17 +481,24 @@ impl SelectivityEstimator {
             _ => defaults::EQUALITY,
         };
 
-        // Register the estimate as the feedback baseline on first sight and
-        // keep tracking fresh statistics afterwards; a learned correction
-        // overrides the fresh estimate when present.
-        if let Some(feedback) = &self.feedback {
-            feedback.register_condition(key.clone(), estimated);
-            feedback.refresh_estimated(&key, estimated);
-            if let Some(corrected) = feedback.get_corrected_selectivity(&key) {
-                return corrected;
+        match snapshot {
+            // Recording path: register the estimate as the feedback baseline
+            // on first sight and keep tracking fresh statistics afterwards; a
+            // learned correction overrides the fresh estimate when present.
+            None => {
+                if let Some(feedback) = &self.feedback {
+                    feedback.register_condition(key.clone(), estimated);
+                    feedback.refresh_estimated(&key, estimated);
+                    if let Some(corrected) = feedback.get_corrected_selectivity(&key) {
+                        return corrected;
+                    }
+                }
+                estimated
             }
+            // Read-only path: apply the snapshotted correction without
+            // registering or refreshing anything.
+            Some(snapshot) => snapshot.corrected(&key, estimated).unwrap_or(estimated),
         }
-        estimated
     }
 
     /// Estimating the selectivity of binary expressions
@@ -390,6 +509,7 @@ impl SelectivityEstimator {
         left: &Expression,
         right: &Expression,
         tag_name: Option<&str>,
+        snapshot: Option<&SelectivitySnapshot>,
     ) -> f64 {
         match op {
             BinaryOperator::Equal => {
@@ -449,14 +569,14 @@ impl SelectivityEstimator {
                 }
             }
             BinaryOperator::And => {
-                let left_sel = self.estimate_from_expression(space, left, tag_name);
-                let right_sel = self.estimate_from_expression(space, right, tag_name);
+                let left_sel = self.estimate_inner(space, left, tag_name, snapshot);
+                let right_sel = self.estimate_inner(space, right, tag_name, snapshot);
                 // The selectivity of the “AND” operator is usually slightly higher than that of the multiplication operator (because there may be correlations between the conditions).
                 (left_sel * right_sel / defaults::AND_CORRELATION).min(1.0)
             }
             BinaryOperator::Or => {
-                let left_sel = self.estimate_from_expression(space, left, tag_name);
-                let right_sel = self.estimate_from_expression(space, right, tag_name);
+                let left_sel = self.estimate_inner(space, left, tag_name, snapshot);
+                let right_sel = self.estimate_inner(space, right, tag_name, snapshot);
                 // OR selectivity: P(A or B) = P(A) + P(B) - P(A and B)
                 let combined =
                     left_sel + right_sel - left_sel * right_sel * defaults::OR_CORRELATION;
@@ -486,12 +606,13 @@ impl SelectivityEstimator {
         op: &linkrs_core::types::UnaryOperator,
         expr: &Expression,
         tag_name: Option<&str>,
+        snapshot: Option<&SelectivitySnapshot>,
     ) -> f64 {
         use linkrs_core::types::UnaryOperator;
 
         match op {
             UnaryOperator::Not => {
-                let inner = self.estimate_from_expression(space, expr, tag_name);
+                let inner = self.estimate_inner(space, expr, tag_name, snapshot);
                 self.estimate_not_selectivity(inner)
             }
             UnaryOperator::IsNull => self
@@ -794,6 +915,60 @@ mod tests {
     }
 
     #[test]
+    fn readonly_estimate_neither_registers_nor_refreshes() {
+        use std::sync::Arc;
+
+        let stats = Arc::new(StatisticsManager::new());
+        let feedback = Arc::new(SelectivityFeedbackManager::new());
+        let estimator =
+            SelectivityEstimator::with_feedback(Arc::clone(&stats), Arc::clone(&feedback));
+        let expr = Expression::Binary {
+            op: BinaryOperator::Equal,
+            left: Box::new(property_expr("age")),
+            right: Box::new(Expression::Literal(Value::Int(30))),
+        };
+
+        let pristine = estimator.snapshot();
+        assert!(pristine.is_empty());
+        let first = estimator.estimate_readonly(None, &expr, None, &pristine);
+        assert!((first - defaults::EQUALITY).abs() < 1e-9, "sel={first}");
+        assert!(
+            estimator.snapshot().is_empty(),
+            "read-only estimates must not register conditions"
+        );
+
+        let recorded = estimator.estimate_from_expression(None, &expr, None);
+        assert!((recorded - first).abs() < 1e-9, "recorded={recorded}");
+        assert_eq!(estimator.snapshot().len(), 1);
+
+        // Learned feedback applies through later snapshots only, and only
+        // after enough samples: a single update stays below the stability
+        // bar and keeps pricing the fresh estimate.
+        let key = condition_key(None, &expr);
+        feedback.update_feedback_ratio(&key, 2.0);
+        let unstable = estimator.snapshot();
+        assert_eq!(
+            estimator.estimate_readonly(None, &expr, None, &unstable),
+            first,
+            "single-sample corrections must not move planning reads"
+        );
+        feedback.update_feedback_ratio(&key, 2.0);
+        feedback.update_feedback_ratio(&key, 2.0);
+        let learned = estimator.snapshot();
+        let corrected = estimator.estimate_readonly(None, &expr, None, &learned);
+        // EWMA with alpha 0.3 over three 2.0 ratios: 1.0 -> 1.3 -> 1.51 -> 1.657.
+        let expected = (defaults::EQUALITY * 1.657).clamp(0.1 * defaults::EQUALITY, 0.99);
+        assert!(
+            (corrected - expected).abs() < 1e-9,
+            "corrected={corrected} expected={expected}"
+        );
+        assert_eq!(
+            estimator.estimate_readonly(None, &expr, None, &pristine),
+            first
+        );
+    }
+
+    #[test]
     fn fuzzy_match_floored_by_ndv_on_low_cardinality() {
         // Prefix heuristic is 0.1, but with only 2 distinct values the match
         // cannot be more selective than the 0.5 equality floor.
@@ -806,5 +981,43 @@ mod tests {
         };
         let sel = est.estimate_from_expression(Some("s"), &expr, Some("person"));
         assert!((sel - 0.5).abs() < 1e-9, "sel={sel}");
+    }
+
+    fn lt_expr(bound: i32) -> Expression {
+        Expression::Binary {
+            op: BinaryOperator::LessThan,
+            left: Box::new(property_expr("value")),
+            right: Box::new(Expression::Literal(Value::Int(bound))),
+        }
+    }
+
+    #[test]
+    fn range_bound_bucket_separates_distant_bounds() {
+        // `value < 800` and `value < 801` share one bucket; `value < 10`
+        // learns separately so one bound's correction cannot leak into
+        // a selectivity regime it never measured.
+        let near_a = condition_key(Some("s"), &lt_expr(800));
+        let near_b = condition_key(Some("s"), &lt_expr(801));
+        let far = condition_key(Some("s"), &lt_expr(10));
+        assert_eq!(near_a, near_b, "near_a={near_a} near_b={near_b}");
+        assert_ne!(near_a, far, "near={near_a} far={far}");
+        assert!(
+            near_a.contains("~bound8e2"),
+            "range key must carry its bucket: {near_a}"
+        );
+    }
+
+    #[test]
+    fn equality_keeps_structural_key_without_bound_bucket() {
+        let expr = Expression::Binary {
+            op: BinaryOperator::Equal,
+            left: Box::new(property_expr("age")),
+            right: Box::new(Expression::Literal(Value::Int(30))),
+        };
+        let key = condition_key(Some("s"), &expr);
+        assert!(
+            !key.contains("~bound"),
+            "equality must not gain a bound bucket: {key}"
+        );
     }
 }

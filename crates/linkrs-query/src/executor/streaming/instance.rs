@@ -17,7 +17,7 @@ use parking_lot::RwLock;
 
 use super::engine::StreamingExecutionEngine;
 use super::plan::materializer::PhysicalPlanMaterializer;
-use super::plan::types::PhysicalPlan;
+use super::plan::types::{PhysicalOperatorId, PhysicalPlan};
 use super::plan::validator::PhysicalPlanValidator;
 use super::result_utils::convert_chunks_to_dataset_with_spill;
 use super::runtime::ExecutionRuntime;
@@ -198,6 +198,37 @@ pub enum ResultSink {
 
 // ── QueryExecutionInstance ──────────────────────────────────────────────────
 
+/// Per-operator profile totals summed across partition instances.
+///
+/// One partitioned execution contributes a single sample per operator:
+/// per-partition actuals must never be compared against the whole
+/// operator estimate individually.
+struct AggregatedOperatorProfile {
+    name: String,
+    output_rows: u64,
+    input_rows: u64,
+    time_us: u64,
+    loops: u64,
+    partitions: u32,
+    exhausted: bool,
+}
+
+impl AggregatedOperatorProfile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            output_rows: 0,
+            input_rows: 0,
+            time_us: 0,
+            loops: 0,
+            partitions: 0,
+            // AND-fold across partitions: start true so the first
+            // instance decides instead of a false default.
+            exhausted: true,
+        }
+    }
+}
+
 /// A single execution instance of a [`PhysicalPlan`].
 ///
 /// Owns the runtime, root memory pool, operator tree, task group, and
@@ -370,6 +401,11 @@ impl QueryExecutionInstance {
     /// the normalized predicate key (`condition_key`) so the
     /// statistics feedback loop can correct the selectivity of the specific
     /// condition.
+    ///
+    /// Partition instances sharing one physical operator are summed into a
+    /// single per-execution sample first: folding per-partition profiles
+    /// independently would compare per-slice actuals against the whole
+    /// operator estimate and systematically bias selective predicates.
     fn collect_execution_feedback(&self) {
         let Some(history) = self.runtime().feedback_history.clone() else {
             return;
@@ -392,6 +428,7 @@ impl QueryExecutionInstance {
         feedback.actual_rows = profile.total_rows;
         feedback.actual_time_us = profile.total_time_us;
 
+        let mut aggregates: HashMap<PhysicalOperatorId, AggregatedOperatorProfile> = HashMap::new();
         for (key, op_profile) in &profile.operators {
             let op_time_us =
                 op_profile.open_time_us + op_profile.next_time_us + op_profile.close_time_us;
@@ -409,7 +446,24 @@ impl QueryExecutionInstance {
                 }
                 _ => {}
             }
-            if let Some(operator) = self.plan.operator(key.physical_operator_id) {
+            let aggregate = aggregates
+                .entry(key.physical_operator_id)
+                .or_insert_with(AggregatedOperatorProfile::default);
+            aggregate.output_rows += op_profile.output_rows;
+            aggregate.input_rows += op_profile.input_rows;
+            aggregate.time_us += op_time_us;
+            aggregate.loops += op_profile.advance_count.max(1);
+            aggregate.partitions += 1;
+            // One starved partition truncates the whole operator sample:
+            // partial counts must not train the feedback loop.
+            aggregate.exhausted = aggregate.exhausted && op_profile.exhausted;
+            if aggregate.name.is_empty() {
+                aggregate.name = op_profile.name.clone();
+            }
+        }
+
+        for (physical_id, aggregate) in &aggregates {
+            if let Some(operator) = self.plan.operator(*physical_id) {
                 if let Some(estimated) = operator.estimated_cardinality {
                     // For filter operators, attach the normalized predicate
                     // key so the feedback loop can correct the
@@ -434,13 +488,16 @@ impl QueryExecutionInstance {
                         )
                     };
                     feedback.add_operator_feedback(OperatorFeedback {
-                        operator_id: key.physical_operator_id.0.to_string(),
-                        operator_type: op_profile.name.clone(),
+                        operator_id: physical_id.0.to_string(),
+                        operator_type: aggregate.name.clone(),
                         estimated_rows: estimated as u64,
-                        actual_rows: op_profile.output_rows,
+                        actual_rows: aggregate.output_rows,
+                        actual_input_rows: Some(aggregate.input_rows),
+                        partition_count: aggregate.partitions,
+                        exhausted: aggregate.exhausted,
                         estimated_time_us: 0,
-                        actual_time_us: op_time_us,
-                        execution_loops: op_profile.advance_count.max(1),
+                        actual_time_us: aggregate.time_us,
+                        execution_loops: aggregate.loops,
                         condition_key,
                         shape_key,
                     });

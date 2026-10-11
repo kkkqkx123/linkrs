@@ -17,6 +17,15 @@ pub struct PartitioningConfig {
     pub max_workers: usize,
     /// Maximum queued chunks per partition worker for backpressure.
     pub max_buffered_chunks: usize,
+    /// Parallel fixed startup overhead in row-equivalents (fragment startup,
+    /// exchange coordination). All-zero cost params disable the economic
+    /// gate and leave the row-count threshold as the only gate.
+    pub fixed_overhead_rows: u64,
+    /// Per-partition fixed overhead in row-equivalents.
+    pub per_partition_rows: u64,
+    /// Exchange cost per output row in row-equivalents, per mille
+    /// (50 = 0.05 row-equivalents per row crossing the gather).
+    pub exchange_row_per_mille: u32,
 }
 
 impl Default for PartitioningConfig {
@@ -28,6 +37,9 @@ impl Default for PartitioningConfig {
             vertex_id_range: None,
             max_workers: 1,
             max_buffered_chunks: 10,
+            fixed_overhead_rows: 0,
+            per_partition_rows: 0,
+            exchange_row_per_mille: 0,
         }
     }
 }

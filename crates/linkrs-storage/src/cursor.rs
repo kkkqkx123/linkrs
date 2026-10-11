@@ -164,6 +164,50 @@ pub struct ScanOptions {
     /// fails. The join/expand layer uses this to push a known vertex set
     /// into the scan instead of scanning whole tables.
     pub internal_id_allowlist: Option<Vec<u32>>,
+    /// Optional edge-table allowlist for table-sharded parallel scans: when
+    /// set, the edge cursor only drains tables whose key is listed. Shards
+    /// partition the key set, so the union of shards covers every table of
+    /// the edge type exactly once. `None` (default) scans all tables.
+    pub edge_table_allowlist: Option<Vec<crate::engine::data_store::EdgeTableKey>>,
+    /// Optional shard slice for parallel vertex scans: when set, the cursor
+    /// enumerates only this slice of every tag table's shard-local id
+    /// space. Slices partition the enumeration space (not the external-id
+    /// value space, which is hash-distributed over shards and cannot prune
+    /// enumeration), so the union of all slices covers the table exactly
+    /// once. `None` (default) enumerates the whole table.
+    pub shard_slice: Option<ShardSlice>,
+    /// Optional shard slice for parallel edge scans: when set, the cursor
+    /// walks only the edges whose source internal id falls in this slice of
+    /// the source tables' shard-local id space. Same division contract as
+    /// `shard_slice`, applied to the edge source space so the union of all
+    /// slices covers every edge exactly once. Composes with
+    /// `edge_src_id_range`, which stays a row-level external-id filter.
+    /// `None` (default) walks the whole source space.
+    pub edge_src_slice: Option<ShardSlice>,
+}
+
+/// One slice of every shard's local-id space, selected by partition index.
+///
+/// Slice `partition_id` of `partition_count` owns a contiguous chunk of each
+/// shard's `[0, high-water)` local-id universe. Every local id belongs to
+/// exactly one slice, so partitioned scans divide enumeration work instead
+/// of repeating a full-table walk per partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardSlice {
+    /// Zero-based index of the owned slice.
+    pub partition_id: usize,
+    /// Total slice count the table is divided into.
+    pub partition_count: usize,
+}
+
+impl ShardSlice {
+    /// Describe one slice of a `partition_count`-way division.
+    pub fn new(partition_id: usize, partition_count: usize) -> Self {
+        Self {
+            partition_id,
+            partition_count,
+        }
+    }
 }
 
 impl ScanOptions {
@@ -211,6 +255,20 @@ impl ScanOptions {
     /// enumerating live IDs (semi-mask pushdown). Requires `with_tag`.
     pub fn with_internal_id_allowlist(mut self, ids: Vec<u32>) -> Self {
         self.internal_id_allowlist = Some(ids);
+        self
+    }
+
+    /// Builder: enumerate only one shard slice of the table instead of the
+    /// whole table (parallel-scan division).
+    pub fn with_shard_slice(mut self, slice: ShardSlice) -> Self {
+        self.shard_slice = Some(slice);
+        self
+    }
+
+    /// Builder: walk only one shard slice of the edge source space instead
+    /// of the whole space (parallel edge-scan division).
+    pub fn with_edge_src_slice(mut self, slice: ShardSlice) -> Self {
+        self.edge_src_slice = Some(slice);
         self
     }
 

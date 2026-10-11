@@ -70,6 +70,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             space_name,
             limit,
             partition_range,
+            shard_slice,
             col_names,
             projected_properties,
             identity_only,
@@ -93,6 +94,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             let mut options = ScanOptions {
                 limit: *limit,
                 vertex_id_range: partition_range.clone(),
+                shard_slice: *shard_slice,
                 projection: if topology_only {
                     Some(Vec::new())
                 } else {
@@ -130,7 +132,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             space_name,
             limit,
             edge_type,
-            partition_range,
+            shard_slice,
             col_names,
             projected_properties,
             identity_only,
@@ -154,7 +156,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
                     &ScanOptions {
                         limit: *limit,
                         edge_type: edge_type.clone(),
-                        edge_src_id_range: partition_range.clone(),
+                        edge_src_slice: *shard_slice,
                         projection: if edge_topology_only {
                             Some(Vec::new())
                         } else {
@@ -178,7 +180,7 @@ pub(crate) fn open(op: &mut SourceOperator) -> Result<(), QueryError> {
             );
             GlobalState::Source(SourceState::StorageScanEdges {
                 partition_id: op.config.partition_id.unwrap_or(0),
-                partition_range: partition_range.clone(),
+                shard_slice: *shard_slice,
                 cursor: None,
                 buffer: Vec::new(),
                 current_index: 0,

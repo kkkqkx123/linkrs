@@ -170,6 +170,10 @@ fn build_pipeline(
             vertex_id_range: Some(0i64..2 * VERTEX_COUNT),
             max_workers: workers,
             max_buffered_chunks: 10,
+            // Mechanism tests: economics disabled so the row gate decides.
+            fixed_overhead_rows: 0,
+            per_partition_rows: 0,
+            exchange_row_per_mille: 0,
         });
     } else {
         engine.set_partitioning_config(PartitioningConfig {
@@ -516,21 +520,17 @@ fn partitioned_anchored_traversal_matches_serial_results() {
         "anchors 0..99 reach neighbors 1..101"
     );
 
-    // The traversing plan must actually run in parallel.
+    // Selectivity-aware gating keeps this 100-anchor query serial: the
+    // expanded work stays below the partition threshold, so a fallback
+    // (not parallel execution) is the intended outcome here.
     let output = query_rows(
         &mut parallel,
         "EXPLAIN ANALYZE MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 100 RETURN count(b)",
     );
     let plan = output[0][0].to_string().unwrap_or_default();
-    let actual = plan
-        .split("actual=")
-        .nth(1)
-        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
     assert!(
-        actual >= 2,
-        "anchored traversal must execute on at least 2 workers, got actual={actual}:\n{plan}"
+        plan.contains("below the partition threshold"),
+        "small-anchor traversal must fall back to serial, got:\n{plan}"
     );
 }
 
@@ -665,6 +665,45 @@ fn plan_cache_replans_on_partition_config_change() {
     assert!(
         actual >= 2,
         "replanned 4-worker query must use parallel execution, got actual={actual}:\n{plan}"
+    );
+}
+
+#[test]
+fn feedback_does_not_learn_partition_bias_from_range_slices() {
+    // Regression test for per-partition feedback bias: a range predicate
+    // over id-ordered slices (`value == vid`, `value < 800`) leaves some
+    // partitions empty. Folding per-partition actuals against the whole
+    // operator estimate once learned a ~0.79 correction and flipped later
+    // plannings to serial. Samples must aggregate per execution and
+    // isolate the local selectivity, so repeated runs keep partitioning.
+    let storage = setup_storage();
+    let mut pipeline = build_pipeline(&storage, 4);
+    let q = "MATCH (n:Node) WHERE n.value < 800 RETURN count(n)";
+
+    // Run enough executions for learned corrections to become plannable
+    // (stability bar is 3 samples); every run must return the true count.
+    for _ in 0..4 {
+        let rows = query_rows(&mut pipeline, q);
+        assert_eq!(rows, vec![vec![Value::BigInt(800)]]);
+    }
+
+    // A fresh planning after the feedback folded must still partition:
+    // the measured selectivity is ~1.0x the estimate, not ~0.79x.
+    let output = query_rows(&mut pipeline, &format!("EXPLAIN ANALYZE {q}"));
+    let plan = output[0][0].to_string().unwrap_or_default();
+    assert!(
+        !plan.contains("below the partition threshold"),
+        "learned correction must not push the range query under the gate:\n{plan}"
+    );
+    let actual = plan
+        .split("actual=")
+        .nth(1)
+        .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(
+        actual >= 2,
+        "range query must stay partitioned after feedback, got actual={actual}:\n{plan}"
     );
 }
 
@@ -922,6 +961,10 @@ fn storage_self_proven_domain_enables_partitioning_without_config_range() {
         vertex_id_range: None, // no trusted config range: storage must prove it
         max_workers: 2,
         max_buffered_chunks: 10,
+        // Mechanism tests: economics disabled so the row gate decides.
+        fixed_overhead_rows: 0,
+        per_partition_rows: 0,
+        exchange_row_per_mille: 0,
     });
     let stats = Arc::new(StatsManager::new());
     let mut pipeline =

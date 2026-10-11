@@ -65,16 +65,21 @@ fn test_feedback_loop_corrects_selectivity() {
         .get_corrected_selectivity(&key)
         .is_some());
 
-    // Simulate history: filter estimated 100 rows, actually produced 10.
-    // Repeat several times so the EWMA correction converges toward 0.1.
+    // Simulate history: filter estimated 1000 rows over a measured 3000
+    // input rows, actually produced 100 (observed selectivity is a tenth
+    // of the estimate). Repeat several times so the measured correction
+    // converges toward 0.1.
     for _ in 0..8 {
         let mut feedback = QueryExecutionFeedback::new("fp".to_string());
         feedback.space = Some("test_space".to_string());
         feedback.add_operator_feedback(OperatorFeedback {
             operator_id: "op1".to_string(),
             operator_type: "Filter".to_string(),
-            estimated_rows: 100,
-            actual_rows: 10,
+            estimated_rows: 1000,
+            actual_rows: 100,
+            actual_input_rows: Some(3000),
+            partition_count: 1,
+            exhausted: true,
             estimated_time_us: 0,
             actual_time_us: 0,
             execution_loops: 1,
@@ -120,6 +125,9 @@ fn test_feedback_loop_respects_enable_switch() {
         operator_type: "Filter".to_string(),
         estimated_rows: 100,
         actual_rows: 10,
+        actual_input_rows: None,
+        partition_count: 1,
+        exhausted: true,
         estimated_time_us: 0,
         actual_time_us: 0,
         execution_loops: 1,
@@ -158,6 +166,9 @@ fn test_feedback_loop_corrects_cardinality_shape_keys() {
             operator_type: "ScanVertices".to_string(),
             estimated_rows: 100,
             actual_rows: 300,
+            actual_input_rows: None,
+            partition_count: 1,
+            exhausted: true,
             estimated_time_us: 0,
             actual_time_us: 0,
             execution_loops: 1,
@@ -1111,5 +1122,55 @@ fn test_cost_config_change_bumps_epoch_and_clears_spaces() {
     assert_eq!(
         engine.cost_calculator_for(None).config().random_page_cost,
         0.1
+    );
+}
+
+#[test]
+fn test_feedback_fold_consumes_each_execution_once() {
+    use crate::optimizer::stats::feedback::query::{OperatorFeedback, QueryExecutionFeedback};
+
+    let engine = OptimizerEngine::default();
+    let key = "test_space:ScanVertices:person".to_string();
+    engine.cardinality_feedback.register_key(key.clone(), 100.0);
+
+    // One execution aggregated across two partitions arrives as a single
+    // per-operator sample.
+    let mut feedback = QueryExecutionFeedback::new("fp".to_string());
+    feedback.space = Some("test_space".to_string());
+    feedback.estimated_rows = 0;
+    feedback.actual_rows = 300;
+    feedback.add_operator_feedback(OperatorFeedback {
+        operator_id: "op1".to_string(),
+        operator_type: "ScanVertices".to_string(),
+        estimated_rows: 100,
+        actual_rows: 300,
+        actual_input_rows: None,
+        partition_count: 2,
+        exhausted: true,
+        estimated_time_us: 0,
+        actual_time_us: 0,
+        execution_loops: 1,
+        condition_key: None,
+        shape_key: Some(key.clone()),
+    });
+    engine.feedback_history.add_feedback(feedback);
+
+    engine.maybe_apply_feedback();
+    let once = engine
+        .cardinality_feedback
+        .corrected_rows(&key)
+        .expect("shape should remain registered");
+    assert!(once > 100.0, "single 3x sample must move up: {once}");
+
+    // Re-optimizing without new executions must not walk the same sample
+    // again: the correction is exactly the one-fold value.
+    engine.maybe_apply_feedback();
+    let twice = engine
+        .cardinality_feedback
+        .corrected_rows(&key)
+        .expect("shape should remain registered");
+    assert!(
+        (once - twice).abs() < 1e-9,
+        "refold must be a no-op: {once} vs {twice}"
     );
 }

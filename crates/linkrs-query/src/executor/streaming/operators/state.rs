@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use crate::executor::base::MemoryTracker;
-use crate::storage::{EdgeCursor, IndexCursor, VertexCursor};
+use crate::storage::{EdgeCursor, IndexCursor, ShardSlice, VertexCursor};
 use linkrs_core::types::expr::Expression;
 use linkrs_core::Value;
 
@@ -40,7 +40,7 @@ pub enum SourceState {
     },
     StorageScanEdges {
         partition_id: usize,
-        partition_range: Option<std::ops::Range<i64>>,
+        shard_slice: Option<ShardSlice>,
         cursor: Option<Box<dyn EdgeCursor>>,
         buffer: Vec<Vec<Value>>,
         current_index: usize,
@@ -94,7 +94,7 @@ impl SourceState {
             },
             SourceSpec::StorageScanEdges { col_names, .. } => SourceState::StorageScanEdges {
                 partition_id: 0,
-                partition_range: None,
+                shard_slice: None,
                 cursor: None,
                 buffer: Vec::new(),
                 current_index: 0,

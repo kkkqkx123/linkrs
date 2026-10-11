@@ -230,6 +230,81 @@ impl ShardedVertexTable {
         Self::merge_sorted_ids(per_shard)
     }
 
+    /// High-water mark of every shard's local-id universe. Every assigned
+    /// local id of a shard lies below its mark, so slice chunks derived
+    /// from these marks cover the whole id space.
+    pub(crate) fn shard_universes(&self) -> Vec<u32> {
+        self.shards
+            .iter()
+            .map(|shard| shard.read().id_indexer.next_index())
+            .collect()
+    }
+
+    /// Contiguous local-id chunk of one shard owned by a slice. Chunks of
+    /// all slices partition `[0, universe)` without overlap, so partitioned
+    /// scans divide enumeration instead of repeating full-table walks.
+    pub(crate) fn slice_chunk(
+        universe: u32,
+        slice: &crate::cursor::ShardSlice,
+    ) -> std::ops::Range<u32> {
+        let total = universe as u64;
+        let count = slice.partition_count as u64;
+        let width = total.div_ceil(count);
+        let start = (slice.partition_id as u64 * width).min(total);
+        let end = ((slice.partition_id as u64 + 1) * width).min(total);
+        (start as u32)..(end as u32)
+    }
+
+    /// Whether a global id belongs to a slice's owned chunks. Staged and
+    /// allowlist ids carry their routing shard in the encoding, so the same
+    /// ownership rule covers base, staged, and allowlist rows uniformly.
+    pub(crate) fn slice_owns_id(
+        &self,
+        global_id: u32,
+        slice: &crate::cursor::ShardSlice,
+        universes: &[u32],
+    ) -> bool {
+        let Ok((shard_idx, local_id)) = self.try_decode_global_id(global_id) else {
+            return false;
+        };
+        universes
+            .get(shard_idx)
+            .is_some_and(|universe| Self::slice_chunk(*universe, slice).contains(&local_id))
+    }
+
+    /// Slice-restricted live-id enumeration: only rows inside the slice's
+    /// owned chunks pay the visibility check, and the walk never resolves
+    /// external ids, so a partitioned scan costs roughly `1/N` of a full
+    /// enumeration. The result keeps the ascending global-id order contract
+    /// of [`Self::live_ids`]. Shards drain sequentially: slice fragments
+    /// already run on worker threads, and nested shard parallelism only
+    /// added contention there.
+    pub(crate) fn live_ids_in_slice(
+        &self,
+        guard: &VisibilityGuard<'_>,
+        slice: &crate::cursor::ShardSlice,
+        universes: &[u32],
+    ) -> Vec<u32> {
+        let mut ids = Vec::new();
+        for (shard_idx, shard) in self.shards.iter().enumerate() {
+            let Some(universe) = universes.get(shard_idx) else {
+                continue;
+            };
+            let chunk = Self::slice_chunk(*universe, slice);
+            if chunk.is_empty() {
+                continue;
+            }
+            let table = shard.read();
+            ids.extend(
+                chunk
+                    .filter(|local_id| Self::shard_row_visible(&table, *local_id, guard))
+                    .map(|local_id| self.encode_id(shard_idx, local_id)),
+            );
+        }
+        ids.sort_unstable();
+        ids
+    }
+
     /// Column-major batch decode for paginated scans.
     ///
     /// Filters candidates by guard visibility, decodes the requested columns

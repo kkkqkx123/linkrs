@@ -181,6 +181,7 @@ fn failed_open_closes_children_opened_before_the_failure() {
                 space_name: "test".to_string(),
                 limit: None,
                 partition_range: None,
+                shard_slice: None,
                 col_names: vec![],
                 projected_properties: vec![],
                 identity_only: false,

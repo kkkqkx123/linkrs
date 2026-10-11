@@ -35,13 +35,16 @@ pub(super) fn handle(
     let direction = *direction;
     let filter_expr = &*filter_expr;
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
+    // One storage read guard serves the whole fragment: acquiring it per
+    // chunk turns the shared lock word into cross-worker contention with no
+    // snapshot benefit, since every chunk already reads at one timestamp.
+    let reader_guard = storage.as_ref().map(|storage_lock| storage_lock.read());
     while let Some(chunk) = input.advance()? {
-        if let Some(storage_lock) = storage {
-            let reader = storage_lock.read();
+        if let Some(reader) = reader_guard.as_deref() {
             if let Some(output) = expand_dispatch::expand_on_chunk(
                 chunk,
                 Arc::clone(&op.output_layout),
-                &*reader,
+                reader,
                 Vec::new(),
                 1,
                 &mut ExpandCtx {
@@ -168,10 +171,11 @@ pub(super) fn handle_all(
         && path_semantic.is_none();
 
     let cancel_token = op.runtime.as_ref().map(|rt| rt.cancel_token());
+    // One storage read guard serves the whole fragment (same rationale as
+    // `handle` above): per-chunk acquisition only adds lock-word contention.
+    let reader_guard = storage.as_ref().map(|storage_lock| storage_lock.read());
     while let Some(chunk) = input.advance()? {
-        if let Some(storage_lock) = storage {
-            let reader = storage_lock.read();
-
+        if let Some(reader) = reader_guard.as_deref() {
             // The degree-batch count path ignores per-path repeat rules,
             // so it only applies when no semantic constrains the walk. A
             // count-only plan with property demands is a contract error:

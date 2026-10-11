@@ -5,7 +5,7 @@ use super::super::assembler::{
 };
 use super::super::specs::build_inner_join_spec;
 use super::chain::{
-    build_chain_group, build_partition_local_fragments, decompose, PartitionedChain,
+    build_chain_group, build_partition_local_fragments, decompose, PartitionedChain, ScanDivision,
 };
 use super::PartitionBuildResult;
 use crate::executor::base::ExecutionContext;
@@ -283,6 +283,8 @@ fn build_co_partitioned_join(
     let mut op_alloc = PhysicalOperatorIdAllocator::new();
     let mut frag_alloc = ArenaFragmentAllocator::new();
 
+    // Co-partitioned joins keep value ranges: the local join is complete
+    // only because both sides observe the same vertex-id range.
     let left_frags = build_partition_local_fragments(
         &mut operators,
         &mut fragments,
@@ -291,6 +293,7 @@ fn build_co_partitioned_join(
         left_chain,
         left_chain.scan,
         spec,
+        ScanDivision::ByValueRange,
         exec_ctx,
     )?;
     let right_frags = build_partition_local_fragments(
@@ -301,6 +304,7 @@ fn build_co_partitioned_join(
         right_chain,
         right_chain.scan,
         spec,
+        ScanDivision::ByValueRange,
         exec_ctx,
     )?;
 
@@ -382,7 +386,9 @@ fn build_hash_exchange_join(
     let mut op_alloc = PhysicalOperatorIdAllocator::new();
     let mut frag_alloc = ArenaFragmentAllocator::new();
 
-    // Build partition-local fragments for both sides.
+    // Build partition-local fragments for both sides. The hash exchange
+    // repartitions by join key, so the scans may divide enumeration by
+    // shard slice instead of repeating value-range full walks.
     let left_frags = build_partition_local_fragments(
         &mut operators,
         &mut fragments,
@@ -391,6 +397,7 @@ fn build_hash_exchange_join(
         left_chain,
         left_chain.scan,
         spec,
+        ScanDivision::ByShardSlice,
         exec_ctx,
     )?;
     let right_frags = build_partition_local_fragments(
@@ -401,6 +408,7 @@ fn build_hash_exchange_join(
         right_chain,
         right_chain.scan,
         spec,
+        ScanDivision::ByShardSlice,
         exec_ctx,
     )?;
 

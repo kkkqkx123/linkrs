@@ -92,6 +92,11 @@ pub struct OptimizerEngine {
     decision_feedback: Arc<DecisionFeedbackStore>,
     feedback_trigger: AutoFeedbackTrigger,
     enable_feedback: bool,
+    /// Highest folded history sequence per query fingerprint. The fold
+    /// loop consumes each execution exactly once; without this watermark
+    /// every optimization would re-apply the whole retained history and
+    /// walk the corrections again over identical samples.
+    feedback_applied_seq: parking_lot::Mutex<HashMap<String, u64>>,
     columnar_policy: Arc<crate::executor::streaming::chunk::ColumnarPolicy>,
     metrics_stats: Option<Arc<linkrs_metrics::StatsManager>>,
 }

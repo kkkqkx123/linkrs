@@ -70,7 +70,7 @@ impl OptimizerEngine {
             stats_manager,
             cte_cache_manager,
             cost_calculator,
-            selectivity_estimator,
+            selectivity_estimator: Arc::clone(&selectivity_estimator),
             batch_plan_analyzer,
             subquery_unnesting_optimizer,
             cost_config,
@@ -80,7 +80,8 @@ impl OptimizerEngine {
             logical_heuristic,
             physical_heuristic,
             last_batch_statistics: std::sync::Mutex::new(Vec::new()),
-            partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default()),
+            partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default())
+                .with_selectivity(Arc::clone(&selectivity_estimator)),
             enable_heuristic: true,
             max_heuristic_iterations: 100,
             feedback_history: Arc::new(QueryFeedbackHistory::default()),
@@ -89,6 +90,7 @@ impl OptimizerEngine {
             decision_feedback,
             feedback_trigger: AutoFeedbackTrigger::default(),
             enable_feedback: true,
+            feedback_applied_seq: parking_lot::Mutex::new(HashMap::new()),
             columnar_policy: Arc::new(crate::executor::streaming::chunk::ColumnarPolicy::default()),
             metrics_stats,
         }
@@ -252,7 +254,8 @@ impl OptimizerEngine {
     }
 
     pub fn set_partitioning_config(&mut self, config: PartitioningConfig) {
-        self.partitioning_planner = PartitioningPlanner::new(config);
+        self.partitioning_planner =
+            PartitioningPlanner::new(config).with_selectivity(self.selectivity_estimator.clone());
     }
 
     pub fn partitioning_config(&self) -> &PartitioningConfig {

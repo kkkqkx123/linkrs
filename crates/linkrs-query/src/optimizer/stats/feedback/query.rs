@@ -27,6 +27,9 @@ use std::time::Instant;
 ///     operator_type: "IndexScan".to_string(),
 ///     estimated_rows: 100,
 ///     actual_rows: 150,
+///     actual_input_rows: None,
+///     partition_count: 1,
+///     exhausted: true,
 ///     estimated_time_us: 1000,
 ///     actual_time_us: 1200,
 ///     execution_loops: 1,
@@ -46,6 +49,20 @@ pub struct OperatorFeedback {
     pub estimated_rows: u64,
     /// Number of actual lines of output
     pub actual_rows: u64,
+    /// Actual input rows consumed by this operator, summed across
+    /// partitions. Lets the fold loop isolate the operator-local
+    /// parameter (e.g. observed selectivity) from upstream cardinality
+    /// error. `None` means unmeasured: the sample cannot separate
+    /// predicate error and must not train selectivity.
+    pub actual_input_rows: Option<u64>,
+    /// How many partition instances this sample aggregates. Always >= 1;
+    /// greater than 1 means per-partition profiles were summed into one
+    /// per-execution sample before any correction was computed.
+    pub partition_count: u32,
+    /// Whether every aggregated instance ran to exhaustion. Samples from
+    /// starved operators (Limit / early termination) carry partial counts
+    /// and must not train the feedback loop.
+    pub exhausted: bool,
     /// Estimated execution time (in microseconds)
     pub estimated_time_us: u64,
     /// Actual execution time (in microseconds)
@@ -83,6 +100,9 @@ impl OperatorFeedback {
             estimated_time_us: 0,
             actual_time_us: 0,
             execution_loops: 1,
+            actual_input_rows: None,
+            partition_count: 1,
+            exhausted: true,
             condition_key: None,
             shape_key: None,
         }
@@ -153,6 +173,10 @@ impl OperatorFeedback {
 pub struct QueryExecutionFeedback {
     /// Querying fingerprints
     pub query_fingerprint: String,
+    /// Monotonic sequence assigned by [`QueryFeedbackHistory`] on insert.
+    /// Lets the fold loop consume each execution exactly once instead of
+    /// re-applying the whole retained history on every optimization.
+    pub sequence: u64,
     /// Target space name (if any), used to scope selectivity corrections.
     pub space: Option<String>,
     /// Estimated number of output lines
@@ -186,6 +210,7 @@ impl QueryExecutionFeedback {
     pub fn new(query_fingerprint: String) -> Self {
         Self {
             query_fingerprint,
+            sequence: 0,
             space: None,
             estimated_rows: 0,
             actual_rows: 0,
@@ -278,6 +303,9 @@ mod tests {
             estimated_time_us: 1000,
             actual_time_us: 1200,
             execution_loops: 1,
+            actual_input_rows: None,
+            partition_count: 1,
+            exhausted: true,
             condition_key: None,
             shape_key: None,
         };
@@ -296,6 +324,9 @@ mod tests {
             estimated_time_us: 1000,
             actual_time_us: 5000,
             execution_loops: 10,
+            actual_input_rows: None,
+            partition_count: 1,
+            exhausted: true,
             condition_key: None,
             shape_key: None,
         };
@@ -334,6 +365,9 @@ mod tests {
             estimated_time_us: 1000,
             actual_time_us: 1100,
             execution_loops: 1,
+            actual_input_rows: None,
+            partition_count: 1,
+            exhausted: true,
             condition_key: None,
             shape_key: None,
         });
@@ -346,6 +380,9 @@ mod tests {
             estimated_time_us: 500,
             actual_time_us: 450,
             execution_loops: 1,
+            actual_input_rows: None,
+            partition_count: 1,
+            exhausted: true,
             condition_key: None,
             shape_key: None,
         });

@@ -57,9 +57,14 @@ impl WriteGateStats {
     }
 
     /// Human-readable contention advice for the observed share.
+    ///
+    /// Batching is the first action whenever the gate binds; gate sharding
+    /// is a separate decision that additionally needs true-machine (>= 8
+    /// cores) evidence, since commit ordering plus WAL durability serialize
+    /// below the gate regardless of the share number.
     pub fn contention_advice(share: f64) -> &'static str {
         if Self::prefer_batch_commits(share) {
-            "gate-wait share above 20%: prefer batch_insert_edges or begin_auto_commit_group over per-statement auto-commit; finer locks below the gate are not justified"
+            "gate-wait share above 20%: batch writes via batch_insert_edges or begin_auto_commit_group over per-statement auto-commit; gate sharding review only on true-machine (>= 8 cores) data, finer locks below the gate are not justified"
         } else {
             "gate-wait share below 20%: per-statement auto-commit is fine; keep explicit caller chunking"
         }

@@ -166,6 +166,15 @@ impl StorageReader for GraphStorage {
         reader::scan_edges_by_type(&self.ctx, space, edge_type)
     }
 
+    fn scan_edges_by_type_parallel(
+        &self,
+        space: &str,
+        edge_type: &str,
+        shards: usize,
+    ) -> Result<Vec<Edge>, StorageError> {
+        reader::scan_edges_by_type_parallel(&self.ctx, space, edge_type, shards)
+    }
+
     fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError> {
         reader::scan_all_edges(&self.ctx, space)
     }

@@ -574,6 +574,84 @@ fn cursor_allowlist_decodes_exact_id_set() {
 }
 
 #[test]
+fn cursor_shard_slices_cover_table_exactly_once() {
+    use crate::cursor::ShardSlice;
+
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    for id in 0..64 {
+        insert_test_vertex(&mut storage, id, "sliced");
+    }
+
+    let full_options = ScanOptions::default().with_tag("Person".into());
+    let mut full = storage
+        .create_vertex_cursor("test_space", &full_options)
+        .expect("full cursor should open");
+    let flat = full.next_flat_batch(128).expect("full batch");
+    assert_eq!(flat.len(), 64);
+    let mut baseline: Vec<i64> = flat.into_iter().filter_map(|r| r.vid.as_int64()).collect();
+    baseline.sort_unstable();
+
+    // Row path: four slices unite to the baseline with no overlap.
+    let mut union: Vec<i64> = Vec::new();
+    for part in 0..4 {
+        let options = ScanOptions::default()
+            .with_tag("Person".into())
+            .with_shard_slice(ShardSlice::new(part, 4));
+        let mut cursor = storage
+            .create_vertex_cursor("test_space", &options)
+            .expect("slice cursor should open");
+        let batch = cursor.next_flat_batch(128).expect("slice batch");
+        union.extend(batch.into_iter().filter_map(|r| r.vid.as_int64()));
+    }
+    assert_eq!(union.len(), baseline.len());
+    let mut sorted = union.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, baseline);
+    sorted.dedup();
+    assert_eq!(sorted.len(), baseline.len());
+
+    // Column path drains the same owned sets.
+    let mut column_total = 0;
+    for part in 0..4 {
+        let options = ScanOptions::default()
+            .with_tag("Person".into())
+            .with_shard_slice(ShardSlice::new(part, 4));
+        let mut cursor = storage
+            .create_vertex_cursor("test_space", &options)
+            .expect("slice column cursor should open");
+        let batch = cursor
+            .next_column_batch(&["name".into()], 128)
+            .expect("slice column batch");
+        column_total += batch.len();
+    }
+    assert_eq!(column_total, 64);
+}
+
+#[test]
+fn cursor_shard_slice_rejects_empty_division() {
+    use crate::cursor::ShardSlice;
+
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+
+    let err = storage
+        .create_vertex_cursor(
+            "test_space",
+            &ScanOptions::default()
+                .with_tag("Person".into())
+                .with_shard_slice(ShardSlice::new(2, 2)),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("shard_slice"),
+        "out-of-range slice must name the slice contract: {err}"
+    );
+}
+
+#[test]
 fn cursor_topology_only_skips_property_decode() {
     let mut storage = create_test_storage();
     setup_space(&mut storage);
@@ -762,5 +840,93 @@ fn edge_cursor_topology_only_rejects_predicates_and_projections() {
     assert!(
         err.to_string().contains("topology_only"),
         "projection with topology_only must name the contract: {err}"
+    );
+}
+
+#[test]
+fn cursor_edge_src_slices_cover_edges_exactly_once() {
+    use crate::cursor::ShardSlice;
+
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    setup_knows_edge(&mut storage);
+    for id in 0..64 {
+        insert_test_vertex(&mut storage, id, "sliced");
+    }
+    let mut inserted = 0;
+    for src in 0..64i64 {
+        for step in 1..=3i64 {
+            let dst = (src + step) % 64;
+            storage
+                .insert_edge(
+                    "test_space",
+                    Edge::new(
+                        VertexId::try_from_int64(src).expect("test src id"),
+                        VertexId::try_from_int64(dst).expect("test dst id"),
+                        "KNOWS".into(),
+                        0,
+                        [("since".into(), Value::Int(2024))].into_iter().collect(),
+                    ),
+                )
+                .expect("edge insert should succeed");
+            inserted += 1;
+        }
+    }
+
+    let edge_key = |edge: &Edge| {
+        (
+            edge.src.as_int64().expect("int src id"),
+            edge.dst.as_int64().expect("int dst id"),
+            edge.ranking,
+        )
+    };
+    let full_options = ScanOptions::default().with_edge_type("KNOWS".into());
+    let mut full = storage
+        .create_edge_cursor("test_space", &full_options)
+        .expect("full edge cursor should open");
+    let flat = full.next_batch(512).expect("full edge batch");
+    assert_eq!(flat.len(), inserted);
+    let mut baseline: Vec<_> = flat.iter().map(edge_key).collect();
+    baseline.sort_unstable();
+
+    // Four slices unite to the baseline with no overlap.
+    let mut union = Vec::new();
+    for part in 0..4 {
+        let options = ScanOptions::default()
+            .with_edge_type("KNOWS".into())
+            .with_edge_src_slice(ShardSlice::new(part, 4));
+        let mut cursor = storage
+            .create_edge_cursor("test_space", &options)
+            .expect("slice edge cursor should open");
+        let batch = cursor.next_batch(512).expect("slice edge batch");
+        union.extend(batch.iter().map(edge_key));
+    }
+    assert_eq!(union.len(), baseline.len());
+    let mut sorted = union.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, baseline);
+    sorted.dedup();
+    assert_eq!(sorted.len(), baseline.len());
+}
+
+#[test]
+fn cursor_edge_src_slice_rejects_empty_division() {
+    use crate::cursor::ShardSlice;
+
+    let mut storage = create_test_storage();
+    setup_space(&mut storage);
+    setup_person_tag(&mut storage);
+    setup_knows_edge(&mut storage);
+
+    let options = ScanOptions::default()
+        .with_edge_type("KNOWS".into())
+        .with_edge_src_slice(ShardSlice::new(2, 2));
+    let err = storage
+        .create_edge_cursor("test_space", &options)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("edge_src_slice"),
+        "invalid edge slice must name the contract: {err}"
     );
 }

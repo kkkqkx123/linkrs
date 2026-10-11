@@ -2,12 +2,14 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::cursor::{EdgeColumnBatch, EdgeCursor, ScanOptions};
+use crate::cursor::{EdgeColumnBatch, EdgeCursor, ScanOptions, ShardSlice};
 use crate::edge::edge_table::core::EdgeStore;
 use crate::edge::Nbr;
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::endpoint_label_id;
+use crate::vertex::vertex_table::sharded::routing::ShardLayout;
+use crate::vertex::ShardedVertexTable;
 use linkrs_core::types::{LabelId, Timestamp, VertexId};
 use linkrs_core::{Edge, StorageError, StorageResult, Value};
 
@@ -61,10 +63,82 @@ struct WalkContext<'a> {
     td: &'a TableDef,
 }
 
+/// Owned slice filter for one source table: the cursor's slice paired
+/// with that table's snapshotted ownership space. `None` walks the
+/// table unfiltered (no slice configured, or no vertex table behind
+/// the label to decode ownership against). Free function (not a method)
+/// so walk call sites with active field borrows can pass the two pieces
+/// without borrowing the whole cursor.
+fn slice_filter_for(
+    slice: &Option<ShardSlice>,
+    spaces: &HashMap<LabelId, EdgeSliceSpace>,
+    src_label: LabelId,
+) -> Option<(ShardSlice, EdgeSliceSpace)> {
+    let owned = (*slice)?;
+    let space = spaces.get(&src_label)?.clone();
+    Some((owned, space))
+}
+
 struct ScanConfig<'a> {
     ts: Timestamp,
     src_id_range: &'a Option<Range<i64>>,
     predicate: &'a [crate::cursor::ScanPredicate],
+    /// Owned slice filter for this table's source space (`None` walks the
+    /// whole table). Owned (not borrowed) so table switches never fight the
+    /// walk's borrows; the payload is one small vector per source label.
+    slice_filter: Option<(ShardSlice, EdgeSliceSpace)>,
+}
+
+/// Source-id ownership for one partitioned edge scan.
+///
+/// Each entry of `chunks` is the slice-owned local-id chunk of one source
+/// shard under `layout`, snapshotted when the table is first visited. Global
+/// source ids decode arithmetically to `(shard, local)` pairs, so ownership
+/// needs no table access and whole single-segment groups can be skipped
+/// without touching any edge.
+#[derive(Clone, Debug)]
+struct EdgeSliceSpace {
+    layout: ShardLayout,
+    chunks: Vec<Range<u32>>,
+}
+
+/// Whether a global source id belongs to the slice's owned chunks.
+/// `None` marks an undecodable id, counted as malformed by the caller.
+fn slice_owns_global(space: &EdgeSliceSpace, global: u32) -> Option<bool> {
+    let seg_bits = space.layout.segment_slots_bits;
+    let segment = global >> seg_bits;
+    if segment >= space.layout.total_segments {
+        return None;
+    }
+    let shards = space.layout.num_shards as u32;
+    let shard = (segment % shards) as usize;
+    let local = (segment / shards) << seg_bits | (global & space.layout.segment_slots_mask());
+    Some(
+        space
+            .chunks
+            .get(shard)
+            .is_some_and(|chunk| chunk.contains(&local)),
+    )
+}
+
+/// Whether a whole CSR group provably holds no owned source id. Only
+/// single-segment groups qualify: a group spanning segments can straddle a
+/// chunk boundary, and those fall back to the per-edge ownership test.
+fn group_outside_slice(space: &EdgeSliceSpace, group_base: u32, group_size: u32) -> bool {
+    let seg_bits = space.layout.segment_slots_bits as u64;
+    let first = (group_base as u64) >> seg_bits;
+    let last = ((group_base as u64) + (group_size as u64) - 1) >> seg_bits;
+    if first != last {
+        return false;
+    }
+    let shards = space.layout.num_shards as u64;
+    let shard = (first % shards) as usize;
+    let Some(chunk) = space.chunks.get(shard) else {
+        return false;
+    };
+    let seg_local_base = (first / shards) << seg_bits;
+    let seg_local_end = seg_local_base + (1u64 << seg_bits);
+    seg_local_end <= chunk.start as u64 || seg_local_base >= chunk.end as u64
 }
 
 pub(crate) struct GraphEdgeCursor {
@@ -73,6 +147,11 @@ pub(crate) struct GraphEdgeCursor {
     offset_remaining: usize,
     emitted: usize,
     src_id_range: Option<Range<i64>>,
+    slice: Option<ShardSlice>,
+    /// Per-source-label slice ownership, snapshotted when each source table
+    /// is first visited. Labels without a vertex table stay absent and walk
+    /// unfiltered, preserving the old per-edge resolution behavior there.
+    slice_spaces: HashMap<LabelId, EdgeSliceSpace>,
     projection: Option<Vec<Arc<str>>>,
     /// Conjunctive predicates evaluated on decoded properties before
     /// offset/limit accounting; a pure pre-filter.
@@ -119,13 +198,14 @@ impl GraphEdgeCursor {
         let ts = options
             .read_timestamp
             .unwrap_or_else(|| ctx.get_read_timestamp());
+        let allowlist = options.edge_table_allowlist.as_deref();
         let targets = if let Some(ref et) = options.edge_type {
-            vec![build_target(&ctx, space, et)?]
+            vec![build_target(&ctx, space, et, allowlist)?]
         } else {
             let edge_types = ctx.schema_manager().list_edge_types(space)?;
             edge_types
                 .into_iter()
-                .map(|et| build_target(&ctx, space, &et.edge_type_name))
+                .map(|et| build_target(&ctx, space, &et.edge_type_name, allowlist))
                 .collect::<StorageResult<Vec<_>>>()?
         };
 
@@ -144,12 +224,52 @@ impl GraphEdgeCursor {
             }
         }
 
+        // A slice selects one of a non-empty division; anything else
+        // addresses no well-defined owned set.
+        if options.edge_src_slice.is_some_and(|slice| {
+            slice.partition_count == 0 || slice.partition_id >= slice.partition_count
+        }) {
+            return Err(StorageError::invalid_operation(
+                "edge_src_slice requires partition_id < partition_count with a non-zero count",
+            ));
+        }
+
+        let mut slice_spaces = HashMap::new();
+        if let Some(slice) = options.edge_src_slice {
+            let mut labels: Vec<LabelId> = targets
+                .iter()
+                .flat_map(|target| target.tables.iter().map(|table| table.tbl_src))
+                .collect();
+            labels.sort_unstable();
+            labels.dedup();
+            ctx.data_store().with_vertex_tables(|tables| {
+                for label in labels {
+                    let Some(table) = tables.get(&label) else {
+                        continue;
+                    };
+                    let universes = table.shard_universes();
+                    slice_spaces.insert(
+                        label,
+                        EdgeSliceSpace {
+                            layout: table.layout(),
+                            chunks: universes
+                                .iter()
+                                .map(|universe| ShardedVertexTable::slice_chunk(*universe, &slice))
+                                .collect(),
+                        },
+                    );
+                }
+            });
+        }
+
         Ok(Self {
             ctx,
             limit: options.limit,
             offset_remaining: options.offset,
             emitted: 0,
             src_id_range: options.edge_src_id_range.clone(),
+            slice: options.edge_src_slice,
+            slice_spaces,
             projection: options
                 .projection
                 .as_ref()
@@ -259,6 +379,7 @@ impl GraphEdgeCursor {
                 let mut raw_edge: Vec<linkrs_core::types::EdgeId> = Vec::new();
                 let mut raw_row: Vec<u32> = Vec::new();
                 let mut no_stop = || false;
+                let slice_filter = slice_filter_for(&self.slice, &self.slice_spaces, td.tbl_src);
                 let table_done = walk_mutable_entries(
                     &WalkContext {
                         store,
@@ -269,6 +390,7 @@ impl GraphEdgeCursor {
                         ts,
                         src_id_range: &src_id_range,
                         predicate: &predicate,
+                        slice_filter,
                     },
                     &mut self.table_state,
                     &mut self.malformed_skipped,
@@ -621,6 +743,8 @@ impl EdgeCursor for GraphEdgeCursor {
         let offset_remaining = &mut self.offset_remaining;
         let exhausted = &mut self.exhausted;
         let malformed = &mut self.malformed_skipped;
+        let slice = &self.slice;
+        let slice_spaces = &self.slice_spaces;
 
         let data_store = ctx.data_store().clone();
         data_store.with_edge_tables(|edge_tables| {
@@ -662,6 +786,7 @@ impl EdgeCursor for GraphEdgeCursor {
 
                 match table_state.phase {
                     TablePhase::Mutable => {
+                        let slice_filter = slice_filter_for(slice, slice_spaces, td.tbl_src);
                         scan_mutable(ScanArgs {
                             ctx,
                             store,
@@ -675,6 +800,7 @@ impl EdgeCursor for GraphEdgeCursor {
                             limit,
                             emitted,
                             offset_remaining,
+                            slice_filter,
                             state: table_state,
                             batch: &mut candidates,
                             batch_size,
@@ -714,6 +840,7 @@ struct ScanArgs<'a> {
     limit: Option<usize>,
     emitted: &'a mut usize,
     offset_remaining: &'a mut usize,
+    slice_filter: Option<(ShardSlice, EdgeSliceSpace)>,
     state: &'a mut TableScanState,
     batch: &'a mut Vec<EdgeCandidate>,
     batch_size: usize,
@@ -766,6 +893,7 @@ fn walk_mutable_entries(
         ts,
         src_id_range,
         predicate,
+        slice_filter,
     } = config;
     let gate = ctx.pending_gate();
 
@@ -792,10 +920,22 @@ fn walk_mutable_entries(
 
     let existing = store.out_csr.existing_group_ids();
     let group_bits = store.out_csr.group_bits();
+    let group_size = 1u32 << group_bits;
     let start_pos = existing.partition_point(|gid| *gid < state.resume_group);
     for gid in existing.into_iter().skip(start_pos) {
         if pre_stop() {
             return false;
+        }
+        let base = crate::edge::node_group::group_base(gid, group_bits);
+        if let Some((_, space)) = slice_filter {
+            if group_outside_slice(space, base, group_size) {
+                // Fully consumed without decoding: no owned source id can
+                // live in this group, so resume advances past the whole
+                // group exactly like a pruned group below.
+                state.resume_group = gid + 1;
+                state.skip_in_group = 0;
+                continue;
+            }
         }
         if pruned.contains(&gid) {
             // Fully consumed without decoding: pruned groups yield no
@@ -813,7 +953,6 @@ fn walk_mutable_entries(
             state.skip_in_group = 0;
             continue;
         };
-        let base = crate::edge::node_group::group_base(gid, group_bits);
         let mut iter = variant.iter_all();
         if gid == state.resume_group {
             let skip = state.skip_in_group;
@@ -846,6 +985,19 @@ fn walk_mutable_entries(
                 *malformed += 1;
                 continue;
             };
+            if let Some((_, space)) = slice_filter {
+                // Pure arithmetic ownership: unowned edges skip the
+                // external-id resolution below, which is the dominant
+                // per-edge cost of a partitioned scan.
+                match slice_owns_global(space, global) {
+                    Some(true) => {}
+                    Some(false) => continue,
+                    None => {
+                        *malformed += 1;
+                        continue;
+                    }
+                }
+            }
             if let Some(ref r) = *src_id_range {
                 let src_internal = VertexId::from_u32(global)
                     .as_internal_u32()
@@ -907,6 +1059,7 @@ fn scan_mutable(args: ScanArgs) {
         limit,
         emitted,
         offset_remaining,
+        slice_filter,
         state,
         batch,
         batch_size,
@@ -935,6 +1088,7 @@ fn scan_mutable(args: ScanArgs) {
             ts,
             src_id_range,
             predicate,
+            slice_filter,
         },
         state,
         malformed,
@@ -1158,6 +1312,7 @@ fn build_target(
     ctx: &Arc<GraphStorageContext>,
     space: &str,
     edge_type: &str,
+    allowlist: Option<&[EdgeTableKey]>,
 ) -> StorageResult<TargetDef> {
     let edge_info = ctx
         .schema_manager()
@@ -1195,6 +1350,15 @@ fn build_target(
             tbl_src: src_label_id,
             tbl_dst: dst_label_id,
         }]
+    };
+    // Table-sharded parallel scans drain one key subset per shard; the
+    // union of shards covers every table exactly once.
+    let tables = match allowlist {
+        Some(allow) => tables
+            .into_iter()
+            .filter(|td| allow.contains(&td.key))
+            .collect(),
+        None => tables,
     };
 
     Ok(TargetDef {
