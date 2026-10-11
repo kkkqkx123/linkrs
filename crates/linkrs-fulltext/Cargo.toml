@@ -25,6 +25,10 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 
 [features]
+# `fulltext` stays opt-in instead of default: the tantivy backend roughly
+# doubles the default build closure, while the bench placeholder warns loudly
+# when the feature is off (see benches/fulltext_bench.rs). Opt in explicitly
+# with `--features fulltext`.
 fulltext = ["dep:tantivy"]
 jieba = ["dep:jieba-rs", "dep:tantivy-tokenizer-api"]
 
