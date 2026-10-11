@@ -19,6 +19,9 @@
 //!
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench -p linkrs-storage --bench rollback_bench
+//!
+//! Fast smoke run (`QUICK=1`) shrinks the setup and the edge counts so the
+//! suite finishes in seconds; the full run keeps million-row duty.
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -33,12 +36,39 @@ use linkrs_storage::{
     StorageSchemaOps, StorageWriter,
 };
 
+#[path = "bench_group.rs"]
+mod bench_group;
+
 const SPACE: &str = "b4";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
-const VERTEX_COUNT: usize = 1_000_000;
-const EDGE_COUNTS: [usize; 3] = [100_000, 500_000, 1_000_000];
-const ITERATIONS: usize = 3;
+const FULL_VERTEX_COUNT: usize = 1_000_000;
+const FULL_EDGE_COUNTS: [usize; 3] = [100_000, 500_000, 1_000_000];
+const FULL_ITERATIONS: usize = 3;
+
+fn vertex_count() -> usize {
+    if bench_group::quick_mode() {
+        20_000
+    } else {
+        FULL_VERTEX_COUNT
+    }
+}
+
+fn edge_counts() -> Vec<usize> {
+    if bench_group::quick_mode() {
+        vec![10_000]
+    } else {
+        FULL_EDGE_COUNTS.to_vec()
+    }
+}
+
+fn iterations() -> usize {
+    if bench_group::quick_mode() {
+        1
+    } else {
+        FULL_ITERATIONS
+    }
+}
 
 fn setup_storage() -> (GraphStorage, Option<TempDir>) {
     let dir = TempDir::new().expect("temp directory");
@@ -64,7 +94,10 @@ fn setup_storage() -> (GraphStorage, Option<TempDir>) {
         )
         .expect("create edge type");
 
-    for chunk in (0..VERTEX_COUNT as i64).collect::<Vec<_>>().chunks(100_000) {
+    for chunk in (0..vertex_count() as i64)
+        .collect::<Vec<_>>()
+        .chunks(100_000)
+    {
         let vertices: Vec<Vertex> = chunk
             .iter()
             .map(|&i| {
@@ -93,8 +126,9 @@ struct RunResult {
 fn build_edges(edge_count: usize, tx_seq: u64) -> Vec<Edge> {
     (0..edge_count)
         .map(|i| Edge {
-            src: VertexId::try_from_int64(i as i64 % VERTEX_COUNT as i64).expect("valid vertex id"),
-            dst: VertexId::try_from_int64((i as i64 + 1) % VERTEX_COUNT as i64)
+            src: VertexId::try_from_int64(i as i64 % vertex_count() as i64)
+                .expect("valid vertex id"),
+            dst: VertexId::try_from_int64((i as i64 + 1) % vertex_count() as i64)
                 .expect("valid vertex id"),
             edge_type: EDGE.to_string(),
             ranking: tx_seq as i64 * 2_000_000 + i as i64,
@@ -190,8 +224,10 @@ fn main() {
             .unwrap_or(0)
     );
     println!(
-        "vertex setup = {VERTEX_COUNT}, edge counts = {:?}, iterations = {} (median)",
-        EDGE_COUNTS, ITERATIONS
+        "vertex setup = {}, edge counts = {:?}, iterations = {} (median)",
+        vertex_count(),
+        edge_counts(),
+        iterations()
     );
     println!(
         "{:>10} | {:>10} | {:>11} | {:>11} | {:>11} | {:>12}",
@@ -199,11 +235,12 @@ fn main() {
     );
     let (storage, _dir) = setup_storage();
     let mut tx_seq = 1u64;
-    for &edge_count in &EDGE_COUNTS {
-        let mut writes = Vec::with_capacity(ITERATIONS);
-        let mut commits = Vec::with_capacity(ITERATIONS);
-        let mut aborts = Vec::with_capacity(ITERATIONS);
-        for _ in 0..ITERATIONS {
+    for &edge_count in &edge_counts() {
+        let rounds = iterations();
+        let mut writes = Vec::with_capacity(rounds);
+        let mut commits = Vec::with_capacity(rounds);
+        let mut aborts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
             let r = run_transaction(&storage, edge_count, tx_seq);
             tx_seq += 1;
             writes.push(r.write_us);

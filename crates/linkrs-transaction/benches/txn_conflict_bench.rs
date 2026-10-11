@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 mod report;
 use report::write_results_report;
 
+#[path = "../../linkrs-core/benches/bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
+
 const WRITE_SET_SIZE: usize = 20;
 const KEY_SPACE: usize = 200;
 
@@ -99,10 +103,7 @@ fn bench_conflict(c: &mut Criterion) {
 
             // Criterion: single mixed round as a timed op.
             let group_name = format!("contention_c{}_ov{}", clients, (overlap * 100.0) as u32);
-            let mut group = c.benchmark_group(&group_name);
-            group.measurement_time(Duration::from_secs(2));
-            group.sample_size(10);
-            group.warm_up_time(Duration::from_millis(300));
+            let mut group = create_benchmark_group(c, &group_name, 10);
             let mgr2 = Arc::clone(&mgr);
             group.bench_function("round", |b| {
                 b.iter(|| {

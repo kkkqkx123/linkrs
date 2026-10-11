@@ -23,9 +23,36 @@ use std::time::Instant;
 const SPACE: &str = "pb";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
-const VERTEX_COUNT: u64 = 100_000;
-const WORKERS: [usize; 4] = [1, 2, 4, 8];
-const ITERATIONS: usize = 11;
+const FULL_VERTEX_COUNT: u64 = 100_000;
+const FULL_WORKERS: [usize; 4] = [1, 2, 4, 8];
+const FULL_ITERATIONS: usize = 11;
+
+#[path = "bench_group.rs"]
+mod bench_group;
+
+fn vertex_count() -> u64 {
+    if bench_group::quick_mode() {
+        10_000
+    } else {
+        FULL_VERTEX_COUNT
+    }
+}
+
+fn worker_list() -> Vec<usize> {
+    if bench_group::quick_mode() {
+        vec![1, 2]
+    } else {
+        FULL_WORKERS.to_vec()
+    }
+}
+
+fn iterations() -> usize {
+    if bench_group::quick_mode() {
+        3
+    } else {
+        FULL_ITERATIONS
+    }
+}
 
 const Q1: &str = "MATCH (n:Node) WHERE n.value < 50000 RETURN count(n)";
 const Q2: &str = "MATCH (n:Node) RETURN n.group_id, count(*)";
@@ -75,8 +102,8 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
         .expect("create edge type");
 
     let mut start = 0usize;
-    while start < VERTEX_COUNT as usize {
-        let end = (start + 20_000).min(VERTEX_COUNT as usize);
+    while start < vertex_count() as usize {
+        let end = (start + 20_000).min(vertex_count() as usize);
         let vertices: Vec<Vertex> = (start..end)
             .map(|i| {
                 Vertex::new(
@@ -99,12 +126,12 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
         start = end;
     }
 
-    let mut edges = Vec::with_capacity((VERTEX_COUNT * 3) as usize);
-    for src in 0..VERTEX_COUNT as i64 {
+    let mut edges = Vec::with_capacity((vertex_count() * 3) as usize);
+    for src in 0..vertex_count() as i64 {
         for k in 1..=3i64 {
             edges.push(Edge {
                 src: VertexId::try_from_int64(src).expect("valid vertex id"),
-                dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64)
+                dst: VertexId::try_from_int64((src + k) % vertex_count() as i64)
                     .expect("valid vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
@@ -130,9 +157,9 @@ fn build_pipeline(
             enabled: true,
             // Size partitions so the desired partition count matches the
             // worker count: desired = rows / min_rows (clamped to 2..=max_partitions).
-            min_rows_per_partition: (VERTEX_COUNT as usize / workers).max(1) as u64,
+            min_rows_per_partition: (vertex_count() as usize / workers).max(1) as u64,
             max_partitions: workers,
-            vertex_id_range: Some(0i64..VERTEX_COUNT as i64),
+            vertex_id_range: Some(0i64..vertex_count() as i64),
             max_workers: workers,
             max_buffered_chunks: 10,
         });
@@ -287,8 +314,8 @@ fn measure(
     for _ in 0..3 {
         run_query(pipeline, query, space).expect("warmup query");
     }
-    let mut samples: Vec<u64> = Vec::with_capacity(ITERATIONS);
-    for _ in 0..ITERATIONS {
+    let mut samples: Vec<u64> = Vec::with_capacity(iterations());
+    for _ in 0..iterations() {
         let start = Instant::now();
         run_query(pipeline, query, space).expect("timed query");
         samples.push(start.elapsed().as_micros() as u64);
@@ -322,12 +349,16 @@ fn measure(
 
 fn main() {
     println!("== parallel speedup validation ==");
-    println!("vertices={VERTEX_COUNT}, edges/vertex=3, iterations={ITERATIONS}");
+    println!(
+        "vertices={}, edges/vertex=3, iterations={}",
+        vertex_count(),
+        iterations()
+    );
     let storage = setup_data();
     println!(
         "data ready ({} vertices, {} edges)",
-        VERTEX_COUNT,
-        VERTEX_COUNT * 3
+        vertex_count(),
+        vertex_count() * 3
     );
 
     let space = space_info(&storage);
@@ -346,13 +377,14 @@ fn main() {
         );
         let mut medians: Vec<u64> = Vec::new();
         let mut metrics_list: Vec<ExplainMetrics> = Vec::new();
-        for &workers in &WORKERS {
+        let work_list = worker_list();
+        for &workers in &work_list {
             let mut pipeline = build_pipeline(&storage, workers);
             let (median, metrics) = measure(&mut pipeline, query, &space);
             medians.push(median);
             metrics_list.push(metrics);
         }
-        for (idx, &workers) in WORKERS.iter().enumerate() {
+        for (idx, &workers) in work_list.iter().enumerate() {
             let t1 = medians[0] as f64;
             let tn = medians[idx] as f64;
             let speedup = t1 / tn;

@@ -14,7 +14,10 @@ use linkrs_storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWrite
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
 
 static ALLOC_BYTES: AtomicUsize = AtomicUsize::new(0);
 static ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -164,10 +167,7 @@ value map plus Value clones, which are inherent to returning owned results.\n",
         PROP_COUNT, bytes_per_op, calls_per_op
     ));
 
-    let mut group = c.benchmark_group("edge_read");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(20);
-    group.warm_up_time(Duration::from_millis(300));
+    let mut group = create_benchmark_group(c, "edge_read", 20);
     group.bench_function("get_edge_single", |b| {
         b.iter(|| read_edge_once(&storage));
     });

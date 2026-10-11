@@ -25,11 +25,15 @@ use parking_lot::RwLock;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[path = "results_report.rs"]
 mod report;
 use report::write_results_report;
+
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
 
 struct CountingAllocator;
 
@@ -226,10 +230,7 @@ fn bench_probes(c: &mut Criterion) {
     report.push_str("|---|---|---|---|---|\n");
 
     for (label, query, expected) in PROBES {
-        let mut group = c.benchmark_group("probe");
-        group.measurement_time(Duration::from_secs(2));
-        group.sample_size(20);
-        group.warm_up_time(Duration::from_millis(500));
+        let mut group = create_benchmark_group(c, "probe", 20);
         group.bench_function(*label, |b| {
             b.iter(|| {
                 let rows = run_query(&mut pipeline, query, &space);

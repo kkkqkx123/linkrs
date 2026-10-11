@@ -25,6 +25,9 @@
 //!
 //! Plain-main bench (harness = false). Run with:
 //!   cargo bench -p linkrs-storage --bench ingest_bench
+//!
+//! Fast smoke run (`QUICK=1`) keeps the small head only: the watched 1M legs
+//! are full-run duty, since they exist to prove bounded completion at scale.
 
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -40,16 +43,36 @@ use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{DataType, Edge, Value, Vertex};
 use linkrs_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 
+#[path = "bench_group.rs"]
+mod bench_group;
+
 const SPACE: &str = "ingest";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
-const BATCH_SIZES: [usize; 3] = [10_000, 100_000, 1_000_000];
+const FULL_BATCH_SIZES: [usize; 3] = [10_000, 100_000, 1_000_000];
 const EDGE_COUNT: usize = 1000;
 /// Measurement repetitions per configuration (median reported).
-const ITERATIONS: usize = 3;
+const FULL_ITERATIONS: usize = 3;
 /// Largest batch size: the only leg that ever approaches resource limits.
 /// Smaller legs run unwatched.
 const WATCHED_SIZE: usize = 1_000_000;
+
+/// Batch sizes for the scaling legs (fast smoke run uses the small head only).
+fn batch_sizes() -> Vec<usize> {
+    if bench_group::quick_mode() {
+        vec![10_000]
+    } else {
+        FULL_BATCH_SIZES.to_vec()
+    }
+}
+
+fn iterations() -> usize {
+    if bench_group::quick_mode() {
+        1
+    } else {
+        FULL_ITERATIONS
+    }
+}
 /// Watchdog polls WAL growth this often and fails the bench when the WAL
 /// shows no growth for this long (stalled batch, not slow batch).
 const WATCHDOG_POLL: Duration = Duration::from_secs(5);
@@ -205,12 +228,13 @@ fn build_edges(count: usize) -> Vec<Edge> {
 }
 
 fn measure(mut sample: impl FnMut() -> f64) -> f64 {
-    let mut samples = Vec::with_capacity(ITERATIONS);
-    for _ in 0..ITERATIONS {
+    let rounds = iterations();
+    let mut samples = Vec::with_capacity(rounds);
+    for _ in 0..rounds {
         samples.push(sample());
     }
     samples.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
-    samples[ITERATIONS / 2]
+    samples[rounds / 2]
 }
 
 fn measure_single(persistent: bool, edges: &[Edge]) -> f64 {
@@ -264,7 +288,8 @@ fn main() {
     );
     println!(
         "batch sizes = {:?}, iterations = {} (median)",
-        BATCH_SIZES, ITERATIONS
+        batch_sizes(),
+        iterations()
     );
 
     // ── leg 1: vertices ─────────────────────────────────────────────────────
@@ -273,7 +298,7 @@ fn main() {
         "{:>10} | {:>10} | {:>10} | {:>9} | {:>9}",
         "batch", "T_cpu ms", "T_wal ms", "CPU share", "WAL share"
     );
-    for &size in &BATCH_SIZES {
+    for &size in &batch_sizes() {
         let vertices = build_vertices(size);
         let cpu_ms = measure(|| {
             let (mut storage, _dir) = new_storage(false);
@@ -326,7 +351,7 @@ fn main() {
         "{:>10} | {:>10} | {:>10} | {:>9} | {:>9}",
         "batch", "T_cpu ms", "T_wal ms", "CPU share", "WAL share"
     );
-    for &size in &BATCH_SIZES {
+    for &size in &batch_sizes() {
         let edges = build_edges(size);
         let cpu_ms = measure(|| {
             let (mut storage, _dir) = new_storage(false);

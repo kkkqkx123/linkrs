@@ -1,7 +1,10 @@
 use std::hint::black_box;
-use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+
+#[path = "../../linkrs-core/benches/bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
 
 use linkrs_core::types::VertexId;
 use linkrs_transaction::manager::TransactionManager;
@@ -11,10 +14,7 @@ use linkrs_transaction::types::*;
 fn bench_transaction_create_commit(c: &mut Criterion) {
     let manager = TransactionManager::new(TransactionManagerConfig::default());
 
-    let mut group = c.benchmark_group("transaction_ops");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
-    group.warm_up_time(Duration::from_secs(1));
+    let mut group = create_benchmark_group(c, "transaction_ops", 100);
 
     group.bench_function("begin_read", |b| {
         b.iter(|| {
@@ -40,10 +40,7 @@ fn bench_transaction_create_commit(c: &mut Criterion) {
 }
 
 fn bench_write_set_operations(c: &mut Criterion) {
-    let mut group = c.benchmark_group("write_set");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
-    group.warm_up_time(Duration::from_secs(1));
+    let mut group = create_benchmark_group(c, "write_set", 100);
 
     for size in &[10, 100, 1000] {
         group.bench_with_input(BenchmarkId::new("build", size), size, |b, &size| {
@@ -84,10 +81,7 @@ fn bench_write_set_operations(c: &mut Criterion) {
 fn bench_mvcc_version_management(c: &mut Criterion) {
     let vm = VersionManager::new();
 
-    let mut group = c.benchmark_group("mvcc");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
-    group.warm_up_time(Duration::from_secs(1));
+    let mut group = create_benchmark_group(c, "mvcc", 100);
 
     group.bench_function("acquire_read_ts", |b| {
         b.iter(|| {
@@ -109,9 +103,7 @@ fn bench_mvcc_version_management(c: &mut Criterion) {
 }
 
 fn bench_certification_fast_paths(c: &mut Criterion) {
-    let mut group = c.benchmark_group("certification_fast_paths");
-    group.measurement_time(Duration::from_secs(5));
-    group.sample_size(100);
+    let mut group = create_benchmark_group(c, "certification_fast_paths", 100);
 
     let manager = TransactionManager::new(TransactionManagerConfig::default());
 
@@ -156,9 +148,7 @@ fn bench_certification_fast_paths(c: &mut Criterion) {
 
 fn bench_snapshot_tracker(c: &mut Criterion) {
     use linkrs_transaction::SnapshotTracker;
-    let mut group = c.benchmark_group("snapshot_tracker");
-    group.measurement_time(Duration::from_secs(5));
-    group.sample_size(100);
+    let mut group = create_benchmark_group(c, "snapshot_tracker", 100);
 
     group.bench_function("min_active_snapshot", |b| {
         let tracker = SnapshotTracker::new();

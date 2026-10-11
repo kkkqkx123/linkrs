@@ -21,7 +21,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use linkrs_core::types::expr::Expression;
@@ -31,6 +30,10 @@ use linkrs_query::executor::streaming::chunk::DataChunk;
 use linkrs_query::executor::streaming::helpers::accumulator_states::AggregateAccumulator;
 use linkrs_query::executor::streaming::operators::join_operator::JoinKeyValue;
 use linkrs_query::executor::streaming::slot::SlotLayout;
+
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
 
 // ── shared fixtures ─────────────────────────────────────────────────────────
 
@@ -130,7 +133,7 @@ fn materialize_columns(chunk: &mut DataChunk) -> Vec<Vec<Value>> {
 // ── expression evaluation ───────────────────────────────────────────────────
 
 fn bench_expression_eval(c: &mut Criterion) {
-    let mut group = c.benchmark_group("expr_eval");
+    let mut group = create_benchmark_group(c, "expr_eval", 100);
 
     for chunk_size in &[128usize, 512, 1024, 4096] {
         // Simple comparison: id > 50
@@ -225,7 +228,7 @@ fn bench_expression_eval(c: &mut Criterion) {
 }
 
 fn bench_filter_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group("filter_throughput");
+    let mut group = create_benchmark_group(c, "filter_throughput", 100);
 
     for chunk_size in &[128usize, 512, 1024, 4096] {
         // Low selectivity: id > 9999999 (almost no rows pass)
@@ -275,7 +278,7 @@ fn bench_filter_throughput(c: &mut Criterion) {
 }
 
 fn bench_materialize_columns(c: &mut Criterion) {
-    let mut group = c.benchmark_group("column_materialize");
+    let mut group = create_benchmark_group(c, "column_materialize", 100);
 
     for chunk_size in &[128usize, 512, 1024, 4096] {
         group.bench_function(BenchmarkId::new("materialize", chunk_size), |b| {
@@ -365,9 +368,7 @@ fn seed_build_target(size: usize) -> (DataChunk, Vec<Vec<Value>>) {
 }
 
 fn bench_hash_join_build(c: &mut Criterion) {
-    let mut group = c.benchmark_group("hash_join_build");
-    group.measurement_time(Duration::from_secs(3));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "hash_join_build", 30);
 
     for size in &ROW_SIZES {
         group.bench_function(BenchmarkId::new("rows_double_clone", size), |b| {
@@ -438,9 +439,7 @@ fn group_by_accumulator(
 }
 
 fn bench_group_by(c: &mut Criterion) {
-    let mut group = c.benchmark_group("group_by");
-    group.measurement_time(Duration::from_secs(3));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "group_by", 30);
 
     for (key_name, key_cols) in [
         ("1_key", vec![2usize]),
@@ -520,9 +519,7 @@ fn scan_group_columns(chunk: &mut DataChunk, key_col: usize, value_col: usize) -
 }
 
 fn bench_scan_group(c: &mut Criterion) {
-    let mut group = c.benchmark_group("scan_group");
-    group.measurement_time(Duration::from_secs(3));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "scan_group", 30);
 
     for size in &ROW_SIZES {
         group.bench_function(BenchmarkId::new("transpose_rows", size), |b| {
@@ -552,9 +549,7 @@ fn bench_scan_group(c: &mut Criterion) {
 /// the per-row Value path; this group quantifies the throughput of the batch
 /// paths (`numeric_i64_view` / `numeric_f64_view` promotion in `typed.rs`).
 fn bench_numeric_promotion(c: &mut Criterion) {
-    let mut group = c.benchmark_group("numeric_promotion");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "numeric_promotion", 30);
 
     // BigInt column + Int(32) literal: promoted to i64.
     let mixed_add = Expression::Binary {
@@ -656,9 +651,7 @@ fn bench_numeric_promotion(c: &mut Criterion) {
 }
 
 fn bench_row_vs_column_filter(c: &mut Criterion) {
-    let mut group = c.benchmark_group("row_vs_column_filter");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "row_vs_column_filter", 30);
 
     for n in [64usize, 1024, 16384, 262144] {
         let rows: Vec<Value> = (0..n).map(|i| Value::BigInt((i % 1000) as i64)).collect();
@@ -693,9 +686,7 @@ fn bench_row_vs_column_filter(c: &mut Criterion) {
 }
 
 fn bench_wide_single_column_filter(c: &mut Criterion) {
-    let mut group = c.benchmark_group("wide_single_column_filter");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "wide_single_column_filter", 30);
 
     for n in [1024usize, 16384, 262144] {
         group.bench_function(BenchmarkId::new("full_row_scan", n), |b| {
@@ -737,9 +728,7 @@ fn bench_wide_single_column_filter(c: &mut Criterion) {
 /// and evaluates a single-column predicate through `evaluate_expression`,
 /// comparing the typed batch path against the row-major path.
 fn bench_typed_data_chunk_filter(c: &mut Criterion) {
-    let mut group = c.benchmark_group("typed_data_chunk_filter");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "typed_data_chunk_filter", 30);
 
     let predicate = Expression::Binary {
         left: Box::new(Expression::Variable("k0".into())),
@@ -777,9 +766,7 @@ fn bench_typed_data_chunk_filter(c: &mut Criterion) {
 /// End-to-end Filter→Project chain: materialized (`take_indices`) vs.
 /// selection-vector propagation (1% selectivity).
 fn bench_selection_chain(c: &mut Criterion) {
-    let mut group = c.benchmark_group("selection_propagation_chain");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "selection_propagation_chain", 30);
 
     let n = 16384usize;
     let predicate = Expression::Binary {
@@ -857,9 +844,7 @@ fn bench_selection_chain(c: &mut Criterion) {
 }
 
 fn bench_null_bitmap(c: &mut Criterion) {
-    let mut group = c.benchmark_group("null_bitmap");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "null_bitmap", 30);
 
     let n = 262144usize;
     for null_rate in [0.0f64, 0.01, 0.3, 0.8] {
@@ -955,9 +940,7 @@ fn filter_unrolled4(values: &[i64]) -> usize {
 }
 
 fn bench_autovectorization(c: &mut Criterion) {
-    let mut group = c.benchmark_group("autovectorization");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "autovectorization", 30);
 
     let n = 262144usize;
     let cols: Vec<i64> = (0..n).map(|i| (i % 1000) as i64).collect();
@@ -969,9 +952,7 @@ fn bench_autovectorization(c: &mut Criterion) {
 }
 
 fn bench_selectivity_propagation(c: &mut Criterion) {
-    let mut group = c.benchmark_group("selectivity_propagation");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "selectivity_propagation", 30);
 
     let n = 16384usize;
     for selectivity in [0.01f64, 0.1, 0.5] {
@@ -1015,9 +996,7 @@ fn bench_selectivity_propagation(c: &mut Criterion) {
 fn bench_nullable_typed_column_filter(c: &mut Criterion) {
     use linkrs_core::value::NullType;
 
-    let mut group = c.benchmark_group("nullable_typed_column_filter");
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "nullable_typed_column_filter", 30);
 
     let n = 262144usize;
     let predicate = Expression::Binary {

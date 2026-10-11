@@ -1,5 +1,4 @@
 use super::build_side::HashJoinBuildSide;
-use super::*;
 use crate::executor::streaming::chunk::DataChunk;
 use crate::executor::streaming::slot::SlotLayout;
 use linkrs_core::Value;

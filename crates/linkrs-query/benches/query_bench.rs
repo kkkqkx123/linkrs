@@ -695,6 +695,9 @@ fn bench_b6_edge_density(c: &mut Criterion) {
 
 /// B7: mixed read/write (DML) scenario: insert -> read -> delete, cycling
 /// over a rotating id range to avoid key collisions across iterations.
+///
+/// The primary key column mirrors the vertex id, so the inserted name
+/// carries the vertex id in string form.
 fn bench_b7_mixed_rw(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "B7_mixed_rw", SAMPLE_SIZE);
     let (mut pipeline, space) = setup_query_pipeline(setup_query_graph());
@@ -705,13 +708,13 @@ fn bench_b7_mixed_rw(c: &mut Criterion) {
             let vid = 100_000 + (counter % 1_000);
             counter += 1;
             let insert = format!(
-                "INSERT VERTEX Node(name, value) VALUES {}:('tmp', 0.5)",
-                vid
+                "INSERT VERTEX Node(name, value) VALUES {}:('{}', 0.5)",
+                vid, vid
             );
             run_query_and_accumulate(&mut pipeline, &insert, &space, &accum.borrow());
-            let read = "MATCH (n:Node) WHERE n.name == 'tmp' RETURN count(n)";
-            run_query_and_accumulate(&mut pipeline, read, &space, &accum.borrow());
-            let delete = format!("DELETE VERTEX {}", vid);
+            let read = format!("MATCH (n:Node) WHERE n.name == '{vid}' RETURN count(n)");
+            run_query_and_accumulate(&mut pipeline, &read, &space, &accum.borrow());
+            let delete = format!("DELETE VERTEX Node FROM {}", vid);
             run_query_and_accumulate(&mut pipeline, &delete, &space, &accum.borrow());
         })
     });

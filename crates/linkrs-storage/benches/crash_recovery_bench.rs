@@ -11,11 +11,15 @@ use linkrs_core::{DataType, Edge, Value, Vertex};
 use linkrs_storage::{
     GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
 };
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[path = "results_report.rs"]
 mod report;
 use report::write_results_report;
+
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
 
 const VERTEX_COUNT: usize = 2000;
 const EDGES_PER_VERTEX: usize = 2;
@@ -151,10 +155,7 @@ fn bench_restart(c: &mut Criterion) {
         assert!(opened.get_space("recovery").expect("space").is_some());
         drop(opened);
 
-        let mut group = c.benchmark_group("restart");
-        group.measurement_time(Duration::from_secs(3));
-        group.sample_size(10);
-        group.warm_up_time(Duration::from_millis(300));
+        let mut group = create_benchmark_group(c, "restart", 10);
         let checkpoint = *checkpoint;
         // Fresh store per iteration: a replayed-open mutates the directory
         // (replay products / new checkpoint), so repeated opens of one dir

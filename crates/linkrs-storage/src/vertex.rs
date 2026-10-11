@@ -35,18 +35,13 @@ pub(crate) mod latch_order {
     /// for the duration of the hold.
     pub(crate) struct Guard<G> {
         inner: G,
-        #[cfg(debug_assertions)]
         rank: u8,
     }
 
     impl<G> Guard<G> {
         pub(crate) fn claim(inner: G, rank: u8, site: &'static str) -> Self {
             acquire(rank, site);
-            Self {
-                inner,
-                #[cfg(debug_assertions)]
-                rank,
-            }
+            Self { inner, rank }
         }
     }
 
@@ -69,7 +64,6 @@ pub(crate) mod latch_order {
     impl<G> Drop for Guard<G> {
         #[inline]
         fn drop(&mut self) {
-            #[cfg(debug_assertions)]
             release(self.rank);
         }
     }

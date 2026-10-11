@@ -29,6 +29,10 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
+
 const VERTEX_COUNT: usize = 500;
 const EDGES_PER_VERTEX: usize = 4;
 
@@ -60,11 +64,7 @@ fn short_group<'a>(
     c: &'a mut Criterion,
     name: &str,
 ) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
-    let mut group = c.benchmark_group(name);
-    group.measurement_time(Duration::from_secs(2));
-    group.sample_size(20);
-    group.warm_up_time(Duration::from_millis(500));
-    group
+    create_benchmark_group(c, name, 20)
 }
 
 fn setup_graph() -> GraphStorage {

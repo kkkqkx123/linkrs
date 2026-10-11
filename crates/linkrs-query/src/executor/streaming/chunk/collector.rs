@@ -446,6 +446,7 @@ impl LocalChunkCollector {
 
     fn write_one_row(&mut self, row: Vec<Value>) -> Result<(), QueryError> {
         self.rotate_active_writer_if_full()?;
+        self.ensure_active_writer()?;
         let manager = self.spill_manager.clone().ok_or_else(|| {
             QueryError::execution("spill run: spill manager not available".to_string())
         })?;
@@ -612,6 +613,21 @@ mod tests {
         for (i, row) in flat.iter().enumerate() {
             assert_eq!(row, &vec![Value::Int(i as i32)]);
         }
+    }
+
+    #[test]
+    fn spill_run_rotation_keeps_writer_alive() {
+        let mut collector = LocalChunkCollector::new(vec!["a".to_string()]);
+        collector.attach_spill_manager(spill_manager(4204));
+        let total = (COLLECTOR_RUN_ROWS_MAX + 10) as usize;
+        let rows: Vec<Vec<Value>> = (0..total).map(|i| vec![Value::Int(i as i32)]).collect();
+        collector.write_rows_spilled(rows).unwrap();
+        collector.finish_spill().unwrap();
+        assert!(collector.spilled_run_count() >= 2);
+        let (flat, _) = collector.into_rows().unwrap();
+        assert_eq!(flat.len(), total);
+        assert_eq!(flat[0], vec![Value::Int(0)]);
+        assert_eq!(flat[total - 1], vec![Value::Int((total - 1) as i32)]);
     }
 
     #[test]

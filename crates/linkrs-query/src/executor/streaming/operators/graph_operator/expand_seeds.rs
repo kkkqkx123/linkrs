@@ -210,6 +210,7 @@ mod tests {
         SlotLayout::from_names(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
 
+    #[test]
     fn materialize_rowless_rebuilds_visible_rows_in_lockstep() {
         let layout = Arc::new(layout_of(&["a", "b"]));
         let mut chunk = DataChunk::new_with_layout(Vec::new(), Arc::clone(&layout));

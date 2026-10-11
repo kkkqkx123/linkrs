@@ -16,10 +16,13 @@
 //! Run with: cargo bench -p linkrs-query --bench olap_e2e_bench
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use parking_lot::RwLock;
+
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
 
 use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use linkrs_core::vertex_edge_path::Tag;
@@ -236,9 +239,7 @@ fn dataset_summary(storage: &SharedStorage) -> String {
 }
 
 fn bench_q1_two_hop_unanchored(c: &mut Criterion) {
-    let mut group = c.benchmark_group("olap_q1_two_hop_unanchored");
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(20);
+    let mut group = create_benchmark_group(c, "olap_q1_two_hop_unanchored", 20);
     let (mut pipeline, space, storage) = pipeline();
     println!("{}", dataset_summary(&storage));
     let query = "MATCH (a:Person)-[:Knows]->(b:Person)-[:Knows]->(c:Person) RETURN count(c)";
@@ -253,9 +254,7 @@ fn bench_q1_two_hop_unanchored(c: &mut Criterion) {
 }
 
 fn bench_q2_two_hop_anchored(c: &mut Criterion) {
-    let mut group = c.benchmark_group("olap_q2_two_hop_anchored");
-    group.measurement_time(Duration::from_secs(5));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "olap_q2_two_hop_anchored", 30);
     let (mut pipeline, space, _) = pipeline();
     // Anchor on the newest vertex: it has M_PER_VERTEX out-edges, while early
     // BA vertices only have in-edges.
@@ -271,9 +270,7 @@ fn bench_q2_two_hop_anchored(c: &mut Criterion) {
 }
 
 fn bench_q3_group_aggregate_topn(c: &mut Criterion) {
-    let mut group = c.benchmark_group("olap_q3_group_aggregate_topn");
-    group.measurement_time(Duration::from_secs(5));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "olap_q3_group_aggregate_topn", 30);
     let (mut pipeline, space, _) = pipeline();
     let query = "MATCH (a:Person)-[:Knows]->(b:Person) \
                  RETURN b.bucket AS grp, count(*) AS cnt \
@@ -285,9 +282,7 @@ fn bench_q3_group_aggregate_topn(c: &mut Criterion) {
 }
 
 fn bench_q4_filtered_edge_scan(c: &mut Criterion) {
-    let mut group = c.benchmark_group("olap_q4_filtered_edge_scan");
-    group.measurement_time(Duration::from_secs(5));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "olap_q4_filtered_edge_scan", 30);
     let (mut pipeline, space, _) = pipeline();
     let query = "MATCH ()-[r:Knows]->() WHERE r.weight > 0.5 RETURN count(r)";
     group.bench_function(BenchmarkId::from_parameter(vertex_count()), |b| {
@@ -297,9 +292,7 @@ fn bench_q4_filtered_edge_scan(c: &mut Criterion) {
 }
 
 fn bench_q5_filtered_vertex_scan(c: &mut Criterion) {
-    let mut group = c.benchmark_group("olap_q5_filtered_vertex_scan");
-    group.measurement_time(Duration::from_secs(5));
-    group.sample_size(30);
+    let mut group = create_benchmark_group(c, "olap_q5_filtered_vertex_scan", 30);
     let (mut pipeline, space, _) = pipeline();
     let half = (vertex_count() / 2) as i64;
     let query = format!("MATCH (n:Person) WHERE n.value > {half} RETURN count(n)");

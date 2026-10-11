@@ -28,6 +28,36 @@ fn setup_vertices(storage: &mut GraphStorage, space: &str, count: usize) {
     }
 }
 
+fn setup_vertices_name_only(storage: &mut GraphStorage, space: &str, count: usize) {
+    for i in 0..count {
+        let vertex = Vertex::new(
+            VertexId::try_from_string(format!("v{}", i)).expect("valid vertex id"),
+            Tag::new(
+                "Node".to_string(),
+                vec![("name".into(), Value::string(format!("v{i}")))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        storage.insert_vertex(space, vertex).expect("insert vertex");
+    }
+}
+
+fn setup_vertices_value_only(storage: &mut GraphStorage, space: &str, count: usize) {
+    for i in 0..count {
+        let vertex = Vertex::new(
+            VertexId::try_from_string(format!("{i}")).expect("valid vertex id"),
+            Tag::new(
+                "Node".to_string(),
+                vec![("value".into(), Value::Int(i as i32))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        storage.insert_vertex(space, vertex).expect("insert vertex");
+    }
+}
+
 fn bench_data_loading_workflow(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "e2e_data_loading", SAMPLE_SIZE);
 
@@ -134,7 +164,7 @@ fn bench_search_workflow(c: &mut Criterion) {
                 .with_properties(vec![PropertyDef::new("name".into(), DataType::String)]),
         )
         .expect("create tag");
-    setup_vertices(&mut storage, space, 100);
+    setup_vertices_name_only(&mut storage, space, 100);
 
     group.bench_function("fulltext_search", |b| {
         b.iter(|| {
@@ -180,7 +210,7 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
 
             for i in 0..100 {
                 let vertex = Vertex::new(
-                    VertexId::try_from_string(format!("u{}", i)).expect("valid vertex id"),
+                    VertexId::try_from_string(format!("{i}")).expect("valid vertex id"),
                     Tag::new(
                         "Node".to_string(),
                         [("value".into(), Value::Int(i))].into_iter().collect(),
@@ -208,19 +238,19 @@ fn bench_concurrent_mixed_workload(c: &mut Criterion) {
                 .with_properties(vec![PropertyDef::new("value".into(), DataType::Int)]),
         )
         .expect("create tag");
-    setup_vertices(&mut storage, space, 100);
+    setup_vertices_value_only(&mut storage, space, 100);
 
     group.bench_function("concurrent_read", |b| {
         b.iter(|| {
             let _ = storage.get_vertex(
                 space,
                 "Node",
-                &VertexId::try_from_string("v0").expect("valid vertex id"),
+                &VertexId::try_from_string("0").expect("valid vertex id"),
             );
             let _ = storage.get_vertex(
                 space,
                 "Node",
-                &VertexId::try_from_string("v50").expect("valid vertex id"),
+                &VertexId::try_from_string("50").expect("valid vertex id"),
             );
         });
     });

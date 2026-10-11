@@ -22,9 +22,36 @@ use std::time::Instant;
 const SPACE: &str = "tv";
 const TAG: &str = "Node";
 const EDGE: &str = "Link";
-const VERTEX_COUNT: u64 = 100_000;
-const ITERATIONS: usize = 7;
-const SLOW_ITERATIONS: usize = 2;
+const FULL_VERTEX_COUNT: u64 = 100_000;
+const FULL_ITERATIONS: usize = 7;
+const FULL_SLOW_ITERATIONS: usize = 2;
+
+#[path = "bench_group.rs"]
+mod bench_group;
+
+fn vertex_count() -> u64 {
+    if bench_group::quick_mode() {
+        10_000
+    } else {
+        FULL_VERTEX_COUNT
+    }
+}
+
+fn iterations() -> usize {
+    if bench_group::quick_mode() {
+        3
+    } else {
+        FULL_ITERATIONS
+    }
+}
+
+fn slow_iterations() -> usize {
+    if bench_group::quick_mode() {
+        1
+    } else {
+        FULL_SLOW_ITERATIONS
+    }
+}
 
 const Q1: &str = "MATCH (a:Node)-[:Link]->(b:Node) WHERE a.value < 100 RETURN count(b)";
 const Q2: &str = "MATCH (a:Node)-[:Link]->(b:Node)-[:Link]->(c:Node) RETURN count(c)";
@@ -52,8 +79,8 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
         .expect("create edge type");
 
     let mut start = 0usize;
-    while start < VERTEX_COUNT as usize {
-        let end = (start + 20_000).min(VERTEX_COUNT as usize);
+    while start < vertex_count() as usize {
+        let end = (start + 20_000).min(vertex_count() as usize);
         let vertices: Vec<Vertex> = (start..end)
             .map(|i| {
                 Vertex::new(
@@ -76,12 +103,12 @@ fn setup_data() -> Arc<RwLock<GraphStorage>> {
         start = end;
     }
 
-    let mut edges = Vec::with_capacity((VERTEX_COUNT * 3) as usize);
-    for src in 0..VERTEX_COUNT as i64 {
+    let mut edges = Vec::with_capacity((vertex_count() * 3) as usize);
+    for src in 0..vertex_count() as i64 {
         for k in 1..=3i64 {
             edges.push(Edge {
                 src: VertexId::try_from_int64(src).expect("valid vertex id"),
-                dst: VertexId::try_from_int64((src + k) % VERTEX_COUNT as i64)
+                dst: VertexId::try_from_int64((src + k) % vertex_count() as i64)
                     .expect("valid vertex id"),
                 edge_type: EDGE.to_string(),
                 ranking: 0,
@@ -105,9 +132,9 @@ fn build_pipeline(
     if workers > 1 {
         engine.set_partitioning_config(PartitioningConfig {
             enabled: true,
-            min_rows_per_partition: (VERTEX_COUNT as usize / workers).max(1) as u64,
+            min_rows_per_partition: (vertex_count() as usize / workers).max(1) as u64,
             max_partitions: workers,
-            vertex_id_range: Some(0i64..VERTEX_COUNT as i64),
+            vertex_id_range: Some(0i64..vertex_count() as i64),
             max_workers: workers,
             max_buffered_chunks: 10,
         });
@@ -156,7 +183,11 @@ fn median_us(samples: &[u64]) -> u64 {
 
 fn main() {
     println!("== A2/E4 traversal performance validation ==");
-    println!("vertices={VERTEX_COUNT}, edges/vertex=3, iterations={ITERATIONS}");
+    println!(
+        "vertices={}, edges/vertex=3, iterations={}",
+        vertex_count(),
+        iterations()
+    );
     let storage = setup_data();
     println!("data ready");
     let space = space_info(&storage);
@@ -171,9 +202,9 @@ fn main() {
                 explain(&mut pipeline, query, &space);
             }
             let iterations = if name == "unanchored 2-hop" {
-                SLOW_ITERATIONS
+                slow_iterations()
             } else {
-                ITERATIONS
+                iterations()
             };
             let mut samples = Vec::with_capacity(iterations);
             for _ in 0..iterations {

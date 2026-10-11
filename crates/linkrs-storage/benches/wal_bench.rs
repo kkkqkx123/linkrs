@@ -18,11 +18,14 @@ use linkrs_core::{DataType, Edge};
 use linkrs_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
 use std::io::Write;
 use std::path::Path;
-use std::time::Duration;
 
 #[path = "results_report.rs"]
 mod report;
 use report::write_results_report;
+
+#[path = "bench_group.rs"]
+mod bench_group;
+use bench_group::create_benchmark_group;
 
 const PAYLOAD_LEN: usize = 128;
 const EDGE_COUNT: usize = 2000;
@@ -46,10 +49,7 @@ fn make_edges() -> Vec<Edge> {
 fn bench_fsync_latency(c: &mut Criterion) {
     let tmp = tempfile::TempDir::new().expect("tmpdir");
 
-    let mut group = c.benchmark_group("wal_fsync");
-    group.measurement_time(Duration::from_secs(3));
-    group.sample_size(30);
-    group.warm_up_time(Duration::from_millis(500));
+    let mut group = create_benchmark_group(c, "wal_fsync", 30);
 
     // Synchronous baseline: one sync_all per append, no group commit.
     group.bench_function("append_plus_sync_all_per_op", |b| {
@@ -152,10 +152,7 @@ fn bench_sync_policy_ingest(c: &mut Criterion) {
             ));
         }
 
-        let mut group = c.benchmark_group("wal_sync_policy_ingest");
-        group.measurement_time(Duration::from_secs(3));
-        group.sample_size(10);
-        group.warm_up_time(Duration::from_millis(300));
+        let mut group = create_benchmark_group(c, "wal_sync_policy_ingest", 10);
         let policy = *policy;
         group.bench_function(*label, |b| {
             b.iter_batched(
@@ -234,10 +231,7 @@ fn bench_replay_read(c: &mut Criterion) {
         file.sync_all().expect("sync");
     }
 
-    let mut group = c.benchmark_group("wal_replay_read");
-    group.measurement_time(Duration::from_secs(3));
-    group.sample_size(20);
-    group.warm_up_time(Duration::from_millis(300));
+    let mut group = create_benchmark_group(c, "wal_replay_read", 20);
     group.bench_function("sequential_scan_5000_entries", |b| {
         b.iter(|| {
             let data = std::fs::read(&log).expect("read wal");
