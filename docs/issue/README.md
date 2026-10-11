@@ -1,80 +1,63 @@
-# Linkrs Bench 测试问题分析（2026-10-09）
+# Linkrs 性能测试分析（2026-10-11 实测）
 
-> 执行方式：gh-proxy 拉取仓库（主仓库 + 3 个子模块 + llm-suite 嵌套子模块），rsproxy 全局 cargo 代理，
-> 依次运行各包含 bench 的包（simvec、linkrs-core、linkrs-fulltext、linkrs-storage、linkrs-transaction、
-> linkrs-query、tantivy 子工作区）。原始日志见 `bench_results/`（phase2.log / phase3.log / simvec.log）。
+> 本文档是基于 **2026-10-11** 在沙箱中实跑的 `bench_results/*.log` 撰写的新分析。
+> 它与仓库内既有的 `docs/issue/`（落款 2026-10-09、引用 `phase2.log`/`phase3.log` 等早期日志）**不是同一份**；
+> 既有 `docs/issue/` 是更早一轮 bench 的产物，本分析不重复其内容，仅针对本次 2026-10-11 数据给出独立结论。
+> 配套 patch：`linkrs_analysis_20261011.patch`（仅含 `docs/bench-report-2026-10-11/` 目录，可直接 `git apply` 到已应用过 `linkrs_testdata.patch` 的仓库，路径不冲突）。
 
-## 环境说明（影响并发类结论解读）
+## 测试环境（影响并发类结论）
 
 | 项 | 值 |
 |---|---|
-| CPU | AMD EPYC 9K65（宿主 192 核，**cgroup 配额 4 核**，32 核可见） |
-| 内存 | 123 GB |
-| 工具链 | rustc/cargo 1.93.0（stable）；bench profile（优化构建） |
-| 代理 | rsproxy-sparse（依赖拉取正常）；gh-proxy（仓库/子模块） |
+| CPU | AMD EPYC 9K65（192 核宿主，**cgroup CPU 配额 4 核**，日志自报 "4 visible cores"） |
+| 工具链 | rustc/cargo 1.93.0（stable），`bench` profile（优化构建） |
+| 代理 | rsproxy-sparse（crates.io）+ ghproxy（仓库/子模块） |
+| 采样 | 多数 bench 用 `-- --sample-size 10` 降采样（criteria 默认 100 采样在大规模单项上需数十分钟到数小时） |
 
-**重要**：`num_cpus/available_parallelism` 在本环境返回 4，而 `nproc` 返回 32。
-所有多线程扩展性结论（concurrent_search、commit_gate）都受 4 核配额混杂，需在开发板/真机复核。
+> **并发类结论的强 caveat**：本环境 cgroup 仅 4 核配额，但 `nproc` 可见 32 核。
+> 凡涉及多线程扩展性的结论（commit gate、edge scan、query parallel、concurrent_search）均受 4 核配额混杂，
+> 绝对数值请在 ≥8 物理核的真机/开发板复核；但**趋势方向**（如 gate 等待占比单调上升、并行效率崩溃）仍有参考价值。
 
-## 执行矩阵
+## 执行矩阵（本次 2026-10-11）
 
-| 包 | bench 数 | 成功 | 失败/挂死 | 说明 |
-|---|---|---|---|---|
-| simvec | 8 | 8 | 0 | ivf_bench 以 `--sample-size 10` 运行（默认 100 采样单项需 2.3h） |
-| linkrs-core | 1 | 1 | 0 | |
-| linkrs-fulltext | 1 | 0 | 1 | 需 `--features fulltext`；开启后 warmup 阶段 panic |
-| linkrs-storage | 13 | 7 | 6 | ingest 挂死（已终止）；5 个 panic（详见各 issue） |
-| linkrs-transaction | 2 | 2 | 0 | |
-| linkrs-query | 6 | 4 | 2 | parallel_scale（spill 目录）、query_bench（PK 镜像） |
-| tantivy 根包 | 14 | 14 | 0 | 逐 `--bench` 运行（workspace 级被 lib test 编译失败与 jitexpr 阻断）；agg_bench 约 29 分钟最重 |
-| tantivy 子包 | bitpacker/columnar/sstable/stacker | 4 | 0 | columnar 含 9 个 bench 目标 |
-| tantivy-common | 1 | 0 | — | exit=0 但 `0 measured`——bench 目标被 libtest 自动发现，binggan 代码永不执行（静默空跑） |
-| jitexpr | — | — | — | 依赖 cranelift 0.134.4 需 rustc 1.94，1.93 拒绝解析（无法编译） |
+| 包 | bench 数 | 结果 | 关键现象 |
+|---|---|---|---|
+| simvec | 8 | 全 OK | avx512 无收益、upsert_wal 批量反慢、filter 选择性反慢 |
+| linkrs-core | 1 | OK | serde 基线（serialize_vertex 280ns） |
+| linkrs-fulltext | 1 | OK* | 需本地补丁才能编译；index_build 100/500 均 ~31ms（零缩放可疑） |
+| linkrs-storage | 13 | **EXIT=124 超时挂死** | commit gate 1→16 线程吞吐跌 65×；边扫描并行加速比≈1.0；ingest WAL 挂死复现 |
+| linkrs-transaction | 2 | OK | begin_read 2.12µs，write_set/build 线性偏超线性 |
+| linkrs-query | 6 | **EXIT=101 panic** | parallel_scale 在 `collector.rs:458` panic；并行效率崩溃 |
 
-## 缺陷索引（按严重级）
+`*` linkrs-fulltext 因上游 `tantivy` 子模块未 pin commit、fork 默认分支移除了 `Bm25Params`/`IndexSettings.bm25_params`，
+沙箱做了 import 替换+去字段的本地临时补丁才编译通过（补丁未纳入任何 patch，根因修复应为 pin 子模块 commit，见 `fulltext-numbers-and-infra.md`）。
 
-### P0 — 挂死 / 数据面阻塞
+## 发现索引（按严重级）
 
-- [ingest-1m-wal-hang.md](ingest-1m-wal-hang.md)：**单批 1M 顶点 + 持久化存储挂死**。
-  WAL 文件 70,090,953 字节停止增长，全部线程 futex 等待、零 CPU ≥35 分钟（已抓 gdb 栈佐证）。
+### P0 — 数据面挂死
+- [storage-ingest-wal-hang.md](storage-ingest-wal-hang.md)：`linkrs-storage` 整包 bench `EXIT=124`（超时挂死），与更早一轮记录的 1M 顶点 WAL 持久化挂死一致，本次复现但未捕获 ingest 指标（进程在超时前被杀）。
 
-### P1 — bench/库契约破裂（bench 无法运行 → 覆盖缺口）
+### P1 — 正确性 / bench 基础设施破裂
+- [query-parallel-collector-panic.md](query-parallel-collector-panic.md)：`parallel_scale_bench` 在 `collector.rs:458` panic `writer must exist`，整包 `EXIT=101`，并行扩展类覆盖缺口。
+- [fulltext-numbers-and-infra.md](fulltext-numbers-and-infra.md)：fulltext 编译依赖 tantivy 子模块 API，未 pin commit 导致默认分支漂移；index_build 100/500 零缩放（疑似固定开销主导）。
 
-- [bench-pk-mirror-fails.md](bench-pk-mirror-fails.md)：**5 个 bench** 因“主键必须镜像顶点 id”校验 panic
-  （storage_bench:706、storage_workflow_bench:27、query_bench:70、edge_scan_speedup_bench:88、
-  storage_read_baseline:93 列名不匹配）。BENCHMARK_REPORT 中 olap 基准修过同类问题，但其余 bench 未跟进。
-- [rollback-bench-invalid-timestamp.md](rollback-bench-invalid-timestamp.md)：~524 次迭代后
-  `commit_ordered` 报 `InvalidTimestamp(524)`，指向 MVCC 写槽位 settle 契约与 bench 用法的冲突。
-- [spill-manager-dir-lifecycle.md](spill-manager-dir-lifecycle.md)：SpillManager Drop 无条件
-  `remove_dir_all`，同 query_id 生命周期交错互删 spill 目录 → parallel_scale_bench warmup 即 ENOENT。
-- [fulltext-bench-defects.md](fulltext-bench-defects.md)：`create_index` 在迭代内无清理（warmup 二轮
-  panic `IndexAlreadyExists`）；且默认 features 下 bench 是惰性占位（静默零覆盖）。
-- [tantivy-bench-infra.md](tantivy-bench-infra.md)：lib test 缺 `Bm25Params` 导入编译失败；
-  jitexpr 需要 rustc 1.94；tantivy-common 的 binggan bench 被 libtest harness 空跑。
+### P2 — 性能问题（本次实测数据支撑）
+- [storage-write-path-gate-collapse.md](storage-write-path-gate-collapse.md)：写路径 commit gate 1→16 线程吞吐 71738→1101 stmts/s（**65× 崩溃**），gate 等待占比 0.1%→57.4%，bench 自带 verdict 与数据自相矛盾。
+- [storage-edge-scan-no-parallel-speedup.md](storage-edge-scan-no-parallel-speedup.md)：边扫描并行加速比 E(n) 在 1→8 worker 间稳定在 1.00–1.02，零加速。
+- [query-parallel-efficiency.md](query-parallel-efficiency.md)：查询并行效率随 worker 数崩溃（Q1 8 线程 E=0.08、Q3 E=0.04、E1 union 8 线程墙时 836ms vs 单线程 103ms）。
+- [simvec-avx512-no-gain.md](simvec-avx512-no-gain.md)：avx512 距离核在 384/768 维**慢于** avx2，仅 1536 维勉强打平——avx512 路径基本无收益。
+- [simvec-upsert-wal-batch-regression.md](simvec-upsert-wal-batch-regression.md)：`upsert_wal/batch_100` 单元素比 `single` 慢 **~9.8×**，批量反而更慢。
+- [simvec-filter-selectivity-inversion.md](simvec-filter-selectivity-inversion.md)：`filter_selectivity` 1%/10%/50% 选择性比 100% 慢 **~11×**，低选择性路径异常慢。
+- [simvec-hnsw-alloc-churn.md](simvec-hnsw-alloc-churn.md)：HNSW 构建 10k 点分配 ~168MB；`workers_4` 比顺序构建快 3.0×——并行构建收益明显，但热路径分配抖动大。
 
-### P2 — 性能问题（实测数据支撑）
-
-- [commit-gate-write-scaling-collapse.md](commit-gate-write-scaling-collapse.md)：写路径 commit gate
-  1→16 线程 74.7k→995 stmts/s（gate wait share 72.7%）；且 bench 自带 verdict 文案与数据自相矛盾。
-- [avx512-manhattan-single-accumulator.md](avx512-manhattan-single-accumulator.md)：avx512 距离核
-  Manhattan 用单累加器（avx2 版是双累加器），实测 4.6 vs 18.2 Gelem/s（512d）。
-- [hnsw-alloc-churn.md](hnsw-alloc-churn.md)：10k 点 HNSW 构建分配 1.85GB/4.4M 次；
-  过滤搜索 miss 路径 645MB。热路径每次 search_layer 新建 HashSet/BinaryHeap。
-- [query-plan-estimation-and-scan.md](query-plan-estimation-and-scan.md)：基数估计严重偏差
-  （est 0.5 → 实际 100%；est 40k → 实际 300k）；顶点全扫描 ~1.7M 行/s，比边扫描慢两个数量级。
-
-### P3 — 观察项（待真机复核 / 工程效率）
-
-- [observational-notes.md](observational-notes.md)：concurrent_search 8 线程退化（cgroup 混杂待复核）、
-  WAL fsync 596x 差距与 ingest WAL 占比、OLAP q3 聚合 TopN 仍最慢、wide point-lookup miss 路径
-  8x 差距、criterion 大规模单项无 quick 模式（ivf 单项默认需 2.3h）。
+### 信息 / 基线（健康）
+- [baseline-benches-core-transaction.md](baseline-benches-core-transaction.md)：core serde 与 transaction 基线健康，给出可回归对比的基准值。
+- [bench-coverage-and-infra-gaps.md](bench-coverage-and-infra-gaps.md)：覆盖健康度与 bench 基础设施缺口汇总（含 criterion 无 quick 模式）。
 
 ## 结论摘要
 
-1. **覆盖健康度差**：34 个声明 bench 目标中 9 个在当前 HEAD 无法运行或空跑（5 个 panic、
-   1 个挂死、1 个 warmup panic、1 个静默空跑、jitexpr 不可编译），
-   且失败是"数据生成 vs 存储校验契约"的系统性脱节——建议引入统一的 bench 数据生成 helper
-   （PK 列镜像 vid）并让 `cargo bench --workspace` 全绿成为 CI 门禁。
-2. **最严重的是数据面挂死**（P0），1M 单批写入在 WAL 持久化路径可复现挂死，建议优先在开发板
-   用 `RUST_BACKTRACE=1` + debug 构建定位（疑点：WAL 段边界轮转 / 组提交协调）。
-3. 写扩展性（commit gate 16 线程吞吐跌 75 倍）与向量构建分配（1.85GB churn）是两个最大的性能改进抓手。
+1. **最严重的是数据面挂死（P0）**：`linkrs-storage` 整包在 `cargo bench` 下超时挂死（EXIT=124），与更早一轮 1M WAL 挂死一致。优先在开发板用 `RUST_BACKTRACE=1` + debug 构建定位 WAL 段边界轮转 / 组提交协调。
+2. **写扩展性崩溃（P2）是最大性能改进抓手**：commit gate 在 16 线程时吞吐跌 65×、gate 等待占 57%，且与 bench 自带 "review sharding" 文案自相矛盾——写路径的集中式 gate 是瓶颈，应评估细粒度分片锁或批提交。
+3. **查询并行不仅没加速反而更慢**：并行效率在 8 worker 时跌到 0.04–0.12，且并行扩展 bench 直接 panic，说明并行执行框架（collector/writer 生命周期、分区 fallback）有正确性+扩展性双重缺陷。
+4. **向量算子是"看起来 SIMD 实则没吃满"**：avx512 路径基本无收益甚至回退，批量 WAL upsert 与低选择性 filter 存在反常回归，是 simvec 热路径最该修的两处。
+5. **复现性隐患**：tantivy 子模块未 pin commit，导致 fulltext 编译随上游漂移——必须用 `[patch]`/rev 固定子模块，否则 bench 不可复现。
