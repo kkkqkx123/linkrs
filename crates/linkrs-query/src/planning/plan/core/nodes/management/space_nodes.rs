@@ -130,36 +130,6 @@ impl SwitchSpaceNode {
 }
 
 define_plan_node! {
-    pub struct AlterSpaceNode {
-        space_name: String,
-        options: Vec<SpaceAlterOption>,
-    }
-    manage_enum: SpaceManageNode::Alter as SpaceManage
-    input: ZeroInputNode
-}
-
-impl AlterSpaceNode {
-    pub fn new(id: i64, space_name: String, options: Vec<SpaceAlterOption>) -> Self {
-        Self {
-            id,
-            space_name,
-            options,
-            output_var: None,
-            col_names: Vec::new(),
-            column_types: vec![],
-        }
-    }
-
-    pub fn space_name(&self) -> &str {
-        &self.space_name
-    }
-
-    pub fn options(&self) -> &[SpaceAlterOption] {
-        &self.options
-    }
-}
-
-define_plan_node! {
     pub struct ClearSpaceNode {
         space_name: String,
     }
@@ -181,12 +151,6 @@ impl ClearSpaceNode {
     pub fn space_name(&self) -> &str {
         &self.space_name
     }
-}
-
-/// Space modification options
-#[derive(Debug, Clone)]
-pub enum SpaceAlterOption {
-    Comment(String),
 }
 
 define_plan_node! {
@@ -241,37 +205,7 @@ impl SpaceManageInfo {
     }
 }
 
-use crate::parser::ast::stmt::{CommentTarget, ExportOption};
-
-define_plan_node! {
-    pub struct CommentOnNode {
-        target: CommentTarget,
-        comment: String,
-    }
-    manage_enum: SpaceManageNode::CommentOn as SpaceManage
-    input: ZeroInputNode
-}
-
-impl CommentOnNode {
-    pub fn new(id: i64, target: CommentTarget, comment: String) -> Self {
-        Self {
-            id,
-            target,
-            comment,
-            output_var: None,
-            col_names: Vec::new(),
-            column_types: vec![],
-        }
-    }
-
-    pub fn target(&self) -> &CommentTarget {
-        &self.target
-    }
-
-    pub fn comment(&self) -> &str {
-        &self.comment
-    }
-}
+use crate::parser::ast::stmt::ExportOption;
 
 define_plan_node! {
     pub struct CheckpointNode {

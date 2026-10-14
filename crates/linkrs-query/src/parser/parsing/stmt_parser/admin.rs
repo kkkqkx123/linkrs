@@ -1,4 +1,4 @@
-//! Administrative / utility statements: MIGRATE, COMMENT ON, CHECKPOINT,
+//! Administrative / utility statements: MIGRATE, CHECKPOINT,
 //! LOAD FROM, and extension management.
 
 use crate::parser::ast::stmt::*;
@@ -68,43 +68,6 @@ pub(super) fn parse_migrate_statement(ctx: &mut ParseContext) -> Result<Stmt, Pa
             ctx.current_position(),
         ))
     }
-}
-
-/// Parse `COMMENT ON TAG|EDGE <name> IS '<string>'`.
-pub(super) fn parse_comment_on_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-    let start_span = ctx.current_span();
-    ctx.consume_keyword("COMMENT")?;
-    ctx.consume_keyword("ON")?;
-
-    let target = if ctx.check_keyword("TAG") {
-        ctx.consume_keyword("TAG")?;
-        let name = ctx.expect_identifier()?;
-        CommentTarget::Tag(name)
-    } else if ctx.check_keyword("EDGE") {
-        ctx.consume_keyword("EDGE")?;
-        let name = ctx.expect_identifier()?;
-        CommentTarget::Edge(name)
-    } else if ctx.check_keyword("TABLE") {
-        ctx.consume_keyword("TABLE")?;
-        let name = ctx.expect_identifier()?;
-        CommentTarget::Table(name)
-    } else {
-        return Err(ParseError::new(
-            ParseErrorKind::SyntaxError,
-            "COMMENT ON expects TAG, EDGE, or TABLE".to_string(),
-            ctx.current_position(),
-        ));
-    };
-
-    ctx.consume_keyword("IS")?;
-    let comment = ctx.expect_string_literal()?;
-
-    let span = ctx.span_since(start_span.start);
-    Ok(Stmt::CommentOn(CommentOnStmt {
-        span,
-        target,
-        comment,
-    }))
 }
 
 /// Parse `CHECKPOINT`.

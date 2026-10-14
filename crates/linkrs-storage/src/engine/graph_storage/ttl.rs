@@ -5,7 +5,10 @@ use linkrs_core::{StorageResult, Value};
 use super::context::GraphStorageContext;
 use super::GraphStorage;
 
-fn vertex_expired_raw(
+/// TTL check over a raw property slice — the shared primitive for read
+/// paths that hold `VertexRecord`/`EdgeRecord` slices instead of a
+/// materialized `Vertex`/`Edge`.
+pub(crate) fn record_expired_from_slice(
     ttl_duration: Option<i64>,
     ttl_col: Option<&str>,
     props: &[(std::sync::Arc<str>, Value)],
@@ -38,7 +41,7 @@ impl GraphStorage {
         };
         let mut expired = Vec::new();
         for record in records {
-            if vertex_expired_raw(
+            if record_expired_from_slice(
                 tag_info.ttl_duration,
                 tag_info.ttl_col.as_deref(),
                 &record.properties,
@@ -111,8 +114,8 @@ mod tests {
     fn raw_helper_matches_record_helper() {
         let props: Vec<(std::sync::Arc<str>, Value)> =
             vec![(std::sync::Arc::<str>::from("ts"), Value::BigInt(100))];
-        assert!(vertex_expired_raw(Some(10), Some("ts"), &props));
-        assert!(!vertex_expired_raw(None, None, &props));
-        assert!(!vertex_expired_raw(Some(10), Some("missing"), &props));
+        assert!(record_expired_from_slice(Some(10), Some("ts"), &props));
+        assert!(!record_expired_from_slice(None, None, &props));
+        assert!(!record_expired_from_slice(Some(10), Some("missing"), &props));
     }
 }

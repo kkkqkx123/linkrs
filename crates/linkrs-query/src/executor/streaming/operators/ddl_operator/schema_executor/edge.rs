@@ -25,19 +25,6 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
         return Ok(None);
     }
     *emitted = true;
-    let edge_type = match command {
-        EdgeManageCommand::Create { edge_name, .. }
-        | EdgeManageCommand::Alter { edge_name, .. }
-        | EdgeManageCommand::Rename {
-            old_name: edge_name,
-            ..
-        }
-        | EdgeManageCommand::UpdateEndpoints { edge_name, .. }
-        | EdgeManageCommand::Desc { edge_name }
-        | EdgeManageCommand::ShowCreate { edge_name } => Some(edge_name.clone()),
-        EdgeManageCommand::Drop { .. } => None,
-        EdgeManageCommand::Show => None,
-    };
     let result = match command {
         EdgeManageCommand::Create {
             edge_name,
@@ -159,9 +146,9 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
             }
             Ok(())
         }),
-        EdgeManageCommand::Desc { .. } => {
+        EdgeManageCommand::Desc { edge_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = edge_type.as_deref().unwrap_or("");
+            let name = edge_name.as_str();
             match reader
                 .get_edge_type(space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?
@@ -215,9 +202,9 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
                 }
             }
         }
-        EdgeManageCommand::ShowCreate { .. } => {
+        EdgeManageCommand::ShowCreate { edge_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = edge_type.as_deref().unwrap_or("");
+            let name = edge_name.as_str();
             match reader
                 .get_edge_type(space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?

@@ -882,6 +882,13 @@ pub(crate) fn get_edge_with_schema(
         },
         ts,
     ) {
+        if crate::engine::graph_storage::ttl::record_expired_from_slice(
+            edge_info.ttl_duration,
+            edge_info.ttl_col.as_deref(),
+            &record.properties,
+        ) {
+            return Ok(None);
+        }
         let data = serialize_properties(&record.properties);
         return Ok(Some((edge_info, data)));
     }

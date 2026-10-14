@@ -806,38 +806,6 @@ fn test_parse_minus_statement() {
 }
 
 #[test]
-fn test_parse_comment_on_tag() {
-    let mut ctx = create_parser_context("COMMENT ON TAG Person IS 'the person table'");
-    let result = StmtParser::parse_statement(&mut ctx);
-    assert!(
-        result.is_ok(),
-        "COMMENT ON TAG parse failure: {:?}",
-        result.err()
-    );
-    if let Ok(Stmt::CommentOn(stmt)) = result {
-        assert_eq!(stmt.comment, "the person table");
-    } else {
-        panic!("Expected CommentOn statement");
-    }
-}
-
-#[test]
-fn test_parse_comment_on_edge() {
-    let mut ctx = create_parser_context("COMMENT ON EDGE Knows IS 'friendship edge'");
-    let result = StmtParser::parse_statement(&mut ctx);
-    assert!(
-        result.is_ok(),
-        "COMMENT ON EDGE parse failure: {:?}",
-        result.err()
-    );
-    if let Ok(Stmt::CommentOn(stmt)) = result {
-        assert_eq!(stmt.comment, "friendship edge");
-    } else {
-        panic!("Expected CommentOn statement");
-    }
-}
-
-#[test]
 fn test_parse_checkpoint() {
     let mut ctx = create_parser_context("CHECKPOINT");
     let result = StmtParser::parse_statement(&mut ctx);

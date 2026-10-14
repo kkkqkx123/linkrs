@@ -24,21 +24,6 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
         return Ok(None);
     }
     *emitted = true;
-    let space_name = match command {
-        SpaceManageCommand::Create { space_name, .. }
-        | SpaceManageCommand::Drop { space_name, .. }
-        | SpaceManageCommand::Desc { space_name }
-        | SpaceManageCommand::ShowCreate { space_name }
-        | SpaceManageCommand::Switch { space_name }
-        | SpaceManageCommand::Alter { space_name }
-        | SpaceManageCommand::Clear { space_name }
-        | SpaceManageCommand::CommentOn { space_name, .. } => Some(space_name.clone()),
-        SpaceManageCommand::Show | SpaceManageCommand::Checkpoint => None,
-        SpaceManageCommand::ExportDatabase { .. }
-        | SpaceManageCommand::ImportDatabase { .. }
-        | SpaceManageCommand::AttachDatabase { .. }
-        | SpaceManageCommand::DetachDatabase { .. } => None,
-    };
     let result = match command {
         SpaceManageCommand::Create {
             space_name,
@@ -54,8 +39,11 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        SpaceManageCommand::Drop { if_exists, .. } => {
-            let name = space_name.as_deref().unwrap_or("").to_string();
+        SpaceManageCommand::Drop {
+            space_name,
+            if_exists,
+        } => {
+            let name = space_name.as_str();
             let Some(lock) = storage else {
                 return Ok(Some(super::super::make_manage_result(
                     "drop_space",
@@ -64,7 +52,7 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 )));
             };
             let mut writer = lock.write();
-            let dropped = StorageSchemaOps::drop_space(&mut *writer, &name)
+            let dropped = StorageSchemaOps::drop_space(&mut *writer, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             if !dropped && !*if_exists {
                 return Err(QueryError::execution(format!(
@@ -74,27 +62,18 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
             }
             Ok(Some(super::super::make_manage_result(
                 "drop_space",
-                Some(&name),
+                Some(name),
                 if dropped { "dropped" } else { "not_exists" },
             )))
         }
-        SpaceManageCommand::Alter { .. } => {
-            let comment = space_name.as_deref().unwrap_or("");
-            super::super::exec_ddl(storage, |s| {
-                StorageSchemaOps::alter_space_comment(s, 0, comment.to_string())
-                    .map_err(|e| QueryError::execution(e.to_string()))?;
-                Ok(())
-            })
-        }
-        SpaceManageCommand::Clear { .. } => super::super::exec_ddl(storage, |s| {
-            let name = space_name.as_deref().unwrap_or("");
-            StorageSchemaOps::clear_space(s, name)
+        SpaceManageCommand::Clear { space_name } => super::super::exec_ddl(storage, |s| {
+            StorageSchemaOps::clear_space(s, space_name.as_str())
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        SpaceManageCommand::Desc { .. } => {
+        SpaceManageCommand::Desc { space_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = space_name.as_deref().unwrap_or("");
+            let name = space_name.as_str();
             match reader
                 .get_space(name)
                 .map_err(|e| QueryError::execution(e.to_string()))?
@@ -153,9 +132,9 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 ))),
             }
         }
-        SpaceManageCommand::ShowCreate { .. } => {
+        SpaceManageCommand::ShowCreate { space_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = space_name.as_deref().unwrap_or("");
+            let name = space_name.as_str();
             match reader
                 .get_space(name)
                 .map_err(|e| QueryError::execution(e.to_string()))?
@@ -180,9 +159,9 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 ))),
             }
         }
-        SpaceManageCommand::Switch { .. } => {
+        SpaceManageCommand::Switch { space_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = space_name.as_deref().unwrap_or("");
+            let name = space_name.as_str();
             match reader
                 .get_space(name)
                 .map_err(|e| QueryError::execution(e.to_string()))?
@@ -255,14 +234,6 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        SpaceManageCommand::CommentOn {
-            space_name: _,
-            comment,
-        } => super::super::exec_ddl(storage, |s| {
-            StorageSchemaOps::alter_space_comment(s, 0, comment.clone())
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
         SpaceManageCommand::Checkpoint => super::super::exec_auth(storage, |s| {
             let result = s
                 .create_checkpoint()

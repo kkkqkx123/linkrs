@@ -88,8 +88,8 @@ pub use crate::planning::plan::core::nodes::management::index_nodes::{
     ShowTagIndexesNode,
 };
 pub use crate::planning::plan::core::nodes::management::space_nodes::{
-    AlterSpaceNode, ClearSpaceNode, CreateSpaceNode, DescSpaceNode, DropSpaceNode,
-    ShowCreateSpaceNode, ShowSpacesNode, SpaceAlterOption, SpaceManageInfo, SwitchSpaceNode,
+    ClearSpaceNode, CreateSpaceNode, DescSpaceNode, DropSpaceNode, ShowCreateSpaceNode,
+    ShowSpacesNode, SpaceManageInfo, SwitchSpaceNode,
 };
 pub use crate::planning::plan::core::nodes::management::stats_nodes::{
     ShowStatsNode as ShowStatsNodeType, ShowStatsType,

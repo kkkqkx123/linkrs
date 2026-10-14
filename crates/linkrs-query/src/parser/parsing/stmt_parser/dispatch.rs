@@ -14,15 +14,12 @@ use crate::parser::parsing::{
 };
 use crate::parser::TokenKind;
 
-/// Dispatch statements recognized by a leading keyword (MIGRATE, COMMENT,
-/// CHECKPOINT, LOAD, INSTALL, CALL, EXPORT, ...). Returns `None` when the
+/// Dispatch statements recognized by a leading keyword (MIGRATE, CHECKPOINT,
+/// LOAD, INSTALL, CALL, EXPORT, ...). Returns `None` when the
 /// current token does not start any keyword-dispatched statement.
 pub(super) fn parse_keyword_statement(ctx: &mut ParseContext) -> Option<Result<Stmt, ParseError>> {
     if ctx.check_keyword("MIGRATE") {
         return Some(admin::parse_migrate_statement(ctx));
-    }
-    if ctx.check_keyword("COMMENT") {
-        return Some(admin::parse_comment_on_statement(ctx));
     }
     if ctx.check_keyword("CHECKPOINT") {
         return Some(admin::parse_checkpoint_statement(ctx));

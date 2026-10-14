@@ -411,6 +411,13 @@ pub(crate) fn get_vertex_with_schema(
         RoutedVertexId::Text(id_str) => ctx.get_vertex(label_id, &id_str, ts),
     };
     if let Some(record) = record {
+        if crate::engine::graph_storage::ttl::record_expired_from_slice(
+            tag_info.ttl_duration,
+            tag_info.ttl_col.as_deref(),
+            &record.properties,
+        ) {
+            return Ok(None);
+        }
         let data = serialize_properties(&record.properties);
         return Ok(Some((tag_info, data)));
     }
@@ -433,6 +440,13 @@ pub(crate) fn scan_vertices_with_schema(
     let label_id = tag_info.tag_id;
     if let Some(iterator) = ctx.scan_vertices(label_id, ts) {
         for record in iterator {
+            if crate::engine::graph_storage::ttl::record_expired_from_slice(
+                tag_info.ttl_duration,
+                tag_info.ttl_col.as_deref(),
+                &record.properties,
+            ) {
+                continue;
+            }
             let data = serialize_properties(&record.properties);
             results.push((tag_info.clone(), data));
         }

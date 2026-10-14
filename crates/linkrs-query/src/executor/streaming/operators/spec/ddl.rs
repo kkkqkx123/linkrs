@@ -33,15 +33,8 @@ pub enum SpaceManageCommand {
     Switch {
         space_name: String,
     },
-    Alter {
-        space_name: String,
-    },
     Clear {
         space_name: String,
-    },
-    CommentOn {
-        space_name: String,
-        comment: String,
     },
     Checkpoint,
     ExportDatabase {
@@ -388,9 +381,7 @@ impl SpaceManageCommand {
         match self {
             Self::Create { .. }
             | Self::Drop { .. }
-            | Self::Alter { .. }
             | Self::Clear { .. }
-            | Self::CommentOn { .. }
             | Self::Checkpoint
             | Self::ExportDatabase { .. }
             | Self::ImportDatabase { .. } => true,

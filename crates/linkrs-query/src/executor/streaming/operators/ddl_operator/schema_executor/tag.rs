@@ -24,17 +24,6 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
         return Ok(None);
     }
     *emitted = true;
-    let tag_name = match command {
-        TagManageCommand::Create { tag_name, .. }
-        | TagManageCommand::Alter { tag_name, .. }
-        | TagManageCommand::Rename {
-            old_name: tag_name, ..
-        }
-        | TagManageCommand::Desc { tag_name }
-        | TagManageCommand::ShowCreate { tag_name } => Some(tag_name.clone()),
-        TagManageCommand::Drop { .. } => None,
-        TagManageCommand::Show => None,
-    };
     let result = match command {
         TagManageCommand::Create {
             tag_name,
@@ -125,9 +114,9 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        TagManageCommand::Desc { .. } => {
+        TagManageCommand::Desc { tag_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = tag_name.as_deref().unwrap_or("");
+            let name = tag_name.as_str();
             match reader
                 .get_tag(space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?
@@ -219,9 +208,9 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        TagManageCommand::ShowCreate { .. } => {
+        TagManageCommand::ShowCreate { tag_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = tag_name.as_deref().unwrap_or("");
+            let name = tag_name.as_str();
             match reader
                 .get_tag(space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?

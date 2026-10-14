@@ -36,7 +36,7 @@ pub use join::{
     SemiJoinNode,
 };
 pub use management::{
-    AlterEdgeNode, AlterSequenceNode, AlterSpaceNode, AlterTagNode, AlterUserNode,
+    AlterEdgeNode, AlterSequenceNode, AlterTagNode, AlterUserNode,
     ChangePasswordNode, ClearSpaceNode, CreateEdgeIndexNode, CreateEdgeNode, CreateMacroNode,
     CreateSequenceNode, CreateSpaceNode, CreateTagIndexNode, CreateTagNode, CreateTypeNode,
     CreateUserNode, DescEdgeIndexNode, DescEdgeNode, DescSpaceNode, DescTagIndexNode, DescTagNode,
@@ -47,7 +47,7 @@ pub use management::{
     ShowConfigsNode, ShowCreateEdgeNode, ShowCreateIndexNode, ShowCreateSpaceNode,
     ShowCreateTagNode, ShowEdgeIndexesNode, ShowEdgesNode, ShowIndexesNode, ShowQueriesNode,
     ShowRolesNode, ShowSessionsNode, ShowSpacesNode, ShowStatsNode, ShowStatsType,
-    ShowTagIndexesNode, ShowTagsNode, ShowUsersNode, SpaceAlterOption, SpaceManageInfo,
+    ShowTagIndexesNode, ShowTagsNode, ShowUsersNode, SpaceManageInfo,
     SwitchSpaceNode, TagAlterInfo, TagManageInfo, TypeManageInfo, UpdateEdgeEndpointsNode,
 };
 pub use operation::{FilterNode, LimitNode, ProjectNode, SampleNode, SortItem, SortNode, TopNNode};

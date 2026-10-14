@@ -4,7 +4,7 @@
 //! the number of variants in PlanNodeEnum from 90+ to ~50.
 //!
 //! # Categories
-//! - SpaceManageNode: Space DDL operations (CREATE/DROP/DESC/SHOW/ALTER/CLEAR SPACE)
+//! - SpaceManageNode: Space DDL operations (CREATE/DROP/DESC/SHOW/CLEAR SPACE)
 //! - TagManageNode: Tag DDL operations (CREATE/ALTER/DESC/DROP/SHOW TAG)
 //! - EdgeManageNode: Edge DDL operations (CREATE/ALTER/DESC/DROP/SHOW EDGE)
 //! - IndexManageNode: Index DDL operations (CREATE/DROP/DESC/SHOW/REBUILD INDEX)
@@ -31,9 +31,9 @@ use crate::planning::plan::core::nodes::management::index_nodes::{
     ShowCreateIndexNode, ShowEdgeIndexesNode, ShowIndexesNode, ShowTagIndexesNode,
 };
 use crate::planning::plan::core::nodes::management::space_nodes::{
-    AlterSpaceNode, AttachDatabaseNode, CheckpointNode, ClearSpaceNode, CommentOnNode,
-    CreateSpaceNode, DescSpaceNode, DetachDatabaseNode, DropSpaceNode, ExportDatabaseNode,
-    ImportDatabaseNode, ShowCreateSpaceNode, ShowSpacesNode, SwitchSpaceNode,
+    AttachDatabaseNode, CheckpointNode, ClearSpaceNode, CreateSpaceNode, DescSpaceNode,
+    DetachDatabaseNode, DropSpaceNode, ExportDatabaseNode, ImportDatabaseNode,
+    ShowCreateSpaceNode, ShowSpacesNode, SwitchSpaceNode,
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, RenameTagNode, ShowCreateTagNode,
@@ -188,9 +188,7 @@ define_manage_node_enum! {
         Show(ShowSpacesNode, "ShowSpaces", "show_spaces", "Show Spaces", "show_spaces"),
         ShowCreate(ShowCreateSpaceNode, "ShowCreateSpace", "show_create_space", "Show Create Space", "show_create_space"),
         Switch(SwitchSpaceNode, "SwitchSpace", "switch_space", "Switch Space", "switch_space"),
-        Alter(AlterSpaceNode, "AlterSpace", "alter_space", "Alter Space", "alter_space"),
         Clear(ClearSpaceNode, "ClearSpace", "clear_space", "Clear Space", "clear_space"),
-        CommentOn(CommentOnNode, "CommentOn", "comment_on", "Comment On", "comment_on"),
         Checkpoint(CheckpointNode, "Checkpoint", "checkpoint", "Checkpoint", "checkpoint"),
         ExportDatabase(ExportDatabaseNode, "ExportDatabase", "export_database", "Export Database", "export_database"),
         ImportDatabase(ImportDatabaseNode, "ImportDatabase", "import_database", "Import Database", "import_database"),

@@ -94,7 +94,7 @@ fn test_show_hosts() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .query("SHOW HOSTS")
-        .assert_success();
+        .assert_error();
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn test_show_parts() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .query("SHOW PARTS")
-        .assert_success();
+        .assert_error();
 }
 
 #[test]

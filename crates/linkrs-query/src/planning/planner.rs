@@ -241,7 +241,6 @@ impl PlannerEnum {
             | Stmt::RollbackTransaction(_)
             | Stmt::Savepoint(_)
             | Stmt::ReleaseSavepoint(_)
-            | Stmt::CommentOn(_)
             | Stmt::Checkpoint(_)
             | Stmt::ExportDatabase(_)
             | Stmt::ImportDatabase(_)

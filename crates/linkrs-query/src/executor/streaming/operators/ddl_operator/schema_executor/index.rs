@@ -24,20 +24,6 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
         return Ok(None);
     }
     *emitted = true;
-    let index_name = match command {
-        IndexManageCommand::CreateTagIndex { index_name, .. }
-        | IndexManageCommand::DropTagIndex { index_name, .. }
-        | IndexManageCommand::DescTagIndex { index_name }
-        | IndexManageCommand::RebuildTagIndex { index_name }
-        | IndexManageCommand::CreateEdgeIndex { index_name, .. }
-        | IndexManageCommand::DropEdgeIndex { index_name, .. }
-        | IndexManageCommand::DescEdgeIndex { index_name }
-        | IndexManageCommand::RebuildEdgeIndex { index_name }
-        | IndexManageCommand::ShowCreateIndex { index_name } => Some(index_name.clone()),
-        IndexManageCommand::ShowTagIndexes
-        | IndexManageCommand::ShowEdgeIndexes
-        | IndexManageCommand::ShowIndexes => None,
-    };
     let target_name = match command {
         IndexManageCommand::CreateTagIndex { target_name, .. }
         | IndexManageCommand::CreateEdgeIndex { target_name, .. } => {
@@ -51,73 +37,89 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
         _ => Vec::new(),
     };
 
-    // Resolve space_id from space_name to avoid space ID mismatch
+    // Resolve space_id from space_name to avoid space ID mismatch. Absent
+    // only when no storage is bound; create arms require a real id instead
+    // of falling back to 0.
     let resolved_space_id = storage
         .as_ref()
-        .and_then(|lock| lock.read().get_space_id(space_name).ok())
-        .unwrap_or(0);
+        .map(|lock| lock.read().get_space_id(space_name))
+        .transpose()
+        .map_err(|e| QueryError::execution(e.to_string()))?;
 
     let result = match command {
-        IndexManageCommand::CreateTagIndex { .. } => super::super::exec_ddl(storage, |s| {
-            let idx_name = index_name.as_deref().unwrap_or("unnamed");
-            let schema = target_name.as_deref().unwrap_or(space_name);
-            let fields: Vec<linkrs_core::types::IndexField> = index_properties
-                .iter()
-                .map(|p| {
-                    linkrs_core::types::IndexField::new(
-                        p.clone(),
-                        linkrs_core::Value::Null(linkrs_core::value::NullType::Null),
-                        true,
-                    )
-                })
-                .collect();
-            let info = Index::new(IndexConfig {
-                id: 0,
-                name: idx_name.to_string(),
-                space_id: resolved_space_id,
-                schema_name: schema.to_string(),
-                fields,
-                properties: index_properties.clone(),
-                index_type: IndexType::TagIndex,
-                is_unique: false,
-                covering: false,
-                partial_condition: None,
-            });
-            StorageSchemaOps::create_tag_index(s, space_name, &info)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
-        IndexManageCommand::CreateEdgeIndex { .. } => super::super::exec_ddl(storage, |s| {
-            let idx_name = index_name.as_deref().unwrap_or("unnamed");
-            let schema = target_name.as_deref().unwrap_or(space_name);
-            let fields: Vec<linkrs_core::types::IndexField> = index_properties
-                .iter()
-                .map(|p| {
-                    linkrs_core::types::IndexField::new(
-                        p.clone(),
-                        linkrs_core::Value::Null(linkrs_core::value::NullType::Null),
-                        true,
-                    )
-                })
-                .collect();
-            let info = Index::new(IndexConfig {
-                id: 0,
-                name: idx_name.to_string(),
-                space_id: resolved_space_id,
-                schema_name: schema.to_string(),
-                fields,
-                properties: index_properties,
-                index_type: IndexType::EdgeIndex,
-                is_unique: false,
-                covering: false,
-                partial_condition: None,
-            });
-            StorageSchemaOps::create_edge_index(s, space_name, &info)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
-        IndexManageCommand::DropTagIndex { if_exists, .. } => {
-            let name = index_name.as_deref().unwrap_or("").to_string();
+        IndexManageCommand::CreateTagIndex { index_name, .. } => {
+            super::super::exec_ddl(storage, |s| {
+                let idx_name = index_name.as_str();
+                let space_id = resolved_space_id.ok_or_else(|| {
+                    QueryError::execution(format!("Space '{}' does not exist", space_name))
+                })?;
+                let schema = target_name.as_deref().unwrap_or(space_name);
+                let fields: Vec<linkrs_core::types::IndexField> = index_properties
+                    .iter()
+                    .map(|p| {
+                        linkrs_core::types::IndexField::new(
+                            p.clone(),
+                            Value::Null(linkrs_core::value::NullType::Null),
+                            true,
+                        )
+                    })
+                    .collect();
+                let info = Index::new(IndexConfig {
+                    id: 0,
+                    name: idx_name.to_string(),
+                    space_id,
+                    schema_name: schema.to_string(),
+                    fields,
+                    properties: index_properties.clone(),
+                    index_type: IndexType::TagIndex,
+                    is_unique: false,
+                    covering: false,
+                    partial_condition: None,
+                });
+                StorageSchemaOps::create_tag_index(s, space_name, &info)
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                Ok(())
+            })
+        }
+        IndexManageCommand::CreateEdgeIndex { index_name, .. } => {
+            super::super::exec_ddl(storage, |s| {
+                let idx_name = index_name.as_str();
+                let space_id = resolved_space_id.ok_or_else(|| {
+                    QueryError::execution(format!("Space '{}' does not exist", space_name))
+                })?;
+                let schema = target_name.as_deref().unwrap_or(space_name);
+                let fields: Vec<linkrs_core::types::IndexField> = index_properties
+                    .iter()
+                    .map(|p| {
+                        linkrs_core::types::IndexField::new(
+                            p.clone(),
+                            Value::Null(linkrs_core::value::NullType::Null),
+                            true,
+                        )
+                    })
+                    .collect();
+                let info = Index::new(IndexConfig {
+                    id: 0,
+                    name: idx_name.to_string(),
+                    space_id,
+                    schema_name: schema.to_string(),
+                    fields,
+                    properties: index_properties,
+                    index_type: IndexType::EdgeIndex,
+                    is_unique: false,
+                    covering: false,
+                    partial_condition: None,
+                });
+                StorageSchemaOps::create_edge_index(s, space_name, &info)
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                Ok(())
+            })
+        }
+        IndexManageCommand::DropTagIndex {
+            index_name,
+            if_exists,
+        } => {
+            let name = index_name.as_str();
             let Some(lock) = storage else {
                 return Ok(Some(super::super::make_manage_result(
                     "drop_tag_index",
@@ -126,7 +128,7 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 )));
             };
             let mut writer = lock.write();
-            let dropped = StorageSchemaOps::drop_tag_index(&mut *writer, space_name, &name)
+            let dropped = StorageSchemaOps::drop_tag_index(&mut *writer, space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             if !dropped && !*if_exists {
                 return Err(QueryError::execution(format!(
@@ -136,12 +138,15 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
             }
             Ok(Some(super::super::make_manage_result(
                 "drop_tag_index",
-                Some(&name),
+                Some(name),
                 if dropped { "dropped" } else { "not_exists" },
             )))
         }
-        IndexManageCommand::DropEdgeIndex { if_exists, .. } => {
-            let name = index_name.as_deref().unwrap_or("").to_string();
+        IndexManageCommand::DropEdgeIndex {
+            index_name,
+            if_exists,
+        } => {
+            let name = index_name.as_str();
             let Some(lock) = storage else {
                 return Ok(Some(super::super::make_manage_result(
                     "drop_edge_index",
@@ -150,7 +155,7 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 )));
             };
             let mut writer = lock.write();
-            let dropped = StorageSchemaOps::drop_edge_index(&mut *writer, space_name, &name)
+            let dropped = StorageSchemaOps::drop_edge_index(&mut *writer, space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             if !dropped && !*if_exists {
                 return Err(QueryError::execution(format!(
@@ -160,13 +165,13 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
             }
             Ok(Some(super::super::make_manage_result(
                 "drop_edge_index",
-                Some(&name),
+                Some(name),
                 if dropped { "dropped" } else { "not_exists" },
             )))
         }
-        IndexManageCommand::DescTagIndex { .. } => {
+        IndexManageCommand::DescTagIndex { index_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = index_name.as_deref().unwrap_or("");
+            let name = index_name.as_str();
             match reader
                 .get_tag_index(space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?
@@ -218,9 +223,9 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 ))),
             }
         }
-        IndexManageCommand::ShowCreateIndex { .. } => {
+        IndexManageCommand::ShowCreateIndex { index_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = index_name.as_deref().unwrap_or("");
+            let name = index_name.as_str();
             let tag_hit = reader
                 .get_tag_index(space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -299,15 +304,14 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        IndexManageCommand::RebuildTagIndex { .. } => super::super::exec_ddl(storage, |s| {
-            let name = index_name.as_deref().unwrap_or("");
-            StorageSchemaOps::rebuild_tag_index(s, space_name, name)
+        IndexManageCommand::RebuildTagIndex { index_name } => super::super::exec_ddl(storage, |s| {
+            StorageSchemaOps::rebuild_tag_index(s, space_name, index_name.as_str())
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageCommand::DescEdgeIndex { .. } => {
+        IndexManageCommand::DescEdgeIndex { index_name } => {
             let reader = super::super::get_reader(storage)?;
-            let name = index_name.as_deref().unwrap_or("");
+            let name = index_name.as_str();
             match reader
                 .get_edge_index(space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?
@@ -401,9 +405,8 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        IndexManageCommand::RebuildEdgeIndex { .. } => super::super::exec_ddl(storage, |s| {
-            let name = index_name.as_deref().unwrap_or("");
-            StorageSchemaOps::rebuild_edge_index(s, space_name, name)
+        IndexManageCommand::RebuildEdgeIndex { index_name } => super::super::exec_ddl(storage, |s| {
+            StorageSchemaOps::rebuild_edge_index(s, space_name, index_name.as_str())
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),

@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 use crate::binder::validation::ValidatedStatement;
 use crate::parser::ast::stmt::{
-    AttachDatabaseStmt, CommentOnStmt, DetachDatabaseStmt, ExportDatabaseStmt, ImportDatabaseStmt,
+    AttachDatabaseStmt, DetachDatabaseStmt, ExportDatabaseStmt, ImportDatabaseStmt,
     InQueryCallStmt, LoadFromStmt, ScanSource, ShowConfigsStmt,
 };
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode;
 use crate::planning::plan::core::nodes::management::space_nodes::{
-    AttachDatabaseNode, CheckpointNode, CommentOnNode, DetachDatabaseNode, ExportDatabaseNode,
+    AttachDatabaseNode, CheckpointNode, DetachDatabaseNode, ExportDatabaseNode,
     ImportDatabaseNode,
 };
 use crate::planning::plan::core::nodes::management::system_nodes::{
@@ -67,11 +67,6 @@ pub(super) fn plan_release_savepoint(name: &str) -> PlanNodeEnum {
 
 pub(super) fn plan_migrate() -> PlanNodeEnum {
     PlanNodeEnum::ShowStats(ShowStatsNode::new(next_node_id(), ShowStatsType::Storage))
-}
-
-pub(super) fn plan_comment_on(stmt: &CommentOnStmt) -> PlanNodeEnum {
-    let node = CommentOnNode::new(next_node_id(), stmt.target.clone(), stmt.comment.clone());
-    PlanNodeEnum::SpaceManage(SpaceManageNode::CommentOn(node))
 }
 
 pub(super) fn plan_checkpoint() -> PlanNodeEnum {

@@ -178,13 +178,9 @@ fn test_show_parser_hosts() {
 
     let result = parser.parse();
     assert!(
-        result.is_ok(),
-        "SHOW HOSTS: should succeed: {:?}",
-        result.err()
+        result.is_err(),
+        "SHOW HOSTS: should be rejected as an unsupported target"
     );
-
-    let stmt = result.expect("SHOWstatement: should succeed");
-    assert_eq!(stmt.ast.stmt.kind(), "SHOW");
 }
 
 #[test]
@@ -194,13 +190,9 @@ fn test_show_parser_parts() {
 
     let result = parser.parse();
     assert!(
-        result.is_ok(),
-        "SHOW PARTS: should succeed: {:?}",
-        result.err()
+        result.is_err(),
+        "SHOW PARTS: should be rejected as an unsupported target"
     );
-
-    let stmt = result.expect("SHOWstatement: should succeed");
-    assert_eq!(stmt.ast.stmt.kind(), "SHOW");
 }
 
 #[test]
@@ -1289,8 +1281,6 @@ fn test_management_show_operations() {
     // with space context in test_show_execution_tags/edges.
     let show_queries = [
         "SHOW SPACES",
-        "SHOW HOSTS",
-        "SHOW PARTS",
         "SHOW SESSIONS",
         "SHOW QUERIES",
         "SHOW CONFIGS",

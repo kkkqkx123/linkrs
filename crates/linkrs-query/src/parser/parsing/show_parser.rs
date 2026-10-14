@@ -70,20 +70,6 @@ impl ShowParser {
                 span,
                 target: ShowTarget::Edges,
             }))
-        } else if ctx.check_token(TokenKind::Hosts) {
-            ctx.expect_token(TokenKind::Hosts)?;
-            let span = ctx.span_since(start_span.start);
-            Ok(Stmt::Show(ShowStmt {
-                span,
-                target: ShowTarget::Spaces,
-            }))
-        } else if ctx.check_token(TokenKind::Parts) {
-            ctx.expect_token(TokenKind::Parts)?;
-            let span = ctx.span_since(start_span.start);
-            Ok(Stmt::Show(ShowStmt {
-                span,
-                target: ShowTarget::Spaces,
-            }))
         } else if ctx.check_token(TokenKind::Indexes) {
             ctx.expect_token(TokenKind::Indexes)?;
             let span = ctx.span_since(start_span.start);
@@ -153,7 +139,12 @@ impl ShowParser {
         } else {
             Err(ParseError::new(
                 ParseErrorKind::SyntaxError,
-                format!("Unknown SHOW Target: {:?}", ctx.peek_token().kind),
+                format!(
+                    "Unknown SHOW target: {:?}; supported targets: SESSIONS, QUERIES, CONFIGS, \
+                     SPACES, TAGS, EDGES, INDEXES, INDEX, STATS, USERS, ROLES, CREATE, \
+                     FUNCTIONS, GRAPHS, MACROS, ATTACHED DATABASES, EXTENSIONS",
+                    ctx.peek_token().kind
+                ),
                 ctx.current_position(),
             ))
         }

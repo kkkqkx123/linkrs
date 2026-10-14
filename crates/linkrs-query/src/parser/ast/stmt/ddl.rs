@@ -146,10 +146,6 @@ pub enum AlterTarget {
         deletions: Vec<String>,
         changes: Vec<PropertyChange>,
     },
-    Space {
-        space_name: String,
-        comment: Option<String>,
-    },
     Sequence {
         name: String,
         increment: Option<i64>,

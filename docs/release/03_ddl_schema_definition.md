@@ -28,25 +28,28 @@ CREATE TAG [IF NOT EXISTS] <tag_name> AS (<query>)
 - 支持多种数据类型
 - 支持IF NOT EXISTS
 - 支持NOT NULL约束
-- 支持DEFAULT默认值（支持字面量与常量函数调用，创建时即求值）
+- 支持DEFAULT默认值（支持字面量与常量函数调用，常量函数在 DDL 语句**解析时**求值一次并冻结为常量值）
 - 支持COMMENT属性注释
 - 支持TTL自动过期
-- 支持 `SERIAL` 类型修饰（自增整数，隐含 NOT NULL）
-- 支持属性名后省略 `:` 与类型（省略时类型由绑定阶段处理）
+- 支持 `SERIAL` 类型修饰（自增整数，隐含 NOT NULL；不能指定 DEFAULT、不能作为主键，每个标签/边类型最多一列）
 - 支持 `AS (<query>)` 从子查询定义标签
 
 ### 支持的数据类型
-| 类型 | 说明 |
-|------|------|
-| INT/INT8/INT16/INT32/INT64 | 整数类型 |
-| FLOAT/DOUBLE | 浮点数类型 |
-| STRING/VARCHAR/TEXT | 字符串类型 |
-| BOOL/BOOLEAN | 布尔类型 |
-| DATE | 日期类型 |
-| TIMESTAMP | 时间戳类型 |
-| DATETIME | 日期时间类型 |
-| ARRAY\<T\> / STRUCT\<...\> | 复合类型（最大嵌套深度 16） |
-| 用户定义类型别名 | 通过 CREATE TYPE 定义后可直接使用 |
+| 类型 | 实际类型与位宽 | 说明 |
+|------|------|------|
+| SMALLINT/INT2 | SmallInt（16 位） | 小整数类型 |
+| INT/INTEGER/INT4/INT16/INT32 | Int（32 位） | 整数类型。注意 `INT16`/`INT32` 按名称历史兼容均映射为 32 位 `Int`，需要 16 位请用 `SMALLINT`/`INT2` |
+| BIGINT/INT8/INT64 | BigInt（64 位） | 长整数类型 |
+| FLOAT/DOUBLE | Float / Double（IEEE-754） | 浮点数类型 |
+| STRING/VARCHAR/TEXT | String（变长） | 字符串类型 |
+| FIXED_STRING(n) | FixedString(n) | 定长字符串类型 |
+| BOOL/BOOLEAN | Bool | 布尔类型 |
+| DATE | Date | 日期类型 |
+| TIME | Time | 时间类型 |
+| TIMESTAMP | DateTime | 时间戳类型，`DATETIME` 的别名，两者等价 |
+| DATETIME | DateTime | 日期时间类型 |
+| ARRAY\<T\> / STRUCT\<...\> | 复合类型（最大嵌套深度 16） | 复合类型 |
+| 用户定义类型别名 | 通过 CREATE TYPE 定义后可直接使用 | 指向某一具体类型的别名 |
 
 ### 约束说明
 | 约束 | 语法 | 默认值 | 说明 |
@@ -66,7 +69,8 @@ CREATE TAG [IF NOT EXISTS] <tag_name> AS (<query>)
 - 当不指定 `DEFAULT` 时，属性**没有默认值**
 - 插入数据时如未提供值且属性可为空，则填充 `NULL`
 - 如属性有 `NOT NULL` 约束且无默认值，插入时必须提供值，否则会报错
-- DEFAULT 值可以是字面量（含负数）或常量函数调用（如 `datetime()`），在创建 Schema 时即求值
+- DEFAULT 值可以是字面量（含负数）或常量函数调用（如 `datetime()`）；常量函数在 DDL 语句**解析时**求值一次并冻结为常量值，
+  之后所有插入行共享该值，不会每行重新取当前时间
 
 **COMMENT 约束（默认无注释）**
 - 当不指定 `COMMENT` 时，属性**没有注释**
@@ -81,7 +85,7 @@ CREATE TAG [IF NOT EXISTS] <tag_name> AS (<query>)
 | NOT NULL + DEFAULT | `age: INT NOT NULL DEFAULT 0` | 非空，有默认值，不提供值时使用默认值 0 |
 | DEFAULT | `age: INT DEFAULT 0` | 可空，有默认值，不提供值时使用默认值 0 |
 | NULL + DEFAULT | `age: INT NULL DEFAULT 0` | 可空，有默认值，不提供值时使用默认值 0 |
-| SERIAL | `id: SERIAL` | 自增整数，隐含 NOT NULL |
+| SERIAL | `id: SERIAL` | 自增整数，隐含 NOT NULL。SERIAL 列不能指定 DEFAULT，不能作为主键，且每个标签/边类型最多只能有一个 SERIAL 列 |
 
 ### TTL说明
 TTL（Time To Live）用于自动清理过期数据。
@@ -102,9 +106,14 @@ TTL（Time To Live）用于自动清理过期数据。
 **TTL 工作原理：**
 1. 数据插入时，记录 `ttl_col` 指定属性的值作为基准时间（整数为 Unix 秒，`TIMESTAMP`/`DATETIME` 按其纪元秒换算）
 2. 当 `当前时间 > 基准时间 + ttl_duration` 时，数据被视为过期
-3. 过期数据在查询时被过滤（读路径按 Schema TTL 配置判定），并可通过存储层过期清理接口物理删除
+3. 过期数据在读取时被过滤：所有会物化属性行的读路径（点查、按标签/属性扫描、边查询、邻接查询、
+   导出等）均按 Schema 的 TTL 配置判定并跳过过期行；不物化 `ttl_col` 属性的纯拓扑快路径
+   （仅取邻接 ID / 度统计的展开）与 `count_*` 近似统计不过滤，统计类数值可能包含过期行。
+   过期行的物理删除通过存储层过期清理接口（按 schema 扫描并删除）执行
 4. `ttl_col` 为 `NULL`、缺失或类型不符的行永不过期；删除 `ttl_col` 属性会清除该 Schema 的 TTL 配置，
    重命名该属性会自动跟随新的属性名
+5. TTL 配置随 Schema 元数据持久化，重命名/删除属性时的联动规则见上；过期清理接口需要被显式调用
+   （无后台定时任务代为执行）
 
 **TTL 使用场景：**
 - 会话数据自动清理（如用户登录令牌）
@@ -168,6 +177,7 @@ CREATE EDGE [IF NOT EXISTS] <edge_type> AS (<query>)
 - 支持 `AS (<query>)` 从子查询定义边类型
 
 > **注意：** 约束默认值与 CREATE TAG 相同：属性默认可空，无默认值时插入 NULL，TTL 默认禁用。
+> `SERIAL` 的限制同 CREATE TAG：不能指定 DEFAULT、不能作为主键、每个边类型最多一列。
 
 ### 示例
 ```cypher
@@ -456,7 +466,7 @@ CREATE TYPE [IF NOT EXISTS] <alias_name> AS <underlying_type | 别名>
 -- 宏：带默认参数的表达式
 CREATE MACRO full_name(first, last, sep = '-') AS first + sep + last
 
--- 类型别名（支持别名引用别名，环检测在计划期执行）
+-- 类型别名（支持别名引用别名，环检测在别名创建与解析时执行）
 CREATE TYPE user_id AS INT64
 CREATE TYPE account_id AS user_id
 ```

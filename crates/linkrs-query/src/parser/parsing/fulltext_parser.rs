@@ -221,12 +221,17 @@ pub fn parse_alter_fulltext_index_after_alter(
             ctx.consume_keyword("FIELD")?;
 
             let field_name = ctx.consume_identifier()?;
-            let mut field_def = IndexFieldDef::new(field_name);
 
             if ctx.check_keyword("ANALYZER") {
-                ctx.consume_keyword("ANALYZER")?;
-                field_def.analyzer = Some(ctx.consume_string()?);
+                return Err(crate::parser::ParseError::new(
+                    crate::parser::core::error::ParseErrorKind::SyntaxError,
+                    "ANALYZER is not supported yet; add the field without a per-field analyzer"
+                        .to_string(),
+                    ctx.current_position(),
+                ));
             }
+
+            let field_def = IndexFieldDef::new(field_name);
 
             actions.push(AlterIndexAction::AddField(field_def));
         } else if ctx.check_keyword("DROP") {
@@ -609,6 +614,21 @@ mod tests {
         assert!(
             collected.contains("OPTIONS"),
             "rejection must name OPTIONS: {}",
+            collected
+        );
+    }
+
+    #[test]
+    fn test_parse_alter_fulltext_add_field_analyzer_rejected() {
+        let sql = "ALTER FULLTEXT INDEX idx_article ADD FIELD summary ANALYZER 'standard'";
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse();
+        assert!(result.is_err());
+        let collected = format!("{:?}", parser.take_errors());
+        assert!(
+            collected.contains("ANALYZER"),
+            "rejection must name ANALYZER: {}",
             collected
         );
     }

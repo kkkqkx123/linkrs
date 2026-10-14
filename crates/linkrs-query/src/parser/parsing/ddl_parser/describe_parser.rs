@@ -64,33 +64,4 @@ impl DdlParser {
 
         Ok(Stmt::DescribeUser(DescribeUserStmt { span, username }))
     }
-
-    pub fn parse_show_create_statement(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Show)?;
-        ctx.expect_token(TokenKind::Create)?;
-
-        let target = if ctx.match_token(TokenKind::Space) {
-            ShowCreateTarget::Space(ctx.expect_identifier()?)
-        } else if ctx.match_token(TokenKind::Tag) {
-            ShowCreateTarget::Tag(ctx.expect_identifier()?)
-        } else if ctx.match_token(TokenKind::Edge) {
-            ShowCreateTarget::Edge(ctx.expect_identifier()?)
-        } else if ctx.match_token(TokenKind::Index) {
-            ShowCreateTarget::Index(ctx.expect_identifier()?)
-        } else {
-            return Err(ParseError::new(
-                ParseErrorKind::UnexpectedToken,
-                "Expected SPACE, TAG, EDGE, or INDEX after SHOW CREATE".to_string(),
-                ctx.current_position(),
-            ));
-        };
-
-        let span = ctx.span_since(start_span.start);
-
-        Ok(Stmt::ShowCreate(ShowCreateStmt { span, target }))
-    }
 }

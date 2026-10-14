@@ -226,21 +226,6 @@ impl PartialEq for SetOperationStmt {
     }
 }
 
-/// `COMMENT ON <target> IS <string>` statement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CommentOnStmt {
-    pub span: Span,
-    pub target: CommentTarget,
-    pub comment: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CommentTarget {
-    Tag(String),
-    Edge(String),
-    Table(String),
-}
-
 /// `EXPORT DATABASE '<path>' [WITH OPTIONS (...)]` statement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportDatabaseStmt {

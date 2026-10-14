@@ -19,7 +19,7 @@ use crate::planning::plan::core::nodes::{
     DropTypeNode, EdgeManageInfo, MacroManageInfo, RenameEdgeNode, RenameTagNode, TagManageInfo,
     TypeManageInfo, UpdateEdgeEndpointsNode,
 };
-use crate::planning::plan::core::{AlterSpaceNode, PlanNodeEnum};
+use crate::planning::plan::core::PlanNodeEnum;
 use crate::planning::planner::PlannerError;
 
 use super::MaintainPlanner;
@@ -294,23 +294,6 @@ impl MaintainPlanner {
         current_space: &str,
     ) -> Result<PlanNodeEnum, PlannerError> {
         match target {
-            AlterTarget::Space {
-                space_name,
-                comment,
-            } => {
-                let options = comment
-                    .as_ref()
-                    .map(|c| {
-                        vec![
-                            crate::planning::plan::core::nodes::SpaceAlterOption::Comment(
-                                c.clone(),
-                            ),
-                        ]
-                    })
-                    .unwrap_or_default();
-                let node = AlterSpaceNode::new(next_node_id(), space_name.clone(), options);
-                Ok(PlanNodeEnum::SpaceManage(SpaceManageNode::Alter(node)))
-            }
             AlterTarget::Tag {
                 tag_name,
                 additions,

@@ -1,4 +1,4 @@
-//! SHOW CREATE Output Contract Tests (Phase 2 wiring)
+//! SHOW CREATE Output Contract Tests
 //!
 //! Test coverage:
 //! - SHOW CREATE TAG/EDGE/SPACE/INDEX all return a single `create_statement` column

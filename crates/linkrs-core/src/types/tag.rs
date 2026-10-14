@@ -1,7 +1,6 @@
 //! Basic types of tags
 
 use super::property::PropertyDef;
-use super::schema_trait::SchemaInfo;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -12,61 +11,6 @@ pub struct TagInfo {
     pub comment: Option<String>,
     pub ttl_duration: Option<i64>,
     pub ttl_col: Option<String>,
-}
-
-impl SchemaInfo for TagInfo {
-    fn schema_id(&self) -> u32 {
-        self.tag_id
-    }
-
-    fn schema_name(&self) -> &str {
-        &self.tag_name
-    }
-
-    fn properties(&self) -> &[PropertyDef] {
-        &self.properties
-    }
-
-    fn comment(&self) -> Option<&str> {
-        self.comment.as_deref()
-    }
-
-    fn ttl_duration(&self) -> Option<i64> {
-        self.ttl_duration
-    }
-
-    fn ttl_col(&self) -> Option<&str> {
-        self.ttl_col.as_deref()
-    }
-
-    fn set_schema_id(&mut self, id: u32) {
-        self.tag_id = id;
-    }
-
-    fn set_properties(&mut self, properties: Vec<PropertyDef>) {
-        self.properties = properties;
-    }
-
-    fn set_comment(&mut self, comment: Option<String>) {
-        self.comment = comment;
-    }
-
-    fn set_ttl(&mut self, duration: Option<i64>, col: Option<String>) {
-        self.ttl_duration = duration;
-        self.ttl_col = col;
-    }
-
-    fn schema_type_name(&self) -> &'static str {
-        "Tag"
-    }
-
-    fn is_tag(&self) -> bool {
-        true
-    }
-
-    fn is_edge(&self) -> bool {
-        false
-    }
 }
 
 impl TagInfo {

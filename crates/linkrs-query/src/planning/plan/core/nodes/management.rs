@@ -31,8 +31,8 @@ pub use manage_node_enums::{
     SpaceManageNode, TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
 };
 pub use space_nodes::{
-    AlterSpaceNode, ClearSpaceNode, CreateSpaceNode, DescSpaceNode, DropSpaceNode,
-    ShowCreateSpaceNode, ShowSpacesNode, SpaceAlterOption, SpaceManageInfo, SwitchSpaceNode,
+    ClearSpaceNode, CreateSpaceNode, DescSpaceNode, DropSpaceNode, ShowCreateSpaceNode,
+    ShowSpacesNode, SpaceManageInfo, SwitchSpaceNode,
 };
 pub use stats_nodes::{ShowStatsNode, ShowStatsType};
 pub use system_nodes::{

@@ -141,8 +141,6 @@ impl Planner for MaintainPlanner {
 
             Stmt::Migrate(_) => system::plan_migrate(),
 
-            Stmt::CommentOn(comment_stmt) => system::plan_comment_on(comment_stmt),
-
             Stmt::Checkpoint(_) => system::plan_checkpoint(),
 
             Stmt::ExportDatabase(export_stmt) => system::plan_export_database(export_stmt),
@@ -190,7 +188,6 @@ impl Planner for MaintainPlanner {
                 | Stmt::Savepoint(_)
                 | Stmt::ReleaseSavepoint(_)
                 | Stmt::Migrate(_)
-                | Stmt::CommentOn(_)
                 | Stmt::Checkpoint(_)
                 | Stmt::ExportDatabase(_)
                 | Stmt::ImportDatabase(_)

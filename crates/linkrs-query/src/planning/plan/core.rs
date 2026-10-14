@@ -8,7 +8,7 @@ pub use nodes::base::plan_node_enum::PlanNodeEnum;
 pub use nodes::base::plan_node_traits::PlanNode;
 pub use nodes::base::plan_node_visitor::PlanNodeVisitor;
 pub use nodes::{
-    AggregateNode, AlterSpaceNode, AppendVerticesNode, ArgumentNode, ClearSpaceNode,
+    AggregateNode, AppendVerticesNode, ArgumentNode, ClearSpaceNode,
     CorrelatedApplyNode, CrossJoinNode, DataCollectNode, DedupNode, ExpandAllNode, ExpandNode,
     FilterNode, GetEdgesNode, GetNeighborsNode, GetVerticesNode, InnerJoinNode, LeftJoinNode,
     LimitNode, LoopNode, PassThroughNode, PatternApplyNode, PlanNodeFactory, ProjectNode,

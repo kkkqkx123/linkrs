@@ -14,7 +14,6 @@ pub mod property;
 pub mod property_trait;
 pub mod query;
 pub mod schema_change;
-pub mod schema_trait;
 pub mod semantic;
 pub mod space;
 pub mod space_name_validation;

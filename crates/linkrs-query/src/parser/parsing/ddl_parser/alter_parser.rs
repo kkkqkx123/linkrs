@@ -77,7 +77,7 @@ impl DdlParser {
         } else {
             return Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
-                "Expected TAG, EDGE, or USER".to_string(),
+                "Expected TAG, EDGE, SEQUENCE, or USER".to_string(),
                 ctx.current_position(),
             ));
         };

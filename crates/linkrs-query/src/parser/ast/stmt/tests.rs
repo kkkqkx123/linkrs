@@ -313,9 +313,11 @@ fn test_stmt_category_exhaustive() {
         (
             Stmt::Alter(AlterStmt {
                 span,
-                target: AlterTarget::Space {
-                    space_name: "s".to_string(),
-                    comment: None,
+                target: AlterTarget::Tag {
+                    tag_name: "person".to_string(),
+                    additions: vec![],
+                    deletions: vec![],
+                    changes: vec![],
                 },
             }),
             Ddl,
@@ -660,14 +662,6 @@ fn test_stmt_category_exhaustive() {
             })),
             Ddl,
         ),
-        (
-            Stmt::CommentOn(CommentOnStmt {
-                span,
-                target: CommentTarget::Tag("Person".to_string()),
-                comment: "a comment".to_string(),
-            }),
-            Ddl,
-        ),
         (Stmt::Checkpoint(CheckpointStmt { span }), Admin),
         (
             Stmt::LoadFrom(LoadFromStmt {
@@ -752,7 +746,7 @@ fn test_stmt_category_exhaustive() {
             Admin,
         ),
     ];
-    assert_eq!(cases.len(), 80, "Stmt has 80 variants; update this test");
+    assert_eq!(cases.len(), 79, "Stmt has 79 variants; update this test");
     for (stmt, expected) in cases {
         assert_eq!(
             stmt.category(),
