@@ -222,6 +222,16 @@ impl CompiledExpr {
                 {
                     return CompiledExpr::Fallback(expression.clone());
                 }
+                // Sequence functions carry catalog state (`next_val`
+                // advances the sequence) and resolve their manager through
+                // the row evaluation environment. The compiled tree has no
+                // env access at function nodes, so keep them on the scalar
+                // interpreter path with the exact per-row semantics.
+                if global_registry_ref().get_builtin(name.as_str()).is_some_and(
+                    |f| matches!(f, crate::executor::expression::functions::BuiltinFunction::Sequence(_)),
+                ) {
+                    return CompiledExpr::Fallback(expression.clone());
+                }
                 let args: Vec<CompiledExpr> = args
                     .iter()
                     .map(|a| Self::compile(a.as_expr(), layout))
@@ -848,6 +858,7 @@ mod tests {
             params: Some(Arc::new(params)),
             session_variables: None,
             subquery_executor: None,
+            sequence_manager: None,
         };
         let batch = compiled
             .evaluate_batch(&rows, layout, Some(&env), None)

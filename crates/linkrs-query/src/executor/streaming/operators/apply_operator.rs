@@ -790,6 +790,7 @@ mod tests {
             columnar_policy: None,
             macro_manager: None,
             type_alias_manager: None,
+            sequence_manager: None,
             search: crate::executor::base::SearchContext::default(),
         }
     }

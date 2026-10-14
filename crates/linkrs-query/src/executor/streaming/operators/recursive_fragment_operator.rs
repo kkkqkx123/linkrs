@@ -910,6 +910,7 @@ impl RecursiveFragmentOperator {
             columnar_policy: None,
             macro_manager: runtime.macro_manager.clone(),
             type_alias_manager: runtime.type_alias_manager.clone(),
+            sequence_manager: runtime.sequence_manager.clone(),
             search: runtime.search.clone(),
         }
     }

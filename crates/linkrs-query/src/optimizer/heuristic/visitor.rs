@@ -54,8 +54,8 @@ use crate::planning::plan::core::nodes::data_modification::{
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, UpdateNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
-    TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
+    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SequenceManageNode,
+    SpaceManageNode, TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
 };
 #[cfg(feature = "vector")]
 use crate::planning::plan::core::nodes::search::vector::data_access::{
@@ -284,6 +284,10 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
 
     fn visit_type_manage(&mut self, node: &TypeManageNode) -> Self::Result {
         Ok(PlanNodeEnum::TypeManage(node.clone()))
+    }
+
+    fn visit_sequence_manage(&mut self, node: &SequenceManageNode) -> Self::Result {
+        Ok(PlanNodeEnum::SequenceManage(node.clone()))
     }
 
     fn visit_show_macros(&mut self, node: &ShowMacrosNode) -> Self::Result {

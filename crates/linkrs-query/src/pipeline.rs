@@ -67,6 +67,11 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     ///
     /// Threaded the same way as [`Self::macro_manager`].
     pub type_alias_manager: Arc<linkrs_core::metadata::TypeAliasManager>,
+    /// Shared sequence catalog (named sequences for `curr_val`/`next_val`),
+    /// engine-wide.
+    ///
+    /// Threaded the same way as [`Self::macro_manager`].
+    pub sequence_manager: Arc<linkrs_core::metadata::SequenceManager>,
     /// Serializes statistics collection to prevent concurrent re-collection.
     pub(crate) statistics_collect_lock: Arc<parking_lot::Mutex<()>>,
     /// Sample cap for per-tag/per-edge-type degree estimation during collection.
@@ -171,6 +176,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             query_manager: None,
             macro_manager: Arc::new(linkrs_core::metadata::MacroManager::new()),
             type_alias_manager: Arc::new(linkrs_core::metadata::TypeAliasManager::new()),
+            sequence_manager: Arc::new(linkrs_core::metadata::SequenceManager::new()),
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
             statistics_sample_limit: Self::DEFAULT_STATISTICS_SAMPLE_LIMIT,
@@ -444,6 +450,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             query_manager: None,
             macro_manager: Arc::new(linkrs_core::metadata::MacroManager::new()),
             type_alias_manager: Arc::new(linkrs_core::metadata::TypeAliasManager::new()),
+            sequence_manager: Arc::new(linkrs_core::metadata::SequenceManager::new()),
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
             statistics_sample_limit: Self::DEFAULT_STATISTICS_SAMPLE_LIMIT,

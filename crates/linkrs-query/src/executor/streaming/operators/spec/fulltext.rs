@@ -1,9 +1,10 @@
 //! Immutable configuration for fulltext search operators.
 
 use linkrs_core::types::expr::Expression;
+use linkrs_core::types::FulltextEngineType;
 use linkrs_fulltext::query::FulltextQuery;
 
-use crate::parser::ast::fulltext::AlterIndexAction;
+use crate::parser::ast::fulltext::{AlterIndexAction, IndexFieldDef, IndexOptions};
 
 /// Fulltext index DDL command payload.
 #[derive(Debug, Clone)]
@@ -11,7 +12,10 @@ pub enum FulltextManageCommand {
     Create {
         index_name: String,
         schema_name: String,
-        fields: Vec<String>,
+        fields: Vec<IndexFieldDef>,
+        engine_type: FulltextEngineType,
+        options: IndexOptions,
+        if_not_exists: bool,
         space_id: u64,
     },
     Drop {

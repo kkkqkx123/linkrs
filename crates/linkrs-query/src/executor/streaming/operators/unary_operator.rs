@@ -252,6 +252,10 @@ impl UnaryOperator {
             .runtime
             .as_ref()
             .and_then(|rt| rt.session_variable_values());
+        let sequence_manager = self
+            .runtime
+            .as_ref()
+            .and_then(|rt| rt.sequence_manager());
         let storage = self.runtime.as_ref().and_then(|rt| rt.storage.clone());
         match &mut self.kind {
             UnaryOperatorKind::Filter { state, .. }
@@ -260,6 +264,7 @@ impl UnaryOperator {
             | UnaryOperatorKind::AppendVertices { state, .. } => {
                 state.env.params = params;
                 state.env.session_variables = session_variables;
+                state.env.sequence_manager = sequence_manager;
             }
             _ => {}
         }

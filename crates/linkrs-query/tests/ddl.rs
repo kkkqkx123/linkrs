@@ -29,6 +29,8 @@ mod index_basic;
 mod macro_;
 #[path = "ddl/schema_evolution.rs"]
 mod schema_evolution;
+#[path = "ddl/sequence.rs"]
+mod sequence;
 #[path = "ddl/show_catalog.rs"]
 mod show_catalog;
 #[path = "ddl/show_create.rs"]

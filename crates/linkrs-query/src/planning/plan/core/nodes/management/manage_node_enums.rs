@@ -18,6 +18,9 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroI
 use crate::planning::plan::core::nodes::management::catalog_nodes::{
     CreateMacroNode, CreateTypeNode, DropMacroNode, DropTypeNode,
 };
+use crate::planning::plan::core::nodes::management::sequence_nodes::{
+    AlterSequenceNode, CreateSequenceNode, DropSequenceNode,
+};
 use crate::planning::plan::core::nodes::management::edge_nodes::{
     AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, RenameEdgeNode, ShowCreateEdgeNode,
     ShowEdgesNode, UpdateEdgeEndpointsNode,
@@ -288,5 +291,14 @@ define_manage_node_enum! {
     pub enum TypeManageNode as TypeManage {
         Create(CreateTypeNode, "CreateType", "create_type", "Create Type", "create_type"),
         Drop(DropTypeNode, "DropType", "drop_type", "Drop Type", "drop_type"),
+    }
+}
+
+define_manage_node_enum! {
+    /// Sequence catalog management sub-enum
+    pub enum SequenceManageNode as SequenceManage {
+        Create(CreateSequenceNode, "CreateSequence", "create_sequence", "Create Sequence", "create_sequence"),
+        Alter(AlterSequenceNode, "AlterSequence", "alter_sequence", "Alter Sequence", "alter_sequence"),
+        Drop(DropSequenceNode, "DropSequence", "drop_sequence", "Drop Sequence", "drop_sequence"),
     }
 }

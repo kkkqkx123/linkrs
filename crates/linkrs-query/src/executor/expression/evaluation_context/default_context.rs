@@ -35,6 +35,8 @@ pub struct DefaultExpressionContext {
     storage: Option<Arc<RwLock<dyn StorageReader>>>,
     /// Space name for graph storage access
     space: String,
+    /// Sequence catalog manager for `curr_val` / `next_val`.
+    sequence_manager: Option<Arc<linkrs_core::metadata::SequenceManager>>,
 }
 
 impl DefaultExpressionContext {
@@ -46,6 +48,7 @@ impl DefaultExpressionContext {
             session_variables: None,
             storage: None,
             space: String::new(),
+            sequence_manager: None,
         }
     }
 
@@ -57,6 +60,7 @@ impl DefaultExpressionContext {
             session_variables: None,
             storage: Some(storage),
             space,
+            sequence_manager: None,
         }
     }
 
@@ -101,6 +105,7 @@ impl DefaultExpressionContext {
             session_variables: None,
             storage: None,
             space: String::new(),
+            sequence_manager: ctx.sequence_manager.clone(),
         }
     }
 
@@ -176,5 +181,9 @@ impl crate::executor::expression::evaluator::traits::ExpressionContext
         self.storage
             .as_ref()
             .map(|s| GraphStorageRef::new(s.clone(), self.space.clone()))
+    }
+
+    fn get_sequence_manager(&self) -> Option<Arc<linkrs_core::metadata::SequenceManager>> {
+        self.sequence_manager.clone()
     }
 }

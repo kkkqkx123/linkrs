@@ -72,6 +72,7 @@ macro_rules! match_all_nodes_with_default {
             PlanNodeEnum::VectorManage(node) => node.$method(),
             PlanNodeEnum::MacroManage(node) => node.$method(),
             PlanNodeEnum::TypeManage(node) => node.$method(),
+            PlanNodeEnum::SequenceManage(node) => node.$method(),
             _ => $default,
         }
     };
@@ -156,6 +157,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::ShowExtensions(_) => "ShowExtensions",
             PlanNodeEnum::MacroManage(_) => "MacroManage",
             PlanNodeEnum::TypeManage(_) => "TypeManage",
+            PlanNodeEnum::SequenceManage(_) => "SequenceManage",
             PlanNodeEnum::LoadFrom(_) => "LoadFrom",
             PlanNodeEnum::InQueryCall(_) => "InQueryCall",
             PlanNodeEnum::CopyFrom(_) => "CopyFrom",
@@ -280,6 +282,7 @@ impl PlanNodeEnum {
             | PlanNodeEnum::ShowExtensions(_)
             | PlanNodeEnum::MacroManage(_)
             | PlanNodeEnum::TypeManage(_)
+            | PlanNodeEnum::SequenceManage(_)
             | PlanNodeEnum::LoadFrom(_)
             | PlanNodeEnum::InQueryCall(_)
             | PlanNodeEnum::CopyFrom(_)

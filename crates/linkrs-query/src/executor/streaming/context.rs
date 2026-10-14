@@ -33,6 +33,8 @@ pub struct ValueRowContext {
     session_variables: Option<Arc<HashMap<String, Value>>>,
     /// Expression-level subquery executor of the hosting operator.
     subquery_executor: Option<Arc<SubqueryExecutor>>,
+    /// Sequence catalog manager for `curr_val` / `next_val`.
+    sequence_manager: Option<Arc<linkrs_core::metadata::SequenceManager>>,
 }
 
 impl ValueRowContext {
@@ -45,6 +47,7 @@ impl ValueRowContext {
             parameters: None,
             session_variables: None,
             subquery_executor: None,
+            sequence_manager: None,
         }
     }
 
@@ -61,6 +64,7 @@ impl ValueRowContext {
             parameters: Some(parameters),
             session_variables: None,
             subquery_executor: None,
+            sequence_manager: None,
         }
     }
 
@@ -73,6 +77,7 @@ impl ValueRowContext {
             parameters: env.params.clone(),
             session_variables: env.session_variables.clone(),
             subquery_executor: env.subquery_executor.clone(),
+            sequence_manager: env.sequence_manager.clone(),
         }
     }
 
@@ -131,6 +136,10 @@ impl ExpressionContext for ValueRowContext {
             .ok_or_else(|| {
                 ExpressionError::type_error(format!("Session variable `{}` is not defined", name))
             })
+    }
+
+    fn get_sequence_manager(&self) -> Option<Arc<linkrs_core::metadata::SequenceManager>> {
+        self.sequence_manager.clone()
     }
 
     fn execute_exists(
@@ -194,6 +203,8 @@ pub struct BorrowedRowContext<'a> {
     session_variables: Option<Arc<HashMap<String, Value>>>,
     /// Expression-level subquery executor of the hosting operator.
     subquery_executor: Option<Arc<SubqueryExecutor>>,
+    /// Sequence catalog manager for `curr_val` / `next_val`.
+    sequence_manager: Option<Arc<linkrs_core::metadata::SequenceManager>>,
 }
 
 impl<'a> BorrowedRowContext<'a> {
@@ -205,6 +216,7 @@ impl<'a> BorrowedRowContext<'a> {
             parameters: None,
             session_variables: None,
             subquery_executor: None,
+            sequence_manager: None,
         }
     }
 
@@ -221,6 +233,7 @@ impl<'a> BorrowedRowContext<'a> {
             parameters: Some(parameters),
             session_variables: None,
             subquery_executor: None,
+            sequence_manager: None,
         }
     }
 
@@ -234,6 +247,7 @@ impl<'a> BorrowedRowContext<'a> {
             parameters: env.params.clone(),
             session_variables: env.session_variables.clone(),
             subquery_executor: env.subquery_executor.clone(),
+            sequence_manager: env.sequence_manager.clone(),
         }
     }
 
@@ -276,6 +290,10 @@ impl ExpressionContext for BorrowedRowContext<'_> {
             .ok_or_else(|| {
                 ExpressionError::type_error(format!("Session variable `{}` is not defined", name))
             })
+    }
+
+    fn get_sequence_manager(&self) -> Option<Arc<linkrs_core::metadata::SequenceManager>> {
+        self.sequence_manager.clone()
     }
 
     fn execute_exists(
@@ -340,6 +358,8 @@ pub struct SplitRowContext<'a> {
     session_variables: Option<Arc<HashMap<String, Value>>>,
     /// Expression-level subquery executor of the hosting operator.
     subquery_executor: Option<Arc<SubqueryExecutor>>,
+    /// Sequence catalog manager for `curr_val` / `next_val`.
+    sequence_manager: Option<Arc<linkrs_core::metadata::SequenceManager>>,
 }
 
 impl<'a> SplitRowContext<'a> {
@@ -354,6 +374,7 @@ impl<'a> SplitRowContext<'a> {
             parameters: None,
             session_variables: None,
             subquery_executor: None,
+            sequence_manager: None,
         }
     }
 
@@ -375,6 +396,7 @@ impl<'a> SplitRowContext<'a> {
             parameters: env.params.clone(),
             session_variables: env.session_variables.clone(),
             subquery_executor: env.subquery_executor.clone(),
+            sequence_manager: env.sequence_manager.clone(),
         }
     }
 }
@@ -412,6 +434,10 @@ impl ExpressionContext for SplitRowContext<'_> {
             .ok_or_else(|| {
                 ExpressionError::type_error(format!("Session variable `{}` is not defined", name))
             })
+    }
+
+    fn get_sequence_manager(&self) -> Option<Arc<linkrs_core::metadata::SequenceManager>> {
+        self.sequence_manager.clone()
     }
 
     fn execute_exists(

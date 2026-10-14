@@ -264,7 +264,7 @@ fn test_create_space_with_params_parses() {
         match &stmt.target {
             CreateTarget::Space { name, vid_type, .. } => {
                 assert_eq!(name, "test_space");
-                assert_eq!(vid_type, "FIXEDSTRING32");
+                assert_eq!(vid_type, "FIXED_STRING(32)");
             }
             _ => panic!(
                 "Expect Space to create a goal and actually get {:?}",

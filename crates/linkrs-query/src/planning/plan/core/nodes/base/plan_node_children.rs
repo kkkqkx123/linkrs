@@ -27,6 +27,7 @@ impl PlanNodeEnum {
             | PlanNodeEnum::ShowExtensions(_)
             | PlanNodeEnum::MacroManage(_)
             | PlanNodeEnum::TypeManage(_)
+            | PlanNodeEnum::SequenceManage(_)
             | PlanNodeEnum::LoadFrom(_)
             | PlanNodeEnum::InQueryCall(_)
             | PlanNodeEnum::CopyFrom(_)

@@ -6,8 +6,8 @@ use crate::planning::plan::core::nodes::data_modification::{
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, UpdateNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
-    TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
+    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SequenceManageNode,
+    SpaceManageNode, TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
 };
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
@@ -164,6 +164,7 @@ pub trait PlanNodeVisitor {
         VectorManage, VectorManageNode, visit_vector_manage;
         MacroManage, MacroManageNode, visit_macro_manage;
         TypeManage, TypeManageNode, visit_type_manage;
+        SequenceManage, SequenceManageNode, visit_sequence_manage;
     );
 
     impl_visitor_methods!(
@@ -287,6 +288,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::VectorManage(node) => visitor.visit_vector_manage(node),
             PlanNodeEnum::MacroManage(node) => visitor.visit_macro_manage(node),
             PlanNodeEnum::TypeManage(node) => visitor.visit_type_manage(node),
+            PlanNodeEnum::SequenceManage(node) => visitor.visit_sequence_manage(node),
 
             PlanNodeEnum::ShowStats(node) => visitor.visit_show_stats(node),
             PlanNodeEnum::ShowConfigs(node) => visitor.visit_show_configs(node),

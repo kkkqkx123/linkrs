@@ -182,6 +182,12 @@ pub struct ExecutionRuntime {
     /// Injected by the materializer from the query bindings; read by DDL
     /// operators executing `CREATE/DROP TYPE`.
     pub type_alias_manager: Option<Arc<linkrs_core::metadata::TypeAliasManager>>,
+    /// Sequence catalog manager (named sequences), shared engine-wide.
+    ///
+    /// Injected by the materializer from the query bindings; read by DDL
+    /// operators executing `CREATE/ALTER/DROP SEQUENCE` and by the
+    /// `curr_val` / `next_val` expression functions.
+    pub sequence_manager: Option<Arc<linkrs_core::metadata::SequenceManager>>,
     /// Working tables of enclosing recursive-CTE fixpoints, keyed by the
     /// mangled CTE tag (`crate::cte::mangle_cte_name`).
     ///
@@ -233,6 +239,7 @@ impl ExecutionRuntime {
             feedback_history: None,
             macro_manager: None,
             type_alias_manager: None,
+            sequence_manager: None,
             cte_tables: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         }
     }
@@ -364,6 +371,19 @@ impl ExecutionRuntime {
     /// Return the type-alias catalog manager, if bound.
     pub fn type_alias_manager(&self) -> Option<Arc<linkrs_core::metadata::TypeAliasManager>> {
         self.type_alias_manager.clone()
+    }
+
+    /// Set the sequence catalog manager for this execution instance.
+    pub fn set_sequence_manager(
+        &mut self,
+        manager: Option<Arc<linkrs_core::metadata::SequenceManager>>,
+    ) {
+        self.sequence_manager = manager;
+    }
+
+    /// Return the sequence catalog manager, if bound.
+    pub fn sequence_manager(&self) -> Option<Arc<linkrs_core::metadata::SequenceManager>> {
+        self.sequence_manager.clone()
     }
 
     /// Publish a recursive-CTE working table for the duration of one step

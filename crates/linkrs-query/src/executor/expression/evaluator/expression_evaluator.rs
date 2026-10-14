@@ -8,7 +8,7 @@ use crate::executor::expression::evaluator::operations::{
     BinaryOperationEvaluator, UnaryOperationEvaluator,
 };
 use crate::executor::expression::evaluator::traits::ExpressionContext;
-use crate::executor::expression::functions::global_registry;
+use crate::executor::expression::functions::{global_registry, global_registry_ref};
 use crate::executor::expression::ExpressionError;
 use linkrs_core::types::expr::analysis_utils::is_evaluable;
 use linkrs_core::types::expr::Expression;
@@ -78,6 +78,22 @@ impl ExpressionEvaluator {
                 // First, obtain the function (as an immutable borrowing).
                 let func_ref = context.get_function(name);
 
+                // Sequence functions resolve against the context's sequence
+                // catalog instead of the stateless builtin path: `next_val`
+                // mutates catalog state and `curr_val` reads it, so both
+                // need the manager even when every other facility is absent.
+                if let Some(seq) = func_ref.as_ref().and_then(|owned| match owned {
+                    crate::executor::expression::functions::OwnedFunctionRef::Builtin(
+                        crate::executor::expression::functions::BuiltinFunction::Sequence(seq),
+                    ) => Some(*seq),
+                    _ => None,
+                }) {
+                    return seq.execute_with_manager(
+                        &arg_values,
+                        context.get_sequence_manager().as_ref(),
+                    );
+                }
+
                 if let Some(func_ref) = func_ref {
                     // Convert to a function reference with ownership to avoid borrowing issues.
                     let owned_func: crate::executor::expression::functions::OwnedFunctionRef =
@@ -102,6 +118,24 @@ impl ExpressionEvaluator {
                     }
                 } else {
                     // If it is not available in the context, use the global registry.
+                    // Sequence functions still resolve against the context's
+                    // manager on this path: row contexts return `None` from
+                    // `get_function` and would otherwise always report a
+                    // missing context.
+                    if let Some(seq) = global_registry_ref()
+                        .get_builtin(name)
+                        .and_then(|f| match f {
+                            crate::executor::expression::functions::BuiltinFunction::Sequence(
+                                seq,
+                            ) => Some(*seq),
+                            _ => None,
+                        })
+                    {
+                        return seq.execute_with_manager(
+                            &arg_values,
+                            context.get_sequence_manager().as_ref(),
+                        );
+                    }
                     // Check if graph storage is available
                     if let Some(storage) = context.get_graph_storage() {
                         global_registry().execute_with_storage(name, &arg_values, &storage)

@@ -5,17 +5,19 @@ use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::management::edge_nodes::EdgeAlterInfo;
 use crate::planning::plan::core::nodes::management::index_nodes::IndexManageInfo;
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, IndexManageNode, MacroManageNode, SpaceManageNode, TagManageNode,
-    TypeManageNode,
+    EdgeManageNode, IndexManageNode, MacroManageNode, SequenceManageNode, SpaceManageNode,
+    TagManageNode, TypeManageNode,
 };
 use crate::planning::plan::core::nodes::management::space_nodes::{
     CreateSpaceNode, SpaceManageInfo,
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo;
+use crate::planning::plan::core::nodes::management::sequence_nodes::SequenceManageInfo;
 use crate::planning::plan::core::nodes::{
-    AlterEdgeNode, AlterTagNode, CreateEdgeNode, CreateMacroNode, CreateTagNode, CreateTypeNode,
-    DropMacroNode, DropTypeNode, EdgeManageInfo, MacroManageInfo, RenameEdgeNode, RenameTagNode,
-    TagManageInfo, TypeManageInfo, UpdateEdgeEndpointsNode,
+    AlterEdgeNode, AlterSequenceNode, AlterTagNode, CreateEdgeNode, CreateMacroNode,
+    CreateSequenceNode, CreateTagNode, CreateTypeNode, DropMacroNode, DropSequenceNode,
+    DropTypeNode, EdgeManageInfo, MacroManageInfo, RenameEdgeNode, RenameTagNode, TagManageInfo,
+    TypeManageInfo, UpdateEdgeEndpointsNode,
 };
 use crate::planning::plan::core::{AlterSpaceNode, PlanNodeEnum};
 use crate::planning::planner::PlannerError;
@@ -127,9 +129,30 @@ impl MaintainPlanner {
             CreateTarget::Node { .. } | CreateTarget::Edge { .. } | CreateTarget::Path { .. } => {
                 Ok(None)
             }
-            CreateTarget::Sequence { .. } => {
-                // Sequence creation is handled by the executor.
-                Ok(None)
+            CreateTarget::Sequence {
+                name,
+                start,
+                increment,
+                min_value,
+                max_value,
+                cycle,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "CREATE SEQUENCE requires a non-empty sequence name".to_string(),
+                    ));
+                }
+                Self::check_sequence_bounds(name, *increment, *min_value, *max_value)?;
+                let info = SequenceManageInfo::new(name.clone())
+                    .with_start(*start)
+                    .with_increment(*increment)
+                    .with_bounds(*min_value, *max_value)
+                    .with_cycle(Some(*cycle))
+                    .with_if_not_exists(if_not_exists);
+                let node = CreateSequenceNode::new(next_node_id(), info);
+                Ok(Some(PlanNodeEnum::SequenceManage(
+                    SequenceManageNode::Create(node),
+                )))
             }
             CreateTarget::TagAsQuery { name, .. } => {
                 Err(PlannerError::UnsupportedOperation(format!(
@@ -146,10 +169,32 @@ impl MaintainPlanner {
         }
     }
 
+    /// Validate sequence step and bounds at plan time so a stuck or
+    /// inverted sequence fails loudly instead of misbehaving at runtime.
+    fn check_sequence_bounds(
+        name: &str,
+        increment: Option<i64>,
+        min_value: Option<i64>,
+        max_value: Option<i64>,
+    ) -> Result<(), PlannerError> {
+        if increment == Some(0) {
+            return Err(PlannerError::PlanGenerationFailed(format!(
+                "Sequence '{name}' has INCREMENT=0, which would never advance"
+            )));
+        }
+        if let (Some(min), Some(max)) = (min_value, max_value) {
+            if min > max {
+                return Err(PlannerError::PlanGenerationFailed(format!(
+                    "Sequence '{name}' has MINVALUE ({min}) greater than MAXVALUE ({max})"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn contextual_body(
         body: &linkrs_core::types::expr::contextual::ContextualExpression,
-    ) -> Result<linkrs_core::Expression, PlannerError> {
-        body.expression()
+    ) -> Result<linkrs_core::Expression, PlannerError> {        body.expression()
             .map(|meta| meta.inner().clone())
             .ok_or_else(|| {
                 PlannerError::PlanGenerationFailed(
@@ -294,9 +339,28 @@ impl MaintainPlanner {
                 let node = AlterEdgeNode::new(next_node_id(), alter_info);
                 Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node)))
             }
-            AlterTarget::Sequence { .. } => Err(PlannerError::UnsupportedOperation(
-                "ALTER SEQUENCE planning not yet implemented".to_string(),
-            )),
+            AlterTarget::Sequence {
+                name,
+                increment,
+                min_value,
+                max_value,
+                cycle,
+            } => {
+                if name.trim().is_empty() {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "ALTER SEQUENCE requires a non-empty sequence name".to_string(),
+                    ));
+                }
+                Self::check_sequence_bounds(name, *increment, *min_value, *max_value)?;
+                let info = SequenceManageInfo::new(name.clone())
+                    .with_increment(*increment)
+                    .with_bounds(*min_value, *max_value)
+                    .with_cycle(*cycle);
+                let node = AlterSequenceNode::new(next_node_id(), info);
+                Ok(PlanNodeEnum::SequenceManage(SequenceManageNode::Alter(
+                    node,
+                )))
+            }
             AlterTarget::RenameTag { old_name, new_name } => {
                 if old_name.trim().is_empty() || new_name.trim().is_empty() {
                     return Err(PlannerError::PlanGenerationFailed(
@@ -451,9 +515,18 @@ impl MaintainPlanner {
                 "DROP TAG/EDGE requires at least one name; the parser guarantees a non-empty list"
                     .to_string(),
             )),
-            DropTarget::Sequence(_) => Err(PlannerError::UnsupportedOperation(
-                "DROP SEQUENCE planning not yet implemented".to_string(),
-            )),
+            DropTarget::Sequence(seq_name) => {
+                if seq_name.trim().is_empty() {
+                    return Err(PlannerError::PlanGenerationFailed(
+                        "DROP SEQUENCE requires a non-empty sequence name".to_string(),
+                    ));
+                }
+                let node = DropSequenceNode::new(next_node_id(), seq_name.clone())
+                    .with_if_exists(if_exists);
+                Ok(PlanNodeEnum::SequenceManage(SequenceManageNode::Drop(
+                    node,
+                )))
+            }
         }
     }
 }

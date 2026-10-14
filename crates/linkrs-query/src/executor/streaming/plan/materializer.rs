@@ -542,6 +542,9 @@ impl PhysicalPlanMaterializer {
         if bindings.type_alias_manager.is_some() {
             runtime.set_type_alias_manager(bindings.type_alias_manager.clone());
         }
+        if bindings.sequence_manager.is_some() {
+            runtime.set_sequence_manager(bindings.sequence_manager.clone());
+        }
 
         // shared scheduler takes priority.
         if let Some(ref ss) = bindings.shared_scheduler {
@@ -741,6 +744,7 @@ mod tests {
             columnar_policy: None,
             macro_manager: None,
             type_alias_manager: None,
+            sequence_manager: None,
             search: crate::executor::base::SearchContext::default(),
         }
     }

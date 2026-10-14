@@ -52,6 +52,9 @@ pub struct EvalEnv {
     pub session_variables: Option<Arc<HashMap<String, Value>>>,
     /// Expression-level subquery executor of the hosting operator, if any.
     pub subquery_executor: Option<Arc<SubqueryExecutor>>,
+    /// Sequence catalog manager for `curr_val` / `next_val`, shared
+    /// engine-wide. Populated from the execution runtime at operator open.
+    pub sequence_manager: Option<Arc<linkrs_core::metadata::SequenceManager>>,
 }
 
 impl EvalEnv {
@@ -61,6 +64,7 @@ impl EvalEnv {
             params,
             session_variables: None,
             subquery_executor: None,
+            sequence_manager: None,
         }
     }
 }
@@ -619,6 +623,7 @@ mod tests {
             columnar_policy: None,
             macro_manager: None,
             type_alias_manager: None,
+            sequence_manager: None,
             search: crate::executor::base::SearchContext::default(),
         });
         SubqueryExecutor::from_specs(runtime, bindings, &specs)

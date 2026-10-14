@@ -303,6 +303,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         context.shared_scheduler = self.shared_scheduler.clone();
         context.macro_manager = Some(self.macro_manager.clone());
         context.type_alias_manager = Some(self.type_alias_manager.clone());
+        context.sequence_manager = Some(self.sequence_manager.clone());
         if let Some(ref storage) = self.storage {
             let dyn_storage: Arc<RwLock<dyn QueryStorage>> = if let Some(operation_storage) =
                 query_context.request_context().operation_storage.clone()

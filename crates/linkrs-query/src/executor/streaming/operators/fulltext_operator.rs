@@ -49,9 +49,85 @@ fn make_manage_result(
     )
 }
 
+/// Map the planner-level engine type to the fulltext manager's engine type.
+///
+/// Both enums currently carry only BM25; the match stays exhaustive so a
+/// future engine variant fails to compile here instead of silently falling
+/// back to a default.
+#[cfg(feature = "fulltext")]
+fn map_engine_type(
+    engine: linkrs_core::types::FulltextEngineType,
+) -> linkrs_fulltext::EngineType {
+    match engine {
+        linkrs_core::types::FulltextEngineType::Bm25 => linkrs_fulltext::EngineType::Bm25,
+    }
+}
+
+/// Render parsed index options as the opaque engine-config document stored
+/// in fulltext index metadata.
+///
+/// Returns `None` when no option was given so the manager keeps its compiled
+/// defaults; per-field `analyzer` / `boost` are parser-rejected today, so a
+/// present field entry only ever carries its name.
+#[cfg(feature = "fulltext")]
+fn fulltext_engine_config(
+    options: &crate::parser::ast::fulltext::IndexOptions,
+) -> Option<serde_json::Value> {
+    let has_bm25 = options.bm25_config.is_some();
+    if !has_bm25 && options.common_options.is_empty() {
+        return None;
+    }
+    let mut config = serde_json::Map::new();
+    if let Some(bm25) = &options.bm25_config {
+        if let Some(k1) = bm25.k1 {
+            config.insert("k1".to_string(), serde_json::json!(k1));
+        }
+        if let Some(b) = bm25.b {
+            config.insert("b".to_string(), serde_json::json!(b));
+        }
+        if let Some(analyzer) = &bm25.analyzer {
+            config.insert("analyzer".to_string(), serde_json::json!(analyzer));
+        }
+        if let Some(store_original) = bm25.store_original {
+            config.insert("store_original".to_string(), serde_json::json!(store_original));
+        }
+        if !bm25.field_weights.is_empty() {
+            config.insert(
+                "field_weights".to_string(),
+                serde_json::json!(bm25.field_weights),
+            );
+        }
+    }
+    for (key, value) in &options.common_options {
+        config.insert(key.clone(), plain_option_json(value));
+    }
+    Some(serde_json::Value::Object(config))
+}
+
+/// Render an option value as plain JSON.
+///
+/// `Value` serializes externally tagged (`{"String": ...}`); option metadata
+/// stays human-readable by unwrapping the common scalar cases and falling
+/// back to the tagged form for complex values.
+#[cfg(feature = "fulltext")]
+fn plain_option_json(value: &linkrs_core::Value) -> serde_json::Value {
+    use linkrs_core::Value;
+    match value {
+        Value::String(s) => serde_json::Value::String(s.to_string()),
+        Value::FixedString(s) => serde_json::Value::String(s.clone()),
+        Value::SmallInt(v) => serde_json::json!(*v),
+        Value::Int(v) => serde_json::json!(*v),
+        Value::BigInt(v) => serde_json::json!(*v),
+        Value::Float(v) => serde_json::json!(*v),
+        Value::Double(v) => serde_json::json!(*v),
+        Value::Bool(v) => serde_json::Value::Bool(*v),
+        Value::Null(_) => serde_json::Value::Null,
+        _ => serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
+    }
+}
+
 #[derive(Debug)]
-pub enum FulltextOperatorKind {
-    FulltextManage {
+pub enum FulltextOperatorKind {    FulltextManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: FulltextManageCommand,
@@ -247,17 +323,37 @@ impl FulltextOperator {
                             index_name,
                             schema_name,
                             fields,
+                            engine_type,
+                            options,
+                            if_not_exists,
                             space_id,
                         } => {
                             if let Some(manager) = fulltext_manager {
-                                for field_name in fields {
+                                let engine_config = fulltext_engine_config(options);
+                                let engine = map_engine_type(*engine_type);
+                                for field in fields {
+                                    if manager.has_index(
+                                        *space_id,
+                                        schema_name,
+                                        field.field_name.as_str(),
+                                    ) {
+                                        if *if_not_exists {
+                                            continue;
+                                        }
+                                        return Err(QueryError::execution(format!(
+                                            "Fulltext index on {}.{}({}) already exists",
+                                            space_id, schema_name, field.field_name,
+                                        )));
+                                    }
                                     crate::executor::streaming::helpers::runtime_bridge::wait(
                                         "Fulltext create",
-                                        manager.create_index(
+                                        manager.create_index_with_engine_config(
                                             *space_id,
                                             schema_name,
-                                            field_name,
-                                            None,
+                                            field.field_name.as_str(),
+                                            index_name.as_str(),
+                                            Some(engine),
+                                            engine_config.clone(),
                                         ),
                                     )?;
                                 }
@@ -676,5 +772,50 @@ impl FulltextOperator {
 
     pub fn close(&mut self) -> Result<(), QueryError> {
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "fulltext"))]
+mod tests {
+    use super::*;
+    use crate::parser::ast::fulltext::{BM25Options, IndexOptions};
+    use std::collections::HashMap;
+
+    #[test]
+    fn engine_config_is_none_without_options() {
+        let options = IndexOptions {
+            bm25_config: None,
+            common_options: HashMap::new(),
+        };
+        assert_eq!(fulltext_engine_config(&options), None);
+    }
+
+    #[test]
+    fn engine_config_carries_bm25_and_common_options() {
+        let mut common = HashMap::new();
+        common.insert("custom".to_string(), linkrs_core::Value::string("x"));
+        let options = IndexOptions {
+            bm25_config: Some(BM25Options {
+                k1: Some(1.2),
+                b: Some(0.8),
+                field_weights: HashMap::new(),
+                analyzer: None,
+                store_original: Some(true),
+            }),
+            common_options: common,
+        };
+        let config = fulltext_engine_config(&options).expect("config rendered");
+        assert_eq!(config["k1"], serde_json::json!(1.2f32));
+        assert_eq!(config["b"], serde_json::json!(0.8f32));
+        assert_eq!(config["store_original"], serde_json::json!(true));
+        assert_eq!(config["custom"], serde_json::json!("x"));
+    }
+
+    #[test]
+    fn engine_type_maps_bm25() {
+        assert_eq!(
+            map_engine_type(linkrs_core::types::FulltextEngineType::Bm25),
+            linkrs_fulltext::EngineType::Bm25
+        );
     }
 }

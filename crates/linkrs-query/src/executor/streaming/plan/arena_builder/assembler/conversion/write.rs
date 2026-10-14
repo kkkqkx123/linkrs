@@ -235,6 +235,10 @@ impl ArenaPlanAssembler {
                 let spec = build_type_manage_spec(tm_node, exec_ctx)?;
                 Self::push_ddl_op(operators, fragments, op_alloc, frag_alloc, node.id(), spec)
             }
+            PlanNodeEnum::SequenceManage(seq_node) => {
+                let spec = build_sequence_manage_spec(seq_node, exec_ctx)?;
+                Self::push_ddl_op(operators, fragments, op_alloc, frag_alloc, node.id(), spec)
+            }
             PlanNodeEnum::ShowStats(_) => Self::push_ddl_op(
                 operators,
                 fragments,

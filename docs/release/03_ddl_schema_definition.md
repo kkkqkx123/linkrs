@@ -264,8 +264,9 @@ CREATE FULLTEXT INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name>
 ### 索引命名语义
 
 全文索引按 `(space, schema, field)` 定位实际索引数据；`DROP FULLTEXT INDEX <name>` /
-`SHOW FULLTEXT INDEX` 按声明时的索引名匹配。创建时传入的索引名会随索引元数据保存，
-同一 `(space, schema, field)` 上的重复创建按索引名区分。
+`SHOW FULLTEXT INDEX` 按声明时的索引名匹配。创建时传入的索引名会随索引元数据保存
+（`DESCRIBE` / `SHOW` 可见），同一 `(space, schema, field)` 上的重复创建直接报错，
+带 `IF NOT EXISTS` 时返回成功而不重建。
 
 ### 关键特性
 - 支持多种文本搜索查询类型
@@ -389,9 +390,52 @@ CREATE SEQUENCE [IF NOT EXISTS] <seq_name>
     [START=<n>] [INCREMENT=<n>] [MINVALUE=<n>] [MAXVALUE=<n>] [CYCLE | NOCYCLE]
 ```
 
+### 参数默认值
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `START` | `1` | 序列初值，`curr_val` 在首次 `next_val` 之前返回该值 |
+| `INCREMENT` | `1` | 步进，必须非零；为 `0` 时创建与修改均直接报错 |
+| `MINVALUE` | 无下界 | 省略时取整数最小值 |
+| `MAXVALUE` | 无上界 | 省略时取整数最大值 |
+| `CYCLE \| NOCYCLE` | `NOCYCLE` | 越界时是否回绕；`NOCYCLE` 下越界报错 |
+
+`MINVALUE` 大于 `MAXVALUE` 时创建与修改均直接报错。
+
+### 取值函数
+
+```cypher
+RETURN next_val('seq_name')   -- 取下一个值并推进序列
+RETURN curr_val('seq_name')   -- 取当前值，不推进序列
+```
+
+`nextval` / `currval`（无下划线）为同义写法。`next_val` 每次调用按 `INCREMENT`
+推进并返回新值；`curr_val` 返回最近一次 `next_val` 之后的值（从未推进时返回
+`START`）。对不存在的序列调用任一函数均直接报错。
+
+### 修改与删除
+
+```cypher
+ALTER SEQUENCE <seq_name>
+    [INCREMENT=<n>] [MINVALUE=<n>] [MAXVALUE=<n>] [CYCLE | NOCYCLE]
+
+DROP SEQUENCE [IF EXISTS] <seq_name>
+```
+
+`ALTER SEQUENCE` 仅调整步进、边界与回绕策略（省略的子句保持现状），不重置
+当前值。删除不存在的序列时，不带 `IF EXISTS` 报错，带 `IF EXISTS` 返回空结果。
+
 ### 示例
 ```cypher
 CREATE SEQUENCE IF NOT EXISTS user_id_seq START=1 INCREMENT=1 NOCYCLE
+
+CREATE SEQUENCE order_seq START=1000 INCREMENT=5 MAXVALUE=999999
+
+RETURN nextval('order_seq')
+
+ALTER SEQUENCE order_seq INCREMENT=10
+
+DROP SEQUENCE IF EXISTS order_seq
 ```
 
 ---
@@ -557,7 +601,6 @@ SHOW ATTACHED DATABASES
 SHOW SESSIONS
 SHOW QUERIES
 SHOW CONFIGS [<module>]
-SHOW HOSTS / SHOW PARTS
 ```
 
 ### 示例

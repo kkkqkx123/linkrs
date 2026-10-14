@@ -15,8 +15,8 @@ use crate::planning::plan::core::nodes::data_modification::{
     InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, UpdateNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
-    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
-    TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
+    EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SequenceManageNode,
+    SpaceManageNode, TagManageNode, TypeManageNode, UserManageNode, VectorManageNode,
 };
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
@@ -72,9 +72,9 @@ use crate::planning::plan::core::nodes::traversal::traversal_node::{
 // Re-export management sub-enums for external use
 pub use crate::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode as EdgeManageNodeEnum, FulltextManageNode as FulltextManageNodeEnum,
-    IndexManageNode as IndexManageNodeEnum, SpaceManageNode as SpaceManageNodeEnum,
-    TagManageNode as TagManageNodeEnum, UserManageNode as UserManageNodeEnum,
-    VectorManageNode as VectorManageNodeEnum,
+    IndexManageNode as IndexManageNodeEnum, SequenceManageNode as SequenceManageNodeEnum,
+    SpaceManageNode as SpaceManageNodeEnum, TagManageNode as TagManageNodeEnum,
+    UserManageNode as UserManageNodeEnum, VectorManageNode as VectorManageNodeEnum,
 };
 // Re-export individual management node types for backward compatibility
 pub use crate::planning::plan::core::nodes::management::edge_nodes::{
@@ -255,6 +255,7 @@ pub enum PlanNodeEnum {
     InQueryCall(InQueryCallNode),
     MacroManage(MacroManageNode),
     TypeManage(TypeManageNode),
+    SequenceManage(SequenceManageNode),
 
     // Full-text Search Nodes
     FulltextSearch(FulltextSearchNode),
@@ -686,6 +687,7 @@ crate::define_all_plan_nodes! {
     (VectorManage, VectorManageNode, PlanNodeCategory::Management, "VectorManage"),
     (MacroManage, MacroManageNode, PlanNodeCategory::Management, "MacroManage"),
     (TypeManage, TypeManageNode, PlanNodeCategory::Management, "TypeManage"),
+    (SequenceManage, SequenceManageNode, PlanNodeCategory::Management, "SequenceManage"),
     // Management Node – Data
     (CopyFrom, CopyFromNode, PlanNodeCategory::Management, "CopyFrom"),
     (CopyTo, CopyToNode, PlanNodeCategory::Management, "CopyTo"),
@@ -755,6 +757,7 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::ShowExtensions(_)
                 | PlanNodeEnum::LoadFrom(_)
                 | PlanNodeEnum::InQueryCall(_)
+                | PlanNodeEnum::SequenceManage(_)
         )
     }
 }
@@ -823,7 +826,6 @@ mod tests {
         "ReleaseSavepoint",
         // DataProcessing (12)
         "DataCollect",
-        "Remove",
         "PatternApply",
         "RollUpApply",
         "CorrelatedApply",
@@ -849,6 +851,7 @@ mod tests {
         "VectorManage",
         "MacroManage",
         "TypeManage",
+        "SequenceManage",
         "CopyFrom",
         "CopyTo",
         "InsertVertices",
@@ -859,8 +862,6 @@ mod tests {
         "PipeDeleteVertices",
         "PipeDeleteEdges",
         "Update",
-        "UpdateVertices",
-        "UpdateEdges",
         "ShowStats",
         "ShowConfigs",
         "ShowQueries",
@@ -946,6 +947,7 @@ mod tests {
         "VectorManage",
         "MacroManage",
         "TypeManage",
+        "SequenceManage",
         "CopyFrom",
         "CopyTo",
         "InsertVertices",
@@ -956,8 +958,6 @@ mod tests {
         "PipeDeleteVertices",
         "PipeDeleteEdges",
         "Update",
-        "UpdateVertices",
-        "UpdateEdges",
         "ShowStats",
         "ShowConfigs",
         "ShowQueries",
@@ -977,12 +977,12 @@ mod tests {
         "VectorMatch",
     ];
 
-    /// Default build: 91 variants. With `vector`: 94 variants.
+    /// Default build: 89 variants. With `vector`: 92 variants.
     /// (`vector-qdrant` implies `vector`, so no separate count is needed.)
     #[cfg(not(feature = "vector"))]
-    const EXPECTED_VARIANT_COUNT: usize = 91;
+    const EXPECTED_VARIANT_COUNT: usize = 89;
     #[cfg(feature = "vector")]
-    const EXPECTED_VARIANT_COUNT: usize = 94;
+    const EXPECTED_VARIANT_COUNT: usize = 92;
 
     #[test]
     fn variant_count_matches_documented_number() {

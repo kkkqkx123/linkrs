@@ -113,6 +113,8 @@ pub struct QueryBindings {
     pub macro_manager: Option<Arc<linkrs_core::metadata::MacroManager>>,
     /// Type-alias catalog manager (user-defined types), shared engine-wide.
     pub type_alias_manager: Option<Arc<linkrs_core::metadata::TypeAliasManager>>,
+    /// Sequence catalog manager (named sequences), shared engine-wide.
+    pub sequence_manager: Option<Arc<linkrs_core::metadata::SequenceManager>>,
     pub search: crate::executor::base::SearchContext,
 }
 
@@ -156,6 +158,7 @@ impl QueryBindings {
             columnar_policy: context.columnar_policy.clone(),
             macro_manager: context.macro_manager.clone(),
             type_alias_manager: context.type_alias_manager.clone(),
+            sequence_manager: context.sequence_manager.clone(),
             search: context.search.clone(),
         }
     }

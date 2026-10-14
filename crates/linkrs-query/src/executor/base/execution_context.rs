@@ -265,4 +265,8 @@ impl crate::executor::expression::evaluator::traits::ExpressionContext for Execu
                     .map(|f| OwnedFunctionRef::Custom(f.clone()))
             })
     }
+
+    fn get_sequence_manager(&self) -> Option<Arc<SequenceManager>> {
+        self.sequence_manager.clone()
+    }
 }

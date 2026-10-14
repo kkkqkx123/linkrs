@@ -582,60 +582,128 @@ impl DdlOperator {
     }
 
     fn execute_sequence_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {
-        if let DdlOperatorKind::SequenceManage {
-            ref command,
-            ref mut emitted,
-            ..
-        } = self.kind
-        {
-            if *emitted {
-                return Ok(None);
+        let command = match &self.kind {
+            DdlOperatorKind::SequenceManage {
+                command, emitted, ..
+            } => {
+                if *emitted {
+                    return Ok(None);
+                }
+                command.clone()
             }
-            *emitted = true;
+            _ => {
+                return Err(QueryError::execution(
+                    "execute_sequence_manage called with non-SequenceManage kind".to_string(),
+                ));
+            }
+        };
 
-            match command {
-                SequenceManageCommand::Create {
-                    seq_name,
-                    start,
-                    increment,
-                    min_value,
-                    max_value,
-                    cycle,
-                    if_not_exists,
-                } => {
-                    let _ = (start, increment, min_value, max_value, cycle);
-                    Ok(Some(make_manage_result(
-                        "create",
-                        Some(seq_name),
-                        if *if_not_exists {
-                            "if_not_exists"
-                        } else {
-                            "ok"
-                        },
-                    )))
+        let manager = self
+            .runtime
+            .as_ref()
+            .and_then(|rt| rt.sequence_manager())
+            .ok_or_else(|| {
+                QueryError::execution(
+                    "CREATE/ALTER/DROP SEQUENCE requires a sequence catalog manager on the runtime"
+                        .to_string(),
+                )
+            })?;
+
+        let result = match command {
+            SequenceManageCommand::Create {
+                seq_name,
+                start,
+                increment,
+                min_value,
+                max_value,
+                cycle,
+                if_not_exists,
+            } => {
+                if manager.exists(&seq_name) {
+                    if if_not_exists {
+                        Ok(Some(make_manage_result(
+                            "create",
+                            Some(&seq_name),
+                            "if_not_exists",
+                        )))
+                    } else {
+                        Err(QueryError::execution(format!(
+                            "Sequence '{seq_name}' already exists"
+                        )))
+                    }
+                } else {
+                    let increment = increment.unwrap_or(1);
+                    if increment == 0 {
+                        return Err(QueryError::execution(format!(
+                            "Sequence '{seq_name}' has INCREMENT=0, which would never advance"
+                        )));
+                    }
+                    manager
+                        .create_sequence(
+                            seq_name.clone(),
+                            start.unwrap_or(1),
+                            increment,
+                            min_value.unwrap_or(i64::MIN),
+                            max_value.unwrap_or(i64::MAX),
+                            cycle,
+                        )
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    Ok(Some(make_manage_result("create", Some(&seq_name), "ok")))
                 }
-                SequenceManageCommand::Alter {
-                    seq_name,
-                    increment,
-                    min_value,
-                    max_value,
-                    cycle,
-                } => {
-                    let _ = (increment, min_value, max_value, cycle);
-                    Ok(Some(make_manage_result("alter", Some(seq_name), "ok")))
-                }
-                SequenceManageCommand::Drop {
-                    seq_name,
-                    if_exists,
-                } => Ok(Some(make_manage_result(
-                    "drop",
-                    Some(seq_name),
-                    if *if_exists { "if_exists" } else { "ok" },
-                ))),
             }
-        } else {
-            unreachable!("execute_sequence_manage called with non-SequenceManage kind")
+            SequenceManageCommand::Alter {
+                seq_name,
+                increment,
+                min_value,
+                max_value,
+                cycle,
+            } => {
+                if !manager.exists(&seq_name) {
+                    Err(QueryError::execution(format!(
+                        "Sequence '{seq_name}' does not exist"
+                    )))
+                } else {
+                    if increment == Some(0) {
+                        return Err(QueryError::execution(format!(
+                            "Sequence '{seq_name}' has INCREMENT=0, which would never advance"
+                        )));
+                    }
+                    manager
+                        .alter_sequence(&seq_name, increment, min_value, max_value, cycle)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    Ok(Some(make_manage_result("alter", Some(&seq_name), "ok")))
+                }
+            }
+            SequenceManageCommand::Drop {
+                seq_name,
+                if_exists,
+            } => {
+                if !manager.exists(&seq_name) {
+                    if if_exists {
+                        Ok(Some(make_manage_result(
+                            "drop",
+                            Some(&seq_name),
+                            "if_exists",
+                        )))
+                    } else {
+                        Err(QueryError::execution(format!(
+                            "Sequence '{seq_name}' does not exist"
+                        )))
+                    }
+                } else {
+                    manager
+                        .drop_sequence(&seq_name)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    Ok(Some(make_manage_result("drop", Some(&seq_name), "ok")))
+                }
+            }
+        };
+        if result.is_ok() {
+            if let DdlOperatorKind::SequenceManage { emitted, .. } = &mut self.kind {
+                *emitted = true;
+            }
         }
+        result
     }
 
     fn execute_macro_manage(&mut self) -> Result<Option<DataChunk>, QueryError> {

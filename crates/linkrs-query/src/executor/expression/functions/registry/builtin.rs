@@ -16,6 +16,22 @@ impl FunctionRegistry {
         );
     }
 
+    /// Register an additional spelling for an already-defined builtin.
+    ///
+    /// Used for compatibility aliases (`NEXTVAL` for `NEXT_VAL`): the entry
+    /// carries the same function value and return type, so dispatch, purity
+    /// classification, and return-type inference stay identical.
+    pub fn register_alias(&mut self, alias: &str, function: BuiltinFunction) {
+        let return_type = builtin_return_type(&function);
+        self.builtin_functions.insert(
+            alias.to_uppercase(),
+            RegistryEntry {
+                function,
+                return_type,
+            },
+        );
+    }
+
     /// Get the static return type for a function name.
     pub fn get_return_type(&self, name: &str) -> Option<&DataType> {
         self.resolve_entry(name).map(|e| &e.return_type)
@@ -375,6 +391,10 @@ impl FunctionRegistry {
         use super::super::SequenceFunction;
         self.register_builtin(BuiltinFunction::Sequence(SequenceFunction::CurrVal));
         self.register_builtin(BuiltinFunction::Sequence(SequenceFunction::NextVal));
+        // Nebula-style spellings without the underscore resolve to the same
+        // variants so `nextval('s')` / `currval('s')` work as documented.
+        self.register_alias("NEXTVAL", BuiltinFunction::Sequence(SequenceFunction::NextVal));
+        self.register_alias("CURRVAL", BuiltinFunction::Sequence(SequenceFunction::CurrVal));
     }
 }
 
