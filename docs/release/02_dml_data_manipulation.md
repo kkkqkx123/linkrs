@@ -2,30 +2,36 @@
 
 ## 概述
 
-数据操作语言 (DML) 用于对图数据库中的数据进行增删改操作，包括插入、更新、删除、合并、批量导入等功能。
+数据操作语言 (DML) 用于对图数据库中的数据进行增删改操作，包括插入、更新、删除、合并、批量导入/导出等功能。
+
+> 本文描述当前代码实现的行为契约：可用的写路径、语法边界，以及被显式拒绝的形式与对应报错。
+> 凡未声明可用的写路径均以明确错误收敛，不存在静默丢弃写入的路径。
 
 ---
 
 ## 1. INSERT - 插入数据
 
 ### 功能
-插入新的节点或边。
+插入新的顶点或边。
 
 ### 语法结构
 ```cypher
-INSERT VERTEX [IF NOT EXISTS] <tag_name> [(<prop_list>)] [, <tag_name> [(<prop_list>)] ...] [VALUES] <vid>: [(<value_list>)] [: (<value_list>) ...] [, <vid>: ...]
-INSERT VERTEX [IF NOT EXISTS] ON <tag_name> [, <tag_name> ...] [VALUES] <vid> [, <vid> ...]
-INSERT EDGE [IF NOT EXISTS] <edge_type> [(<prop_list>)] [VALUES] <src_vid> -> <dst_vid> [@<rank>]: [(<value_list>)] [, <src_vid> -> <dst_vid> [@rank]: ...]
+INSERT VERTEX [IF NOT EXISTS] <tag_name> (<prop_list>) [VALUES] <vid>: (<value_list>) [, <vid>: (<value_list>) ...]
+INSERT VERTEX [IF NOT EXISTS] ON <tag_name> [VALUES] <vid> [, <vid> ...]
+INSERT EDGE [IF NOT EXISTS] <edge_type> [(<prop_list>)] [VALUES] <src_vid> -> <dst_vid> [@<rank>]: [(<value_list>)] [, <src_vid> -> <dst_vid> [@<rank>]: ...]
 ```
 
 ### 关键特性
-- 支持批量插入节点
-- 支持插入边
-- 支持指定边rank
-- **支持多标签节点插入** - 一个顶点可同时插入多个标签（值组用冒号分隔）
-- **支持IF NOT EXISTS** - 仅在顶点/边不存在时插入
-- 支持默认属性列表（空括号表示使用所有默认属性）
-- 支持 `ON <tag>` 简写形式（不指定属性名列表）
+- 支持批量插入（逗号分隔多行）；边插入的 `@<rank>` 端到端生效于写入、去重与删除
+- **每语句仅单个标签**：存储层顶点恰好挂一个 tag；多标签写法会被解析器显式拒绝
+- 顶点形式的属性名列表不允许空括号（`person()` 报语法错误）；边形式支持 `()` 与 `:()`
+- **缺省属性名列表时只写入 VID**：省略括号或使用 `ON <tag>` 简写形式时只写 VID；
+  若同时给出值组，绑定层报
+  `INSERT VERTEX without a property name list only writes vertex ids; specify property names to write properties`
+- **属性名与值数量必须一致**：不匹配时报
+  `INSERT VERTEX property value count (N) does not match property name count (M) for tag '<tag>'`
+  （边形式为 `INSERT EDGE property value count ...`）
+- 支持 `IF NOT EXISTS`：顶点已存在则跳过且不计入插入数；边仅探测同 rank 的既有边
 - `VALUES` 关键字可省略
 - 顶点 VID 和属性值均为表达式
 
@@ -37,155 +43,61 @@ INSERT VERTEX person(name, age) VALUES "101": ("Alice", 25), "102": ("Bob", 30)
 -- 带IF NOT EXISTS的插入（幂等操作）
 INSERT VERTEX IF NOT EXISTS person(name, age) VALUES "101": ("Alice", 25)
 
--- 多标签顶点插入
-INSERT VERTEX person(name, age), employee(title, department) VALUES "103": ("Charlie", 35): ("Engineer", "Tech")
-
--- ON简写形式
+-- ON简写形式（只写 VID，不得携带值组）
 INSERT VERTEX ON person VALUES "104"
 
--- 边插入
+-- 边插入（rank 生效）
 INSERT EDGE follow(degree) VALUES "101" -> "102" @0: (0.8)
 
 -- 带IF NOT EXISTS的边插入
 INSERT EDGE IF NOT EXISTS follow(degree) VALUES "101" -> "102" @0: (0.8)
 
--- 批量边插入
+-- 批量边插入 / 空属性列表
 INSERT EDGE follow(degree) VALUES "101" -> "102" @0: (0.8), "102" -> "103" @0: (0.9)
-
--- 空属性列表
 INSERT EDGE follow() VALUES "101" -> "102": ()
 ```
 
 ---
 
-## 2. CREATE - 创建数据（Cypher风格）
+## 2. CREATE - Cypher 风格创建
 
 ### 功能
-使用Cypher风格语法创建节点和边，提供更直观、灵活的图数据操作方式。
+Schema 形式（`CREATE TAG` / `CREATE EDGE TYPE` / `CREATE INDEX` 等）由维护语句（DDL）链路执行，
+行为见 DDL 文档。**数据形式（节点、边、路径模式）在绑定层显式拒绝**，写入请使用 INSERT / UPSERT。
 
 ### 语法结构
 ```cypher
--- 创建节点（属性可选）
+-- Schema 形式（可用，走 DDL）
+CREATE TAG [IF NOT EXISTS] <tag_name> (<col_name> <type> [, ...])
+CREATE EDGE [IF NOT EXISTS] <edge_type> (<col_name> <type> [, ...])
+CREATE INDEX [IF NOT EXISTS] <index_name> ON <tag_name>(<col_name>)
+
+-- 数据形式（绑定层拒绝）
 CREATE (<variable>:<Label> [{<prop>: <value>, ...}])
-CREATE (:<Label> [{<prop>: <value>, ...}])  -- 无变量
-
--- 创建边（属性可选）
 CREATE (<src>)-[:<EdgeType> [{<prop>: <value>, ...}]]->(<dst>)
-CREATE (<src>)-[:<EdgeType>]-(<dst>)   -- 无向边
-CREATE (<src>)<-[:<EdgeType>]-(<dst>)  -- 反向边
-
--- 创建路径（节点+边）
-CREATE (<var1>:<Label1> [{props}])-[:<EdgeType> [{props}]]->(<var2>:<Label2> [{props}])
-
--- 创建多个模式
 CREATE <pattern1>, <pattern2>, ...
 ```
 
 ### 关键特性
-
-| 特性 | 说明 | 示例 |
-|------|------|------|
-| **Cypher风格语法** | 与Neo4j兼容的语法 | `CREATE (n:Person {name: 'Alice'})` |
-| **Schema自动推断** | 自动创建不存在的Tag和Edge Type | 创建节点时自动创建Person标签 |
-| **多标签支持** | 一个节点可以有多个标签 | `CREATE (n:Person:Employee {...})` |
-| **变量绑定** | 可在后续引用创建的节点 | `CREATE (n)-[:KNOWS]->(m)` |
-| **可选属性** | 节点和边可以没有属性 | `CREATE (n:Person)` |
-| **批量创建** | 支持一次创建多个模式 | `CREATE (a), (b), (c)` |
-| **路径创建** | 同时创建节点和关系 | `CREATE (a)-[:KNOWS]->(b)` |
-
-### Schema自动推断
-
-当使用CREATE语句创建数据时，如果指定的标签或边类型不存在，系统会自动推断并创建Schema：
-
-| 属性值类型 | 推断的Schema类型 | 示例 |
-|------------|------------------|------|
-| 字符串 | STRING | `{name: 'Alice'}` → `name: STRING` |
-| 整数 | INT64 | `{age: 30}` → `age: INT64` |
-| 浮点数 | DOUBLE | `{salary: 50000.50}` → `salary: DOUBLE` |
-| 布尔值 | BOOL | `{active: true}` → `active: BOOL` |
-| 日期时间 | DATETIME | `{created: datetime()}` → `created: DATETIME` |
-
-**注意：**
-- 自动创建的Schema属性默认可空（NULL）
-- 不会自动设置默认值
-- 不会自动添加NOT NULL约束
-- 如需更精确的Schema控制，请使用DDL语句预先定义
-
-### 与NGQL语法对比
-
-| 操作 | Cypher语法 | NGQL语法 |
-|------|------------|----------|
-| 创建节点 | `CREATE (n:Person {name: 'Alice', age: 30})` | `INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)` |
-| 创建边 | `CREATE (a)-[:KNOWS {since: '2020-01-01'}]->(b)` | `INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01')` |
-| 多标签 | `CREATE (n:Person:Employee {...})` | `INSERT VERTEX Person(...), Employee(...) VALUES 1:(...):(...)` |
+- 数据形式在绑定层报错：
+  `CREATE data patterns are not supported yet; use INSERT VERTEX / INSERT EDGE`
+- 该拒绝发生在绑定阶段，不会进入规划与执行，也不产生任何写入副作用
+- Schema 形式不经过数据 CREATE 链路，与 INSERT 的标签/边类型定义由 DDL 负责这一模型保持一致：
+  先以 DDL 定义 tag 与列，再用 INSERT / UPSERT 写数据
 
 ### 示例
-
-#### 基本节点创建
 ```cypher
--- 创建带属性的节点
-CREATE (p:Person {name: 'Alice', age: 25})
+-- 先定义 schema
+CREATE TAG person(name STRING, age INT)
+CREATE EDGE follow(degree DOUBLE)
 
--- 创建无属性的节点
-CREATE (p:Person)
+-- 再写入数据
+INSERT VERTEX person(name, age) VALUES "101": ("Alice", 25)
+INSERT EDGE follow(degree) VALUES "101" -> "102" @0: (0.8)
 
--- 创建多标签节点
-CREATE (p:Person:Employee {name: 'Bob', department: 'Engineering'})
-
--- 创建无变量节点（匿名节点）
-CREATE (:Person {name: 'Charlie'})
-```
-
-#### 边创建
-```cypher
--- 创建带属性的边
-CREATE (a)-[:KNOWS {since: '2020-01-01', degree: 0.8}]->(b)
-
--- 创建无属性的边
-CREATE (a)-[:FRIEND]->(b)
-
--- 创建双向边
-CREATE (a)-[:COLLEAGUE]-(b)
-
--- 创建反向边
-CREATE (a)<-[:FOLLOWS]-(b)
-```
-
-#### 路径创建
-```cypher
--- 创建节点和边（完整路径）
-CREATE (a:Person {name: 'Alice'})-[:KNOWS {since: '2020-01-01'}]->(b:Person {name: 'Bob'})
-
--- 创建长路径
-CREATE (a:Person)-[:KNOWS]->(b:Person)-[:WORKS_AT]->(c:Company)
-```
-
-#### 批量创建
-```cypher
--- 创建多个节点
-CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}), (c:Person {name: 'Charlie'})
-
--- 创建多个边
-CREATE (a)-[:KNOWS]->(b), (b)-[:KNOWS]->(c), (c)-[:KNOWS]->(a)
-
--- 混合创建
-CREATE 
-  (a:Person {name: 'Alice'}),
-  (b:Person {name: 'Bob'}),
-  (a)-[:KNOWS {since: '2020-01-01'}]->(b)
-```
-
-#### 复杂属性
-```cypher
--- 使用各种数据类型
-CREATE (p:Person {
-  name: 'Alice',
-  age: 30,
-  salary: 50000.50,
-  is_active: true,
-  created_at: datetime(),
-  tags: ['engineer', 'leader']
-})
+-- 数据形式被拒绝
+-- CREATE (n:Person {name: 'Alice'})
+--   报错：CREATE data patterns are not supported yet; use INSERT VERTEX / INSERT EDGE
 ```
 
 ---
@@ -197,45 +109,50 @@ CREATE (p:Person {
 
 ### 语法结构
 ```cypher
-UPDATE VERTEX <vid> SET <prop> = <value> [, <prop> = <value> ...] [WHERE <condition>] [YIELD <return_list>]
-UPDATE EDGE OF <edge_type> FROM <src_vid> TO <dst_vid> [@<rank>] SET <prop> = <value> [, ...] [WHERE <condition>] [YIELD <return_list>]
-UPDATE EDGE <src_vid> -> <dst_vid> [@<rank>] OF <edge_type> SET <prop> = <value> [, ...] [WHERE <condition>] [YIELD <return_list>]
+UPDATE [VERTEX] <vid> ON <tag> SET <prop> = <value> [, ...] [WHERE | WHEN <condition>]
+UPDATE EDGE OF <edge_type> FROM <src_vid> TO <dst_vid> [@<rank>] SET <prop> = <value> [, ...] [WHERE <condition>]
+UPDATE [EDGE] <src_vid> -> <dst_vid> [@<rank>] OF <edge_type> SET <prop> = <value> [, ...] [WHERE <condition>]
+UPDATE TAG <tag> SET <prop> = <value> [, ...] WHERE <condition>   -- 解析支持，计划层拒绝
 ```
 
 ### 关键特性
-- 支持条件更新（WHERE子句，`WHEN` 为同义关键字）
-- 支持多属性更新
-- 支持节点和边更新
-- 支持表达式计算
-- 整映射覆盖（`SET v = {...}`）在 UPDATE 中明确拒绝：
-  存储层仅支持逐属性合并写入，接受该形式会静默保留旧属性，
-  因此直接报错，请逐属性赋值
-- 目标别名的自引用可用：`SET` 右值与条件中的 `<别名>.<属性>`
-  在别名即更新目标且未被外层作用域绑定时，按行属性解析，
-  与裸属性名写法等价；其他限定符保持原报错
-- 边更新支持两种语法：`OF <edge_type> FROM <src> TO <dst>` 与短形式 `<src> -> <dst> OF <edge_type>`
-- **支持YIELD子句** - 返回更新后的属性值
-
-> 注意：`ON <tag>` 子句仅在 UPSERT 语句中支持，UPDATE 不支持。
+- **顶点更新必须带标签限定**：`UPDATE VERTEX "101" SET age = 26`（无 `ON <tag>`）在计划层报
+  `UPDATE vertex requires a tag qualifier (use UPDATE <vid> ON <tag> SET ...)`；
+  正确写法是 `UPDATE VERTEX "101" ON person SET ...` 或短形式 `UPDATE "101" ON person SET ...`
+- vid 仅允许字面量、参数（`@p`）或会话变量（`$v`），否则计划期报错
+- **`UPDATE TAG <tag> ...` 批量形式在计划层被拒绝**：
+  `UPDATE TAG <tag> bulk update is not supported yet; use UPDATE <vid> ON <tag> SET ...`
+- **YIELD 在绑定层被拒绝**：`YIELD is not supported for UPDATE/UPSERT yet`；
+  需要读取更新后的值请再执行 LOOKUP / MATCH
+- `WHERE` 与 `WHEN` 同义；条件与右值表达式读取的是**更新前**的行属性，
+  支持 `SET age = age + 1` 这类自引用计算
+- 更新目标写成变量名（`UPDATE v ON ...`）且该变量未被外层作用域绑定时，
+  右值与条件中的 `<v>.<prop>` 按行属性解析（与裸属性名等价）；其他限定符保持报错
+- **整映射覆盖（整行替换语义）**：`SET v = {age: 20}` 将目标属性行整体替换
+  （非逐属性合并），`SET v = {}` 清空全部属性；整映射覆盖可与逐属性赋值混写，
+  逐属性赋值在替换后的行上继续叠加
+- 边更新支持两种语法：`OF <edge_type> FROM <src> TO <dst>`（边类型在前）与
+  `<src> -> <dst> [@rank] OF <edge_type>`（字面量/短形式）；`@rank` 端到端生效
 
 ### 示例
 ```cypher
--- 基本顶点更新
-UPDATE VERTEX "101" SET age = 26, name = "Alice Smith"
+-- 基本顶点更新（必须带 ON 标签限定）
+UPDATE VERTEX "101" ON person SET age = 26, name = "Alice Smith"
 
--- 带条件的顶点更新
-UPDATE VERTEX "101" SET age = age + 1 WHERE age > 20
+-- 带条件的顶点更新（WHEN 与 WHERE 同义）
+UPDATE "101" ON person SET age = age + 1 WHERE age > 20
 
--- 带YIELD的更新（返回更新后的值）
-UPDATE VERTEX "101" SET age = 26 YIELD $^.person.name, $^.person.age
+-- 整映射覆盖（整行替换）与空映射清空
+UPDATE "101" ON person SET v = {age: 20}
+UPDATE "101" ON person SET v = {}
+
+-- 混写：先整行替换为 {age: 20}，再叠加 name = 'Bob'
+UPDATE "101" ON person SET v = {age: 20}, name = 'Bob'
 
 -- 边更新（OF ... FROM ... TO ... 语法）
 UPDATE EDGE OF follow FROM "101" TO "102" SET degree = 0.9
 
--- 边更新（短形式语法）
-UPDATE EDGE "101" -> "102" @0 OF follow SET degree = 0.9
-
--- 带条件的边更新
+-- 边更新（短形式语法，rank 生效）
 UPDATE EDGE "101" -> "102" @0 OF follow SET degree = degree + 0.1 WHERE degree < 1.0
 ```
 
@@ -244,43 +161,51 @@ UPDATE EDGE "101" -> "102" @0 OF follow SET degree = degree + 0.1 WHERE degree <
 ## 4. UPSERT - 插入或更新数据
 
 ### 功能
-如果数据存在则更新，不存在则插入（原子操作）。
+如果数据存在则更新，不存在则插入（探测后写入，适合幂等写入场景）。
 
 ### 语法结构
 ```cypher
-UPSERT VERTEX <vid> [ON <tag_name>] [SET <prop> = <value> [, ...]] [WHERE <condition>] [YIELD <return_list>]
-UPSERT VERTEX ON <tag_name> [SET <prop> = <value> [, ...]] WHERE id(vid) == <vid_value> [YIELD <return_list>]
-UPSERT EDGE <src_vid> -> <dst_vid> [@<rank>] OF <edge_type> [SET <prop> = <value> [, ...]] [WHERE <condition>] [YIELD <return_list>]
-UPSERT EDGE ON <edge_type> [SET <prop> = <value> [, ...]] WHERE id(src) == <src_value> AND id(dst) == <dst_value> [@<rank>] [YIELD <return_list>]
+UPSERT VERTEX <vid> ON <tag_name> SET <prop> = <value> [, ...] [WHERE <condition>]
+UPSERT VERTEX ON <tag_name> SET <prop> = <value> [, ...] WHERE id(vid) == <vid_value>
+UPSERT [EDGE] <src_vid> -> <dst_vid> [@<rank>] OF <edge_type> SET <prop> = <value> [, ...] [WHERE <condition>]
+UPSERT EDGE ON <edge_type> SET <prop> = <value> [, ...] WHERE id(src) == <src_value> AND id(dst) == <dst_value> [@<rank>]
 ```
 
 ### 关键特性
-- **原子性操作** - 保证插入或更新的原子性
-- 支持条件判断
-- 支持ON子句指定标签/边类型
-- 支持YIELD子句返回结果
-- 支持可选 `WHEN` 子句（解析但语义上不影响插入或更新判定）
-- 适用于需要幂等写入的场景
+- 与 UPDATE 相同的顶点目标规则：`UPSERT VERTEX <vid>`（不带 `ON <tag>`）同样被计划层拒绝
+  （要求标签限定）
+- **`UPSERT VERTEX ON <tag>` 形式要求 WHERE 中含 `id(vid) == <字面量>` 合取项**，
+  缺失时报 `UPSERT VERTEX ON form requires WHERE id(vid) == <literal>`
+- **`UPSERT EDGE ON <type>` 形式要求 WHERE 中含 `id(src) == <字面量>` 与 `id(dst) == <字面量>`
+  两个合取项**，缺失时报
+  `UPSERT EDGE ON form requires WHERE id(src) == <literal> AND id(dst) == <literal>`
+- **剩余谓词被保留并继续作为过滤条件生效**：`id(...) == <字面量>` 合取项被消费用于定位目标，
+  其余谓词与原条件合并后作用于写入判定，不会被丢弃
+- 可选 `WHEN` 子句（两种 ON 形式中）：解析后丢弃，不影响插入或更新判定
+- 整映射覆盖（`SET v = {...}`）行为与 UPDATE 一致（整行替换 / 空映射清空）
+- YIELD 在绑定层被拒绝（与 UPDATE 相同）
+- 支持表达式右值与目标别名自引用（同第 3 节）
+- `@rank` 可写在 WHERE 之后、YIELD 之前，端到端生效
 
 ### 示例
 ```cypher
--- 顶点UPSERT（存在则更新，不存在则插入）
-UPSERT VERTEX "101" SET name = "Alice", age = 25
-
--- 指定标签的UPSERT
+-- 顶点UPSERT（存在则更新，不存在则插入；必须 ON 标签）
 UPSERT VERTEX "101" ON person SET name = "Alice", age = 25
 
 -- ON tag + WHERE 指定 vid 的UPSERT
 UPSERT VERTEX ON person SET age = 26 WHERE id(vid) == "101"
 
--- 带YIELD的UPSERT
-UPSERT VERTEX "101" SET age = 26 YIELD $^.person.name, $^.person.age
+-- ON tag 形式携带额外过滤谓词（一并生效）
+UPSERT VERTEX ON person SET age = 26 WHERE id(vid) == "101" AND age < 20
 
 -- 边UPSERT
 UPSERT EDGE "101" -> "102" OF follow SET degree = 0.9
 
 -- 带rank的边UPSERT
-UPSERT EDGE "101" -> "102" @1 OF follow SET degree = 0.9 YIELD $^.follow.degree
+UPSERT EDGE "101" -> "102" @1 OF follow SET degree = 0.9
+
+-- UPSERT EDGE ON + WHERE 指定端点
+UPSERT EDGE ON follow SET degree = 0.9 WHERE id(src) == "101" AND id(dst) == "102"
 ```
 
 ---
@@ -288,40 +213,40 @@ UPSERT EDGE "101" -> "102" @1 OF follow SET degree = 0.9 YIELD $^.follow.degree
 ## 5. DELETE - 删除数据
 
 ### 功能
-删除节点、边或标签。
+删除节点或边。
 
 ### 语法结构
 ```cypher
-DELETE VERTEX <vertex_id> [, <vertex_id> ...] [WITH EDGE]
+DELETE VERTEX <tag> FROM <vid> [, <vid> ...] [WITH EDGE]
+DETACH DELETE VERTEX <tag> FROM <vid> [, <vid> ...]
 DELETE EDGE <edge_type> <src_vid> -> <dst_vid> [@<rank>] [, ...]
 DELETE EDGE <src_vid> -> <dst_vid> [@<rank>] OF <edge_type> [, ...]
-DETACH DELETE <vertex_expr> [, <vertex_expr> ...]
 ```
 
-> 说明：按标签剥离顶点的 `DELETE TAG ... FROM ...` 形态当前尚未实现，
-> 解析器会直接拒绝该写法；如需删除整个顶点请使用 `DELETE VERTEX`。
-
 ### 关键特性
-- 支持批量删除节点
-- 支持删除边（两种语法：边类型在前，或 `OF <edge_type>` 后置）
-- 支持指定边rank
-- 支持级联删除关联边（WITH EDGE）
-- 支持 Cypher 风格的 `DETACH DELETE`（等价于 WITH EDGE）
+- **DELETE 之后必须紧跟 `VERTEX` 或 `EDGE` 关键字**：`DELETE VERTEX "101"`、
+  `DETACH DELETE "101"` 等裸 ID 写法会被解析器直接拒绝
+- 顶点删除形式为 `DELETE VERTEX <tag> FROM <vid>[, ...]`：tag 限定符用于定位顶点唯一的标签，
+  语义是**删除整个顶点行**（存储层顶点恰好单标签），不是仅剥离该 tag 的数据；
+  单独的 `DELETE TAG ... FROM ...` 语法不存在（解析拒绝）
+- `WITH EDGE` 或 `DETACH` 级联删除关联边；两者等价，缺省时保留关联边（产生悬挂边）
+- 边删除支持两种语法（边类型在前，或 `OF <edge_type>` 后置）；
+  **`@rank` 端到端生效**，按给定 rank 删除对应边
+- 独立 DELETE 不支持 WHERE 条件
 - 支持在 MATCH 语句后直接接 DELETE 子句（见下文）
-- 不指定WITH EDGE时保留边（产生悬挂边）
 
 ### 示例
 ```cypher
 -- 仅删除顶点，保留关联边（可能产生悬挂边）
-DELETE VERTEX "101", "102"
+DELETE VERTEX person FROM "101", "102"
 
 -- 删除顶点及其所有关联边
-DELETE VERTEX "101" WITH EDGE
+DELETE VERTEX person FROM "101" WITH EDGE
 
--- Cypher风格级联删除
-DETACH DELETE "101"
+-- Cypher风格级联删除（仍需 VERTEX <tag> FROM 限定）
+DETACH DELETE VERTEX person FROM "101"
 
--- 删除边
+-- 删除边（按 rank 删除）
 DELETE EDGE follow "101" -> "102" @0
 
 -- 删除边（OF后置语法）
@@ -333,18 +258,27 @@ DELETE EDGE follow "101" -> "102" @0, "102" -> "103" @0
 
 ### MATCH + DELETE
 
-MATCH 语句支持直接跟随 DELETE 子句，删除匹配到的数据：
+MATCH 语句支持直接跟随 DELETE 子句，删除匹配到的数据。DELETE 由绑定结果驱动规划，
+校验与执行使用同一份绑定输出。DELETE 之后同样必须跟 `VERTEX` / `EDGE` 关键字，
+再接已绑定的变量或边引用表达式：
 
 ```cypher
 -- 删除匹配到的顶点（级联删除边）
-MATCH (p:Person {name: 'Alice'}) DELETE p
+MATCH (p:Person {name: 'Alice'}) DELETE VERTEX p WITH EDGE
 
 -- 删除匹配到的边
-MATCH (a)-[e:KNOWS]->(b) DELETE e
+MATCH (a)-[e:KNOWS]->(b) DELETE EDGE e
+
+-- 删除指定端点的边
+MATCH (a:Person) DELETE EDGE a -> b @0
 ```
 
+- 裸变量写法 `MATCH ... DELETE p` / `DELETE e` 会被解析拒绝
+- MATCH 形式中 `WITH EDGE` 提供级联；`DELETE VERTEX <expr>` 要求表达式求值为带标签的
+  顶点值（裸 vid 表达式会在执行期报错）
+
 ### 悬挂边说明
-- 当删除顶点时不使用WITH EDGE，与该顶点关联的边会变成悬挂边（边的起点或终点不存在）
+- 当删除顶点时不使用 WITH EDGE / DETACH，与该顶点关联的边会变成悬挂边（边的起点或终点不存在）
 - 悬挂边可以通过GO语句查询到边属性，但点属性为空
 - MATCH语句不会返回悬挂边
 - 可以使用存储层API检测和修复悬挂边
@@ -354,8 +288,8 @@ MATCH (a)-[e:KNOWS]->(b) DELETE e
 ## 6. MERGE - 合并数据
 
 ### 功能
-如果存在则更新，不存在则创建（基于模式匹配）。点模式的条件执行已实现，
-同一事务快照内先按标签加全属性相等做存在性探查，再执行命中的分支；
+如果存在则更新，不存在则创建（基于模式匹配）。点模式的条件执行已实现：
+同一事务快照内先按标签加全属性相等做存在性探查，再执行命中的分支。
 边模式携带动作子句会显式拒绝，不会静默丢弃。
 
 ### 语法结构
@@ -364,33 +298,30 @@ MERGE (<variable>:<Label> {<prop>: <value>}) [ON CREATE SET <prop> = <value>] [O
 MERGE EDGE|VERTEX ON <tag_or_edge_type> [SET <prop> = <value>] WHERE id(vid|src) == <value> [AND id(dst) == <value>]
 ```
 
-双动作子句可按任意顺序各出现至多一次，重复出现或 `ON` 后缺 `CREATE`/`MATCH`
-关键字均报语法错误。无动作的合并保持 `IF NOT EXISTS` 插入路径。
-
 ### 关键特性
 - 幂等操作
-- 支持存在时更新（ON MATCH）
-- 支持不存在时创建（ON CREATE）
-- 避免重复数据
-- 基于模式匹配，比UPSERT更灵活
-- 支持 UPSERT 风格的 `MERGE VERTEX/EDGE ON ...` 语法
+- 支持存在时更新（ON MATCH）、不存在时创建（ON CREATE）
+- 双动作子句可按任意顺序各出现至多一次，重复出现报语法错误
+- **`ON` 之后必须紧跟 `CREATE` 或 `MATCH` 关键字**，否则解析层报
+  `Expected CREATE or MATCH after ON in MERGE statement`
+- 无动作的合并保持 `IF NOT EXISTS` 插入路径
+- 支持 UPSERT 风格的 `MERGE VERTEX/EDGE ON ...` 语法（内部按 UPSERT 目标规则执行，
+  含第 4 节所述的 `id(...)` 提取与剩余谓词规则）
 - MATCH 语句支持跟随 MERGE 子句（解析校验，不改变匹配结果）
 - 模式后的裸 `SET` 子句同时作用于创建与匹配两条分支，
   其赋值会合并进已有的 `ON CREATE` / `ON MATCH` 子句
 - 条件分支复用插入与更新写入能力，不新增流式算子；
   无论走哪条分支，均返回统一的 `merged` 列，不透出内部分支列名差异
 - 探查语义为标签加全属性相等，数值类型宽容比较
- （SmallInt/Int/BigInt 互比按数值相等）；模式属性必须为常量表达式，
+  （SmallInt/Int/BigInt 互比按数值相等）；模式属性必须为常量表达式，
   行变量、属性引用、子查询均明确拒绝
-- 仅覆盖点模式；边模式携带动作因端点解析需要数据流、标量探查不可见，
-  显式拒绝
+- 仅覆盖点模式；边模式携带动作因端点解析需要数据流、标量探查不可见，显式拒绝
 - 探查与分支写入在同一事务作用域内完成；仅含 `ON CREATE` 时，
   第二次命中因无匹配动作而返回 `0`，不会重复创建
-- 整映射覆盖（`SET v = {...}`）在 MERGE 动作子句中明确拒绝，
-  与 UPDATE 原因相同：存储层仅合并写入，优先使用逐属性赋值
+- 整映射覆盖（动作子句中 `SET v = {...}`）与 UPDATE 行为一致：
+  整行替换目标属性，`{}` 清空全部属性
 - `ON MATCH` / `ON CREATE` 的赋值表达式支持目标别名自引用
-  （如 `SET age = v.age + 5`），按命中行属性解析；
-  其他限定符保持原报错
+  （如 `SET age = v.age + 5`），按命中行属性解析；其他限定符保持原报错
 
 ### 示例
 ```cypher
@@ -414,34 +345,32 @@ ON CREATE SET p.name = 'Alice', p.created = timestamp(), p.status = 'active'
 ## 7. SET - 设置属性
 
 ### 功能
-设置或更新属性值（独立语句，也可作为 UPDATE/MERGE/UPSERT 的 SET 子句）。
+设置或更新属性值。独立 `SET` 语句可解析、可绑定，但**没有标签上下文，
+在计划层被显式拒绝**；UPDATE / UPSERT / MERGE 内部的 SET 子句是实际可用的写入路径
+（语义见第 3、4、6 节）。
 
-### 语法结构
+### 语法结构（解析层）
 ```cypher
 SET <variable>.<prop> = <value> [, <variable>.<prop> = <value> ...]
 SET <variable> = {<prop>: <value> [, ...]}  -- 整映射覆盖
 ```
 
-### 关键特性
-- 支持动态属性设置
-- 支持表达式计算
-- 支持批量设置
-- 逐属性赋值左侧必须是属性路径（如 `p.age`）
-- 整映射覆盖（`SET n = {age: 20}`）一次性替换该实体的全部属性，
-  而非逐项合并；空映射（`SET n = {}`）清空全部属性
-- 整映射覆盖不可与逐属性赋值混写在同一子句中
-- 支持属性增减操作
+### 关键特性（独立 SET 现状）
+- 独立语句在计划层报错：
+  `standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead`
+- 该拒绝覆盖属性路径形式与整映射覆盖形式：独立语句没有上游行流，
+  顶点写入缺标签上下文、行变量赋值不落存储，均不产生写入副作用
+- 多个赋值同样被拒绝（不会出现只取第一个赋值的静默行为）
+- 右值支持表达式计算（子查询在计划期仍会被 EXISTS/IN 检查拒绝）
 
 ### 示例
 ```cypher
--- 基本属性设置
-SET p.age = 26, p.updated = true
+-- 独立 SET 当前被拒绝；持久化更新请使用带标签限定的 UPDATE
+-- SET p.age = p.age + 1
+--   报错：standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead
 
--- 表达式计算
-SET p.age = p.age + 1, p.full_name = p.first_name + ' ' + p.last_name
-
--- 移除属性（设置为NULL）
-SET p.temp_field = NULL
+-- 正确写法
+UPDATE "101" ON person SET age = age + 1
 ```
 
 ---
@@ -449,28 +378,27 @@ SET p.temp_field = NULL
 ## 8. REMOVE - 移除属性
 
 ### 功能
-移除节点或边的属性（独立语句）。
+移除节点或边的属性（独立语句）。当前仅完成语法解析与绑定，
+执行链路未接入存储，**在计划层被显式拒绝**。
 
-### 语法结构
+### 语法结构（解析层）
 ```cypher
 REMOVE <variable>.<prop> [, <variable>.<prop> ...]
 ```
 
-> 说明：`REMOVE <variable>:<Label>` 标签移除形态当前尚未实现，
-> 解析器会直接拒绝该写法。
+> 说明：`REMOVE <variable>:<Label>` 标签移除形态在表达式位置即被解析拒绝。
 
-### 关键特性
-- 支持移除属性
-- 支持批量操作
-- 返回移除的属性数量
+### 关键特性（独立 REMOVE 现状）
+- 独立语句在计划层报错：`REMOVE is not wired to storage yet`
+- 拒绝发生在规划阶段，不会产出只剔列不写存储的计划，也不产生任何写入副作用
+- 属性移除暂无替代语句；如需清空属性，UPDATE 的整映射覆盖
+  （`SET v = {}`）提供删除全部属性的能力
 
 ### 示例
 ```cypher
--- 移除属性
-REMOVE p.temp_field
-
--- 移除多个属性
-REMOVE p.temp1, p.temp2, p.deprecated_field
+-- 语法可解析，但计划层拒绝
+-- REMOVE p.temp_field, p.temp2
+--   报错：REMOVE is not wired to storage yet
 ```
 
 ---
@@ -478,26 +406,29 @@ REMOVE p.temp1, p.temp2, p.deprecated_field
 ## 9. COPY - 批量导入/导出
 
 ### 功能
-从 CSV 文件批量导入顶点/边数据，或将数据导出到 CSV 文件。
+从 CSV 文件批量导入顶点/边数据，或将数据导出到 CSV 文件（导出已实现）。
 
 ### 语法结构
 ```cypher
 COPY VERTEX <tag_name> FROM '<file_path>' [, '<file_path>' ...] [BY COLUMN] [WITH (HEADER [true|false] | NO HEADER [, DELIMITER '<char>'] [, BATCH_SIZE <n>] [, CSV])]
-COPY EDGE <edge_type> FROM '<file_path>' [, ...] [BY COLUMN] [WITH (...)]
-COPY <tag_name> FROM '<file_path>'   -- 省略VERTEX关键字，默认为顶点
+COPY EDGE <edge_type> FROM '<file_path>' [, ...] [WITH (...)]
+COPY <tag_name> FROM ('<file_path>' [, '<file_path>' ...])   -- 文件列表也可用括号包裹
+COPY TAG <tag_name> FROM ...                                  -- TAG 关键字等价于 VERTEX
 COPY VERTEX|EDGE <name> TO '<file_path>' [WITH (...)]
 ```
 
 ### 关键特性
 - 支持从单个或多个 CSV 文件导入
-- `FROM` 导入 / `TO` 导出；`TO` 仅支持单个文件
-- `BY COLUMN`：多文件按列合并导入（仅 FROM）
-- 选项可放在括号内或直接罗列：
+- `FROM` 导入 / `TO` 导出；`TO` 仅支持单个文件，且不接受 `BY COLUMN`
+- `BY COLUMN`：多文件按列合并导入（仅 FROM）；可写在文件列表后或选项之后
+- 选项可放在括号内或直接罗列（`WITH` 与括号均可省略；选项名与值之间的 `=` 可选）：
   - `HEADER true|false` 或 `NO HEADER`（默认有表头）
   - `DELIMITER '<char>'`（默认 `,`）
-  - `BATCH_SIZE <n>`：批量提交大小
-  - `CSV`：显式声明 CSV 格式
+  - `BATCH_SIZE <n>` / `BATCH SIZE <n>`：批量提交大小，缺省 1000；
+    解析层拒绝负值，0 在规划期报 `COPY batch_size must be > 0`
+  - `CSV`：显式声明 CSV 格式（语法占位，不影响行为）
 - 省略 `VERTEX`/`EDGE` 关键字时默认为顶点导入
+- 导出按 tag / edge_type 全量扫描，NULL 值输出为空单元格；导出列头由 `HEADER` 控制
 
 ### 示例
 ```cypher
@@ -522,18 +453,22 @@ COPY VERTEX person TO '/tmp/person_out.csv'
 | 语句 | 主要用途 | 幂等性 | 条件支持 | 返回结果 | 适用场景 |
 |------|---------|--------|----------|----------|----------|
 | **INSERT** | 插入新数据 | 可选(IF NOT EXISTS) | 无 | 插入数量 | 批量导入、初始化数据 |
-| **UPDATE** | 更新已有数据 | 否 | WHERE | YIELD支持 | 属性修改、增量更新 |
-| **UPSERT** | 插入或更新 | 是 | WHERE | YIELD支持 | 幂等写入、同步场景 |
-| **DELETE** | 删除数据 | 否 | MATCH模式 | 删除数量 | 数据清理 |
-| **MERGE** | 匹配则更新，否则创建 | 是 | 模式匹配 | 无 | 复杂条件的数据合并 |
-| **SET** | 属性设置 | 否 | 无 | 无 | 属性动态更新 |
-| **REMOVE** | 移除属性 | 否 | 无 | 移除数量 | 清理临时数据 |
+| **UPDATE** | 更新已有数据 | 否 | WHERE/WHEN | 修改统计（YIELD 被拒绝） | 属性修改、增量更新 |
+| **UPSERT** | 插入或更新 | 是 | WHERE(限定用法) | 修改统计（YIELD 被拒绝） | 幂等写入、同步场景 |
+| **DELETE** | 删除数据 | 否 | MATCH模式 | 删除统计 | 数据清理 |
+| **MERGE** | 匹配则更新，否则创建 | 是 | 模式匹配 | merged 列（1/0） | 复杂条件的数据合并 |
+| **CREATE** | Cypher 风格创建 | — | — | 数据形式被拒绝 | Schema 定义走 DDL |
+| **SET** | 属性设置 | 否 | 无 | 独立形式被拒绝 | 建议使用 UPDATE 子句形式 |
+| **REMOVE** | 移除属性 | 否 | 无 | 独立形式被拒绝 | 暂不可用 |
 | **COPY** | 批量导入/导出 | 否 | 无 | 导入/导出统计 | CSV数据搬迁 |
 
 ### 选择建议
 
-- **需要幂等性**: 使用 `INSERT IF NOT EXISTS` 或 `UPSERT`
-- **需要返回更新后数据**: 使用 `UPDATE ... YIELD` 或 `UPSERT ... YIELD`
-- **复杂条件的数据合并**: 使用 `MERGE` (基于模式匹配)
-- **简单的属性更新**: 使用 `UPDATE` 或 `SET`
+- **需要幂等性**: 使用 `INSERT ... IF NOT EXISTS` 或 `UPSERT`
+- **需要读取更新后的数据**: UPDATE/UPSERT 的 YIELD 当前被拒绝，请再执行 LOOKUP / MATCH 读回
+- **复杂条件的数据合并**: 使用 `MERGE`（基于模式匹配，点模式 + 动作子句）
+- **简单的属性更新**: 使用 `UPDATE ... ON <tag> SET ...`（顶点必须带标签限定）
+- **批量属性更新**: 逐 vid 调用带标签限定的 `UPDATE`（`UPDATE TAG` 批量形式被拒绝）
 - **CSV 批量搬迁**: 使用 `COPY`
+- **写入数据**: 使用 `INSERT` / `UPSERT` / 带动作的 `MERGE`；数据形式 `CREATE`、独立 `SET`、
+  独立 `REMOVE` 均以明确错误拒绝，不会产生写入
