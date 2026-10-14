@@ -82,8 +82,7 @@ impl DmlParser {
                     .expression_context_clone()
                     .register_expression(vid_expr_meta);
                 let vid = ContextualExpression::new(vid_id, ctx.expression_context_clone());
-                let end_span = ctx.current_span();
-                let span = ctx.merge_span(start_span.start, end_span.end);
+                let span = ctx.span_since(start_span.start);
                 return Ok(Stmt::Update(UpdateStmt {
                     span,
                     target: UpdateTarget::TagOnVertex {
@@ -150,11 +149,8 @@ impl DmlParser {
                 // Extract src and dst from WHERE clause. Only the
                 // `id(src)/id(dst) == <literal>` conjuncts are consumed; any
                 // remaining terms stay as a regular filter predicate.
-                let (src_value_opt, after_src) = Self::extract_id_with_residual(
-                    ctx,
-                    where_clause.as_ref(),
-                    &["src", "source"],
-                );
+                let (src_value_opt, after_src) =
+                    Self::extract_id_with_residual(ctx, where_clause.as_ref(), &["src", "source"]);
                 let src_value = src_value_opt.ok_or_else(|| {
                     ParseError::new(
                         crate::parser::core::error::ParseErrorKind::SyntaxError,
@@ -188,8 +184,7 @@ impl DmlParser {
                     };
                 let src = make_literal_expr(ctx, src_value);
                 let dst = make_literal_expr(ctx, dst_value);
-                let end_span = ctx.current_span();
-                let span = ctx.merge_span(start_span.start, end_span.end);
+                let span = ctx.span_since(start_span.start);
                 return Ok(Stmt::Update(UpdateStmt {
                     span,
                     target: UpdateTarget::Edge {
@@ -280,8 +275,7 @@ impl DmlParser {
             None
         };
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::Update(UpdateStmt {
             span,

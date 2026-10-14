@@ -19,6 +19,7 @@ mod schema_engine;
 mod schema_writer;
 mod serial;
 mod stats_reader_impl;
+pub mod ttl;
 mod writer;
 mod writer_api;
 

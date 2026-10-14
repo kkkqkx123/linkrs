@@ -8,6 +8,7 @@ use linkrs_core::types::{TagInfo, VertexId};
 use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{StorageError, StorageResult, Value, Vertex};
 
+use crate::engine::graph_storage::reader::ttl_filter::vertex_is_expired;
 use crate::engine::graph_storage::reader::utils::*;
 
 pub(crate) fn get_vertex(
@@ -63,11 +64,13 @@ fn get_vertex_impl(
         },
     };
 
-    Ok(record.map(|record| {
-        let props: HashMap<std::sync::Arc<str>, Value> =
-            record.properties.iter().cloned().collect();
-        Vertex::new(id, Tag::new(tag.to_string(), props))
-    }))
+    Ok(record
+        .map(|record| {
+            let props: HashMap<std::sync::Arc<str>, Value> =
+                record.properties.iter().cloned().collect();
+            Vertex::new(id, Tag::new(tag.to_string(), props))
+        })
+        .filter(|vertex| !vertex_is_expired(&tag_info, vertex)))
 }
 
 pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageResult<Vec<Vertex>> {
@@ -88,10 +91,11 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
             record_vertex_read(ctx, record.vid);
             let props: HashMap<std::sync::Arc<str>, Value> =
                 record.properties.iter().cloned().collect();
-            out.push(Vertex::new(
-                record.vid,
-                Tag::new(tag.tag_name.clone(), props),
-            ));
+            let vertex = Vertex::new(record.vid, Tag::new(tag.tag_name.clone(), props));
+            if vertex_is_expired(tag, &vertex) {
+                continue;
+            }
+            out.push(vertex);
         }
     }
 
@@ -116,6 +120,9 @@ pub(crate) fn scan_vertices_by_tag(
         for record in iterator {
             record_vertex_read(ctx, record.vid);
             let vertex = vertex_record_to_vertex(&record, tag);
+            if vertex_is_expired(&tag_info, &vertex) {
+                continue;
+            }
             vertices.push(vertex);
         }
     }
@@ -148,6 +155,9 @@ pub(crate) fn scan_vertices_by_prop(
                 .any(|(k, v)| *k.as_ref() == *prop && v == value)
             {
                 let vertex = vertex_record_to_vertex(&record, tag);
+                if vertex_is_expired(&tag_info, &vertex) {
+                    continue;
+                }
                 vertices.push(vertex);
             }
         }
@@ -369,6 +379,10 @@ fn get_vertices_batch_impl(
             Vertex::new(vid, Tag::new(tag.to_string(), props))
         });
     }
+    let out: Vec<Option<Vertex>> = out
+        .into_iter()
+        .map(|opt| opt.filter(|vertex| !vertex_is_expired(&tag_info, vertex)))
+        .collect();
     Ok(out)
 }
 

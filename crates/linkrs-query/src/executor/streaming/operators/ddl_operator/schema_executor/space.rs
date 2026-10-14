@@ -26,7 +26,7 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
     *emitted = true;
     let space_name = match command {
         SpaceManageCommand::Create { space_name, .. }
-        | SpaceManageCommand::Drop { space_name }
+        | SpaceManageCommand::Drop { space_name, .. }
         | SpaceManageCommand::Desc { space_name }
         | SpaceManageCommand::ShowCreate { space_name }
         | SpaceManageCommand::Switch { space_name }
@@ -50,12 +50,30 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        SpaceManageCommand::Drop { .. } => super::super::exec_ddl(storage, |s| {
-            let name = space_name.as_deref().unwrap_or("");
-            StorageSchemaOps::drop_space(s, name)
+        SpaceManageCommand::Drop { if_exists, .. } => {
+            let name = space_name.as_deref().unwrap_or("").to_string();
+            let Some(lock) = storage else {
+                return Ok(Some(super::super::make_manage_result(
+                    "drop_space",
+                    None,
+                    "no-storage",
+                )));
+            };
+            let mut writer = lock.write();
+            let dropped = StorageSchemaOps::drop_space(&mut *writer, &name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
+            if !dropped && !*if_exists {
+                return Err(QueryError::execution(format!(
+                    "Space '{}' does not exist",
+                    name
+                )));
+            }
+            Ok(Some(super::super::make_manage_result(
+                "drop_space",
+                Some(&name),
+                if dropped { "dropped" } else { "not_exists" },
+            )))
+        }
         SpaceManageCommand::Alter { .. } => {
             let comment = space_name.as_deref().unwrap_or("");
             super::super::exec_ddl(storage, |s| {

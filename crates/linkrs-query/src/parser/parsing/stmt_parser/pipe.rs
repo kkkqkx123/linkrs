@@ -86,8 +86,7 @@ fn parse_pipe_stage(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.next_token();
         let expression = misc::parse_expression(ctx)?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
         return Ok(Stmt::Filter(FilterStmt { span, expression }));
     }
     if ctx.current_token().kind == TokenKind::Group {
@@ -112,8 +111,7 @@ fn parse_pipe_stage(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
                 break;
             }
         }
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
         return Ok(Stmt::Collect(CollectStmt { span, items }));
     }
     super::StmtParser::parse_single_statement(ctx)

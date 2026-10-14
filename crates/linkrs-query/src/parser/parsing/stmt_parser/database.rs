@@ -31,8 +31,7 @@ pub(super) fn parse_in_query_call_statement(ctx: &mut ParseContext) -> Result<St
         None
     };
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::InQueryCall(InQueryCallStmt {
         span,
         func_name,
@@ -68,8 +67,7 @@ pub(super) fn parse_export_database_statement(ctx: &mut ParseContext) -> Result<
         vec![]
     };
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::ExportDatabase(ExportDatabaseStmt {
         span,
         path,
@@ -84,8 +82,7 @@ pub(super) fn parse_import_database_statement(ctx: &mut ParseContext) -> Result<
     ctx.consume_keyword("DATABASE")?;
     let path = ctx.expect_string_literal()?;
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::ImportDatabase(ImportDatabaseStmt { span, path }))
 }
 
@@ -126,8 +123,7 @@ pub(super) fn parse_attach_database_statement(ctx: &mut ParseContext) -> Result<
         ctx.expect_token(TokenKind::RParen)?;
     }
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::AttachDatabase(AttachDatabaseStmt {
         span,
         path,
@@ -142,8 +138,7 @@ pub(super) fn parse_detach_database_statement(ctx: &mut ParseContext) -> Result<
     let start_span = ctx.current_span();
     ctx.consume_keyword("DETACH")?;
     let alias = ctx.expect_identifier()?;
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::DetachDatabase(DetachDatabaseStmt { span, alias }))
 }
 

@@ -239,22 +239,19 @@ fn test_create_cypher_edge_execution() {
 }
 
 fn assert_create_data_rejected(
-    result: Result<
-        linkrs_query::executor::base::ExecutionResult,
-        linkrs_core::error::DBError,
-    >,
+    result: Result<linkrs_query::executor::base::ExecutionResult, linkrs_core::error::DBError>,
 ) {
     match result {
         Ok(linkrs_query::executor::base::ExecutionResult::Error(message)) => {
             assert!(
-                message.contains("not supported yet"),
+                message.contains("use INSERT VERTEX / INSERT EDGE"),
                 "CREATE data should be rejected explicitly, got: {}",
                 message
             );
         }
         Err(error) => {
             assert!(
-                format!("{:?}", error).contains("not supported yet"),
+                format!("{:?}", error).contains("use INSERT VERTEX / INSERT EDGE"),
                 "CREATE data should be rejected explicitly, got: {:?}",
                 error
             );
@@ -288,7 +285,7 @@ fn test_create_cypher_nested_props() {
 }
 
 #[test]
-fn test_schema_auto_inference_string() {
+fn test_create_parse_only_string_prop() {
     let query = "CREATE (n:Person {name: 'Alice'})";
     let mut parser = Parser::new(query);
 
@@ -297,7 +294,7 @@ fn test_schema_auto_inference_string() {
 }
 
 #[test]
-fn test_schema_auto_inference_int() {
+fn test_create_parse_only_int_prop() {
     let query = "CREATE (n:Person {age: 30})";
     let mut parser = Parser::new(query);
 
@@ -306,7 +303,7 @@ fn test_schema_auto_inference_int() {
 }
 
 #[test]
-fn test_schema_auto_inference_float() {
+fn test_create_parse_only_float_prop() {
     let query = "CREATE (n:Person {salary: 50000.50})";
     let mut parser = Parser::new(query);
 
@@ -318,7 +315,7 @@ fn test_schema_auto_inference_float() {
 }
 
 #[test]
-fn test_schema_auto_inference_bool() {
+fn test_create_parse_only_bool_prop() {
     let query = "CREATE (n:Person {is_active: true})";
     let mut parser = Parser::new(query);
 
@@ -327,7 +324,7 @@ fn test_schema_auto_inference_bool() {
 }
 
 #[test]
-fn test_schema_auto_inference_mixed_types() {
+fn test_create_parse_only_mixed_props() {
     let query = "CREATE (n:Person {name: 'Alice', age: 30, salary: 50000.50, is_active: true})";
     let mut parser = Parser::new(query);
 

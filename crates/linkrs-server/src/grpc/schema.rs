@@ -232,8 +232,13 @@ impl<
             .into_iter()
             .map(proto_property_to_core)
             .collect::<Vec<_>>();
-        let edge_info = linkrs_core::types::EdgeTypeInfo::new(req.edge_type_name.clone())
+        let mut edge_info = linkrs_core::types::EdgeTypeInfo::new(req.edge_type_name.clone())
             .with_properties(properties);
+        if let Some(options) = req.options {
+            let ttl = (options.ttl_seconds > 0).then_some(options.ttl_seconds);
+            let col = (!options.ttl_column.is_empty()).then(|| options.ttl_column.clone());
+            edge_info = edge_info.with_ttl(ttl, col);
+        }
         let storage = self.app_state.server.get_storage();
         let mut storage_guard = storage.write();
         let edge_type_id = storage_guard

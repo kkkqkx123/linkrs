@@ -135,6 +135,9 @@ impl TraversalStartSelector {
                     // The edge mode can be converted into the node mode as a starting point.
                     candidates.extend(self.evaluate_edge_as_start(space, edge));
                 }
+                PathElement::CreateEdge(_) => {
+                    // CREATE edge hops never reach traversal cost estimation.
+                }
                 PathElement::Alternative(patterns) => {
                     // Evaluate each of the alternative models.
                     for pattern in patterns {

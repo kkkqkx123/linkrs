@@ -435,6 +435,11 @@ impl Binder {
                 });
                 Ok(None)
             }
+            PathElement::CreateEdge(_) => Err(DBError::from(
+                linkrs_core::error::QueryError::invalid_query(
+                    "CREATE edge patterns cannot appear in a MATCH pattern".to_string(),
+                ),
+            )),
             PathElement::Alternative(alt_patterns) => {
                 for alt in alt_patterns {
                     self.process_pattern(alt, graph, prev_node_var.clone())?;

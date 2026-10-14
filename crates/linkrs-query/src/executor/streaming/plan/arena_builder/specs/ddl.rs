@@ -254,6 +254,7 @@ fn space_manage_to_command(
         },
         Drop(n) => SpaceManageCommand::Drop {
             space_name: n.space_name().to_string(),
+            if_exists: n.if_exists(),
         },
         Desc(n) => SpaceManageCommand::Desc {
             space_name: n.space_name().to_string(),
@@ -313,6 +314,8 @@ fn tag_manage_to_command(
                 tag_name: info.tag_name.clone(),
                 properties: info.properties.clone(),
                 if_not_exists: info.if_not_exists,
+                ttl_duration: info.ttl_duration,
+                ttl_col: info.ttl_col.clone(),
             }
         }
         Alter(n) => {
@@ -339,7 +342,7 @@ fn tag_manage_to_command(
             new_name: n.new_name().to_string(),
         },
         Drop(n) => TagManageCommand::Drop {
-            tag_name: n.tag_name().to_string(),
+            tag_names: n.tag_names().to_vec(),
             if_exists: n.if_exists(),
         },
         Show(_) => TagManageCommand::Show,
@@ -363,6 +366,8 @@ fn edge_manage_to_command(
                 src_tag_name: info.src_tag_name.clone(),
                 dst_tag_name: info.dst_tag_name.clone(),
                 if_not_exists: info.if_not_exists,
+                ttl_duration: info.ttl_duration,
+                ttl_col: info.ttl_col.clone(),
             }
         }
         Alter(n) => {
@@ -387,7 +392,7 @@ fn edge_manage_to_command(
             edge_name: n.edge_name().to_string(),
         },
         Drop(n) => EdgeManageCommand::Drop {
-            edge_name: n.edge_name().to_string(),
+            edge_names: n.edge_names().to_vec(),
             if_exists: n.if_exists(),
         },
         Show(_) => EdgeManageCommand::Show,
@@ -413,6 +418,7 @@ fn index_manage_to_command(
         }
         DropTagIndex(n) => IndexManageCommand::DropTagIndex {
             index_name: n.index_name().to_string(),
+            if_exists: n.if_exists(),
         },
         DescTagIndex(n) => IndexManageCommand::DescTagIndex {
             index_name: n.index_name().to_string(),
@@ -431,6 +437,7 @@ fn index_manage_to_command(
         }
         DropEdgeIndex(n) => IndexManageCommand::DropEdgeIndex {
             index_name: n.index_name().to_string(),
+            if_exists: n.if_exists(),
         },
         DescEdgeIndex(n) => IndexManageCommand::DescEdgeIndex {
             index_name: n.index_name().to_string(),

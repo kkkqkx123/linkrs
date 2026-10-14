@@ -259,8 +259,9 @@ impl RecursiveFragmentOperator {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
                     let layout = chunk.get_layout();
-                    let endpoint_tags =
-                        path_endpoint_tags(&*reader, space_name, edge_types, *direction, vertex_tag);
+                    let endpoint_tags = path_endpoint_tags(
+                        &*reader, space_name, edge_types, *direction, vertex_tag,
+                    );
                     let (start_tag, end_tag) = endpoint_tags
                         .as_ref()
                         .map(|(start, end)| (start.as_str(), end.as_str()))
@@ -284,21 +285,13 @@ impl RecursiveFragmentOperator {
                         };
                         for (src_val, dst_val) in pairs {
                             let Some(start_vertex) = materialize_path_endpoint(
-                                &*reader,
-                                space_name,
-                                &src_val,
-                                vertex_tag,
-                                start_tag,
+                                &*reader, space_name, &src_val, vertex_tag, start_tag,
                             )?
                             else {
                                 continue;
                             };
                             let Some(end_vertex) = materialize_path_endpoint(
-                                &*reader,
-                                space_name,
-                                &dst_val,
-                                vertex_tag,
-                                end_tag,
+                                &*reader, space_name, &dst_val, vertex_tag, end_tag,
                             )?
                             else {
                                 continue;
@@ -395,8 +388,9 @@ impl RecursiveFragmentOperator {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
                     let layout = chunk.get_layout();
-                    let endpoint_tags =
-                        path_endpoint_tags(&*reader, space_name, edge_types, *direction, vertex_tag);
+                    let endpoint_tags = path_endpoint_tags(
+                        &*reader, space_name, edge_types, *direction, vertex_tag,
+                    );
                     let (start_tag, end_tag) = endpoint_tags
                         .as_ref()
                         .map(|(start, end)| (start.as_str(), end.as_str()))
@@ -418,21 +412,13 @@ impl RecursiveFragmentOperator {
                             .or_else(|| row.get(1).cloned())
                             .unwrap_or(Value::Null(linkrs_core::NullType::Null));
                         let Some(start_vertex) = materialize_path_endpoint(
-                            &*reader,
-                            space_name,
-                            &left_val,
-                            vertex_tag,
-                            start_tag,
+                            &*reader, space_name, &left_val, vertex_tag, start_tag,
                         )?
                         else {
                             continue;
                         };
                         let Some(end_vertex) = materialize_path_endpoint(
-                            &*reader,
-                            space_name,
-                            &right_val,
-                            vertex_tag,
-                            end_tag,
+                            &*reader, space_name, &right_val, vertex_tag, end_tag,
                         )?
                         else {
                             continue;
@@ -511,8 +497,9 @@ impl RecursiveFragmentOperator {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
                     let layout = chunk.get_layout();
-                    let endpoint_tags =
-                        path_endpoint_tags(&*reader, space_name, edge_types, *direction, vertex_tag);
+                    let endpoint_tags = path_endpoint_tags(
+                        &*reader, space_name, edge_types, *direction, vertex_tag,
+                    );
                     let (start_tag, end_tag) = endpoint_tags
                         .as_ref()
                         .map(|(start, end)| (start.as_str(), end.as_str()))
@@ -533,21 +520,13 @@ impl RecursiveFragmentOperator {
                             .or_else(|| row.get(1).cloned())
                             .unwrap_or(Value::Null(linkrs_core::NullType::Null));
                         let Some(start_vertex) = materialize_path_endpoint(
-                            &*reader,
-                            space_name,
-                            &vid_val,
-                            vertex_tag,
-                            start_tag,
+                            &*reader, space_name, &vid_val, vertex_tag, start_tag,
                         )?
                         else {
                             continue;
                         };
                         let Some(end_vertex) = materialize_path_endpoint(
-                            &*reader,
-                            space_name,
-                            &end_val,
-                            vertex_tag,
-                            end_tag,
+                            &*reader, space_name, &end_val, vertex_tag, end_tag,
                         )?
                         else {
                             continue;
@@ -628,8 +607,9 @@ impl RecursiveFragmentOperator {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
                     let layout = chunk.get_layout();
-                    let endpoint_tags =
-                        path_endpoint_tags(&*reader, space_name, edge_types, *direction, vertex_tag);
+                    let endpoint_tags = path_endpoint_tags(
+                        &*reader, space_name, edge_types, *direction, vertex_tag,
+                    );
                     let (start_tag, end_tag) = endpoint_tags
                         .as_ref()
                         .map(|(start, end)| (start.as_str(), end.as_str()))
@@ -648,21 +628,13 @@ impl RecursiveFragmentOperator {
                         )?;
                         for (src_val, dst_val) in pairs {
                             let Some(start_vertex) = materialize_path_endpoint(
-                                &*reader,
-                                space_name,
-                                &src_val,
-                                vertex_tag,
-                                start_tag,
+                                &*reader, space_name, &src_val, vertex_tag, start_tag,
                             )?
                             else {
                                 continue;
                             };
                             let Some(end_vertex) = materialize_path_endpoint(
-                                &*reader,
-                                space_name,
-                                &dst_val,
-                                vertex_tag,
-                                end_tag,
+                                &*reader, space_name, &dst_val, vertex_tag, end_tag,
                             )?
                             else {
                                 continue;

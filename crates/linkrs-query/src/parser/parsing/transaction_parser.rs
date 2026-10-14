@@ -57,8 +57,7 @@ impl TransactionParser {
             read_only = Some(mode);
         }
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::BeginTransaction(BeginTransactionStmt {
             span,
@@ -75,8 +74,7 @@ impl TransactionParser {
             ctx.expect_token(TokenKind::Transaction)?;
         }
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::CommitTransaction(CommitTransactionStmt { span }))
     }
@@ -102,8 +100,7 @@ impl TransactionParser {
             None
         };
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::RollbackTransaction(RollbackTransactionStmt {
             span,
@@ -121,8 +118,7 @@ impl TransactionParser {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Savepoint)?;
         let name = ctx.expect_identifier()?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
         Ok(Stmt::Savepoint(SavepointStmt { span, name }))
     }
 
@@ -134,8 +130,7 @@ impl TransactionParser {
         ctx.expect_token(TokenKind::Release)?;
         ctx.expect_token(TokenKind::Savepoint)?;
         let name = ctx.expect_identifier()?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
         Ok(Stmt::ReleaseSavepoint(ReleaseSavepointStmt { span, name }))
     }
 }

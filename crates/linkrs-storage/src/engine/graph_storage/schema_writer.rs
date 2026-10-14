@@ -317,6 +317,12 @@ pub(crate) fn create_tag_with_estimate(
     {
         return Err(StorageError::label_already_exists(tag.tag_name.clone()));
     }
+    linkrs_core::types::ttl::validate_ttl(
+        &tag.properties,
+        tag.ttl_duration,
+        tag.ttl_col.as_deref(),
+    )
+    .map_err(StorageError::invalid_operation)?;
     let tag_id = ctx.schema_manager().peek_next_tag_id();
 
     validate_serial_columns(&tag.properties)?;
@@ -518,6 +524,12 @@ pub(crate) fn create_edge_type(
             edge_type.edge_type_name.clone(),
         ));
     }
+    linkrs_core::types::ttl::validate_ttl(
+        &edge_type.properties,
+        edge_type.ttl_duration,
+        edge_type.ttl_col.as_deref(),
+    )
+    .map_err(StorageError::invalid_operation)?;
     let src_label_id =
         endpoint_label_id(ctx, space, &edge_type.src_tag_name)?.ok_or_else(|| {
             StorageError::not_found(format!("Source tag {} not found", edge_type.src_tag_name))

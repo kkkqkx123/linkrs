@@ -63,8 +63,7 @@ impl UserParser {
             role = Some(ctx.expect_identifier()?);
         }
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::CreateUser(CreateUserStmt {
             span,
@@ -120,8 +119,7 @@ impl UserParser {
             }
         }
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::AlterUser(AlterUserStmt {
             span,
@@ -148,8 +146,7 @@ impl UserParser {
 
         let username = ctx.expect_dcl_name()?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::DropUser(DropUserStmt {
             span,
@@ -186,8 +183,7 @@ impl UserParser {
         ctx.expect_token(TokenKind::To)?;
         let new_password = ctx.expect_string_literal()?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::ChangePassword(ChangePasswordStmt {
             span,
@@ -270,8 +266,7 @@ impl UserParser {
         // Analyzing the username
         let username = ctx.expect_dcl_name()?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::Grant(GrantStmt {
             span,
@@ -305,8 +300,7 @@ impl UserParser {
         // Analyzing the username
         let username = ctx.expect_dcl_name()?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::Revoke(RevokeStmt {
             span,
@@ -328,8 +322,7 @@ impl UserParser {
 
         let username = ctx.expect_dcl_name()?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::DescribeUser(DescribeUserStmt { span, username }))
     }
@@ -344,8 +337,7 @@ impl UserParser {
         ctx.expect_token(TokenKind::Show)?;
         ctx.expect_token(TokenKind::Users)?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::ShowUsers(ShowUsersStmt { span }))
     }
@@ -367,8 +359,7 @@ impl UserParser {
             None
         };
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::ShowRoles(ShowRolesStmt { span, space_name }))
     }

@@ -67,6 +67,23 @@ fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChu
     )
 }
 
+/// Multi-row variant of [`make_manage_result`] for batch DDL (e.g.
+/// `DROP TAG a, b, c`): one `(action, name, status)` row per item so each
+/// deletion is reported individually.
+fn make_manage_results(action: &str, items: Vec<(String, &str)>) -> DataChunk {
+    let rows = items
+        .into_iter()
+        .map(|(name, status)| {
+            vec![
+                Value::string(action),
+                Value::string(name),
+                Value::string(status),
+            ]
+        })
+        .collect();
+    DataChunk::new_with_layout(rows, manage_result_layout())
+}
+
 fn exec_ddl<F>(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     f: F,

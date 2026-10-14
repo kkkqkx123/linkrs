@@ -487,6 +487,7 @@ impl TemplateExtractor {
                         crate::parser::ast::PathElement::Edge(e) => {
                             Self::pattern_to_template(&Pattern::Edge(e.clone()))
                         }
+                        crate::parser::ast::PathElement::CreateEdge(_) => "(...)".to_string(),
                         crate::parser::ast::PathElement::Alternative(patterns) => {
                             let alts: Vec<String> =
                                 patterns.iter().map(Self::pattern_to_template).collect();

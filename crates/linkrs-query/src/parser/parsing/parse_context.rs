@@ -339,6 +339,14 @@ impl<'a> ParseContext<'a> {
         Span::new(start, end)
     }
 
+    /// Span from `start` (usually another span's `.start`) up to the current
+    /// cursor position. Replaces the `end_span = ctx.current_span()` /
+    /// `merge_span(start, end_span.end)` idiom spread across the parsers.
+    pub fn span_since(&self, start: Position) -> Span {
+        let end = self.current_span();
+        Span::new(start, end.end)
+    }
+
     pub fn current_token(&self) -> &Token {
         &self.current_token
     }

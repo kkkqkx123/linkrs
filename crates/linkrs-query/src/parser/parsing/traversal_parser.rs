@@ -10,10 +10,10 @@ use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
+use crate::parser::parsing::pattern_common;
 use crate::parser::TokenKind;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::expr::Expression as CoreExpression;
-use linkrs_core::types::graph_schema::EdgeDirection;
 
 mod find_path;
 mod get_subgraph;
@@ -75,8 +75,7 @@ impl TraversalParser {
                 Ok(Pattern::Path(path))
             }
             Pattern::Node(node) => {
-                let end_span = ctx.current_span();
-                let span = ctx.merge_span(start_span.start, end_span.end);
+                let span = ctx.span_since(start_span.start);
                 Ok(Pattern::Path(PathPattern::with_name(
                     vec![PathElement::Node(node)],
                     span,
@@ -145,15 +144,7 @@ impl TraversalParser {
         if ctx.match_token(TokenKind::Colon) {
             loop {
                 let label = ctx.expect_identifier()?;
-                if ctx.match_token(TokenKind::Dot) {
-                    let table = ctx.expect_identifier()?;
-                    let pos = ctx.current_position();
-                    return Err(ParseError::new(
-                        ParseErrorKind::UnexpectedToken,
-                        crate::attached::qualified_reference_message(&label, &table),
-                        pos,
-                    ));
-                }
+                pattern_common::reject_qualified_reference(ctx, &label)?;
                 labels.push(label);
                 if !ctx.check_token(TokenKind::Colon) {
                     break;
@@ -169,8 +160,7 @@ impl TraversalParser {
 
         ctx.expect_token(TokenKind::RParen)?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(NodePattern {
             span,
@@ -208,8 +198,7 @@ impl TraversalParser {
             }
         }
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Pattern::Path(PathPattern {
             span,
@@ -221,11 +210,8 @@ impl TraversalParser {
     /// Analyzing the border mode
     fn parse_edge_pattern(&mut self, ctx: &mut ParseContext) -> Result<EdgePattern, ParseError> {
         let start_span = ctx.current_span();
-        let mut direction = EdgeDirection::Out;
-
-        if ctx.match_token(TokenKind::BackArrow) || ctx.match_token(TokenKind::LeftArrow) {
-            direction = EdgeDirection::In;
-        }
+        let incoming =
+            ctx.match_token(TokenKind::BackArrow) || ctx.match_token(TokenKind::LeftArrow);
 
         ctx.expect_token(TokenKind::Minus)?;
 
@@ -243,15 +229,7 @@ impl TraversalParser {
                 if ctx.check_token(TokenKind::Colon) {
                     variable = Some(name);
                 } else {
-                    if ctx.match_token(TokenKind::Dot) {
-                        let table = ctx.expect_identifier()?;
-                        let pos = ctx.current_position();
-                        return Err(ParseError::new(
-                            ParseErrorKind::UnexpectedToken,
-                            crate::attached::qualified_reference_message(&name, &table),
-                            pos,
-                        ));
-                    }
+                    pattern_common::reject_qualified_reference(ctx, &name)?;
                     edge_types.push(name);
                 }
             }
@@ -260,15 +238,7 @@ impl TraversalParser {
                 loop {
                     ctx.match_token(TokenKind::Colon);
                     let edge_type = ctx.expect_identifier()?;
-                    if ctx.match_token(TokenKind::Dot) {
-                        let table = ctx.expect_identifier()?;
-                        let pos = ctx.current_position();
-                        return Err(ParseError::new(
-                            ParseErrorKind::UnexpectedToken,
-                            crate::attached::qualified_reference_message(&edge_type, &table),
-                            pos,
-                        ));
-                    }
+                    pattern_common::reject_qualified_reference(ctx, &edge_type)?;
                     edge_types.push(edge_type);
                     if !ctx.match_token(TokenKind::Pipe) {
                         break;
@@ -332,8 +302,7 @@ impl TraversalParser {
 
                     ctx.expect_token(TokenKind::RParen)?;
 
-                    let end_span = ctx.current_span();
-                    let span = ctx.merge_span(start_span.start, end_span.end);
+                    let span = ctx.span_since(start_span.start);
 
                     let rc = RecursiveComprehension {
                         span,
@@ -393,32 +362,19 @@ impl TraversalParser {
             ctx.expect_token(TokenKind::RBracket)?;
         }
 
-        if ctx.match_token(TokenKind::Arrow) {
-            if direction == EdgeDirection::In {
-                direction = EdgeDirection::Both;
-            } else {
-                direction = EdgeDirection::Out;
-            }
-        } else if ctx.match_token(TokenKind::Minus) {
-            if direction == EdgeDirection::Out {
-                direction = EdgeDirection::Both;
-            }
-        } else if ctx.match_token(TokenKind::RightArrow) {
-            if direction == EdgeDirection::In {
-                direction = EdgeDirection::Both;
-            } else {
-                direction = EdgeDirection::Out;
-            }
-        } else {
-            return Err(ParseError::new(
-                ParseErrorKind::SyntaxError,
-                "Expected '-', '->', or '<-' after edge pattern".to_string(),
-                ctx.current_position(),
-            ));
-        }
+        // The trailing direction closes the hop: `->` or `-`.
+        let closing = ctx.current_token().kind.clone();
+        let direction =
+            pattern_common::resolve_edge_direction(incoming, &closing).ok_or_else(|| {
+                ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    "Expected '-', '->', or '<-' after edge pattern".to_string(),
+                    ctx.current_position(),
+                )
+            })?;
+        ctx.next_token();
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(EdgePattern {
             span,

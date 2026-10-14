@@ -10,6 +10,7 @@ use crate::engine::params::EdgeOperationParams;
 use linkrs_core::types::{EdgeTypeInfo, LabelId, Timestamp, VertexId};
 use linkrs_core::{Edge, EdgeDirection, StorageError, StorageResult, Value};
 
+use crate::engine::graph_storage::reader::ttl_filter::edge_is_expired;
 use crate::engine::graph_storage::reader::utils::*;
 
 pub(crate) fn get_edge(
@@ -101,6 +102,9 @@ fn get_edge_impl(
     };
     if let Some(record) = record {
         let edge = edge_record_to_edge_with_projection(record, edge_type, src, dst, projection);
+        if edge_is_expired(&edge_info, &edge) {
+            return Ok(None);
+        }
         return Ok(Some(edge));
     }
 
@@ -203,6 +207,9 @@ pub(crate) fn get_node_edges_projected(
                         dst,
                         projection,
                     );
+                    if edge_is_expired(edge_info, &edge) {
+                        continue;
+                    }
                     edges.push(edge);
                 }
             }
@@ -231,6 +238,9 @@ pub(crate) fn get_node_edges_projected(
                         node_vid,
                         projection,
                     );
+                    if edge_is_expired(edge_info, &edge) {
+                        continue;
+                    }
                     edges.push(edge);
                 }
             }
@@ -266,6 +276,9 @@ pub(crate) fn get_node_edges_projected(
                         dst,
                         projection,
                     );
+                    if edge_is_expired(edge_info, &edge) {
+                        continue;
+                    }
                     edges.push(edge);
                 }
                 let remaining = limit.map(|l| l.saturating_sub(edges.len()));
@@ -299,6 +312,9 @@ pub(crate) fn get_node_edges_projected(
                         node_vid,
                         projection,
                     );
+                    if edge_is_expired(edge_info, &edge) {
+                        continue;
+                    }
                     edges.push(edge);
                 }
             }
@@ -574,6 +590,9 @@ pub(crate) fn scan_edges_by_type(
             break;
         }
         for edge in batch {
+            if edge_is_expired(&edge_info, &edge) {
+                continue;
+            }
             record_edge_read(
                 ctx,
                 linkrs_core::types::EdgeIdentifier::new(
@@ -684,6 +703,9 @@ pub(crate) fn scan_edges_by_type_parallel(
     let mut edges = Vec::new();
     for shard in per_shard {
         for edge in shard {
+            if edge_is_expired(&edge_info, &edge) {
+                continue;
+            }
             record_edge_read(
                 ctx,
                 linkrs_core::types::EdgeIdentifier::new(
@@ -711,6 +733,7 @@ pub(crate) fn scan_edges_by_type_paginated(
     if limit == 0 {
         return Ok(Vec::new());
     }
+    let edge_info = ctx.schema_manager().get_edge_type(space, edge_type)?;
     let mut cursor = crate::engine::graph_storage::cursor_impl::create_edge_cursor(
         Arc::new(ctx.clone()),
         space,
@@ -727,7 +750,17 @@ pub(crate) fn scan_edges_by_type_paginated(
         if batch.is_empty() {
             break;
         }
-        edges.extend(batch);
+        for edge in batch {
+            if let Some(info) = edge_info.as_ref() {
+                if edge_is_expired(info, &edge) {
+                    continue;
+                }
+            }
+            edges.push(edge);
+            if edges.len() >= limit {
+                break;
+            }
+        }
     }
     edges.truncate(limit);
     Ok(edges)

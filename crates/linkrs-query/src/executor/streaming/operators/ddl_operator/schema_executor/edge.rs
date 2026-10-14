@@ -34,8 +34,8 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
         }
         | EdgeManageCommand::UpdateEndpoints { edge_name, .. }
         | EdgeManageCommand::Desc { edge_name }
-        | EdgeManageCommand::Drop { edge_name, .. }
         | EdgeManageCommand::ShowCreate { edge_name } => Some(edge_name.clone()),
+        EdgeManageCommand::Drop { .. } => None,
         EdgeManageCommand::Show => None,
     };
     let result = match command {
@@ -45,9 +45,15 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
             src_tag_name,
             dst_tag_name,
             if_not_exists,
+            ttl_duration,
+            ttl_col,
         } => super::super::exec_ddl(storage, |s| {
+            linkrs_core::types::ttl::validate_ttl(properties, *ttl_duration, ttl_col.as_deref())
+                .map_err(QueryError::execution)?;
             let mut info = EdgeTypeInfo::new(edge_name.clone());
             info.properties = properties.clone();
+            info.ttl_duration = *ttl_duration;
+            info.ttl_col = ttl_col.clone();
             info.src_tag_name = src_tag_name.clone().unwrap_or_default();
             info.dst_tag_name = dst_tag_name.clone().unwrap_or_default();
             match StorageSchemaOps::create_edge_type(s, space_name, &info) {
@@ -63,23 +69,38 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
             }
         }),
         EdgeManageCommand::Drop {
-            edge_name,
+            edge_names,
             if_exists,
-        } => super::super::exec_ddl(storage, |s| {
-            match StorageSchemaOps::drop_edge_type(s, space_name, edge_name) {
-                Ok(_) => Ok(()),
-                Err(e)
-                    if *if_exists
-                        && (e.kind()
-                            == linkrs_core::error::storage::StorageErrorKind::LabelNotFound
-                            || e.kind()
-                                == linkrs_core::error::storage::StorageErrorKind::NotFound) =>
-                {
-                    Ok(())
-                }
-                Err(e) => Err(QueryError::execution(e.to_string())),
+        } => {
+            if edge_names.is_empty() {
+                return Err(QueryError::execution(
+                    "DROP EDGE requires at least one edge type name".to_string(),
+                ));
             }
-        }),
+            let Some(lock) = storage else {
+                return Ok(Some(super::super::make_manage_result(
+                    "drop_edge",
+                    None,
+                    "no-storage",
+                )));
+            };
+            let mut writer = lock.write();
+            let mut items = Vec::with_capacity(edge_names.len());
+            for name in edge_names {
+                match StorageSchemaOps::drop_edge_type(&mut *writer, space_name, name) {
+                    Ok(true) => items.push((name.clone(), "dropped")),
+                    Ok(false) if *if_exists => items.push((name.clone(), "not_exists")),
+                    Ok(false) => {
+                        return Err(QueryError::execution(format!(
+                            "Edge type '{}' does not exist",
+                            name
+                        )));
+                    }
+                    Err(e) => return Err(QueryError::execution(e.to_string())),
+                }
+            }
+            Ok(Some(super::super::make_manage_results("drop_edge", items)))
+        }
         EdgeManageCommand::Alter {
             edge_name,
             additions,

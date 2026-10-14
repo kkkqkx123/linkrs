@@ -20,6 +20,7 @@ pub enum SpaceManageCommand {
     },
     Drop {
         space_name: String,
+        if_exists: bool,
     },
     Desc {
         space_name: String,
@@ -65,6 +66,8 @@ pub enum TagManageCommand {
         tag_name: String,
         properties: Vec<PropertyDef>,
         if_not_exists: bool,
+        ttl_duration: Option<i64>,
+        ttl_col: Option<String>,
     },
     Alter {
         tag_name: String,
@@ -80,7 +83,7 @@ pub enum TagManageCommand {
         tag_name: String,
     },
     Drop {
-        tag_name: String,
+        tag_names: Vec<String>,
         if_exists: bool,
     },
     Show,
@@ -98,6 +101,8 @@ pub enum EdgeManageCommand {
         src_tag_name: Option<String>,
         dst_tag_name: Option<String>,
         if_not_exists: bool,
+        ttl_duration: Option<i64>,
+        ttl_col: Option<String>,
     },
     Alter {
         edge_name: String,
@@ -118,7 +123,7 @@ pub enum EdgeManageCommand {
         edge_name: String,
     },
     Drop {
-        edge_name: String,
+        edge_names: Vec<String>,
         if_exists: bool,
     },
     Show,
@@ -194,6 +199,7 @@ pub enum IndexManageCommand {
     },
     DropTagIndex {
         index_name: String,
+        if_exists: bool,
     },
     DescTagIndex {
         index_name: String,
@@ -209,6 +215,7 @@ pub enum IndexManageCommand {
     },
     DropEdgeIndex {
         index_name: String,
+        if_exists: bool,
     },
     DescEdgeIndex {
         index_name: String,

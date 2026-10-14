@@ -16,9 +16,13 @@ impl Binder {
                 // Cypher-style data creation is parsed but has no executable
                 // write path (no id generation, no schema inference): fail
                 // here instead of planning a statement that cannot run.
+                // Node/edge writes are only supported through INSERT VERTEX /
+                // INSERT EDGE (see docs/release/02_dml_data_manipulation.md
+                // section 1 and section 2); no automatic schema creation is
+                // performed for CREATE data patterns.
                 Err(linkrs_core::error::DBError::from(
                     linkrs_core::error::QueryError::invalid_query(
-                        "CREATE data patterns are not supported yet; use INSERT VERTEX / INSERT EDGE"
+                        "CREATE data patterns are not supported; use INSERT VERTEX / INSERT EDGE (see docs/release/02_dml_data_manipulation.md)"
                             .to_string(),
                     ),
                 ))

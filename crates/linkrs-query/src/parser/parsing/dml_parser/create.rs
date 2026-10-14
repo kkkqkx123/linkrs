@@ -1,4 +1,5 @@
 use super::*;
+use crate::parser::parsing::pattern_common;
 
 impl DmlParser {
     /// Parse the Cypher-style CREATE data statement (the CREATE token has already been consumed)
@@ -23,8 +24,7 @@ impl DmlParser {
             }
         }
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::Create(CreateStmt {
             span,
@@ -57,22 +57,20 @@ impl DmlParser {
 
         let start = start_node.span.start;
         let mut elements = vec![PathElement::Node(start_node)];
-        let mut end = start;
         while matches!(
             ctx.current_token().kind,
             TokenKind::Minus | TokenKind::BackArrow
         ) {
             let edge = self.parse_edge_pattern(ctx)?;
-            end = edge.span.end;
-            elements.push(PathElement::Edge(edge));
+            elements.push(PathElement::CreateEdge(edge));
 
             let node = self.parse_node_pattern(ctx)?;
-            end = node.span.end;
             elements.push(PathElement::Node(node));
         }
 
+        let end_span = ctx.current_span();
         Ok(Pattern::Path(PathPattern {
-            span: ctx.merge_span(start, end),
+            span: ctx.merge_span(start, end_span.end),
             elements,
             name: None,
         }))
@@ -99,15 +97,7 @@ impl DmlParser {
         if ctx.match_token(TokenKind::Colon) {
             loop {
                 let label = ctx.expect_identifier()?;
-                if ctx.match_token(TokenKind::Dot) {
-                    let table = ctx.expect_identifier()?;
-                    let pos = ctx.current_position();
-                    return Err(ParseError::new(
-                        crate::parser::core::error::ParseErrorKind::UnexpectedToken,
-                        crate::attached::qualified_reference_message(&label, &table),
-                        pos,
-                    ));
-                }
+                pattern_common::reject_qualified_reference(ctx, &label)?;
                 labels.push(label);
                 if !ctx.match_token(TokenKind::Colon) {
                     break;
@@ -125,8 +115,7 @@ impl DmlParser {
 
         ctx.expect_token(TokenKind::RParen)?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(NodePattern {
             span,
@@ -145,15 +134,13 @@ impl DmlParser {
     fn parse_edge_pattern(
         &mut self,
         ctx: &mut ParseContext,
-    ) -> Result<crate::parser::ast::pattern::EdgePattern, ParseError> {
+    ) -> Result<crate::parser::ast::pattern::CreateEdgePattern, ParseError> {
         use crate::parser::ast::pattern::*;
 
         let start_span = ctx.current_span();
 
-        let mut direction = EdgeDirection::Out;
-        if ctx.match_token(TokenKind::BackArrow) || ctx.match_token(TokenKind::LeftArrow) {
-            direction = EdgeDirection::In;
-        }
+        let incoming =
+            ctx.match_token(TokenKind::BackArrow) || ctx.match_token(TokenKind::LeftArrow);
         ctx.expect_token(TokenKind::Minus)?;
 
         ctx.expect_token(TokenKind::LBracket)?;
@@ -167,15 +154,7 @@ impl DmlParser {
         let mut edge_types = Vec::new();
         if ctx.match_token(TokenKind::Colon) {
             let edge_type = ctx.expect_identifier()?;
-            if ctx.match_token(TokenKind::Dot) {
-                let table = ctx.expect_identifier()?;
-                let pos = ctx.current_position();
-                return Err(ParseError::new(
-                    crate::parser::core::error::ParseErrorKind::UnexpectedToken,
-                    crate::attached::qualified_reference_message(&edge_type, &table),
-                    pos,
-                ));
-            }
+            pattern_common::reject_qualified_reference(ctx, &edge_type)?;
             edge_types.push(edge_type);
         }
 
@@ -189,44 +168,26 @@ impl DmlParser {
 
         ctx.expect_token(TokenKind::RBracket)?;
 
-        // The trailing direction closes the hop: `->`, `-`, or `<-`.
-        if ctx.match_token(TokenKind::Arrow) {
-            if direction == EdgeDirection::In {
-                direction = EdgeDirection::Both;
-            } else {
-                direction = EdgeDirection::Out;
-            }
-        } else if ctx.match_token(TokenKind::Minus) {
-            if direction == EdgeDirection::Out {
-                direction = EdgeDirection::Both;
-            }
-        } else if ctx.match_token(TokenKind::RightArrow) {
-            if direction == EdgeDirection::In {
-                direction = EdgeDirection::Both;
-            } else {
-                direction = EdgeDirection::Out;
-            }
-        } else {
-            return Err(ParseError::new(
-                crate::parser::core::error::ParseErrorKind::SyntaxError,
-                "Expected '-', '->', or '<-' after edge pattern".to_string(),
-                ctx.current_position(),
-            ));
-        }
+        // The trailing direction closes the hop: `->` or `-`.
+        let closing = ctx.current_token().kind.clone();
+        let direction =
+            pattern_common::resolve_edge_direction(incoming, &closing).ok_or_else(|| {
+                ParseError::new(
+                    crate::parser::core::error::ParseErrorKind::SyntaxError,
+                    "Expected '-', '->', or '<-' after edge pattern".to_string(),
+                    ctx.current_position(),
+                )
+            })?;
+        ctx.next_token();
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
-        Ok(EdgePattern {
+        Ok(CreateEdgePattern {
             span,
             variable,
             edge_types,
             properties,
-            predicates: Vec::new(),
             direction,
-            range: None,
-            path_semantic: None,
-            recursive_comprehension: None,
         })
     }
 }

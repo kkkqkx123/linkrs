@@ -38,6 +38,14 @@ pub trait SchemaInfo: Clone + PartialEq + Eq + std::hash::Hash + Send + Sync {
     /// Setting the TTL
     fn set_ttl(&mut self, duration: Option<i64>, col: Option<String>);
 
+    /// Whether a usable TTL is configured (positive duration plus a named column).
+    fn has_ttl(&self) -> bool {
+        matches!(
+            (self.ttl_duration(), self.ttl_col()),
+            (Some(d), Some(c)) if d > 0 && !c.is_empty()
+        )
+    }
+
     /// Get the Schema type name (to distinguish between Tag or Edge)
     fn schema_type_name(&self) -> &'static str;
 

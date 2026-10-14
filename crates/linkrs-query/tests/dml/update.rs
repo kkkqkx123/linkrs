@@ -413,7 +413,9 @@ fn test_update_yield_execution() {
         .assert_success()
         .exec_dml("UPDATE 1 ON Person SET name = 'Bob', age = 35 YIELD name, age");
     assert!(
-        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("YIELD is not supported")),
         "UPDATE with YIELD should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -498,7 +500,9 @@ fn test_update_edge_yield_execution() {
         .assert_success()
         .exec_dml("UPDATE EDGE 1 -> 2 OF KNOWS SET since = '2024-06-01' YIELD since");
     assert!(
-        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("YIELD is not supported")),
         "UPDATE EDGE with YIELD should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -704,7 +708,9 @@ fn test_update_tag_bulk_rejected() {
         .assert_success()
         .exec_dml("UPDATE TAG Person SET age = 31");
     assert!(
-        scenario.error().is_some_and(|e| e.contains("not supported yet")),
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("not supported yet")),
         "UPDATE TAG bulk update should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -721,7 +727,9 @@ fn test_update_yield_rejected() {
         .assert_success()
         .exec_dml("UPDATE 1 ON Person SET age = 31 YIELD age");
     assert!(
-        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("YIELD is not supported")),
         "UPDATE with YIELD should fail explicitly, got: {:?}",
         scenario.error()
     );

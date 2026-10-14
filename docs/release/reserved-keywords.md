@@ -2,7 +2,7 @@
 
 本文档列出了 Linkrs 查询语言中所有保留关键字。保留关键字不能用作**属性名**、**标签名**、**边类型名**或**标识符**。
 
-> 关键字表来源：词法器 `lookup_keyword`（`crates/linkrs-query/src/parser/lexing/lexer.rs`），与代码一一对应。
+> 关键字表来源：词法器 `lookup_keyword`（`crates/linkrs-query/src/parser/lexing/lexer/token.rs`），与代码一一对应。
 
 ---
 
@@ -28,6 +28,8 @@
 | `COLLATE` / `COLLATION` | `Collate` / `Collation` | 排序规则     |
 | `DEFAULT`               | `Default`               | 默认值       |
 | `SERIAL`                | `Serial`                | 自增列类型   |
+| `TTL_DURATION`          | `TtlDuration`           | TTL 持续时间（秒） |
+| `TTL_COL`               | `TtlCol`                | TTL 基准时间属性 |
 | `STRUCT`                | `Struct`                | 结构体类型   |
 | `ARRAY`                 | `Array`                 | 数组类型     |
 | `MACROS`                | `Macros`                | 宏列表       |
@@ -35,7 +37,8 @@
 | `GRAPHS`                | `Graphs`                | 图空间列表   |
 | `SUBQUERY`              | `Subquery`              | 子查询       |
 
-> 注意：`TTL_DURATION` / `TTL_COL` **不是**保留关键字（词法器中无对应 TokenKind），可作为普通标识符使用。
+> 注意：`TTL_DURATION` / `TTL_COL` 为保留关键字（词法器映射为 `TokenKind::TtlDuration` /
+> `TokenKind::TtlCol`，用于 `CREATE TAG` / `CREATE EDGE` 的 TTL 子句），不可作为普通标识符使用。
 
 ## 2. DML / 数据操作
 
@@ -324,4 +327,5 @@
 2. **属性名冲突**：使用 `WEIGHT` 作为属性名会导致解析错误，因为该关键字被词法分析器映射为 `TokenKind::Weight`。应使用 `strength`、`score` 等替代名称。
 3. **数据类型关键字**：所有数据类型名（`INT`、`STRING`、`GEOGRAPHY` 等）均为保留关键字，不可用作标识符。
 4. **`TRUE` / `FALSE`**：被解析为 `BooleanLiteral` 字面量，同样不可用作标识符。
-5. **非保留字**：`BALANCE`、`TTL_DURATION`、`TTL_COL`、`FIND_PATH`、`OUTBOUND`、`INBOUND` 看似关键字但词法器未保留，可作为标识符使用。
+5. **TTL 关键字**：`TTL_DURATION`、`TTL_COL` 为保留关键字（TTL 子句专用），不可作为标识符使用；
+   `BALANCE`、`FIND_PATH`、`OUTBOUND`、`INBOUND` 看似关键字但词法器未保留，可作为标识符使用。

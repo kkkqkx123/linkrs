@@ -82,10 +82,7 @@ impl Planner for PathPlanner {
             // A cycle can never produce a shorter path, so WITH LOOP /
             // WITH TRAIL / WITH WALK are no-ops on this branch; report the
             // ignored modifiers instead of folding them into the plan.
-            if find_path_stmt.with_loop
-                || find_path_stmt.with_trail
-                || find_path_stmt.with_walk
-            {
+            if find_path_stmt.with_loop || find_path_stmt.with_trail || find_path_stmt.with_walk {
                 log::debug!(
                     "FIND SHORTEST PATH ignores WITH LOOP/TRAIL/WALK: \
                      revisiting a vertex or edge cannot yield a shorter path"
@@ -248,8 +245,11 @@ impl Planner for PathPlanner {
             // Default paths do not repeat vertices; WITH LOOP / WITH TRAIL /
             // WITH WALK each relax a distinct part of that constraint (see
             // PathUniqueness).
-            let path_uniqueness =
-                PathUniqueness::from_flags(find_path.with_loop, find_path.with_trail, find_path.with_walk);
+            let path_uniqueness = PathUniqueness::from_flags(
+                find_path.with_loop,
+                find_path.with_trail,
+                find_path.with_walk,
+            );
 
             let right_node = StartNode::new();
             let right_node_enum = PlanNodeEnum::Start(right_node);
@@ -711,11 +711,7 @@ mod tests {
         ];
         for (with_loop, with_trail, with_walk, expected) in cases {
             let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(
-                false,
-                with_loop,
-                with_trail,
-                with_walk,
-                None,
+                false, with_loop, with_trail, with_walk, None,
             ));
             let plan = PathPlanner::new()
                 .transform(&validated(stmt), test_query_context())
@@ -746,9 +742,7 @@ mod tests {
     fn shortest_path_ignores_repeat_flags() {
         // Cycles can never shorten a path, so the shortest-path plan stays a
         // plain ShortestPath node regardless of the modifiers.
-        let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(
-            true, true, true, true, None,
-        ));
+        let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(true, true, true, true, None));
         let plan = PathPlanner::new()
             .transform(&validated(stmt), test_query_context())
             .expect("modifiers do not break shortest path planning");

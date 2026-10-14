@@ -30,8 +30,8 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
             old_name: tag_name, ..
         }
         | TagManageCommand::Desc { tag_name }
-        | TagManageCommand::Drop { tag_name, .. }
         | TagManageCommand::ShowCreate { tag_name } => Some(tag_name.clone()),
+        TagManageCommand::Drop { .. } => None,
         TagManageCommand::Show => None,
     };
     let result = match command {
@@ -39,9 +39,15 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
             tag_name,
             properties,
             if_not_exists,
+            ttl_duration,
+            ttl_col,
         } => super::super::exec_ddl(storage, |s| {
+            linkrs_core::types::ttl::validate_ttl(properties, *ttl_duration, ttl_col.as_deref())
+                .map_err(QueryError::execution)?;
             let mut info = TagInfo::new(tag_name.clone());
             info.properties = properties.clone();
+            info.ttl_duration = *ttl_duration;
+            info.ttl_col = ttl_col.clone();
             match StorageSchemaOps::create_tag(s, space_name, &info) {
                 Ok(_) => Ok(()),
                 Err(e)
@@ -55,23 +61,38 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
             }
         }),
         TagManageCommand::Drop {
-            tag_name,
+            tag_names,
             if_exists,
-        } => super::super::exec_ddl(storage, |s| {
-            match StorageSchemaOps::drop_tag(s, space_name, tag_name) {
-                Ok(_) => Ok(()),
-                Err(e)
-                    if *if_exists
-                        && (e.kind()
-                            == linkrs_core::error::storage::StorageErrorKind::LabelNotFound
-                            || e.kind()
-                                == linkrs_core::error::storage::StorageErrorKind::NotFound) =>
-                {
-                    Ok(())
-                }
-                Err(e) => Err(QueryError::execution(e.to_string())),
+        } => {
+            if tag_names.is_empty() {
+                return Err(QueryError::execution(
+                    "DROP TAG requires at least one tag name".to_string(),
+                ));
             }
-        }),
+            let Some(lock) = storage else {
+                return Ok(Some(super::super::make_manage_result(
+                    "drop_tag",
+                    None,
+                    "no-storage",
+                )));
+            };
+            let mut writer = lock.write();
+            let mut items = Vec::with_capacity(tag_names.len());
+            for name in tag_names {
+                match StorageSchemaOps::drop_tag(&mut *writer, space_name, name) {
+                    Ok(true) => items.push((name.clone(), "dropped")),
+                    Ok(false) if *if_exists => items.push((name.clone(), "not_exists")),
+                    Ok(false) => {
+                        return Err(QueryError::execution(format!(
+                            "Tag '{}' does not exist",
+                            name
+                        )));
+                    }
+                    Err(e) => return Err(QueryError::execution(e.to_string())),
+                }
+            }
+            Ok(Some(super::super::make_manage_results("drop_tag", items)))
+        }
         TagManageCommand::Alter {
             tag_name,
             additions,
@@ -205,15 +226,17 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?
             {
                 Some(tag) => {
-                    let ddl = format!(
-                        "CREATE TAG {} ({})",
-                        tag.tag_name,
-                        tag.properties
-                            .iter()
-                            .map(|p| format!("{} {:?}", p.name, p.data_type))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
+                    let mut parts: Vec<String> = tag
+                        .properties
+                        .iter()
+                        .map(|p| format!("{} {}", p.name, p.data_type))
+                        .collect();
+                    if let (Some(duration), Some(col)) = (tag.ttl_duration, tag.ttl_col.as_deref())
+                    {
+                        parts.push(format!("ttl_duration={duration}"));
+                        parts.push(format!("ttl_col={col}"));
+                    }
+                    let ddl = format!("CREATE TAG {} ({})", tag.tag_name, parts.join(", "));
                     let schema = super::super::make_single_col_schema("create_tag", "string");
                     Ok(Some(super::super::make_single_row(
                         schema,

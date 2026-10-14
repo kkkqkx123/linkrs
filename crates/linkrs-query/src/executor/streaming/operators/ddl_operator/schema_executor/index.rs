@@ -25,11 +25,11 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
     *emitted = true;
     let index_name = match command {
         IndexManageCommand::CreateTagIndex { index_name, .. }
-        | IndexManageCommand::DropTagIndex { index_name }
+        | IndexManageCommand::DropTagIndex { index_name, .. }
         | IndexManageCommand::DescTagIndex { index_name }
         | IndexManageCommand::RebuildTagIndex { index_name }
         | IndexManageCommand::CreateEdgeIndex { index_name, .. }
-        | IndexManageCommand::DropEdgeIndex { index_name }
+        | IndexManageCommand::DropEdgeIndex { index_name, .. }
         | IndexManageCommand::DescEdgeIndex { index_name }
         | IndexManageCommand::RebuildEdgeIndex { index_name }
         | IndexManageCommand::ShowCreateIndex { index_name } => Some(index_name.clone()),
@@ -115,18 +115,54 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageCommand::DropTagIndex { .. } => super::super::exec_ddl(storage, |s| {
-            let name = index_name.as_deref().unwrap_or("");
-            StorageSchemaOps::drop_tag_index(s, space_name, name)
+        IndexManageCommand::DropTagIndex { if_exists, .. } => {
+            let name = index_name.as_deref().unwrap_or("").to_string();
+            let Some(lock) = storage else {
+                return Ok(Some(super::super::make_manage_result(
+                    "drop_tag_index",
+                    None,
+                    "no-storage",
+                )));
+            };
+            let mut writer = lock.write();
+            let dropped = StorageSchemaOps::drop_tag_index(&mut *writer, space_name, &name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
-        IndexManageCommand::DropEdgeIndex { .. } => super::super::exec_ddl(storage, |s| {
-            let name = index_name.as_deref().unwrap_or("");
-            StorageSchemaOps::drop_edge_index(s, space_name, name)
+            if !dropped && !*if_exists {
+                return Err(QueryError::execution(format!(
+                    "Tag index '{}' does not exist",
+                    name
+                )));
+            }
+            Ok(Some(super::super::make_manage_result(
+                "drop_tag_index",
+                Some(&name),
+                if dropped { "dropped" } else { "not_exists" },
+            )))
+        }
+        IndexManageCommand::DropEdgeIndex { if_exists, .. } => {
+            let name = index_name.as_deref().unwrap_or("").to_string();
+            let Some(lock) = storage else {
+                return Ok(Some(super::super::make_manage_result(
+                    "drop_edge_index",
+                    None,
+                    "no-storage",
+                )));
+            };
+            let mut writer = lock.write();
+            let dropped = StorageSchemaOps::drop_edge_index(&mut *writer, space_name, &name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
+            if !dropped && !*if_exists {
+                return Err(QueryError::execution(format!(
+                    "Edge index '{}' does not exist",
+                    name
+                )));
+            }
+            Ok(Some(super::super::make_manage_result(
+                "drop_edge_index",
+                Some(&name),
+                if dropped { "dropped" } else { "not_exists" },
+            )))
+        }
         IndexManageCommand::DescTagIndex { .. } | IndexManageCommand::ShowCreateIndex { .. } => {
             let reader = super::super::get_reader(storage)?;
             let name = index_name.as_deref().unwrap_or("");

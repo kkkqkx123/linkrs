@@ -4,7 +4,7 @@
 //! including CREATE FULLTEXT INDEX, SEARCH, and related queries.
 
 use crate::parser::ast::fulltext::{
-    AlterFulltextIndex, AlterIndexAction, BM25Options, CreateFulltextIndex, DescribeFulltextIndex,
+    AlterFulltextIndex, AlterIndexAction, CreateFulltextIndex, DescribeFulltextIndex,
     DropFulltextIndex, FulltextMatchCondition, FulltextQueryExpr, FulltextYieldClause,
     FulltextYieldItem, IndexFieldDef, IndexOptions, LookupFulltext, MatchFulltext, SearchStatement,
     ShowFulltextIndex,
@@ -96,16 +96,24 @@ pub fn parse_create_fulltext_index_after_create(
     loop {
         let field_name = ctx.consume_identifier()?;
 
-        let mut field_def = IndexFieldDef::new(field_name);
+        let field_def = IndexFieldDef::new(field_name);
 
         if ctx.check_keyword("ANALYZER") {
-            ctx.consume_keyword("ANALYZER")?;
-            field_def.analyzer = Some(ctx.consume_string()?);
+            return Err(crate::parser::ParseError::new(
+                crate::parser::core::error::ParseErrorKind::SyntaxError,
+                "ANALYZER is not supported yet; create the fulltext index without per-field analyzers"
+                    .to_string(),
+                ctx.current_position(),
+            ));
         }
 
         if ctx.check_keyword("BOOST") {
-            ctx.consume_keyword("BOOST")?;
-            field_def.boost = Some(ctx.consume_float()? as f32);
+            return Err(crate::parser::ParseError::new(
+                crate::parser::core::error::ParseErrorKind::SyntaxError,
+                "BOOST is not supported yet; create the fulltext index without per-field weights"
+                    .to_string(),
+                ctx.current_position(),
+            ));
         }
 
         fields.push(field_def);
@@ -118,6 +126,9 @@ pub fn parse_create_fulltext_index_after_create(
     ctx.expect_token(TokenKind::RParen)?;
 
     ctx.consume_keyword("ENGINE")?;
+    if ctx.current_token().kind == TokenKind::Assign {
+        ctx.next_token();
+    }
     if ctx.check_keyword("BM25") {
         ctx.consume_keyword("BM25")?;
     } else {
@@ -129,71 +140,19 @@ pub fn parse_create_fulltext_index_after_create(
     }
     let engine_type = FulltextEngineType::Bm25;
 
+    if ctx.check_keyword("OPTIONS") {
+        return Err(crate::parser::ParseError::new(
+            crate::parser::core::error::ParseErrorKind::SyntaxError,
+            "OPTIONS (...) is not supported yet; create the fulltext index without BM25 option overrides (defaults k1=1.5, b=0.75 apply)"
+                .to_string(),
+            ctx.current_position(),
+        ));
+    }
+
     let options = IndexOptions {
         bm25_config: None,
         common_options: HashMap::new(),
     };
-
-    let mut options = options;
-
-    if ctx.check_keyword("OPTIONS") {
-        ctx.consume_keyword("OPTIONS")?;
-        ctx.expect_token(TokenKind::LParen)?;
-
-        loop {
-            let key = ctx.consume_identifier()?;
-            ctx.expect_token(TokenKind::Assign)?;
-
-            match key.to_lowercase().as_str() {
-                "k1" => {
-                    if options.bm25_config.is_none() {
-                        options.bm25_config = Some(BM25Options {
-                            k1: None,
-                            b: None,
-                            field_weights: HashMap::new(),
-                            analyzer: None,
-                            store_original: None,
-                        });
-                    }
-                    options.bm25_config.as_mut().unwrap().k1 = Some(ctx.consume_float()? as f32);
-                }
-                "b" => {
-                    if options.bm25_config.is_none() {
-                        options.bm25_config = Some(BM25Options {
-                            k1: None,
-                            b: None,
-                            field_weights: HashMap::new(),
-                            analyzer: None,
-                            store_original: None,
-                        });
-                    }
-                    options.bm25_config.as_mut().unwrap().b = Some(ctx.consume_float()? as f32);
-                }
-                "analyzer" => {
-                    if options.bm25_config.is_none() {
-                        options.bm25_config = Some(BM25Options {
-                            k1: None,
-                            b: None,
-                            field_weights: HashMap::new(),
-                            analyzer: None,
-                            store_original: None,
-                        });
-                    }
-                    options.bm25_config.as_mut().unwrap().analyzer = Some(ctx.consume_string()?);
-                }
-                _ => {
-                    let value = ctx.consume_value()?;
-                    options.common_options.insert(key, value);
-                }
-            }
-
-            if !ctx.consume_optional_token(",") {
-                break;
-            }
-        }
-
-        ctx.expect_token(TokenKind::RParen)?;
-    }
 
     let mut create = CreateFulltextIndex::new(
         ctx.current_span(),
@@ -590,6 +549,68 @@ mod tests {
         let mut parser = Parser::new(sql);
         let result = parser.parse();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_create_fulltext_index_with_equals_engine() {
+        let sql = r#"CREATE FULLTEXT INDEX idx_article_content
+                     ON article(content)
+                     ENGINE = BM25"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_create_fulltext_index_with_analyzer_rejected() {
+        let sql = r#"CREATE FULLTEXT INDEX idx_article_content
+                     ON article(content ANALYZER 'standard')
+                     ENGINE = BM25"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse();
+        assert!(result.is_err());
+        let collected = format!("{:?}", parser.take_errors());
+        assert!(
+            collected.contains("ANALYZER"),
+            "rejection must name ANALYZER: {}",
+            collected
+        );
+    }
+
+    #[test]
+    fn test_parse_create_fulltext_index_with_boost_rejected() {
+        let sql = r#"CREATE FULLTEXT INDEX idx_article_content
+                     ON article(content BOOST 2.0)
+                     ENGINE = BM25"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse();
+        assert!(result.is_err());
+        let collected = format!("{:?}", parser.take_errors());
+        assert!(
+            collected.contains("BOOST"),
+            "rejection must name BOOST: {}",
+            collected
+        );
+    }
+
+    #[test]
+    fn test_parse_create_fulltext_index_with_options_rejected() {
+        let sql = r#"CREATE FULLTEXT INDEX idx_article_content
+                     ON article(content)
+                     ENGINE = BM25 OPTIONS (k1=1.2, b=0.8)"#;
+
+        let mut parser = Parser::new(sql);
+        let result = parser.parse();
+        assert!(result.is_err());
+        let collected = format!("{:?}", parser.take_errors());
+        assert!(
+            collected.contains("OPTIONS"),
+            "rejection must name OPTIONS: {}",
+            collected
+        );
     }
 
     #[test]

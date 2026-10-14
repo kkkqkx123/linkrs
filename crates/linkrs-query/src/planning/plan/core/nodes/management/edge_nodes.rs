@@ -102,7 +102,7 @@ impl DescEdgeNode {
 define_plan_node! {
     pub struct DropEdgeNode {
         space_name: String,
-        edge_name: String,
+        edge_names: Vec<String>,
         if_exists: bool,
     }
     manage_enum: EdgeManageNode::Drop as EdgeManage
@@ -110,11 +110,11 @@ define_plan_node! {
 }
 
 impl DropEdgeNode {
-    pub fn new(id: i64, space_name: String, edge_name: String) -> Self {
+    pub fn new(id: i64, space_name: String, edge_names: Vec<String>) -> Self {
         Self {
             id,
             space_name,
-            edge_name,
+            edge_names,
             if_exists: false,
             output_var: None,
             col_names: Vec::new(),
@@ -131,8 +131,8 @@ impl DropEdgeNode {
         &self.space_name
     }
 
-    pub fn edge_name(&self) -> &str {
-        &self.edge_name
+    pub fn edge_names(&self) -> &[String] {
+        &self.edge_names
     }
 
     pub fn if_exists(&self) -> bool {
@@ -294,6 +294,8 @@ pub struct EdgeManageInfo {
     pub dst_tag_name: Option<String>,
     pub properties: Vec<PropertyDef>,
     pub if_not_exists: bool,
+    pub ttl_duration: Option<i64>,
+    pub ttl_col: Option<String>,
 }
 
 impl EdgeManageInfo {
@@ -305,6 +307,8 @@ impl EdgeManageInfo {
             dst_tag_name: None,
             properties: Vec::new(),
             if_not_exists: false,
+            ttl_duration: None,
+            ttl_col: None,
         }
     }
 
@@ -315,6 +319,12 @@ impl EdgeManageInfo {
 
     pub fn with_if_not_exists(mut self, if_not_exists: bool) -> Self {
         self.if_not_exists = if_not_exists;
+        self
+    }
+
+    pub fn with_ttl(mut self, duration: Option<i64>, col: Option<String>) -> Self {
+        self.ttl_duration = duration;
+        self.ttl_col = col;
         self
     }
 

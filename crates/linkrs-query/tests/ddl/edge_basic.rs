@@ -1,9 +1,10 @@
 //! DDL Edge Basic Tests
 //!
 //! Test coverage:
-//! - CREATE EDGE - Create edge type
-//! - DROP EDGE - Delete edge type
+//! - CREATE EDGE - Create edge type (including TTL expiry configuration)
+//! - DROP EDGE - Delete edge type (single, batch, IF EXISTS)
 //! - DESC EDGE - Describe edge schema
+//! - TTL - Expiry filtering of expired edges
 
 use super::common;
 
@@ -224,6 +225,23 @@ fn test_drop_edge_execution_with_if_exists() {
         .assert_success();
 }
 
+#[test]
+fn test_drop_edge_execution_multiple() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG P1(id: INT, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE TAG P2(id: INT, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE RelA(since: INT) FROM P1 TO P2")
+        .assert_success()
+        .exec_ddl("CREATE EDGE RelB(since: INT) FROM P1 TO P2")
+        .assert_success()
+        .exec_ddl("DROP EDGE RelA, RelB")
+        .assert_success();
+}
+
 // ==================== DESC EDGE Tests ====================
 
 #[test]
@@ -298,4 +316,72 @@ fn test_ddl_edge_lifecycle() {
         .assert_success()
         .exec_ddl("DROP EDGE TestEdge")
         .assert_success();
+}
+
+// ==================== TTL Parser Tests ====================
+
+#[test]
+fn test_create_edge_parser_with_ttl() {
+    let query = "CREATE EDGE TempRel(data: STRING, expire_at: INT64, ttl_duration=2592000, ttl_col=expire_at)";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "CREATE EDGE with TTL parsing should succeed: {:?}",
+        result.err()
+    );
+
+    let stmt = result.expect("CREATE EDGE statement parsing should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "CREATE");
+}
+
+// ==================== TTL Execution Tests ====================
+
+#[test]
+fn test_create_edge_execution_with_ttl() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG P(pid: INT64, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE TAG Q(pid: INT64, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE TempRel(expire_at: INT64, ttl_duration=100, ttl_col=expire_at) FROM P TO Q")
+        .assert_success();
+}
+
+#[test]
+fn test_create_edge_execution_with_ttl_type_mismatch_rejected() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG P(pid: INT64, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE TAG Q(pid: INT64, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE Bad(label: STRING, ttl_duration=100, ttl_col=label) FROM P TO Q")
+        .assert_error();
+}
+
+#[test]
+fn test_ttl_expired_edge_is_filtered() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG P(pid: INT64, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE TAG Q(pid: INT64, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE TempRel(expire_at: INT64, ttl_duration=100, ttl_col=expire_at) FROM P TO Q")
+        .assert_success()
+        .exec_dml("INSERT VERTEX P(name) VALUES 1:('a'), 2:('b')")
+        .assert_success()
+        .exec_dml("INSERT VERTEX Q(name) VALUES 3:('c'), 4:('d')")
+        .assert_success()
+        .exec_dml("INSERT EDGE TempRel(expire_at) VALUES 1 -> 3:(0)")
+        .assert_success()
+        .exec_dml("INSERT EDGE TempRel(expire_at) VALUES 2 -> 4:(9999999999)")
+        .assert_success()
+        .assert_edge_count("TempRel", 1);
 }

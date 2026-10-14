@@ -1,9 +1,10 @@
 //! DDL Tag Basic Tests
 //!
 //! Test coverage:
-//! - CREATE TAG - Create vertex tag
-//! - DROP TAG - Delete vertex tag
+//! - CREATE TAG - Create vertex tag (including TTL expiry configuration)
+//! - DROP TAG - Delete vertex tag (single, batch, IF EXISTS)
 //! - DESC TAG - Describe tag schema
+//! - TTL - Expiry filtering and physical purge of expired vertices
 
 use super::common;
 
@@ -230,6 +231,56 @@ fn test_drop_tag_execution_with_if_exists() {
         .exec_ddl("DROP TAG IF EXISTS Person")
         .assert_success()
         .assert_tag_not_exists("Person");
+}
+
+#[test]
+fn test_drop_tag_execution_multiple() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG BatchA(id: INT)")
+        .assert_success()
+        .exec_ddl("CREATE TAG BatchB(id: INT)")
+        .assert_success()
+        .exec_ddl("CREATE TAG BatchC(id: INT)")
+        .assert_success()
+        .exec_ddl("DROP TAG BatchA, BatchB, BatchC")
+        .assert_success()
+        .assert_tag_not_exists("BatchA")
+        .assert_tag_not_exists("BatchB")
+        .assert_tag_not_exists("BatchC");
+}
+
+#[test]
+fn test_drop_tag_execution_multiple_with_if_exists() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG BatchX(id: INT)")
+        .assert_success()
+        .exec_ddl("DROP TAG IF EXISTS BatchX, BatchMissing")
+        .assert_success()
+        .assert_tag_not_exists("BatchX");
+}
+
+#[test]
+fn test_drop_tag_execution_multiple_missing_errors() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG BatchY(id: INT)")
+        .assert_success()
+        .exec_ddl("DROP TAG BatchY, BatchMissing")
+        .assert_error();
+}
+
+#[test]
+fn test_drop_tag_execution_missing_errors() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("DROP TAG no_such_tag")
+        .assert_error();
 }
 
 // ==================== DESC TAG Tests ====================
@@ -517,4 +568,212 @@ fn test_create_tag_parser_all_types() {
 
     let stmt = result.expect("CREATE TAG statement parsing should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "CREATE");
+}
+
+// ==================== TTL Parser Tests ====================
+
+#[test]
+fn test_create_tag_parser_with_ttl() {
+    let query = "CREATE TAG UserSession(sid: INT64, token: STRING, created_at: INT64, ttl_duration=31536000, ttl_col=created_at)";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "CREATE TAG with TTL parsing should succeed: {:?}",
+        result.err()
+    );
+
+    let stmt = result.expect("CREATE TAG statement parsing should succeed");
+    match stmt.ast.stmt() {
+        linkrs_query::parser::ast::Stmt::Create(create) => match &create.target {
+            linkrs_query::parser::ast::CreateTarget::Tag {
+                ttl_duration,
+                ttl_col,
+                ..
+            } => {
+                assert_eq!(*ttl_duration, Some(31536000));
+                assert_eq!(ttl_col.as_deref(), Some("created_at"));
+            }
+            other => panic!("expected tag target, got {:?}", other),
+        },
+        other => panic!("expected create statement, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_create_tag_parser_with_ttl_quoted_col() {
+    let query = r#"CREATE TAG UserSession(token: STRING, created_at: INT64, ttl_duration=100, ttl_col="created_at")"#;
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "CREATE TAG with quoted ttl_col parsing should succeed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_create_tag_parser_with_half_ttl_rejected() {
+    for query in [
+        "CREATE TAG Bad1(x: INT, ttl_duration=100)",
+        "CREATE TAG Bad2(x: INT, ttl_col=x)",
+    ] {
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(
+            result.is_err(),
+            "one-sided TTL should be rejected: {}",
+            query
+        );
+        let collected = format!("{:?}", parser.take_errors());
+        assert!(
+            collected.contains("both ttl_duration and ttl_col"),
+            "TTL rejection should name both ttl_duration and ttl_col for {}: {}",
+            query,
+            collected
+        );
+    }
+}
+
+#[test]
+fn test_create_tag_parser_with_non_positive_ttl_rejected() {
+    let query = "CREATE TAG Bad(x: INT, ttl_duration=0, ttl_col=x)";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_err(),
+        "non-positive ttl_duration should be rejected: {:?}",
+        result.ok()
+    );
+}
+
+// ==================== TTL Execution Tests ====================
+
+#[test]
+fn test_create_tag_execution_with_ttl() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG UserSession(sid: INT64, token: STRING, created_at: INT64, ttl_duration=31536000, ttl_col=created_at)")
+        .assert_success()
+        .assert_tag_exists("UserSession");
+}
+
+#[test]
+fn test_create_tag_execution_with_timestamp_ttl_col() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG UserSession(sid: INT64, token: STRING, created_at: TIMESTAMP, ttl_duration=31536000, ttl_col=created_at)")
+        .assert_success()
+        .assert_tag_exists("UserSession");
+}
+
+#[test]
+fn test_create_tag_execution_with_ttl_type_mismatch_rejected() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Bad(name: STRING, ttl_duration=100, ttl_col=name)")
+        .assert_error();
+}
+
+#[test]
+fn test_create_tag_execution_with_ttl_unknown_col_rejected() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Bad(x: INT, ttl_duration=100, ttl_col=missing)")
+        .assert_error();
+}
+
+#[test]
+fn test_ttl_expired_vertex_is_filtered() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG UserSession(sid: INT64, token: STRING, created_at: INT64, ttl_duration=100, ttl_col=created_at)")
+        .assert_success()
+        .exec_dml("INSERT VERTEX UserSession(token, created_at) VALUES 1:('old', 0)")
+        .assert_success()
+        .exec_dml("INSERT VERTEX UserSession(token, created_at) VALUES 2:('fresh', 9999999999)")
+        .assert_success()
+        .assert_vertex_not_exists(1, "UserSession")
+        .assert_vertex_exists(2, "UserSession");
+}
+
+#[test]
+fn test_ttl_purge_removes_expired_vertices() {
+    use linkrs_query::storage::{StorageReader, StorageSchemaOps, StorageWriter};
+
+    let holder = common::TestStorage::new().expect("Failed to create test storage");
+    let storage = holder.storage();
+    {
+        let mut guard = storage.write();
+        let mut space = linkrs_core::types::SpaceInfo::new("ttl_space".to_string());
+        StorageSchemaOps::create_space(&mut *guard, &mut space).expect("create space");
+        let tag = linkrs_core::types::TagInfo::new("T".to_string())
+            .with_properties(vec![
+                linkrs_core::types::PropertyDef::new(
+                    "id".to_string(),
+                    linkrs_core::DataType::BigInt,
+                ),
+                linkrs_core::types::PropertyDef::new(
+                    "ts".to_string(),
+                    linkrs_core::DataType::BigInt,
+                ),
+            ])
+            .with_ttl(Some(100), Some("ts".to_string()));
+        StorageSchemaOps::create_tag(&mut *guard, "ttl_space", &tag).expect("create tag");
+        let vid_old = linkrs_core::types::VertexId::try_from_int64(1).expect("vid");
+        let vid_fresh = linkrs_core::types::VertexId::try_from_int64(2).expect("vid");
+        let mut old_props = std::collections::HashMap::new();
+        old_props.insert(
+            std::sync::Arc::<str>::from("id"),
+            linkrs_core::Value::BigInt(1),
+        );
+        old_props.insert(
+            std::sync::Arc::<str>::from("ts"),
+            linkrs_core::Value::BigInt(0),
+        );
+        let mut fresh_props = std::collections::HashMap::new();
+        fresh_props.insert(
+            std::sync::Arc::<str>::from("id"),
+            linkrs_core::Value::BigInt(2),
+        );
+        fresh_props.insert(
+            std::sync::Arc::<str>::from("ts"),
+            linkrs_core::Value::BigInt(9999999999),
+        );
+        StorageWriter::insert_vertex(
+            &mut *guard,
+            "ttl_space",
+            linkrs_core::Vertex::new(vid_old, linkrs_core::Tag::new("T".to_string(), old_props)),
+        )
+        .expect("insert old vertex");
+        StorageWriter::insert_vertex(
+            &mut *guard,
+            "ttl_space",
+            linkrs_core::Vertex::new(
+                vid_fresh,
+                linkrs_core::Tag::new("T".to_string(), fresh_props),
+            ),
+        )
+        .expect("insert fresh vertex");
+    }
+    {
+        let guard = storage.read();
+        let visible = guard.scan_vertices_by_tag("ttl_space", "T").expect("scan");
+        assert_eq!(visible.len(), 1, "expired vertex must be filtered");
+    }
+    {
+        let guard = storage.read();
+        let removed = guard
+            .purge_expired_vertices("ttl_space", "T")
+            .expect("purge");
+        assert_eq!(removed, 1, "purge must remove exactly the expired vertex");
+    }
 }

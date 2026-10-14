@@ -75,26 +75,44 @@ impl MaintainPlanner {
                 ))))
             }
             CreateTarget::Tag {
-                name, properties, ..
+                name,
+                properties,
+                ttl_duration,
+                ttl_col,
             } => {
                 let space_name = current_space.to_string();
+                linkrs_core::types::ttl::validate_ttl(
+                    properties,
+                    *ttl_duration,
+                    ttl_col.as_deref(),
+                )
+                .map_err(PlannerError::InvalidOperation)?;
                 let tag_info = TagManageInfo::new(space_name, name.clone())
                     .with_properties(properties.clone())
-                    .with_if_not_exists(if_not_exists);
+                    .with_if_not_exists(if_not_exists)
+                    .with_ttl(*ttl_duration, ttl_col.clone());
                 let node = CreateTagNode::new(next_node_id(), tag_info);
                 Ok(Some(PlanNodeEnum::TagManage(TagManageNode::Create(node))))
             }
             CreateTarget::EdgeType {
                 name,
                 properties,
+                ttl_duration,
+                ttl_col,
                 src_tag,
                 dst_tag,
-                ..
             } => {
                 let space_name = current_space.to_string();
+                linkrs_core::types::ttl::validate_ttl(
+                    properties,
+                    *ttl_duration,
+                    ttl_col.as_deref(),
+                )
+                .map_err(PlannerError::InvalidOperation)?;
                 let mut edge_info = EdgeManageInfo::new(space_name, name.clone())
                     .with_properties(properties.clone())
-                    .with_if_not_exists(if_not_exists);
+                    .with_if_not_exists(if_not_exists)
+                    .with_ttl(*ttl_duration, ttl_col.clone());
                 if let (Some(src), Some(dst)) = (src_tag, dst_tag) {
                     edge_info = edge_info.with_src_dst_tags(src.clone(), dst.clone());
                 }
@@ -367,31 +385,19 @@ impl MaintainPlanner {
 
         match target {
             DropTarget::Tags(tag_names) if !tag_names.is_empty() => {
-                if tag_names.len() > 1 {
-                    return Err(PlannerError::UnsupportedOperation(
-                        "DROP TAG with multiple names is not yet supported; drop one tag per statement"
-                            .to_string(),
-                    ));
-                }
                 let node = crate::planning::plan::core::nodes::DropTagNode::new(
                     next_node_id(),
                     current_space.to_string(),
-                    tag_names[0].clone(),
+                    tag_names.clone(),
                 )
                 .with_if_exists(if_exists);
                 Ok(PlanNodeEnum::TagManage(TagManageNode::Drop(node)))
             }
             DropTarget::Edges(edge_names) if !edge_names.is_empty() => {
-                if edge_names.len() > 1 {
-                    return Err(PlannerError::UnsupportedOperation(
-                        "DROP EDGE with multiple names is not yet supported; drop one edge type per statement"
-                            .to_string(),
-                    ));
-                }
                 let node = crate::planning::plan::core::nodes::DropEdgeNode::new(
                     next_node_id(),
                     current_space.to_string(),
-                    edge_names[0].clone(),
+                    edge_names.clone(),
                 )
                 .with_if_exists(if_exists);
                 Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node)))
@@ -400,7 +406,8 @@ impl MaintainPlanner {
                 let node = crate::planning::plan::core::nodes::DropSpaceNode::new(
                     next_node_id(),
                     space_name.clone(),
-                );
+                )
+                .with_if_exists(if_exists);
                 Ok(PlanNodeEnum::SpaceManage(SpaceManageNode::Drop(node)))
             }
             DropTarget::TagIndex {
@@ -416,7 +423,8 @@ impl MaintainPlanner {
                     next_node_id(),
                     resolved_space,
                     index_name.clone(),
-                );
+                )
+                .with_if_exists(if_exists);
                 Ok(PlanNodeEnum::IndexManage(IndexManageNode::DropTagIndex(
                     node,
                 )))
@@ -434,29 +442,16 @@ impl MaintainPlanner {
                     next_node_id(),
                     resolved_space,
                     index_name.clone(),
-                );
+                )
+                .with_if_exists(if_exists);
                 Ok(PlanNodeEnum::IndexManage(IndexManageNode::DropEdgeIndex(
                     node,
                 )))
             }
-            DropTarget::Tags(_) => {
-                let node = crate::planning::plan::core::nodes::DropTagNode::new(
-                    next_node_id(),
-                    current_space.to_string(),
-                    String::new(),
-                )
-                .with_if_exists(if_exists);
-                Ok(PlanNodeEnum::TagManage(TagManageNode::Drop(node)))
-            }
-            DropTarget::Edges(_) => {
-                let node = crate::planning::plan::core::nodes::DropEdgeNode::new(
-                    next_node_id(),
-                    current_space.to_string(),
-                    String::new(),
-                )
-                .with_if_exists(if_exists);
-                Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Drop(node)))
-            }
+            DropTarget::Tags(_) | DropTarget::Edges(_) => Err(PlannerError::PlanGenerationFailed(
+                "DROP TAG/EDGE requires at least one name; the parser guarantees a non-empty list"
+                    .to_string(),
+            )),
             DropTarget::Sequence(_) => Err(PlannerError::UnsupportedOperation(
                 "DROP SEQUENCE planning not yet implemented".to_string(),
             )),

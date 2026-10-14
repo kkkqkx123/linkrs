@@ -73,8 +73,7 @@ impl SessionParser {
         ctx.expect_token(TokenKind::Assign)?;
 
         let expression = parse_expression_with_context(ctx, ctx.expression_context_clone())?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::AssignVariable(AssignVariableStmt {
             span,
@@ -93,8 +92,7 @@ impl SessionParser {
         ctx.expect_token(TokenKind::Comma)?;
         let plan_id = ctx.expect_integer_literal()?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::KillQuery(KillQueryStmt {
             span,

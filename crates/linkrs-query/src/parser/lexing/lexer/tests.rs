@@ -202,3 +202,13 @@ fn test_values_case_insensitive() {
         );
     }
 }
+
+#[test]
+fn test_ttl_keywords() {
+    let mut lexer = Lexer::new("ttl_duration TTL_COL Ttl_Duration");
+    assert_eq!(lexer.current_token.kind, Tk::TtlDuration);
+    lexer.advance();
+    assert_eq!(lexer.current_token.kind, Tk::TtlCol);
+    lexer.advance();
+    assert_eq!(lexer.current_token.kind, Tk::TtlDuration);
+}

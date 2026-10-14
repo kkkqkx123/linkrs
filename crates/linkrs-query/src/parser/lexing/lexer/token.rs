@@ -227,6 +227,8 @@ impl<'a> Lexer<'a> {
             "AVG" => Tk::Avg,
             "MIN" => Tk::Min,
             "MAX" => Tk::Max,
+            "TTL_DURATION" => Tk::TtlDuration,
+            "TTL_COL" => Tk::TtlCol,
             "SOURCE" => Tk::Source,
             "DESTINATION" => Tk::Destination,
             "RANK" => Tk::Rank,

@@ -34,8 +34,7 @@ pub(super) fn parse_update_statement_extended(ctx: &mut ParseContext) -> Result<
         ctx.expect_token(TokenKind::Assign)?;
         let config_value = parse_expression(ctx)?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::UpdateConfigs(UpdateConfigsStmt {
             span,
@@ -59,8 +58,7 @@ pub(super) fn parse_assignment_statement(ctx: &mut ParseContext) -> Result<Stmt,
 
     let statement = Box::new(super::StmtParser::parse_statement(ctx)?);
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
 
     Ok(Stmt::Assignment(AssignmentStmt {
         span,

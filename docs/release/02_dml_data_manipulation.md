@@ -79,8 +79,11 @@ CREATE <pattern1>, <pattern2>, ...
 ```
 
 ### 关键特性
+- 节点/边写入仅支持 `INSERT VERTEX` / `INSERT EDGE` 系列语句
+  （幂等与条件写入复用其写入能力的 `UPSERT` / `MERGE` 见第 4、6 节）；
+  数据形式 `CREATE (...)` 永不执行写入，下述拒绝无任何副作用
 - 数据形式在绑定层报错：
-  `CREATE data patterns are not supported yet; use INSERT VERTEX / INSERT EDGE`
+  `CREATE data patterns are not supported; use INSERT VERTEX / INSERT EDGE (see docs/release/02_dml_data_manipulation.md)`
 - 该拒绝发生在绑定阶段，不会进入规划与执行，也不产生任何写入副作用
 - Schema 形式不经过数据 CREATE 链路，与 INSERT 的标签/边类型定义由 DDL 负责这一模型保持一致：
   先以 DDL 定义 tag 与列，再用 INSERT / UPSERT 写数据
@@ -97,7 +100,7 @@ INSERT EDGE follow(degree) VALUES "101" -> "102" @0: (0.8)
 
 -- 数据形式被拒绝
 -- CREATE (n:Person {name: 'Alice'})
---   报错：CREATE data patterns are not supported yet; use INSERT VERTEX / INSERT EDGE
+--   报错：CREATE data patterns are not supported; use INSERT VERTEX / INSERT EDGE (see docs/release/02_dml_data_manipulation.md)
 ```
 
 ---

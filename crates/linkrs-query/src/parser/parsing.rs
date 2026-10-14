@@ -10,6 +10,7 @@ mod expr_parser;
 mod fulltext_parser;
 mod parse_context;
 mod parser;
+mod pattern_common;
 mod session_parser;
 mod show_parser;
 mod stmt_parser;

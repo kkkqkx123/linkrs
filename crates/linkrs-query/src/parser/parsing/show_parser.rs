@@ -34,13 +34,11 @@ impl ShowParser {
 
         if ctx.check_token(TokenKind::Sessions) {
             ctx.expect_token(TokenKind::Sessions)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::ShowSessions(ShowSessionsStmt { span }))
         } else if ctx.check_token(TokenKind::Queries) {
             ctx.expect_token(TokenKind::Queries)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::ShowQueries(ShowQueriesStmt { span }))
         } else if ctx.check_token(TokenKind::Configs) {
             ctx.expect_token(TokenKind::Configs)?;
@@ -49,53 +47,46 @@ impl ShowParser {
             } else {
                 None
             };
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::ShowConfigs(ShowConfigsStmt { span, module }))
         } else if ctx.check_token(TokenKind::Spaces) {
             ctx.expect_token(TokenKind::Spaces)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Spaces,
             }))
         } else if ctx.check_token(TokenKind::Tags) {
             ctx.expect_token(TokenKind::Tags)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Tags,
             }))
         } else if ctx.check_token(TokenKind::Edges) {
             ctx.expect_token(TokenKind::Edges)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Edges,
             }))
         } else if ctx.check_token(TokenKind::Hosts) {
             ctx.expect_token(TokenKind::Hosts)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Spaces,
             }))
         } else if ctx.check_token(TokenKind::Parts) {
             ctx.expect_token(TokenKind::Parts)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Spaces,
             }))
         } else if ctx.check_token(TokenKind::Indexes) {
             ctx.expect_token(TokenKind::Indexes)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Indexes,
@@ -103,24 +94,21 @@ impl ShowParser {
         } else if ctx.check_token(TokenKind::Index) {
             ctx.expect_token(TokenKind::Index)?;
             let index_name = ctx.expect_identifier()?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Index(index_name),
             }))
         } else if ctx.check_token(TokenKind::Stats) {
             ctx.expect_token(TokenKind::Stats)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Stats,
             }))
         } else if ctx.check_token(TokenKind::Users) {
             ctx.expect_token(TokenKind::Users)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::ShowUsers(ShowUsersStmt { span }))
         } else if ctx.check_token(TokenKind::Roles) {
             UtilStmtParser::new().parse_show_roles_internal(ctx, start_span)
@@ -128,24 +116,21 @@ impl ShowParser {
             UtilStmtParser::new().parse_show_create_internal(ctx, start_span)
         } else if ctx.check_token(TokenKind::Functions) {
             ctx.expect_token(TokenKind::Functions)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Functions,
             }))
         } else if ctx.check_token(TokenKind::Graphs) {
             ctx.expect_token(TokenKind::Graphs)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Graphs,
             }))
         } else if ctx.check_token(TokenKind::Macros) {
             ctx.expect_token(TokenKind::Macros)?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Macros,
@@ -153,16 +138,14 @@ impl ShowParser {
         } else if ctx.check_keyword("ATTACHED") {
             ctx.consume_keyword("ATTACHED")?;
             ctx.consume_keyword("DATABASES")?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::AttachedDatabases,
             }))
         } else if ctx.check_keyword("EXTENSIONS") {
             ctx.consume_keyword("EXTENSIONS")?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::Show(ShowStmt {
                 span,
                 target: ShowTarget::Extensions,

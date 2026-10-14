@@ -497,7 +497,9 @@ fn test_upsert_yield_execution() {
         .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_dml("UPSERT VERTEX ON Person SET name = 'Alice', age = 30 WHERE id(vid) == 1 YIELD name, age");
     assert!(
-        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("YIELD is not supported")),
         "UPSERT with YIELD should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -756,7 +758,9 @@ fn test_upsert_edge_yield_execution() {
         .assert_success()
         .exec_dml("UPSERT EDGE ON KNOWS SET since = '2024-01-01' WHERE id(src) == 1 AND id(dst) == 2 YIELD since");
     assert!(
-        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("YIELD is not supported")),
         "UPSERT EDGE with YIELD should fail explicitly, got: {:?}",
         scenario.error()
     );

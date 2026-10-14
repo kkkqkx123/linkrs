@@ -45,9 +45,9 @@ pub(crate) fn materialize_path_endpoint(
                 .to_string(),
         ));
     };
-    storage.get_vertex(space_name, &tag, &vid).map_err(|error| {
-        QueryError::execution(format!("Failed to read path endpoint: {error}"))
-    })
+    storage
+        .get_vertex(space_name, &tag, &vid)
+        .map_err(|error| QueryError::execution(format!("Failed to read path endpoint: {error}")))
 }
 
 /// Derive the (start, end) endpoint labels for a label-less path search.
@@ -76,9 +76,10 @@ pub(crate) fn path_endpoint_tags(
     let mut start_tags: Vec<String> = Vec::new();
     let mut end_tags: Vec<String> = Vec::new();
     for edge_type in edge_types {
-        let (src_tag, dst_tag) = crate::executor::traversal::graph_reader::resolve_edge_endpoint_tags(
-            storage, space_name, edge_type,
-        )?;
+        let (src_tag, dst_tag) =
+            crate::executor::traversal::graph_reader::resolve_edge_endpoint_tags(
+                storage, space_name, edge_type,
+            )?;
         let (start, end) = match direction {
             EdgeDirection::Out => (src_tag, dst_tag),
             EdgeDirection::In => (dst_tag, src_tag),
@@ -603,7 +604,12 @@ pub(crate) fn enumerate_all_paths(
             continue;
         }
         let edges = storage
-            .get_node_edges(cfg.space_name, &state.current_id, cfg.direction, cfg.edge_types)
+            .get_node_edges(
+                cfg.space_name,
+                &state.current_id,
+                cfg.direction,
+                cfg.edge_types,
+            )
             .map_err(|error| {
                 QueryError::execution(format!("Failed to read path edges: {error}"))
             })?;
@@ -678,7 +684,11 @@ pub(crate) fn enumerate_all_paths(
             else {
                 continue;
             };
-            let next_path = Arc::new(NPath::extend(state.path.clone(), Arc::new(edge), Arc::new(vertex)));
+            let next_path = Arc::new(NPath::extend(
+                state.path.clone(),
+                Arc::new(edge),
+                Arc::new(vertex),
+            ));
             if terminal_extension {
                 if next_id == end_id && depth + 1 >= cfg.min_depth {
                     paths.push(next_path.to_path());

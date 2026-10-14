@@ -357,25 +357,23 @@ impl StmtUtils {
                 }
                 _ => {}
             },
-            Stmt::Delete(s) => {
-                match &s.target {
-                    DeleteTarget::Vertices { vids, .. } => {
-                        for vertex in vids {
-                            variables.extend(collect_variables_from_contextual(vertex));
-                        }
+            Stmt::Delete(s) => match &s.target {
+                DeleteTarget::Vertices { vids, .. } => {
+                    for vertex in vids {
+                        variables.extend(collect_variables_from_contextual(vertex));
                     }
-                    DeleteTarget::Edges { edges, .. } => {
-                        for (src, dst, rank) in edges {
-                            variables.extend(collect_variables_from_contextual(src));
-                            variables.extend(collect_variables_from_contextual(dst));
-                            if let Some(ref rank) = rank {
-                                variables.extend(collect_variables_from_contextual(rank));
-                            }
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                DeleteTarget::Edges { edges, .. } => {
+                    for (src, dst, rank) in edges {
+                        variables.extend(collect_variables_from_contextual(src));
+                        variables.extend(collect_variables_from_contextual(dst));
+                        if let Some(ref rank) = rank {
+                            variables.extend(collect_variables_from_contextual(rank));
+                        }
+                    }
+                }
+                _ => {}
+            },
             Stmt::Update(s) => {
                 match &s.target {
                     UpdateTarget::Vertex(vertex) => {

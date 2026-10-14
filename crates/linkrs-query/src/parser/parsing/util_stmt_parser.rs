@@ -25,6 +25,9 @@ impl UtilStmtParser {
         ctx.expect_token(TokenKind::Use)?;
 
         // `USE GRAPH <name>` is a namespace alias for `USE <name>`.
+        // `SPACE` is intentionally not consumed here: it stays a legal
+        // space name in USE position, unlike CREATE/DROP where SPACE is
+        // the object keyword (see ddl_parser::consume_space_or_graph).
         if ctx.check_keyword("GRAPH") {
             ctx.consume_keyword("GRAPH")?;
         }
@@ -61,8 +64,7 @@ impl UtilStmtParser {
             ));
         };
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::ShowCreate(ShowCreateStmt { span, target }))
     }
@@ -82,8 +84,7 @@ impl UtilStmtParser {
             None
         };
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::ShowRoles(ShowRolesStmt { span, space_name }))
     }

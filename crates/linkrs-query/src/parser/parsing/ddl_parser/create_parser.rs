@@ -4,6 +4,7 @@ use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
 
+use super::consume_space_or_graph;
 use super::DdlParser;
 
 /// Whether a type identifier spelled with a leading identifier denotes a
@@ -27,19 +28,6 @@ type TagEdgeDefsResult = (
     Option<String>,
 );
 
-/// Consume either the `SPACE` token or the `GRAPH` identifier (namespace
-/// alias). Returns `Ok(true)` when either was matched and consumed.
-fn consume_space_or_graph(ctx: &mut ParseContext) -> Result<bool, ParseError> {
-    if ctx.match_token(TokenKind::Space) {
-        return Ok(true);
-    }
-    if ctx.check_keyword("GRAPH") {
-        ctx.consume_keyword("GRAPH")?;
-        return Ok(true);
-    }
-    Ok(false)
-}
-
 impl DdlParser {
     pub fn parse_create_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
@@ -56,8 +44,7 @@ impl DdlParser {
 
             if ctx.match_token(TokenKind::As) {
                 let query_text = Self::capture_subquery_text(ctx)?;
-                let end_span = ctx.current_span();
-                let span = ctx.merge_span(start_span.start, end_span.end);
+                let span = ctx.span_since(start_span.start);
                 return Ok(Stmt::Create(CreateStmt {
                     span,
                     target: CreateTarget::TagAsQuery { name, query_text },
@@ -86,8 +73,7 @@ impl DdlParser {
             let name = ctx.expect_identifier()?;
             if ctx.match_token(TokenKind::As) {
                 let query_text = Self::capture_subquery_text(ctx)?;
-                let end_span = ctx.current_span();
-                let span = ctx.merge_span(start_span.start, end_span.end);
+                let span = ctx.span_since(start_span.start);
                 return Ok(Stmt::Create(CreateStmt {
                     span,
                     target: CreateTarget::EdgeAsQuery { name, query_text },
@@ -171,8 +157,7 @@ impl DdlParser {
                 role = Some(ctx.expect_identifier()?);
             }
 
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
 
             Ok(Stmt::CreateUser(CreateUserStmt {
                 span,
@@ -542,8 +527,7 @@ impl DdlParser {
                 ctx,
                 ctx.expression_context_clone(),
             )?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::CreateMacro(CreateMacroStmt {
                 span,
                 name,
@@ -600,8 +584,7 @@ impl DdlParser {
                     (DataType::Unknown, alias_name.clone())
                 }
             };
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             Ok(Stmt::CreateType(CreateTypeStmt {
                 span,
                 name,
@@ -630,13 +613,51 @@ impl DdlParser {
         if ctx.match_token(TokenKind::LParen) {
             while !ctx.check_token(TokenKind::RParen) {
                 if ctx.check_token(TokenKind::TtlDuration) {
+                    if ttl_duration.is_some() {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "duplicate ttl_duration clause".to_string(),
+                            ctx.current_position(),
+                        ));
+                    }
                     ctx.next_token();
                     ctx.expect_token(TokenKind::Assign)?;
-                    ttl_duration = Some(ctx.expect_integer_literal()?);
+                    let duration = ctx.expect_integer_literal()?;
+                    if duration <= 0 {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            format!(
+                                "ttl_duration must be a positive integer (seconds), got {duration}"
+                            ),
+                            ctx.current_position(),
+                        ));
+                    }
+                    ttl_duration = Some(duration);
                 } else if ctx.check_token(TokenKind::TtlCol) {
+                    if ttl_col.is_some() {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "duplicate ttl_col clause".to_string(),
+                            ctx.current_position(),
+                        ));
+                    }
                     ctx.next_token();
                     ctx.expect_token(TokenKind::Assign)?;
-                    ttl_col = Some(ctx.expect_identifier()?);
+                    let col = if let TokenKind::StringLiteral(s) = ctx.current_token().kind.clone()
+                    {
+                        ctx.next_token();
+                        s
+                    } else {
+                        ctx.expect_identifier()?
+                    };
+                    if col.is_empty() {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "ttl_col must not be empty".to_string(),
+                            ctx.current_position(),
+                        ));
+                    }
+                    ttl_col = Some(col);
                 } else {
                     let prop = self.parse_single_property_def(ctx)?;
                     properties.push(prop);
@@ -647,6 +668,15 @@ impl DdlParser {
                 }
             }
             ctx.expect_token(TokenKind::RParen)?;
+        }
+
+        if ttl_duration.is_some() != ttl_col.is_some() {
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "TTL requires both ttl_duration and ttl_col to be specified together; omit both to disable TTL"
+                    .to_string(),
+                ctx.current_position(),
+            ));
         }
 
         Ok((properties, ttl_duration, ttl_col))

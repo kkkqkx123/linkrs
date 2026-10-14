@@ -3,6 +3,7 @@ use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
 
+use super::consume_space_or_graph;
 use super::DdlParser;
 
 impl DdlParser {
@@ -20,7 +21,8 @@ impl DdlParser {
             return crate::parser::parsing::vector_parser::parse_drop_vector_index_after_drop(ctx);
         }
 
-        let target = if ctx.match_token(TokenKind::Space) {
+        // `DROP SPACE` and `DROP GRAPH` are equivalent namespace operations.
+        if consume_space_or_graph(ctx)? {
             let mut if_exists = false;
             if ctx.match_token(TokenKind::If) {
                 ctx.expect_token(TokenKind::Exists)?;
@@ -35,16 +37,25 @@ impl DdlParser {
         } else if ctx.match_token(TokenKind::Tag) {
             if ctx.check_token(TokenKind::Index) {
                 ctx.next_token();
+                let mut if_exists = false;
+                if ctx.match_token(TokenKind::If) {
+                    ctx.expect_token(TokenKind::Exists)?;
+                    if_exists = true;
+                }
                 let index_name = ctx.expect_identifier()?;
                 let space_name = if ctx.match_token(TokenKind::On) {
                     Some(ctx.expect_identifier()?)
                 } else {
                     None
                 };
-                DropTarget::TagIndex {
-                    space_name: space_name.unwrap_or_default(),
-                    index_name,
-                }
+                return Ok(Stmt::Drop(DropStmt {
+                    span: start_span,
+                    target: DropTarget::TagIndex {
+                        space_name: space_name.unwrap_or_default(),
+                        index_name,
+                    },
+                    if_exists,
+                }));
             } else {
                 let mut if_exists = false;
                 if ctx.match_token(TokenKind::If) {
@@ -65,16 +76,25 @@ impl DdlParser {
             ctx.next_token();
             if ctx.check_token(TokenKind::Index) {
                 ctx.next_token();
+                let mut if_exists = false;
+                if ctx.match_token(TokenKind::If) {
+                    ctx.expect_token(TokenKind::Exists)?;
+                    if_exists = true;
+                }
                 let index_name = ctx.expect_identifier()?;
                 let space_name = if ctx.match_token(TokenKind::On) {
                     Some(ctx.expect_identifier()?)
                 } else {
                     None
                 };
-                DropTarget::EdgeIndex {
-                    space_name: space_name.unwrap_or_default(),
-                    index_name,
-                }
+                return Ok(Stmt::Drop(DropStmt {
+                    span: start_span,
+                    target: DropTarget::EdgeIndex {
+                        space_name: space_name.unwrap_or_default(),
+                        index_name,
+                    },
+                    if_exists,
+                }));
             } else {
                 let mut if_exists = false;
                 if ctx.match_token(TokenKind::If) {
@@ -92,16 +112,25 @@ impl DdlParser {
                 }));
             }
         } else if ctx.match_token(TokenKind::Index) {
+            let mut if_exists = false;
+            if ctx.match_token(TokenKind::If) {
+                ctx.expect_token(TokenKind::Exists)?;
+                if_exists = true;
+            }
             let index_name = ctx.expect_identifier()?;
             let space_name = if ctx.match_token(TokenKind::On) {
                 Some(ctx.expect_identifier()?)
             } else {
                 None
             };
-            DropTarget::TagIndex {
-                space_name: space_name.unwrap_or_default(),
-                index_name,
-            }
+            return Ok(Stmt::Drop(DropStmt {
+                span: start_span,
+                target: DropTarget::TagIndex {
+                    space_name: space_name.unwrap_or_default(),
+                    index_name,
+                },
+                if_exists,
+            }));
         } else if ctx.match_token(TokenKind::User) {
             let mut if_exists = false;
             if ctx.match_token(TokenKind::If) {
@@ -165,18 +194,10 @@ impl DdlParser {
         } else {
             return Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
-                "Expected SPACE, TAG, EDGE, INDEX, SEQUENCE, MACRO, TYPE, or USER".to_string(),
+                "Expected SPACE, GRAPH, TAG, EDGE, INDEX, SEQUENCE, MACRO, TYPE, or USER"
+                    .to_string(),
                 ctx.current_position(),
             ));
-        };
-
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
-
-        Ok(Stmt::Drop(DropStmt {
-            span,
-            target,
-            if_exists: false,
-        }))
+        }
     }
 }

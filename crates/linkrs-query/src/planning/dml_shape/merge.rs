@@ -34,7 +34,8 @@ fn render_pattern(out: &mut String, values: &mut Vec<Value>, pattern: &Pattern) 
                 match element {
                     PathElement::Node(node) => render_node(out, values, node)?,
                     PathElement::Edge(edge) => render_edge(out, values, edge)?,
-                    PathElement::Alternative(_)
+                    PathElement::CreateEdge(_)
+                    | PathElement::Alternative(_)
                     | PathElement::Optional(_)
                     | PathElement::Repeated(_, _)
                     | PathElement::Recursive(_) => return None,

@@ -144,8 +144,7 @@ impl DmlParser {
             }
         }
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         let tag = tags.pop().ok_or_else(|| {
             ParseError::new(
@@ -237,8 +236,7 @@ impl DmlParser {
                 }
             }
 
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
 
             Ok(Stmt::Insert(InsertStmt {
                 span,

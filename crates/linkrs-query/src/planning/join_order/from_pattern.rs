@@ -147,7 +147,8 @@ impl QueryGraphBuilder {
                     ));
                     expect_node = true;
                 }
-                PathElement::Alternative(_)
+                PathElement::CreateEdge(_)
+                | PathElement::Alternative(_)
                 | PathElement::Optional(_)
                 | PathElement::Repeated(_, _)
                 | PathElement::Recursive(_) => return false,

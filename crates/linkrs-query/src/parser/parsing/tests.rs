@@ -1131,9 +1131,10 @@ mod tests {
 
     #[test]
     fn test_merge_on_clauses_still_parse() {
-        let stmt =
-            parse_statement("MERGE (v:Person {name: 'Alice'}) ON MATCH SET v.age = 30 ON CREATE SET v.age = 0")
-                .expect("MERGE with ON MATCH / ON CREATE should parse");
+        let stmt = parse_statement(
+            "MERGE (v:Person {name: 'Alice'}) ON MATCH SET v.age = 30 ON CREATE SET v.age = 0",
+        )
+        .expect("MERGE with ON MATCH / ON CREATE should parse");
         assert_eq!(stmt.kind(), "MERGE");
     }
 }

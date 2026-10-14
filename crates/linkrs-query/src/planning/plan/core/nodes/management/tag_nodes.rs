@@ -103,7 +103,7 @@ impl DescTagNode {
 define_plan_node! {
     pub struct DropTagNode {
         space_name: String,
-        tag_name: String,
+        tag_names: Vec<String>,
         if_exists: bool,
     }
     manage_enum: TagManageNode::Drop as TagManage
@@ -111,11 +111,11 @@ define_plan_node! {
 }
 
 impl DropTagNode {
-    pub fn new(id: i64, space_name: String, tag_name: String) -> Self {
+    pub fn new(id: i64, space_name: String, tag_names: Vec<String>) -> Self {
         Self {
             id,
             space_name,
-            tag_name,
+            tag_names,
             if_exists: false,
             output_var: None,
             col_names: Vec::new(),
@@ -132,8 +132,8 @@ impl DropTagNode {
         &self.space_name
     }
 
-    pub fn tag_name(&self) -> &str {
-        &self.tag_name
+    pub fn tag_names(&self) -> &[String] {
+        &self.tag_names
     }
 
     pub fn if_exists(&self) -> bool {
@@ -172,6 +172,8 @@ pub struct TagManageInfo {
     pub tag_name: String,
     pub properties: Vec<PropertyDef>,
     pub if_not_exists: bool,
+    pub ttl_duration: Option<i64>,
+    pub ttl_col: Option<String>,
 }
 
 impl TagManageInfo {
@@ -181,6 +183,8 @@ impl TagManageInfo {
             tag_name,
             properties: Vec::new(),
             if_not_exists: false,
+            ttl_duration: None,
+            ttl_col: None,
         }
     }
 
@@ -191,6 +195,12 @@ impl TagManageInfo {
 
     pub fn with_if_not_exists(mut self, if_not_exists: bool) -> Self {
         self.if_not_exists = if_not_exists;
+        self
+    }
+
+    pub fn with_ttl(mut self, duration: Option<i64>, col: Option<String>) -> Self {
+        self.ttl_duration = duration;
+        self.ttl_col = col;
         self
     }
 }

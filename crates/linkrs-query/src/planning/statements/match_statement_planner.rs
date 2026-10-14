@@ -133,7 +133,14 @@ impl Planner for MatchStatementPlanner {
             log::debug!("Optimization Tip: {:?}", hint);
         }
 
-        self.plan_match_pattern(validated, space_id, &space_name, validation_info, &qctx, None)
+        self.plan_match_pattern(
+            validated,
+            space_id,
+            &space_name,
+            validation_info,
+            &qctx,
+            None,
+        )
     }
 
     fn plan_bound(

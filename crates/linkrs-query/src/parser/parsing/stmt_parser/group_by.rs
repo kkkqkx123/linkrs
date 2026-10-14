@@ -90,8 +90,7 @@ pub(super) fn parse_group_by_statement(ctx: &mut ParseContext) -> Result<Stmt, P
         None
     };
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
 
     Ok(Stmt::GroupBy(GroupByStmt {
         span,

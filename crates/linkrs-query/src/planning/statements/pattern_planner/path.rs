@@ -193,6 +193,11 @@ pub fn plan_path_pattern(
                             "Recursive comprehension with variable binding and projection is rejected; rewrite with plain variable-length traversal".to_string(),
                         ));
                     }
+                    PathElement::CreateEdge(_) => {
+                        return Err(PlannerError::UnsupportedOperation(
+                            "CREATE edge patterns have no traversal plan".to_string(),
+                        ));
+                    }
                 }
             }
 

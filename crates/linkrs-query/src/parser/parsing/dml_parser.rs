@@ -13,7 +13,6 @@ use crate::parser::parsing::traversal_parser::TraversalParser;
 use crate::parser::TokenKind;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::expr::Expression as CoreExpression;
-use linkrs_core::types::EdgeDirection;
 
 mod copy;
 mod create;
@@ -63,9 +62,7 @@ impl DmlParser {
     fn collect_conjuncts(expr: CoreExpression, out: &mut Vec<CoreExpression>) {
         use linkrs_core::types::operators::BinaryOperator;
         match expr {
-            CoreExpression::Binary { left, op, right }
-                if matches!(op, BinaryOperator::And) =>
-            {
+            CoreExpression::Binary { left, op, right } if matches!(op, BinaryOperator::And) => {
                 Self::collect_conjuncts(*left, out);
                 Self::collect_conjuncts(*right, out);
             }
@@ -80,9 +77,7 @@ impl DmlParser {
     ) -> Option<linkrs_core::Value> {
         use linkrs_core::types::operators::BinaryOperator;
         match conjunct {
-            CoreExpression::Binary { left, op, right }
-                if matches!(op, BinaryOperator::Equal) =>
-            {
+            CoreExpression::Binary { left, op, right } if matches!(op, BinaryOperator::Equal) => {
                 if let CoreExpression::Function { name, args } = left.as_ref() {
                     if name == "id" && args.len() == 1 {
                         if let CoreExpression::Variable(v) = args[0].as_expr() {
@@ -117,7 +112,10 @@ impl DmlParser {
         }
         let meta = linkrs_core::types::expr::ExpressionMeta::with_span(acc, ctx.current_span());
         let id = ctx.expression_context_clone().register_expression(meta);
-        Some(ContextualExpression::new(id, ctx.expression_context_clone()))
+        Some(ContextualExpression::new(
+            id,
+            ctx.expression_context_clone(),
+        ))
     }
 
     /// Parse the expression

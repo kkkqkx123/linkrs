@@ -42,6 +42,7 @@ impl Pattern {
                     match element {
                         PathElement::Node(node) => out.push_str(&render_node(node)?),
                         PathElement::Edge(edge) => out.push_str(&render_edge(edge)?),
+                        PathElement::CreateEdge(edge) => out.push_str(&render_create_edge(edge)?),
                         _ => return None,
                     }
                 }
@@ -130,6 +131,21 @@ impl EdgePattern {
     }
 }
 
+/// Edge hop inside a CREATE data pattern.
+///
+/// Variable-length traversal constructs (`*` ranges, path semantics,
+/// recursive comprehension, predicates) are MATCH-only; the CREATE parser
+/// cannot produce them, so they are absent from this struct by construction
+/// instead of sitting as always-empty placeholder fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateEdgePattern {
+    pub span: Span,
+    pub variable: Option<String>,
+    pub edge_types: Vec<String>,
+    pub properties: Option<ContextualExpression>,
+    pub direction: EdgeDirection,
+}
+
 /// Border range
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeRange {
@@ -212,6 +228,8 @@ impl PathPattern {
 pub enum PathElement {
     Node(NodePattern),
     Edge(EdgePattern),
+    /// Edge hop produced only by the CREATE data parser.
+    CreateEdge(CreateEdgePattern),
     Alternative(Vec<Pattern>),
     Optional(Box<PathElement>),
     Repeated(Box<PathElement>, RepetitionType),
@@ -322,6 +340,37 @@ fn render_edge(edge: &EdgePattern) -> Option<String> {
         }
     } else if let Some(ref range) = edge.range {
         out.push_str(&render_range(Some(range))?);
+    }
+    out.push(']');
+    match edge.direction {
+        EdgeDirection::Out => out.push_str("->"),
+        EdgeDirection::In | EdgeDirection::Both => out.push('-'),
+    }
+    Some(out)
+}
+
+/// Render a CREATE edge hop back to Cypher syntax. Same bracket grammar as
+/// `render_edge` but without the MATCH-only range / path-semantic suffixes.
+fn render_create_edge(edge: &CreateEdgePattern) -> Option<String> {
+    let mut out = String::new();
+    match edge.direction {
+        EdgeDirection::In => out.push_str("<-"),
+        EdgeDirection::Out | EdgeDirection::Both => out.push('-'),
+    }
+    out.push('[');
+    if let Some(ref var) = edge.variable {
+        out.push_str(var);
+    }
+    for (i, edge_type) in edge.edge_types.iter().enumerate() {
+        if i == 0 {
+            out.push(':');
+        } else {
+            out.push_str("|:");
+        }
+        out.push_str(edge_type);
+    }
+    if let Some(ref props) = edge.properties {
+        out.push_str(&render_properties(props)?);
     }
     out.push(']');
     match edge.direction {
@@ -449,6 +498,14 @@ impl PatternUtils {
                     variables.extend(collect_variables_from_contextual(predicate));
                 }
             }
+            PathElement::CreateEdge(p) => {
+                if let Some(ref var) = p.variable {
+                    variables.push(var.clone());
+                }
+                if let Some(ref props) = p.properties {
+                    variables.extend(collect_variables_from_contextual(props));
+                }
+            }
             PathElement::Alternative(patterns) => {
                 for pattern in patterns {
                     Self::find_variables_recursive(pattern, variables);
@@ -508,6 +565,9 @@ impl PatternUtils {
         match element {
             PathElement::Node(p) => {
                 labels.extend(p.labels.clone());
+            }
+            PathElement::CreateEdge(_) => {
+                // Edge hops carry edge types, not node labels.
             }
             PathElement::Alternative(patterns) => {
                 for pattern in patterns {

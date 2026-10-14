@@ -57,8 +57,7 @@ impl DdlParser {
                 }
             }
 
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             return Ok(Stmt::Alter(AlterStmt {
                 span,
                 target: AlterTarget::Sequence {
@@ -86,8 +85,7 @@ impl DdlParser {
         if ctx.match_token(TokenKind::Rename) {
             ctx.expect_token(TokenKind::To)?;
             let new_name = ctx.expect_identifier()?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             return Ok(Stmt::Alter(AlterStmt {
                 span,
                 target: if is_tag {
@@ -117,8 +115,7 @@ impl DdlParser {
             let src_tag = ctx.expect_identifier()?;
             ctx.expect_token(TokenKind::To)?;
             let dst_tag = ctx.expect_identifier()?;
-            let end_span = ctx.current_span();
-            let span = ctx.merge_span(start_span.start, end_span.end);
+            let span = ctx.span_since(start_span.start);
             let target = if is_add {
                 AlterTarget::AddFrom {
                     edge_name: name,
@@ -137,8 +134,7 @@ impl DdlParser {
 
         let (additions, deletions, changes) = self.parse_alter_operations(ctx)?;
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
         if is_tag {
             Ok(Stmt::Alter(AlterStmt {
                 span,
@@ -239,8 +235,7 @@ impl DdlParser {
             }
         }
 
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::AlterUser(AlterUserStmt {
             span,

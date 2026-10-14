@@ -36,8 +36,7 @@ pub(super) fn parse_migrate_statement(ctx: &mut ParseContext) -> Result<Stmt, Pa
         let to_version = ctx.expect_integer_literal()? as u64;
         ctx.consume_keyword("IN")?;
         let space = ctx.expect_identifier()?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
         Ok(Stmt::Migrate(MigrateStmt::Plan(MigratePlanStmt {
             span,
             space,
@@ -49,8 +48,7 @@ pub(super) fn parse_migrate_statement(ctx: &mut ParseContext) -> Result<Stmt, Pa
     } else if ctx.check_keyword("EXECUTE") {
         ctx.consume_keyword("EXECUTE")?;
         let plan_json = ctx.expect_string_literal()?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
         Ok(Stmt::Migrate(MigrateStmt::Execute(MigrateExecuteStmt {
             span,
             plan_json,
@@ -58,8 +56,7 @@ pub(super) fn parse_migrate_statement(ctx: &mut ParseContext) -> Result<Stmt, Pa
     } else if ctx.check_keyword("ROLLBACK") {
         ctx.consume_keyword("ROLLBACK")?;
         let plan_json = ctx.expect_string_literal()?;
-        let end_span = ctx.current_span();
-        let span = ctx.merge_span(start_span.start, end_span.end);
+        let span = ctx.span_since(start_span.start);
         Ok(Stmt::Migrate(MigrateStmt::Rollback(MigrateRollbackStmt {
             span,
             plan_json,
@@ -102,8 +99,7 @@ pub(super) fn parse_comment_on_statement(ctx: &mut ParseContext) -> Result<Stmt,
     ctx.consume_keyword("IS")?;
     let comment = ctx.expect_string_literal()?;
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::CommentOn(CommentOnStmt {
         span,
         target,
@@ -115,8 +111,7 @@ pub(super) fn parse_comment_on_statement(ctx: &mut ParseContext) -> Result<Stmt,
 pub(super) fn parse_checkpoint_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
     let start_span = ctx.current_span();
     ctx.consume_keyword("CHECKPOINT")?;
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::Checkpoint(CheckpointStmt { span }))
 }
 
@@ -275,8 +270,7 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
         None
     };
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::LoadFrom(LoadFromStmt {
         span,
         headers,
@@ -325,8 +319,7 @@ pub(super) fn parse_extension_statement(ctx: &mut ParseContext) -> Result<Stmt, 
         }
     };
 
-    let end_span = ctx.current_span();
-    let span = ctx.merge_span(start_span.start, end_span.end);
+    let span = ctx.span_since(start_span.start);
     Ok(Stmt::Extension(ExtensionStmt {
         span,
         action,

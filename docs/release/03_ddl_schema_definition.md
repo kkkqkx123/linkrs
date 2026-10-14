@@ -94,13 +94,17 @@ TTL（Time To Live）用于自动清理过期数据。
 
 **TTL 默认行为：**
 - 当不指定 `ttl_duration` 和 `ttl_col` 时，**TTL 默认禁用**
-- 仅指定 `ttl_duration` 而不指定 `ttl_col` 时，TTL 不会生效（需要两者配合）
-- 建议同时指定 `ttl_duration` 和 `ttl_col`，或都不指定
+- `ttl_duration` 与 `ttl_col` 必须同时指定或同时省略，仅指定其一时直接报错
+  （`TTL requires both ttl_duration and ttl_col to be specified together`），不会静默忽略
+- `ttl_duration` 必须为正整数（秒）；`ttl_col` 必须引用已定义的属性，
+  且该属性类型须为整数类型（`INT`/`INT64` 等）或 `TIMESTAMP`/`DATETIME`
 
 **TTL 工作原理：**
-1. 数据插入时，记录 `ttl_col` 指定属性的值作为基准时间
+1. 数据插入时，记录 `ttl_col` 指定属性的值作为基准时间（整数为 Unix 秒，`TIMESTAMP`/`DATETIME` 按其纪元秒换算）
 2. 当 `当前时间 > 基准时间 + ttl_duration` 时，数据被视为过期
-3. 过期数据会在后台自动清理（或在查询时被过滤）
+3. 过期数据在查询时被过滤（读路径按 Schema TTL 配置判定），并可通过存储层过期清理接口物理删除
+4. `ttl_col` 为 `NULL`、缺失或类型不符的行永不过期；删除 `ttl_col` 属性会清除该 Schema 的 TTL 配置，
+   重命名该属性会自动跟随新的属性名
 
 **TTL 使用场景：**
 - 会话数据自动清理（如用户登录令牌）
@@ -124,7 +128,8 @@ CREATE TAG Person(
 CREATE TAG Counter(id: SERIAL, name: STRING)
 
 -- 带TTL创建（数据1年后自动过期）
-CREATE TAG Session(
+CREATE TAG UserSession(
+    sid: INT64 NOT NULL,
     token: STRING NOT NULL,
     user_id: INT NOT NULL,
     created_at: TIMESTAMP NOT NULL,
@@ -187,116 +192,7 @@ CREATE EDGE TempRelation(
 
 ---
 
-## 3. Schema 自动创建（Cypher DML 触发）
-
-### 功能
-当使用 Cypher 风格的 `CREATE` 数据语句时，如果指定的标签或边类型不存在，系统会自动推断并创建对应的 Schema。
-
-### 触发条件
-- 使用 `CREATE (n:Label {...})` 创建节点时，如果 `Label` 不存在
-- 使用 `CREATE ()-[:Type {...}]->()` 创建边时，如果 `Type` 不存在
-
-### 自动推断规则
-
-#### 数据类型推断
-| 属性值示例 | 推断的数据类型 | 说明 |
-|------------|----------------|------|
-| `'Alice'` | STRING | 字符串值 |
-| `30` | INT64 | 整数值 |
-| `30.5` | DOUBLE | 浮点数值 |
-| `true` / `false` | BOOL | 布尔值 |
-| `datetime()` | DATETIME | 日期时间函数 |
-| `date()` | DATE | 日期函数 |
-| `timestamp()` | TIMESTAMP | 时间戳函数 |
-
-#### Schema 特性
-| 特性 | 自动创建行为 | 说明 |
-|------|--------------|------|
-| 属性约束 | 默认可空（NULL） | 不添加 NOT NULL 约束 |
-| 默认值 | 无默认值 | 不设置 DEFAULT 值 |
-| 注释 | 无注释 | 不添加 COMMENT |
-| TTL | 禁用 | 不设置 ttl_duration 和 ttl_col |
-
-### 示例
-
-#### 自动创建标签
-```cypher
--- 创建节点，自动创建 Person 标签
-CREATE (n:Person {name: 'Alice', age: 30, salary: 50000.50})
-
--- 自动创建的 Schema:
--- CREATE TAG Person(
---   name: STRING,
---   age: INT64,
---   salary: DOUBLE
--- )
-```
-
-#### 自动创建边类型
-```cypher
--- 创建边，自动创建 KNOWS 边类型
-CREATE (a)-[:KNOWS {since: '2020-01-01', degree: 0.8}]->(b)
-
--- 自动创建的 Schema:
--- CREATE EDGE KNOWS(
---   since: STRING,
---   degree: DOUBLE
--- )
-```
-
-#### 自动创建多标签
-```cypher
--- 创建多标签节点
-CREATE (n:Person:Employee {name: 'Bob', department: 'Engineering'})
-
--- 自动创建两个标签:
--- CREATE TAG Person(name: STRING)
--- CREATE TAG Employee(name: STRING, department: STRING)
-```
-
-### 注意事项
-
-1. **类型推断的局限性**
-   - 所有字符串都推断为 STRING，不会自动使用 VARCHAR
-   - 所有整数都推断为 INT64，不会使用 INT8/INT16/INT32
-   - 如需更精确的类型控制，请使用 DDL 预先定义 Schema
-
-2. **约束缺失**
-   - 自动创建的属性都是可空的
-   - 不会自动设置默认值
-   - 不会自动添加 NOT NULL 约束
-   - 如需约束，请使用 ALTER TAG/EDGE 修改
-
-3. **性能考虑**
-   - Schema 自动创建需要额外的元数据操作
-   - 大批量数据导入时，建议先使用 DDL 创建 Schema
-   - 自动创建适合交互式查询和小批量数据操作
-
-4. **命名规范**
-   - 自动创建的 Schema 名称与 Cypher 语句中的标签/边类型名称一致
-   - 遵循标识符命名规范（区分大小写）
-
-### 与显式 DDL 的对比
-
-| 特性 | Schema 自动创建 | 显式 DDL |
-|------|-----------------|----------|
-| 使用场景 | 交互式查询、快速原型 | 生产环境、大批量导入 |
-| 类型控制 | 自动推断 | 精确指定 |
-| 约束支持 | 仅默认可空 | 完整约束支持 |
-| 性能 | 稍慢（需元数据操作） | 更快（无运行时创建） |
-| 灵活性 | 高 | 中 |
-
-### 最佳实践
-
-1. **开发阶段**：可以使用 Schema 自动创建快速迭代
-2. **测试阶段**：建议使用显式 DDL 确保 Schema 稳定性
-3. **生产阶段**：
-   - 使用显式 DDL 预先定义所有 Schema
-   - 使用版本控制管理 Schema 变更
-
----
-
-## 4. CREATE SPACE - 创建图空间
+## 3. CREATE SPACE - 创建图空间
 
 ### 功能
 创建图空间（数据库实例）。`CREATE GRAPH` 为同义写法。
@@ -328,7 +224,7 @@ CREATE GRAPH basketball
 
 ---
 
-## 5. CREATE INDEX - 创建索引
+## 4. CREATE INDEX - 创建索引
 
 ### 功能
 在标签或边类型上创建属性索引。
@@ -349,7 +245,7 @@ CREATE INDEX IF NOT EXISTS idx_person_age ON person(age)
 
 ---
 
-## 6. CREATE FULLTEXT INDEX - 创建全文索引
+## 5. CREATE FULLTEXT INDEX - 创建全文索引
 
 ### 功能
 在标签或边类型的文本属性上创建全文索引（BM25 引擎），支持高效的文本搜索功能。
@@ -357,25 +253,22 @@ CREATE INDEX IF NOT EXISTS idx_person_age ON person(age)
 ### 语法结构
 ```cypher
 CREATE FULLTEXT INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name>
-    (<field> [ANALYZER '<analyzer>'] [BOOST <weight>] [, <field> ...])
+    (<field> [, <field> ...])
     ENGINE = BM25
-    [OPTIONS (key=value, ...)]
 ```
 
-> **注意：** `ENGINE = BM25` 当前为必填子句，且仅支持 BM25 引擎；字段可逐个指定分词器与权重。
+> **注意：** `ENGINE = BM25` 当前为必填子句，且仅支持 BM25 引擎（默认参数 k1=1.5、b=0.75）。
+> 字段级 `ANALYZER '<analyzer>'` / `BOOST <weight>` 与 `OPTIONS (key=value, ...)` 当前**不受支持**，
+> 写出这些子句会在解析期直接报错，而不是静默忽略。
 
-### 全文索引选项
+### 索引命名语义
 
-| 选项 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `k1` | FLOAT | 1.5 | BM25 词频调节参数 |
-| `b` | FLOAT | 0.75 | BM25 文档长度调节参数 |
-| `analyzer` | STRING | default | 分词器名称 |
-| 其他键值 | - | - | 存入通用选项（common_options） |
+全文索引按 `(space, schema, field)` 定位实际索引数据；`DROP FULLTEXT INDEX <name>` /
+`SHOW FULLTEXT INDEX` 按声明时的索引名匹配。创建时传入的索引名会随索引元数据保存，
+同一 `(space, schema, field)` 上的重复创建按索引名区分。
 
 ### 关键特性
 - 支持多种文本搜索查询类型
-- 支持字段级分词器（`ANALYZER`）与权重（`BOOST`）设置
 - 支持短语搜索
 - 支持前缀和通配符搜索
 - 支持模糊搜索
@@ -387,41 +280,40 @@ CREATE FULLTEXT INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name>
 -- 创建基础全文索引
 CREATE FULLTEXT INDEX IF NOT EXISTS idx_article_content ON Article(content) ENGINE = BM25
 
--- 多字段，字段级分词器
+-- 多字段全文索引
 CREATE FULLTEXT INDEX idx_news_title ON News(title, summary) ENGINE = BM25
-
--- 带选项的全文索引
-CREATE FULLTEXT INDEX idx_product_desc ON Product(description) ENGINE = BM25
-OPTIONS (k1=1.2, b=0.8, analyzer=standard)
 ```
 
 ### 维护全文索引（ALTER FULLTEXT INDEX）
 
 ```cypher
-ALTER FULLTEXT INDEX <index_name> ADD FIELD <field> [ANALYZER '<analyzer>']
+ALTER FULLTEXT INDEX <index_name> ADD FIELD <field>
 ALTER FULLTEXT INDEX <index_name> DROP FIELD <field>
 ALTER FULLTEXT INDEX <index_name> SET <key> = <value>
 ALTER FULLTEXT INDEX <index_name> REBUILD
 ALTER FULLTEXT INDEX <index_name> OPTIMIZE
 ```
 
+> **注意：** `ADD FIELD` 暂不支持 `ANALYZER` 子句；各维护动作中当前仅 `OPTIMIZE` 真实执行，
+> 其余动作在执行期明确报错而非静默丢弃，如需增删字段或改选项请使用 `DROP` + `CREATE` 重建。
+
 多个动作可用逗号连接。示例：
 
 ```cypher
-ALTER FULLTEXT INDEX idx_article_content ADD FIELD tags ANALYZER 'standard'
 ALTER FULLTEXT INDEX idx_article_content DROP FIELD tags, REBUILD
 ```
 
 ---
 
-## 7. CREATE VECTOR INDEX - 创建向量索引
+## 6. CREATE VECTOR INDEX - 创建向量索引
 
 ### 功能
-在标签或边类型的向量属性上创建向量索引，支持向量相似度搜索。
+在顶点标签的向量属性上创建向量索引，支持向量相似度搜索。仅支持顶点标签（`TAG`），
+不支持边类型：向量索引的点 ID、payload 与重建源均按顶点建模，对边类型名建索引会直接报错。
 
 ### 语法结构
 ```cypher
-CREATE VECTOR INDEX [IF NOT EXISTS] <index_name> ON <tag_or_edge_name> (<field>)
+CREATE VECTOR INDEX [IF NOT EXISTS] <index_name> ON <tag_name> (<field>)
 WITH (vector_size=<dimension>, distance={COSINE | EUCLIDEAN | DOT | MANHATTAN}
       [, hnsw_m=<value>] [, hnsw_ef_construct=<value>]
       [, quantization={SCALAR | BINARY | PRODUCT}] [, quantile=<0..1>]
@@ -429,6 +321,8 @@ WITH (vector_size=<dimension>, distance={COSINE | EUCLIDEAN | DOT | MANHATTAN}
 ```
 
 > **注意：** `WITH (...)` 子句为必需；`vector_size` 必填，其余可选。
+> `compression` 仅在 `quantization=PRODUCT` 时有效，其他组合执行期直接报错；
+> 非法 HNSW / 量化参数同样在执行期直接报错，不会静默采用无效配置。
 
 ### 向量索引参数
 
@@ -439,8 +333,8 @@ WITH (vector_size=<dimension>, distance={COSINE | EUCLIDEAN | DOT | MANHATTAN}
 | `hnsw_m` | INT | 否 | HNSW 每层最大连接数 |
 | `hnsw_ef_construct` | INT | 否 | HNSW 构建时动态列表大小 |
 | `quantization` | STRING | 否 | 量化类型：`scalar` / `binary` / `product` / `none` |
-| `quantile` | FLOAT | 否 | 量化分位数，取值 (0,1]，需配合 quantization |
-| `compression` | STRING | 否 | 压缩比 x4/x8/x16/x32/x64，需配合 quantization |
+| `quantile` | FLOAT | 否 | 量化分位数，取值 (0,1]，需配合 quantization（仅标量量化读取该值） |
+| `compression` | STRING | 否 | 压缩比 x4/x8/x16/x32/x64，仅配合 `quantization=PRODUCT`；其他量化类型下显式报错 |
 | `always_ram` | BOOL | 否 | 量化数据是否常驻内存，需配合 quantization |
 
 ### 距离度量方式
@@ -476,9 +370,15 @@ WITH (vector_size=512, distance=EUCLIDEAN,
       quantization=PRODUCT, compression=x16, always_ram=false)
 ```
 
+### 索引命名语义
+
+向量索引按 `(space, tag, field)` 定位实际索引数据；声明时的索引名会随索引元数据保存，
+供 `SEARCH / LOOKUP / DROP VECTOR INDEX <name>` 反查回 `(space, tag, field)` 位置。
+未知索引名在规划期即定位失败，执行期按语句是否带 `IF EXISTS` 报错或返回空结果。
+
 ---
 
-## 8. CREATE SEQUENCE - 创建序列
+## 7. CREATE SEQUENCE - 创建序列
 
 ### 功能
 创建自增序列，用于生成唯一ID。
@@ -496,7 +396,7 @@ CREATE SEQUENCE IF NOT EXISTS user_id_seq START=1 INCREMENT=1 NOCYCLE
 
 ---
 
-## 9. CREATE MACRO / CREATE TYPE - 宏与类型别名
+## 8. CREATE MACRO / CREATE TYPE - 宏与类型别名
 
 ### 功能
 创建可复用的表达式宏和类型别名。
@@ -519,7 +419,7 @@ CREATE TYPE account_id AS user_id
 
 ---
 
-## 10. ALTER TAG / ALTER EDGE - 修改标签与边类型
+## 9. ALTER TAG / ALTER EDGE - 修改标签与边类型
 
 ### 功能
 修改标签或边类型的属性定义、名称和端点约束。
@@ -560,22 +460,22 @@ ALTER EDGE follow ADD FROM person TO person
 
 ---
 
-## 11. ALTER FULLTEXT INDEX - 修改全文索引
+## 10. ALTER FULLTEXT INDEX - 修改全文索引
 
-见第 6 节「维护全文索引」。
+见第 5 节「维护全文索引」。
 
 ---
 
-## 12. DROP - 删除对象
+## 11. DROP - 删除对象
 
 ### 语法结构
 ```cypher
 DROP TAG [IF EXISTS] <tag_name> [, <tag_name> ...]
 DROP EDGE [IF EXISTS] <edge_type> [, <edge_type> ...]
 DROP [SPACE | GRAPH] [IF EXISTS] <space_name>
-DROP TAG INDEX <index_name> [ON <space_name>]
-DROP EDGE INDEX <index_name> [ON <space_name>]
-DROP INDEX <index_name> [ON <space_name>]
+DROP TAG INDEX [IF EXISTS] <index_name> [ON <space_name>]
+DROP EDGE INDEX [IF EXISTS] <index_name> [ON <space_name>]
+DROP INDEX [IF EXISTS] <index_name> [ON <space_name>]
 DROP FULLTEXT INDEX [IF EXISTS] <index_name>
 DROP VECTOR INDEX [IF EXISTS] <index_name>
 DROP SEQUENCE [IF EXISTS] <seq_name>
@@ -584,7 +484,8 @@ DROP TYPE [IF EXISTS] <alias_name>
 ```
 
 ### 关键特性
-- TAG/EDGE 支持批量删除与 IF EXISTS
+- TAG/EDGE 支持批量删除与 IF EXISTS；批量删除逐项执行、逐项汇报
+  （`IF EXISTS` 下不存在的对象汇报 `not_exists`，否则整个语句报错）
 - `DROP INDEX` 默认按 TAG 索引处理；`ON <space_name>` 可选
 - `DROP SPACE` 与 `DROP GRAPH` 等价，支持 IF EXISTS
 - 删除被引用的类型别名会报错（依赖检查）
@@ -594,7 +495,8 @@ DROP TYPE [IF EXISTS] <alias_name>
 DROP TAG IF EXISTS person, company
 DROP EDGE IF EXISTS follow, like
 DROP SPACE IF EXISTS test_space
-DROP TAG INDEX idx_person_name
+DROP GRAPH IF EXISTS test_space
+DROP TAG INDEX IF EXISTS idx_person_name
 DROP FULLTEXT INDEX IF EXISTS idx_article_content
 DROP VECTOR INDEX IF EXISTS idx_doc_embedding
 DROP MACRO IF EXISTS full_name
@@ -603,7 +505,7 @@ DROP TYPE IF EXISTS account_id
 
 ---
 
-## 13. DESC/DESCRIBE - 描述对象
+## 12. DESC/DESCRIBE - 描述对象
 
 ### 功能
 显示标签、边类型、图空间或用户的定义。
@@ -626,7 +528,7 @@ DESCRIBE USER root
 
 ---
 
-## 14. SHOW - 显示信息
+## 13. SHOW - 显示信息
 
 ### 功能
 显示数据库中的各种元信息。
@@ -664,7 +566,7 @@ SHOW CONFIGS database
 
 ---
 
-## 15. SHOW CREATE - 显示创建语句
+## 14. SHOW CREATE - 显示创建语句
 
 ### 功能
 显示对象的完整创建语句（DDL），便于查看对象定义或迁移数据。

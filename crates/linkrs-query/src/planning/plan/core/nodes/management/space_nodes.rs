@@ -31,6 +31,7 @@ impl CreateSpaceNode {
 define_plan_node! {
     pub struct DropSpaceNode {
         space_name: String,
+        if_exists: bool,
     }
     manage_enum: SpaceManageNode::Drop as SpaceManage
     input: ZeroInputNode
@@ -41,14 +42,24 @@ impl DropSpaceNode {
         Self {
             id,
             space_name,
+            if_exists: false,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
     }
 
+    pub fn with_if_exists(mut self, if_exists: bool) -> Self {
+        self.if_exists = if_exists;
+        self
+    }
+
     pub fn space_name(&self) -> &str {
         &self.space_name
+    }
+
+    pub fn if_exists(&self) -> bool {
+        self.if_exists
     }
 }
 

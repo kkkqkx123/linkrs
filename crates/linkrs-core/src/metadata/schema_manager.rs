@@ -830,6 +830,12 @@ impl SchemaManager {
                     data.info
                         .properties
                         .retain(|p| !deletions.contains(&p.name));
+                    if let Some(col) = data.info.ttl_col.clone() {
+                        if !data.info.properties.iter().any(|p| p.name == col) {
+                            data.info.ttl_duration = None;
+                            data.info.ttl_col = None;
+                        }
+                    }
                     Some((data.info.tag_id, added, deletions))
                 } else {
                     None
@@ -877,6 +883,9 @@ impl SchemaManager {
                     if let Some(prop) = data.info.properties.iter_mut().find(|p| p.name == old_name)
                     {
                         prop.name = new_name.to_string();
+                        if data.info.ttl_col.as_deref() == Some(old_name) {
+                            data.info.ttl_col = Some(new_name.to_string());
+                        }
                         Some((
                             data.info.tag_id,
                             vec![new_name.to_string()],
@@ -1069,6 +1078,12 @@ impl SchemaManager {
                     data.info
                         .properties
                         .retain(|p| !deletions.contains(&p.name));
+                    if let Some(col) = data.info.ttl_col.clone() {
+                        if !data.info.properties.iter().any(|p| p.name == col) {
+                            data.info.ttl_duration = None;
+                            data.info.ttl_col = None;
+                        }
+                    }
                     Some((data.info.edge_type_id, added, deletions))
                 } else {
                     None

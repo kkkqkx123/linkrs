@@ -333,10 +333,26 @@ impl VectorOperator {
                                     if let Some(ef) = hnsw_ef_construct {
                                         hnsw.ef_construct = *ef;
                                     }
-                                    let _ = hnsw.validate();
+                                    hnsw.validate().map_err(|e| {
+                                        QueryError::execution(format!(
+                                            "invalid HNSW parameters: {}",
+                                            e
+                                        ))
+                                    })?;
                                     config = config.with_hnsw(hnsw);
                                 }
                                 if let Some(qkind) = quantization {
+                                    if compression.is_some()
+                                        && !matches!(
+                                            qkind,
+                                            crate::parser::ast::vector::QuantizationKind::Product
+                                        )
+                                    {
+                                        return Err(QueryError::execution(format!(
+                                            "compression requires quantization=PRODUCT, got quantization={:?}; omit compression or use PRODUCT",
+                                            qkind
+                                        )));
+                                    }
                                     let quant_cfg = match qkind {
                                         crate::parser::ast::vector::QuantizationKind::Scalar => {
                                             let mut cfg = simvec::QuantizationConfig::scalar(
@@ -381,7 +397,12 @@ impl VectorOperator {
                                             cfg
                                         }
                                     };
-                                    let _ = quant_cfg.validate(*vector_size);
+                                    quant_cfg.validate(*vector_size).map_err(|e| {
+                                        QueryError::execution(format!(
+                                            "invalid quantization parameters: {}",
+                                            e
+                                        ))
+                                    })?;
                                     config = config.with_quantization(quant_cfg);
                                 }
                                 let res = if config.quantization_config.is_some()

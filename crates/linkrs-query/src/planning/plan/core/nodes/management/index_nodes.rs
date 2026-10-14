@@ -40,6 +40,7 @@ define_plan_node! {
     pub struct DropTagIndexNode {
         space_name: String,
         index_name: String,
+        if_exists: bool,
     }
     manage_enum: IndexManageNode::DropTagIndex as IndexManage
     input: ZeroInputNode
@@ -51,10 +52,16 @@ impl DropTagIndexNode {
             id,
             space_name,
             index_name,
+            if_exists: false,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn with_if_exists(mut self, if_exists: bool) -> Self {
+        self.if_exists = if_exists;
+        self
     }
 
     pub fn space_name(&self) -> &str {
@@ -63,6 +70,10 @@ impl DropTagIndexNode {
 
     pub fn index_name(&self) -> &str {
         &self.index_name
+    }
+
+    pub fn if_exists(&self) -> bool {
+        self.if_exists
     }
 }
 
@@ -156,6 +167,7 @@ define_plan_node! {
     pub struct DropEdgeIndexNode {
         space_name: String,
         index_name: String,
+        if_exists: bool,
     }
     manage_enum: IndexManageNode::DropEdgeIndex as IndexManage
     input: ZeroInputNode
@@ -167,10 +179,16 @@ impl DropEdgeIndexNode {
             id,
             space_name,
             index_name,
+            if_exists: false,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn with_if_exists(mut self, if_exists: bool) -> Self {
+        self.if_exists = if_exists;
+        self
     }
 
     pub fn space_name(&self) -> &str {
@@ -179,6 +197,10 @@ impl DropEdgeIndexNode {
 
     pub fn index_name(&self) -> &str {
         &self.index_name
+    }
+
+    pub fn if_exists(&self) -> bool {
+        self.if_exists
     }
 }
 
