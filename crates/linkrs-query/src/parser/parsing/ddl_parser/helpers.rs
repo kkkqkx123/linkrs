@@ -244,9 +244,98 @@ impl DdlParser {
                 }
             }
             TokenKind::Identifier(ref s) => {
-                let type_name = s.clone();
-                ctx.next_token();
-                Ok(type_name.to_uppercase())
+                let upper = s.to_uppercase();
+                match upper.as_str() {
+                    "STRING" => {
+                        ctx.next_token();
+                        Ok("STRING".to_string())
+                    }
+                    "INT" | "INT8" | "INT16" | "INT32" | "INT64" => {
+                        ctx.next_token();
+                        Ok("INT64".to_string())
+                    }
+                    "FLOAT" => {
+                        ctx.next_token();
+                        Ok("FLOAT".to_string())
+                    }
+                    "DOUBLE" => {
+                        ctx.next_token();
+                        Ok("DOUBLE".to_string())
+                    }
+                    // Passed through untouched: the executor rejects it with
+                    // a dedicated message guiding toward real vid types.
+                    "VID" => {
+                        ctx.next_token();
+                        Ok("VID".to_string())
+                    }
+                    _ => {
+                        let rest = upper
+                            .strip_prefix("FIXED_STRING")
+                            .or_else(|| upper.strip_prefix("FIXEDSTRING"));
+                        match rest {
+                            Some(trailing) if trailing.is_empty() => {
+                                ctx.next_token();
+                                if ctx.current_token().kind == TokenKind::LParen {
+                                    ctx.next_token();
+                                    if let TokenKind::IntegerLiteral(length) =
+                                        ctx.current_token().kind
+                                    {
+                                        if length <= 0 {
+                                            return Err(ParseError::new(
+                                                ParseErrorKind::SyntaxError,
+                                                "FIXED_STRING length must be a positive integer"
+                                                    .to_string(),
+                                                ctx.current_position(),
+                                            ));
+                                        }
+                                        ctx.next_token();
+                                        if ctx.current_token().kind == TokenKind::RParen {
+                                            ctx.next_token();
+                                            Ok(format!("FIXED_STRING({})", length))
+                                        } else {
+                                            Err(ParseError::new(
+                                                ParseErrorKind::SyntaxError,
+                                                "FIXED_STRING right parenthesis required"
+                                                    .to_string(),
+                                                ctx.current_position(),
+                                            ))
+                                        }
+                                    } else {
+                                        Err(ParseError::new(
+                                            ParseErrorKind::SyntaxError,
+                                            "FIXED_STRING requires length parameter".to_string(),
+                                            ctx.current_position(),
+                                        ))
+                                    }
+                                } else {
+                                    Ok("FIXED_STRING(32)".to_string())
+                                }
+                            }
+                            Some(trailing) => match trailing.parse::<i64>() {
+                                Ok(length) if length > 0 => {
+                                    ctx.next_token();
+                                    Ok(format!("FIXED_STRING({})", length))
+                                }
+                                _ => Err(ParseError::new(
+                                    ParseErrorKind::SyntaxError,
+                                    format!(
+                                        "Invalid vid_type '{}'; supported vid types: INT64, STRING, FIXED_STRING(n)",
+                                        s
+                                    ),
+                                    ctx.current_position(),
+                                )),
+                            },
+                            None => Err(ParseError::new(
+                                ParseErrorKind::SyntaxError,
+                                format!(
+                                    "Unknown vid_type '{}'; supported vid types: INT64, STRING, FIXED_STRING(n)",
+                                    s
+                                ),
+                                ctx.current_position(),
+                            )),
+                        }
+                    }
+                }
             }
             _ => Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,

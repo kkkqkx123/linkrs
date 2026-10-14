@@ -342,6 +342,7 @@ pub struct EdgeAlterInfo {
     pub edge_name: String,
     pub additions: Vec<PropertyDef>,
     pub deletions: Vec<String>,
+    pub changes: Vec<crate::parser::ast::stmt::PropertyChange>,
 }
 
 impl EdgeAlterInfo {
@@ -351,6 +352,7 @@ impl EdgeAlterInfo {
             edge_name,
             additions: Vec::new(),
             deletions: Vec::new(),
+            changes: Vec::new(),
         }
     }
 
@@ -361,6 +363,14 @@ impl EdgeAlterInfo {
 
     pub fn with_deletions(mut self, deletions: Vec<String>) -> Self {
         self.deletions = deletions;
+        self
+    }
+
+    pub fn with_changes(
+        mut self,
+        changes: Vec<crate::parser::ast::stmt::PropertyChange>,
+    ) -> Self {
+        self.changes = changes;
         self
     }
 }

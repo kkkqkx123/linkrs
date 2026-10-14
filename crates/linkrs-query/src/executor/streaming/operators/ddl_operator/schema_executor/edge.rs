@@ -7,7 +7,7 @@ use linkrs_core::error::QueryError;
 use linkrs_core::types::edge::EdgeTypeInfo;
 use linkrs_core::Value;
 
-use super::common::endpoint_rows;
+use super::common::{endpoint_rows, render_create_edge};
 
 pub(in crate::executor::streaming::operators) fn execute_edge_manage(
     op: &mut super::super::DdlOperator,
@@ -105,6 +105,7 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
             edge_name,
             additions,
             deletions,
+            changes,
         } => super::super::exec_ddl(storage, |s| {
             StorageSchemaOps::alter_edge_type(
                 s,
@@ -114,6 +115,22 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
                 deletions.clone(),
             )
             .map_err(|e| QueryError::execution(e.to_string()))?;
+            for change in changes {
+                if !StorageSchemaOps::rename_edge_property(
+                    s,
+                    space_name,
+                    edge_name,
+                    &change.old_name,
+                    &change.new_name,
+                )
+                .map_err(|e| QueryError::execution(e.to_string()))?
+                {
+                    return Err(QueryError::execution(format!(
+                        "Edge property '{}' does not exist on edge type '{}'",
+                        change.old_name, edge_name
+                    )));
+                }
+            }
             Ok(())
         }),
         EdgeManageCommand::Rename { old_name, new_name } => super::super::exec_ddl(storage, |s| {
@@ -142,7 +159,7 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
             }
             Ok(())
         }),
-        EdgeManageCommand::Desc { .. } | EdgeManageCommand::ShowCreate { .. } => {
+        EdgeManageCommand::Desc { .. } => {
             let reader = super::super::get_reader(storage)?;
             let name = edge_type.as_deref().unwrap_or("");
             match reader
@@ -196,6 +213,36 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
                     let schema = super::super::make_single_col_schema("Field", "string");
                     Ok(Some(DataChunk::new(vec![], schema)))
                 }
+            }
+        }
+        EdgeManageCommand::ShowCreate { .. } => {
+            let reader = super::super::get_reader(storage)?;
+            let name = edge_type.as_deref().unwrap_or("");
+            match reader
+                .get_edge_type(space_name, name)
+                .map_err(|e| QueryError::execution(e.to_string()))?
+            {
+                Some(et) => {
+                    let ddl = render_create_edge(
+                        &et.edge_type_name,
+                        &et.properties,
+                        &et.src_tag_name,
+                        &et.dst_tag_name,
+                        et.ttl_duration,
+                        et.ttl_col.as_deref(),
+                    );
+                    let schema =
+                        super::super::make_single_col_schema("create_statement", "string");
+                    Ok(Some(super::super::make_single_row(
+                        schema,
+                        vec![Value::string(ddl)],
+                    )))
+                }
+                None => Ok(Some(super::super::make_manage_result(
+                    "show_create_edge",
+                    Some(name),
+                    "not-found",
+                ))),
             }
         }
         EdgeManageCommand::Show => {

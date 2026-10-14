@@ -218,18 +218,25 @@ impl ShowCreateSpaceNode {
 pub struct SpaceManageInfo {
     pub space_name: String,
     pub vid_type: String,
+    pub comment: Option<String>,
 }
 
 impl SpaceManageInfo {
     pub fn new(space_name: String) -> Self {
         Self {
             space_name,
-            vid_type: "FIXED_STRING(32)".to_string(),
+            vid_type: "INT64".to_string(),
+            comment: None,
         }
     }
 
     pub fn with_vid_type(mut self, vid_type: String) -> Self {
         self.vid_type = vid_type;
+        self
+    }
+
+    pub fn with_comment(mut self, comment: Option<String>) -> Self {
+        self.comment = comment;
         self
     }
 }

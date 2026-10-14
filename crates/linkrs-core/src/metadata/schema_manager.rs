@@ -1047,6 +1047,68 @@ impl SchemaManager {
         Ok(false)
     }
 
+    pub fn rename_edge_property(
+        &self,
+        space_name: &str,
+        edge_type_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<bool, StorageError> {
+        let space_info = self.get_space(space_name)?.ok_or_else(|| {
+            StorageError::db_error(format!("Space \"{}\" does not exist", space_name))
+        })?;
+
+        let applied: Option<(u32, Vec<String>, Vec<String>)> = {
+            let mut edge_types = self.edge_types.write();
+            let key = edge_types
+                .iter()
+                .find(|((sid, _), data)| {
+                    *sid == space_info.space_id && data.info.edge_type_name == edge_type_name
+                })
+                .map(|(k, _)| *k);
+
+            if let Some(key) = key {
+                if let Some(data) = edge_types.get_mut(&key) {
+                    if let Some(prop) = data
+                        .info
+                        .properties
+                        .iter_mut()
+                        .find(|p| p.name == old_name)
+                    {
+                        prop.name = new_name.to_string();
+                        if data.info.ttl_col.as_deref() == Some(old_name) {
+                            data.info.ttl_col = Some(new_name.to_string());
+                        }
+                        Some((
+                            data.info.edge_type_id,
+                            vec![new_name.to_string()],
+                            vec![old_name.to_string()],
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some((edge_type_id, added, removed)) = applied {
+            self.emit_schema_event(SchemaChangeEvent::EdgeTypeAltered {
+                space_id: space_info.space_id,
+                space_name: space_name.to_string(),
+                edge_type_id,
+                type_name: edge_type_name.to_string(),
+                added_properties: added,
+                removed_properties: removed,
+            });
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub fn alter_edge_type(
         &self,
         space_name: &str,

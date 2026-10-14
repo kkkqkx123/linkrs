@@ -5,6 +5,7 @@ use crate::executor::streaming::operators::spec::IndexManageCommand;
 use crate::storage::StorageSchemaOps;
 use linkrs_core::error::QueryError;
 use linkrs_core::types::index::{Index, IndexConfig, IndexType};
+use super::common::render_create_index;
 use linkrs_core::Value;
 
 pub(in crate::executor::streaming::operators) fn execute_index_manage(
@@ -163,7 +164,7 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 if dropped { "dropped" } else { "not_exists" },
             )))
         }
-        IndexManageCommand::DescTagIndex { .. } | IndexManageCommand::ShowCreateIndex { .. } => {
+        IndexManageCommand::DescTagIndex { .. } => {
             let reader = super::super::get_reader(storage)?;
             let name = index_name.as_deref().unwrap_or("");
             match reader
@@ -212,6 +213,45 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 }
                 None => Ok(Some(super::super::make_manage_result(
                     "desc_index",
+                    Some(name),
+                    "not-found",
+                ))),
+            }
+        }
+        IndexManageCommand::ShowCreateIndex { .. } => {
+            let reader = super::super::get_reader(storage)?;
+            let name = index_name.as_deref().unwrap_or("");
+            let tag_hit = reader
+                .get_tag_index(space_name, name)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            if let Some(idx) = tag_hit {
+                let fields: Vec<String> =
+                    idx.fields.iter().map(|f| f.name.clone()).collect();
+                let ddl = render_create_index("TAG", &idx.name, &idx.schema_name, &fields);
+                let schema =
+                    super::super::make_single_col_schema("create_statement", "string");
+                return Ok(Some(super::super::make_single_row(
+                    schema,
+                    vec![Value::string(ddl)],
+                )));
+            }
+            match reader
+                .get_edge_index(space_name, name)
+                .map_err(|e| QueryError::execution(e.to_string()))?
+            {
+                Some(idx) => {
+                    let fields: Vec<String> =
+                        idx.fields.iter().map(|f| f.name.clone()).collect();
+                    let ddl = render_create_index("EDGE", &idx.name, &idx.schema_name, &fields);
+                    let schema =
+                        super::super::make_single_col_schema("create_statement", "string");
+                    Ok(Some(super::super::make_single_row(
+                        schema,
+                        vec![Value::string(ddl)],
+                    )))
+                }
+                None => Ok(Some(super::super::make_manage_result(
+                    "show_create_index",
                     Some(name),
                     "not-found",
                 ))),

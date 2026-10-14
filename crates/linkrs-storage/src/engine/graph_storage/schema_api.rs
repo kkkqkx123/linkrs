@@ -163,6 +163,26 @@ impl StorageSchemaOps for GraphStorage {
         Ok(renamed)
     }
 
+    fn rename_edge_property(
+        &mut self,
+        space: &str,
+        edge_type: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
+        let renamed = self
+            .ctx
+            .schema_manager()
+            .rename_edge_property(space, edge_type, old_name, new_name)?;
+        if renamed {
+            let label_id = ops::edge_label_id(&self.ctx, space, edge_type)?
+                .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
+            schema_engine::rename_edge_property(&self.ctx, label_id, old_name, new_name)?;
+        }
+        Ok(renamed)
+    }
+
     fn update_edge_endpoints(
         &mut self,
         space: &str,

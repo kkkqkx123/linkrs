@@ -19,7 +19,6 @@ use crate::planning::plan::core::nodes::{
 };
 use crate::planning::plan::core::{AlterSpaceNode, PlanNodeEnum};
 use crate::planning::planner::PlannerError;
-use linkrs_core::types::PropertyDef;
 
 use super::MaintainPlanner;
 
@@ -67,8 +66,14 @@ impl MaintainPlanner {
                 };
                 Ok(Some(plan_node))
             }
-            CreateTarget::Space { name, vid_type, .. } => {
-                let space_info = SpaceManageInfo::new(name.clone()).with_vid_type(vid_type.clone());
+            CreateTarget::Space {
+                name,
+                vid_type,
+                comment,
+            } => {
+                let space_info = SpaceManageInfo::new(name.clone())
+                    .with_vid_type(vid_type.clone())
+                    .with_comment(comment.clone());
                 let node = CreateSpaceNode::new(next_node_id(), space_info);
                 Ok(Some(PlanNodeEnum::SpaceManage(SpaceManageNode::Create(
                     node,
@@ -281,16 +286,10 @@ impl MaintainPlanner {
                 deletions,
                 changes,
             } => {
-                let mut alter_info =
-                    EdgeAlterInfo::new(current_space.to_string(), edge_name.clone())
-                        .with_additions(additions.clone())
-                        .with_deletions(deletions.clone());
-
-                for change in changes {
-                    let prop = PropertyDef::new(change.new_name.clone(), change.data_type.clone());
-                    alter_info.additions.push(prop);
-                    alter_info.deletions.push(change.old_name.clone());
-                }
+                let alter_info = EdgeAlterInfo::new(current_space.to_string(), edge_name.clone())
+                    .with_additions(additions.clone())
+                    .with_deletions(deletions.clone())
+                    .with_changes(changes.clone());
 
                 let node = AlterEdgeNode::new(next_node_id(), alter_info);
                 Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node)))

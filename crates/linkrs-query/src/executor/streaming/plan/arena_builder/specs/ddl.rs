@@ -251,6 +251,7 @@ fn space_manage_to_command(
         Create(n) => SpaceManageCommand::Create {
             space_name: n.info().space_name.clone(),
             vid_type: n.info().vid_type.clone(),
+            comment: n.info().comment.clone(),
         },
         Drop(n) => SpaceManageCommand::Drop {
             space_name: n.space_name().to_string(),
@@ -376,6 +377,14 @@ fn edge_manage_to_command(
                 edge_name: info.edge_name.clone(),
                 additions: info.additions.clone(),
                 deletions: info.deletions.clone(),
+                changes: info
+                    .changes
+                    .iter()
+                    .map(|c| PropertyRename {
+                        old_name: c.old_name.clone(),
+                        new_name: c.new_name.clone(),
+                    })
+                    .collect(),
             }
         }
         Rename(n) => EdgeManageCommand::Rename {

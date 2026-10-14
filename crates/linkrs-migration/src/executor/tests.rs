@@ -577,6 +577,15 @@ impl linkrs_storage::StorageSchemaOps for TestStorage {
     ) -> Result<bool, StorageError> {
         Ok(true)
     }
+    fn rename_edge_property(
+        &mut self,
+        _space: &str,
+        _edge_type: &str,
+        _old_name: &str,
+        _new_name: &str,
+    ) -> Result<bool, StorageError> {
+        Ok(true)
+    }
     fn create_edge_type(
         &mut self,
         _space: &str,

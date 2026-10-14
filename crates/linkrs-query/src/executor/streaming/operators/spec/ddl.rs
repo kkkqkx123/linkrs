@@ -17,6 +17,7 @@ pub enum SpaceManageCommand {
     Create {
         space_name: String,
         vid_type: String,
+        comment: Option<String>,
     },
     Drop {
         space_name: String,
@@ -108,6 +109,7 @@ pub enum EdgeManageCommand {
         edge_name: String,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+        changes: Vec<PropertyRename>,
     },
     Rename {
         old_name: String,

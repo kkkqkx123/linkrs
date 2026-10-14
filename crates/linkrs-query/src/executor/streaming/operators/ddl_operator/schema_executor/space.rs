@@ -7,7 +7,7 @@ use linkrs_core::error::QueryError;
 use linkrs_core::types::space::SpaceInfo;
 use linkrs_core::{NullType, Value};
 
-use super::common::parse_vid_type_str;
+use super::common::{parse_vid_type_str, render_create_space};
 
 pub(in crate::executor::streaming::operators) fn execute_space_manage(
     op: &mut super::super::DdlOperator,
@@ -43,9 +43,13 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
         SpaceManageCommand::Create {
             space_name,
             vid_type,
+            comment,
         } => super::super::exec_ddl(storage, |s| {
             let vid_type = parse_vid_type_str(vid_type).map_err(QueryError::execution)?;
-            let mut space_info = SpaceInfo::new(space_name.clone()).with_vid_type(vid_type);
+            let space_info = SpaceInfo::new(space_name.clone())
+                .with_vid_type(vid_type)
+                .with_comment(comment.clone());
+            let mut space_info = space_info;
             StorageSchemaOps::create_space(s, &mut space_info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
@@ -88,7 +92,7 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        SpaceManageCommand::Desc { .. } | SpaceManageCommand::ShowCreate { .. } => {
+        SpaceManageCommand::Desc { .. } => {
             let reader = super::super::get_reader(storage)?;
             let name = space_name.as_deref().unwrap_or("");
             match reader
@@ -144,6 +148,33 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 }
                 None => Ok(Some(super::super::make_manage_result(
                     "desc_space",
+                    Some(name),
+                    "not-found",
+                ))),
+            }
+        }
+        SpaceManageCommand::ShowCreate { .. } => {
+            let reader = super::super::get_reader(storage)?;
+            let name = space_name.as_deref().unwrap_or("");
+            match reader
+                .get_space(name)
+                .map_err(|e| QueryError::execution(e.to_string()))?
+            {
+                Some(info) => {
+                    let ddl = render_create_space(
+                        &info.space_name,
+                        &info.vid_type,
+                        info.comment.as_deref(),
+                    );
+                    let schema =
+                        super::super::make_single_col_schema("create_statement", "string");
+                    Ok(Some(super::super::make_single_row(
+                        schema,
+                        vec![Value::string(ddl)],
+                    )))
+                }
+                None => Ok(Some(super::super::make_manage_result(
+                    "show_create_space",
                     Some(name),
                     "not-found",
                 ))),

@@ -60,6 +60,13 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
     ) -> Result<bool, StorageError>;
+    fn rename_edge_property(
+        &mut self,
+        space: &str,
+        edge_type: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<bool, StorageError>;
     fn rename_edge_type(
         &mut self,
         space: &str,

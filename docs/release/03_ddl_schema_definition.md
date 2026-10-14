@@ -446,6 +446,11 @@ ALTER EDGE <edge_type> DROP FROM <src_tag> TO <dst_tag>    -- 移除端点约束
 - 边类型支持增加/移除端点约束（ADD/DROP FROM ... TO ...）
 - ADD/DROP/CHANGE 子句可在一个语句中连续出现多个
 
+> **注意：** `CHANGE` 的语义冻结为"仅改名"：新属性继承目标类型的可空性默认值
+> （默认可空），不保留也不修改原属性的默认值、注释与可空性约束。
+> 如需调整这些约束，请使用 `DROP` + `ADD` 显式表达。
+> TAG 与 EDGE 的 `CHANGE` 均走重命名路径，行为一致。
+
 ### 示例
 ```cypher
 ALTER TAG person ADD (email: STRING, phone: STRING)

@@ -65,6 +65,13 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
             old_name: &str,
             new_name: &str,
         ) -> Result<bool, StorageError>;
+        fn rename_edge_property(
+            &mut self,
+            space: &str,
+            edge_type: &str,
+            old_name: &str,
+            new_name: &str,
+        ) -> Result<bool, StorageError>;
         fn update_edge_endpoints(
             &mut self,
             space: &str,

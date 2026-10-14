@@ -31,6 +31,8 @@ mod macro_;
 mod schema_evolution;
 #[path = "ddl/show_catalog.rs"]
 mod show_catalog;
+#[path = "ddl/show_create.rs"]
+mod show_create;
 #[path = "ddl/space_basic.rs"]
 mod space_basic;
 #[path = "ddl/tag_alter.rs"]

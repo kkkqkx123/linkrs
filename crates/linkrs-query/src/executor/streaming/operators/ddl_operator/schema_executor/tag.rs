@@ -5,6 +5,7 @@ use crate::executor::streaming::operators::spec::TagManageCommand;
 use crate::storage::StorageSchemaOps;
 use linkrs_core::error::QueryError;
 use linkrs_core::types::tag::TagInfo;
+use super::common::render_create_tag;
 use linkrs_core::Value;
 
 pub(in crate::executor::streaming::operators) fn execute_tag_manage(
@@ -226,18 +227,14 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?
             {
                 Some(tag) => {
-                    let mut parts: Vec<String> = tag
-                        .properties
-                        .iter()
-                        .map(|p| format!("{} {}", p.name, p.data_type))
-                        .collect();
-                    if let (Some(duration), Some(col)) = (tag.ttl_duration, tag.ttl_col.as_deref())
-                    {
-                        parts.push(format!("ttl_duration={duration}"));
-                        parts.push(format!("ttl_col={col}"));
-                    }
-                    let ddl = format!("CREATE TAG {} ({})", tag.tag_name, parts.join(", "));
-                    let schema = super::super::make_single_col_schema("create_tag", "string");
+                    let ddl = render_create_tag(
+                        &tag.tag_name,
+                        &tag.properties,
+                        tag.ttl_duration,
+                        tag.ttl_col.as_deref(),
+                    );
+                    let schema =
+                        super::super::make_single_col_schema("create_statement", "string");
                     Ok(Some(super::super::make_single_row(
                         schema,
                         vec![Value::string(ddl)],

@@ -173,3 +173,49 @@ fn test_alter_edge_drop_nonexistent_field() {
         .exec_ddl("ALTER EDGE KNOWS DROP (nonexistent_field)")
         .assert_error();
 }
+
+// ==================== ALTER EDGE CHANGE Execution Tests ====================
+
+#[test]
+fn test_alter_edge_execution_change_rename() {
+    use linkrs_core::Value;
+    use std::collections::HashMap;
+
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id: INT, name: STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since: STRING, old_note: STRING) FROM Person TO Person")
+        .assert_success()
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('alice'), 2:('bob')")
+        .assert_success()
+        .exec_dml("INSERT EDGE KNOWS(since, old_note) VALUES 1 -> 2:('2024-01-01', 'hi')")
+        .assert_success()
+        .exec_ddl("ALTER EDGE KNOWS CHANGE (old_note note: STRING)")
+        .assert_success()
+        .query("DESC EDGE KNOWS")
+        .assert_success()
+        .assert_result_contains(vec![Value::string("note")])
+        .assert_edge_props(
+            1,
+            2,
+            "KNOWS",
+            HashMap::from([
+                ("since", Value::string("2024-01-01")),
+                ("note", Value::string("hi")),
+            ]),
+        )
+        .assert_edge_prop_absent(1, 2, "KNOWS", "old_note");
+}
+
+#[test]
+fn test_alter_edge_execution_change_missing_property_errors() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(name: STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since: STRING) FROM Person TO Person")
+        .assert_success()
+        .exec_ddl("ALTER EDGE KNOWS CHANGE (missing renamed: STRING)")
+        .assert_error();
+}

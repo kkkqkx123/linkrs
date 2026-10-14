@@ -119,6 +119,13 @@ impl DdlParser {
                     } else if ctx.match_token(TokenKind::Comment) {
                         ctx.expect_token(TokenKind::Assign)?;
                         comment = Some(ctx.expect_string_literal()?);
+                    } else {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "Unsupported space option; supported options: vid_type, comment"
+                                .to_string(),
+                            ctx.current_position(),
+                        ));
                     }
 
                     if !ctx.match_token(TokenKind::Comma) {
@@ -328,6 +335,13 @@ impl DdlParser {
                     } else if ctx.match_token(TokenKind::Comment) {
                         ctx.expect_token(TokenKind::Assign)?;
                         comment = Some(ctx.expect_string_literal()?);
+                    } else {
+                        return Err(ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "Unsupported space option; supported options: vid_type, comment"
+                                .to_string(),
+                            ctx.current_position(),
+                        ));
                     }
 
                     if !ctx.match_token(TokenKind::Comma) {
@@ -738,14 +752,32 @@ impl DdlParser {
     }
 
     /// Parse optional space parameters: (vid_type=..., comment='...') and
-    /// WITH key=value clauses (e.g. WITH DIMENSION=128).
+    /// WITH key=value clauses (e.g. WITH comment='...').
     fn parse_space_with_params(
         &mut self,
         ctx: &mut ParseContext,
         comment: &mut Option<String>,
     ) -> Result<(), ParseError> {
         while ctx.match_token(TokenKind::With) {
-            let key = ctx.expect_identifier()?;
+            // Option keys may lex as dedicated keywords (`comment`,
+            // `partition_num`, ...); accept their spellings so unknown keys
+            // reach the explicit rejection below instead of dying in
+            // `expect_identifier`.
+            let key = match &ctx.current_token().kind {
+                TokenKind::Comment => {
+                    ctx.next_token();
+                    "comment".to_string()
+                }
+                TokenKind::PartitionNum
+                | TokenKind::ReplicaFactor
+                | TokenKind::VIdType => {
+                    let lexeme = ctx.current_token().lexeme.clone();
+                    ctx.next_token();
+                    lexeme
+                }
+                _ => ctx.expect_identifier()?,
+            };
+            let key_pos = ctx.current_position();
             ctx.expect_token(TokenKind::Assign)?;
             let value = if let TokenKind::StringLiteral(s) = ctx.current_token().kind.clone() {
                 ctx.next_token();
@@ -755,6 +787,15 @@ impl DdlParser {
             };
             if key.eq_ignore_ascii_case("comment") {
                 *comment = Some(value);
+            } else {
+                return Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    format!(
+                        "Unsupported space option '{}'; supported options: comment",
+                        key
+                    ),
+                    key_pos,
+                ));
             }
         }
         Ok(())
