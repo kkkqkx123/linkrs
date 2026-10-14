@@ -11,11 +11,10 @@ use std::sync::Arc;
 use crate::binder::BoundStatement;
 use crate::parser::ast::{CopyDirection, CopyStmt, CopyTarget as AstCopyTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::ArgumentNode;
 use crate::planning::plan::core::nodes::CopyTarget;
 use crate::planning::plan::logical::logical_nodes::dml::{LogicalCopyFromNode, LogicalCopyToNode};
 use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::plan::{PlanNodeEnum, SubPlan};
+use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
 
@@ -112,10 +111,7 @@ impl Planner for CopyPlanner {
             }),
         };
 
-        let mut sub_plan = SubPlan::from_logical_root(logical_root);
-        let arg_node = ArgumentNode::new(next_node_id(), "copy_args");
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 
     fn transform(
@@ -179,10 +175,7 @@ impl Planner for CopyPlanner {
             }),
         };
 
-        let mut sub_plan = SubPlan::from_logical_root(logical_root);
-        let arg_node = ArgumentNode::new(next_node_id(), "copy_args");
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

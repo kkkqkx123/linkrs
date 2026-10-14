@@ -10,17 +10,14 @@
 use crate::binder::BoundStatement;
 use crate::parser::ast::{DeleteStmt, DeleteTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::{
-    ArgumentNode, EdgeDeleteInfo, IndexDeleteInfo, VertexDeleteInfo,
-};
+use crate::planning::plan::core::nodes::{EdgeDeleteInfo, IndexDeleteInfo, VertexDeleteInfo};
 use crate::planning::plan::logical::logical_nodes::dml::{
     LogicalDeleteEdgesNode, LogicalDeleteIndexNode, LogicalDeleteVerticesNode,
     LogicalPipeDeleteEdgesNode, LogicalPipeDeleteVerticesNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::plan::{PlanNodeEnum, SubPlan};
+use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
 use std::sync::Arc;
 
@@ -81,22 +78,12 @@ impl Planner for DeletePlanner {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let condition = delete
-                    .where_clause
-                    .as_ref()
-                    .map(|wc| {
-                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
-                            .map_err(PlannerError::PlanGenerationFailed)
-                    })
-                    .transpose()?;
-
                 let info = VertexDeleteInfo {
                     space_name,
                     tag: Some(tag.clone()),
                     vertex_ids: converted_ids,
                     with_edge: delete.with_edge,
                     cascade: delete.with_edge || delete.detach,
-                    condition,
                 };
                 LogicalNodeEnum::DeleteVertices(LogicalDeleteVerticesNode {
                     id: next_node_id(),
@@ -133,20 +120,10 @@ impl Planner for DeletePlanner {
                     })
                     .collect::<Result<Vec<_>, PlannerError>>()?;
 
-                let condition = delete
-                    .where_clause
-                    .as_ref()
-                    .map(|wc| {
-                        crate::binder::expr_converter::bound_expr_to_contextual(wc, &expr_ctx)
-                            .map_err(PlannerError::PlanGenerationFailed)
-                    })
-                    .transpose()?;
-
                 let info = EdgeDeleteInfo {
                     space_name,
                     edge_type: edge_type.clone(),
                     edges: converted_edges,
-                    condition,
                 };
                 LogicalNodeEnum::DeleteEdges(LogicalDeleteEdgesNode {
                     id: next_node_id(),
@@ -171,10 +148,7 @@ impl Planner for DeletePlanner {
             }
         };
 
-        let mut sub_plan = SubPlan::from_logical_root(final_node);
-        let arg_node = ArgumentNode::new(next_node_id(), "delete_input");
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(final_node))
     }
 
     fn transform(
@@ -213,24 +187,6 @@ impl DeletePlanner {
 
         let delete_stmt = self.extract_delete_stmt(validated.stmt())?;
 
-        // Unified entry for expression-level EXISTS / IN: subqueries in the
-        // DELETE WHERE condition are rejected at planning time with a precise
-        // error.
-        let check_space_id = qctx.space_id().unwrap_or(1);
-        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let outer_col_names: Vec<String> = Vec::new();
-        if let Some(where_cond) = &delete_stmt.where_clause {
-            if let Some(expr_meta) = where_cond.expression() {
-                exists_planner::check_expression_subqueries(
-                    expr_meta.inner(),
-                    &qctx,
-                    check_space_id,
-                    &check_space_name,
-                    &outer_col_names,
-                )?;
-            }
-        }
-
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
 
         // Determine the logical root for the pipe delete node. Prefer the
@@ -246,7 +202,6 @@ impl DeletePlanner {
                     vertex_ids: vids.clone(),
                     with_edge: delete_stmt.with_edge,
                     cascade: delete_stmt.with_edge || delete_stmt.detach,
-                    condition: delete_stmt.where_clause.clone(),
                 };
 
                 if let Some(input) = upstream_logical {
@@ -276,7 +231,6 @@ impl DeletePlanner {
                         .iter()
                         .map(|(src, dst, rank)| (src.clone(), dst.clone(), rank.clone()))
                         .collect(),
-                    condition: delete_stmt.where_clause.clone(),
                 };
 
                 if let Some(input) = upstream_logical {
@@ -313,10 +267,7 @@ impl DeletePlanner {
             }
         };
 
-        let mut sub_plan = SubPlan::from_logical_root(final_node);
-        let arg_node = ArgumentNode::new(next_node_id(), "delete_input");
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(final_node))
     }
 }
 

@@ -23,7 +23,6 @@ use crate::planning::statements::ddl::use_planner::UsePlanner;
 use crate::planning::statements::ddl::user_management_planner::UserManagementPlanner;
 use crate::planning::statements::dml::assignment_planner::AssignmentPlanner;
 use crate::planning::statements::dml::copy_planner::CopyPlanner;
-use crate::planning::statements::dml::create_planner::CreatePlanner;
 use crate::planning::statements::dml::delete_planner::DeletePlanner;
 use crate::planning::statements::dml::insert_planner::InsertPlanner;
 use crate::planning::statements::dml::merge_planner::MergePlanner;
@@ -127,7 +126,6 @@ pub enum PlannerEnum {
     FetchEdges(FetchEdgesPlanner),
     Maintain(MaintainPlanner),
     UserManagement(UserManagementPlanner),
-    CreateData(CreatePlanner),
     Assignment(AssignmentPlanner),
     Insert(InsertPlanner),
     Copy(CopyPlanner),
@@ -217,14 +215,6 @@ impl PlannerEnum {
             | Stmt::SearchVector(_)
             | Stmt::LookupVector(_)
             | Stmt::MatchVector(_) => Some(PlannerEnum::VectorSearch(VectorSearchPlanner::new())),
-            Stmt::Create(create_stmt) => match &create_stmt.target {
-                crate::parser::ast::CreateTarget::Node { .. }
-                | crate::parser::ast::CreateTarget::Edge { .. }
-                | crate::parser::ast::CreateTarget::Path { .. } => {
-                    Some(PlannerEnum::CreateData(CreatePlanner::new()))
-                }
-                _ => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
-            },
             Stmt::CreateUser(_)
             | Stmt::DropUser(_)
             | Stmt::AlterUser(_)
@@ -234,7 +224,8 @@ impl PlannerEnum {
             | Stmt::DescribeUser(_)
             | Stmt::ShowUsers(_)
             | Stmt::ShowRoles(_) => Some(PlannerEnum::UserManagement(UserManagementPlanner::new())),
-            Stmt::Drop(_)
+            Stmt::Create(_)
+            | Stmt::Drop(_)
             | Stmt::Show(_)
             | Stmt::Desc(_)
             | Stmt::Alter(_)
@@ -294,7 +285,6 @@ impl PlannerEnum {
             PlannerEnum::FetchEdges(planner) => planner.transform(validated, qctx),
             PlannerEnum::Maintain(planner) => planner.transform(validated, qctx),
             PlannerEnum::UserManagement(planner) => planner.transform(validated, qctx),
-            PlannerEnum::CreateData(planner) => planner.transform(validated, qctx),
             PlannerEnum::Assignment(planner) => planner.transform(validated, qctx),
             PlannerEnum::Insert(planner) => planner.transform(validated, qctx),
             PlannerEnum::Copy(planner) => planner.transform(validated, qctx),
@@ -357,13 +347,6 @@ impl PlannerEnum {
             BoundStatement::Set(_) => Some(PlannerEnum::Set(SetPlanner::new())),
             BoundStatement::Remove(_) => Some(PlannerEnum::Remove(RemovePlanner::new())),
             BoundStatement::Copy(_) => Some(PlannerEnum::Copy(CopyPlanner::new())),
-            BoundStatement::Create(c) => match &c.target {
-                crate::binder::bound::BoundCreateTarget::Node { .. }
-                | crate::binder::bound::BoundCreateTarget::Edge(_)
-                | crate::binder::bound::BoundCreateTarget::Path { .. } => {
-                    Some(PlannerEnum::CreateData(CreatePlanner::new()))
-                }
-            },
             BoundStatement::Drop(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::Alter(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::Show(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
@@ -416,7 +399,6 @@ impl PlannerEnum {
             PlannerEnum::FetchEdges(_) => "FetchEdgesPlanner",
             PlannerEnum::Maintain(_) => "MaintainPlanner",
             PlannerEnum::UserManagement(_) => "UserManagementPlanner",
-            PlannerEnum::CreateData(_) => "CreateDataPlanner",
             PlannerEnum::Assignment(_) => "AssignmentPlanner",
             PlannerEnum::Insert(_) => "InsertPlanner",
             PlannerEnum::Copy(_) => "CopyPlanner",
@@ -455,7 +437,6 @@ impl PlannerEnum {
             PlannerEnum::FetchEdges(planner) => planner.match_planner(stmt),
             PlannerEnum::Maintain(planner) => planner.match_planner(stmt),
             PlannerEnum::UserManagement(planner) => planner.match_planner(stmt),
-            PlannerEnum::CreateData(planner) => planner.match_planner(stmt),
             PlannerEnum::Assignment(planner) => planner.match_planner(stmt),
             PlannerEnum::Insert(planner) => planner.match_planner(stmt),
             PlannerEnum::Copy(planner) => planner.match_planner(stmt),
@@ -497,7 +478,6 @@ impl PlannerEnum {
             PlannerEnum::FetchEdges(planner) => planner.plan_bound(ctx),
             PlannerEnum::Maintain(planner) => planner.plan_bound(ctx),
             PlannerEnum::UserManagement(planner) => planner.plan_bound(ctx),
-            PlannerEnum::CreateData(planner) => planner.plan_bound(ctx),
             PlannerEnum::Assignment(planner) => planner.plan_bound(ctx),
             PlannerEnum::Insert(planner) => planner.plan_bound(ctx),
             PlannerEnum::Copy(planner) => planner.plan_bound(ctx),

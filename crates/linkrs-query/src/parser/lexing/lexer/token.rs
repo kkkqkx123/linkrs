@@ -78,6 +78,7 @@ impl<'a> Lexer<'a> {
             "SHORTEST" => Tk::Shortest,
             "ALLSHORTESTPATHS" => Tk::AllShortestPaths,
             "TRAIL" => Tk::Trail,
+            "WALK" => Tk::Walk,
             "ACYCLIC" => Tk::Acyclic,
             "WEIGHTED" => Tk::Weighted,
             "LOOP" => Tk::Loop,

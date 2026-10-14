@@ -116,7 +116,7 @@ define_binary_input_node! {
         space_id: u64,
         steps: usize,
         edge_types: Vec<String>,
-        with_cycle: bool,
+        with_walk: bool,
         with_loop: bool,
         reverse: bool,
     }
@@ -131,7 +131,7 @@ impl BFSShortestNode {
         space_id: u64,
         steps: usize,
         edge_types: Vec<String>,
-        with_cycle: bool,
+        with_walk: bool,
     ) -> Self {
         let left_box = Box::new(left);
         let right_box = Box::new(right);
@@ -142,7 +142,7 @@ impl BFSShortestNode {
             space_id,
             steps,
             edge_types,
-            with_cycle,
+            with_walk,
             with_loop: false,
             reverse: false,
             output_var: None,
@@ -171,8 +171,8 @@ impl BFSShortestNode {
         &self.edge_types
     }
 
-    pub fn with_cycle(&self) -> bool {
-        self.with_cycle
+    pub fn with_walk(&self) -> bool {
+        self.with_walk
     }
 
     pub fn with_loop(&self) -> bool {
@@ -199,7 +199,7 @@ define_binary_input_node! {
         edge_types: Vec<String>,
         min_hop: usize,
         max_hop: usize,
-        acyclic: bool,
+        path_uniqueness: PathUniqueness,
         direction: EdgeDirection,
         has_step_limit: bool,
         limit: i64,
@@ -212,6 +212,39 @@ define_binary_input_node! {
     input: BinaryInputNode
 }
 
+/// Vertex-repeat / edge-repeat policy for path enumeration, driven by the
+/// `WITH LOOP` / `WITH TRAIL` / `WITH WALK` modifiers of `FIND ALL PATH`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathUniqueness {
+    /// Default: a vertex may appear at most once; self-loops are pruned.
+    VertexUnique,
+    /// `WITH LOOP`: vertices stay unique, but a self-loop edge (A->A) may be
+    /// taken once as a terminal extension.
+    AllowSelfLoop,
+    /// `WITH TRAIL`: an edge may appear at most once; vertices may repeat.
+    EdgeUnique,
+    /// `WITH WALK` (alone or with the other modifiers): vertices may repeat.
+    Free,
+}
+
+impl PathUniqueness {
+    /// Map the parsed `WITH LOOP` / `WITH TRAIL` / `WITH WALK` flags to the
+    /// policy. A looser modifier dominates: once edges may repeat, vertex
+    /// uniqueness no longer constrains the enumeration, and once vertices may
+    /// repeat, self-loops are legal without a separate exemption.
+    pub fn from_flags(with_loop: bool, with_trail: bool, with_walk: bool) -> Self {
+        if with_walk {
+            Self::Free
+        } else if with_trail {
+            Self::EdgeUnique
+        } else if with_loop {
+            Self::AllowSelfLoop
+        } else {
+            Self::VertexUnique
+        }
+    }
+}
+
 impl AllPathsNode {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -222,7 +255,7 @@ impl AllPathsNode {
         edge_types: Vec<String>,
         min_hop: usize,
         max_hop: usize,
-        acyclic: bool,
+        path_uniqueness: PathUniqueness,
     ) -> Self {
         let left_box = Box::new(left);
         let right_box = Box::new(right);
@@ -235,7 +268,7 @@ impl AllPathsNode {
             edge_types,
             min_hop,
             max_hop,
-            acyclic,
+            path_uniqueness,
             direction: EdgeDirection::Both,
             has_step_limit: true,
             limit: -1,
@@ -277,8 +310,8 @@ impl AllPathsNode {
         self.max_hop
     }
 
-    pub fn is_acyclic(&self) -> bool {
-        self.acyclic
+    pub fn path_uniqueness(&self) -> PathUniqueness {
+        self.path_uniqueness
     }
 
     pub fn direction(&self) -> EdgeDirection {

@@ -634,7 +634,8 @@ mod factorization_fallback_tests {
             edge_types: vec!["knows".to_string()],
             min_hop: 1,
             max_hop: 3,
-            acyclic: true,
+            path_uniqueness:
+                crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness::VertexUnique,
             direction: linkrs_core::EdgeDirection::Out,
             has_step_limit: true,
             limit: -1,

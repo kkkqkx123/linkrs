@@ -330,7 +330,6 @@ impl BatchPlanAnalyzer {
                 self.analyze_recursive(n.input(), context, Some(node_id))
             }
             PlanNodeEnum::Unwind(n) => self.analyze_recursive(n.input(), context, Some(node_id)),
-            PlanNodeEnum::Remove(n) => self.analyze_recursive(n.input(), context, Some(node_id)),
             PlanNodeEnum::Materialize(n) => {
                 self.analyze_recursive(n.input(), context, Some(node_id))
             }

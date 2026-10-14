@@ -105,14 +105,6 @@ define_logical_plan_node_with_deps! {
     input: SingleInputNode
 }
 
-define_logical_plan_node_with_deps! {
-    pub struct LogicalRemoveNode {
-        remove_items: Vec<(String, ContextualExpression)>,
-    }
-    enum: Remove
-    input: SingleInputNode
-}
-
 define_logical_plan_node! {
     pub struct LogicalMinusNode {}
     enum: Minus

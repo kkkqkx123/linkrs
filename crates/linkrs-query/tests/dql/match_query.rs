@@ -12,6 +12,8 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
+use linkrs_core::Value;
+use linkrs_query::executor::base::ExecutionResult;
 use linkrs_query::parser::Parser;
 
 // ==================== MATCH Parser Tests ====================
@@ -436,4 +438,194 @@ fn test_optional_match_execution_with_edge() {
         .query("OPTIONAL MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
         .assert_success()
         .assert_result_count(1);
+}
+
+// ==================== MATCH Variable-Length Path Semantics Tests ====================
+
+/// First-column values of the most recent result, in emission order.
+fn first_column(scenario: &TestScenario) -> Vec<Value> {
+    match scenario.last_result().expect("query produced a result") {
+        ExecutionResult::DataSet { data, .. } => data
+            .rows
+            .iter()
+            .map(|row| row.first().cloned().expect("result row has a column"))
+            .collect(),
+        other => panic!("expected a data set, got {other:?}"),
+    }
+}
+
+/// Name and edge endpoint pair of a `RETURN b.name, e` row.
+fn row_name_and_edge(row: &[Value]) -> (Option<String>, Option<(i64, i64)>) {
+    let mut name = None;
+    let mut edge = None;
+    for value in row {
+        match value {
+            Value::String(s) => name = Some(s.to_string()),
+            Value::Edge(e) => {
+                edge = Some((
+                    e.src().as_int64().expect("edge src id"),
+                    e.dst().as_int64().expect("edge dst id"),
+                ));
+            }
+            _ => {}
+        }
+    }
+    (name, edge)
+}
+
+/// The direct hop 1 -> 4 costs 10 while the detour costs 0.5 per hop, so
+/// accumulated cost order disagrees with hop-count order.
+fn weighted_semantic_graph() -> TestScenario {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(w DOUBLE) FROM Person TO Person")
+        .exec_dml(
+            "INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie'), 4:('David')",
+        )
+        .exec_dml(
+            "INSERT EDGE KNOWS(w) VALUES 1 -> 4:(10.0), 1 -> 2:(0.5), 2 -> 3:(0.5), 3 -> 4:(0.5)",
+        )
+        .assert_success()
+}
+
+#[test]
+fn test_match_weighted_shortest_walks_until_frontier_exhausted() {
+    // A bare `*WEIGHTED(prop)` carries no hop bound: the walk must keep
+    // expanding until the frontier is exhausted instead of stopping after
+    // the first hop. The direct hop costs 10 while the detour costs 0.5 per
+    // hop, so David can only be reached through the cheap 3 -> 4 hop.
+    let scenario = weighted_semantic_graph()
+        .query(
+            "MATCH (a:Person)-[e:KNOWS*WEIGHTED(w)]->(b:Person) \
+             WHERE a.name == 'Alice' RETURN b.name, e",
+        )
+        .assert_success();
+    let result = scenario.last_result().expect("query produced a result");
+    let data = match result {
+        ExecutionResult::DataSet { data, .. } => data,
+        other => panic!("expected a data set, got {other:?}"),
+    };
+    let names = first_column(&scenario);
+    assert!(
+        names.contains(&Value::string("Charlie")),
+        "a two-hop destination must be reachable: {names:?}"
+    );
+    let david_hops: Vec<(i64, i64)> = data
+        .rows
+        .iter()
+        .filter_map(|row| match row_name_and_edge(row) {
+            (Some(name), Some(edge)) if name == "David" => Some(edge),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        david_hops,
+        vec![(3, 4)],
+        "the expensive direct hop must not win: David is reached via 3 -> 4"
+    );
+}
+
+#[test]
+fn test_match_unbounded_star_walks_multiple_hops() {
+    // A bare `*` carries no hop bound: the walk must keep expanding until
+    // the frontier is exhausted instead of stopping after the first hop.
+    // 1 -> 4 is a direct hop and 1 -> 2 -> 3 -> 4 a three-hop detour, so
+    // David is reachable twice. Without an explicit semantic the unbounded
+    // enumeration uses the trail repeat rule, the weakest one that stays
+    // finite on a cyclic graph.
+    let scenario = weighted_semantic_graph()
+        .query(
+            "MATCH (a:Person)-[:KNOWS*]->(b:Person) \
+             WHERE a.name == 'Alice' RETURN b.name",
+        )
+        .assert_success();
+    let mut names: Vec<String> = first_column(&scenario)
+        .iter()
+        .map(|value| match value {
+            Value::String(s) => s.to_string(),
+            other => panic!("expected a name string, got {other:?}"),
+        })
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["Bob", "Charlie", "David", "David"],
+        "the unbounded hop count must reach multi-hop destinations"
+    );
+}
+
+#[test]
+fn test_match_bounded_star_stays_a_union_of_depths() {
+    // A bounded bare `*` stays a union of the listed depths: hop 1 reaches
+    // Bob and David, hop 2 reaches Charlie, and the detour to David needs
+    // three hops, so it is not part of this range.
+    let scenario = weighted_semantic_graph()
+        .query(
+            "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) \
+             WHERE a.name == 'Alice' RETURN b.name",
+        )
+        .assert_success();
+    let mut names: Vec<String> = first_column(&scenario)
+        .iter()
+        .map(|value| match value {
+            Value::String(s) => s.to_string(),
+            other => panic!("expected a name string, got {other:?}"),
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["Bob", "Charlie", "David"]);
+}
+
+/// A triangle plus a tail: 1 -> 2 -> 3 -> 1 closes the cycle and 3 -> 4
+/// leaves it.
+fn cyclic_semantic_graph() -> TestScenario {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE) FROM Person TO Person")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie'), 4:('David')")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01'), 2 -> 3:('2020-02-01'), 3 -> 1:('2020-03-01'), 3 -> 4:('2020-04-01')")
+        .assert_success()
+}
+
+#[test]
+fn test_match_trail_walks_until_frontier_exhausted() {
+    // `*TRAIL` forbids repeating an edge but permits repeating a vertex, so
+    // the cycle 1 -> 2 -> 3 -> 1 (three distinct edges) may return the walk
+    // to its own start.
+    let scenario = cyclic_semantic_graph()
+        .query("MATCH (a:Person)-[:KNOWS*TRAIL]->(b:Person) WHERE a.name == 'Alice' RETURN b.name")
+        .assert_success();
+    let names = first_column(&scenario);
+    assert!(
+        names.contains(&Value::string("Charlie")),
+        "a two-hop destination must be reachable: {names:?}"
+    );
+    assert!(
+        names.contains(&Value::string("Alice")),
+        "*TRAIL only forbids repeated edges, so the cycle may return to the start: {names:?}"
+    );
+}
+
+#[test]
+fn test_match_acyclic_walks_multiple_hops() {
+    // `*ACYCLIC` forbids repeating a vertex, so the cycle cannot carry the
+    // walk back to its own start.
+    let scenario = cyclic_semantic_graph()
+        .query(
+            "MATCH (a:Person)-[:KNOWS*ACYCLIC]->(b:Person) WHERE a.name == 'Alice' RETURN b.name",
+        )
+        .assert_success();
+    let names = first_column(&scenario);
+    assert!(
+        names.contains(&Value::string("Charlie")),
+        "a two-hop destination must be reachable: {names:?}"
+    );
+    assert!(
+        !names.contains(&Value::string("Alice")),
+        "*ACYCLIC forbids repeated vertices, so the cycle cannot return to the start: {names:?}"
+    );
 }

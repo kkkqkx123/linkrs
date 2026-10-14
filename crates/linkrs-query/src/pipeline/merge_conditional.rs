@@ -19,8 +19,6 @@ use crate::executor::base::ExecutionResult;
 use crate::executor::expression::evaluation_context::default_context::DefaultExpressionContext;
 use crate::executor::expression::evaluator::ExpressionEvaluator;
 use crate::executor::streaming::instance::ResultSink;
-use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::{ArgumentNode, PlanNodeEnum};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::logical_plan::LogicalPlan;
 use crate::planning::plan::{ExecutionPlan, SubPlan};
@@ -244,11 +242,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         space_name: &str,
         scope: crate::executor::streaming::transaction_scope::TransactionScope,
     ) -> DBResult<()> {
-        let mut sub_plan = SubPlan::from_logical_root(branch_root);
-        sub_plan.set_tail(PlanNodeEnum::Argument(ArgumentNode::new(
-            next_node_id(),
-            "merge_branch",
-        )));
+        let sub_plan = SubPlan::from_logical_root(branch_root);
         let root = sub_plan.root().clone();
         let mut execution_plan = ExecutionPlan::new(root);
         if let Some(logical_root) = sub_plan.logical_root().cloned() {

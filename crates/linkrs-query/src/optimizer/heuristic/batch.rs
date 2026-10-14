@@ -163,7 +163,6 @@ impl PlanNodeVisitor for SubqueryHostFinder {
         visit_correlated_apply => crate::planning::plan::core::nodes::graph_operations::graph_operations_node::CorrelatedApplyNode,
         visit_roll_up_apply => crate::planning::plan::core::nodes::graph_operations::graph_operations_node::RollUpApplyNode,
         visit_data_collect => crate::planning::plan::core::nodes::graph_operations::graph_operations_node::DataCollectNode,
-        visit_remove => crate::planning::plan::core::nodes::RemoveNode,
         visit_window => crate::planning::plan::core::nodes::graph_operations::window_node::WindowNode,
     );
 
@@ -202,8 +201,6 @@ impl PlanNodeVisitor for SubqueryHostFinder {
         visit_insert_vertices => crate::planning::plan::core::nodes::data_modification::InsertVerticesNode,
         visit_insert_edges => crate::planning::plan::core::nodes::data_modification::InsertEdgesNode,
         visit_update => crate::planning::plan::core::nodes::data_modification::UpdateNode,
-        visit_update_vertices => crate::planning::plan::core::nodes::data_modification::UpdateVerticesNode,
-        visit_update_edges => crate::planning::plan::core::nodes::data_modification::UpdateEdgesNode,
         visit_delete_vertices => crate::planning::plan::core::nodes::data_modification::DeleteVerticesNode,
         visit_delete_edges => crate::planning::plan::core::nodes::data_modification::DeleteEdgesNode,
         visit_delete_index => crate::planning::plan::core::nodes::data_modification::DeleteIndexNode,

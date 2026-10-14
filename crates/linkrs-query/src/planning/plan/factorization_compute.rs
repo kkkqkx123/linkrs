@@ -124,7 +124,6 @@ pub(crate) fn dispatch_module(node: &LogicalNodeEnum) -> &'static str {
         LogicalNodeEnum::PipeDeleteEdges(_) => "flat_leaf",
         LogicalNodeEnum::CopyFrom(_) => "flat_leaf",
         LogicalNodeEnum::CopyTo(_) => "flat_leaf",
-        LogicalNodeEnum::Remove(_) => "flat_leaf",
         LogicalNodeEnum::DataCollect(_) => "flat_leaf",
         LogicalNodeEnum::Materialize(_) => "flat_leaf",
         LogicalNodeEnum::RollUpApply(_) => "flat_leaf",
@@ -270,8 +269,7 @@ impl FactorizedSchemaCompute for LogicalNodeEnum {
             // Single-input barrier: output is fully flat. The rewriter
             // inserts the matching `FlattenAll` nodes explicitly, so compute
             // and rewrite stay in sync (barrier semantics).
-            LogicalNodeEnum::Remove(_)
-            | LogicalNodeEnum::DataCollect(_)
+            LogicalNodeEnum::DataCollect(_)
             | LogicalNodeEnum::Materialize(_)
             | LogicalNodeEnum::RollUpApply(_) => flat_leaf::flatten_all_from_child(child_schemas)?,
 

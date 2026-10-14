@@ -405,14 +405,19 @@ fn test_update_yield_parser() {
 
 #[test]
 fn test_update_yield_execution() {
-    TestScenario::new()
+    let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
         .assert_success()
-        .exec_dml("UPDATE 1 ON Person SET name = 'Bob', age = 35 YIELD name, age")
-        .assert_success();
+        .exec_dml("UPDATE 1 ON Person SET name = 'Bob', age = 35 YIELD name, age");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        "UPDATE with YIELD should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
 }
 
 // ==================== UPDATE EDGE with WHEN Condition Tests ====================
@@ -483,7 +488,7 @@ fn test_update_edge_yield_parser() {
 
 #[test]
 fn test_update_edge_yield_execution() {
-    TestScenario::new()
+    let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
@@ -491,8 +496,13 @@ fn test_update_edge_yield_execution() {
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
         .assert_success()
-        .exec_dml("UPDATE EDGE 1 -> 2 OF KNOWS SET since = '2024-06-01' YIELD since")
-        .assert_success();
+        .exec_dml("UPDATE EDGE 1 -> 2 OF KNOWS SET since = '2024-06-01' YIELD since");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        "UPDATE EDGE with YIELD should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
 }
 
 // ==================== UPDATE Arithmetic Divide By Zero Tests ====================
@@ -680,4 +690,40 @@ fn test_update_complex_vid_expression_is_rejected() {
         error.contains("Standalone UPDATE vid"),
         "unexpected error: {error}"
     );
+}
+
+// ==================== UPDATE TAG / YIELD Guard Tests ====================
+
+#[test]
+fn test_update_tag_bulk_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE TAG Person SET age = 31");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("not supported yet")),
+        "UPDATE TAG bulk update should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_update_yield_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPDATE 1 ON Person SET age = 31 YIELD age");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        "UPDATE with YIELD should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
 }

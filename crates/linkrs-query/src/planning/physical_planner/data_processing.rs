@@ -15,20 +15,6 @@ pub(super) fn convert_data_collect(
     PlanNodeEnum::DataCollect(node)
 }
 
-pub(super) fn convert_remove(
-    n: crate::planning::plan::logical::logical_nodes::graph_ops::LogicalRemoveNode,
-) -> PlanNodeEnum {
-    let input = convert_logical_to_physical(*n.input.expect("RemoveNode missing input"));
-    let mut node = crate::planning::plan::core::nodes::graph_operations::graph_operations_node::RemoveNode::new(
-                input, n.remove_items,
-            ).expect("Failed to construct RemoveNode");
-    if let Some(var) = n.output_var {
-        node.set_output_var(var);
-    }
-    node.set_col_names(n.col_names);
-    PlanNodeEnum::Remove(node)
-}
-
 pub(super) fn convert_pattern_apply(
     n: crate::planning::plan::logical::logical_nodes::graph_ops::LogicalPatternApplyNode,
 ) -> PlanNodeEnum {

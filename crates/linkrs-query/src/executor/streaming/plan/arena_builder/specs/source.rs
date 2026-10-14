@@ -254,42 +254,55 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_standalone_writ
                 .collect::<Vec<_>>(),
             vec!["vid".to_string()],
         ),
-        PlanNodeEnum::DeleteEdges(delete) => (
-            delete
-                .edges()
-                .iter()
-                .map(|(src, dst, _)| vec![src.clone(), dst.clone()])
-                .collect::<Vec<_>>(),
-            vec!["src".to_string(), "dst".to_string()],
-        ),
+        PlanNodeEnum::DeleteEdges(delete) => {
+            use linkrs_core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+            let mut rows = Vec::with_capacity(delete.edges().len());
+            for (src, dst, rank) in delete.edges() {
+                let mut row = vec![src.clone(), dst.clone()];
+                let rank_expr = match rank {
+                    Some(value) => value.clone(),
+                    None => {
+                        let id = src.context().register_expression(ExpressionMeta::new(
+                            Expression::literal(linkrs_core::Value::BigInt(0)),
+                        ));
+                        ContextualExpression::new(id, src.context().clone())
+                    }
+                };
+                row.push(rank_expr);
+                rows.push(row);
+            }
+            (
+                rows,
+                vec!["src".to_string(), "dst".to_string(), "rank".to_string()],
+            )
+        }
         PlanNodeEnum::Update(update) => {
             use crate::planning::plan::core::nodes::data_modification::info::UpdateTargetType;
             match update.info() {
                 UpdateTargetType::Vertex(info) => {
                     (vec![vec![info.vertex_id.clone()]], vec!["vid".to_string()])
                 }
-                UpdateTargetType::Edge(info) => (
-                    vec![vec![info.src.clone(), info.dst.clone()]],
-                    vec!["src".to_string(), "dst".to_string()],
-                ),
+                UpdateTargetType::Edge(info) => {
+                    use linkrs_core::types::expr::{Expression, ExpressionMeta};
+                    let rank_expr = match &info.rank {
+                        Some(value) => value.clone(),
+                        None => {
+                            let id = info.src.context().register_expression(ExpressionMeta::new(
+                                Expression::literal(linkrs_core::Value::BigInt(0)),
+                            ));
+                            linkrs_core::types::expr::ContextualExpression::new(
+                                id,
+                                info.src.context().clone(),
+                            )
+                        }
+                    };
+                    (
+                        vec![vec![info.src.clone(), info.dst.clone(), rank_expr]],
+                        vec!["src".to_string(), "dst".to_string(), "rank".to_string()],
+                    )
+                }
             }
         }
-        PlanNodeEnum::UpdateVertices(update) => (
-            update
-                .updates()
-                .iter()
-                .map(|value| vec![value.vertex_id.clone()])
-                .collect::<Vec<_>>(),
-            vec!["vid".to_string()],
-        ),
-        PlanNodeEnum::UpdateEdges(update) => (
-            update
-                .updates()
-                .iter()
-                .map(|value| vec![value.src.clone(), value.dst.clone()])
-                .collect::<Vec<_>>(),
-            vec!["src".to_string(), "dst".to_string()],
-        ),
         PlanNodeEnum::CopyFrom(_) | PlanNodeEnum::CopyTo(_) => {
             // COPY is driven by file scan (FROM) or storage scan (TO), not
             // in-memory values: emit a single dummy row

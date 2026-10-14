@@ -92,6 +92,7 @@ pub(super) fn handle_insert_edges(
         space_name,
         src_col,
         dst_col,
+        rank_col,
         edge_type,
         edge_properties,
         if_not_exists,
@@ -132,6 +133,7 @@ pub(super) fn handle_insert_edges(
                 let dst = VertexId::try_from(&dst_val).map_err(|e| {
                     QueryError::execution(format!("Invalid edge destination id: {}", e))
                 })?;
+                let rank = resolve_edge_rank(&context, rank_col, &src_val, &dst_val)?;
                 // Multi-edge semantics: the storage layer
                 // assigns an increasing rank when a
                 // (src, dst, edge_type) pair already exists,
@@ -139,7 +141,7 @@ pub(super) fn handle_insert_edges(
                 // if-not-exists guard only skips duplicates.
                 if *if_not_exists
                     && writer
-                        .get_edge(space_name, &src, &dst, edge_type, 0)
+                        .get_edge(space_name, &src, &dst, edge_type, rank)
                         .map_err(|e| QueryError::execution(e.to_string()))?
                         .is_some()
                 {
@@ -150,7 +152,7 @@ pub(super) fn handle_insert_edges(
                     let val = eval_expr(expr, &mut context)?;
                     props.insert(prop_name.as_str().into(), val);
                 }
-                let edge = Edge::new(src, dst, edge_type.clone(), 0, props);
+                let edge = Edge::new(src, dst, edge_type.clone(), rank, props);
                 StorageWriter::insert_edge(&mut *writer, space_name, edge)
                     .map_err(|e| QueryError::execution(e.to_string()))?;
                 *rows_inserted += 1;

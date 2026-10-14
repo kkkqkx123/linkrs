@@ -266,9 +266,6 @@ impl OptimizerEngine {
             LogicalNodeEnum::Unwind(n) => {
                 n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
             }
-            LogicalNodeEnum::Remove(n) => {
-                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
-            }
             LogicalNodeEnum::PipeDeleteVertices(n) => {
                 n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
             }

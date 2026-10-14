@@ -389,7 +389,11 @@ pub fn parse_search_vector_statement(
 
     let mut yield_clause = None;
     if ctx.check_keyword("YIELD") || ctx.check_keyword("RETURN") {
-        ctx.consume_keyword("YIELD")?;
+        if ctx.check_keyword("YIELD") {
+            ctx.consume_keyword("YIELD")?;
+        } else {
+            ctx.consume_keyword("RETURN")?;
+        }
         yield_clause = Some(parse_vector_yield_clause(ctx)?);
     }
 
@@ -535,7 +539,11 @@ pub fn parse_lookup_vector(ctx: &mut ParseContext) -> Result<Stmt, crate::parser
 
     let mut yield_clause = None;
     if ctx.check_keyword("YIELD") || ctx.check_keyword("RETURN") {
-        ctx.consume_keyword("YIELD")?;
+        if ctx.check_keyword("YIELD") {
+            ctx.consume_keyword("YIELD")?;
+        } else {
+            ctx.consume_keyword("RETURN")?;
+        }
         yield_clause = Some(parse_vector_yield_clause(ctx)?);
     }
 
@@ -587,7 +595,11 @@ pub fn parse_match_vector(ctx: &mut ParseContext) -> Result<Stmt, crate::parser:
 
     let mut yield_clause = None;
     if ctx.check_keyword("YIELD") || ctx.check_keyword("RETURN") {
-        ctx.consume_keyword("YIELD")?;
+        if ctx.check_keyword("YIELD") {
+            ctx.consume_keyword("YIELD")?;
+        } else {
+            ctx.consume_keyword("RETURN")?;
+        }
         yield_clause = Some(parse_vector_yield_clause(ctx)?);
     }
 

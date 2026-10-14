@@ -209,7 +209,8 @@ fn test_create_cypher_node_execution() {
     let _ = pipeline_manager.execute_query(use_space);
 
     let query = "CREATE (n:Person {name: 'Alice', age: 30})";
-    let _result = pipeline_manager.execute_query(query);
+    let result = pipeline_manager.execute_query(query);
+    assert_create_data_rejected(result);
 }
 
 #[test]
@@ -233,7 +234,33 @@ fn test_create_cypher_edge_execution() {
     let _ = pipeline_manager.execute_query(use_space);
 
     let query = "CREATE (a:Person {name: 'Alice'})-[:KNOWS {since: '2020-01-01'}]->(b:Person {name: 'Bob'})";
-    let _result = pipeline_manager.execute_query(query);
+    let result = pipeline_manager.execute_query(query);
+    assert_create_data_rejected(result);
+}
+
+fn assert_create_data_rejected(
+    result: Result<
+        linkrs_query::executor::base::ExecutionResult,
+        linkrs_core::error::DBError,
+    >,
+) {
+    match result {
+        Ok(linkrs_query::executor::base::ExecutionResult::Error(message)) => {
+            assert!(
+                message.contains("not supported yet"),
+                "CREATE data should be rejected explicitly, got: {}",
+                message
+            );
+        }
+        Err(error) => {
+            assert!(
+                format!("{:?}", error).contains("not supported yet"),
+                "CREATE data should be rejected explicitly, got: {:?}",
+                error
+            );
+        }
+        other => panic!("CREATE data should be rejected, got: {:?}", other),
+    }
 }
 
 #[test]

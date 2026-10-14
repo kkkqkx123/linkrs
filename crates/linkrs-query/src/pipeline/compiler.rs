@@ -845,7 +845,6 @@ fn referenced_schema_objects(
         | BoundStatement::Set(_)
         | BoundStatement::Remove(_)
         | BoundStatement::Copy(_)
-        | BoundStatement::Create(_)
         | BoundStatement::Drop(_)
         | BoundStatement::Alter(_)
         | BoundStatement::Show(_)

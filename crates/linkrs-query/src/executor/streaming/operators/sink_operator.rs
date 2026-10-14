@@ -62,6 +62,7 @@ pub enum SinkOperatorKind {
         space_name: String,
         src_col: String,
         dst_col: String,
+        rank_col: String,
         edge_type: String,
         edge_properties: Vec<(String, Expression)>,
         if_not_exists: bool,
@@ -84,6 +85,7 @@ pub enum SinkOperatorKind {
         space_name: String,
         src_col: String,
         dst_col: String,
+        rank_col: String,
         edge_type: String,
         updates: Vec<(String, Expression)>,
         condition: Option<Expression>,
@@ -106,6 +108,7 @@ pub enum SinkOperatorKind {
         space_name: String,
         src_col: String,
         dst_col: String,
+        rank_col: String,
         edge_type: String,
         rows_deleted: u64,
         summary_returned: bool,
@@ -123,6 +126,7 @@ pub enum SinkOperatorKind {
         space_name: String,
         src_col: String,
         dst_col: String,
+        rank_col: String,
         edge_type: String,
         rows_deleted: u64,
         summary_returned: bool,
@@ -275,6 +279,38 @@ pub(super) fn resolve_edge_endpoints(
     }
 }
 
+/// Resolve the edge rank for a write row.
+///
+/// A materialized `rank` column wins; otherwise the rank carried by an edge
+/// value in the row is used; otherwise the rank defaults to 0.
+pub(super) fn resolve_edge_rank(
+    context: &ValueRowContext,
+    rank_col: &str,
+    src_val: &Value,
+    dst_val: &Value,
+) -> Result<i64, QueryError> {
+    if let Some(rank_val) = context.get_variable(rank_col) {
+        if !matches!(rank_val, Value::Null(_)) {
+            return match &rank_val {
+                Value::SmallInt(i) => Ok(*i as i64),
+                Value::Int(i) => Ok(*i as i64),
+                Value::BigInt(i) => Ok(*i),
+                _ => Err(QueryError::execution(format!(
+                    "Invalid edge rank: {:?}",
+                    rank_val
+                ))),
+            };
+        }
+    }
+    match (src_val, dst_val) {
+        (Value::Edge(edge), _) => Ok(edge.ranking),
+        (_, Value::Edge(edge)) => Ok(edge.ranking),
+        (Value::EdgeHeader(header), _) => Ok(header.ranking),
+        (_, Value::EdgeHeader(header)) => Ok(header.ranking),
+        _ => Ok(0),
+    }
+}
+
 impl SinkOperator {
     pub fn from_spec(
         spec: &super::spec::SinkSpec,
@@ -338,6 +374,7 @@ impl SinkOperator {
                 space_name,
                 src_col,
                 dst_col,
+                rank_col,
                 edge_type,
                 edge_properties,
                 if_not_exists,
@@ -346,6 +383,7 @@ impl SinkOperator {
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
+                rank_col: rank_col.clone(),
                 edge_type: edge_type.clone(),
                 edge_properties: edge_properties.clone(),
                 if_not_exists: *if_not_exists,
@@ -374,6 +412,7 @@ impl SinkOperator {
                 space_name,
                 src_col,
                 dst_col,
+                rank_col,
                 edge_type,
                 updates,
                 condition,
@@ -384,6 +423,7 @@ impl SinkOperator {
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
+                rank_col: rank_col.clone(),
                 edge_type: edge_type.clone(),
                 updates: updates.clone(),
                 condition: condition.clone(),
@@ -410,12 +450,14 @@ impl SinkOperator {
                 space_name,
                 src_col,
                 dst_col,
+                rank_col,
                 edge_type,
             } => SinkOperatorKind::DeleteEdges {
                 storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
+                rank_col: rank_col.clone(),
                 edge_type: edge_type.clone(),
                 rows_deleted: 0,
                 summary_returned: false,
@@ -436,12 +478,14 @@ impl SinkOperator {
                 space_name,
                 src_col,
                 dst_col,
+                rank_col,
                 edge_type,
             } => SinkOperatorKind::PipeDeleteEdges {
                 storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
+                rank_col: rank_col.clone(),
                 edge_type: edge_type.clone(),
                 rows_deleted: 0,
                 summary_returned: false,

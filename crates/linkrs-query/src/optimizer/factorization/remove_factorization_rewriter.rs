@@ -68,7 +68,6 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::GetVertices(n) => Self::visit_deps(n, LogicalNodeEnum::GetVertices),
             LogicalNodeEnum::GetNeighbors(n) => Self::visit_deps(n, LogicalNodeEnum::GetNeighbors),
             LogicalNodeEnum::Assign(n) => Self::visit_single_input(n, LogicalNodeEnum::Assign),
-            LogicalNodeEnum::Remove(n) => Self::visit_single_input(n, LogicalNodeEnum::Remove),
             LogicalNodeEnum::DataCollect(n) => {
                 Self::visit_single_input(n, LogicalNodeEnum::DataCollect)
             }
@@ -312,7 +311,6 @@ impl RemoveFactorizationRewriter {
             LogicalNodeEnum::GetVertices(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::GetNeighbors(n) => n.deps.iter().any(Self::has_flatten),
             LogicalNodeEnum::Assign(n) => n.input.as_deref().is_some_and(Self::has_flatten),
-            LogicalNodeEnum::Remove(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::DataCollect(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::Materialize(n) => n.input.as_deref().is_some_and(Self::has_flatten),
             LogicalNodeEnum::RollUpApply(n) => n.input.as_deref().is_some_and(Self::has_flatten),

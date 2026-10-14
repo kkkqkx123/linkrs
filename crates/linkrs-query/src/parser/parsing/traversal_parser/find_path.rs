@@ -25,12 +25,15 @@ impl TraversalParser {
         ctx.expect_token(TokenKind::Path)?;
 
         let mut with_loop = false;
-        let mut with_cycle = false;
+        let mut with_trail = false;
+        let mut with_walk = false;
         while ctx.match_token(TokenKind::With) {
             if ctx.match_token(TokenKind::Loop) {
                 with_loop = true;
-            } else if ctx.match_token(TokenKind::Cycle) {
-                with_cycle = true;
+            } else if ctx.match_token(TokenKind::Trail) {
+                with_trail = true;
+            } else if ctx.match_token(TokenKind::Walk) {
+                with_walk = true;
             }
         }
 
@@ -141,7 +144,8 @@ impl TraversalParser {
             weight_expression,
             heuristic_expression: None,
             with_loop,
-            with_cycle,
+            with_trail,
+            with_walk,
         }))
     }
 }

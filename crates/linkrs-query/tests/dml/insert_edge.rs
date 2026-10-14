@@ -327,3 +327,35 @@ fn test_insert_edge_all_null_properties() {
         .assert_success()
         .assert_edge_exists(1, 2, "KNOWS");
 }
+
+// ==================== Property Count Validation Tests ====================
+
+#[test]
+fn test_insert_edge_arity_mismatch_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:()");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("does not match")),
+        "fewer values than property names should fail, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_insert_edge_empty_props_empty_values() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE NULL)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS() VALUES 1 -> 2:()")
+        .assert_success()
+        .assert_edge_exists(1, 2, "KNOWS");
+}

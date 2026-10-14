@@ -24,6 +24,7 @@ pub enum SinkSpec {
         space_name: String,
         src_col: String,
         dst_col: String,
+        rank_col: String,
         edge_type: String,
         edge_properties: Vec<(String, Expression)>,
         if_not_exists: bool,
@@ -40,6 +41,7 @@ pub enum SinkSpec {
         space_name: String,
         src_col: String,
         dst_col: String,
+        rank_col: String,
         edge_type: String,
         updates: Vec<(String, Expression)>,
         condition: Option<Expression>,
@@ -56,6 +58,7 @@ pub enum SinkSpec {
         space_name: String,
         src_col: String,
         dst_col: String,
+        rank_col: String,
         edge_type: String,
     },
     PipeDeleteVertices {
@@ -67,6 +70,7 @@ pub enum SinkSpec {
         space_name: String,
         src_col: String,
         dst_col: String,
+        rank_col: String,
         edge_type: String,
     },
     CopyFrom {

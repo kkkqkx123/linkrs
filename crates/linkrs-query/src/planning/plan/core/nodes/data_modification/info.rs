@@ -87,7 +87,6 @@ pub struct VertexDeleteInfo {
     pub vertex_ids: Vec<ContextualExpression>,
     pub with_edge: bool,
     pub cascade: bool,
-    pub condition: Option<ContextualExpression>,
 }
 
 /// Edge deletion information
@@ -101,7 +100,6 @@ pub struct EdgeDeleteInfo {
         ContextualExpression,
         Option<ContextualExpression>,
     )>,
-    pub condition: Option<ContextualExpression>,
 }
 
 /// Index deletion information

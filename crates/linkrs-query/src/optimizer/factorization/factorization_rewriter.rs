@@ -651,16 +651,6 @@ impl FactorizationRewriter {
                 }
                 node.compute_factorized_schema(&[child_schema])
             }
-            LogicalNodeEnum::Remove(n) => {
-                let mut child_schema = if let Some(child) = n.input.as_mut() {
-                    self.visit_operator(child)?
-                } else {
-                    FactorizedSchema::new()
-                };
-                self.flatten_barrier_single(n.input.as_mut(), &child_schema)?;
-                child_schema.flatten_all()?;
-                node.compute_factorized_schema(&[child_schema])
-            }
             LogicalNodeEnum::DataCollect(n) => {
                 let mut child_schema = if let Some(child) = n.input.as_mut() {
                     self.visit_operator(child)?

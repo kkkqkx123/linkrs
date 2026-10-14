@@ -8,7 +8,6 @@ use super::YieldClause;
 pub struct DeleteStmt {
     pub span: Span,
     pub target: DeleteTarget,
-    pub where_clause: Option<ContextualExpression>,
     pub with_edge: bool,
     pub detach: bool,
 }
@@ -18,7 +17,6 @@ impl DeleteStmt {
         Self {
             span,
             target,
-            where_clause: None,
             with_edge: false,
             detach: false,
         }

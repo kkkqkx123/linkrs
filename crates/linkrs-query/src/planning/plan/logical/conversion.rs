@@ -90,7 +90,6 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         PlanNodeEnum::PassThrough(n) => control_flow::convert_pass_through(n),
         // === Pipeline nodes ===
         PlanNodeEnum::Assign(n) => pipeline::convert_assign(n),
-        PlanNodeEnum::Remove(n) => pipeline::convert_remove(n),
         PlanNodeEnum::DataCollect(n) => pipeline::convert_data_collect(n),
         PlanNodeEnum::Materialize(n) => pipeline::convert_materialize(n),
         // === Set operation nodes ===

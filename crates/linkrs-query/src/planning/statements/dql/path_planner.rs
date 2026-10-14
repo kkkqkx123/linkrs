@@ -11,6 +11,7 @@
 use crate::binder::BoundStatement;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::next_node_id;
+use crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness;
 use crate::planning::plan::core::nodes::traversal::{AllPathsNode, ShortestPathNode};
 use crate::planning::plan::core::PlanNode;
 use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
@@ -20,6 +21,7 @@ use crate::planning::plan::logical::logical_nodes::algorithm::{
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::statements::plan_combiner::wrap_logical_filter;
 use crate::QueryContext;
 use linkrs_core::types::VertexId;
 use linkrs_core::Value;
@@ -76,7 +78,19 @@ impl Planner for PathPlanner {
         let start_vertex_ids = self.extract_vertex_ids_from_exprs(&find_path_stmt.from.vertices);
         let end_vertex_ids = self.extract_vertex_ids_from_expr(&find_path_stmt.to);
 
-        let (root_node, logical_root) = if self.is_shortest_path_stmt(find_path_stmt) {
+        let (mut root_node, mut logical_root) = if self.is_shortest_path_stmt(find_path_stmt) {
+            // A cycle can never produce a shorter path, so WITH LOOP /
+            // WITH TRAIL / WITH WALK are no-ops on this branch; report the
+            // ignored modifiers instead of folding them into the plan.
+            if find_path_stmt.with_loop
+                || find_path_stmt.with_trail
+                || find_path_stmt.with_walk
+            {
+                log::debug!(
+                    "FIND SHORTEST PATH ignores WITH LOOP/TRAIL/WALK: \
+                     revisiting a vertex or edge cannot yield a shorter path"
+                );
+            }
             let root = self.build_shortest_path_plan(PathPlanParams {
                 left_input: start_node_enum.clone(),
                 space_id,
@@ -84,6 +98,7 @@ impl Planner for PathPlanner {
                 max_steps,
                 start_vertex_ids: start_vertex_ids.clone(),
                 end_vertex_ids: end_vertex_ids.clone(),
+                weight_expression: find_path_stmt.weight_expression.clone(),
             })?;
             let logical = Self::shortest_path_logical(
                 space_id,
@@ -91,6 +106,7 @@ impl Planner for PathPlanner {
                 max_steps,
                 start_vertex_ids,
                 end_vertex_ids,
+                find_path_stmt.weight_expression.clone(),
             );
             (root, logical)
         } else {
@@ -102,6 +118,8 @@ impl Planner for PathPlanner {
                     max_steps,
                     start_vertex_ids: start_vertex_ids.clone(),
                     end_vertex_ids: end_vertex_ids.clone(),
+                    // Rejected at bind time; WEIGHT never reaches ALL PATH.
+                    weight_expression: None,
                 },
                 find_path_stmt,
             )?;
@@ -115,6 +133,20 @@ impl Planner for PathPlanner {
             );
             (root, logical)
         };
+
+        // Apply the WHERE clause on top of the path result.
+        if let Some(where_expr) = find_path_stmt.where_clause.clone() {
+            let filter_node =
+                FilterNode::new(root_node.clone(), where_expr.clone()).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create FilterNode: {}",
+                        e
+                    ))
+                })?;
+            let col_names = filter_node.col_names().to_vec();
+            logical_root = wrap_logical_filter(logical_root, where_expr.clone(), col_names);
+            root_node = PlanNodeEnum::Filter(filter_node);
+        }
 
         let sub_plan = SubPlan {
             root: Some(root_node),
@@ -178,7 +210,16 @@ impl Planner for PathPlanner {
             _ => vec![],
         };
 
-        let (root_node, logical_root) = if find_path.shortest {
+        let (mut root_node, mut logical_root) = if find_path.shortest {
+            // A cycle can never produce a shorter path, so WITH LOOP /
+            // WITH TRAIL / WITH WALK are no-ops here; report the ignored
+            // modifiers instead of folding them into the plan.
+            if find_path.with_loop || find_path.with_trail || find_path.with_walk {
+                log::debug!(
+                    "FIND SHORTEST PATH ignores WITH LOOP/TRAIL/WALK: \
+                     revisiting a vertex or edge cannot yield a shorter path"
+                );
+            }
             let root = self.build_shortest_path_plan(PathPlanParams {
                 left_input: start_node_enum.clone(),
                 space_id,
@@ -186,6 +227,7 @@ impl Planner for PathPlanner {
                 max_steps,
                 start_vertex_ids: start_vertex_ids.clone(),
                 end_vertex_ids: end_vertex_ids.clone(),
+                weight_expression: find_path.weight_expression.clone(),
             })?;
             let logical = Self::shortest_path_logical(
                 space_id,
@@ -193,6 +235,7 @@ impl Planner for PathPlanner {
                 max_steps,
                 start_vertex_ids,
                 end_vertex_ids,
+                find_path.weight_expression.clone(),
             );
             (root, logical)
         } else {
@@ -201,6 +244,12 @@ impl Planner for PathPlanner {
                 .as_ref()
                 .map(|(_, dir)| *dir)
                 .unwrap_or(linkrs_core::EdgeDirection::Out);
+
+            // Default paths do not repeat vertices; WITH LOOP / WITH TRAIL /
+            // WITH WALK each relax a distinct part of that constraint (see
+            // PathUniqueness).
+            let path_uniqueness =
+                PathUniqueness::from_flags(find_path.with_loop, find_path.with_trail, find_path.with_walk);
 
             let right_node = StartNode::new();
             let right_node_enum = PlanNodeEnum::Start(right_node);
@@ -213,7 +262,7 @@ impl Planner for PathPlanner {
                 edge_types.clone(),
                 1,
                 max_steps,
-                true,
+                path_uniqueness,
             );
             all_paths_node.set_direction(direction);
             let start_vids: Vec<VertexId> = start_vertex_ids
@@ -228,10 +277,38 @@ impl Planner for PathPlanner {
             all_paths_node.set_end_vertex_ids(end_vids.clone());
 
             let logical = Self::all_paths_logical_from_parts(
-                space_id, edge_types, max_steps, true, direction, start_vids, end_vids,
+                space_id,
+                edge_types,
+                max_steps,
+                path_uniqueness,
+                direction,
+                start_vids,
+                end_vids,
             );
             (all_paths_node.into_enum(), logical)
         };
+
+        // Apply the bound WHERE clause on top of the path result.
+        if let Some(where_clause) = &find_path.where_clause {
+            let expr_ctx = Arc::new(
+                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            );
+            let condition = crate::binder::expr_converter::bound_expr_to_contextual(
+                &where_clause.condition,
+                &expr_ctx,
+            )
+            .map_err(PlannerError::PlanGenerationFailed)?;
+            let filter_node =
+                FilterNode::new(root_node.clone(), condition.clone()).map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create FilterNode: {}",
+                        e
+                    ))
+                })?;
+            let col_names = filter_node.col_names().to_vec();
+            logical_root = wrap_logical_filter(logical_root, condition, col_names);
+            root_node = PlanNodeEnum::Filter(filter_node);
+        }
 
         let sub_plan = SubPlan {
             root: Some(root_node),
@@ -255,6 +332,7 @@ struct PathPlanParams {
     max_steps: usize,
     start_vertex_ids: Vec<Value>,
     end_vertex_ids: Vec<Value>,
+    weight_expression: Option<String>,
 }
 
 impl PathPlanner {
@@ -274,6 +352,9 @@ impl PathPlanner {
         );
         shortest_path_node.set_start_vertex_ids(params.start_vertex_ids);
         shortest_path_node.set_end_vertex_ids(params.end_vertex_ids);
+        if let Some(weight) = params.weight_expression {
+            shortest_path_node.set_weight_expression(weight);
+        }
 
         Ok(shortest_path_node.into_enum())
     }
@@ -286,9 +367,13 @@ impl PathPlanner {
         let right_node = StartNode::new();
         let right_node_enum = PlanNodeEnum::Start(right_node);
 
-        // By default paths must not repeat vertices; WITH LOOP/WITH CYCLE
-        // relaxes that constraint.
-        let acyclic = !(stmt.with_loop || stmt.with_cycle);
+        // Default paths do not repeat vertices; WITH LOOP / WITH TRAIL /
+        // WITH WALK each relax a distinct part of that constraint (see
+        // PathUniqueness).
+        let path_uniqueness =
+            crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness::from_flags(
+                stmt.with_loop, stmt.with_trail, stmt.with_walk,
+            );
         let direction = stmt
             .over
             .as_ref()
@@ -303,7 +388,7 @@ impl PathPlanner {
             params.edge_types,
             1,
             params.max_steps,
-            acyclic,
+            path_uniqueness,
         );
         all_paths_node.set_direction(direction);
         let start_vids: Vec<VertexId> = params
@@ -332,6 +417,7 @@ impl PathPlanner {
         max_steps: usize,
         start_vertex_ids: Vec<Value>,
         end_vertex_ids: Vec<Value>,
+        weight_expression: Option<String>,
     ) -> LogicalNodeEnum {
         let left = Self::logical_start_leaf();
         let right = Self::logical_start_leaf();
@@ -342,7 +428,7 @@ impl PathPlanner {
             space_id,
             edge_types,
             max_step: max_steps,
-            weight_expression: None,
+            weight_expression,
             heuristic_expression: None,
             no_reverse: false,
             start_vertex_ids,
@@ -361,7 +447,10 @@ impl PathPlanner {
         start_vertex_ids: Vec<Value>,
         end_vertex_ids: Vec<Value>,
     ) -> LogicalNodeEnum {
-        let acyclic = !(stmt.with_loop || stmt.with_cycle);
+        let path_uniqueness =
+            crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness::from_flags(
+                stmt.with_loop, stmt.with_trail, stmt.with_walk,
+            );
         let direction = stmt
             .over
             .as_ref()
@@ -376,7 +465,13 @@ impl PathPlanner {
             .filter_map(|v| VertexId::try_from(v).ok())
             .collect();
         Self::all_paths_logical_from_parts(
-            space_id, edge_types, max_steps, acyclic, direction, start_vids, end_vids,
+            space_id,
+            edge_types,
+            max_steps,
+            path_uniqueness,
+            direction,
+            start_vids,
+            end_vids,
         )
     }
 
@@ -384,7 +479,7 @@ impl PathPlanner {
         space_id: u64,
         edge_types: Vec<String>,
         max_steps: usize,
-        acyclic: bool,
+        path_uniqueness: crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness,
         direction: linkrs_core::EdgeDirection,
         start_vertex_ids: Vec<VertexId>,
         end_vertex_ids: Vec<VertexId>,
@@ -400,7 +495,7 @@ impl PathPlanner {
             edge_types,
             min_hop: 1,
             max_hop: max_steps,
-            acyclic,
+            path_uniqueness,
             direction,
             has_step_limit: true,
             limit: -1,
@@ -483,6 +578,16 @@ mod tests {
     }
 
     fn find_path_stmt(shortest: bool) -> FindPathStmt {
+        find_path_stmt_with_modifiers(shortest, false, false, false, None)
+    }
+
+    fn find_path_stmt_with_modifiers(
+        shortest: bool,
+        with_loop: bool,
+        with_trail: bool,
+        with_walk: bool,
+        weight_expression: Option<&str>,
+    ) -> FindPathStmt {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let id =
             ctx.register_expression(ExpressionMeta::new(Expression::Variable("dst".to_string())));
@@ -504,10 +609,11 @@ mod tests {
             limit: None,
             skip: None,
             yield_clause: None,
-            weight_expression: None,
+            weight_expression: weight_expression.map(str::to_string),
             heuristic_expression: None,
-            with_loop: false,
-            with_cycle: false,
+            with_loop,
+            with_trail,
+            with_walk,
         }
     }
 
@@ -549,6 +655,107 @@ mod tests {
         assert!(
             plan.root.is_some() && plan.logical_root.is_some(),
             "plan must carry both physical and logical shapes"
+        );
+    }
+
+    #[test]
+    fn shortest_path_plan_carries_weight_expression() {
+        let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(
+            true,
+            false,
+            false,
+            false,
+            Some("cost"),
+        ));
+        let plan = PathPlanner::new()
+            .transform(&validated(stmt), test_query_context())
+            .expect("weighted shortest path plans");
+        match plan.root.as_ref().expect("physical root") {
+            PlanNodeEnum::ShortestPath(node) => {
+                assert_eq!(node.weight_expression().as_deref(), Some("cost"));
+            }
+            other => panic!("expected ShortestPath root, got {:?}", other),
+        }
+        match plan.logical_root.as_ref().expect("logical root") {
+            LogicalNodeEnum::ShortestPath(node) => {
+                assert_eq!(node.weight_expression.as_deref(), Some("cost"));
+            }
+            other => panic!("expected ShortestPath logical root, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn shortest_path_plan_defaults_weight_to_none() {
+        let stmt = Stmt::FindPath(find_path_stmt(true));
+        let plan = PathPlanner::new()
+            .transform(&validated(stmt), test_query_context())
+            .expect("plain shortest path plans");
+        match plan.root.as_ref().expect("physical root") {
+            PlanNodeEnum::ShortestPath(node) => {
+                assert!(node.weight_expression().is_none());
+            }
+            other => panic!("expected ShortestPath root, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn all_paths_plan_maps_repeat_flags_to_uniqueness() {
+        let cases = [
+            (false, false, false, PathUniqueness::VertexUnique),
+            (true, false, false, PathUniqueness::AllowSelfLoop),
+            (false, true, false, PathUniqueness::EdgeUnique),
+            (false, false, true, PathUniqueness::Free),
+            // A looser modifier dominates the tighter ones.
+            (true, true, false, PathUniqueness::EdgeUnique),
+            (true, false, true, PathUniqueness::Free),
+        ];
+        for (with_loop, with_trail, with_walk, expected) in cases {
+            let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(
+                false,
+                with_loop,
+                with_trail,
+                with_walk,
+                None,
+            ));
+            let plan = PathPlanner::new()
+                .transform(&validated(stmt), test_query_context())
+                .expect("all path plans");
+            match plan.root.as_ref().expect("physical root") {
+                PlanNodeEnum::AllPaths(node) => {
+                    assert_eq!(
+                        node.path_uniqueness(),
+                        expected,
+                        "loop={with_loop} trail={with_trail} walk={with_walk} physical policy mismatch"
+                    );
+                }
+                other => panic!("expected AllPaths root, got {:?}", other),
+            }
+            match plan.logical_root.as_ref().expect("logical root") {
+                LogicalNodeEnum::AllPaths(node) => {
+                    assert_eq!(
+                        node.path_uniqueness, expected,
+                        "loop={with_loop} trail={with_trail} walk={with_walk} logical policy mismatch"
+                    );
+                }
+                other => panic!("expected AllPaths logical root, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn shortest_path_ignores_repeat_flags() {
+        // Cycles can never shorten a path, so the shortest-path plan stays a
+        // plain ShortestPath node regardless of the modifiers.
+        let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(
+            true, true, true, true, None,
+        ));
+        let plan = PathPlanner::new()
+            .transform(&validated(stmt), test_query_context())
+            .expect("modifiers do not break shortest path planning");
+        assert!(
+            matches!(plan.root.as_ref(), Some(PlanNodeEnum::ShortestPath(_))),
+            "expected ShortestPath root, got {:?}",
+            plan.root
         );
     }
 }

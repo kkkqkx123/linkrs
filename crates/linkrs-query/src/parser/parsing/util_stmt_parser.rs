@@ -132,10 +132,18 @@ impl UtilStmtParser {
                     } else {
                         None
                     };
+                    let edge_type = tag_name.ok_or_else(|| {
+                        ParseError::new(
+                            ParseErrorKind::SyntaxError,
+                            "FETCH edge form requires an edge type; '*' is only valid for vertices"
+                                .to_string(),
+                            ctx.current_position(),
+                        )
+                    })?;
                     Ok(FetchTarget::Edges {
                         src: first_expr,
                         dst,
-                        edge_type: tag_name.expect("Edge type name is required"),
+                        edge_type,
                         rank,
                         properties: None,
                     })

@@ -5,13 +5,13 @@
 use crate::parser::ast::{InsertStmt, InsertTarget, Stmt, VertexRow};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
-    nodes::{ArgumentNode, EdgeInsertInfo, TagInsertSpec, VertexInsertInfo},
+    nodes::{EdgeInsertInfo, TagInsertSpec, VertexInsertInfo},
 };
 use crate::planning::plan::logical::logical_nodes::dml::{
     LogicalInsertEdgesNode, LogicalInsertVerticesNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::plan::{PlanNodeEnum, SubPlan};
+use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
@@ -163,8 +163,6 @@ impl Planner for InsertPlanner {
             Ok(())
         };
 
-        let arg_node = ArgumentNode::new(next_node_id(), "insert_args");
-
         let (insert_node, _inserted_count) = match &insert.target {
             BoundInsertTarget::Vertices { tag, values } => {
                 let mut rows = Vec::with_capacity(values.len());
@@ -248,10 +246,7 @@ impl Planner for InsertPlanner {
             }
         };
 
-        let mut sub_plan = SubPlan::from_logical_root(insert_node);
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(insert_node))
     }
 
     fn transform(
@@ -322,9 +317,6 @@ impl Planner for InsertPlanner {
             }
         }
 
-        // Create a Parameter Node
-        let arg_node = ArgumentNode::new(next_node_id(), "insert_args");
-
         // Create the corresponding insertion nodes based on the type of the INSERT target.
         let (insert_node, _inserted_count) = match &insert_stmt.target {
             InsertTarget::Vertices { tag, values } => {
@@ -372,12 +364,9 @@ impl Planner for InsertPlanner {
             }
         };
 
-        // Create a SubPlan with InsertVertices/InsertEdges as the root node
-        // Note: ProjectNode is not needed here as the executor returns Count result directly
-        let mut sub_plan = SubPlan::from_logical_root(insert_node);
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-
-        Ok(sub_plan)
+        // InsertVertices/InsertEdges is the root node; the executor returns
+        // the count summary directly, so no projection node is needed.
+        Ok(SubPlan::from_logical_root(insert_node))
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

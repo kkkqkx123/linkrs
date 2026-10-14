@@ -49,7 +49,6 @@ pub(super) fn apply_decisions(
         Window(n) => changed |= apply_decisions(n.input_mut(), decisions),
         Unwind(n) => changed |= apply_decisions(n.input_mut(), decisions),
         Assign(n) => changed |= apply_decisions(n.input_mut(), decisions),
-        Remove(n) => changed |= apply_decisions(n.input_mut(), decisions),
         Materialize(n) => changed |= apply_decisions(n.input_mut(), decisions),
         PatternApply(n) => changed |= apply_decisions(n.input_mut(), decisions),
         CorrelatedApply(n) => changed |= apply_decisions(n.input_mut(), decisions),

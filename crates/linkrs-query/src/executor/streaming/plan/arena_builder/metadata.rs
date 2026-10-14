@@ -584,14 +584,6 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
         OperatorKindSpec::Unary(UnarySpec::Assign { assignments, .. }) => {
             layout_with_added_names(&input, assignments.iter().map(|(name, _)| name.clone()))
         }
-        OperatorKindSpec::Unary(UnarySpec::Remove { columns_to_remove }) => {
-            let names = input
-                .names()
-                .into_iter()
-                .filter(|name| !columns_to_remove.contains(name))
-                .collect::<Vec<_>>();
-            SlotLayout::from_names(&names)
-        }
         OperatorKindSpec::Unary(UnarySpec::AppendVertices {
             entity_var,
             prop_names,
@@ -834,7 +826,6 @@ pub(super) fn unary_explain_name(spec: &UnarySpec) -> &'static str {
         UnarySpec::Project { .. } => "Project",
         UnarySpec::Limit { .. } => "Limit",
         UnarySpec::Assign { .. } => "Assign",
-        UnarySpec::Remove { .. } => "Remove",
         UnarySpec::Unwind { .. } => "Unwind",
         UnarySpec::AppendVertices { .. } => "AppendVertices",
         UnarySpec::Sample { .. } => "Sample",

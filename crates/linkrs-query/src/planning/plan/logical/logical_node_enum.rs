@@ -29,7 +29,7 @@ use super::logical_nodes::flatten::LogicalFlattenNode;
 use super::logical_nodes::graph_ops::{
     LogicalApplyNode, LogicalAssignNode, LogicalCorrelatedApplyNode, LogicalDataCollectNode,
     LogicalIntersectNode, LogicalMaterializeNode, LogicalMinusNode, LogicalPatternApplyNode,
-    LogicalRemoveNode, LogicalRollUpApplyNode, LogicalUnionNode, LogicalUnwindNode,
+    LogicalRollUpApplyNode, LogicalUnionNode, LogicalUnwindNode,
 };
 use super::logical_nodes::join::{
     LogicalCrossJoinNode, LogicalFullOuterJoinNode, LogicalInnerJoinNode, LogicalLeftJoinNode,
@@ -102,7 +102,6 @@ pub enum LogicalNodeEnum {
 
     // Data processing nodes
     DataCollect(LogicalDataCollectNode),
-    Remove(LogicalRemoveNode),
     PatternApply(LogicalPatternApplyNode),
     RollUpApply(LogicalRollUpApplyNode),
     CorrelatedApply(LogicalCorrelatedApplyNode),
@@ -205,7 +204,6 @@ impl LogicalNodeEnum {
             Self::Commit(n) => n.id(),
             Self::Rollback(n) => n.id(),
             Self::DataCollect(n) => n.id(),
-            Self::Remove(n) => n.id(),
             Self::PatternApply(n) => n.id(),
             Self::RollUpApply(n) => n.id(),
             Self::CorrelatedApply(n) => n.id(),
@@ -282,7 +280,6 @@ impl LogicalNodeEnum {
             Self::Commit(_) => "Commit",
             Self::Rollback(_) => "Rollback",
             Self::DataCollect(_) => "DataCollect",
-            Self::Remove(_) => "Remove",
             Self::PatternApply(_) => "PatternApply",
             Self::RollUpApply(_) => "RollUpApply",
             Self::CorrelatedApply(_) => "CorrelatedApply",
@@ -359,7 +356,6 @@ impl LogicalNodeEnum {
             Self::Commit(n) => n.col_names(),
             Self::Rollback(n) => n.col_names(),
             Self::DataCollect(n) => n.col_names(),
-            Self::Remove(n) => n.col_names(),
             Self::PatternApply(n) => n.col_names(),
             Self::RollUpApply(n) => n.col_names(),
             Self::CorrelatedApply(n) => n.col_names(),

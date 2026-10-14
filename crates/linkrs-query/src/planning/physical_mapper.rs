@@ -349,7 +349,6 @@ pub(crate) fn logical_children(
         LogicalNodeEnum::Window(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Traverse(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Assign(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Remove(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::PipeDeleteVertices(n) => {
             n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
         }

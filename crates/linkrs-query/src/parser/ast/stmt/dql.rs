@@ -212,8 +212,12 @@ pub struct FindPathStmt {
     pub yield_clause: Option<YieldClause>,
     pub weight_expression: Option<String>,
     pub heuristic_expression: Option<String>,
+    /// `WITH LOOP`: self-loop edges may be taken as terminal extensions.
     pub with_loop: bool,
-    pub with_cycle: bool,
+    /// `WITH TRAIL`: path edges may not repeat; vertices may.
+    pub with_trail: bool,
+    /// `WITH WALK`: path vertices may repeat.
+    pub with_walk: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

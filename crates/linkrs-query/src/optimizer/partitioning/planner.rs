@@ -832,8 +832,6 @@ impl PartitioningPlanner {
                 | PlanNodeEnum::PipeDeleteVertices(_)
                 | PlanNodeEnum::PipeDeleteEdges(_)
                 | PlanNodeEnum::Update(_)
-                | PlanNodeEnum::UpdateVertices(_)
-                | PlanNodeEnum::UpdateEdges(_)
         ) || node.children().iter().any(|c| Self::has_write_operation(c))
     }
 

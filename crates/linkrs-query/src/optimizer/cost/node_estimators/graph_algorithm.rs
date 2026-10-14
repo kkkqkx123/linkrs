@@ -88,6 +88,7 @@ mod tests {
     use super::*;
     use crate::optimizer::cost::config::CostModelConfig;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
+    use crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness;
     use crate::planning::plan::core::nodes::traversal::{
         AllPathsNode, BFSShortestNode, MultiShortestPathNode, ShortestPathNode,
     };
@@ -146,7 +147,7 @@ mod tests {
             vec!["friend".to_string()],
             1,
             3,
-            false,
+            PathUniqueness::VertexUnique,
         ));
 
         let child_estimates = vec![];
@@ -273,7 +274,7 @@ mod tests {
             vec!["friend".to_string()],
             1,
             15,
-            false,
+            PathUniqueness::VertexUnique,
         ));
 
         let child_estimates = vec![];

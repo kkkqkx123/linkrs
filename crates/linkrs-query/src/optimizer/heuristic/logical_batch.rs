@@ -171,7 +171,6 @@ fn logical_children_mut(node: &mut LogicalNodeEnum) -> Vec<&mut LogicalNodeEnum>
         LogicalNodeEnum::SemiJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
         LogicalNodeEnum::Flatten(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::Unwind(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Remove(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
         LogicalNodeEnum::DataCollect(n) => {
             n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
         }

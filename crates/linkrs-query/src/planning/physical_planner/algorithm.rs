@@ -34,7 +34,7 @@ pub(super) fn convert_b_f_s_shortest(
             n.space_id,
             n.steps,
             n.edge_types,
-            n.with_cycle,
+            n.with_walk,
         );
     if n.with_loop {
         node.set_loop(true);
@@ -64,7 +64,7 @@ pub(super) fn convert_all_paths(
             n.edge_types,
             n.min_hop,
             n.max_hop,
-            n.acyclic,
+            n.path_uniqueness,
         );
     node.set_start_vertex_ids(n.start_vertex_ids);
     node.set_end_vertex_ids(n.end_vertex_ids);

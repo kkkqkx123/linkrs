@@ -33,7 +33,9 @@ impl DmlParser {
         }))
     }
 
-    /// Parse the schema in the CREATE statement
+    /// Parse a Cypher data pattern: a node followed by any number of edge
+    /// hops (`-[...]->`, `<-[...]-`, `-[...]-`), mirroring how the
+    /// traversal parser spells edges in MATCH.
     fn parse_create_pattern(
         &mut self,
         ctx: &mut ParseContext,
@@ -42,25 +44,38 @@ impl DmlParser {
 
         let start_node = self.parse_node_pattern(ctx)?;
 
-        // Check whether there is an edge pattern (using Arrow or LeftArrow).
-        if ctx.check_token(TokenKind::Arrow) || ctx.check_token(TokenKind::LeftArrow) {
-            let edge = self.parse_edge_pattern(ctx)?;
-            let end_node = self.parse_node_pattern(ctx)?;
-
-            let span = ctx.merge_span(start_node.span.start, end_node.span.end);
-            let elements = vec![
-                PathElement::Node(start_node),
-                PathElement::Edge(edge),
-                PathElement::Node(end_node),
-            ];
-            Ok(Pattern::Path(PathPattern {
-                span,
-                elements,
-                name: None,
-            }))
-        } else {
-            Ok(Pattern::Node(start_node))
+        // An edge hop starts with an optional `<-` (BackArrow) followed by a
+        // mandatory `-` (Minus), so only those tokens continue the path.
+        // The braceless `(a)->(b)` form carries no edge body and stays
+        // unsupported, matching the traversal parser.
+        if !matches!(
+            ctx.current_token().kind,
+            TokenKind::Minus | TokenKind::BackArrow
+        ) {
+            return Ok(Pattern::Node(start_node));
         }
+
+        let start = start_node.span.start;
+        let mut elements = vec![PathElement::Node(start_node)];
+        let mut end = start;
+        while matches!(
+            ctx.current_token().kind,
+            TokenKind::Minus | TokenKind::BackArrow
+        ) {
+            let edge = self.parse_edge_pattern(ctx)?;
+            end = edge.span.end;
+            elements.push(PathElement::Edge(edge));
+
+            let node = self.parse_node_pattern(ctx)?;
+            end = node.span.end;
+            elements.push(PathElement::Node(node));
+        }
+
+        Ok(Pattern::Path(PathPattern {
+            span: ctx.merge_span(start, end),
+            elements,
+            name: None,
+        }))
     }
 
     /// Parse node pattern: (var:Label {prop: value})
@@ -123,6 +138,10 @@ impl DmlParser {
     }
 
     /// Parse edge pattern: -[:Type {prop: value}]-> or <-[:Type {prop: value}]-
+    /// Parse a Cypher edge pattern: an optional incoming `<-` (BackArrow),
+    /// a mandatory `-` (Minus), the bracketed edge body, and a mandatory
+    /// trailing direction. This is the same grammar the traversal parser
+    /// uses for MATCH edges.
     fn parse_edge_pattern(
         &mut self,
         ctx: &mut ParseContext,
@@ -131,13 +150,11 @@ impl DmlParser {
 
         let start_span = ctx.current_span();
 
-        let direction = if ctx.match_token(TokenKind::LeftArrow) {
-            EdgeDirection::In
-        } else if ctx.match_token(TokenKind::Arrow) || ctx.match_token(TokenKind::RightArrow) {
-            EdgeDirection::Out
-        } else {
-            EdgeDirection::Both
-        };
+        let mut direction = EdgeDirection::Out;
+        if ctx.match_token(TokenKind::BackArrow) || ctx.match_token(TokenKind::LeftArrow) {
+            direction = EdgeDirection::In;
+        }
+        ctx.expect_token(TokenKind::Minus)?;
 
         ctx.expect_token(TokenKind::LBracket)?;
 
@@ -171,6 +188,31 @@ impl DmlParser {
         };
 
         ctx.expect_token(TokenKind::RBracket)?;
+
+        // The trailing direction closes the hop: `->`, `-`, or `<-`.
+        if ctx.match_token(TokenKind::Arrow) {
+            if direction == EdgeDirection::In {
+                direction = EdgeDirection::Both;
+            } else {
+                direction = EdgeDirection::Out;
+            }
+        } else if ctx.match_token(TokenKind::Minus) {
+            if direction == EdgeDirection::Out {
+                direction = EdgeDirection::Both;
+            }
+        } else if ctx.match_token(TokenKind::RightArrow) {
+            if direction == EdgeDirection::In {
+                direction = EdgeDirection::Both;
+            } else {
+                direction = EdgeDirection::Out;
+            }
+        } else {
+            return Err(ParseError::new(
+                crate::parser::core::error::ParseErrorKind::SyntaxError,
+                "Expected '-', '->', or '<-' after edge pattern".to_string(),
+                ctx.current_position(),
+            ));
+        }
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);

@@ -12,8 +12,7 @@
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::planning::plan::core::nodes::data_modification::{
     CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteVerticesNode,
-    InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
-    UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
+    InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, UpdateNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
@@ -47,7 +46,7 @@ pub use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 pub use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 pub use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::{
     ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode, DedupNode, MaterializeNode,
-    PatternApplyNode, RemoveNode, RollUpApplyNode, UnionNode, UnwindNode,
+    PatternApplyNode, RollUpApplyNode, UnionNode, UnwindNode,
 };
 pub use crate::planning::plan::core::nodes::graph_operations::set_operations_node::{
     IntersectNode, MinusNode,
@@ -202,7 +201,6 @@ pub enum PlanNodeEnum {
 
     // ========== Data Processing Node ----------
     DataCollect(DataCollectNode),
-    Remove(RemoveNode),
     PatternApply(PatternApplyNode),
     RollUpApply(RollUpApplyNode),
     CorrelatedApply(CorrelatedApplyNode),
@@ -240,8 +238,6 @@ pub enum PlanNodeEnum {
     PipeDeleteVertices(PipeDeleteVerticesNode),
     PipeDeleteEdges(PipeDeleteEdgesNode),
     Update(UpdateNode),
-    UpdateVertices(UpdateVerticesNode),
-    UpdateEdges(UpdateEdgesNode),
 
     // Statistics Nodes ============
     ShowStats(ShowStatsNode),
@@ -325,7 +321,6 @@ crate::define_enum_is_methods! {
     (Select, is_select),
     // Data processing node
     (DataCollect, is_data_collect),
-    (Remove, is_remove),
     (PatternApply, is_pattern_apply),
     (RollUpApply, is_roll_up_apply),
     (CorrelatedApply, is_correlated_apply),
@@ -360,8 +355,6 @@ crate::define_enum_is_methods! {
     (PipeDeleteVertices, is_pipe_delete_vertices),
     (PipeDeleteEdges, is_pipe_delete_edges),
     (Update, is_update),
-    (UpdateVertices, is_update_vertices),
-    (UpdateEdges, is_update_edges),
     // Statistical nodes
     (ShowStats, is_show_stats),
     (ShowConfigs, is_show_configs),
@@ -440,7 +433,6 @@ crate::define_enum_as_methods! {
     (ReleaseSavepoint, as_release_savepoint, ReleaseSavepointNode),
     // Data processing node
     (DataCollect, as_data_collect, DataCollectNode),
-    (Remove, as_remove, RemoveNode),
     (PatternApply, as_pattern_apply, PatternApplyNode),
     (RollUpApply, as_roll_up_apply, RollUpApplyNode),
     (CorrelatedApply, as_correlated_apply, CorrelatedApplyNode),
@@ -475,8 +467,6 @@ crate::define_enum_as_methods! {
     (PipeDeleteVertices, as_pipe_delete_vertices, PipeDeleteVerticesNode),
     (PipeDeleteEdges, as_pipe_delete_edges, PipeDeleteEdgesNode),
     (Update, as_update, UpdateNode),
-    (UpdateVertices, as_update_vertices, UpdateVerticesNode),
-    (UpdateEdges, as_update_edges, UpdateEdgesNode),
     // Statistical node
     (ShowStats, as_show_stats, ShowStatsNode),
     (ShowConfigs, as_show_configs, ShowConfigsNode),
@@ -554,7 +544,6 @@ crate::define_enum_as_mut_methods! {
     (ReleaseSavepoint, as_release_savepoint_mut, ReleaseSavepointNode),
     // Data processing node
     (DataCollect, as_data_collect_mut, DataCollectNode),
-    (Remove, as_remove_mut, RemoveNode),
     (PatternApply, as_pattern_apply_mut, PatternApplyNode),
     (RollUpApply, as_roll_up_apply_mut, RollUpApplyNode),
     (CorrelatedApply, as_correlated_apply_mut, CorrelatedApplyNode),
@@ -589,8 +578,6 @@ crate::define_enum_as_mut_methods! {
     (PipeDeleteVertices, as_pipe_delete_vertices_mut, PipeDeleteVerticesNode),
     (PipeDeleteEdges, as_pipe_delete_edges_mut, PipeDeleteEdgesNode),
     (Update, as_update_mut, UpdateNode),
-    (UpdateVertices, as_update_vertices_mut, UpdateVerticesNode),
-    (UpdateEdges, as_update_edges_mut, UpdateEdgesNode),
     // Statistical node
     (ShowStats, as_show_stats_mut, ShowStatsNode),
     (ShowConfigs, as_show_configs_mut, ShowConfigsNode),
@@ -674,7 +661,6 @@ crate::define_all_plan_nodes! {
     (ReleaseSavepoint, ReleaseSavepointNode, PlanNodeCategory::ControlFlow, "ReleaseSavepoint"),
     // Data processing node
     (DataCollect, DataCollectNode, PlanNodeCategory::DataProcessing, "DataCollect"),
-    (Remove, RemoveNode, PlanNodeCategory::DataProcessing, "Remove"),
     (PatternApply, PatternApplyNode, PlanNodeCategory::DataProcessing, "PatternApply"),
     (RollUpApply, RollUpApplyNode, PlanNodeCategory::DataProcessing, "RollUpApply"),
     (CorrelatedApply, CorrelatedApplyNode, PlanNodeCategory::DataProcessing, "CorrelatedApply"),
@@ -711,8 +697,6 @@ crate::define_all_plan_nodes! {
     (PipeDeleteVertices, PipeDeleteVerticesNode, PlanNodeCategory::Management, "PipeDeleteVertices"),
     (PipeDeleteEdges, PipeDeleteEdgesNode, PlanNodeCategory::Management, "PipeDeleteEdges"),
     (Update, UpdateNode, PlanNodeCategory::Management, "Update"),
-    (UpdateVertices, UpdateVerticesNode, PlanNodeCategory::Management, "UpdateVertices"),
-    (UpdateEdges, UpdateEdgesNode, PlanNodeCategory::Management, "UpdateEdges"),
     // Statistical nodes
     (ShowStats, ShowStatsNode, PlanNodeCategory::Management, "ShowStats"),
     (ShowConfigs, ShowConfigsNode, PlanNodeCategory::Management, "ShowConfigs"),
@@ -760,8 +744,6 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::PipeDeleteVertices(_)
                 | PlanNodeEnum::PipeDeleteEdges(_)
                 | PlanNodeEnum::Update(_)
-                | PlanNodeEnum::UpdateVertices(_)
-                | PlanNodeEnum::UpdateEdges(_)
                 | PlanNodeEnum::ShowStats(_)
                 | PlanNodeEnum::ShowConfigs(_)
                 | PlanNodeEnum::ShowQueries(_)

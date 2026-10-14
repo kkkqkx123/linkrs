@@ -108,7 +108,6 @@ impl DmlParser {
             Ok(Stmt::Delete(DeleteStmt {
                 span,
                 target,
-                where_clause: None,
                 with_edge,
                 detach,
             }))

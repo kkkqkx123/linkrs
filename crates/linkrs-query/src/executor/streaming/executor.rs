@@ -353,7 +353,6 @@ impl StreamingExecutor {
                     UnaryOperatorKind::Filter { .. }
                         | UnaryOperatorKind::Project { .. }
                         | UnaryOperatorKind::Assign { .. }
-                        | UnaryOperatorKind::Remove { .. }
                         | UnaryOperatorKind::Unwind { .. }
                         | UnaryOperatorKind::AppendVertices { .. }
                 ) && input.is_partition_local()

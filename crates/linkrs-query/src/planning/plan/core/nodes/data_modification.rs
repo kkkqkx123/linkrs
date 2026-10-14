@@ -21,4 +21,4 @@ pub use delete_nodes::{
     PipeDeleteVerticesNode,
 };
 pub use insert_nodes::{InsertEdgesNode, InsertVerticesNode};
-pub use update_nodes::{UpdateEdgesNode, UpdateNode, UpdateVerticesNode};
+pub use update_nodes::UpdateNode;

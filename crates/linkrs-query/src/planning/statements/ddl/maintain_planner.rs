@@ -8,7 +8,7 @@
 //! - `system` - transactions, maintenance and LOAD/CALL system planning
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::{CreateTarget, Stmt};
+use crate::parser::ast::Stmt;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::QueryContext;
@@ -74,19 +74,6 @@ impl Planner for MaintainPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let stmt = validated.stmt();
         let current_space = self.current_space(validated);
-
-        if let Stmt::Create(create_stmt) = stmt {
-            match &create_stmt.target {
-                CreateTarget::Node { .. }
-                | CreateTarget::Edge { .. }
-                | CreateTarget::Path { .. } => {
-                    let mut data_planner =
-                        crate::planning::statements::dml::create_planner::CreatePlanner::new();
-                    return data_planner.transform(validated, qctx);
-                }
-                _ => {}
-            }
-        }
 
         let final_node = match stmt {
             Stmt::Show(show_stmt) => self.plan_show(&show_stmt.target, &current_space),

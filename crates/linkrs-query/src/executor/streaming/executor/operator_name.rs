@@ -40,7 +40,6 @@ pub fn operator_name(exec: &StreamingExecutor) -> &'static str {
             UnaryOperatorKind::Limit { .. } => "Limit",
             UnaryOperatorKind::Dedup { .. } => "Dedup",
             UnaryOperatorKind::Assign { .. } => "Assign",
-            UnaryOperatorKind::Remove { .. } => "Remove",
             UnaryOperatorKind::Unwind { .. } => "Unwind",
             UnaryOperatorKind::AppendVertices { .. } => "AppendVertices",
             UnaryOperatorKind::Sample { .. } => "Sample",

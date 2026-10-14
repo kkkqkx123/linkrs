@@ -375,9 +375,6 @@ impl StmtUtils {
                     }
                     _ => {}
                 }
-                if let Some(ref where_clause) = s.where_clause {
-                    variables.extend(collect_variables_from_contextual(where_clause));
-                }
             }
             Stmt::Update(s) => {
                 match &s.target {

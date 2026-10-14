@@ -25,7 +25,11 @@ impl DmlParser {
             } else if ctx.match_token(TokenKind::Match) {
                 (None, Some(Self::parse_merge_set_clause(ctx)?))
             } else {
-                (None, None)
+                return Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    "Expected CREATE or MATCH after ON in MERGE statement".to_string(),
+                    ctx.current_position(),
+                ));
             }
         } else {
             (None, None)

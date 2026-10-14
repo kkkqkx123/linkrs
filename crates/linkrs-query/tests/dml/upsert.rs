@@ -491,12 +491,72 @@ fn test_upsert_yield_parser() {
 
 #[test]
 fn test_upsert_yield_execution() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("UPSERT VERTEX ON Person SET name = 'Alice', age = 30 WHERE id(vid) == 1 YIELD name, age");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        "UPSERT with YIELD should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+// ==================== UPSERT ON Residual Predicate Tests ====================
+
+#[test]
+fn test_upsert_on_residual_predicate_filters() {
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
-        .exec_dml("UPSERT VERTEX ON Person SET name = 'Alice', age = 30 WHERE id(vid) == 1 YIELD name, age")
-        .assert_success();
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("UPSERT VERTEX ON Person SET age = 99 WHERE id(vid) == 1 AND age > 100")
+        .assert_success()
+        .assert_vertex_props(1, "Person", HashMap::from([("age", Value::Int(30))]))
+        .exec_dml("UPSERT VERTEX ON Person SET age = 31 WHERE id(vid) == 1 AND age > 20")
+        .assert_success()
+        .assert_vertex_props(1, "Person", HashMap::from([("age", Value::Int(31))]));
+}
+
+#[test]
+fn test_upsert_on_missing_id_rejected() {
+    // Parser-level rejections are wrapped by statement recovery, so only the
+    // rejection itself is asserted here, not the message.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("UPSERT VERTEX ON Person SET age = 1 WHERE age > 20")
+        .assert_error();
+}
+
+#[test]
+fn test_upsert_on_non_literal_id_rejected() {
+    // Parser-level rejections are wrapped by statement recovery, so only the
+    // rejection itself is asserted here, not the message.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("UPSERT VERTEX ON Person SET age = 1 WHERE id(vid) == 1 + 1")
+        .assert_error();
+}
+
+#[test]
+fn test_upsert_edge_on_missing_endpoint_rejected() {
+    // Parser-level rejections are wrapped by statement recovery, so only the
+    // rejection itself is asserted here, not the message.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE)")
+        .exec_dml("UPSERT EDGE ON KNOWS SET since = '2024-01-01' WHERE id(src) == 1")
+        .assert_error();
 }
 
 // ==================== UPSERT Arithmetic Expression Tests ====================
@@ -687,15 +747,20 @@ fn test_upsert_edge_yield_parser() {
 
 #[test]
 fn test_upsert_edge_yield_execution() {
-    TestScenario::new()
+    let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
         .exec_ddl("CREATE EDGE KNOWS(since DATE)")
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
         .assert_success()
-        .exec_dml("UPSERT EDGE ON KNOWS SET since = '2024-01-01' WHERE id(src) == 1 AND id(dst) == 2 YIELD since")
-        .assert_success();
+        .exec_dml("UPSERT EDGE ON KNOWS SET since = '2024-01-01' WHERE id(src) == 1 AND id(dst) == 2 YIELD since");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("YIELD is not supported")),
+        "UPSERT EDGE with YIELD should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
 }
 
 // ==================== MERGE Alias Self-Reference Tests ====================

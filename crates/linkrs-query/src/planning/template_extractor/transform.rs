@@ -338,12 +338,6 @@ impl TemplateExtractor {
             }
         }
 
-        if let Some(ref where_expr) = stmt.where_clause {
-            let result = transformer.parameterize(where_expr);
-            let where_template = Self::expr_to_template_string(&result.expression);
-            parts.push(format!("WHERE {}", where_template));
-        }
-
         if stmt.with_edge {
             parts.push("WITH EDGE".to_string());
         }

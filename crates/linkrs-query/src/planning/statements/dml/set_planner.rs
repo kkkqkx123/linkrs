@@ -9,12 +9,11 @@
 use crate::binder::BoundStatement;
 use crate::parser::ast::{SetStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::{UpdateTargetType, VertexUpdateInfo};
+use crate::planning::plan::core::nodes::VertexUpdateInfo;
 use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
-use crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode;
 use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::plan::{PlanNodeEnum, SubPlan};
+use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
@@ -183,19 +182,10 @@ impl Planner for SetPlanner {
         }
 
         if !vertex_updates.is_empty() {
-            let update_info = UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap());
-            let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
-                id: next_node_id(),
-                info: update_info,
-                output_var: None,
-                col_names: vec!["updated".to_string()],
-                column_types: vec![],
-            });
-            let mut sub_plan = SubPlan::from_logical_root(logical_root);
-            let arg_node =
-                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
-            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-            return Ok(sub_plan);
+            return Err(PlannerError::PlanGenerationFailed(
+                "standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead"
+                    .to_string(),
+            ));
         }
 
         if !variable_assignments.is_empty() {
@@ -215,11 +205,7 @@ impl Planner for SetPlanner {
                 col_names: vec![],
                 column_types: vec![],
             });
-            let mut sub_plan = SubPlan::from_logical_root(logical_root);
-            let arg_node =
-                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
-            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-            return Ok(sub_plan);
+            return Ok(SubPlan::from_logical_root(logical_root));
         }
 
         let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
@@ -229,11 +215,7 @@ impl Planner for SetPlanner {
             col_names: vec![],
             column_types: vec![],
         });
-        let mut sub_plan = SubPlan::from_logical_root(arg_logical);
-        let arg_node =
-            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(arg_logical))
     }
 
     fn transform(
@@ -302,31 +284,13 @@ impl Planner for SetPlanner {
             }
         }
 
-        // If we have vertex updates, create an UpdateNode
+        // Direct vertex writes have no tag context, so they are rejected
+        // instead of silently dropping all but the first assignment.
         if !vertex_updates.is_empty() {
-            // For simplicity, handle the first vertex update
-            // In a full implementation, we might want to batch all updates
-            let update_info = if vertex_updates.len() == 1 {
-                UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap())
-            } else {
-                // For multiple vertices, we would need to create a batch update
-                // For now, just use the first one
-                UpdateTargetType::Vertex(vertex_updates.into_iter().next().unwrap())
-            };
-
-            let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
-                id: next_node_id(),
-                info: update_info,
-                output_var: None,
-                col_names: vec!["updated".to_string()],
-                column_types: vec![],
-            });
-
-            let mut sub_plan = SubPlan::from_logical_root(logical_root);
-            let arg_node =
-                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
-            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-            return Ok(sub_plan);
+            return Err(PlannerError::PlanGenerationFailed(
+                "standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead"
+                    .to_string(),
+            ));
         }
 
         // If no vertex updates, fall back to AssignNode for variable assignments
@@ -347,11 +311,7 @@ impl Planner for SetPlanner {
                 col_names: vec![],
                 column_types: vec![],
             });
-            let mut sub_plan = SubPlan::from_logical_root(logical_root);
-            let arg_node =
-                crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
-            sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-            return Ok(sub_plan);
+            return Ok(SubPlan::from_logical_root(logical_root));
         }
 
         // If no assignments at all, return an empty plan
@@ -362,11 +322,7 @@ impl Planner for SetPlanner {
             col_names: vec![],
             column_types: vec![],
         });
-        let mut sub_plan = SubPlan::from_logical_root(arg_logical);
-        let arg_node =
-            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "set_input");
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(arg_logical))
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

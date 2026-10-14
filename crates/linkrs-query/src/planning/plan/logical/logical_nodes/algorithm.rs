@@ -25,7 +25,7 @@ define_logical_binary_input_node! {
         space_id: u64,
         steps: usize,
         edge_types: Vec<String>,
-        with_cycle: bool,
+        with_walk: bool,
         with_loop: bool,
         reverse: bool,
     }
@@ -40,7 +40,7 @@ define_logical_binary_input_node! {
         edge_types: Vec<String>,
         min_hop: usize,
         max_hop: usize,
-        acyclic: bool,
+        path_uniqueness: crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness,
         direction: EdgeDirection,
         has_step_limit: bool,
         limit: i64,

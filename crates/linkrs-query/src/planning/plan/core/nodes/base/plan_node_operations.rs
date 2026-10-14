@@ -162,10 +162,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::CopyTo(_) => "CopyTo",
             PlanNodeEnum::InsertVertices(_) => "InsertVertices",
             PlanNodeEnum::InsertEdges(_) => "InsertEdges",
-            PlanNodeEnum::Remove(_) => "Remove",
             PlanNodeEnum::Update(_) => "Update",
-            PlanNodeEnum::UpdateVertices(_) => "UpdateVertices",
-            PlanNodeEnum::UpdateEdges(_) => "UpdateEdges",
             PlanNodeEnum::DeleteVertices(_) => "DeleteVertices",
             PlanNodeEnum::DeleteEdges(_) => "DeleteEdges",
             PlanNodeEnum::DeleteIndex(_) => "DeleteIndex",
@@ -292,9 +289,7 @@ impl PlanNodeEnum {
             | PlanNodeEnum::DeleteVertices(_)
             | PlanNodeEnum::DeleteEdges(_)
             | PlanNodeEnum::DeleteIndex(_)
-            | PlanNodeEnum::Update(_)
-            | PlanNodeEnum::UpdateVertices(_)
-            | PlanNodeEnum::UpdateEdges(_) => Cow::Borrowed(&[]),
+            | PlanNodeEnum::Update(_) => Cow::Borrowed(&[]),
 
             PlanNodeEnum::Project(node) => Cow::Owned(vec![node.input()]),
             PlanNodeEnum::Sort(node) => Cow::Owned(vec![node.input()]),
@@ -345,7 +340,6 @@ impl PlanNodeEnum {
 
             PlanNodeEnum::PipeDeleteVertices(node) => Cow::Owned(vec![node.input()]),
             PlanNodeEnum::PipeDeleteEdges(node) => Cow::Owned(vec![node.input()]),
-            PlanNodeEnum::Remove(node) => Cow::Owned(vec![node.input()]),
             PlanNodeEnum::Materialize(node) => Cow::Owned(vec![node.input()]),
 
             PlanNodeEnum::Minus(node) => Cow::Owned(vec![node.input(), node.minus_input()]),

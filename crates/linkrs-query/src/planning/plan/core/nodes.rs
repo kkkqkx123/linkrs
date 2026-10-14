@@ -23,14 +23,13 @@ pub use control_flow::{
 pub use data_modification::{
     CopyFromNode, CopyTarget, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteVerticesNode,
     EdgeDeleteInfo, EdgeInsertInfo, EdgeUpdateInfo, IndexDeleteInfo, InsertEdgesNode,
-    InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, TagInsertSpec,
-    UpdateEdgesNode, UpdateNode, UpdateTargetType, UpdateVerticesNode, VertexDeleteInfo,
-    VertexInsertInfo, VertexUpdateInfo,
+    InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, TagInsertSpec, UpdateNode,
+    UpdateTargetType, VertexDeleteInfo, VertexInsertInfo, VertexUpdateInfo,
 };
 pub use graph_operations::{
     AggregateNode, ApplyKind, ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode,
-    DedupNode, IntersectNode, MaterializeNode, MinusNode, PatternApplyNode, RemoveNode,
-    RollUpApplyNode, UnionNode, UnwindNode, WindowFunctionSpec, WindowNode,
+    DedupNode, IntersectNode, MaterializeNode, MinusNode, PatternApplyNode, RollUpApplyNode,
+    UnionNode, UnwindNode, WindowFunctionSpec, WindowNode,
 };
 pub use join::{
     AntiJoinNode, CrossJoinNode, FullOuterJoinNode, InnerJoinNode, LeftJoinNode, RightJoinNode,

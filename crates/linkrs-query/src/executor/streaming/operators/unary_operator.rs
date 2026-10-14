@@ -20,7 +20,6 @@ mod filter;
 mod flatten;
 mod limit;
 mod project;
-mod remove;
 mod sample;
 mod unwind;
 
@@ -57,9 +56,6 @@ pub enum UnaryOperatorKind {
     Assign {
         assignments: Vec<(String, Expression)>,
         state: UnaryOperatorState,
-    },
-    Remove {
-        columns_to_remove: Vec<String>,
     },
     Unwind {
         unwind_column: String,
@@ -158,9 +154,6 @@ impl UnaryOperator {
             } => UnaryOperatorKind::Assign {
                 assignments: assignments.clone(),
                 state,
-            },
-            super::spec::UnarySpec::Remove { columns_to_remove } => UnaryOperatorKind::Remove {
-                columns_to_remove: columns_to_remove.clone(),
             },
             super::spec::UnarySpec::Unwind {
                 unwind_column,
@@ -332,9 +325,6 @@ impl UnaryOperator {
         if matches!(&self.kind, UnaryOperatorKind::Assign { .. }) {
             return assign::handle(self, input);
         }
-        if matches!(&self.kind, UnaryOperatorKind::Remove { .. }) {
-            return remove::handle(self, input);
-        }
         if matches!(&self.kind, UnaryOperatorKind::Unwind { .. }) {
             return unwind::handle(self, input);
         }
@@ -356,7 +346,7 @@ impl UnaryOperator {
 
     /// Reset this operator's per-run counters/buffers and rewind the input.
     ///
-    /// Stateless operators (Filter/Project/Assign/Remove/AppendVertices)
+    /// Stateless operators (Filter/Project/Assign/AppendVertices)
     /// are no-ops beyond rewinding the input; Limit/Sample reset their
     /// counters; Dedup clears its seen-set; Unwind clears its input buffer.
     pub fn reset(&mut self, input: &mut StreamingExecutor) -> Result<bool, QueryError> {
@@ -405,7 +395,6 @@ impl UnaryOperator {
             UnaryOperatorKind::Filter { .. }
             | UnaryOperatorKind::Project { .. }
             | UnaryOperatorKind::Assign { .. }
-            | UnaryOperatorKind::Remove { .. }
             | UnaryOperatorKind::AppendVertices { .. } => {}
         }
         input.reset()?;

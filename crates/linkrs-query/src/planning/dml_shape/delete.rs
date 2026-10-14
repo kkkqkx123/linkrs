@@ -7,11 +7,6 @@ use super::{render_contextual, ContextualExpression};
 
 /// Render a canonical DELETE template, appending literal values to `values`.
 pub(crate) fn render_delete(delete: &DeleteStmt, values: &mut Vec<Value>) -> Option<String> {
-    // The parser never produces a WHERE clause for DELETE. If one is present
-    // we cannot re-render it faithfully, so skip shape caching.
-    if delete.where_clause.is_some() {
-        return None;
-    }
     let mut out = if delete.detach {
         String::from("DETACH DELETE ")
     } else {

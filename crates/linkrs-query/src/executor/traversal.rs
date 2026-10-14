@@ -2,6 +2,7 @@ pub mod config;
 pub mod graph_reader;
 pub mod runtime;
 pub mod stats;
+pub mod weighted;
 
 pub use config::{
     EmitPolicy, PathPolicy, TraversalConfig, TraversalKind, TraversalOrder, VisitedPolicy,

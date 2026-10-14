@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::parser::ast::pattern::EdgePattern;
+use crate::parser::ast::pattern::{EdgePattern, PathSemantic};
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
 use crate::planning::plan::core::nodes::ExpandAllNode;
@@ -13,16 +13,22 @@ use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 
 use super::logical_mirror::{logical_filter, neighbor_tag};
 
-/// Map an edge range to fixed or variable expand steps. Unbounded or illegal
-/// ranges keep the legacy single-hop shape so execution falls back to the row
-/// path instead of changing results.
-fn apply_edge_range(
-    expand_node: &mut ExpandAllNode,
-    range: Option<&crate::parser::ast::pattern::EdgeRange>,
-) {
-    let Some(range) = range else {
+/// Map an edge range to fixed or variable expand steps, and resolve the
+/// effective repeat rule for the hop. An unbounded range means "any number
+/// of hops": with a path semantic the walk is bounded by that semantic's
+/// repeat rule, while a bare `*` carries none and would enumerate an
+/// unterminating walk on a cyclic graph, so it enumerates as a trail —
+/// the weakest repeat rule that keeps the enumeration finite. Everywhere
+/// else a missing or oversized range keeps the single-hop shape so
+/// execution falls back to the row path instead of changing results.
+///
+/// Returns the effective path semantic so the logical mirror carries the
+/// same policy as the physical node.
+fn apply_edge_range(expand_node: &mut ExpandAllNode, edge: &EdgePattern) -> Option<PathSemantic> {
+    expand_node.set_path_semantic(edge.path_semantic.clone());
+    let Some(range) = edge.range.as_ref() else {
         expand_node.set_step_limit(1);
-        return;
+        return edge.path_semantic.clone();
     };
     match (range.min, range.max) {
         (Some(min), Some(max)) if min == max => {
@@ -33,14 +39,14 @@ fn apply_edge_range(
             let hi = max;
             if hi - lo > 64 {
                 expand_node.set_step_limit(1);
-                return;
+                return edge.path_semantic.clone();
             }
             expand_node.set_step_limits((lo..=hi).map(|v| v as u32).collect());
         }
         (None, Some(max)) if max >= 1 => {
             if max > 64 {
                 expand_node.set_step_limit(1);
-                return;
+                return edge.path_semantic.clone();
             }
             expand_node.set_step_limits((1..=max).map(|v| v as u32).collect());
         }
@@ -52,9 +58,16 @@ fn apply_edge_range(
             }
         }
         _ => {
-            expand_node.set_step_limit(1);
+            // The grammar gives a bare path semantic no range slot, so an
+            // unbounded range is the only shape it can arrive in: capping
+            // the hops would silently discard the requested semantic.
+            expand_node.set_unbounded_steps();
+            if edge.path_semantic.is_none() {
+                expand_node.set_path_semantic(Some(PathSemantic::Trail));
+            }
         }
     }
+    expand_node.path_semantic()
 }
 
 pub fn plan_pattern_edge(
@@ -85,8 +98,9 @@ pub fn plan_pattern_edge(
         expand_node.set_any_edge_type(true);
     }
 
-    apply_edge_range(&mut expand_node, edge.range.as_ref());
-    expand_node.set_path_semantic(edge.path_semantic.clone());
+    let path_semantic = apply_edge_range(&mut expand_node, edge);
+    let step_limit = expand_node.step_limit();
+    let step_limits = expand_node.step_limits().cloned();
 
     let edge_var = edge.variable.clone().unwrap_or_else(|| "e".to_string());
     expand_node.set_col_names(vec![edge_var.clone()]);
@@ -99,9 +113,10 @@ pub fn plan_pattern_edge(
         edge.edge_types.is_empty(),
         None,
         vec![edge_var.clone()],
-        edge.path_semantic.clone(),
+        path_semantic,
         None,
-        edge.range.clone(),
+        step_limit,
+        step_limits,
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),
@@ -189,8 +204,7 @@ pub fn plan_pattern_edge_with_input(
         expand_node.set_any_edge_type(true);
     }
 
-    apply_edge_range(&mut expand_node, edge.range.as_ref());
-    expand_node.set_path_semantic(edge.path_semantic.clone());
+    let path_semantic = apply_edge_range(&mut expand_node, edge);
     let dst_tag = neighbor_tag(dst_labels)?;
     expand_node.set_dst_tag(dst_tag.clone());
 
@@ -207,6 +221,9 @@ pub fn plan_pattern_edge_with_input(
 
     expand_node.set_include_empty_paths(false);
 
+    let step_limit = expand_node.step_limit();
+    let step_limits = expand_node.step_limits().cloned();
+
     let expand_root = expand_node.into_enum();
     let mut logical_root = super::logical_mirror::logical_expand_all_with_range(
         space_id,
@@ -215,9 +232,10 @@ pub fn plan_pattern_edge_with_input(
         edge.edge_types.is_empty(),
         Some(input_var.to_string()),
         vec![src_col_name, edge_col_name, dst_col_name],
-        edge.path_semantic.clone(),
+        path_semantic,
         Some(dst_tag),
-        edge.range.clone(),
+        step_limit,
+        step_limits,
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),

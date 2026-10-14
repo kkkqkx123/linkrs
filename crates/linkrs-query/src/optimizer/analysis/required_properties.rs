@@ -331,7 +331,6 @@ impl RequiredPropertyAnalyzer {
             Unwind(n) => self.propagate_single(n.input(), &passed, map),
             Materialize(n) => self.propagate_single(n.input(), &passed, map),
             DataCollect(n) => self.propagate_single(n.input(), &passed, map),
-            Remove(n) => self.propagate_single(n.input(), &passed, map),
 
             // Binary join nodes: the join key expressions may reference
             // properties; both inputs receive the full requirement set and

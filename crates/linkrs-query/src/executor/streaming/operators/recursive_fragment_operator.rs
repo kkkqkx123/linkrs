@@ -3,8 +3,8 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use super::algorithms::{
-    bidir_bfs_shortest_path, enumerate_all_paths, homogeneous_path_tag, materialize_path_endpoint,
-    path_endpoint_pairs, AllPathsConfig, BidirBfsConfig,
+    bidir_bfs_shortest_path, enumerate_all_paths, materialize_path_endpoint, path_endpoint_pairs,
+    path_endpoint_tags, weighted_shortest_path, AllPathsConfig, BidirBfsConfig,
 };
 use crate::executor::expression::evaluator::traits::ExpressionContext;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
@@ -13,6 +13,7 @@ use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::SlotLayout;
+use crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness;
 use crate::storage::QueryStorage;
 use linkrs_core::error::QueryError;
 use linkrs_core::{EdgeDirection, Value};
@@ -30,6 +31,7 @@ pub enum RecursiveFragmentOperatorKind {
         start_vertices: Vec<Value>,
         target_vertices: Vec<Value>,
         vertex_tag: String,
+        weight: Option<String>,
     },
     MultiShortestPath {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -58,7 +60,7 @@ pub enum RecursiveFragmentOperatorKind {
         direction: EdgeDirection,
         min_depth: usize,
         max_depth: usize,
-        acyclic: bool,
+        path_uniqueness: PathUniqueness,
         limit: Option<usize>,
         offset: usize,
         start_vertices: Vec<Value>,
@@ -120,6 +122,7 @@ impl RecursiveFragmentOperator {
                 start_vertices,
                 target_vertices,
                 vertex_tag,
+                weight,
             } => RecursiveFragmentOperatorKind::ShortestPath {
                 storage,
                 space_name,
@@ -129,6 +132,7 @@ impl RecursiveFragmentOperator {
                 start_vertices: start_vertices.clone(),
                 target_vertices: target_vertices.clone(),
                 vertex_tag: vertex_tag.clone(),
+                weight: weight.clone(),
             },
             RecursiveFragmentSpec::MultiShortestPath {
                 edge_types,
@@ -169,7 +173,7 @@ impl RecursiveFragmentOperator {
                 direction,
                 min_depth,
                 max_depth,
-                acyclic,
+                path_uniqueness,
                 limit,
                 offset,
                 start_vertices,
@@ -182,7 +186,7 @@ impl RecursiveFragmentOperator {
                 direction: *direction,
                 min_depth: *min_depth,
                 max_depth: *max_depth,
-                acyclic: *acyclic,
+                path_uniqueness: *path_uniqueness,
                 limit: *limit,
                 offset: *offset,
                 start_vertices: start_vertices.clone(),
@@ -245,6 +249,7 @@ impl RecursiveFragmentOperator {
                 start_vertices,
                 target_vertices,
                 vertex_tag,
+                weight,
             } => loop {
                 let Some(mut chunk) = input.advance()? else {
                     return Ok(None);
@@ -254,8 +259,12 @@ impl RecursiveFragmentOperator {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
                     let layout = chunk.get_layout();
-                    let endpoint_tag =
-                        homogeneous_path_tag(&*reader, space_name, edge_types, vertex_tag);
+                    let endpoint_tags =
+                        path_endpoint_tags(&*reader, space_name, edge_types, *direction, vertex_tag);
+                    let (start_tag, end_tag) = endpoint_tags
+                        .as_ref()
+                        .map(|(start, end)| (start.as_str(), end.as_str()))
+                        .unzip();
                     let mut out_rows = Vec::new();
                     for row in &chunk.rows {
                         if let Some(rt) = self.runtime.as_ref() {
@@ -279,8 +288,9 @@ impl RecursiveFragmentOperator {
                                 space_name,
                                 &src_val,
                                 vertex_tag,
-                                endpoint_tag.as_deref(),
-                            ) else {
+                                start_tag,
+                            )?
+                            else {
                                 continue;
                             };
                             let Some(end_vertex) = materialize_path_endpoint(
@@ -288,29 +298,49 @@ impl RecursiveFragmentOperator {
                                 space_name,
                                 &dst_val,
                                 vertex_tag,
-                                endpoint_tag.as_deref(),
-                            ) else {
+                                end_tag,
+                            )?
+                            else {
                                 continue;
                             };
                             if let Some(rt) = self.runtime.as_ref() {
                                 rt.ensure_not_cancelled()?;
                             }
                             let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
-                            let paths = bidir_bfs_shortest_path(
-                                &*reader,
-                                &start_vertex,
-                                &end_vertex,
-                                BidirBfsConfig {
+                            let paths = if let Some(weight_prop) = weight {
+                                // Weighted variant: Dijkstra on the named edge
+                                // property; one cheapest path per (src, dst).
+                                weighted_shortest_path(
+                                    &*reader,
+                                    &start_vertex,
+                                    &end_vertex,
                                     space_name,
                                     vertex_tag,
-                                    edge_type_filter: et_ref,
-                                    max_depth: *max_depth,
-                                    single_shortest: false,
-                                    limit: 1000,
-                                    direction: *direction,
-                                },
-                                cancel_token.as_ref(),
-                            )?;
+                                    et_ref,
+                                    *direction,
+                                    *max_depth,
+                                    weight_prop,
+                                    cancel_token.as_ref(),
+                                )?
+                                .into_iter()
+                                .collect()
+                            } else {
+                                bidir_bfs_shortest_path(
+                                    &*reader,
+                                    &start_vertex,
+                                    &end_vertex,
+                                    BidirBfsConfig {
+                                        space_name,
+                                        vertex_tag,
+                                        edge_type_filter: et_ref,
+                                        max_depth: *max_depth,
+                                        single_shortest: false,
+                                        limit: 1000,
+                                        direction: *direction,
+                                    },
+                                    cancel_token.as_ref(),
+                                )?
+                            };
                             for path in &paths {
                                 if let Some(rt) = self.runtime.as_ref() {
                                     rt.ensure_not_cancelled()?;
@@ -365,8 +395,12 @@ impl RecursiveFragmentOperator {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
                     let layout = chunk.get_layout();
-                    let endpoint_tag =
-                        homogeneous_path_tag(&*reader, space_name, edge_types, vertex_tag);
+                    let endpoint_tags =
+                        path_endpoint_tags(&*reader, space_name, edge_types, *direction, vertex_tag);
+                    let (start_tag, end_tag) = endpoint_tags
+                        .as_ref()
+                        .map(|(start, end)| (start.as_str(), end.as_str()))
+                        .unzip();
                     let mut out_rows = Vec::new();
                     for row in &chunk.rows {
                         if let Some(rt) = self.runtime.as_ref() {
@@ -388,8 +422,9 @@ impl RecursiveFragmentOperator {
                             space_name,
                             &left_val,
                             vertex_tag,
-                            endpoint_tag.as_deref(),
-                        ) else {
+                            start_tag,
+                        )?
+                        else {
                             continue;
                         };
                         let Some(end_vertex) = materialize_path_endpoint(
@@ -397,8 +432,9 @@ impl RecursiveFragmentOperator {
                             space_name,
                             &right_val,
                             vertex_tag,
-                            endpoint_tag.as_deref(),
-                        ) else {
+                            end_tag,
+                        )?
+                        else {
                             continue;
                         };
                         let et_ref: Option<&[String]> = if edge_types.is_empty() {
@@ -475,8 +511,12 @@ impl RecursiveFragmentOperator {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
                     let layout = chunk.get_layout();
-                    let endpoint_tag =
-                        homogeneous_path_tag(&*reader, space_name, edge_types, vertex_tag);
+                    let endpoint_tags =
+                        path_endpoint_tags(&*reader, space_name, edge_types, *direction, vertex_tag);
+                    let (start_tag, end_tag) = endpoint_tags
+                        .as_ref()
+                        .map(|(start, end)| (start.as_str(), end.as_str()))
+                        .unzip();
                     let mut out_rows = Vec::new();
                     for row in &chunk.rows {
                         if let Some(rt) = self.runtime.as_ref() {
@@ -497,8 +537,9 @@ impl RecursiveFragmentOperator {
                             space_name,
                             &vid_val,
                             vertex_tag,
-                            endpoint_tag.as_deref(),
-                        ) else {
+                            start_tag,
+                        )?
+                        else {
                             continue;
                         };
                         let Some(end_vertex) = materialize_path_endpoint(
@@ -506,8 +547,9 @@ impl RecursiveFragmentOperator {
                             space_name,
                             &end_val,
                             vertex_tag,
-                            endpoint_tag.as_deref(),
-                        ) else {
+                            end_tag,
+                        )?
+                        else {
                             continue;
                         };
                         let et_ref: Option<&[String]> = if edge_types.is_empty() {
@@ -571,7 +613,7 @@ impl RecursiveFragmentOperator {
                 direction,
                 min_depth,
                 max_depth,
-                acyclic,
+                path_uniqueness,
                 limit,
                 offset,
                 start_vertices,
@@ -586,8 +628,12 @@ impl RecursiveFragmentOperator {
                     let reader = storage_lock.read();
                     let col_names = chunk.col_names();
                     let layout = chunk.get_layout();
-                    let endpoint_tag =
-                        homogeneous_path_tag(&*reader, space_name, edge_types, vertex_tag);
+                    let endpoint_tags =
+                        path_endpoint_tags(&*reader, space_name, edge_types, *direction, vertex_tag);
+                    let (start_tag, end_tag) = endpoint_tags
+                        .as_ref()
+                        .map(|(start, end)| (start.as_str(), end.as_str()))
+                        .unzip();
                     let mut out_rows = Vec::new();
                     for row in &chunk.rows {
                         if let Some(rt) = self.runtime.as_ref() {
@@ -606,8 +652,9 @@ impl RecursiveFragmentOperator {
                                 space_name,
                                 &src_val,
                                 vertex_tag,
-                                endpoint_tag.as_deref(),
-                            ) else {
+                                start_tag,
+                            )?
+                            else {
                                 continue;
                             };
                             let Some(end_vertex) = materialize_path_endpoint(
@@ -615,8 +662,9 @@ impl RecursiveFragmentOperator {
                                 space_name,
                                 &dst_val,
                                 vertex_tag,
-                                endpoint_tag.as_deref(),
-                            ) else {
+                                end_tag,
+                            )?
+                            else {
                                 continue;
                             };
                             let cancel_token = self.runtime.as_ref().map(|rt| rt.cancel_token());
@@ -631,7 +679,7 @@ impl RecursiveFragmentOperator {
                                     direction: *direction,
                                     min_depth: *min_depth,
                                     max_depth: *max_depth,
-                                    acyclic: *acyclic,
+                                    path_uniqueness: *path_uniqueness,
                                     result_cap: limit.unwrap_or(usize::MAX),
                                 },
                                 cancel_token.as_ref(),

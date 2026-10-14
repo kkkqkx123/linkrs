@@ -657,3 +657,50 @@ fn test_match_delete_multi_hop() {
         .assert_vertex_exists(2, "Person")
         .assert_vertex_exists(3, "Person");
 }
+
+// ==================== Edge Rank Handling Tests ====================
+
+#[test]
+fn test_delete_edge_rank_honored() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(strength DOUBLE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(strength) VALUES 1 -> 2 @0:(0.5), 1 -> 2 @1:(0.9)")
+        .assert_success()
+        .assert_edge_count("KNOWS", 2)
+        .exec_dml("DELETE EDGE 1 -> 2 @1 OF KNOWS")
+        .assert_success()
+        .assert_edge_count("KNOWS", 1)
+        .assert_edge_props(
+            1,
+            2,
+            "KNOWS",
+            std::collections::HashMap::from([("strength", linkrs_core::Value::Double(0.5))]),
+        );
+}
+
+#[test]
+fn test_update_edge_rank_honored() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(strength DOUBLE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(strength) VALUES 1 -> 2 @0:(0.5), 1 -> 2 @1:(0.9)")
+        .assert_success()
+        .exec_dml("UPDATE EDGE 1 -> 2 @1 OF KNOWS SET strength = 1.0")
+        .assert_success()
+        .exec_dml("DELETE EDGE 1 -> 2 @1 OF KNOWS")
+        .assert_success()
+        .assert_edge_count("KNOWS", 1)
+        .assert_edge_props(
+            1,
+            2,
+            "KNOWS",
+            std::collections::HashMap::from([("strength", linkrs_core::Value::Double(0.5))]),
+        );
+}

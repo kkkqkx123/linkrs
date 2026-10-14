@@ -189,17 +189,6 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_sample_spec(
     Ok(UnarySpec::Sample { count })
 }
 
-pub(in crate::executor::streaming::plan::arena_builder) fn build_remove_spec(
-    node: &crate::planning::plan::core::nodes::graph_operations::graph_operations_node::RemoveNode,
-) -> Result<UnarySpec, PlanBuildError> {
-    let columns_to_remove: Vec<String> = node
-        .remove_items()
-        .iter()
-        .map(|(col, _)| col.clone())
-        .collect();
-    Ok(UnarySpec::Remove { columns_to_remove })
-}
-
 pub(in crate::executor::streaming::plan::arena_builder) fn build_assign_spec(
     node: &crate::planning::plan::core::nodes::graph_operations::graph_operations_node::AssignNode,
     subquery_runners: Vec<SubqueryRunnerSpec>,
@@ -403,6 +392,8 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
         filter_expr: node.filter().map(contextual_to_expression).transpose()?,
         col_names: node.col_names().to_vec(),
         src_vids: node.src_vids().to_vec(),
+        // `step_limit == 0` is the unbounded sentinel produced by
+        // `set_unbounded_steps`, so it must pass through untouched.
         step_limit: node.step_limit().unwrap_or(1),
         step_limits: node.step_limits().cloned(),
         count_only,
@@ -466,10 +457,10 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_shortest_path_s
     node: &crate::planning::plan::core::nodes::traversal::path_algorithms::ShortestPathNode,
     _exec_ctx: &ExecutionContext,
 ) -> Result<RecursiveFragmentSpec, PlanBuildError> {
-    if node.weight_expression().is_some() || node.heuristic_expression().is_some() {
+    if node.heuristic_expression().is_some() {
         return Err(PlanBuildError::capability(
             "weighted_shortest_path",
-            "Weighted shortest path is not supported by the streaming executor",
+            "A* (heuristic) shortest path is not supported by the streaming executor",
         ));
     }
     // The plan carries no vertex label; the executor derives endpoint
@@ -482,6 +473,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_shortest_path_s
         start_vertices: node.start_vertex_ids().to_vec(),
         target_vertices: node.end_vertex_ids().to_vec(),
         vertex_tag: String::new(),
+        weight: node.weight_expression().clone(),
     })
 }
 
@@ -559,7 +551,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_all_paths_spec(
         direction: node.direction(),
         min_depth: node.min_hop(),
         max_depth: node.max_hop(),
-        acyclic: node.is_acyclic(),
+        path_uniqueness: node.path_uniqueness(),
         limit,
         offset,
         start_vertices: node

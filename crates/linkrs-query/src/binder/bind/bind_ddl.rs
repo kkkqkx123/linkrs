@@ -1,7 +1,6 @@
 use linkrs_core::DBResult;
 
 use crate::binder::bound::*;
-use crate::parser::ast::pattern::Pattern;
 
 use super::Binder;
 
@@ -14,11 +13,15 @@ impl Binder {
             crate::parser::ast::CreateTarget::Node { .. }
             | crate::parser::ast::CreateTarget::Edge { .. }
             | crate::parser::ast::CreateTarget::Path { .. } => {
-                let bound_target = self.bind_create_target(&stmt.target)?;
-                Ok(BoundStatement::Create(BoundCreate {
-                    target: bound_target,
-                    if_not_exists: stmt.if_not_exists,
-                }))
+                // Cypher-style data creation is parsed but has no executable
+                // write path (no id generation, no schema inference): fail
+                // here instead of planning a statement that cannot run.
+                Err(linkrs_core::error::DBError::from(
+                    linkrs_core::error::QueryError::invalid_query(
+                        "CREATE data patterns are not supported yet; use INSERT VERTEX / INSERT EDGE"
+                            .to_string(),
+                    ),
+                ))
             }
             _ => {
                 // Schema DDL targets (Tag, EdgeType, Space, Index, Sequence)
@@ -27,108 +30,6 @@ impl Binder {
                     crate::parser::ast::Stmt::Create(stmt.clone()),
                 )))
             }
-        }
-    }
-
-    fn bind_create_target(
-        &mut self,
-        target: &crate::parser::ast::CreateTarget,
-    ) -> DBResult<BoundCreateTarget> {
-        match target {
-            crate::parser::ast::CreateTarget::Node {
-                variable,
-                labels,
-                properties,
-            } => {
-                let bound_props = properties
-                    .as_ref()
-                    .map(|p| self.extract_map_properties(p))
-                    .transpose()?;
-                Ok(BoundCreateTarget::Node {
-                    variable: variable.clone(),
-                    labels: labels.clone(),
-                    properties: bound_props,
-                })
-            }
-            crate::parser::ast::CreateTarget::Edge {
-                variable,
-                edge_type,
-                src,
-                dst,
-                properties,
-                direction,
-            } => {
-                let src_expr = src
-                    .expression()
-                    .map(|e| e.inner().clone())
-                    .unwrap_or_else(|| linkrs_core::types::Expression::Variable("_".to_string()));
-                let dst_expr = dst
-                    .expression()
-                    .map(|e| e.inner().clone())
-                    .unwrap_or_else(|| linkrs_core::types::Expression::Variable("_".to_string()));
-                let bound_src = self.convert_ast_expr_to_bound(&src_expr)?;
-                let bound_dst = self.convert_ast_expr_to_bound(&dst_expr)?;
-                let bound_props = properties
-                    .as_ref()
-                    .map(|p| self.extract_map_properties(p))
-                    .transpose()?;
-                Ok(BoundCreateTarget::Edge(Box::new(
-                    crate::binder::bound::BoundEdgeCreateTarget {
-                        variable: variable.clone(),
-                        edge_type: edge_type.clone(),
-                        src: bound_src,
-                        dst: bound_dst,
-                        properties: bound_props,
-                        direction: *direction,
-                    },
-                )))
-            }
-            crate::parser::ast::CreateTarget::Path { patterns } => {
-                let bound_patterns = patterns
-                    .iter()
-                    .map(|p| self.bind_pattern_element(p))
-                    .collect::<DBResult<Vec<_>>>()?;
-                Ok(BoundCreateTarget::Path {
-                    patterns: bound_patterns,
-                })
-            }
-            _ => Err(linkrs_core::error::DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "Unexpected CREATE target type".to_string(),
-                ),
-            )),
-        }
-    }
-
-    fn bind_pattern_element(&mut self, pattern: &Pattern) -> DBResult<BoundPatternElement> {
-        match pattern {
-            Pattern::Node(np) => Ok(BoundPatternElement::Node(BoundPatternVertex {
-                variable: np.variable.clone(),
-                labels: np.labels.clone(),
-                properties: np
-                    .properties
-                    .as_ref()
-                    .map(|p| self.extract_map_properties(p))
-                    .transpose()?,
-            })),
-            Pattern::Edge(ep) => {
-                let properties = ep
-                    .properties
-                    .as_ref()
-                    .map(|p| self.extract_map_properties(p))
-                    .transpose()?;
-                Ok(BoundPatternElement::Edge(BoundPatternEdge {
-                    variable: ep.variable.clone(),
-                    edge_types: ep.edge_types.clone(),
-                    properties,
-                    direction: ep.direction,
-                }))
-            }
-            _ => Err(linkrs_core::error::DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "CREATE PATH only supports node or edge patterns".to_string(),
-                ),
-            )),
         }
     }
 

@@ -133,7 +133,7 @@ impl Planner for MatchStatementPlanner {
             log::debug!("Optimization Tip: {:?}", hint);
         }
 
-        self.plan_match_pattern(validated, space_id, &space_name, validation_info, &qctx)
+        self.plan_match_pattern(validated, space_id, &space_name, validation_info, &qctx, None)
     }
 
     fn plan_bound(
@@ -145,11 +145,14 @@ impl Planner for MatchStatementPlanner {
         let metadata = ctx.metadata;
         let validated = ctx.validated;
         let _ = (&bound, &qctx, &metadata, &validated);
-        if !matches!(bound, BoundStatement::Match(_)) {
-            return Err(PlannerError::UnsupportedOperation(
-                "Expected a MATCH bound statement".to_string(),
-            ));
-        }
+        let bound_delete = match bound {
+            BoundStatement::Match(m) => m.delete_clause.clone(),
+            _ => {
+                return Err(PlannerError::UnsupportedOperation(
+                    "Expected a MATCH bound statement".to_string(),
+                ));
+            }
+        };
 
         let space_id = qctx.space_id().unwrap_or(1);
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
@@ -166,7 +169,14 @@ impl Planner for MatchStatementPlanner {
             log::debug!("Optimization Tip: {:?}", hint);
         }
 
-        self.plan_match_pattern(validated, space_id, &space_name, validation_info, &qctx)
+        self.plan_match_pattern(
+            validated,
+            space_id,
+            &space_name,
+            validation_info,
+            &qctx,
+            bound_delete,
+        )
     }
 }
 
@@ -195,6 +205,7 @@ impl MatchStatementPlanner {
         space_name: &str,
         validation_info: &ValidationInfo,
         qctx: &Arc<QueryContext>,
+        bound_delete: Option<crate::binder::bound::BoundMatchDeleteClause>,
     ) -> Result<SubPlan, PlannerError> {
         let stmt = validated.stmt();
         match stmt {
@@ -269,12 +280,23 @@ impl MatchStatementPlanner {
                 }
 
                 if let Some(delete_clause) = &match_stmt.delete_clause {
-                    plan = pattern_planner::plan_match_delete(
-                        plan,
-                        delete_clause,
-                        space_name,
-                        match_stmt,
-                    )?;
+                    plan = if let Some(bound_delete_clause) = bound_delete.as_ref() {
+                        let edge_type =
+                            pattern_planner::extract_edge_type_from_patterns(&match_stmt.patterns);
+                        pattern_planner::plan_match_delete_bound(
+                            plan,
+                            bound_delete_clause,
+                            space_name,
+                            edge_type,
+                        )?
+                    } else {
+                        pattern_planner::plan_match_delete(
+                            plan,
+                            delete_clause,
+                            space_name,
+                            match_stmt,
+                        )?
+                    };
                 }
 
                 Ok(plan)

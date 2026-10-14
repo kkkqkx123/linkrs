@@ -42,7 +42,9 @@ pub(super) fn handle_update_vertices(
                     .or_else(|| row.first().cloned())
                     .unwrap_or(Value::Null(linkrs_core::NullType::Null));
                 if matches!(vid_val, Value::Null(_)) {
-                    continue;
+                    return Err(QueryError::execution(
+                        "UPDATE/UPSERT vertex id must not be NULL".to_string(),
+                    ));
                 }
                 let vid = VertexId::try_from(&vid_val)
                     .map_err(|e| QueryError::execution(format!("Invalid vertex id: {}", e)))?;
@@ -129,6 +131,7 @@ pub(super) fn handle_update_edges(
         space_name,
         src_col,
         dst_col,
+        rank_col,
         edge_type,
         updates,
         condition,
@@ -169,16 +172,19 @@ pub(super) fn handle_update_edges(
                     .unwrap_or(Value::Null(linkrs_core::NullType::Null));
 
                 if matches!(src_val, Value::Null(_)) || matches!(dst_val, Value::Null(_)) {
-                    continue;
+                    return Err(QueryError::execution(
+                        "UPDATE/UPSERT edge endpoint id must not be NULL".to_string(),
+                    ));
                 }
                 let src = VertexId::try_from(&src_val)
                     .map_err(|e| QueryError::execution(format!("Invalid edge source id: {}", e)))?;
                 let dst = VertexId::try_from(&dst_val).map_err(|e| {
                     QueryError::execution(format!("Invalid edge destination id: {}", e))
                 })?;
+                let rank = resolve_edge_rank(&context, rank_col, &src_val, &dst_val)?;
                 {
                     let existing = writer
-                        .get_edge(space_name, &src, &dst, edge_type, 0)
+                        .get_edge(space_name, &src, &dst, edge_type, rank)
                         .map_err(|e| QueryError::execution(e.to_string()))?;
                     let existing = match existing {
                         Some(edge) => edge,
@@ -186,7 +192,7 @@ pub(super) fn handle_update_edges(
                             if *is_upsert {
                                 let props =
                                     eval_update_props(updates, *replace_properties, &mut context)?;
-                                let edge = Edge::new(src, dst, edge_type.clone(), 0, props);
+                                let edge = Edge::new(src, dst, edge_type.clone(), rank, props);
                                 StorageWriter::insert_edge(&mut *writer, space_name, edge)
                                     .map_err(|e| QueryError::execution(e.to_string()))?;
                                 *rows_updated += 1;
@@ -209,7 +215,7 @@ pub(super) fn handle_update_edges(
                         }
                     }
                     let props = eval_update_props(updates, *replace_properties, &mut context)?;
-                    let mut edge = Edge::new_empty(src, dst, edge_type.clone(), 0);
+                    let mut edge = Edge::new_empty(src, dst, edge_type.clone(), rank);
                     edge.props = props;
                     if *replace_properties {
                         StorageWriter::update_edge_replace(&mut *writer, space_name, edge)

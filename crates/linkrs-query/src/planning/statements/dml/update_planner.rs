@@ -9,17 +9,14 @@
 use crate::binder::BoundStatement;
 use crate::parser::ast::{Stmt, UpdateStmt, UpdateTarget};
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::{
-    EdgeUpdateInfo, UpdateNode, UpdateTargetType, VertexUpdateInfo,
-};
-use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+use crate::planning::plan::core::nodes::{EdgeUpdateInfo, UpdateTargetType, VertexUpdateInfo};
 use crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::plan::{PlanNodeEnum, SubPlan};
+use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
-use linkrs_core::types::{ContextualExpression, ExpressionMeta};
+use linkrs_core::types::ContextualExpression;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -182,7 +179,7 @@ impl Planner for UpdatePlanner {
         let update_target = match &update.target {
             crate::binder::bound::BoundUpdateTarget::Vertex(_) => {
                 return Err(PlannerError::PlanGenerationFailed(
-                    "UPDATE vertex requires a tag qualifier (use UPDATE TAG <tag> ... WHERE ...)"
+                    "UPDATE vertex requires a tag qualifier (use UPDATE <vid> ON <tag> SET ...)"
                         .to_string(),
                 ));
             }
@@ -240,53 +237,9 @@ impl Planner for UpdatePlanner {
                 UpdateTargetType::Edge(edge_info)
             }
             crate::binder::bound::BoundUpdateTarget::Tag(tag_name) => {
-                let mut properties = HashMap::new();
-                for assignment in &update.assignments {
-                    let value = crate::binder::expr_converter::bound_expr_to_contextual(
-                        &assignment.value,
-                        &expr_ctx,
-                    )
-                    .map_err(PlannerError::PlanGenerationFailed)?;
-                    properties.insert(assignment.property.clone(), value);
-                }
-
-                let placeholder_meta = ExpressionMeta::new(linkrs_core::Expression::Variable(
-                    "_tag_placeholder".to_string(),
-                ));
-                let placeholder_id = expr_ctx.register_expression(placeholder_meta);
-
-                let vertex_info = VertexUpdateInfo {
-                    space_name: space_name.clone(),
-                    vertex_id: ContextualExpression::new(placeholder_id, expr_ctx.clone()),
-                    tag_name: Some(tag_name.clone()),
-                    properties,
-                    condition: None,
-                    is_upsert: update.is_upsert,
-                    replace_properties: update.assignments.iter().any(|a| a.is_map_overwrite),
-                };
-
-                let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
-                    id: next_node_id(),
-                    space_id: 0,
-                    space_name: space_name.clone(),
-                    tag: Some(tag_name.clone()),
-                    expression: None,
-                    limit: None,
-                    projected_properties: vec![],
-                    index_hint: None,
-                    estimated_cardinality: None,
-                    output_var: None,
-                    col_names: vec![],
-                    column_types: vec![],
-                });
-
-                let mut sub_plan = SubPlan::from_logical_root(logical_scan);
-                let physical_update = PlanNodeEnum::Update(UpdateNode::new(
-                    next_node_id(),
-                    UpdateTargetType::Vertex(vertex_info),
-                ));
-                sub_plan.set_tail(physical_update);
-                return Ok(sub_plan);
+                return Err(PlannerError::PlanGenerationFailed(format!(
+                    "UPDATE TAG <{tag_name}> bulk update is not supported yet; use UPDATE <vid> ON <tag> SET ..."
+                )));
             }
             crate::binder::bound::BoundUpdateTarget::TagOnVertex { vid, tag_name } => {
                 validate_bound_standalone_vid(vid)?;
@@ -333,11 +286,7 @@ impl Planner for UpdatePlanner {
             col_names: vec!["updated".to_string()],
             column_types: vec![],
         });
-        let mut sub_plan = SubPlan::from_logical_root(logical_root);
-        let arg_node =
-            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "update_input");
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 
     fn transform(
@@ -386,7 +335,7 @@ impl Planner for UpdatePlanner {
         let update_target = match &update_stmt.target {
             UpdateTarget::Vertex(_) => {
                 return Err(PlannerError::PlanGenerationFailed(
-                    "UPDATE vertex requires a tag qualifier (use UPDATE TAG <tag> ... WHERE ...)"
+                    "UPDATE vertex requires a tag qualifier (use UPDATE <vid> ON <tag> SET ...)"
                         .to_string(),
                 ));
             }
@@ -407,54 +356,9 @@ impl Planner for UpdatePlanner {
                 UpdateTargetType::Edge(edge_info)
             }
             UpdateTarget::Tag(tag_name) => {
-                let mut properties = HashMap::new();
-                for assignment in &update_stmt.set_clause.assignments {
-                    properties.insert(assignment.property.clone(), assignment.value.clone());
-                }
-
-                let mut scan_node =
-                    crate::planning::plan::core::nodes::ScanVerticesNode::new(0, &space_name);
-                scan_node.set_tag(tag_name);
-
-                let vertex_info = VertexUpdateInfo {
-                    space_name: space_name.clone(),
-                    vertex_id: ContextualExpression::new(
-                        linkrs_core::types::expr::ExpressionId::new(0),
-                        validated.ast.expr_context().clone(),
-                    ),
-                    tag_name: Some(tag_name.clone()),
-                    properties,
-                    condition: update_stmt.where_clause.clone(),
-                    is_upsert: update_stmt.is_upsert,
-                    replace_properties: update_stmt
-                        .set_clause
-                        .assignments
-                        .iter()
-                        .any(|a| a.is_map_overwrite),
-                };
-
-                let logical_scan = LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
-                    id: next_node_id(),
-                    space_id: 0,
-                    space_name: space_name.clone(),
-                    tag: Some(tag_name.clone()),
-                    expression: None,
-                    limit: None,
-                    projected_properties: vec![],
-                    index_hint: None,
-                    estimated_cardinality: None,
-                    output_var: None,
-                    col_names: vec![],
-                    column_types: vec![],
-                });
-
-                let mut sub_plan = SubPlan::from_logical_root(logical_scan);
-                let physical_update = PlanNodeEnum::Update(UpdateNode::new(
-                    next_node_id(),
-                    UpdateTargetType::Vertex(vertex_info),
-                ));
-                sub_plan.set_tail(physical_update);
-                return Ok(sub_plan);
+                return Err(PlannerError::PlanGenerationFailed(format!(
+                    "UPDATE TAG <{tag_name}> bulk update is not supported yet; use UPDATE <vid> ON <tag> SET ..."
+                )));
             }
             UpdateTarget::TagOnVertex { vid, tag_name } => {
                 // Update specific tag on a specific vertex
@@ -490,13 +394,7 @@ impl Planner for UpdatePlanner {
             column_types: vec![],
         });
 
-        // Create a SubPlan with the update node as the final node
-        let mut sub_plan = SubPlan::from_logical_root(logical_root);
-        let arg_node =
-            crate::planning::plan::core::nodes::ArgumentNode::new(next_node_id(), "update_input");
-        sub_plan.set_tail(PlanNodeEnum::Argument(arg_node));
-
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

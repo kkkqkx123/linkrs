@@ -504,3 +504,61 @@ fn test_insert_vertex_empty_string() {
         .assert_vertex_exists(1, "Person")
         .assert_vertex_props(1, "Person", HashMap::from([("name", Value::string(""))]));
 }
+
+// ==================== Property Count Validation Tests ====================
+
+#[test]
+fn test_insert_vertex_arity_mismatch_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice')");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("does not match")),
+        "fewer values than property names should fail, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_insert_vertex_extra_values_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30, 'extra')");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("does not match")),
+        "more values than property names should fail, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_insert_vertex_default_props_with_values_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX ON Person VALUES 1:('Alice', 30)");
+    assert!(
+        scenario.error().is_some_and(|e| e.contains("only writes vertex ids")),
+        "default property list with values should fail, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_insert_vertex_empty_parens_vid_only() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_dml("INSERT VERTEX Person() VALUES 1")
+        .assert_success()
+        .assert_vertex_exists(1, "Person");
+}

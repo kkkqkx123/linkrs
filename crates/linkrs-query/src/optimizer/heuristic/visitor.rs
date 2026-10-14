@@ -51,8 +51,7 @@ use crate::planning::plan::core::nodes::control_flow::control_flow_node::{
 use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 use crate::planning::plan::core::nodes::data_modification::{
     CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteVerticesNode,
-    InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
-    UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
+    InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, UpdateNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
@@ -62,7 +61,6 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
 use crate::planning::plan::core::nodes::search::vector::data_access::{
     VectorLookupNode, VectorMatchNode, VectorSearchNode,
 };
-use crate::planning::plan::core::nodes::RemoveNode;
 
 use crate::planning::plan::core::nodes::access::IndexScanNode;
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
@@ -215,7 +213,6 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_roll_up_apply => RollUpApplyNode, RollUpApply,
         visit_data_collect => DataCollectNode, DataCollect,
         visit_assign => AssignNode, Assign,
-        visit_remove => RemoveNode, Remove,
         visit_window => WindowNode, Window,
         visit_traverse => TraverseNode, Traverse,
         visit_materialize => MaterializeNode, Materialize,
@@ -261,8 +258,6 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_insert_vertices => InsertVerticesNode, InsertVertices,
         visit_insert_edges => InsertEdgesNode, InsertEdges,
         visit_update => UpdateNode, Update,
-        visit_update_vertices => UpdateVerticesNode, UpdateVertices,
-        visit_update_edges => UpdateEdgesNode, UpdateEdges,
         visit_delete_vertices => DeleteVerticesNode, DeleteVertices,
         visit_delete_edges => DeleteEdgesNode, DeleteEdges,
         visit_delete_index => DeleteIndexNode, DeleteIndex,

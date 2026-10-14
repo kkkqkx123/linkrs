@@ -135,8 +135,6 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         // ==================== Data Processing Nodes ====================
         LogicalNodeEnum::DataCollect(n) => convert_data_collect(n),
 
-        LogicalNodeEnum::Remove(n) => convert_remove(n),
-
         LogicalNodeEnum::PatternApply(n) => convert_pattern_apply(n),
 
         LogicalNodeEnum::CorrelatedApply(n) => convert_correlated_apply(n),

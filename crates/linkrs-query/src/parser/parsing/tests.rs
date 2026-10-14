@@ -12,6 +12,18 @@ mod tests {
         Ok(parser_result.ast.stmt.clone())
     }
 
+    /// Assert a query is rejected. Recovery may reparse the input into a
+    /// structurally valid statement after a syntax error, so rejection is
+    /// either a failed parse or a recorded error the pipeline surfaces.
+    fn assert_rejected(query: &str) {
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(
+            result.is_err() || parser.has_errors(),
+            "query must be rejected: {query}"
+        );
+    }
+
     #[test]
     fn test_insert_edge_basic() {
         let query = "INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01')";
@@ -455,8 +467,12 @@ mod tests {
                 "Self-loop edges should be allowed."
             );
             assert!(
-                !find_path_stmt.with_cycle,
-                "By default, loops are not allowed."
+                !find_path_stmt.with_trail,
+                "By default, edges do not repeat."
+            );
+            assert!(
+                !find_path_stmt.with_walk,
+                "By default, vertices do not repeat."
             );
         } else {
             panic!("Expectation for the FindPath statement");
@@ -464,40 +480,84 @@ mod tests {
     }
 
     #[test]
-    fn test_find_path_with_cycle() {
-        let query = "FIND ALL PATH WITH CYCLE FROM 1 TO 2 OVER connect";
+    fn test_find_path_with_trail() {
+        let query = "FIND ALL PATH WITH TRAIL FROM 1 TO 2 OVER connect";
         let result = parse_statement(query);
         assert!(
             result.is_ok(),
-            "FIND PATH parsing with WITH CYCLE should succeed: {:?}",
+            "FIND PATH parsing with WITH TRAIL should succeed: {:?}",
             result.err()
         );
 
-        let stmt = result.expect("FIND PATH parsing with WITH CYCLE should succeed!");
+        let stmt = result.expect("FIND PATH parsing with WITH TRAIL should succeed!");
         assert_eq!(stmt.kind(), "FIND PATH");
 
         if let Stmt::FindPath(find_path_stmt) = stmt {
             assert!(
                 !find_path_stmt.with_loop,
-                "By default, self-looping edges are not allowed."
+                "Self-loop edges stay under vertex uniqueness."
             );
-            assert!(find_path_stmt.with_cycle, "The loop should be allowed.");
+            assert!(find_path_stmt.with_trail, "Edges should not repeat.");
+            assert!(
+                !find_path_stmt.with_walk,
+                "By default, vertices do not repeat."
+            );
         } else {
-            panic!("The expectation for the FindPath statement");
+            panic!("Expectation for the FindPath statement");
         }
     }
 
     #[test]
-    fn test_find_path_with_loop_and_cycle() {
-        let query = "FIND ALL PATH WITH LOOP WITH CYCLE FROM 1 TO 2 OVER connect";
+    fn test_find_path_with_walk() {
+        let query = "FIND ALL PATH WITH WALK FROM 1 TO 2 OVER connect";
         let result = parse_statement(query);
         assert!(
             result.is_ok(),
-            "FIND PATH with WITH LOOP WITH CYCLE should parse successfully: {:?}",
+            "FIND PATH parsing with WITH WALK should succeed: {:?}",
             result.err()
         );
 
-        let stmt = result.expect("FIND PATH parsing with WITH LOOP WITH CYCLE should succeed!");
+        let stmt = result.expect("FIND PATH parsing with WITH WALK should succeed!");
+        assert_eq!(stmt.kind(), "FIND PATH");
+
+        if let Stmt::FindPath(find_path_stmt) = stmt {
+            assert!(
+                !find_path_stmt.with_loop,
+                "Self-loop edges stay under vertex uniqueness."
+            );
+            assert!(
+                !find_path_stmt.with_trail,
+                "Walk relaxation subsumes trail."
+            );
+            assert!(find_path_stmt.with_walk, "Vertices should repeat.");
+        } else {
+            panic!("Expectation for the FindPath statement");
+        }
+    }
+
+    #[test]
+    fn test_find_path_with_cycle_keyword_rejected() {
+        // WITH CYCLE was renamed to WITH WALK: the vocabulary must not
+        // survive next to MATCH's `*ACYCLIC`, whose meaning is opposite.
+        let mut parser = Parser::new("FIND ALL PATH WITH CYCLE FROM 1 TO 2 OVER connect");
+        let result = parser.parse();
+        assert!(
+            result.is_err() || parser.has_errors(),
+            "query must be rejected: FIND ALL PATH WITH CYCLE FROM 1 TO 2 OVER connect"
+        );
+    }
+
+    #[test]
+    fn test_find_path_with_loop_and_walk() {
+        let query = "FIND ALL PATH WITH LOOP WITH WALK FROM 1 TO 2 OVER connect";
+        let result = parse_statement(query);
+        assert!(
+            result.is_ok(),
+            "FIND PATH with WITH LOOP WITH WALK should parse successfully: {:?}",
+            result.err()
+        );
+
+        let stmt = result.expect("FIND PATH parsing with WITH LOOP WITH WALK should succeed!");
         assert_eq!(stmt.kind(), "FIND PATH");
 
         if let Stmt::FindPath(find_path_stmt) = stmt {
@@ -505,9 +565,12 @@ mod tests {
                 find_path_stmt.with_loop,
                 "Self-loop edges should be allowed."
             );
-            assert!(find_path_stmt.with_cycle, "The circuit should be allowed to operate (i.e., its operation should be permitted).");
+            assert!(
+                find_path_stmt.with_walk,
+                "Vertices should be allowed to repeat."
+            );
         } else {
-            panic!("The expectation for the FindPath statement");
+            panic!("Expectation for the FindPath statement");
         }
     }
 
@@ -1054,5 +1117,23 @@ mod tests {
         } else {
             panic!("expected CreateType statement");
         }
+    }
+
+    #[test]
+    fn test_merge_first_on_without_keyword_rejected() {
+        assert_rejected("MERGE (v:Person {name: 'Alice'}) ON SET v.age = 30");
+    }
+
+    #[test]
+    fn test_merge_dangling_on_rejected() {
+        assert_rejected("MERGE (v:Person {name: 'Alice'}) ON");
+    }
+
+    #[test]
+    fn test_merge_on_clauses_still_parse() {
+        let stmt =
+            parse_statement("MERGE (v:Person {name: 'Alice'}) ON MATCH SET v.age = 30 ON CREATE SET v.age = 0")
+                .expect("MERGE with ON MATCH / ON CREATE should parse");
+        assert_eq!(stmt.kind(), "MERGE");
     }
 }

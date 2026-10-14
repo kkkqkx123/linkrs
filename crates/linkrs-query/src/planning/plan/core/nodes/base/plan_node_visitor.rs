@@ -3,8 +3,7 @@
 use super::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::data_modification::{
     CopyFromNode, CopyToNode, DeleteEdgesNode, DeleteIndexNode, DeleteVerticesNode,
-    InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode,
-    UpdateEdgesNode, UpdateNode, UpdateVerticesNode,
+    InsertEdgesNode, InsertVerticesNode, PipeDeleteEdgesNode, PipeDeleteVerticesNode, UpdateNode,
 };
 use crate::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, FulltextManageNode, IndexManageNode, MacroManageNode, SpaceManageNode,
@@ -35,7 +34,7 @@ pub use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 pub use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 pub use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::{
     ApplyNode, AssignNode, CorrelatedApplyNode, DataCollectNode, DedupNode, MaterializeNode,
-    PatternApplyNode, RemoveNode, RollUpApplyNode, UnionNode, UnwindNode,
+    PatternApplyNode, RollUpApplyNode, UnionNode, UnwindNode,
 };
 pub use crate::planning::plan::core::nodes::graph_operations::set_operations_node::{
     IntersectNode, MinusNode,
@@ -135,7 +134,6 @@ pub trait PlanNodeVisitor {
         PatternApply, PatternApplyNode, visit_pattern_apply;
         RollUpApply, RollUpApplyNode, visit_roll_up_apply;
         CorrelatedApply, CorrelatedApplyNode, visit_correlated_apply;
-        Remove, RemoveNode, visit_remove;
     );
 
     impl_visitor_methods!(
@@ -202,8 +200,6 @@ pub trait PlanNodeVisitor {
 
     impl_visitor_methods!(
         Update, UpdateNode, visit_update;
-        UpdateVertices, UpdateVerticesNode, visit_update_vertices;
-        UpdateEdges, UpdateEdgesNode, visit_update_edges;
     );
 
     impl_visitor_methods!(
@@ -269,7 +265,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::PatternApply(node) => visitor.visit_pattern_apply(node),
             PlanNodeEnum::RollUpApply(node) => visitor.visit_roll_up_apply(node),
             PlanNodeEnum::CorrelatedApply(node) => visitor.visit_correlated_apply(node),
-            PlanNodeEnum::Remove(node) => visitor.visit_remove(node),
             PlanNodeEnum::Union(node) => visitor.visit_union(node),
             PlanNodeEnum::Minus(node) => visitor.visit_minus(node),
             PlanNodeEnum::Intersect(node) => visitor.visit_intersect(node),
@@ -316,8 +311,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::PipeDeleteVertices(node) => visitor.visit_pipe_delete_vertices(node),
             PlanNodeEnum::PipeDeleteEdges(node) => visitor.visit_pipe_delete_edges(node),
             PlanNodeEnum::Update(node) => visitor.visit_update(node),
-            PlanNodeEnum::UpdateVertices(node) => visitor.visit_update_vertices(node),
-            PlanNodeEnum::UpdateEdges(node) => visitor.visit_update_edges(node),
 
             PlanNodeEnum::FulltextSearch(node) => visitor.visit_fulltext_search(node),
             PlanNodeEnum::FulltextLookup(node) => visitor.visit_fulltext_lookup(node),

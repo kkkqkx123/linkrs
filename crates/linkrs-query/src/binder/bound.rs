@@ -439,6 +439,15 @@ pub struct BoundFindPathStatement {
     pub limit: Option<LimitClause>,
     pub skip: Option<SkipClause>,
     pub yield_clause: Option<BoundYieldClause>,
+    /// WEIGHT clause: property name used as the edge weight (validated at
+    /// bind time to only appear on FIND SHORTEST PATH).
+    pub weight_expression: Option<String>,
+    /// `WITH LOOP`: self-loop edges may be taken as terminal extensions.
+    pub with_loop: bool,
+    /// `WITH TRAIL`: path edges may not repeat; vertices may.
+    pub with_trail: bool,
+    /// `WITH WALK`: path vertices may repeat.
+    pub with_walk: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -583,7 +592,6 @@ pub struct BoundAssignment {
 #[derive(Debug, Clone)]
 pub struct BoundDelete {
     pub target: BoundDeleteTarget,
-    pub where_clause: Option<BoundExpression>,
     pub with_edge: bool,
     pub detach: bool,
 }
@@ -602,37 +610,6 @@ pub enum BoundDeleteTarget {
 }
 
 // ── Bound pattern types (replace raw AST patterns) ───────────────────────────
-
-#[derive(Debug, Clone)]
-pub enum BoundCreateTarget {
-    Node {
-        variable: Option<String>,
-        labels: Vec<String>,
-        properties: Option<Vec<(String, BoundExpression)>>,
-    },
-    Edge(Box<BoundEdgeCreateTarget>),
-    Path {
-        patterns: Vec<BoundPatternElement>,
-    },
-}
-
-/// Edge create target payload. Boxed inside [`BoundCreateTarget::Edge`] to keep
-/// the enum's inline size bounded by its smaller variants.
-#[derive(Debug, Clone)]
-pub struct BoundEdgeCreateTarget {
-    pub variable: Option<String>,
-    pub edge_type: String,
-    pub src: BoundExpression,
-    pub dst: BoundExpression,
-    pub properties: Option<Vec<(String, BoundExpression)>>,
-    pub direction: EdgeDirection,
-}
-
-#[derive(Debug, Clone)]
-pub enum BoundPatternElement {
-    Node(BoundPatternVertex),
-    Edge(BoundPatternEdge),
-}
 
 #[derive(Debug, Clone)]
 pub struct BoundPatternVertex {
@@ -674,12 +651,6 @@ pub struct BoundSet {
 #[derive(Debug, Clone)]
 pub struct BoundRemove {
     pub items: Vec<BoundExpression>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BoundCreate {
-    pub target: BoundCreateTarget,
-    pub if_not_exists: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -853,7 +824,6 @@ pub enum BoundStatement {
     Copy(BoundCopy),
 
     // ── DDL ─────────────────────────────────────────────────────────────────
-    Create(BoundCreate),
     Drop(BoundDrop),
     Alter(BoundAlter),
     Show(BoundShow),
@@ -914,7 +884,6 @@ impl BoundStatement {
             Self::Set(_) => "Set",
             Self::Remove(_) => "Remove",
             Self::Copy(_) => "Copy",
-            Self::Create(_) => "Create",
             Self::Drop(_) => "Drop",
             Self::Alter(_) => "Alter",
             Self::Show(_) => "Show",

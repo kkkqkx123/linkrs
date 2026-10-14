@@ -368,6 +368,10 @@ pub(super) fn expand_on_chunk(
         if step_limit > 1 {
             config.min_depth = step_limit;
             config.max_depth = step_limit;
+        } else if step_limit == 0 {
+            // An unbounded hop count: walk until the frontier is exhausted.
+            config.min_depth = 1;
+            config.max_depth = u32::MAX;
         }
         config.vertex_tag = ctx.dst_tag.to_string();
         config.path_semantic = ctx.path_semantic.clone();

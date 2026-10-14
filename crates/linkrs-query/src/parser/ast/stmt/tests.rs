@@ -139,7 +139,8 @@ fn test_stmt_category_exhaustive() {
                 weight_expression: None,
                 heuristic_expression: None,
                 with_loop: false,
-                with_cycle: false,
+                with_trail: false,
+                with_walk: false,
             }),
             Dql,
         ),
@@ -269,7 +270,6 @@ fn test_stmt_category_exhaustive() {
                     tag: String::new(),
                     vids: vec![],
                 },
-                where_clause: None,
                 with_edge: false,
                 detach: false,
             }),
@@ -874,7 +874,8 @@ fn test_find_path_stmt() {
         weight_expression: None,
         heuristic_expression: None,
         with_loop: false,
-        with_cycle: false,
+        with_trail: false,
+        with_walk: false,
     });
 
     assert!(matches!(stmt, Stmt::FindPath(_)));

@@ -50,7 +50,7 @@ impl DmlParser {
                 tags.push(TagInsertSpec {
                     tag_name,
                     prop_names: vec![],
-                    is_default_props: false,
+                    is_default_props: true,
                 });
                 if !ctx.match_token(TokenKind::Comma) {
                     break;
@@ -62,15 +62,21 @@ impl DmlParser {
                 loop {
                     let tag_name = ctx.expect_identifier()?;
                     let mut prop_names = vec![];
+                    let mut is_default_props = true;
 
                     // Check whether there is a list of attribute names.
                     if ctx.match_token(TokenKind::LParen) {
-                        loop {
-                            let prop_name = ctx.expect_identifier()?;
-                            prop_names.push(prop_name);
-                            if !ctx.match_token(TokenKind::Comma) {
-                                break;
+                        // Support empty property list: tag() is equivalent
+                        // to the ON shorthand (default properties).
+                        if !ctx.check_token(TokenKind::RParen) {
+                            loop {
+                                let prop_name = ctx.expect_identifier()?;
+                                prop_names.push(prop_name);
+                                if !ctx.match_token(TokenKind::Comma) {
+                                    break;
+                                }
                             }
+                            is_default_props = false;
                         }
                         ctx.expect_token(TokenKind::RParen)?;
                     }
@@ -78,7 +84,7 @@ impl DmlParser {
                     tags.push(TagInsertSpec {
                         tag_name,
                         prop_names,
-                        is_default_props: false,
+                        is_default_props,
                     });
 
                     // Check to see if there are any additional tags.

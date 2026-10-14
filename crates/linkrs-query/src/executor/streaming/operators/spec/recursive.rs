@@ -17,6 +17,9 @@ use crate::executor::streaming::plan::types::PhysicalPlan;
 #[derive(Debug, Clone)]
 pub enum RecursiveFragmentSpec {
     /// Bidirectional BFS shortest path between start and target vertices.
+    ///
+    /// When `weight` is set the search runs Dijkstra on that edge property
+    /// instead of hop-count BFS (see `algorithms::weighted_shortest_path`).
     ShortestPath {
         edge_types: Vec<String>,
         direction: EdgeDirection,
@@ -25,6 +28,8 @@ pub enum RecursiveFragmentSpec {
         target_vertices: Vec<Value>,
         /// Single vertex label used to materialize path vertices.
         vertex_tag: String,
+        /// Edge property used as the traversal weight (None = hop-count BFS).
+        weight: Option<String>,
     },
     /// Multi-source multi-target shortest path via bidirectional BFS.
     MultiShortestPath {
@@ -52,7 +57,8 @@ pub enum RecursiveFragmentSpec {
         direction: EdgeDirection,
         min_depth: usize,
         max_depth: usize,
-        acyclic: bool,
+        path_uniqueness:
+            crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness,
         limit: Option<usize>,
         offset: usize,
         start_vertices: Vec<Value>,

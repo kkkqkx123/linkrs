@@ -329,7 +329,7 @@ fn estimate_node_output_rows_impl(
         }
 
         // ── Pass-through / control flow ──
-        PassThrough(_) | Materialize(_) | Unwind(_) | DataCollect(_) | Remove(_) | Assign(_) => {
+        PassThrough(_) | Materialize(_) | Unwind(_) | DataCollect(_) | Assign(_) => {
             child_rows_of_impl(node, stats, selectivity, cardinality)
         }
 

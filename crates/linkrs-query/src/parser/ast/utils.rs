@@ -348,30 +348,20 @@ impl StmtFactory {
     }
 
     /// Create a DELETE statement
-    pub fn delete(
-        target: DeleteTarget,
-        where_clause: Option<ContextualExpression>,
-        span: Span,
-    ) -> Stmt {
+    pub fn delete(target: DeleteTarget, span: Span) -> Stmt {
         Stmt::Delete(DeleteStmt {
             span,
             target,
-            where_clause,
             with_edge: false,
             detach: false,
         })
     }
 
     /// Create a DELETE statement with the WITH EDGE option
-    pub fn delete_with_edge(
-        target: DeleteTarget,
-        where_clause: Option<ContextualExpression>,
-        span: Span,
-    ) -> Stmt {
+    pub fn delete_with_edge(target: DeleteTarget, span: Span) -> Stmt {
         Stmt::Delete(DeleteStmt {
             span,
             target,
-            where_clause,
             with_edge: true,
             detach: false,
         })
@@ -528,7 +518,8 @@ impl StmtFactory {
             weight_expression: None,
             heuristic_expression: None,
             with_loop: false,
-            with_cycle: false,
+            with_trail: false,
+            with_walk: false,
         })
     }
 }
@@ -671,7 +662,6 @@ impl AstBuilder {
                 tag,
                 vids: vertices,
             },
-            None,
             self.span,
         )
     }

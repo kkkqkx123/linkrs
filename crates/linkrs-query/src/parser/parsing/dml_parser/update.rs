@@ -61,11 +61,18 @@ impl DmlParser {
                 if ctx.match_token(TokenKind::When) {
                     ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?;
                 }
-                // Extract vid from WHERE clause condition.
-                // The WHERE clause is used to specify the vertex ID, so we clear it
-                // after extraction since the ID is now in the target.
-                let vid_value = Self::extract_id_from_condition(where_clause.as_ref(), &["vid"])
-                    .unwrap_or_else(|| linkrs_core::Value::Null(linkrs_core::NullType::Null));
+                // Extract vid from WHERE clause condition. Only the
+                // `id(vid) == <literal>` conjunct is consumed; any remaining
+                // terms stay as a regular filter predicate.
+                let (vid_value_opt, residual) =
+                    Self::extract_id_with_residual(ctx, where_clause.as_ref(), &["vid"]);
+                let vid_value = vid_value_opt.ok_or_else(|| {
+                    ParseError::new(
+                        crate::parser::core::error::ParseErrorKind::SyntaxError,
+                        "UPSERT VERTEX ON form requires WHERE id(vid) == <literal>".to_string(),
+                        ctx.current_position(),
+                    )
+                })?;
                 let vid_expr = CoreExpression::Literal(vid_value);
                 let vid_expr_meta = linkrs_core::types::expr::ExpressionMeta::with_span(
                     vid_expr,
@@ -84,7 +91,7 @@ impl DmlParser {
                         tag_name,
                     },
                     set_clause,
-                    where_clause: None,
+                    where_clause: residual,
                     yield_clause,
                     is_upsert,
                 }));
@@ -140,9 +147,35 @@ impl DmlParser {
                 if ctx.match_token(TokenKind::When) {
                     ctx.recover_clause(|_| Ok(None), |c| self.parse_expression(c).map(Some))?;
                 }
-                // Extract src and dst from WHERE clause.
-                // The WHERE clause is used to specify src/dst, so we clear it
-                // after extraction since the IDs are now in the target.
+                // Extract src and dst from WHERE clause. Only the
+                // `id(src)/id(dst) == <literal>` conjuncts are consumed; any
+                // remaining terms stay as a regular filter predicate.
+                let (src_value_opt, after_src) = Self::extract_id_with_residual(
+                    ctx,
+                    where_clause.as_ref(),
+                    &["src", "source"],
+                );
+                let src_value = src_value_opt.ok_or_else(|| {
+                    ParseError::new(
+                        crate::parser::core::error::ParseErrorKind::SyntaxError,
+                        "UPSERT EDGE ON form requires WHERE id(src) == <literal> AND id(dst) == <literal>"
+                            .to_string(),
+                        ctx.current_position(),
+                    )
+                })?;
+                let (dst_value_opt, residual) = Self::extract_id_with_residual(
+                    ctx,
+                    after_src.as_ref(),
+                    &["dst", "dest", "destination"],
+                );
+                let dst_value = dst_value_opt.ok_or_else(|| {
+                    ParseError::new(
+                        crate::parser::core::error::ParseErrorKind::SyntaxError,
+                        "UPSERT EDGE ON form requires WHERE id(src) == <literal> AND id(dst) == <literal>"
+                            .to_string(),
+                        ctx.current_position(),
+                    )
+                })?;
                 let make_literal_expr =
                     |ctx: &mut ParseContext, value: linkrs_core::Value| -> ContextualExpression {
                         let expr = CoreExpression::Literal(value);
@@ -153,14 +186,6 @@ impl DmlParser {
                         let id = ctx.expression_context_clone().register_expression(meta);
                         ContextualExpression::new(id, ctx.expression_context_clone())
                     };
-                let src_value =
-                    Self::extract_id_from_condition(where_clause.as_ref(), &["src", "source"])
-                        .unwrap_or_else(|| linkrs_core::Value::Null(linkrs_core::NullType::Null));
-                let dst_value = Self::extract_id_from_condition(
-                    where_clause.as_ref(),
-                    &["dst", "dest", "destination"],
-                )
-                .unwrap_or_else(|| linkrs_core::Value::Null(linkrs_core::NullType::Null));
                 let src = make_literal_expr(ctx, src_value);
                 let dst = make_literal_expr(ctx, dst_value);
                 let end_span = ctx.current_span();
@@ -174,7 +199,7 @@ impl DmlParser {
                         rank,
                     },
                     set_clause,
-                    where_clause: None,
+                    where_clause: residual,
                     is_upsert,
                     yield_clause,
                 }));

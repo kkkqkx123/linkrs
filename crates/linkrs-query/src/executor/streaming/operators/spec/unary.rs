@@ -30,9 +30,6 @@ pub enum UnarySpec {
         /// Expression-level subqueries compiled for this assign.
         subquery_runners: Vec<crate::executor::streaming::subquery::SubqueryRunnerSpec>,
     },
-    Remove {
-        columns_to_remove: Vec<String>,
-    },
     Unwind {
         unwind_column: String,
         list_expression: Option<Expression>,

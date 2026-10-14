@@ -261,6 +261,7 @@ pub enum TokenKind {
     FindPath,
     Weight,
     Loop,
+    Walk,
     Cycle,
     TtlDuration,
     TtlCol,

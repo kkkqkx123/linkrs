@@ -70,7 +70,6 @@ pub fn plan_match_delete(
                 vertex_ids: vertex_exprs.clone(),
                 with_edge: delete_clause.with_edge,
                 cascade: delete_clause.with_edge,
-                condition: None,
             };
             PipeDeleteVerticesNode::new(next_node_id(), info, input_node.clone()).into_enum()
         }
@@ -85,7 +84,6 @@ pub fn plan_match_delete(
                 space_name: space_name.to_string(),
                 edges,
                 edge_type,
-                condition: None,
             };
             PipeDeleteEdgesNode::new(next_node_id(), info, input_node.clone()).into_enum()
         }
@@ -97,7 +95,73 @@ pub fn plan_match_delete(
                 space_name: space_name.to_string(),
                 edges,
                 edge_type,
-                condition: None,
+            };
+            PipeDeleteEdgesNode::new(next_node_id(), info, input_node.clone()).into_enum()
+        }
+    };
+
+    Ok(SubPlan::new(Some(delete_node), input_plan.tail))
+}
+
+/// Bound-statement counterpart of [`plan_match_delete`].
+///
+/// Plans the MATCH DELETE clause from the binder output instead of the AST,
+/// so the bound validation and the executed plan cannot drift apart.
+pub fn plan_match_delete_bound(
+    input_plan: SubPlan,
+    delete_clause: &crate::binder::bound::BoundMatchDeleteClause,
+    space_name: &str,
+    edge_type: Option<String>,
+) -> Result<SubPlan, PlannerError> {
+    let input_node = input_plan.root().as_ref().ok_or_else(|| {
+        PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
+    })?;
+
+    let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+    let convert = |bound_expr: &crate::binder::bound::BoundExpression| {
+        crate::binder::expr_converter::bound_expr_to_contextual(bound_expr, &expr_ctx)
+            .map_err(PlannerError::PlanGenerationFailed)
+    };
+
+    let delete_node = match &delete_clause.target {
+        crate::binder::bound::BoundMatchDeleteTarget::Vertices(exprs) => {
+            let vertex_ids = exprs
+                .iter()
+                .map(convert)
+                .collect::<Result<Vec<ContextualExpression>, _>>()?;
+            let info = VertexDeleteInfo {
+                space_name: space_name.to_string(),
+                tag: None,
+                vertex_ids,
+                with_edge: delete_clause.with_edge,
+                cascade: delete_clause.with_edge,
+            };
+            PipeDeleteVerticesNode::new(next_node_id(), info, input_node.clone()).into_enum()
+        }
+        crate::binder::bound::BoundMatchDeleteTarget::Edges(exprs) => {
+            let edges: Vec<ContextualExpression> =
+                exprs.iter().map(convert).collect::<Result<Vec<_>, _>>()?;
+            let edges = edges.iter().map(|e| (e.clone(), e.clone(), None)).collect();
+            let info = EdgeDeleteInfo {
+                space_name: space_name.to_string(),
+                edges,
+                edge_type,
+            };
+            PipeDeleteEdgesNode::new(next_node_id(), info, input_node.clone()).into_enum()
+        }
+        crate::binder::bound::BoundMatchDeleteTarget::EdgeRefs(refs) => {
+            let mut edges = Vec::with_capacity(refs.len());
+            for (src, dst, rank) in refs {
+                edges.push((
+                    convert(src)?,
+                    convert(dst)?,
+                    rank.as_ref().map(convert).transpose()?,
+                ));
+            }
+            let info = EdgeDeleteInfo {
+                space_name: space_name.to_string(),
+                edges,
+                edge_type,
             };
             PipeDeleteEdgesNode::new(next_node_id(), info, input_node.clone()).into_enum()
         }
@@ -148,7 +212,7 @@ pub fn plan_variable_pattern(
     Ok(sub_plan)
 }
 
-fn extract_edge_type_from_patterns(patterns: &[Pattern]) -> Option<String> {
+pub(crate) fn extract_edge_type_from_patterns(patterns: &[Pattern]) -> Option<String> {
     for pattern in patterns {
         if let Pattern::Path(path_pattern) = pattern {
             for element in &path_pattern.elements {

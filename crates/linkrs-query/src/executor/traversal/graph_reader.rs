@@ -3,6 +3,21 @@ use linkrs_core::error::QueryError;
 use linkrs_core::types::storage_ids::VertexId;
 use linkrs_core::{Edge, EdgeDirection, Vertex};
 
+/// Identity of one edge inside a single path: source, destination, edge
+/// type and ranking. Parallel edges between the same pair stay distinct.
+pub type EdgeKey = (VertexId, VertexId, String, i64);
+
+/// Path-local identity of `edge`, the key trail (edge-unique) enumeration
+/// rejects when an edge repeats within one path.
+pub fn edge_key(edge: &Edge) -> EdgeKey {
+    (
+        *edge.src(),
+        *edge.dst(),
+        edge.edge_type().to_string(),
+        edge.ranking(),
+    )
+}
+
 /// Resolve the endpoint tag pair declared by an edge type schema.
 ///
 /// Returns `None` when the edge type is unknown or its schema declares no

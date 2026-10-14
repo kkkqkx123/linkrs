@@ -192,13 +192,6 @@ impl ChildAccessor for PlanNodeEnum {
                     None
                 }
             }
-            PlanNodeEnum::Remove(n) => {
-                if index == 0 {
-                    Some(n.input_mut())
-                } else {
-                    None
-                }
-            }
             PlanNodeEnum::Materialize(n) => {
                 if index == 0 {
                     Some(n.input_mut())

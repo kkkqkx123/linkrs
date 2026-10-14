@@ -17,17 +17,18 @@ MATCH <pattern> [, <pattern> ...] [WHERE <condition>] [RETURN <projection>] [ORD
 ```
 
 ### 关键特性
-- 支持节点模式: `(variable:Label {prop: value})`
-- 支持边模式: `-[variable:EdgeType {prop: value}]->`、`<-[...]-`、`-[...]-`（无向）
-- 支持多边类型: `-[e:KNOWS|FOLLOWS]->`
+- 支持节点模式: `(variable:Label {prop: value})`，标签支持多段写法 `:Person:Employee`
+- 支持边模式: `-[variable:EdgeType {prop: value}]->`、`<-[...]-`、`-[...]-`（无向）；边类型可省略 `:`，如 `-[knows]->`
+- 支持多边类型: `-[e:KNOWS|FOLLOWS]->`（`|` 仅用于边类型；节点多标签用 `:A:B` 形式）
 - 支持路径模式: `(a)-[e]->(b)`
-- 支持可变长边: `-[e*]->`、`-[e*2..5]->`、`-[e*..3]->`、`-[e*2]->`
+- 支持可变长边: `-[e*]->`、`-[e*2..5]->`、`-[e*..3]->`、`-[e*2]->`，同时支持方括号形式 `-[e*[2..5]]->`
 - 支持路径语义修饰: `*TRAIL`（不重复经过边）、`*ACYCLIC`（不重复经过点）、`*SHORTEST`、`*ALL SHORTEST`、`*WEIGHTED(weight_prop)`（带权最短路径）
-- 支持递归模式推导: `-[e*(v | WHERE ... | {proj}, {proj})]->`
-- 支持谓词过滤
-- 支持属性投影（RETURN 支持 DISTINCT、HAVING、SAMPLE、ORDER BY、SKIP、LIMIT）
+- 支持递归模式推导: `-[e*(v | WHERE ... | {node_proj}, {edge_proj})]->`（两个投影依次为节点投影、边投影）
+- 支持谓词过滤（WHERE 可出现在 RETURN 之前，也可在 RETURN 之后追加第二个 WHERE，两者取 AND）
+- 支持属性投影（RETURN 支持 `*`、DISTINCT、GROUP BY、HAVING、SAMPLE、ORDER BY、SKIP、LIMIT）
 - 支持 OPTIONAL MATCH
-- 支持多模式逗号连接（join），支持 join hint
+- 支持多模式逗号连接（join），支持 join hint：`USING JOIN BINARY(left, right)` 或 `USING JOIN MULTIWAY(probe, build, ...)`
+- MATCH 模式之后还支持 `DELETE VERTEX/EDGE` 子句与 `MERGE` 子句
 
 ### 示例
 ```cypher
@@ -51,6 +52,14 @@ MATCH (a)-[e:ROUTE*SHORTEST]->(b)
 RETURN a, b
 ```
 
+> **路径语义说明**：`*TRAIL` 不重复经过边（顶点可重复），`*ACYCLIC`
+> 不重复经过点。两者与 `*min..max` 范围可组合（`*1..3 TRAIL`）；
+> 语义与范围都是可选的，**只写语义不写范围时为无界枚举**——路径数随
+> 图稠密程度阶乘级增长，请按需加上界（如 `*1..5`）或依赖查询取消。
+> **纯 `*` 不写语义时同样无界**：为保持枚举有限（无约束的 walk 在带环
+> 图上不会终止），无界枚举按 trail 规则执行；带上界时（如 `*1..3`）
+> 按 walk 规则执行，跳数上界保证终止。
+
 ---
 
 ## 2. GO - 图遍历查询
@@ -64,9 +73,10 @@ GO [<steps>] [STEP] FROM <vertex_id> [, <vertex_id> ...] [OVER <edge_type> [, <e
 ```
 
 ### 关键特性
-- 支持指定遍历步数（单个整数，缺省为 1；不支持 `GO 2 TO 4 STEPS` 区间形式）
+- 支持指定遍历步数：目前仅支持单个整数字面量（缺省为 1）；`GO 2 TO 4 STEPS` 区间形式暂不支持（AST 已预留 Range/Variable 表示，解析层未接入；非整数字面量会静默按 1 步处理）
 - 支持正向、反向（`REVERSELY` 或 `IN`）、双向（`BIDIRECT`）遍历
-- OVER 子句可省略（遍历所有边类型），也可指定多个边类型
+- OVER 子句可省略（遍历所有边类型），也可指定多个边类型（逗号分隔）
+- 支持 `$$.tag.prop`（目标点）、`$^.tag.prop`（源点）、`$-.prop`（管道输入）引用表达式
 - 支持条件过滤
 - 支持属性投影（YIELD 支持 DISTINCT、WHERE、ORDER BY、SKIP、LIMIT、SAMPLE）
 - 支持管道后缀（`| WHERE ...`、`| YIELD ...` 等）与集合操作（UNION / INTERSECT / MINUS）
@@ -99,10 +109,10 @@ LOOKUP ON [TAG | EDGE] <tag_or_edge> [WHERE <condition>] [YIELD <properties>]
 
 ### 关键特性
 - 利用索引加速查询
-- `TAG` / `EDGE` 关键字可显式声明目标类型，也可省略（在绑定阶段解析）
+- `TAG` / `EDGE` 关键字可显式声明目标类型；`ON` 子句也可整体省略（此时按名称解析：先尝试 tag，再尝试边类型）
 - 支持复合条件
 - 支持属性投影（YIELD 支持 DISTINCT、WHERE、ORDER BY、SKIP、LIMIT）
-- 另有向量检索变体 `LOOKUP VECTOR`（见第 7 节）
+- 另有全文检索变体 `LOOKUP ON <schema> INDEX <index> WHERE '<query>'` 与向量检索变体 `LOOKUP VECTOR`（见第 6、7 节）
 
 ### 示例
 ```cypher
@@ -121,14 +131,17 @@ YIELD person.name, person.age
 ```cypher
 FETCH [PROP] ON [<tag> | *] <vertex_id> [, <vertex_id> ...] [YIELD <properties>]
 FETCH [PROP] ON <edge_type> <src_id> -> <dst_id> [@<rank>] [YIELD <properties>]
+FETCH TAG <tag> <vertex_id> [, <vertex_id> ...]
+FETCH EDGE <edge_type> <src_id> -> <dst_id> [@<rank>]
 ```
 
 ### 关键特性
-- 支持批量获取节点属性
-- `*` 表示获取所有 tag 的属性
+- 支持一次获取多个顶点属性（逗号分隔的 id 列表）
+- `*` 表示获取所有 tag 的属性（仅顶点形式；边形式使用 `*` 会直接报错）
 - 支持获取边属性
 - 支持指定边 rank
 - 支持属性投影
+- 不支持 `FETCH PROP ON <tag> <id> <prop_list>` 指定属性列表的写法（语法保留但解析后被丢弃）
 
 ### 示例
 ```cypher
@@ -151,66 +164,54 @@ FETCH PROP ON follow "101" -> "102" @0
 
 ### 语法结构
 ```cypher
-FIND <SHORTEST | ALL> PATH [WITH LOOP] [WITH CYCLE] FROM <src_id> [, <src_id> ...] [TO <dst_id> [, <dst_id> ...]] [OVER <edge_type> [, <edge_type> ...] [REVERSELY | BIDIRECT]] [UPTO <steps> STEP] [WEIGHT <weight_property>] [WHERE <condition>] [YIELD <properties>]
+FIND <SHORTEST | ALL> PATH [WITH LOOP] [WITH TRAIL] [WITH WALK] FROM <src_id> [, <src_id> ...] [TO <dst_id>] [OVER <edge_type> [, <edge_type> ...] [REVERSELY | BIDIRECT]] [UPTO <steps> STEP] [WEIGHT <weight_property>] [WHERE <condition>] [YIELD <properties>]
 ```
 
 ### 关键特性
 - 支持最短路径查找（`SHORTEST`，缺省）
 - 支持所有路径查找（`ALL`）
-- 支持带权最短路径（`WEIGHT` 子句，Dijkstra 算法）
-- 路径顶点唯一性是默认行为（路径中不重复访问同一顶点）
-- 支持显式允许自环边（A->A）
-- 支持显式允许回路（路径中重复访问顶点）
-- 支持路径长度限制（`UPTO <steps> STEP`）
-- `TO` 子句可省略（查找从起点出发的路径）
-- OVER 子句可省略（遍历所有边类型）
-- 支持条件过滤
-- 支持属性投影
+- 支持带权最短路径（`WEIGHT <prop>`，Dijkstra 算法）；`WEIGHT ranking` 使用边 ranking 字段，其余按属性名读取（缺失/非数值权重按 1.0，负值截断为 0.0，与 MATCH `*WEIGHTED` 规则一致）；每个 (src, dst) 对返回一条最廉价路径
+- `WEIGHT` 仅支持 `FIND SHORTEST PATH`；与 `FIND ALL PATH` 组合会在绑定阶段报错
+- 支持路径长度限制（`UPTO <steps> STEP`，`STEPS` 亦可）；省略时默认最大 10 步
+- 支持多边类型路径（`OVER <type> [, <type> ...]`）：端点标签由全部所列边类型的 schema 分方向推导，任一角色无法收敛到唯一标签时报显式错误
+- `TO` 子句可省略；目前 `TO` 后仅支持单个目标点表达式，不支持逗号分隔的 id 列表
+- OVER 子句可省略（遍历所有边类型，方向缺省为正向）
+- 支持条件过滤与属性投影（WHERE 在路径结果之上过滤）
 
 ### 环路控制选项
 
 | 选项 | 默认 | 说明 |
 |-----|------|------|
-| `WITH CYCLE` | 无 | 允许路径中重复访问顶点（如 A->B->C->A） |
-| `WITH LOOP` | 无 | 允许自环边（A->A），用于时序数据或List属性存储 |
+| `WITH WALK` | 无 | 允许路径中重复访问顶点与边（如 A->B->C->A），自环边随之自然合法 |
+| `WITH TRAIL` | 无 | 边不可重复（平行边因类型/rank 区分而互不相同），顶点可重复（如 A->B->A->B） |
+| `WITH LOOP` | 无 | 仅放行自环边（A->A，作为路径末端扩展），其余顶点重复仍被拒绝 |
 
 ### 区别说明
-- `WITH CYCLE`: 控制路径中是否允许重复访问顶点（如 A->B->C->A）
-- `WITH LOOP`: 控制是否允许自环边（A->A），不影响路径顶点唯一性检测
-- 两个选项独立工作，可以同时使用
-- 默认情况下，路径顶点唯一且自环边被去重
-
-### 权重表达式
-- `ranking`: 使用边的ranking字段作为权重
-- `<property_name>`: 使用指定属性作为权重（如 `weight`, `distance`, `cost`）
-- 省略WEIGHT子句: 使用无权图（BFS算法）
+- 三个选项与标准路径分类一一对应：缺省即 path（顶点唯一、自环剪除，`VertexUnique`）、`WITH LOOP` → `AllowSelfLoop`、`WITH TRAIL` → `EdgeUnique`、`WITH WALK` → `Free`；越宽松的选项优先
+- 这三个选项仅对 `FIND ALL PATH` 生效；`FIND SHORTEST PATH` 忽略它们（回路不可能产生更短路径）
+- 默认情况下，路径顶点唯一
+- `WITH WALK`/`WITH TRAIL` 与 MATCH 侧 `*`（无界时按 trail 枚举）的重复语义一致；`WITH TRAIL` 与 `*TRAIL` 同义
 
 ### 算法选择
-- **无权图**: 使用双向BFS算法，时间复杂度最优 O(b^(d/2))
-- **带权图**: 使用Dijkstra算法，支持多对多最短路径
+- **无权图**: 使用最短路径算子（BFS 类扩展）
+- **带权图**: `FIND SHORTEST PATH ... WEIGHT <prop>` 使用 Dijkstra 算法；MATCH 可变长模式 `*WEIGHTED(prop)` 使用同一权重规则
 
 ### 示例
 ```cypher
 -- 无权最短路径（默认去重自环边）
 FIND SHORTEST PATH FROM "101" TO "201" OVER follow
 
--- 带权最短路径（使用weight属性）
-FIND SHORTEST PATH FROM "101" TO "201" OVER follow WEIGHT weight
-
--- 带权最短路径（使用ranking字段）
-FIND SHORTEST PATH FROM "101" TO "201" OVER follow WEIGHT ranking
-
--- 所有路径查询
+-- 所有路径查询（UPTO 省略时默认 10 步）
 FIND ALL PATH FROM "101" TO "201" OVER follow UPTO 5 STEP
 
--- 允许自环边（用于时序数据查询）
+-- 允许自环边（其余顶点重复仍被拒绝）
 FIND ALL PATH WITH LOOP FROM "player100" TO "player200" OVER temp UPTO 5 STEP
 
--- 允许回路（路径中可重复访问顶点）
-FIND ALL PATH WITH CYCLE FROM "player100" TO "player200" OVER follow UPTO 5 STEP
+-- 边不可重复、顶点可重复（标准 trail 语义，与 *TRAIL 同义）
+FIND ALL PATH WITH TRAIL FROM "player100" TO "player200" OVER follow UPTO 5 STEP
 
--- 同时允许自环边和回路
-FIND ALL PATH WITH LOOP WITH CYCLE FROM "player100" TO "player200" OVER follow UPTO 5 STEP
+-- 顶点与边均可重复（标准 walk 语义）
+FIND ALL PATH WITH WALK FROM "player100" TO "player200" OVER follow UPTO 5 STEP
 ```
 
 ---
@@ -235,12 +236,11 @@ SEARCH [INDEX] <index_name> MATCH <query>
 ### 关键特性
 - 支持简单文本查询
 - 支持字段查询（`field:'keyword'`）
-- 支持短语搜索
-- 支持前缀和通配符搜索
-- 支持模糊搜索
+- 短语查询依赖底层全文引擎（tantivy）对查询串内引号的解释，解析层不区分短语 token
+- 前缀、通配符、模糊搜索等无解析层语法，仅在查询串内依赖 tantivy 查询语法支持
 - 支持评分排序
 - 支持结果高亮
-- 支持分页
+- 支持分页（ORDER BY / LIMIT 省略方向时默认 ASC）
 
 ### 查询类型
 
@@ -257,10 +257,14 @@ SEARCH [INDEX] <index_name> MATCH <query>
 | 字段 | 说明 |
 |------|------|
 | `<field>` | 索引字段 |
-| `score` / `score()` | 相关性评分 |
+| `score` / `score()` | 相关性评分（裸标识符 `score`、`matched_fields` 会自动按零参函数处理） |
 | `matched_fields` | 匹配的字段 |
 | `highlight(<field>)` | 高亮显示 |
 | `*` | 所有字段 |
+
+> 除 `SEARCH` 外，解析层还支持两种全文检索形式：
+> - `LOOKUP ON <schema> INDEX <index> WHERE '<query>'`
+> - `MATCH '<pattern>' WHERE FULLTEXT_MATCH(<field>, '<query>')`
 
 ### 示例
 ```cypher
@@ -302,13 +306,13 @@ SEARCH VECTOR <index_name> WITH vector = [<float>, ...] | text = '<query>' | par
 ```
 
 #### 关键特性
-- `WITH` 子句为必需，支持三种查询形式：
+- `WITH` 子句为必需，支持三种查询形式（`parameter = $name` 与 `param = $name` 等价）：
   - `vector = [0.1, 0.2, ...]`：浮点数组字面量，维度必须与索引定义一致
   - `text = '...'`：文本查询（先嵌入再检索）
   - `param = $name`：参数化查询
 - 支持阈值过滤（`THRESHOLD`）
 - 支持属性过滤（`WHERE`）
-- 支持排序、分页
+- 支持排序（省略方向时默认 ASC）、分页
 - `YIELD` 与 `RETURN` 等价，支持 `*` 与别名
 
 #### 示例
@@ -329,7 +333,7 @@ LIMIT 10
 
 #### 语法结构
 ```cypher
-LOOKUP VECTOR <schema_name> <index_name> WITH vector = [...] | text = '...' | param = $<name> [YIELD <fields>] [LIMIT <n>]
+LOOKUP VECTOR <schema_name> <index_name> WITH vector = [...] | text = '...' | param = $<name> [YIELD <fields> | RETURN <fields>] [LIMIT <n>]
 ```
 
 #### 示例
@@ -367,8 +371,8 @@ GET SUBGRAPH [WITH PROP | WITH EDGE] [<steps> STEPS | STEPS <steps>] FROM <verte
 ### 关键特性
 - 支持指定起始节点（多个）
 - 支持入边、出边、双向扩展
-- 支持扩展步数限制：规范形式 `GET SUBGRAPH <n> STEPS FROM ...`，也支持 `GET SUBGRAPH STEPS <n> FROM ...`；两者都省略时默认 1 步
-- `WITH PROP` / `WITH EDGE` 控制返回内容
+- 支持扩展步数限制：规范形式 `GET SUBGRAPH <n> STEPS FROM ...`，也支持 `GET SUBGRAPH STEPS <n> FROM ...`（`STEP`/`STEPS` 均可，且步数必须在 `FROM` 之前）；两者都省略时默认 1 步
+- `WITH PROP` / `WITH EDGE` 目前仅完成语法解析，绑定与执行阶段尚未接入（不影响返回内容）
 - 包含属性信息
 - 支持条件过滤与属性投影
 
@@ -383,8 +387,10 @@ GET SUBGRAPH 2 STEPS FROM "101", "102" OVER follow
 
 ### 9.1 RETURN 子句
 ```cypher
-RETURN <expression> [AS <alias>] [, ...] [DISTINCT] [HAVING <condition>] [SAMPLE <n>] [ORDER BY <expression> [ASC|DESC]] [SKIP <n>] [LIMIT <n>]
+RETURN [* | <expression> [AS <alias>]] [, ...] [DISTINCT] [GROUP BY <keys>] [HAVING <condition>] [SAMPLE <n>] [ORDER BY <expression> [ASC|DESC]] [SKIP <n>] [LIMIT <n>]
 ```
+
+> RETURN 可作为独立语句使用（如 `RETURN 1 + 1`），GROUP BY 另支持 `ROLLUP` / `CUBE` / `GROUPING SETS`。SKIP 与 LIMIT 可按任意顺序书写。
 
 ### 9.2 YIELD 子句
 ```cypher
@@ -392,11 +398,11 @@ YIELD [DISTINCT] <expression> [AS <alias>] [, ...] [WHERE <condition>] [ORDER BY
 ```
 
 #### 关键特性
-- 支持属性投影和表达式计算
-- 支持 DISTINCT 去重
+- 支持属性投影和表达式计算，支持 `*`
+- YIELD 子句语法支持 DISTINCT 去重
 - 支持 WHERE 条件过滤（在投影后过滤）
 - 支持 ORDER BY、SKIP、LIMIT、SAMPLE
-- 可作为独立语句使用
+- 可作为独立语句使用（注意：独立 YIELD 语句当前实现会丢弃 DISTINCT 与 SAMPLE，仅作为后缀子句时完整生效）
 - 可与其他语句组合使用（GO / LOOKUP / FETCH / FIND PATH / GET SUBGRAPH 等语句的 YIELD 后缀）
 
 #### 示例
@@ -435,13 +441,19 @@ SKIP <n>
 
 ### 9.6 WITH 子句
 ```cypher
-WITH <expression> [AS <alias>] [, ...] [WHERE <condition>]
+WITH [DISTINCT] <expression> [AS <alias>] [, ...] [WHERE <condition>] [ORDER BY ...] [SKIP <n>] [LIMIT <n>]
+WITH <name> AS (<query>) [, <name2> AS (<query2>) ...]      -- CTE
+WITH RECURSIVE <name> AS (<query>) [, ...]                  -- 递归 CTE
 ```
+
+> WITH 支持表达式投影（含 DISTINCT / WHERE / ORDER BY / SKIP / LIMIT），也支持定义普通与递归 CTE，且可作为独立语句使用。
 
 ### 9.7 UNWIND 子句
 ```cypher
 UNWIND <expression> AS <variable>
 ```
+
+> UNWIND 可作为独立语句使用，也可作为管道阶段。
 
 ### 9.8 管道 (`|`) 与集合操作
 
@@ -454,9 +466,12 @@ UNWIND <expression> AS <variable>
 <statement> | WITH <projection>
 <statement> | UNWIND <expression> AS <variable>
 <statement> | GROUP BY <keys> [YIELD <aggregates>]
+<statement> | COLLECT <expression> [AS <alias>] [, ...]
 ```
 
-支持集合操作：
+> 除 `| WHERE` 与 `| COLLECT` 外，`RETURN` / `WITH` / `UNWIND` / `GROUP BY` 作为管道阶段时 `|` 可省略（直接跟在上一条语句之后）。
+
+支持集合操作（直接跟在语句之后，无需 `|`）：
 
 ```cypher
 <statement> UNION [ALL] <statement>

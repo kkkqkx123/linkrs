@@ -44,6 +44,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_insert_edges_sp
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         src_col: "src".to_string(),
         dst_col: "dst".to_string(),
+        rank_col: "rank".to_string(),
         edge_type: node.edge_name().to_string(),
         edge_properties: node
             .prop_names()
@@ -100,6 +101,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_delete_edges_sp
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         src_col: "src".to_string(),
         dst_col: "dst".to_string(),
+        rank_col: "rank".to_string(),
         edge_type,
     })
 }
@@ -139,6 +141,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_pipe_delete_edg
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         src_col,
         dst_col,
+        rank_col: "rank".to_string(),
         edge_type,
     })
 }
@@ -169,6 +172,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_update_spec(
             space_name: exec_ctx.space_name.clone().unwrap_or_default(),
             src_col: "src".to_string(),
             dst_col: "dst".to_string(),
+            rank_col: "rank".to_string(),
             edge_type: info.edge_type.clone().unwrap_or_default(),
             updates: info
                 .properties
@@ -184,81 +188,6 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_update_spec(
             replace_properties: info.replace_properties,
         }),
     }
-}
-
-pub(in crate::executor::streaming::plan::arena_builder) fn build_update_vertices_spec(
-    node: &crate::planning::plan::core::nodes::data_modification::update_nodes::UpdateVerticesNode,
-    exec_ctx: &ExecutionContext,
-) -> Result<SinkSpec, PlanBuildError> {
-    let tag_name = node
-        .updates()
-        .first()
-        .and_then(|update| update.tag_name.clone())
-        .unwrap_or_default();
-    Ok(SinkSpec::UpdateVertices {
-        space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        tag_name,
-        updates: node
-            .updates()
-            .iter()
-            .flat_map(|update| update.properties.iter())
-            .map(|(name, value)| contextual_to_expression(value).map(|expr| (name.clone(), expr)))
-            .collect::<Result<Vec<_>, _>>()?,
-        condition: node
-            .updates()
-            .first()
-            .and_then(|update| update.condition.as_ref())
-            .map(contextual_to_expression)
-            .transpose()?,
-        is_upsert: node
-            .updates()
-            .first()
-            .map(|update| update.is_upsert)
-            .unwrap_or(false),
-        replace_properties: node
-            .updates()
-            .first()
-            .map(|update| update.replace_properties)
-            .unwrap_or(false),
-    })
-}
-
-pub(in crate::executor::streaming::plan::arena_builder) fn build_update_edges_spec(
-    node: &crate::planning::plan::core::nodes::data_modification::update_nodes::UpdateEdgesNode,
-    exec_ctx: &ExecutionContext,
-) -> Result<SinkSpec, PlanBuildError> {
-    Ok(SinkSpec::UpdateEdges {
-        space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        src_col: "src".to_string(),
-        dst_col: "dst".to_string(),
-        edge_type: node
-            .updates()
-            .first()
-            .and_then(|update| update.edge_type.clone())
-            .unwrap_or_default(),
-        updates: node
-            .updates()
-            .iter()
-            .flat_map(|update| update.properties.iter())
-            .map(|(name, value)| contextual_to_expression(value).map(|expr| (name.clone(), expr)))
-            .collect::<Result<Vec<_>, _>>()?,
-        condition: node
-            .updates()
-            .first()
-            .and_then(|update| update.condition.as_ref())
-            .map(contextual_to_expression)
-            .transpose()?,
-        is_upsert: node
-            .updates()
-            .first()
-            .map(|update| update.is_upsert)
-            .unwrap_or(false),
-        replace_properties: node
-            .updates()
-            .first()
-            .map(|update| update.replace_properties)
-            .unwrap_or(false),
-    })
 }
 
 pub(in crate::executor::streaming::plan::arena_builder) fn build_copy_from_spec(

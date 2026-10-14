@@ -21,6 +21,8 @@ mod insert_edge;
 mod insert_vertex;
 #[path = "dml/memo_skip_bind.rs"]
 mod memo_skip_bind;
+#[path = "dml/standalone_guards.rs"]
+mod standalone_guards;
 #[path = "dml/update.rs"]
 mod update;
 #[path = "dml/upsert.rs"]

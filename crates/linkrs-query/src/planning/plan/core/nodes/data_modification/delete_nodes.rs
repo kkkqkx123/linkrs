@@ -58,10 +58,6 @@ impl DeleteVerticesNode {
     pub fn cascade(&self) -> bool {
         self.info.cascade
     }
-
-    pub fn condition(&self) -> Option<&ContextualExpression> {
-        self.info.condition.as_ref()
-    }
 }
 
 // ============================================================================
@@ -146,10 +142,6 @@ impl DeleteEdgesNode {
     )] {
         &self.info.edges
     }
-
-    pub fn condition(&self) -> Option<&ContextualExpression> {
-        self.info.condition.as_ref()
-    }
 }
 
 // ============================================================================
@@ -206,10 +198,6 @@ impl PipeDeleteVerticesNode {
     pub fn cascade(&self) -> bool {
         self.info.cascade
     }
-
-    pub fn condition(&self) -> Option<&ContextualExpression> {
-        self.info.condition.as_ref()
-    }
 }
 
 define_plan_node_with_deps! {
@@ -259,9 +247,5 @@ impl PipeDeleteEdgesNode {
         Option<ContextualExpression>,
     )] {
         &self.info.edges
-    }
-
-    pub fn condition(&self) -> Option<&ContextualExpression> {
-        self.info.condition.as_ref()
     }
 }

@@ -76,6 +76,7 @@ pub(super) fn handle_delete_edges(
         space_name,
         src_col,
         dst_col,
+        rank_col,
         edge_type,
         rows_deleted,
         summary_returned,
@@ -112,8 +113,9 @@ pub(super) fn handle_delete_edges(
                 }
                 let (src, dst) = resolve_edge_endpoints(&src_val, &dst_val)
                     .ok_or_else(|| QueryError::execution("Invalid edge endpoint id".to_string()))?;
+                let rank = resolve_edge_rank(&context, rank_col, &src_val, &dst_val)?;
                 {
-                    StorageWriter::delete_edge(&mut *writer, space_name, &src, &dst, edge_type, 0)
+                    StorageWriter::delete_edge(&mut *writer, space_name, &src, &dst, edge_type, rank)
                         .map_err(|e| QueryError::execution(e.to_string()))?;
                     *rows_deleted += 1;
                 }
@@ -140,6 +142,7 @@ pub(super) fn handle_pipe_delete_edges(
         space_name,
         src_col,
         dst_col,
+        rank_col,
         edge_type,
         rows_deleted,
         summary_returned,
@@ -176,8 +179,9 @@ pub(super) fn handle_pipe_delete_edges(
                 }
                 let (src, dst) = resolve_edge_endpoints(&src_val, &dst_val)
                     .ok_or_else(|| QueryError::execution("Invalid edge endpoint id".to_string()))?;
+                let rank = resolve_edge_rank(&context, rank_col, &src_val, &dst_val)?;
                 {
-                    StorageWriter::delete_edge(&mut *writer, space_name, &src, &dst, edge_type, 0)
+                    StorageWriter::delete_edge(&mut *writer, space_name, &src, &dst, edge_type, rank)
                         .map_err(|e| QueryError::execution(e.to_string()))?;
                     *rows_deleted += 1;
                 }

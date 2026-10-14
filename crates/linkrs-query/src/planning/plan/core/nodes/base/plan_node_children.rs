@@ -37,8 +37,6 @@ impl PlanNodeEnum {
             | PlanNodeEnum::DeleteEdges(_)
             | PlanNodeEnum::DeleteIndex(_)
             | PlanNodeEnum::Update(_)
-            | PlanNodeEnum::UpdateVertices(_)
-            | PlanNodeEnum::UpdateEdges(_)
             | PlanNodeEnum::IndexScan(_)
             | PlanNodeEnum::ScanVertices(_)
             | PlanNodeEnum::ScanEdges(_)
@@ -100,9 +98,6 @@ impl PlanNodeEnum {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }
             PlanNodeEnum::RollUpApply(node) => {
-                vec![super::plan_node_traits::SingleInputNode::input(node)]
-            }
-            PlanNodeEnum::Remove(node) => {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }
             PlanNodeEnum::Materialize(node) => {
@@ -250,7 +245,6 @@ impl PlanNodeEnum {
             PlanNodeEnum::PatternApply(node) => set_single_child(node, children),
             PlanNodeEnum::CorrelatedApply(node) => set_single_child(node, children),
             PlanNodeEnum::RollUpApply(node) => set_single_child(node, children),
-            PlanNodeEnum::Remove(node) => set_single_child(node, children),
             PlanNodeEnum::Materialize(node) => set_single_child(node, children),
             PlanNodeEnum::Traverse(node) => set_single_child(node, children),
             PlanNodeEnum::PipeDeleteVertices(node) => set_single_child(node, children),

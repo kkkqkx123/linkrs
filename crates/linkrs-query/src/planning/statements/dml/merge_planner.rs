@@ -15,15 +15,14 @@ use crate::binder::expr_converter::bound_expr_to_contextual;
 use crate::parser::ast::{MergeStmt, Pattern, SetClause, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
-    ArgumentNode, EdgeInsertInfo, TagInsertSpec, UpdateTargetType, VertexInsertInfo,
-    VertexUpdateInfo,
+    EdgeInsertInfo, TagInsertSpec, UpdateTargetType, VertexInsertInfo, VertexUpdateInfo,
 };
 use crate::planning::plan::logical::logical_nodes::control_flow::LogicalSelectNode;
 use crate::planning::plan::logical::logical_nodes::dml::{
     LogicalInsertEdgesNode, LogicalInsertVerticesNode, LogicalUpdateNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::plan::{PlanNodeEnum, SubPlan};
+use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
@@ -520,17 +519,11 @@ impl Planner for MergePlanner {
                 let has_on_create = !merge.on_create.is_empty();
 
                 if !has_on_match && !has_on_create {
-                    let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
-                    let arg_node_enum = PlanNodeEnum::Argument(arg_node);
                     let (logical_root, _) =
                         self.build_node_insert_parts(vertex, space_name.clone(), &expr_ctx)?;
-                    let mut sub_plan = SubPlan::from_logical_root(logical_root);
-                    sub_plan.set_tail(arg_node_enum);
-                    return Ok(sub_plan);
+                    return Ok(SubPlan::from_logical_root(logical_root));
                 }
 
-                let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
-                let arg_node_enum = PlanNodeEnum::Argument(arg_node);
                 let condition = self.create_exists_condition(&expr_ctx)?;
                 let mut select_node = LogicalSelectNode {
                     id: next_node_id(),
@@ -579,9 +572,7 @@ impl Planner for MergePlanner {
                 select_node.set_else_branch(current_node);
 
                 let logical_root = LogicalNodeEnum::Select(select_node);
-                let mut sub_plan = SubPlan::from_logical_root(logical_root);
-                sub_plan.set_tail(arg_node_enum);
-                Ok(sub_plan)
+                Ok(SubPlan::from_logical_root(logical_root))
             }
             BoundMergePattern::Edge { .. } => {
                 // Edge MERGE still delegates to AST-based transform
@@ -676,10 +667,7 @@ impl Planner for MergePlanner {
                 col_names: vec!["inserted".to_string()],
                 column_types: vec![],
             });
-            let mut sub_plan = SubPlan::from_logical_root(logical_root);
-            let physical_root = sub_plan.root.clone().expect("logical root converts");
-            sub_plan.set_tail(physical_root);
-            return Ok(sub_plan);
+            return Ok(SubPlan::from_logical_root(logical_root));
         }
 
         let vertex_info = self.pattern_to_vertex_info(
@@ -692,9 +680,6 @@ impl Planner for MergePlanner {
         let has_on_create = merge_stmt.on_create.is_some();
 
         if !has_on_match && !has_on_create {
-            let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
-            let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
-
             let logical_root = LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
                 id: next_node_id(),
                 info: vertex_info,
@@ -703,13 +688,8 @@ impl Planner for MergePlanner {
                 column_types: vec![],
             });
 
-            let mut sub_plan = SubPlan::from_logical_root(logical_root);
-            sub_plan.set_tail(arg_node_enum);
-            return Ok(sub_plan);
+            return Ok(SubPlan::from_logical_root(logical_root));
         }
-
-        let arg_node = ArgumentNode::new(next_node_id(), "merge_args");
-        let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
 
         let condition = self.create_exists_condition(validated.expr_context())?;
         let mut select_node = LogicalSelectNode {
@@ -737,10 +717,8 @@ impl Planner for MergePlanner {
         select_node.set_else_branch(else_branch);
 
         let logical_root = LogicalNodeEnum::Select(select_node);
-        let mut sub_plan = SubPlan::from_logical_root(logical_root);
-        sub_plan.set_tail(arg_node_enum);
 
-        Ok(sub_plan)
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

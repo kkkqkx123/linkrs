@@ -123,6 +123,30 @@ impl Binder {
     ) -> DBResult<BoundStatement> {
         let target = match &stmt.target {
             InsertTarget::Vertices { tag, values } => {
+                if tag.is_default_props {
+                    for row in values {
+                        if !row.values.is_empty() {
+                            return Err(linkrs_core::error::DBError::from(
+                                linkrs_core::error::QueryError::invalid_query(
+                                    "INSERT VERTEX without a property name list only writes vertex ids; specify property names to write properties".to_string(),
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    for row in values {
+                        if row.values.len() != tag.prop_names.len() {
+                            return Err(linkrs_core::error::DBError::from(
+                                linkrs_core::error::QueryError::invalid_query(format!(
+                                    "INSERT VERTEX property value count ({}) does not match property name count ({}) for tag '{}'",
+                                    row.values.len(),
+                                    tag.prop_names.len(),
+                                    tag.tag_name
+                                )),
+                            ));
+                        }
+                    }
+                }
                 let mut bound_values = Vec::with_capacity(values.len());
                 for row in values {
                     let vid = self.bind_expr(&row.vid)?;
@@ -146,6 +170,18 @@ impl Binder {
                 prop_names,
                 edges,
             } => {
+                for (_, _, _, props) in edges {
+                    if props.len() != prop_names.len() {
+                        return Err(linkrs_core::error::DBError::from(
+                            linkrs_core::error::QueryError::invalid_query(format!(
+                                "INSERT EDGE property value count ({}) does not match property name count ({}) for edge type '{}'",
+                                props.len(),
+                                prop_names.len(),
+                                edge_name
+                            )),
+                        ));
+                    }
+                }
                 let mut bound_edges = Vec::with_capacity(edges.len());
                 for (src, dst, rank, props) in edges {
                     let src_b = self.bind_expr(src)?;
@@ -174,6 +210,13 @@ impl Binder {
         &mut self,
         stmt: &crate::parser::ast::UpdateStmt,
     ) -> DBResult<BoundStatement> {
+        if stmt.yield_clause.is_some() {
+            return Err(linkrs_core::error::DBError::from(
+                linkrs_core::error::QueryError::invalid_query(
+                    "YIELD is not supported for UPDATE/UPSERT yet".to_string(),
+                ),
+            ));
+        }
         let target_alias = update_target_alias(&stmt.target);
         let target = match &stmt.target {
             UpdateTarget::Vertex(expr) => {
@@ -256,14 +299,8 @@ impl Binder {
             }
             DeleteTarget::Index(name) => BoundDeleteTarget::Index(name.clone()),
         };
-        let where_clause = stmt
-            .where_clause
-            .as_ref()
-            .map(|w| self.bind_expr(w))
-            .transpose()?;
         Ok(BoundStatement::Delete(BoundDelete {
             target,
-            where_clause,
             with_edge: stmt.with_edge,
             detach: stmt.detach,
         }))
