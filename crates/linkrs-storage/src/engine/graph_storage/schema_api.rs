@@ -44,6 +44,7 @@ impl StorageSchemaOps for GraphStorage {
         tag_name: &str,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+        new_comment: Option<String>,
     ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
         schema_writer::alter_tag(
@@ -52,6 +53,7 @@ impl StorageSchemaOps for GraphStorage {
             tag_name,
             additions,
             deletions.into_iter().map(Arc::from).collect(),
+            new_comment,
         )
     }
 
@@ -124,6 +126,7 @@ impl StorageSchemaOps for GraphStorage {
         edge_type_name: &str,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+        new_comment: Option<String>,
     ) -> Result<bool, StorageError> {
         self.ctx.check_write_admission()?;
         schema_writer::alter_edge_type(
@@ -132,6 +135,7 @@ impl StorageSchemaOps for GraphStorage {
             edge_type_name,
             additions,
             deletions.into_iter().map(Arc::from).collect(),
+            new_comment,
         )
     }
 

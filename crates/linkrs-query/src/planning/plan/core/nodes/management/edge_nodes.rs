@@ -343,6 +343,7 @@ pub struct EdgeAlterInfo {
     pub additions: Vec<PropertyDef>,
     pub deletions: Vec<String>,
     pub changes: Vec<crate::parser::ast::stmt::PropertyChange>,
+    pub new_comment: Option<String>,
 }
 
 impl EdgeAlterInfo {
@@ -353,6 +354,7 @@ impl EdgeAlterInfo {
             additions: Vec::new(),
             deletions: Vec::new(),
             changes: Vec::new(),
+            new_comment: None,
         }
     }
 
@@ -371,6 +373,11 @@ impl EdgeAlterInfo {
         changes: Vec<crate::parser::ast::stmt::PropertyChange>,
     ) -> Self {
         self.changes = changes;
+        self
+    }
+
+    pub fn with_new_comment(mut self, new_comment: Option<String>) -> Self {
+        self.new_comment = new_comment;
         self
     }
 }

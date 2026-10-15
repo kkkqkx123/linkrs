@@ -318,6 +318,7 @@ fn test_stmt_category_exhaustive() {
                     additions: vec![],
                     deletions: vec![],
                     changes: vec![],
+                    new_comment: None,
                 },
             }),
             Ddl,

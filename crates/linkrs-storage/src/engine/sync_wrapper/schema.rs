@@ -26,6 +26,7 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
             tag: &str,
             additions: Vec<linkrs_core::types::PropertyDef>,
             deletions: Vec<String>,
+            new_comment: Option<String>,
         ) -> Result<bool, StorageError>;
         fn rename_vertex_property(
             &mut self,
@@ -57,6 +58,7 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
             edge_type: &str,
             additions: Vec<linkrs_core::types::PropertyDef>,
             deletions: Vec<String>,
+            new_comment: Option<String>,
         ) -> Result<bool, StorageError>;
         fn rename_edge_type(
             &mut self,

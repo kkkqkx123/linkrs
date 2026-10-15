@@ -10,6 +10,7 @@ type AlterOpsResult = (
     Vec<linkrs_core::types::PropertyDef>,
     Vec<String>,
     Vec<PropertyChange>,
+    Option<String>,
 );
 
 impl DdlParser {
@@ -132,7 +133,15 @@ impl DdlParser {
             return Ok(Stmt::Alter(AlterStmt { span, target }));
         }
 
-        let (additions, deletions, changes) = self.parse_alter_operations(ctx)?;
+        let (additions, deletions, changes, new_comment) = self.parse_alter_operations(ctx)?;
+        if additions.is_empty() && deletions.is_empty() && changes.is_empty() && new_comment.is_none()
+        {
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "ALTER TAG/EDGE requires ADD, DROP, CHANGE, or COMMENT".to_string(),
+                ctx.current_position(),
+            ));
+        }
 
         let span = ctx.span_since(start_span.start);
         if is_tag {
@@ -143,6 +152,7 @@ impl DdlParser {
                     additions,
                     deletions,
                     changes,
+                    new_comment,
                 },
             }))
         } else {
@@ -153,6 +163,7 @@ impl DdlParser {
                     additions,
                     deletions,
                     changes,
+                    new_comment,
                 },
             }))
         }
@@ -165,6 +176,7 @@ impl DdlParser {
         let mut additions = Vec::new();
         let mut deletions = Vec::new();
         let mut changes = Vec::new();
+        let mut new_comment: Option<String> = None;
 
         loop {
             if ctx.match_token(TokenKind::Add) {
@@ -195,12 +207,22 @@ impl DdlParser {
                     }
                 }
                 ctx.expect_token(TokenKind::RParen)?;
+            } else if ctx.match_token(TokenKind::Comment) {
+                if new_comment.is_some() {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SyntaxError,
+                        "duplicate COMMENT clause".to_string(),
+                        ctx.current_position(),
+                    ));
+                }
+                ctx.expect_token(TokenKind::Assign)?;
+                new_comment = Some(ctx.expect_string_literal()?);
             } else {
                 break;
             }
         }
 
-        Ok((additions, deletions, changes))
+        Ok((additions, deletions, changes, new_comment))
     }
 
     fn parse_alter_user_internal(

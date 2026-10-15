@@ -315,6 +315,7 @@ fn test_schema_wal_replays_create_and_alter_after_restart() {
                 "Person",
                 vec![PropertyDef::new("email".into(), DataType::String)],
                 vec!["age".to_string()],
+                None,
             )
             .expect("Failed to alter tag");
         storage
@@ -323,6 +324,7 @@ fn test_schema_wal_replays_create_and_alter_after_restart() {
                 "KNOWS",
                 vec![PropertyDef::new("weight".into(), DataType::Double)],
                 vec!["since".to_string()],
+                None,
             )
             .expect("Failed to alter edge type");
 

@@ -220,6 +220,7 @@ fn test_alter_tag_properties_with_existing_data() {
             "Person",
             vec![PropertyDef::new("email".into(), DataType::String)],
             vec!["age".to_string()],
+            None,
         )
         .expect("alter_tag should succeed");
 
@@ -282,6 +283,7 @@ fn test_alter_edge_type_properties() {
             "KNOWS",
             vec![PropertyDef::new("weight".into(), DataType::Double)],
             vec!["since".to_string()],
+            None,
         )
         .expect("alter_edge_type should succeed");
 

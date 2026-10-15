@@ -322,6 +322,7 @@ fn tag_manage_to_command(
                         new_name: c.new_name.clone(),
                     })
                     .collect(),
+                new_comment: info.new_comment.clone(),
             }
         }
         Desc(n) => TagManageCommand::Desc {
@@ -374,6 +375,7 @@ fn edge_manage_to_command(
                         new_name: c.new_name.clone(),
                     })
                     .collect(),
+                new_comment: info.new_comment.clone(),
             }
         }
         Rename(n) => EdgeManageCommand::Rename {

@@ -426,6 +426,7 @@ pub(crate) fn alter_tag(
     tag_name: &str,
     additions: Vec<PropertyDef>,
     deletions: Vec<Arc<str>>,
+    new_comment: Option<String>,
 ) -> StorageResult<bool> {
     let _ = ctx.schema_manager().get_space_id(space)?;
     let tag = ctx
@@ -443,9 +444,13 @@ pub(crate) fn alter_tag(
 
     // Execute modifications in schema_manager first
     let deletions_str: Vec<String> = deletions.iter().map(|n| n.to_string()).collect();
-    let result =
-        ctx.schema_manager()
-            .alter_tag(space, tag_name, additions.clone(), deletions_str)?;
+    let result = ctx.schema_manager().alter_tag(
+        space,
+        tag_name,
+        additions.clone(),
+        deletions_str,
+        new_comment.clone(),
+    )?;
 
     if !result {
         return Ok(false);
@@ -474,13 +479,14 @@ pub(crate) fn alter_tag(
         )?;
     }
 
-    if !additions.is_empty() {
+    if !additions.is_empty() || new_comment.is_some() {
         append_schema_redo(
             ctx,
             WalOpType::AddVertexProp,
             &AddVertexPropRedo {
                 label: tag.tag_id,
                 properties: schema_properties(&additions),
+                new_comment,
             },
         )?;
     }
@@ -673,6 +679,7 @@ pub(crate) fn alter_edge_type(
     edge_type_name: &str,
     additions: Vec<PropertyDef>,
     deletions: Vec<Arc<str>>,
+    new_comment: Option<String>,
 ) -> StorageResult<bool> {
     let _ = ctx.schema_manager().get_space_id(space)?;
     let edge_type = ctx
@@ -711,7 +718,7 @@ pub(crate) fn alter_edge_type(
         )?;
     }
 
-    if !additions.is_empty() {
+    if !additions.is_empty() || new_comment.is_some() {
         append_schema_redo(
             ctx,
             WalOpType::AddEdgeProp,
@@ -720,6 +727,7 @@ pub(crate) fn alter_edge_type(
                 dst_label: dst_label_id,
                 edge_label: edge_type.edge_type_id,
                 properties: schema_properties(&additions),
+                new_comment: new_comment.clone(),
             },
         )?;
     }
@@ -730,6 +738,7 @@ pub(crate) fn alter_edge_type(
         edge_type_name,
         additions.clone(),
         deletions_str,
+        new_comment,
     )?;
 
     if !result {

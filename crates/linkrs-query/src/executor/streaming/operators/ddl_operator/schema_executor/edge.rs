@@ -93,6 +93,7 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
             additions,
             deletions,
             changes,
+            new_comment,
         } => super::super::exec_ddl(storage, |s| {
             StorageSchemaOps::alter_edge_type(
                 s,
@@ -100,6 +101,7 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
                 edge_name,
                 additions.clone(),
                 deletions.clone(),
+                new_comment.clone(),
             )
             .map_err(|e| QueryError::execution(e.to_string()))?;
             for change in changes {
@@ -176,7 +178,7 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
                             data_type: "string".to_string(),
                         },
                     ]));
-                    let rows: Vec<Vec<Value>> = endpoint_rows(&et)
+                    let mut rows: Vec<Vec<Value>> = endpoint_rows(&et)
                         .into_iter()
                         .chain(et.properties.iter().map(|p| {
                             vec![
@@ -194,6 +196,15 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
                             ]
                         }))
                         .collect();
+                    if let Some(comment) = et.comment.as_deref() {
+                        rows.push(vec![
+                            Value::string("__schema_comment__"),
+                            Value::string("STRING"),
+                            Value::Bool(true),
+                            Value::string(""),
+                            Value::string(comment),
+                        ]);
+                    }
                     Ok(Some(DataChunk::new(rows, schema)))
                 }
                 None => {
@@ -217,6 +228,7 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
                         &et.dst_tag_name,
                         et.ttl_duration,
                         et.ttl_col.as_deref(),
+                        et.comment.as_deref(),
                     );
                     let schema =
                         super::super::make_single_col_schema("create_statement", "string");

@@ -82,6 +82,7 @@ fn purge_all_spaces(storage: &GraphStorage) {
         }
     };
     let mut removed_total: u64 = 0;
+    let mut failed_spaces: u64 = 0;
     for space in &spaces {
         match storage.purge_expired(&space.space_name, None) {
             Ok(entries) => {
@@ -98,13 +99,22 @@ fn purge_all_spaces(storage: &GraphStorage) {
                     }
                 }
             }
-            Err(error) => log::warn!(
-                "TTL background purge failed for space '{}': {}",
-                space.space_name,
-                error
-            ),
+            Err(error) => {
+                failed_spaces += 1;
+                log::warn!(
+                    "TTL background purge failed for space '{}': {}",
+                    space.space_name,
+                    error
+                );
+            }
         }
     }
+    log::info!(
+        "TTL background purge finished: {} space(s), {} row(s) removed, {} space(s) failed",
+        spaces.len(),
+        removed_total,
+        failed_spaces,
+    );
     if let Some(stats) = storage.ctx.stats_manager() {
         stats.record_ttl_purge(1, removed_total);
     }

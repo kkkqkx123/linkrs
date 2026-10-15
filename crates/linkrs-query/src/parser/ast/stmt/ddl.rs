@@ -139,12 +139,14 @@ pub enum AlterTarget {
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
         changes: Vec<PropertyChange>,
+        new_comment: Option<String>,
     },
     Edge {
         edge_name: String,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
         changes: Vec<PropertyChange>,
+        new_comment: Option<String>,
     },
     Sequence {
         name: String,

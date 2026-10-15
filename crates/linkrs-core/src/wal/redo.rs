@@ -125,6 +125,8 @@ pub struct AddVertexPropRedo {
     pub label: LabelId,
     /// (property name, type name, is_serial) triples.
     pub properties: Vec<(String, String, bool)>,
+    #[serde(default)]
+    pub new_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +136,8 @@ pub struct AddEdgePropRedo {
     pub edge_label: LabelId,
     /// (property name, type name, is_serial) triples.
     pub properties: Vec<(String, String, bool)>,
+    #[serde(default)]
+    pub new_comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

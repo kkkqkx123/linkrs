@@ -262,6 +262,7 @@ mod tests {
             &AddVertexPropRedo {
                 label: person_label,
                 properties: vec![("age".into(), "INT".into(), false)],
+                new_comment: None,
             },
             2,
         )
@@ -307,6 +308,7 @@ mod tests {
                 dst_label: city_label,
                 edge_label: lives_in_label,
                 properties: vec![("cost".into(), "INT".into(), false)],
+                new_comment: None,
             },
             3,
         )

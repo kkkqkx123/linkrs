@@ -299,11 +299,13 @@ impl MaintainPlanner {
                 additions,
                 deletions,
                 changes,
+                new_comment,
             } => {
                 let alter_info = TagAlterInfo::new(current_space.to_string(), tag_name.clone())
                     .with_additions(additions.clone())
                     .with_deletions(deletions.clone())
-                    .with_changes(changes.clone());
+                    .with_changes(changes.clone())
+                    .with_new_comment(new_comment.clone());
 
                 let node = AlterTagNode::new(next_node_id(), alter_info);
                 Ok(PlanNodeEnum::TagManage(TagManageNode::Alter(node)))
@@ -313,11 +315,13 @@ impl MaintainPlanner {
                 additions,
                 deletions,
                 changes,
+                new_comment,
             } => {
                 let alter_info = EdgeAlterInfo::new(current_space.to_string(), edge_name.clone())
                     .with_additions(additions.clone())
                     .with_deletions(deletions.clone())
-                    .with_changes(changes.clone());
+                    .with_changes(changes.clone())
+                    .with_new_comment(new_comment.clone());
 
                 let node = AlterEdgeNode::new(next_node_id(), alter_info);
                 Ok(PlanNodeEnum::EdgeManage(EdgeManageNode::Alter(node)))

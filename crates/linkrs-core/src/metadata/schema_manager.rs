@@ -781,6 +781,7 @@ impl SchemaManager {
         tag_name: &str,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+        new_comment: Option<String>,
     ) -> Result<bool, StorageError> {
         let space_info = self.get_space(space_name)?.ok_or_else(|| {
             StorageError::db_error(format!("Space \"{}\" does not exist", space_name))
@@ -810,6 +811,13 @@ impl SchemaManager {
                         if !data.info.properties.iter().any(|p| p.name == col) {
                             data.info.ttl_duration = None;
                             data.info.ttl_col = None;
+                        }
+                    }
+                    if let Some(comment) = new_comment {
+                        if comment.is_empty() {
+                            data.info.comment = None;
+                        } else {
+                            data.info.comment = Some(comment);
                         }
                     }
                     Some((data.info.tag_id, added, deletions))
@@ -1091,6 +1099,7 @@ impl SchemaManager {
         edge_type_name: &str,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+        new_comment: Option<String>,
     ) -> Result<bool, StorageError> {
         let space_info = self.get_space(space_name)?.ok_or_else(|| {
             StorageError::db_error(format!("Space \"{}\" does not exist", space_name))
@@ -1120,6 +1129,13 @@ impl SchemaManager {
                         if !data.info.properties.iter().any(|p| p.name == col) {
                             data.info.ttl_duration = None;
                             data.info.ttl_col = None;
+                        }
+                    }
+                    if let Some(comment) = new_comment {
+                        if comment.is_empty() {
+                            data.info.comment = None;
+                        } else {
+                            data.info.comment = Some(comment);
                         }
                     }
                     Some((data.info.edge_type_id, added, deletions))

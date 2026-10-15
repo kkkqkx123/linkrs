@@ -73,6 +73,7 @@ pub enum TagManageCommand {
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
         changes: Vec<PropertyRename>,
+        new_comment: Option<String>,
     },
     Rename {
         old_name: String,
@@ -108,6 +109,7 @@ pub enum EdgeManageCommand {
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
         changes: Vec<PropertyRename>,
+        new_comment: Option<String>,
     },
     Rename {
         old_name: String,

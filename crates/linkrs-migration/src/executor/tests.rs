@@ -531,6 +531,7 @@ impl linkrs_storage::StorageSchemaOps for TestStorage {
         _tag: &str,
         _additions: Vec<linkrs_core::types::PropertyDef>,
         _deletions: Vec<String>,
+        _new_comment: Option<String>,
     ) -> Result<bool, StorageError> {
         Ok(true)
     }
@@ -592,6 +593,7 @@ impl linkrs_storage::StorageSchemaOps for TestStorage {
         _edge_type: &str,
         _additions: Vec<linkrs_core::types::PropertyDef>,
         _deletions: Vec<String>,
+        _new_comment: Option<String>,
     ) -> Result<bool, StorageError> {
         Ok(true)
     }

@@ -134,28 +134,83 @@ mod tests {
 
     #[tokio::test]
     async fn maintenance_statements_are_classified_above_read_only() {
-        let fixture = MaintenanceTestService::new().await;
-        let service = &fixture.service;
+        use crate::graph_service::GraphService as TestService;
+        use crate::storage::MockStorage;
+
+        fn permission(text: &str) -> Option<linkrs_core::Permission> {
+            let stmt = TestService::<MockStorage>::parse_stmt(text)?;
+            TestService::<MockStorage>::permission_for_stmt(&stmt)
+        }
 
         // Maintenance statements must never inherit the read-only default:
         // `PURGE EXPIRED` reclaims storage (schema-level), `CHECKPOINT`
         // forces a snapshot (write-level).
         assert_eq!(
-            service.extract_permission_from_statement("PURGE EXPIRED IN maint_space"),
-            linkrs_core::Permission::Schema
+            permission("PURGE EXPIRED IN maint_space"),
+            Some(linkrs_core::Permission::Schema)
         );
         assert_eq!(
-            service.extract_permission_from_statement("purge expired in maint_space"),
-            linkrs_core::Permission::Schema
+            permission("purge expired in maint_space"),
+            Some(linkrs_core::Permission::Schema)
         );
         assert_eq!(
-            service.extract_permission_from_statement("CHECKPOINT"),
-            linkrs_core::Permission::Write
+            permission("CHECKPOINT"),
+            Some(linkrs_core::Permission::Write)
         );
         assert_eq!(
-            service.extract_permission_from_statement("SELECT 1"),
-            linkrs_core::Permission::Read
+            permission("MATCH (n) RETURN n"),
+            Some(linkrs_core::Permission::Read)
         );
+        assert_eq!(
+            permission("UPDATE 1 ON Person SET age = 2"),
+            Some(linkrs_core::Permission::Write)
+        );
+        assert_eq!(
+            permission("CREATE TAG t (id: INT)"),
+            Some(linkrs_core::Permission::Schema)
+        );
+        assert_eq!(
+            permission("CREATE SPACE s"),
+            Some(linkrs_core::Permission::Admin)
+        );
+        assert_eq!(permission("CREATE USER u WITH PASSWORD 'x'"), None);
+        assert_eq!(permission("CREATEUSER u WITH PASSWORD 'x'"), None);
+        assert_eq!(permission("SELECT 1"), None);
+    }
+
+    #[tokio::test]
+    async fn user_management_spellings_share_one_gate() {
+        let fixture = MaintenanceTestService::new().await;
+        let service = &fixture.service;
+        let guest = fixture
+            .session_with_role("gate_guest", linkrs_core::RoleType::Guest)
+            .await;
+        for stmt in [
+            "CREATE USER gate_u WITH PASSWORD 'secret123'",
+            "CREATEUSER gate_u WITH PASSWORD 'secret123'",
+            "CREATE  USER gate_u WITH PASSWORD 'secret123'",
+            "CHANGE PASSWORD guest_other 'old12345' TO 'new12345'",
+            "CHANGEPASSWORD guest_other 'old12345' TO 'new12345'",
+        ] {
+            let error = service
+                .execute(guest, stmt)
+                .await
+                .expect_err("guest must not pass the user gate");
+            assert!(
+                error.message().contains("Permission check failed"),
+                "unexpected error for {stmt}: {}",
+                error
+            );
+            let stream_error = match service.execute_stream(guest, stmt).await {
+                Ok(_) => panic!("guest must not pass the streaming gate for {stmt}"),
+                Err(error) => error,
+            };
+            assert!(
+                stream_error.message().contains("Permission check failed"),
+                "unexpected streaming error for {stmt}: {}",
+                stream_error
+            );
+        }
     }
 
     #[tokio::test]

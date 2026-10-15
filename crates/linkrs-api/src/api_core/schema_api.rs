@@ -173,7 +173,7 @@ impl<S: StorageClient> SchemaApi<S> {
 
         let mut storage = self.storage.write();
         let result = storage
-            .alter_tag(&space_name, tag_name, core_additions, deletions)
+            .alter_tag(&space_name, tag_name, core_additions, deletions, None)
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
 
         if result {
@@ -275,7 +275,7 @@ impl<S: StorageClient> SchemaApi<S> {
 
         let mut storage = self.storage.write();
         let result = storage
-            .alter_edge_type(&space_name, edge_type_name, core_additions, deletions)
+            .alter_edge_type(&space_name, edge_type_name, core_additions, deletions, None)
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
 
         if result {

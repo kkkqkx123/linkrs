@@ -88,6 +88,7 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
             additions,
             deletions,
             changes,
+            new_comment,
         } => super::super::exec_ddl(storage, |s| {
             StorageSchemaOps::alter_tag(
                 s,
@@ -95,6 +96,7 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                 tag_name,
                 additions.clone(),
                 deletions.clone(),
+                new_comment.clone(),
             )
             .map_err(|e| QueryError::execution(e.to_string()))?;
             for change in changes {
@@ -144,7 +146,7 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                             data_type: "string".to_string(),
                         },
                     ]));
-                    let rows: Vec<Vec<Value>> = tag
+                    let mut rows: Vec<Vec<Value>> = tag
                         .properties
                         .iter()
                         .map(|p| {
@@ -163,6 +165,15 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                             ]
                         })
                         .collect();
+                    if let Some(comment) = tag.comment.as_deref() {
+                        rows.push(vec![
+                            Value::string("__schema_comment__"),
+                            Value::string("STRING"),
+                            Value::Bool(true),
+                            Value::string(""),
+                            Value::string(comment),
+                        ]);
+                    }
                     Ok(Some(DataChunk::new(rows, schema)))
                 }
                 None => {
@@ -221,6 +232,7 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                         &tag.properties,
                         tag.ttl_duration,
                         tag.ttl_col.as_deref(),
+                        tag.comment.as_deref(),
                     );
                     let schema =
                         super::super::make_single_col_schema("create_statement", "string");

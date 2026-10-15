@@ -447,6 +447,13 @@ pub(crate) fn replay_add_vertex_prop(
                 tag.properties.push(prop);
             }
         }
+        if let Some(comment) = redo.new_comment.clone() {
+            if comment.is_empty() {
+                tag.comment = None;
+            } else {
+                tag.comment = Some(comment);
+            }
+        }
         ctx.schema_manager().update_tag(&space_name, &tag)?;
     }
     Ok(())
@@ -511,6 +518,13 @@ pub(crate) fn replay_add_edge_prop(
                 .any(|existing| existing.name == prop.name)
             {
                 edge_type.properties.push(prop);
+            }
+        }
+        if let Some(comment) = redo.new_comment.clone() {
+            if comment.is_empty() {
+                edge_type.comment = None;
+            } else {
+                edge_type.comment = Some(comment);
             }
         }
         ctx.schema_manager()

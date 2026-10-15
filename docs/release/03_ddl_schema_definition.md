@@ -110,7 +110,8 @@ TTL（Time To Live）用于自动清理过期数据。
    导出等）均按 Schema 的 TTL 配置判定并跳过过期行。纯拓扑快路径（仅取邻接 ID 的多跳中间跳、
    度统计展开、GET NEIGHBORS 等）会先判定所涉及的边类型是否配置了 TTL：若有，则降级到物化路径
    从而正确跳过过期边；未配置 TTL 时保持零物化快路径，行为与性能不变。`count_vertices_by_tag` /
-   `count_edges_by_type` 计数路径不解码属性、不判定 TTL，统计类数值仍可能包含过期行。
+   `count_edges_by_type` 计数路径不解码属性、不判定 TTL，计数值含尚未物理清除的过期行；
+   开启后台清理或执行 `PURGE EXPIRED` 后收敛（与上游一致，统计收集器维持近似口径）。
    过期行的物理删除通过 `PURGE EXPIRED` 语句执行（语法见本文档第 15 节）
 4. `ttl_col` 为 `NULL`、缺失或类型不符的行永不过期；删除 `ttl_col` 属性会清除该 Schema 的 TTL 配置，
    重命名该属性会自动跟随新的属性名
@@ -223,10 +224,9 @@ CREATE [SPACE | GRAPH] [IF NOT EXISTS] <space_name> [(vid_type=<type>, comment='
 - 可添加注释（`comment`，括号内或 `WITH comment='...'` 均可）
 - `WITH key=value` 形式的扩展参数（当前仅 `comment` 被语义化处理）
 
-> **注意：** 空间注释与标签/边类型注释均为**仅创建时可设**：`CREATE` 接受注释，
-> 之后没有任何语句可以修改它（无 `ALTER SPACE ... SET COMMENT`，`ALTER TAG` /
-> `ALTER EDGE` 也不接受 `COMMENT` 变更项）。`SHOW CREATE` / `DESC` 回显的是创建期
-> 的值。
+> **注意：** 空间注释为**仅创建时可设**（无 `ALTER SPACE ... SET COMMENT`），标签/边类型的
+> Schema 注释可经 `ALTER TAG/EDGE ... COMMENT = '...'` 修改（见第 9 节）。`SHOW CREATE` / `DESC`
+> 回显的是当前值（空间为创建期值，标签/边类型含后续修改值）。
 
 > **注意：** 当前单节点版本不支持 `partition_num`、`replica_factor` 参数。
 
@@ -494,11 +494,13 @@ ALTER TAG <tag_name> ADD (<prop_name>: <prop_type> [, ...])
 ALTER TAG <tag_name> DROP (<prop_name> [, <prop_name> ...])
 ALTER TAG <tag_name> CHANGE (<old_prop> <new_prop>: <prop_type> [, ...])
 ALTER TAG <tag_name> RENAME TO <new_name>
+ALTER TAG <tag_name> COMMENT = '<text>'
 
 ALTER EDGE <edge_type> ADD (...)
 ALTER EDGE <edge_type> DROP (...)
 ALTER EDGE <edge_type> CHANGE (...)
 ALTER EDGE <edge_type> RENAME TO <new_name>
+ALTER EDGE <edge_type> COMMENT = '<text>'
 ALTER EDGE <edge_type> ADD FROM <src_tag> TO <dst_tag>     -- 增加端点约束
 ALTER EDGE <edge_type> DROP FROM <src_tag> TO <dst_tag>    -- 移除端点约束
 ```
@@ -507,13 +509,18 @@ ALTER EDGE <edge_type> DROP FROM <src_tag> TO <dst_tag>    -- 移除端点约束
 - 支持添加、删除属性
 - 支持属性重命名 + 类型修改（CHANGE）
 - 支持标签/边类型重命名（RENAME TO）
+- 支持修改 Schema 级注释（`COMMENT = '...'`，可与 ADD/DROP/CHANGE 组合在同一语句中；空字符串清空注释）
 - 边类型支持增加/移除端点约束（ADD/DROP FROM ... TO ...）
-- ADD/DROP/CHANGE 子句可在一个语句中连续出现多个
+- ADD/DROP/CHANGE/COMMENT 子句可在一个语句中连续出现多个，重复指定 COMMENT 直接报错
 
 > **注意：** `CHANGE` 的语义冻结为"仅改名"：新属性继承目标类型的可空性默认值
 > （默认可空），不保留也不修改原属性的默认值、注释与可空性约束。
 > 如需调整这些约束，请使用 `DROP` + `ADD` 显式表达。
 > TAG 与 EDGE 的 `CHANGE` 均走重命名路径，行为一致。
+
+> **注意：** Schema 注释口径与创建期属性注释一致；`COMMENT = ''`（空字符串）表示清空注释，
+> 存为无注释。修改后 `SHOW CREATE` 回显新值（含 `comment='...'` 部分），`DESC` 在属性行之外
+> 追加一行 `__schema_comment__` 展示 Schema 注释（无注释时不追加）；重启后经快照与 WAL 回放持久。
 
 ### 示例
 ```cypher
@@ -521,9 +528,12 @@ ALTER TAG person ADD (email: STRING, phone: STRING)
 ALTER TAG person DROP (temp_field)
 ALTER TAG person CHANGE (old_name new_name: STRING)
 ALTER TAG person RENAME TO user
+ALTER TAG person COMMENT = '用户标签'
+ALTER TAG person ADD (phone: STRING) COMMENT = '用户标签'
 
 ALTER EDGE follow ADD (note: STRING)
 ALTER EDGE follow RENAME TO follows
+ALTER EDGE follow COMMENT = '关注关系'
 ALTER EDGE follow ADD FROM person TO person
 ```
 
@@ -746,11 +756,12 @@ PURGE EXPIRED EDGE temp_rel IN my_space
   （执行间隔，默认 3600 秒）位于 `[storage]` 节，见《07_configuration_reference.md》。
   开关关闭或间隔为 0 均不启动任务。
 - 每轮按空间枚举，逐空间调用不带目标的清理，即清理该空间全部配置了 TTL 的标签与
-  边类型；单轮串行，批删除逻辑与内存有界性与显式语句完全一致，不新写删除路径。
-- 任务为单实例，复用存储后台线程池与任务句柄（与索引 GC 后台任务同构）；显式语句与
-  后台清理由该单实例天然串行化，重复执行幂等。
-- 每轮把各 Schema 的删除行数写入日志，并累计到指标 `linkrs_ttl_purge_cycles_total`
-  与 `linkrs_ttl_purge_rows_total`（经 `/metrics` Prometheus 端点暴露）。
+  边类型；单轮内按空间顺序执行，批删除逻辑与内存有界性与显式语句完全一致，不新写删除路径。
+- 任务为单实例，复用存储后台线程池与任务句柄（与索引 GC 后台任务同构）；显式语句在请求线程执行，
+  与后台任务可并发执行，二者共用同一 purge 实现、无互斥锁，安全性由 MVCC 与幂等保证，重复执行幂等。
+- 每轮把各 Schema 的删除行数写入日志（删除行数大于 0 时按 Schema 记录，失败空间按 warn 记录原因），
+  并累计到指标 `linkrs_ttl_purge_cycles_total` 与 `linkrs_ttl_purge_rows_total`
+  （经 `/metrics` Prometheus 端点暴露）。单轮内某空间失败不影响其余空间，该空间下一轮重试。
 - 开关默认关闭：不改变现有部署行为，需要自动回收的部署显式开启。
 
 ---

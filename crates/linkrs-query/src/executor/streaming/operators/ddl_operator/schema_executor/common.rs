@@ -171,9 +171,13 @@ pub(super) fn render_create_tag(
     properties: &[PropertyDef],
     ttl_duration: Option<i64>,
     ttl_col: Option<&str>,
+    comment: Option<&str>,
 ) -> String {
     let mut parts: Vec<String> = properties.iter().map(render_property_def).collect();
     parts.extend(render_ttl_parts(ttl_duration, ttl_col));
+    if let Some(comment) = comment {
+        parts.push(format!("comment='{}'", escape_single_quoted(comment)));
+    }
     format!(
         "CREATE TAG IF NOT EXISTS {} ({})",
         tag_name,
@@ -188,9 +192,13 @@ pub(super) fn render_create_edge(
     dst_tag: &str,
     ttl_duration: Option<i64>,
     ttl_col: Option<&str>,
+    comment: Option<&str>,
 ) -> String {
     let mut parts: Vec<String> = properties.iter().map(render_property_def).collect();
     parts.extend(render_ttl_parts(ttl_duration, ttl_col));
+    if let Some(comment) = comment {
+        parts.push(format!("comment='{}'", escape_single_quoted(comment)));
+    }
     let mut ddl = format!(
         "CREATE EDGE IF NOT EXISTS {} ({})",
         edge_name,

@@ -1,6 +1,8 @@
 # P0 [dcl] 授权分类按字符串前缀匹配，用户管理门禁可被绕过
 
-> 对照文档：`docs/release/04_dcl_user_management.md`。修复方案见 `docs/plan/dcl_user_management_fix.md` 阶段零。
+> 对照文档：`docs/release/04_dcl_user_management.md`。修复方案由 `docs/plan/ddl_leftover_long_term_supplement.md`
+> 第 3 章承接并已实施（查询通道权限判定改为按解析后语句类别推导，单判定入口，解析失败显式拒绝；
+> 原 `docs/plan/dcl_user_management_fix.md` 阶段零未实施，不再作为依据）。
 
 ## 现象
 

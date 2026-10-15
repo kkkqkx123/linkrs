@@ -28,6 +28,7 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
         tag: &str,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+        new_comment: Option<String>,
     ) -> Result<bool, StorageError>;
     fn rename_vertex_property(
         &mut self,
@@ -57,6 +58,7 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
         edge_type: &str,
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
+        new_comment: Option<String>,
     ) -> Result<bool, StorageError>;
     fn rename_edge_property(
         &mut self,
