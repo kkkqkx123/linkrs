@@ -43,6 +43,15 @@ impl<
             Permission::Delete
         } else if stmt_upper.starts_with("ALTER") || stmt_upper.starts_with("ADD") {
             Permission::Schema
+        } else if stmt_upper.starts_with("PURGE") {
+            // `PURGE EXPIRED` physically deletes TTL-expired rows. It is a
+            // maintenance statement, so it must never fall into the
+            // read-only default that lets read roles reclaim storage.
+            Permission::Schema
+        } else if stmt_upper.starts_with("CHECKPOINT") {
+            // `CHECKPOINT` forces a storage snapshot: a write-level action
+            // that also must not inherit the read-only default.
+            Permission::Write
         } else {
             Permission::Read
         }

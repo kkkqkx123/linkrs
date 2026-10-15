@@ -163,4 +163,15 @@ impl StatsManager {
         );
         self.set_value(MetricType::TopologyWastedBytes, wasted_bytes);
     }
+
+    /// Record one background TTL-purge sweep: how many sweep cycles ran and
+    /// how many expired rows each cycle physically deleted.
+    pub fn record_ttl_purge(&self, cycles: u64, removed_rows: u64) {
+        if cycles > 0 {
+            self.add_value_with_amount(MetricType::TtlPurgeCycles, cycles);
+        }
+        if removed_rows > 0 {
+            self.add_value_with_amount(MetricType::TtlPurgeRows, removed_rows);
+        }
+    }
 }

@@ -198,6 +198,9 @@ pub enum MetricType {
     // Edge secondary index lag observability
     EdgeIndexLag,
     EdgeIndexStaleSecs,
+    // TTL background purge observability
+    TtlPurgeCycles,
+    TtlPurgeRows,
 }
 
 impl MetricType {
@@ -374,6 +377,8 @@ impl MetricType {
             Self::SnapshotFallbackCount => "linkrs_snapshot_fallback_total",
             Self::EdgeIndexLag => "linkrs_edge_index_lag",
             Self::EdgeIndexStaleSecs => "linkrs_edge_index_stale_secs",
+            Self::TtlPurgeCycles => "linkrs_ttl_purge_cycles_total",
+            Self::TtlPurgeRows => "linkrs_ttl_purge_rows_total",
         }
     }
 }

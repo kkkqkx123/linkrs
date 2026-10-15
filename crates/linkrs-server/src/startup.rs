@@ -17,7 +17,7 @@ use vector_client::VectorManager;
 use crate::config::Config;
 use crate::storage::{
     GraphStorage, MetricsStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig,
-    StorageCommitOps, SyncWrapper,
+    StorageCommitOps, StorageTtlPurgeOps, SyncWrapper,
 };
 use crate::{GraphService, HttpServer};
 use linkrs_core::error::DBResult;
@@ -68,7 +68,7 @@ pub async fn start_service_with_config_path(
             return Err(linkrs_core::DBError::validation(format!(
                 "Failed to resolve the bootstrap password: {}",
                 error
-            )))
+            )));
         }
     }
     info!(
@@ -395,6 +395,16 @@ pub async fn start_service_with_config_path(
         let sync_storage = SyncWrapper::new((*inner_storage).clone());
         Arc::new(sync_storage)
     };
+
+    // Opt-in background TTL purge. Off by default so deployments keep the
+    // explicit `PURGE EXPIRED` contract; a zero interval stays off too.
+    if config.storage.ttl_purge_enabled && config.storage.ttl_purge_interval_secs > 0 {
+        storage.start_ttl_purge(Duration::from_secs(config.storage.ttl_purge_interval_secs));
+        info!(
+            "Background TTL purge enabled (interval {}s)",
+            config.storage.ttl_purge_interval_secs
+        );
+    }
 
     // Create a transaction manager
     let txn_config = TransactionManagerConfig {

@@ -70,7 +70,188 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
 #[cfg(test)]
 mod tests {
     use super::GraphService;
-    use crate::storage::MockStorage;
+    use crate::storage::{GraphStorage, MockStorage};
+    use linkrs_core::types::{SpaceInfo, SpaceSummary};
+    use std::sync::Arc;
+
+    /// In-memory storage with a single space, the GraphService built over it,
+    /// and that space's identity for role grants.
+    struct MaintenanceTestService {
+        service: Arc<GraphService<GraphStorage>>,
+        space: SpaceSummary,
+        space_id: i64,
+    }
+
+    impl MaintenanceTestService {
+        async fn new() -> Self {
+            use crate::storage::{PropertyGraphConfig, StorageReader, StorageSchemaOps};
+
+            let storage = Arc::new(
+                GraphStorage::new_with_config(PropertyGraphConfig::test())
+                    .expect("in-memory storage"),
+            );
+            {
+                let mut handle = (*storage).clone();
+                let mut space = SpaceInfo::new("maint_space".to_string())
+                    .with_vid_type(linkrs_core::DataType::BigInt);
+                StorageSchemaOps::create_space(&mut handle, &mut space).expect("create space");
+            }
+            let space = storage
+                .list_spaces()
+                .expect("list spaces")
+                .into_iter()
+                .next()
+                .expect("space must exist");
+            let space_id = space.space_id as i64;
+            let service = GraphService::<GraphStorage>::new_for_test(
+                crate::config::Config::default(),
+                storage,
+            )
+            .await;
+            Self {
+                service,
+                space: SpaceSummary::from(&space),
+                space_id,
+            }
+        }
+
+        /// Create a session for `username` holding `role` in the test space.
+        async fn session_with_role(&self, username: &str, role: linkrs_core::RoleType) -> i64 {
+            self.service
+                .permission_manager
+                .grant_role(username, self.space_id, role)
+                .expect("grant role");
+            let session = self
+                .service
+                .get_session_manager()
+                .create_session(username.to_string(), "127.0.0.1".to_string())
+                .await
+                .expect("create session");
+            session.set_space(self.space.clone());
+            session.id()
+        }
+    }
+
+    #[tokio::test]
+    async fn maintenance_statements_are_classified_above_read_only() {
+        let fixture = MaintenanceTestService::new().await;
+        let service = &fixture.service;
+
+        // Maintenance statements must never inherit the read-only default:
+        // `PURGE EXPIRED` reclaims storage (schema-level), `CHECKPOINT`
+        // forces a snapshot (write-level).
+        assert_eq!(
+            service.extract_permission_from_statement("PURGE EXPIRED IN maint_space"),
+            linkrs_core::Permission::Schema
+        );
+        assert_eq!(
+            service.extract_permission_from_statement("purge expired in maint_space"),
+            linkrs_core::Permission::Schema
+        );
+        assert_eq!(
+            service.extract_permission_from_statement("CHECKPOINT"),
+            linkrs_core::Permission::Write
+        );
+        assert_eq!(
+            service.extract_permission_from_statement("SELECT 1"),
+            linkrs_core::Permission::Read
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_expired_requires_maintenance_permission_on_every_entry() {
+        let fixture = MaintenanceTestService::new().await;
+        let stmt = "PURGE EXPIRED IN maint_space";
+
+        let guest = fixture
+            .session_with_role("guest_user", linkrs_core::RoleType::Guest)
+            .await;
+        let writer = fixture
+            .session_with_role("writer_user", linkrs_core::RoleType::User)
+            .await;
+        let dba = fixture
+            .session_with_role("dba_user", linkrs_core::RoleType::Dba)
+            .await;
+
+        // Read-only and plain write roles are rejected on the unary entry.
+        for session_id in [guest, writer] {
+            let error = fixture
+                .service
+                .execute(session_id, stmt)
+                .await
+                .expect_err("role without maintenance rights must be rejected");
+            assert!(
+                error.message().contains("Permission check failed"),
+                "unexpected error: {}",
+                error
+            );
+        }
+        // The same rejection happens on the streaming entry.
+        let stream_error = match fixture.service.execute_stream(guest, stmt).await {
+            Ok(_) => panic!("read-only role must be rejected on the streaming entry"),
+            Err(error) => error,
+        };
+        assert!(
+            stream_error.message().contains("Permission check failed"),
+            "unexpected error: {}",
+            stream_error
+        );
+
+        // The maintenance role executes the purge.
+        fixture
+            .service
+            .execute(dba, stmt)
+            .await
+            .expect("dba role runs the purge");
+        fixture
+            .service
+            .execute_stream(dba, stmt)
+            .await
+            .expect("dba role runs the purge on the streaming entry");
+    }
+
+    #[tokio::test]
+    async fn checkpoint_requires_write_permission_on_every_entry() {
+        let fixture = MaintenanceTestService::new().await;
+
+        let guest = fixture
+            .session_with_role("guest_user", linkrs_core::RoleType::Guest)
+            .await;
+        let writer = fixture
+            .session_with_role("writer_user", linkrs_core::RoleType::User)
+            .await;
+
+        let unary_error = fixture
+            .service
+            .execute(guest, "CHECKPOINT")
+            .await
+            .expect_err("read-only role must be rejected");
+        assert!(
+            unary_error.message().contains("Permission check failed"),
+            "unexpected error: {}",
+            unary_error
+        );
+        let stream_error = match fixture.service.execute_stream(guest, "CHECKPOINT").await {
+            Ok(_) => panic!("read-only role must be rejected on the streaming entry"),
+            Err(error) => error,
+        };
+        assert!(
+            stream_error.message().contains("Permission check failed"),
+            "unexpected error: {}",
+            stream_error
+        );
+
+        fixture
+            .service
+            .execute(writer, "CHECKPOINT")
+            .await
+            .expect("write role runs the checkpoint");
+        fixture
+            .service
+            .execute_stream(writer, "CHECKPOINT")
+            .await
+            .expect("write role runs the checkpoint on the streaming entry");
+    }
 
     #[test]
     fn transaction_command_classification() {

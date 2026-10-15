@@ -3,6 +3,7 @@ use crate::macros::forward_methods;
 use crate::{
     StorageClient, StorageCommitOps, StorageGcOps, StorageOperationContext,
     StorageOperationContextOps, StorageRecoveryOps, StorageSchemaContextOps, StorageSyncContextOps,
+    StorageTtlPurgeOps,
 };
 use linkrs_core::metadata::{IndexMetadataManager, SchemaManager};
 use linkrs_core::StorageResult;
@@ -164,6 +165,17 @@ impl<S: StorageClient + 'static> StorageGcOps for SyncWrapper<S> {
 
     forward_methods!(inner;
         fn stop_index_gc(&self);
+    );
+}
+
+impl<S: StorageClient + crate::StorageTtlPurgeOps + 'static> StorageTtlPurgeOps for SyncWrapper<S> {
+    forward_methods!(inner;
+        fn start_ttl_purge(&self, interval: std::time::Duration);
+        fn stop_ttl_purge(&self);
+    );
+
+    forward_methods!(inner;
+        fn is_ttl_purge_running(&self) -> bool;
     );
 }
 

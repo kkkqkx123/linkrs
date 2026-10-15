@@ -417,9 +417,17 @@ fn test_space_wal_replays_create_and_clear_after_restart() {
 
     {
         let mut storage = GraphStorage::open(work_dir.clone()).expect("Failed to reopen storage");
-        let space_id = storage
-            .get_space_id("test_space")
-            .expect("space id should exist");
+        // The replayed schema must still resolve the space id consistently.
+        assert_eq!(
+            storage
+                .get_space_id("test_space")
+                .expect("space id should exist"),
+            storage
+                .get_space("test_space")
+                .expect("Failed to load space")
+                .expect("space should exist after replay")
+                .space_id
+        );
 
         assert!(storage.space_exists("test_space"));
         assert_eq!(

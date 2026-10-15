@@ -122,7 +122,7 @@ WAL 兼容处理：
 |------|------|------|------|
 | SQL 维护语句 | 显式、可测、与 CHECKPOINT / KILL QUERY 同层；文档有归属章节 | 需打通 parser 到 executor 全链 | 采用 |
 | gRPC / HTTP RPC | 服务侧自然 | CLI 与嵌入式不可达；需改 proto | 本期不做，文档声明仅 SQL 入口 |
-| 后台定时清扫 | 全自动 | 隐藏副作用、时序不确定、与"显式调用"契约冲突、引入后台线程 | 不做 |
+| 后台定时清扫 | 全自动 | 隐藏副作用、时序不确定、与"显式调用"契约冲突、引入后台线程 | 不做（再评估结论见 `ddl_leftover_deferred_evaluation.md`，已立项为配置 opt-in 方案：`ttl_purge_enabled` / `ttl_purge_interval_secs`，与显式语句共用同一 purge 实现） |
 
 语法（建议）：
 
@@ -217,6 +217,8 @@ PURGE EXPIRED [TAG <tag_name> | EDGE <edge_name>] IN <space_name>
 5. 全仓 grep 校验：`AlterSpaceComment` / `alter_space_comment` 零残留；`PURGE EXPIRED` 文档章节与实现逐条对应。
 
 ## 7. 明确不做
+
+再评估结论见 `ddl_leftover_deferred_evaluation.md`：TTL 后台定时清扫与维护语句权限分类缺陷已另行立项（分别落地为配置 opt-in 后台清理与权限归类修正），其余各项维持不做。以下内容作为历史记录保留。
 
 - 不做 TTL 后台定时清扫任务：与"显式调用"契约冲突；如未来需要，应作为配置项并参照 `StorageGcOps` 的后台任务先例单独立项。
 - 不做计数路径（`count_vertices_by_tag` / `count_edges_by_type`）的 TTL 精确化：二者本不物化属性，近似/行计数定位不变，文档已声明边界。

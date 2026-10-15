@@ -309,6 +309,12 @@ pub struct GraphStorageContext {
     auto_commit_window: Option<Arc<AutoCommitBatchWindow>>,
     checkpoint_scheduler:
         Arc<Mutex<Option<crate::engine::persistence_coordinator::CheckpointScheduler>>>,
+    /// Opt-in background TTL purge sweep. Created on the first
+    /// `start_ttl_purge` call and kept here so `stop_ttl_purge` can always
+    /// join the loop; the sweep itself runs on a scheduler-free context
+    /// clone to avoid a reference cycle.
+    ttl_purge_scheduler:
+        Arc<Mutex<Option<crate::engine::graph_storage::ttl_purge::TtlPurgeScheduler>>>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -354,6 +360,7 @@ impl GraphStorageContext {
             auto_commit_write_set: None,
             auto_commit_window: None,
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
+            ttl_purge_scheduler: Arc::new(Mutex::new(None)),
         })
     }
 

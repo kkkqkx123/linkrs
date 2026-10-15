@@ -11,7 +11,8 @@ use linkrs_core::{StorageError, StorageResult};
 use linkrs_transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeTypeRedo, CreateSpaceRedo,
     CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexTypeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    DeleteVertexTypeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo,
+    RenameVertexPropRedo,
 };
 
 pub(crate) fn replay_create_space(

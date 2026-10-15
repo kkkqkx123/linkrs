@@ -346,6 +346,8 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | max_db_size | u64 | 0 | 最大数据库大小（字节，0 不限制） |
 | auto_statistics | bool | true | 是否自动收集统计信息 |
 | statistics_interval_secs | u64 | 60 | 统计信息收集间隔（秒） |
+| ttl_purge_enabled | bool | false | 是否启用 TTL 过期行后台自动清理（默认关闭，过期行仅由 `PURGE EXPIRED` 显式回收） |
+| ttl_purge_interval_secs | u64 | 3600 | TTL 后台清理执行间隔（秒）；开关关闭或该值为 0 均不启动清理任务 |
 
 ### 9.2 内存预算
 

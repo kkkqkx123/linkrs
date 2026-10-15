@@ -150,6 +150,42 @@ impl GraphStorageContext {
         self.runtime.is_vertex_gc_running()
     }
 
+    /// Start the background TTL purge sweep at `interval`. The scheduler and
+    /// its task handle are retained here, so `stop_ttl_purge` can always join
+    /// the loop. A zero interval leaves the sweep stopped, and repeated calls
+    /// keep the already running sweep.
+    pub fn start_ttl_purge(&self, interval: std::time::Duration) {
+        let mut guard = self.ttl_purge_scheduler.lock();
+        let scheduler = guard.get_or_insert_with(|| {
+            crate::engine::graph_storage::ttl_purge::TtlPurgeScheduler::new(
+                self.runtime.thread_pool.clone(),
+            )
+        });
+        scheduler.start(interval, self);
+    }
+
+    pub fn stop_ttl_purge(&self) {
+        if let Some(scheduler) = self.ttl_purge_scheduler.lock().as_mut() {
+            scheduler.stop();
+        }
+    }
+
+    pub fn is_ttl_purge_running(&self) -> bool {
+        self.ttl_purge_scheduler
+            .lock()
+            .as_ref()
+            .is_some_and(|scheduler| scheduler.is_running())
+    }
+
+    /// Clone this context for the background purge sweep, which must not own
+    /// the scheduler it runs on (that would form a reference cycle keeping
+    /// the storage context alive after the last handle drops).
+    pub(crate) fn clone_for_ttl_purge(&self) -> Self {
+        let mut sweep_ctx = self.clone();
+        sweep_ctx.ttl_purge_scheduler = Arc::new(parking_lot::Mutex::new(None));
+        sweep_ctx
+    }
+
     pub fn mark_vertex_modified(&self, label: LabelId) {
         self.persistent
             .table_tracker

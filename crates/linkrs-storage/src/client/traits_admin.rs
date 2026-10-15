@@ -47,8 +47,9 @@ pub trait StorageAdmin: Send + Sync + std::fmt::Debug {
     /// explicit error. Deletions run through the normal write path, so they
     /// are WAL-logged and crash-recoverable.
     ///
-    /// There is no background task backing this: it only runs when a caller
-    /// invokes it (e.g. the `PURGE EXPIRED` statement).
+    /// Callers are the `PURGE EXPIRED` statement and the optional background
+    /// sweep ([`StorageTtlPurgeOps`]), which invokes this per space without a
+    /// target schema. Both share this one entry point.
     fn purge_expired(
         &self,
         space: &str,
@@ -184,6 +185,22 @@ pub trait StorageGcOps: Send + Sync + std::fmt::Debug {
     fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle>;
 
     fn stop_index_gc(&self);
+}
+
+/// Background TTL purge operations.
+///
+/// The sweep is opt-in and off by default: without a `start_ttl_purge` call,
+/// expired rows are only reclaimed by an explicit `PURGE EXPIRED` statement.
+/// The task handle is retained by the storage so `stop_ttl_purge` can always
+/// join the loop, which is why `start_ttl_purge` does not return it.
+pub trait StorageTtlPurgeOps: Send + Sync + std::fmt::Debug {
+    /// Start the periodic purge sweep at `interval`; a zero interval leaves
+    /// the sweep stopped. Repeated calls keep the running sweep.
+    fn start_ttl_purge(&self, interval: std::time::Duration);
+
+    fn stop_ttl_purge(&self);
+
+    fn is_ttl_purge_running(&self) -> bool;
 }
 
 /// Background freeze operations.

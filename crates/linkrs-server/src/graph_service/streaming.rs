@@ -77,6 +77,19 @@ impl<
             Ok(None) => {}
         }
 
+        // Regular statements run the same permission gate as the materialized
+        // path, so a statement admitted by one entry can never be rejected by
+        // the other. Commands above already re-enter that gate through
+        // `execute_with_params`.
+        let permission_context = super::context::QueryExecutionContext {
+            stmt,
+            parsed_ast: None,
+            space_id: session.space().map(|s| s.id as i64).unwrap_or(0),
+            parameters: None,
+            session_variables: None,
+        };
+        self.check_query_permission(&session.user(), &permission_context)?;
+
         let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed) as u32;
         let query_request = linkrs_api::api_core::QueryRequest {
             isolation_level: None,

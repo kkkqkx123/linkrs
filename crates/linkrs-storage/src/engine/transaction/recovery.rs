@@ -12,7 +12,8 @@ use linkrs_transaction::wal::{
     CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo,
     DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexTypeRedo,
     DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo, RenameEdgePropRedo,
-    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
+    UpdateSequenceRedo,
 };
 use std::sync::Arc;
 

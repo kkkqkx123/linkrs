@@ -3,7 +3,7 @@ use crate::{
     LabelVersionHistory, PropertyChange, StorageAdmin, StorageAuthOps, StorageGcOps,
     StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
-    StorageSyncContextOps, StorageWriter,
+    StorageSyncContextOps, StorageTtlPurgeOps, StorageWriter,
 };
 use linkrs_core::error::StorageError;
 use linkrs_core::metadata::IndexMetadataManager;
@@ -770,6 +770,16 @@ impl StorageGcOps for MockStorage {
     }
 
     fn stop_index_gc(&self) {}
+}
+
+impl StorageTtlPurgeOps for MockStorage {
+    fn start_ttl_purge(&self, _interval: std::time::Duration) {}
+
+    fn stop_ttl_purge(&self) {}
+
+    fn is_ttl_purge_running(&self) -> bool {
+        false
+    }
 }
 
 // The mock has no auto-commit batch/group window; the stubs exist so the

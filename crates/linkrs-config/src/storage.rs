@@ -119,6 +119,19 @@ pub struct StorageConfig {
     #[serde(default = "default_index_gc_batch")]
     pub index_gc_batch: usize,
 
+    /// Enable the background sweep that physically reclaims TTL-expired rows.
+    ///
+    /// Off by default: expired rows stay visible only to reads that filter
+    /// them until `PURGE EXPIRED` runs (explicitly, or via this sweep once
+    /// enabled).
+    #[serde(default = "default_false")]
+    pub ttl_purge_enabled: bool,
+
+    /// Background TTL purge interval in seconds. Zero never starts the sweep,
+    /// as does leaving `ttl_purge_enabled` off.
+    #[serde(default = "default_ttl_purge_interval")]
+    pub ttl_purge_interval_secs: u64,
+
     /// Maximum maintenance operation duration in seconds.
     #[serde(default = "default_operation_timeout_secs")]
     pub operation_timeout_secs: u64,
@@ -224,6 +237,14 @@ fn default_index_gc_batch() -> usize {
     10_000
 }
 
+fn default_false() -> bool {
+    false
+}
+
+fn default_ttl_purge_interval() -> u64 {
+    3600 // 1 hour
+}
+
 fn default_operation_timeout_secs() -> u64 {
     30
 }
@@ -296,6 +317,8 @@ impl Default for StorageConfig {
             max_tombstones: default_max_tombstones(),
             max_tombstone_bytes: default_max_tombstone_bytes(),
             index_gc_batch: default_index_gc_batch(),
+            ttl_purge_enabled: default_false(),
+            ttl_purge_interval_secs: default_ttl_purge_interval(),
             operation_timeout_secs: default_operation_timeout_secs(),
             dirty_flush_operations: default_dirty_flush_operations(),
             dirty_flush_bytes: default_dirty_flush_bytes(),
@@ -461,6 +484,10 @@ mod tests {
         assert_eq!(config.checkpoint_interval_secs, 300);
         assert_eq!(config.sync_mode, SyncMode::Full);
         assert!(config.auto_statistics);
+        // The TTL purge sweep is opt-in: disabled with a positive interval,
+        // so a zero interval is the only other way it stays off.
+        assert!(!config.ttl_purge_enabled);
+        assert_eq!(config.ttl_purge_interval_secs, 3600);
     }
 
     #[test]

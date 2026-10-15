@@ -114,8 +114,11 @@ TTL（Time To Live）用于自动清理过期数据。
    过期行的物理删除通过 `PURGE EXPIRED` 语句执行（语法见本文档第 15 节）
 4. `ttl_col` 为 `NULL`、缺失或类型不符的行永不过期；删除 `ttl_col` 属性会清除该 Schema 的 TTL 配置，
    重命名该属性会自动跟随新的属性名
-5. TTL 配置随 Schema 元数据持久化，重命名/删除属性时的联动规则见上；过期行的物理删除需要显式执行
-   `PURGE EXPIRED` 语句，无后台定时任务代为执行
+5. TTL 配置随 Schema 元数据持久化，重命名/删除属性时的联动规则见上；过期行的物理删除有两种形态：
+   显式执行 `PURGE EXPIRED` 语句（语法见本文档第 15 节，立即可用），或开启后台清理后由
+   存储按配置间隔自动执行同一清理（见本文档第 15 节"后台自动清理"与《07_configuration_reference.md》
+   存储配置的 `ttl_purge_enabled` / `ttl_purge_interval_secs`）。后台清理默认关闭，
+   开启后每轮清理该实例全部空间内所有配置了 TTL 的标签与边类型，与显式语句共用同一实现
 
 **TTL 使用场景：**
 - 会话数据自动清理（如用户登录令牌）
@@ -219,6 +222,11 @@ CREATE [SPACE | GRAPH] [IF NOT EXISTS] <space_name> [(vid_type=<type>, comment='
 - 可配置VID类型（默认 `INT64`，支持 `FIXEDSTRING(N)` 等）
 - 可添加注释（`comment`，括号内或 `WITH comment='...'` 均可）
 - `WITH key=value` 形式的扩展参数（当前仅 `comment` 被语义化处理）
+
+> **注意：** 空间注释与标签/边类型注释均为**仅创建时可设**：`CREATE` 接受注释，
+> 之后没有任何语句可以修改它（无 `ALTER SPACE ... SET COMMENT`，`ALTER TAG` /
+> `ALTER EDGE` 也不接受 `COMMENT` 变更项）。`SHOW CREATE` / `DESC` 回显的是创建期
+> 的值。
 
 > **注意：** 当前单节点版本不支持 `partition_num`、`replica_factor` 参数。
 
@@ -676,8 +684,19 @@ SHOW CREATE INDEX idx_person_name
 
 ### 功能
 物理删除已配置 TTL 的 Schema 中过期的行。TTL 在读取时只做"逻辑过期"（过滤），
-占用的存储不会自动释放；`PURGE EXPIRED` 是将其真正回收的唯一入口。删除走正常写入路径，
-因此会记录 WAL，可被崩溃恢复。当前仅提供 SQL 入口，无对应的 gRPC / HTTP 接口。
+占用的存储不会自动释放；`PURGE EXPIRED` 是将其真正回收的显式入口。删除走正常写入路径，
+因此会记录 WAL，可被崩溃恢复。
+
+该语句经通用查询接口执行：gRPC `ExecuteQuery`、HTTP 一元查询、CLI 与嵌入式入口均可使用，
+**没有专用 RPC**（不新增 proto 消息与服务端方法），与上游"维护操作复用语句通道"的形态一致。
+
+### 权限
+`PURGE EXPIRED` 是维护语句，需要目标空间的**维护权限**（`Schema` 级，即 GOD / ADMIN / DBA 角色）：
+
+- 只读角色（GUEST）与普通读写角色（USER，无 Schema 权限）执行会被拒绝，返回
+  `Permission check failed: ...` 可读错误；
+- 拒绝行为在 gRPC 一元、HTTP 一元与流式（SSE / gRPC 流式）入口完全一致；
+- 显式语句与后台清理（见下）走同一条 purge 实现，权限门只作用于语句入口。
 
 ### 语法结构
 ```cypher
@@ -689,12 +708,14 @@ PURGE EXPIRED [TAG <tag_name> | EDGE <edge_name>] IN <space_name>
 - `IN <space_name>` 必填，避免误清其他空间的数据。
 
 ### 关键特性
-- **无后台任务**：不设定时清扫线程，仅在语句被显式执行时运行。
+- **两种执行形态**：显式语句立即可用；后台自动清理为配置 opt-in（默认关闭），
+  开启后按配置间隔自动执行不带目标的清理，见下节。
 - **按 Schema 汇报**：结果集为每个被扫描的 TTL Schema 返回一行（含删除 0 行的情况），
-  便于观测清理进度。
+  便于观测清理进度。后台清理每轮按同一口径把各 Schema 的删除行数写入日志与指标。
 - **有界批量**：按 Schema 顺序删除，删除按批（每批固定条数）提交，避免大表一次性
   收集全部过期行造成内存尖峰。
 - **不改写 WAL 格式**：删除复用既有 `DeleteVertex` / `DeleteEdge` 记录。
+- **幂等**：删除走正常 MVCC 写路径，已清除的 Schema 再次执行汇报 0 行。
 
 ### 结果集
 列固定为 `space_name` / `schema_name` / `schema_type`（`TAG` 或 `EDGE`）/ `removed_rows`（bigint）。
@@ -717,6 +738,20 @@ PURGE EXPIRED EDGE temp_rel IN my_space
 - `TAG` / `EDGE` 目标 Schema 不存在：显式报错。
 - 目标 Schema 存在但未配置 TTL：不报错，`removed_rows` 为 0（未配置即无过期数据）。
 - 同时使用 `TAG` 与 `EDGE`：语法错误。
+
+### 后台自动清理（opt-in）
+存储层提供一个后台清理任务，与显式语句共用同一 purge 入口，仅多出"按空间枚举"一步：
+
+- 配置项 `ttl_purge_enabled`（总开关，默认 `false`）与 `ttl_purge_interval_secs`
+  （执行间隔，默认 3600 秒）位于 `[storage]` 节，见《07_configuration_reference.md》。
+  开关关闭或间隔为 0 均不启动任务。
+- 每轮按空间枚举，逐空间调用不带目标的清理，即清理该空间全部配置了 TTL 的标签与
+  边类型；单轮串行，批删除逻辑与内存有界性与显式语句完全一致，不新写删除路径。
+- 任务为单实例，复用存储后台线程池与任务句柄（与索引 GC 后台任务同构）；显式语句与
+  后台清理由该单实例天然串行化，重复执行幂等。
+- 每轮把各 Schema 的删除行数写入日志，并累计到指标 `linkrs_ttl_purge_cycles_total`
+  与 `linkrs_ttl_purge_rows_total`（经 `/metrics` Prometheus 端点暴露）。
+- 开关默认关闭：不改变现有部署行为，需要自动回收的部署显式开启。
 
 ---
 

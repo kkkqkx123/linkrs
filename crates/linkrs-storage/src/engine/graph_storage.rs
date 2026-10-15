@@ -20,6 +20,7 @@ mod schema_writer;
 mod serial;
 mod stats_reader_impl;
 pub mod ttl;
+pub(crate) mod ttl_purge;
 mod writer;
 mod writer_api;
 
@@ -37,7 +38,7 @@ use crate::index::IndexGcConfig;
 use crate::{
     StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContext,
     StorageOperationContextOps, StorageRecoveryOps, StorageSchemaContextOps, StorageStats,
-    StorageSyncContextOps,
+    StorageSyncContextOps, StorageTtlPurgeOps,
 };
 use linkrs_core::metadata::{IndexMetadataManager, SchemaManager};
 use linkrs_core::types::{
@@ -691,6 +692,20 @@ impl StorageGcOps for GraphStorage {
 
     fn stop_index_gc(&self) {
         self.ctx.stop_index_gc();
+    }
+}
+
+impl StorageTtlPurgeOps for GraphStorage {
+    fn start_ttl_purge(&self, interval: std::time::Duration) {
+        self.ctx.start_ttl_purge(interval);
+    }
+
+    fn stop_ttl_purge(&self) {
+        self.ctx.stop_ttl_purge();
+    }
+
+    fn is_ttl_purge_running(&self) -> bool {
+        self.ctx.is_ttl_purge_running()
     }
 }
 

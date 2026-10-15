@@ -24,6 +24,7 @@ impl GraphStorageContext {
             auto_commit_write_set: None,
             auto_commit_window: None,
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
+            ttl_purge_scheduler: Arc::new(Mutex::new(None)),
         }
         .with_default_index_gc()
     }
@@ -51,6 +52,7 @@ impl GraphStorageContext {
                 auto_commit_write_set: None,
                 auto_commit_window: None,
                 checkpoint_scheduler: Arc::new(Mutex::new(None)),
+                ttl_purge_scheduler: Arc::new(Mutex::new(None)),
             }
             .with_default_index_gc();
             ctx
@@ -128,6 +130,7 @@ impl GraphStorageContext {
             auto_commit_write_set: self.auto_commit_write_set.clone(),
             auto_commit_window: self.auto_commit_window.clone(),
             checkpoint_scheduler: self.checkpoint_scheduler.clone(),
+            ttl_purge_scheduler: self.ttl_purge_scheduler.clone(),
         }
     }
 

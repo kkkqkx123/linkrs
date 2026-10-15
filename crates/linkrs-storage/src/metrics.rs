@@ -8,7 +8,7 @@ use crate::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
     StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
-    StorageStats, StorageSyncContextOps, StorageWriter,
+    StorageStats, StorageSyncContextOps, StorageTtlPurgeOps, StorageWriter,
 };
 use linkrs_core::metadata::{IndexMetadataManager, SchemaManager};
 use linkrs_core::types::{
@@ -617,6 +617,17 @@ impl<S: StorageClient> StorageGcOps for MetricsStorage<S> {
 
     forward_methods!(inner;
         fn stop_index_gc(&self);
+    );
+}
+
+impl<S: StorageClient + crate::StorageTtlPurgeOps> StorageTtlPurgeOps for MetricsStorage<S> {
+    forward_methods!(inner;
+        fn start_ttl_purge(&self, interval: std::time::Duration);
+        fn stop_ttl_purge(&self);
+    );
+
+    forward_methods!(inner;
+        fn is_ttl_purge_running(&self) -> bool;
     );
 }
 

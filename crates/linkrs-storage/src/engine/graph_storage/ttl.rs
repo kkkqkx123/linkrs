@@ -205,7 +205,6 @@ impl GraphStorage {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,7 +215,11 @@ mod tests {
             vec![(std::sync::Arc::<str>::from("ts"), Value::BigInt(100))];
         assert!(record_expired_from_slice(Some(10), Some("ts"), &props));
         assert!(!record_expired_from_slice(None, None, &props));
-        assert!(!record_expired_from_slice(Some(10), Some("missing"), &props));
+        assert!(!record_expired_from_slice(
+            Some(10),
+            Some("missing"),
+            &props
+        ));
     }
 
     #[test]
@@ -229,8 +232,8 @@ mod tests {
         // Space with no TTL edge type at all.
         let mut nottl = SpaceInfo::new("nottl".to_string());
         StorageSchemaOps::create_space(&mut storage, &mut nottl).expect("create space");
-        let plain_only = EdgeTypeInfo::new("PLAIN".to_string())
-            .with_properties(vec![PropertyDef::new(
+        let plain_only =
+            EdgeTypeInfo::new("PLAIN".to_string()).with_properties(vec![PropertyDef::new(
                 "w".into(),
                 linkrs_core::DataType::Int,
             )]);

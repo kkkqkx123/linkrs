@@ -214,10 +214,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         edge_types: &[String],
     ) -> Result<bool, StorageError> {
         let is_active = |info: &EdgeTypeInfo| {
-            linkrs_core::types::ttl::has_valid_ttl(
-                info.ttl_duration,
-                info.ttl_col.as_deref(),
-            )
+            linkrs_core::types::ttl::has_valid_ttl(info.ttl_duration, info.ttl_col.as_deref())
         };
         if edge_types.is_empty() {
             Ok(self.list_edge_types(space)?.iter().any(is_active))

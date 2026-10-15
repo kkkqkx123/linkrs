@@ -80,6 +80,12 @@ max_tombstones = 1000000
 max_tombstone_bytes = 268435456
 # Index entries processed per GC pass (default 10000)
 index_gc_batch = 10000
+# Background sweep that physically reclaims TTL-expired rows (default false).
+# Off keeps the explicit-only contract: expired rows are only removed by
+# `PURGE EXPIRED`. The interval below (seconds) is the sweep period once this
+# is enabled; a zero interval never starts the sweep.
+ttl_purge_enabled = false
+ttl_purge_interval_secs = 3600
 # Maximum maintenance operation duration in seconds (default 30)
 operation_timeout_secs = 30
 # Dirty operations that trigger a flush request (default 50000)
