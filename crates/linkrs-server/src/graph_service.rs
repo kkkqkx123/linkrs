@@ -308,6 +308,64 @@ mod tests {
             .expect("write role runs the checkpoint on the streaming entry");
     }
 
+    #[tokio::test]
+    async fn use_statement_binds_session_space_from_parsed_form() {
+        let fixture = MaintenanceTestService::new().await;
+        let session = fixture
+            .session_with_role("use_user", linkrs_core::RoleType::User)
+            .await;
+
+        // Any whitespace separates `USE` from the space name, so the binding
+        // must follow the parsed statement rather than a literal text prefix.
+        for stmt in ["USE maint_space", "USE\tmaint_space", "USE\nmaint_space"] {
+            fixture
+                .service
+                .execute(session, stmt)
+                .await
+                .expect("space switch must execute");
+            let bound = fixture
+                .service
+                .get_session_manager()
+                .find_session(session)
+                .expect("session must exist")
+                .space()
+                .map(|space| space.id);
+            assert_eq!(
+                bound,
+                Some(fixture.space_id as u64),
+                "session space must bind for {stmt:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn use_statement_binds_session_space_on_the_streaming_entry() {
+        let fixture = MaintenanceTestService::new().await;
+        let session = fixture
+            .session_with_role("stream_use_user", linkrs_core::RoleType::User)
+            .await;
+
+        // The streaming entry snapshots the session space before executing, so a
+        // space switch must be routed to the materialized path that binds it.
+        fixture
+            .service
+            .execute_stream(session, "USE\tmaint_space")
+            .await
+            .expect("streaming space switch must execute");
+        let bound = fixture
+            .service
+            .get_session_manager()
+            .find_session(session)
+            .expect("session must exist")
+            .space()
+            .map(|space| space.id);
+        assert_eq!(
+            bound,
+            Some(fixture.space_id as u64),
+            "streaming space switch must bind the session space",
+        );
+    }
+
     #[test]
     fn transaction_command_classification() {
         let begin = GraphService::<MockStorage>::parse_command("BEGIN READ ONLY")
@@ -388,7 +446,7 @@ mod tests {
     #[test]
     fn config_statements_are_classified_for_streaming_guard() {
         assert!(GraphService::<MockStorage>::is_config_statement(
-            "UPDATE CONFIGS SET a = 1"
+            "UPDATE CONFIGS database max_sessions = 100"
         ));
         assert!(GraphService::<MockStorage>::is_config_statement(
             "  show configs database"

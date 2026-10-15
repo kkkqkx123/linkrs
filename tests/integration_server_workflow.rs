@@ -260,8 +260,8 @@ async fn test_graph_service_permission_enforcement() {
         result.err()
     );
 
-    // Note: extract_permission_from_statement classifies CREATE as Write, not Schema.
-    // Use ALTER (classified as Schema) to test Schema permission denial.
+    // Note: the permission gate classifies ALTER as Schema, so a USER role must be
+    // denied here; CREATE would be the Schema-level counterpart for tags/indexes.
     let result = graph_service
         .execute(user_sid, "ALTER TAG Person DROP (age)")
         .await;

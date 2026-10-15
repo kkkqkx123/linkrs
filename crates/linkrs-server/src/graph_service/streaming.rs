@@ -77,6 +77,18 @@ impl<
             Ok(None) => {}
         }
 
+        // A space switch mutates session state. It runs on the materialized
+        // path, whose single implementation binds the session space, and comes
+        // back as a one-chunk stream; the streaming request below snapshots the
+        // session space up front, so routing the switch through it would leave
+        // the session on the previous space.
+        if Self::parse_stmt(stmt).is_some_and(|parsed| Self::is_use_statement(&parsed)) {
+            return self
+                .execute_with_params(session_id, stmt, parameters, session_variables)
+                .await
+                .map(|result| StreamingQueryResult::from_execution_result(result.execution));
+        }
+
         // Regular statements run the same permission gate as the materialized
         // path, so a statement admitted by one entry can never be rejected by
         // the other. Commands above already re-enter that gate through

@@ -206,6 +206,15 @@ impl<
             .map_err(|e| GraphServiceError::new(format!("Permission check failed: {}", e)))
     }
 
+    /// Whether the parsed statement switches the session space.
+    ///
+    /// Session-space binding keys off the parsed variant, never the raw text:
+    /// the parser accepts any whitespace between `USE` and the space name, so a
+    /// text prefix would miss those spellings and leave the session unrouted.
+    pub(crate) fn is_use_statement(stmt: &crate::query::parser::ast::Stmt) -> bool {
+        matches!(stmt, crate::query::parser::ast::Stmt::Use(_))
+    }
+
     /// Whether a parsed statement writes user state and needs post-execution alignment.
     pub(crate) fn is_user_management_write_stmt(
         stmt: &crate::query::parser::ast::Stmt,
@@ -241,9 +250,6 @@ impl<
                     .to_string(),
             ));
         }
-        if let Err(reason) = self.enforce_new_password_policy(username, context.stmt) {
-            return Err(reason);
-        }
         let resolved = context
             .parsed_ast
             .as_ref()
@@ -254,7 +260,10 @@ impl<
                 "Permission check failed: unable to classify statement".to_string(),
             ));
         };
-        self.enforce_stmt_permission(username, &stmt, context.space_id)
+        self.enforce_stmt_permission(username, &stmt, context.space_id)?;
+        // Password policy applies to statements the caller is allowed to run:
+        // an unauthorized caller learns the denial, not the policy details.
+        self.enforce_new_password_policy(username, &stmt)
     }
 
     fn enforce_stmt_permission(

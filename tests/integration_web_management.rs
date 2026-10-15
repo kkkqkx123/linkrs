@@ -20,6 +20,17 @@ async fn create_test_web_state() -> (
     linkrs_server::web::WebState<linkrs::storage::GraphStorage>,
     i64,
 ) {
+    create_test_web_state_with(true).await
+}
+
+/// Same as [`create_test_web_state`], with authorization switched on or off so
+/// tests can cover both the authenticated-caller and default-identity paths.
+async fn create_test_web_state_with(
+    enable_authorize: bool,
+) -> (
+    linkrs_server::web::WebState<linkrs::storage::GraphStorage>,
+    i64,
+) {
     use linkrs::config::Config;
     use linkrs::storage::GraphStorage;
     use linkrs::transaction::{TransactionManager, TransactionManagerConfig};
@@ -40,7 +51,8 @@ async fn create_test_web_state() -> (
     let storage_mutex = Arc::new(RwLock::new(storage));
 
     // Create config
-    let config = Config::default();
+    let mut config = Config::default();
+    config.server.auth.enable_authorize = enable_authorize;
 
     // Create graph service for test (no transaction manager, no background tasks)
     let graph_service = GraphService::new_for_test(config.clone(), storage_arc.clone()).await;
@@ -77,6 +89,32 @@ async fn create_test_web_state() -> (
     };
 
     (web_state, session_id)
+}
+
+/// Seed one space with two vertices and one edge through the query pipeline, so
+/// the endpoints are exercised against data created the way a client creates it.
+async fn seed_graph_data(web_state: &linkrs_server::web::WebState<linkrs::storage::GraphStorage>) {
+    let graph_service = web_state.core_state.server.get_graph_service();
+    let admin = graph_service
+        .get_session_manager()
+        .create_session("root".to_string(), "127.0.0.1".to_string())
+        .await
+        .expect("seed session");
+
+    for stmt in [
+        "CREATE SPACE IF NOT EXISTS test_space",
+        "USE test_space",
+        "CREATE TAG Person(id INT64, name STRING)",
+        "CREATE EDGE KNOWS(weight DOUBLE) FROM Person TO Person",
+        "INSERT VERTEX Person(id, name) VALUES 1:(1, \"Alice\")",
+        "INSERT VERTEX Person(id, name) VALUES 2:(2, \"Bob\")",
+        "INSERT EDGE KNOWS(weight) VALUES 1 -> 2:(1.0)",
+    ] {
+        graph_service
+            .execute(admin.id(), stmt)
+            .await
+            .unwrap_or_else(|err| panic!("seed statement failed: {stmt}: {err}"));
+    }
 }
 
 /// Test creating and listing query history
@@ -229,65 +267,184 @@ async fn test_list_indexes() {
     assert!(response.status() == StatusCode::OK || response.status() == StatusCode::NOT_FOUND);
 }
 
-/// Test data browsing - list vertices
+/// Test data browsing - list vertices of a seeded space
 #[tokio::test]
 async fn test_list_vertices() {
-    let (web_state, session_id) = create_test_web_state().await;
+    let (web_state, _session_id) = create_test_web_state_with(false).await;
+    seed_graph_data(&web_state).await;
     let app = linkrs_server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
-        .uri("/v1/data/spaces/test_space/vertices?page=1&page_size=10")
-        .header("X-Session-ID", session_id.to_string())
+        .uri("/v1/data/spaces/test_space/tags/Person/vertices?limit=10&offset=0")
         .body(Body::empty())
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    // Should return 404 if space doesn't exist
-    assert!(response.status() == StatusCode::OK || response.status() == StatusCode::NOT_FOUND);
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["success"], true);
+    assert_eq!(payload["data"]["total"], 2, "two seeded vertices");
+    assert_eq!(payload["data"]["items"].as_array().unwrap().len(), 2);
 }
 
-/// Test data browsing - list edges
+/// Unknown spaces are reported as not found instead of an opaque query error
+#[tokio::test]
+async fn test_list_vertices_unknown_space_is_not_found() {
+    let (web_state, _session_id) = create_test_web_state_with(false).await;
+    let app = linkrs_server::web::create_router(web_state);
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/v1/data/spaces/missing_space/tags/Person/vertices?limit=10&offset=0")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
+/// Test data browsing - list edges of a seeded space
 #[tokio::test]
 async fn test_list_edges() {
-    let (web_state, session_id) = create_test_web_state().await;
+    let (web_state, _session_id) = create_test_web_state_with(false).await;
+    seed_graph_data(&web_state).await;
     let app = linkrs_server::web::create_router(web_state);
 
     let request = Request::builder()
         .method("GET")
-        .uri("/v1/data/spaces/test_space/edges?page=1&page_size=10")
-        .header("X-Session-ID", session_id.to_string())
+        .uri("/v1/data/spaces/test_space/edge-types/KNOWS/edges?limit=10&offset=0")
         .body(Body::empty())
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    // Should return 404 if space doesn't exist
-    assert!(response.status() == StatusCode::OK || response.status() == StatusCode::NOT_FOUND);
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["success"], true);
+    assert_eq!(payload["data"]["total"], 1, "one seeded edge");
 }
 
-/// Test graph data query execution
+/// Test graph data query execution - vertex detail of a seeded space
 #[tokio::test]
 async fn test_execute_query() {
-    let (web_state, session_id) = create_test_web_state().await;
+    let (web_state, _session_id) = create_test_web_state_with(false).await;
+    seed_graph_data(&web_state).await;
     let app = linkrs_server::web::create_router(web_state);
 
     let request = Request::builder()
-        .method("POST")
-        .uri("/v1/graph/execute")
-        .header("content-type", "application/json")
-        .header("X-Session-ID", session_id.to_string())
-        .body(Body::from(
-            json!({
-                "query": "MATCH (n) RETURN n LIMIT 1",
-                "space": "test_space"
-            })
-            .to_string(),
-        ))
+        .method("GET")
+        .uri("/v1/graph/vertices/1?space=test_space")
+        .body(Body::empty())
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    // Should process the query (may fail due to no space, but should not panic)
-    assert!(response.status().as_u16() < 500);
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["success"], true);
+    assert!(payload["data"]["vertex"].is_object());
+}
+
+/// Test graph data query execution - neighbors of a seeded vertex
+#[tokio::test]
+async fn test_graph_neighbors() {
+    let (web_state, _session_id) = create_test_web_state_with(false).await;
+    seed_graph_data(&web_state).await;
+    let app = linkrs_server::web::create_router(web_state);
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/v1/graph/vertices/1/neighbors?space=test_space&direction=OUT")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["success"], true);
+    assert_eq!(
+        payload["data"]["neighbors"].as_array().unwrap().len(),
+        1,
+        "one outgoing edge must yield one neighbor",
+    );
+}
+
+/// Test graph data query execution - edge detail of a seeded space
+#[tokio::test]
+async fn test_edge_detail() {
+    let (web_state, _session_id) = create_test_web_state_with(false).await;
+    seed_graph_data(&web_state).await;
+    let app = linkrs_server::web::create_router(web_state);
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/v1/graph/edges?space=test_space&edge_type=KNOWS&src=1&dst=2&rank=0")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["success"], true);
+    assert!(payload["data"]["edge"].is_object());
 }
 
 /// Test authentication middleware - missing session ID

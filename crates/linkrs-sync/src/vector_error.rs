@@ -282,6 +282,22 @@ impl From<simvec::VectorSearchError> for VectorError {
                 VectorError::ConfigError(format!("Invalid collection name: {}", name))
             }
             simvec::VectorSearchError::InvalidConfig(msg) => VectorError::ConfigError(msg),
+            simvec::VectorSearchError::InsufficientSpace {
+                operation,
+                needed,
+                available,
+            } => VectorError::ConfigError(format!(
+                "insufficient space for {}: needs {} bytes, {} available",
+                operation, needed, available
+            )),
+            simvec::VectorSearchError::CapacityExceeded {
+                collection,
+                max_points,
+                requested,
+            } => VectorError::ConfigError(format!(
+                "collection {} capacity exceeded: limit {}, requested total {}",
+                collection, max_points, requested
+            )),
             simvec::VectorSearchError::InvalidVectorDimension { expected, actual } => {
                 VectorError::DimensionMismatch { expected, actual }
             }

@@ -6,7 +6,7 @@
 //! - Neighbor queries
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     response::Json,
     routing::get,
     Router,
@@ -18,6 +18,7 @@ use crate::storage::{
 };
 use crate::web::{
     error::{WebError, WebResult},
+    handlers::common::{execute_in_space, vid_literal},
     models::ApiResponse,
     WebState,
 };
@@ -71,32 +72,24 @@ async fn get_vertex<
         + 'static,
 >(
     State(web_state): State<WebState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Path(vid): Path<String>,
     Query(params): Query<GetVertexParams>,
 ) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
-    let graph_service = web_state.core_state.server.get_graph_service();
+    // A vertex detail request has no tag qualifier, and the FETCH planner
+    // requires one; an unlabeled MATCH scans every tag in the space.
+    let id = vid_literal(&web_state, &params.space, &vid)?;
+    let query = format!("MATCH (v) WHERE id(v) == {} RETURN v LIMIT 1", id);
 
-    // Build query to fetch vertex by ID
-    let query = format!(
-        "USE {}; FETCH PROP ON * \"{}\" YIELD vertex AS v",
-        params.space, vid
-    );
+    let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
+    if let Some(vertex) = result.first_value() {
+        return Ok(Json(ApiResponse::success(serde_json::json!({"vertex": vertex}))));
+    }
 
-    let result = match graph_service.execute(0, &query).await {
-        Ok(result) => {
-            if let Some(vertex) = result.first_value() {
-                Ok(serde_json::json!({"vertex": vertex}))
-            } else {
-                Err(WebError::NotFound(format!(
-                    "Vertex '{}' not found in space '{}'",
-                    vid, params.space
-                )))
-            }
-        }
-        Err(e) => Err(WebError::Query(format!("Failed to get vertex: {}", e))),
-    };
-
-    Ok(Json(ApiResponse::success(result?)))
+    Err(WebError::NotFound(format!(
+        "Vertex '{}' not found in space '{}'",
+        vid, params.space
+    )))
 }
 
 /// Get edge details
@@ -133,31 +126,24 @@ async fn get_edge<
         + 'static,
 >(
     State(web_state): State<WebState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Query(params): Query<GetEdgeParams>,
 ) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
-    let graph_service = web_state.core_state.server.get_graph_service();
-
     // Build query to fetch edge
     let query = format!(
-        "USE {}; FETCH PROP ON {} \"{}\" -> \"{}\"@{} YIELD edge AS e",
-        params.space, params.edge_type, params.src, params.dst, params.rank
+        "FETCH PROP ON {} \"{}\" -> \"{}\"@{} YIELD edge AS e",
+        params.edge_type, params.src, params.dst, params.rank
     );
 
-    let result = match graph_service.execute(0, &query).await {
-        Ok(result) => {
-            if let Some(edge) = result.first_value() {
-                Ok(serde_json::json!({"edge": edge}))
-            } else {
-                Err(WebError::NotFound(format!(
-                    "Edge from '{}' to '{}' with type '{}' not found in space '{}'",
-                    params.src, params.dst, params.edge_type, params.space
-                )))
-            }
-        }
-        Err(e) => Err(WebError::Query(format!("Failed to get edge: {}", e))),
-    };
+    let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
+    if let Some(edge) = result.first_value() {
+        return Ok(Json(ApiResponse::success(serde_json::json!({"edge": edge}))));
+    }
 
-    Ok(Json(ApiResponse::success(result?)))
+    Err(WebError::NotFound(format!(
+        "Edge from '{}' to '{}' with type '{}' not found in space '{}'",
+        params.src, params.dst, params.edge_type, params.space
+    )))
 }
 
 /// Get neighbors of a vertex
@@ -200,55 +186,44 @@ async fn get_neighbors<
         + 'static,
 >(
     State(web_state): State<WebState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Path(vid): Path<String>,
     Query(params): Query<GetNeighborsParams>,
 ) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
-    let graph_service = web_state.core_state.server.get_graph_service();
-
-    // Build match pattern based on direction
+    // An edge token carries the edge type after a colon; a bare name is read as
+    // the type itself. With no filter the bracket pair matches any type.
+    let edge = match &params.edge_type {
+        Some(edge_type) => format!("[:{}]", edge_type),
+        None => "[]".to_string(),
+    };
     let pattern = match params.direction.as_str() {
-        "OUT" => "(v)-[e]->(n)".to_string(),
-        "IN" => "(v)<-[e]-(n)".to_string(),
-        _ => "(v)-[e]-(n)".to_string(),
+        "OUT" => format!("(v)-{}->(n)", edge),
+        "IN" => format!("(v)<-{}-(n)", edge),
+        _ => format!("(v)-{}-(n)", edge),
     };
 
-    // Add edge type filter if specified
-    let edge_filter = params
-        .edge_type
-        .as_ref()
-        .map(|et| format!(":{}", et))
-        .unwrap_or_default();
-    let pattern = pattern.replace("[e]", &format!("[e{}]", edge_filter));
-
+    let id = vid_literal(&web_state, &params.space, &vid)?;
     let query = format!(
-        "USE {}; MATCH {} WHERE id(v) == \"{}\" RETURN n LIMIT 100",
-        params.space, pattern, vid
+        "MATCH {} WHERE id(v) == {} RETURN n LIMIT 100",
+        pattern, id
     );
 
-    let result = match graph_service.execute(0, &query).await {
-        Ok(result) => {
-            let neighbors: Vec<serde_json::Value> = result
-                .rows()
-                .iter()
-                .flat_map(|row| row.iter())
-                .filter_map(|v| match v {
-                    linkrs_core::Value::Vertex(vertex) => {
-                        Some(serde_json::json!({"vertex": vertex}))
-                    }
-                    _ => None,
-                })
-                .collect();
+    let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
+    let neighbors: Vec<serde_json::Value> = result
+        .rows()
+        .iter()
+        .flat_map(|row| row.iter())
+        .filter_map(|v| match v {
+            linkrs_core::Value::Vertex(vertex) => Some(serde_json::json!({"vertex": vertex})),
+            _ => None,
+        })
+        .collect();
 
-            Ok(serde_json::json!({
-                "vid": vid,
-                "space": params.space,
-                "direction": params.direction,
-                "edge_type": params.edge_type,
-                "neighbors": neighbors,
-            }))
-        }
-        Err(e) => Err(WebError::Query(format!("Failed to get neighbors: {}", e))),
-    };
-
-    Ok(Json(ApiResponse::success(result?)))
+    Ok(Json(ApiResponse::success(serde_json::json!({
+        "vid": vid,
+        "space": params.space,
+        "direction": params.direction,
+        "edge_type": params.edge_type,
+        "neighbors": neighbors,
+    }))))
 }

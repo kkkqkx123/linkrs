@@ -6,7 +6,7 @@
 //! - Data filtering and pagination
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     response::Json,
     routing::get,
     Router,
@@ -17,37 +17,12 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use crate::web::{
-    error::{WebError, WebResult},
-    models::{ApiResponse, PaginatedResponse, PaginationParams},
+    error::WebResult,
+    handlers::common::execute_in_space,
+    models::{ApiResponse, PaginatedResponse},
     WebState,
 };
 use linkrs_core::Value;
-
-/// Get or create a session for the current request
-/// Returns a session ID that can be used with graph_service.execute()
-async fn get_or_create_session_id<
-    S: StorageClient
-        + StorageSchemaContextOps
-        + StorageSyncContextOps
-        + StorageOperationContextOps
-        + Clone
-        + Send
-        + Sync
-        + 'static,
->(
-    web_state: &WebState<S>,
-) -> Result<i64, WebError> {
-    let session_manager = web_state.core_state.server.get_session_manager();
-
-    // Try to find an existing anonymous session or create a new one
-    // In a production system, this would use authenticated session from request context
-    let session = session_manager
-        .create_session("anonymous".into(), "127.0.0.1".to_string())
-        .await
-        .map_err(|e| WebError::Internal(format!("Failed to create session: {}", e)))?;
-
-    Ok(session.id())
-}
 
 /// Create data browser routes (without state)
 pub fn create_routes<
@@ -72,10 +47,16 @@ pub fn create_routes<
 }
 
 /// Filter parameters for data browsing
+///
+/// The pagination fields are declared inline rather than flattened into
+/// `PaginationParams`: the query-string deserializer buffers flattened fields
+/// as text, which rejects `limit=10` as `invalid type: string, expected usize`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct DataFilterParams {
-    #[serde(flatten)]
-    pub pagination: PaginationParams,
+    #[serde(default = "crate::web::models::default_limit")]
+    pub limit: usize,
+    #[serde(default = "crate::web::models::default_offset")]
+    pub offset: usize,
     /// Property filter (e.g., "age>18")
     pub filter: Option<String>,
     /// Sort field
@@ -114,14 +95,10 @@ async fn list_vertices_by_tag<
         + 'static,
 >(
     State(web_state): State<WebState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Path((space_name, tag_name)): Path<(String, String)>,
     Query(params): Query<DataFilterParams>,
 ) -> WebResult<Json<ApiResponse<PaginatedResponse<serde_json::Value>>>> {
-    // Get or create session for this request
-    let session_id = get_or_create_session_id(&web_state).await?;
-
-    let graph_service = web_state.core_state.server.get_graph_service();
-
     // Build filter clause for both count and data queries
     let filter_clause = params
         .filter
@@ -142,51 +119,42 @@ async fn list_vertices_by_tag<
 
     // First, get total count
     let count_query = format!(
-        "USE {}; MATCH (v:{}) RETURN COUNT(v) as total{}",
-        space_name, tag_name, filter_clause
+        "MATCH (v:{}) RETURN COUNT(v) as total{}",
+        tag_name, filter_clause
     );
 
-    let total = match graph_service.execute(session_id, &count_query).await {
-        Ok(result) => result
-            .first_value()
-            .and_then(|val| match val {
-                Value::BigInt(c) => Some(*c),
-                _ => None,
-            })
-            .unwrap_or(0),
-        _ => 0,
-    };
+    let total = execute_in_space(&web_state, caller_session_id, &space_name, &count_query)
+        .await?
+        .first_value()
+        .and_then(|val| match val {
+            Value::BigInt(c) => Some(*c),
+            _ => None,
+        })
+        .unwrap_or(0);
 
     // Then, get paginated data
     let query = format!(
-        "USE {}; MATCH (v:{}) RETURN v{}{} SKIP {} LIMIT {}",
-        space_name,
+        "MATCH (v:{}) RETURN v{}{} SKIP {} LIMIT {}",
         tag_name,
         filter_clause,
         sort_clause,
-        params.pagination.offset,
-        params.pagination.limit
+        params.offset,
+        params.limit
     );
 
-    let result = match graph_service.execute(session_id, &query).await {
-        Ok(result) => {
-            // Convert QueryResult to JSON values
-            let rows: Vec<serde_json::Value> = result
-                .first_column_values()
-                .map(|val| serde_json::json!({"vertex": val}))
-                .collect();
+    let result = execute_in_space(&web_state, caller_session_id, &space_name, &query).await?;
+    // Convert QueryResult to JSON values
+    let rows: Vec<serde_json::Value> = result
+        .first_column_values()
+        .map(|val| serde_json::json!({"vertex": val}))
+        .collect();
 
-            Ok::<_, WebError>(PaginatedResponse::new(
-                rows,
-                total,
-                params.pagination.limit,
-                params.pagination.offset,
-            ))
-        }
-        Err(e) => Err(WebError::Query(format!("Failed to list vertices: {}", e))),
-    };
-
-    Ok(Json(ApiResponse::success(result?)))
+    Ok(Json(ApiResponse::success(PaginatedResponse::new(
+        rows,
+        total,
+        params.limit,
+        params.offset,
+    ))))
 }
 
 /// List edges by type
@@ -219,14 +187,10 @@ async fn list_edges_by_type<
         + 'static,
 >(
     State(web_state): State<WebState<S>>,
+    Extension(caller_session_id): Extension<i64>,
     Path((space_name, edge_name)): Path<(String, String)>,
     Query(params): Query<DataFilterParams>,
 ) -> WebResult<Json<ApiResponse<PaginatedResponse<serde_json::Value>>>> {
-    // Get or create session for this request
-    let session_id = get_or_create_session_id(&web_state).await?;
-
-    let graph_service = web_state.core_state.server.get_graph_service();
-
     // Build filter clause for both count and data queries
     let filter_clause = params
         .filter
@@ -247,49 +211,40 @@ async fn list_edges_by_type<
 
     // First, get total count
     let count_query = format!(
-        "USE {}; MATCH ()-[e:{}]->() RETURN COUNT(e) as total{}",
-        space_name, edge_name, filter_clause
+        "MATCH ()-[e:{}]->() RETURN COUNT(e) as total{}",
+        edge_name, filter_clause
     );
 
-    let total = match graph_service.execute(session_id, &count_query).await {
-        Ok(result) => result
-            .first_value()
-            .and_then(|val| match val {
-                Value::BigInt(c) => Some(*c),
-                _ => None,
-            })
-            .unwrap_or(0),
-        _ => 0,
-    };
+    let total = execute_in_space(&web_state, caller_session_id, &space_name, &count_query)
+        .await?
+        .first_value()
+        .and_then(|val| match val {
+            Value::BigInt(c) => Some(*c),
+            _ => None,
+        })
+        .unwrap_or(0);
 
     // Then, get paginated data
     let query = format!(
-        "USE {}; MATCH ()-[e:{}]->() RETURN e{}{} SKIP {} LIMIT {}",
-        space_name,
+        "MATCH ()-[e:{}]->() RETURN e{}{} SKIP {} LIMIT {}",
         edge_name,
         filter_clause,
         sort_clause,
-        params.pagination.offset,
-        params.pagination.limit
+        params.offset,
+        params.limit
     );
 
-    let result = match graph_service.execute(session_id, &query).await {
-        Ok(result) => {
-            // Convert QueryResult to JSON values
-            let rows: Vec<serde_json::Value> = result
-                .first_column_values()
-                .map(|val| serde_json::json!({"edge": val}))
-                .collect();
+    let result = execute_in_space(&web_state, caller_session_id, &space_name, &query).await?;
+    // Convert QueryResult to JSON values
+    let rows: Vec<serde_json::Value> = result
+        .first_column_values()
+        .map(|val| serde_json::json!({"edge": val}))
+        .collect();
 
-            Ok::<_, WebError>(PaginatedResponse::new(
-                rows,
-                total,
-                params.pagination.limit,
-                params.pagination.offset,
-            ))
-        }
-        Err(e) => Err(WebError::Query(format!("Failed to list edges: {}", e))),
-    };
-
-    Ok(Json(ApiResponse::success(result?)))
+    Ok(Json(ApiResponse::success(PaginatedResponse::new(
+        rows,
+        total,
+        params.limit,
+        params.offset,
+    ))))
 }

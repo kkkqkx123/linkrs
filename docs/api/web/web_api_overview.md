@@ -236,6 +236,12 @@ Web 模块基于 Axum 框架构建，提供 RESTful API 接口，主要包含以
 
 路径前缀: `/v1/data`
 
+**身份与空间语义**
+
+- 语句按**调用方会话身份**执行，权限门按该用户的角色判定；`enable_authorize = false`
+  或 `single_user_mode = true` 时，按配置的默认身份（`auth.default_username`）执行。
+- 目标空间不存在返回 `404 NOT_FOUND`；空间存在但标签/边类型不存在返回 `400 QUERY_ERROR`。
+
 #### 3.1 Vertex 浏览
 
 | 方法 | 路径 | 描述 |
@@ -272,6 +278,8 @@ GET /v1/data/spaces/my_space/tags/person/vertices?limit=10&filter=age>18&sort_by
 ### 4. 图形数据 API
 
 路径前缀: `/v1/graph`
+
+身份与空间语义同第 3 节；此外，边的 `rank` 仅在 `/v1/graph/edges` 生效，`/v1/graph/vertices/{vid}/neighbors` 不做 rank 过滤。
 
 #### 4.1 Vertex 查询
 

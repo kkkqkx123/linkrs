@@ -126,10 +126,11 @@ impl<
             parameters,
             session_variables,
         };
+        let parsed = Self::parse_stmt(stmt);
         let mut result =
             self.execute_query_with_permission(session_id, &context, consistency.clone());
 
-        if stmt.trim().to_uppercase().starts_with("USE ") {
+        if parsed.as_ref().is_some_and(|parsed| Self::is_use_statement(parsed)) {
             if let Ok(ref exec_result) = result {
                 if let Some(space_summary) = Self::extract_space_summary_from_result(exec_result) {
                     session.set_space(space_summary);
@@ -139,8 +140,9 @@ impl<
 
         self.finish_auto_commit(&session, &mut result);
         if result.is_ok() {
-            let needs_alignment = Self::parse_stmt(stmt)
-                .is_some_and(|parsed| Self::is_user_management_write_stmt(&parsed));
+            let needs_alignment = parsed
+                .as_ref()
+                .is_some_and(|parsed| Self::is_user_management_write_stmt(parsed));
             if needs_alignment {
                 self.reconcile_user_state(Some(session_id)).await;
                 self.evict_stale_user_sessions(&session, session_id, stmt)
@@ -153,26 +155,24 @@ impl<
     /// Enforce the password policy on query-channel password writes.
     ///
     /// Single hook on the execution path covering user creation, admin
-    /// alteration carrying a new password, and self-service password
-    /// changes. History reuse is checked against stored hashes.
+    /// alteration carrying a new password, and self-service password changes.
+    /// History reuse is checked against stored hashes. The caller has already
+    /// passed the permission gate by the time this runs.
     pub(crate) fn enforce_new_password_policy(
         &self,
         caller: &str,
-        stmt: &str,
+        stmt: &crate::query::parser::ast::Stmt,
     ) -> Result<(), GraphServiceError> {
-        let Some(parsed) = Self::parse_stmt(stmt) else {
-            return Ok(());
-        };
         use crate::query::parser::ast::Stmt as Parsed;
         let invalid =
             |reason: String| GraphServiceError::new(format!("invalid password: {}", reason));
-        match parsed {
+        match stmt {
             Parsed::CreateUser(create) => self
                 .validate_new_password(&create.username, &create.password)
                 .map_err(invalid),
-            Parsed::AlterUser(alter) => match alter.password {
+            Parsed::AlterUser(alter) => match &alter.password {
                 Some(password) => self
-                    .validate_new_password(&alter.username, &password)
+                    .validate_new_password(&alter.username, password)
                     .map_err(invalid),
                 None => Ok(()),
             },

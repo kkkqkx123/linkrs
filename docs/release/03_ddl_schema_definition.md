@@ -701,12 +701,15 @@ SHOW CREATE INDEX idx_person_name
 **没有专用 RPC**（不新增 proto 消息与服务端方法），与上游"维护操作复用语句通道"的形态一致。
 
 ### 权限
-`PURGE EXPIRED` 是维护语句，需要目标空间的**维护权限**（`Schema` 级，即 GOD / ADMIN / DBA 角色）：
+`PURGE EXPIRED` 是维护语句，需要**维护权限**（`Schema` 级，即 GOD / ADMIN / DBA 角色）。
+权限按**当前会话空间**判定，与其余语句同一口径：会话空间无角色时回退到全局角色。因此只在目标
+空间持有角色的用户，需先 `USE <space_name>` 再执行该空间的清理。
 
 - 只读角色（GUEST）与普通读写角色（USER，无 Schema 权限）执行会被拒绝，返回
   `Permission check failed: ...` 可读错误；
 - 拒绝行为在 gRPC 一元、HTTP 一元与流式（SSE / gRPC 流式）入口完全一致；
-- 显式语句与后台清理（见下）走同一条 purge 实现，权限门只作用于语句入口。
+- 显式语句与后台清理（见下）走同一条 purge 实现，权限门只作用于语句入口；后台任务不经权限门，
+  是否运行由配置开关决定。
 
 ### 语法结构
 ```cypher
