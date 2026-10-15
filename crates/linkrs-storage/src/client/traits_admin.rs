@@ -37,7 +37,45 @@ pub trait StorageAdmin: Send + Sync + std::fmt::Debug {
     fn find_dangling_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
     fn repair_dangling_edges(&mut self, space: &str) -> Result<usize, StorageError>;
 
+    /// Physically delete TTL-expired rows.
+    ///
+    /// `target = None` scans every TTL-configured tag and edge type in the
+    /// space and returns one [`TtlPurgeEntry`] per such schema (even when it
+    /// deletes nothing). `target = Some(..)` scans only that schema and
+    /// returns its single entry, whose `removed` is 0 when the schema exists
+    /// but has no TTL or nothing expired; a schema that does not exist is an
+    /// explicit error. Deletions run through the normal write path, so they
+    /// are WAL-logged and crash-recoverable.
+    ///
+    /// There is no background task backing this: it only runs when a caller
+    /// invokes it (e.g. the `PURGE EXPIRED` statement).
+    fn purge_expired(
+        &self,
+        space: &str,
+        target: Option<PurgeTarget<'_>>,
+    ) -> Result<Vec<TtlPurgeEntry>, StorageError>;
+
     fn get_db_path(&self) -> &str;
+}
+
+/// Target schema of a [`StorageAdmin::purge_expired`] call: a single tag or
+/// edge type by name. `None` passed instead means "every TTL-configured
+/// schema in the space".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurgeTarget<'a> {
+    Tag(&'a str),
+    Edge(&'a str),
+}
+
+/// Physical-deletion result for one TTL schema scanned by a purge.
+///
+/// `is_edge` distinguishes an edge type (`true`) from a tag (`false`);
+/// `removed` reports how many expired rows were deleted.
+#[derive(Debug, Clone)]
+pub struct TtlPurgeEntry {
+    pub schema_name: String,
+    pub is_edge: bool,
+    pub removed: usize,
 }
 
 /// Persistence operations for flushing, checkpointing, and compaction.

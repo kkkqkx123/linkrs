@@ -5,14 +5,13 @@ use postcard::from_bytes;
 use serde::de::DeserializeOwned;
 
 use crate::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
-    CreateEdgeTypeRedo, CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
-    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexRedo, DeleteVertexTypeRedo,
-    DropEdgeIndexRedo, DropMacroRedo, DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo,
-    InsertEdgeRedo, InsertVertexRedo, Lsn, ParsedWalEntry, RenameEdgePropRedo, RenameEdgeTypeRedo,
-    RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
-    UpdateVertexPropRedo, WalOpType,
+    AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeIndexRedo, CreateEdgeTypeRedo,
+    CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo, CreateVertexTypeRedo,
+    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
+    DeleteVertexPropsRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo,
+    DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, InsertVertexRedo, Lsn,
+    ParsedWalEntry, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    UpdateEdgePropRedo, UpdateSequenceRedo, UpdateVertexPropRedo, WalOpType,
 };
 use linkrs_core::types::Timestamp;
 use linkrs_core::{StorageError, StorageResult};
@@ -95,7 +94,6 @@ impl RecoveryManager {
                 | WalOpType::CreateSpace
                 | WalOpType::DropSpace
                 | WalOpType::ClearSpace
-                | WalOpType::AlterSpaceComment
                 | WalOpType::AddVertexProp
                 | WalOpType::AddEdgeProp
                 | WalOpType::DeleteVertexProp
@@ -304,18 +302,6 @@ impl RecoveryManager {
                     self.stats,
                     ClearSpaceRedo,
                     replay_clear_space
-                )
-            }
-            WalOpType::AlterSpaceComment => {
-                recovery_arm_ref!(
-                    applier,
-                    op_type,
-                    entry,
-                    payload,
-                    ts,
-                    self.stats,
-                    AlterSpaceCommentRedo,
-                    replay_alter_space_comment
                 )
             }
             WalOpType::AddVertexProp => {

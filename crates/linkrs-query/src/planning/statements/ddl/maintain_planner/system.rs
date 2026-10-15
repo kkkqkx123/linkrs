@@ -5,13 +5,13 @@ use std::sync::Arc;
 use crate::binder::validation::ValidatedStatement;
 use crate::parser::ast::stmt::{
     AttachDatabaseStmt, DetachDatabaseStmt, ExportDatabaseStmt, ImportDatabaseStmt,
-    InQueryCallStmt, LoadFromStmt, ScanSource, ShowConfigsStmt,
+    InQueryCallStmt, LoadFromStmt, PurgeTarget, ScanSource, ShowConfigsStmt,
 };
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode;
 use crate::planning::plan::core::nodes::management::space_nodes::{
-    AttachDatabaseNode, CheckpointNode, DetachDatabaseNode, ExportDatabaseNode,
-    ImportDatabaseNode,
+    AttachDatabaseNode, CheckpointNode, DetachDatabaseNode, ExportDatabaseNode, ImportDatabaseNode,
+    PurgeExpiredNode,
 };
 use crate::planning::plan::core::nodes::management::system_nodes::{
     InQueryCallNode, LoadFromNode, ShowConfigsNode, ShowQueriesNode, ShowSessionsNode,
@@ -73,6 +73,11 @@ pub(super) fn plan_checkpoint() -> PlanNodeEnum {
     PlanNodeEnum::SpaceManage(SpaceManageNode::Checkpoint(CheckpointNode::new(
         next_node_id(),
     )))
+}
+
+pub(super) fn plan_purge_expired(space_name: &str, target: Option<&PurgeTarget>) -> PlanNodeEnum {
+    let node = PurgeExpiredNode::new(next_node_id(), space_name.to_string(), target.cloned());
+    PlanNodeEnum::SpaceManage(SpaceManageNode::PurgeExpired(node))
 }
 
 pub(super) fn plan_export_database(stmt: &ExportDatabaseStmt) -> PlanNodeEnum {

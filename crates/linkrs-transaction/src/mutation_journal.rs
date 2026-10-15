@@ -74,8 +74,7 @@ impl MutationResource {
             | WalOpType::DeleteEdgeType
             | WalOpType::CreateSpace
             | WalOpType::DropSpace
-            | WalOpType::ClearSpace
-            | WalOpType::AlterSpaceComment => MutationResource::Schema,
+            | WalOpType::ClearSpace => MutationResource::Schema,
             WalOpType::CreateTagIndex
             | WalOpType::DropTagIndex
             | WalOpType::CreateEdgeIndex

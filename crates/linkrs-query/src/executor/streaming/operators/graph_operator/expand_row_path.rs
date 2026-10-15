@@ -79,8 +79,38 @@ pub(super) fn expand_single_step(
                 "raw-id expand with property demands violates the plan contract".to_string(),
             ));
         }
-        let neighbors =
-            reader.neighbor_dst_ids_batch(space_name, &seed_vids, direction, edge_types)?;
+        // The raw-id batched neighbor read walks CSR adjacency without
+        // materializing edges, so it cannot evaluate TTL. When any relevant
+        // edge type has TTL, fall back to materialized edges — which filter
+        // expired rows via the ttl column — and take the far endpoint per
+        // edge. Full properties are read so the ttl column is present; the
+        // raw-id output shape (VertexId + Null edge) is preserved.
+        let neighbors: Vec<Vec<VertexId>> = if ctx.edge_ttl_active(reader)? {
+            let mut out = Vec::with_capacity(seed_vids.len());
+            for vid in &seed_vids {
+                let edges =
+                    reader.get_node_edges_projected(space_name, vid, direction, edge_types, None, None)?;
+                let mut ids = Vec::with_capacity(edges.len());
+                for edge in &edges {
+                    let dst = match direction {
+                        EdgeDirection::Out => *edge.dst(),
+                        EdgeDirection::In => *edge.src(),
+                        EdgeDirection::Both => {
+                            if edge.src() == vid {
+                                *edge.dst()
+                            } else {
+                                *edge.src()
+                            }
+                        }
+                    };
+                    ids.push(dst);
+                }
+                out.push(ids);
+            }
+            out
+        } else {
+            reader.neighbor_dst_ids_batch(space_name, &seed_vids, direction, edge_types)?
+        };
         for (dst_ids, seed_row) in neighbors.iter().zip(seed_rows.iter()) {
             for dst in dst_ids {
                 buf.push_row(

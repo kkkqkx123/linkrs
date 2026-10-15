@@ -2,7 +2,8 @@
 
 ## 概述
 
-数据查询语言 (DQL) 用于从图数据库中检索数据，包括模式匹配、图遍历、索引查找、路径查找、全文检索、向量检索等功能。
+数据查询语言 (DQL) 用于从图数据库中检索数据，包括模式匹配、图遍历、索引查找、路径查找、全文检索、向量检索等功能，
+并覆盖分组聚合、管道组合、集合操作、变量赋值等辅助子句与表达能力（见第 9、10 节）。
 
 ---
 
@@ -479,6 +480,13 @@ UNWIND <expression> AS <variable>
 <statement> MINUS <statement>
 ```
 
+| 操作符 | 说明 |
+|--------|------|
+| UNION | 并集，去重 |
+| UNION ALL | 并集，保留重复 |
+| INTERSECT | 交集 |
+| MINUS | 差集 |
+
 #### 示例
 ```cypher
 -- 管道过滤
@@ -487,3 +495,108 @@ GO FROM "player100" OVER follow | WHERE follow.degree > 1 | YIELD target.name
 -- 集合操作
 MATCH (a:Person) RETURN a.name UNION MATCH (b:Team) RETURN b.name
 ```
+
+### 9.9 GROUP BY 语句
+
+#### 语法结构
+```cypher
+GROUP BY <expression> [, <expression> ...]
+[YIELD <item> [, <item> ...]]
+[HAVING <condition>]
+
+-- 分组扩展
+GROUP BY ROLLUP (<expression> [, ...])       [YIELD ...] [HAVING ...]
+GROUP BY CUBE (<expression> [, ...])         [YIELD ...] [HAVING ...]
+GROUP BY GROUPING SETS ((<expr>, ...), ...)  [YIELD ...] [HAVING ...]
+```
+
+#### 关键特性
+- 支持多字段分组
+- 支持 YIELD 子句指定输出（缺省时按分组列输出，别名为 `group_0`、`group_1`...）
+- 支持 HAVING 子句过滤分组
+- 支持 ROLLUP / CUBE / GROUPING SETS 分组扩展
+- 可与管道操作符结合使用
+
+> RETURN 子句内置的 `GROUP BY`（含 ROLLUP / CUBE / GROUPING SETS，见 9.1 节）
+> 与管道阶段 `| GROUP BY`（见 9.8 节）之外的独立语句形态在此描述。
+
+#### 示例
+```cypher
+-- 基础分组
+GROUP BY category YIELD category, count(*) AS cnt
+
+-- 带 HAVING 过滤
+GROUP BY age YIELD age, count(*) AS cnt HAVING cnt > 5
+
+-- ROLLUP 小计
+GROUP BY ROLLUP (country, city) YIELD country, city, count(*) AS cnt
+
+-- GROUPING SETS
+GROUP BY GROUPING SETS ((country, city), (country)) YIELD country, city, count(*) AS cnt
+
+-- 与管道结合
+GO FROM "player100" OVER follow | GROUP BY $-.dst YIELD $-.dst, count(*) AS cnt
+```
+
+### 9.10 变量赋值
+
+#### 语法结构
+```cypher
+$<variable_name> = <statement>     -- 结果集变量：存储查询结果
+LET [$]<name> = <expression>       -- 会话变量：存储表达式求值结果
+```
+
+#### 关键特性
+- 结果集变量：变量名以 `$` 开头，可存储查询结果供后续语句与管道引用
+  （如 `GO FROM $friends.dst OVER serve`）
+- 会话变量：`LET` 右侧是表达式（非语句），可引用其他会话变量 `$name` 与参数 `@name`
+- 会话变量名必须是合法标识符（`[A-Za-z_][A-Za-z0-9_]*`），`$` 前缀可省略，作用域为当前会话
+
+#### 示例
+```cypher
+-- 结果集变量
+$result = GO FROM "player100" OVER follow
+$friends = MATCH (n:Person) RETURN n
+GO FROM $friends.dst OVER serve
+
+-- 会话变量
+LET threshold = 25
+LET $limit = 10
+```
+
+---
+
+## 10. 表达式速查
+
+### 10.1 字面量
+- 字符串: `'hello'`, `"world"`
+- 整数: `123`, `-456`
+- 浮点数: `3.14`, `-0.5`
+- 布尔值: `true`, `false`
+- NULL: `NULL`
+
+### 10.2 属性访问
+```cypher
+$^.tag.prop        -- 访问源点属性
+$$.tag.prop        -- 访问目标点属性
+$-.prop            -- 访问边属性
+variable.prop      -- 访问变量属性
+```
+
+### 10.3 运算符
+| 类型 | 运算符 |
+|------|--------|
+| 算术 | `+`, `-`, `*`, `/`, `%` |
+| 比较 | `=`, `==`, `!=`, `<>`, `<`, `>`, `<=`, `>=` |
+| 逻辑 | `AND`, `OR`, `NOT`, `XOR` |
+| 字符串 | `+` (连接) |
+| 列表 | `IN` |
+
+### 10.4 函数
+| 类别 | 函数 |
+|------|------|
+| 聚合 | `count()`, `sum()`, `avg()`, `max()`, `min()`, `collect()` |
+| 字符串 | `concat()`, `substring()`, `lower()`, `upper()`, `trim()` |
+| 数学 | `abs()`, `round()`, `floor()`, `ceil()`, `sqrt()`, `pow()` |
+| 时间 | `now()`, `timestamp()`, `date()`, `datetime()` |
+| 图相关 | `id()`, `tags()`, `type()`, `src()`, `dst()`, `rank()` |

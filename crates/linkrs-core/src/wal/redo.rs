@@ -87,12 +87,6 @@ pub struct ClearSpaceRedo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlterSpaceCommentRedo {
-    pub space_id: u64,
-    pub comment: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateVertexTypeRedo {
     pub space_name: String,
     pub label_id: Option<LabelId>,

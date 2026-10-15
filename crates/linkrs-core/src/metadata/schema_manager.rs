@@ -295,30 +295,6 @@ impl SchemaManager {
         Ok(true)
     }
 
-    pub fn alter_space_comment(
-        &self,
-        space_id: u64,
-        comment: String,
-    ) -> Result<bool, StorageError> {
-        let (applied, space_name) = {
-            let mut spaces = self.spaces.write();
-            if let Some(data) = spaces.get_mut(&space_id) {
-                data.info.comment = Some(comment);
-                let name = data.info.space_name.clone();
-                (true, name)
-            } else {
-                (false, String::new())
-            }
-        };
-        if applied {
-            self.emit_schema_event(SchemaChangeEvent::SpaceUpdated {
-                space_id,
-                space_name,
-            });
-        }
-        Ok(applied)
-    }
-
     pub fn get_space(&self, space_name: &str) -> Result<Option<SpaceInfo>, StorageError> {
         let name_index = self.space_name_index.read();
         if let Some(space_id) = name_index.get(space_name) {

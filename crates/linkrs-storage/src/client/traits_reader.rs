@@ -196,6 +196,43 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         Ok(out)
     }
 
+    /// Whether any edge type reached by a topology fast path has TTL
+    /// configured.
+    ///
+    /// Fast paths that read raw CSR adjacency (`neighbor_dst_ids_batch`,
+    /// `out_degree_batch`, multi-hop intermediate hops, GetNeighbors source)
+    /// never materialize edge properties, so they cannot evaluate TTL. Before
+    /// taking such a path a caller checks this predicate and, when it is true,
+    /// degrades to the materializing path so results match the "expired means
+    /// absent" contract.
+    ///
+    /// `edge_types` empty means "every edge type in the space". Returns `true`
+    /// when at least one of the relevant edge types has a valid TTL.
+    fn edge_types_ttl_active(
+        &self,
+        space: &str,
+        edge_types: &[String],
+    ) -> Result<bool, StorageError> {
+        let is_active = |info: &EdgeTypeInfo| {
+            linkrs_core::types::ttl::has_valid_ttl(
+                info.ttl_duration,
+                info.ttl_col.as_deref(),
+            )
+        };
+        if edge_types.is_empty() {
+            Ok(self.list_edge_types(space)?.iter().any(is_active))
+        } else {
+            for name in edge_types {
+                if let Some(info) = self.get_edge_type(space, name)? {
+                    if is_active(&info) {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        }
+    }
+
     /// Lightweight batch neighbor read used by de-materialized expand hops
     /// (`id_only`/`count_only`).  Resolves the edge-type schema once for the
     /// batch and reads MVCC neighbors directly from the CSR, skipping

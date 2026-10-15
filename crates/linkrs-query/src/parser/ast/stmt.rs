@@ -168,6 +168,7 @@ pub enum Stmt {
     Extension(ExtensionStmt),
     AttachDatabase(AttachDatabaseStmt),
     DetachDatabase(DetachDatabaseStmt),
+    PurgeExpired(PurgeExpiredStmt),
 }
 
 crate::define_stmt_helpers! {
@@ -251,6 +252,7 @@ crate::define_stmt_helpers! {
     Extension => Admin,
     AttachDatabase => Admin,
     DetachDatabase => Admin,
+    PurgeExpired => Ddl,
 }
 
 impl Stmt {
@@ -362,6 +364,7 @@ impl Stmt {
             },
             Stmt::AttachDatabase(_) => "ATTACH DATABASE",
             Stmt::DetachDatabase(_) => "DETACH DATABASE",
+            Stmt::PurgeExpired(_) => "PURGE EXPIRED",
         }
     }
 

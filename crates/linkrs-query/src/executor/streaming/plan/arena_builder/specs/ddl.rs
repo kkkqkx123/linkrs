@@ -285,6 +285,10 @@ fn space_manage_to_command(
         DetachDatabase(n) => SpaceManageCommand::DetachDatabase {
             alias: n.alias().to_string(),
         },
+        PurgeExpired(n) => SpaceManageCommand::PurgeExpired {
+            space_name: n.space_name().to_string(),
+            target: n.target().cloned(),
+        },
     }
 }
 

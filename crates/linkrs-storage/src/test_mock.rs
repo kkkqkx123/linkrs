@@ -403,7 +403,6 @@ impl StorageSchemaOps for MockStorage {
     mock_stub!(&mut self, create_space(_space: &mut SpaceInfo) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, drop_space(_space: &str) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, clear_space(_space: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, alter_space_comment(_space_id: u64, _comment: String) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, create_tag(_space: &str, _info: &TagInfo) -> Result<u32, StorageError>, Ok(1));
     mock_stub!(&mut self, alter_tag(_space: &str, _tag: &str, _additions: Vec<PropertyDef>, _deletions: Vec<String>) -> Result<bool, StorageError>, Ok(true));
     mock_stub!(&mut self, rename_vertex_property(_label: LabelId, _old_name: &str, _new_name: &str) -> Result<(), StorageError>, Ok(()));
@@ -458,6 +457,7 @@ impl StorageAdmin for MockStorage {
 
     mock_stub!(&self, find_dangling_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&mut self, repair_dangling_edges(_space: &str) -> Result<usize, StorageError>, Ok(0));
+    mock_stub!(&self, purge_expired(_space: &str, _target: Option<crate::PurgeTarget<'_>>) -> Result<Vec<crate::TtlPurgeEntry>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, get_db_path() -> &str, "");
 }
 

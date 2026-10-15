@@ -151,9 +151,9 @@ PURGE EXPIRED [TAG <tag_name> | EDGE <edge_name>] IN <space_name>
   - spec：`executor/streaming/operators/spec/ddl.rs` 的 `SpaceManageCommand` 增加 `PurgeExpired { space_name, target }`；`arena_builder/specs/ddl.rs` 增加构造臂。
   - executor：`schema_executor/space.rs` 增加臂，经 `exec_ddl` 闭包调用 `StorageAdmin::purge_expired`（带 target 时走 schema 级 purge），按 `TtlPurgeEntry` 组装结果集。
 - 文档
-  - `docs/release/05_other_statements.md` 新增"PURGE EXPIRED - 过期数据物理清理"章节：功能、语法结构、关键特性（无后台任务、按 schema 汇报、有界批量）、示例、错误形态。
-  - `docs/release/03_ddl_schema_definition.md` TTL 工作原理第 5 条改写：声明物理删除入口为 `PURGE EXPIRED` 语句，仍无后台定时任务。
-  - 在 05 章节注明"当前仅 SQL 入口"（本期不做服务端 RPC）。
+  - `docs/release/03_ddl_schema_definition.md` 新增"PURGE EXPIRED - 过期数据物理清理"章节：功能、语法结构、关键特性（无后台任务、按 schema 汇报、有界批量）、示例、错误形态。
+  - `docs/release/03_ddl_schema_definition.md` TTL 工作原理引用 PURGE EXPIRED 语法节（同文档内交叉引用，不再指向其他文档）。
+  - 在 PURGE EXPIRED 章节注明"当前仅 SQL 入口"（本期不做服务端 RPC）。
 - 测试
   - parser：合法形态两种（带/不带 target）；非法形态（缺 `IN`、未知 space、未知 TAG/EDGE、`TAG` 与 `EDGE` 并用）。
   - 执行：顶点 TTL 过期后 purge，物理删除且 `removed_rows` 正确（补 2.4 的边版本）；未配置 TTL 的 schema 返回 0 行；space 不存在报错。

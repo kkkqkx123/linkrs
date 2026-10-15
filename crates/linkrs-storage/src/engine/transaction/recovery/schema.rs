@@ -9,10 +9,9 @@ use linkrs_core::types::{
 };
 use linkrs_core::{StorageError, StorageResult};
 use linkrs_transaction::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeTypeRedo,
-    CreateSpaceRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexTypeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo,
-    RenameTagRedo, RenameVertexPropRedo,
+    AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeTypeRedo, CreateSpaceRedo,
+    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
+    DeleteVertexTypeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
 };
 
 pub(crate) fn replay_create_space(
@@ -76,17 +75,6 @@ pub(crate) fn replay_clear_space(
 
     cascade_drop_space_indexes(ctx, space_id, &redo.space_name);
     let _ = ctx.schema_manager().clear_space(&redo.space_name)?;
-    Ok(())
-}
-
-pub(crate) fn replay_alter_space_comment(
-    ctx: &GraphStorageContext,
-    redo: &AlterSpaceCommentRedo,
-    _ts: Timestamp,
-) -> StorageResult<()> {
-    let _ = ctx
-        .schema_manager()
-        .alter_space_comment(redo.space_id, redo.comment.clone())?;
     Ok(())
 }
 

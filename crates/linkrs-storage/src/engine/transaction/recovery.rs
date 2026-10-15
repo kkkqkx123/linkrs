@@ -8,12 +8,11 @@ use linkrs_core::types::{LabelId, Timestamp, VertexId};
 use linkrs_core::wal::traits::RecoveryApplier;
 use linkrs_core::{StorageResult, Value};
 use linkrs_transaction::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
-    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
-    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo,
-    DropTagIndexRedo, InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo,
-    RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeIndexRedo, CreateEdgeTypeRedo,
+    CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo,
+    DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexTypeRedo,
+    DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo, RenameEdgePropRedo,
+    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 use std::sync::Arc;
 
@@ -82,14 +81,6 @@ impl RecoveryApplier for GraphStorageContext {
 
     fn replay_clear_space(&self, redo: &ClearSpaceRedo, ts: Timestamp) -> StorageResult<()> {
         schema::replay_clear_space(self, redo, ts)
-    }
-
-    fn replay_alter_space_comment(
-        &self,
-        redo: &AlterSpaceCommentRedo,
-        ts: Timestamp,
-    ) -> StorageResult<()> {
-        schema::replay_alter_space_comment(self, redo, ts)
     }
 
     fn replay_create_vertex_type(

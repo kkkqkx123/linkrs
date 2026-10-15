@@ -30,11 +30,11 @@ mod test_mock;
 pub use batch_ops::AutoCommitBatchOps;
 pub use batch_ops::AutoCommitGroupOps;
 pub use client::{
-    CatalogStore, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps, StorageClient,
-    StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
+    CatalogStore, GraphStore, PurgeTarget, QueryStorage, StorageAdmin, StorageAuthOps,
+    StorageClient, StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
     StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
     StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps, StorageStats,
-    StorageSyncContextOps, StorageWriter,
+    StorageSyncContextOps, StorageWriter, TtlPurgeEntry,
 };
 pub use cursor::{
     open_edge_scan, open_index_cursor, open_vertex_scan, ColumnValues, EdgeColumnBatch, EdgeCursor,

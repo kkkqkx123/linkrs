@@ -58,6 +58,12 @@ pub(super) fn expand_multi_hop_frontier(
     ) {
         return Ok(ColumnarOutcome::Declined);
     }
+    // Intermediate hops read raw CSR adjacency, which cannot evaluate TTL;
+    // degrade to the generic materializing path when any relevant edge type
+    // has TTL so expired edges are excluded.
+    if ctx.edge_ttl_active(reader)? {
+        return Ok(ColumnarOutcome::Declined);
+    }
     let seed_slot = seed_slot(&chunk.get_layout(), &ctx.col_names_template);
     let seed_width = if chunk.rows.is_empty() {
         chunk.get_layout().len()
@@ -336,6 +342,12 @@ pub(super) fn expand_variable_frontier(
         ctx.direction,
         ctx.dst_tag,
     ) {
+        return Ok(ColumnarOutcome::Declined);
+    }
+    // Non-emitting depths advance the frontier by raw neighbor ids, which
+    // cannot evaluate TTL; degrade to the row-union replay (materializing,
+    // TTL-filtering) when any relevant edge type has TTL.
+    if ctx.edge_ttl_active(reader)? {
         return Ok(ColumnarOutcome::Declined);
     }
     let max_depth = *step_limits.iter().max().unwrap_or(&0);
@@ -637,8 +649,21 @@ pub(super) fn expand_count_only(
         }
     }
 
-    let degrees = reader.out_degree_batch(space_name, &seed_vids, direction, edge_types)?;
-    Ok(degrees.iter().map(|&d| d as i64).sum())
+    if ctx.edge_ttl_active(reader)? {
+        // The degree-batch tail counts raw CSR neighbors, which cannot
+        // evaluate TTL; count materialized (TTL-filtering) per-node edges
+        // instead so expired edges are excluded from the degree.
+        let mut count: i64 = 0;
+        for vid in &seed_vids {
+            count += reader
+                .get_node_edges(space_name, vid, direction, edge_types)?
+                .len() as i64;
+        }
+        Ok(count)
+    } else {
+        let degrees = reader.out_degree_batch(space_name, &seed_vids, direction, edge_types)?;
+        Ok(degrees.iter().map(|&d| d as i64).sum())
+    }
 }
 
 /// Row-path union for `step_limits` ranges when the frontier loop declines.

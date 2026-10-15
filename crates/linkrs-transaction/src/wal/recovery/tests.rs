@@ -8,13 +8,12 @@ use tempfile::TempDir;
 use super::{RecoveryApplier, RecoveryConfig, RecoveryManager};
 use crate::wal::writer::{LocalWalWriter, WalWriter};
 use crate::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
-    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
-    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
-    InsertVertexRedo, LabelId, Lsn, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo,
-    RenameVertexPropRedo, Timestamp, TransactionWalEntry, UpdateEdgePropRedo, VertexId, WalOpType,
-    WalRecoveryMode,
+    AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeIndexRedo, CreateEdgeTypeRedo,
+    CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo,
+    DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo,
+    DropTagIndexRedo, InsertEdgeRedo, InsertVertexRedo, LabelId, Lsn, RenameEdgePropRedo,
+    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, Timestamp, TransactionWalEntry,
+    UpdateEdgePropRedo, VertexId, WalOpType, WalRecoveryMode,
 };
 use linkrs_core::{StorageError, StorageResult, Value};
 
@@ -73,7 +72,6 @@ impl RecoveryApplier for RecordingApplier {
         replay_create_space(redo: &CreateSpaceRedo, ts: Timestamp),
         replay_drop_space(redo: &DropSpaceRedo, ts: Timestamp),
         replay_clear_space(redo: &ClearSpaceRedo, ts: Timestamp),
-        replay_alter_space_comment(redo: &AlterSpaceCommentRedo, ts: Timestamp),
         replay_create_vertex_type(redo: &CreateVertexTypeRedo, ts: Timestamp),
         replay_create_edge_type(redo: &CreateEdgeTypeRedo, ts: Timestamp),
         replay_delete_vertex_type(redo: &DeleteVertexTypeRedo, ts: Timestamp),

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::Timestamp;
 
 pub const WAL_MAGIC: u32 = 0x47524150;
-pub const WAL_VERSION: u32 = 2;
+pub const WAL_VERSION: u32 = 3;
 pub const WAL_FILE_HEADER_SIZE: usize = 64;
 pub const WAL_HEADER_SIZE: usize = 40;
 pub const WAL_BLOCK_SIZE: usize = 32 * 1024;
@@ -117,7 +117,6 @@ pub enum WalOpType {
     CreateSpace = 19,
     DropSpace = 20,
     ClearSpace = 21,
-    AlterSpaceComment = 22,
     OutboxIntent = 23,
     TransactionCommit = 24,
     TransactionAbort = 25,
@@ -160,7 +159,6 @@ impl TryFrom<u8> for WalOpType {
             19 => Ok(WalOpType::CreateSpace),
             20 => Ok(WalOpType::DropSpace),
             21 => Ok(WalOpType::ClearSpace),
-            22 => Ok(WalOpType::AlterSpaceComment),
             23 => Ok(WalOpType::OutboxIntent),
             24 => Ok(WalOpType::TransactionCommit),
             25 => Ok(WalOpType::TransactionAbort),
@@ -204,7 +202,6 @@ impl fmt::Display for WalOpType {
             WalOpType::CreateSpace => write!(f, "CreateSpace"),
             WalOpType::DropSpace => write!(f, "DropSpace"),
             WalOpType::ClearSpace => write!(f, "ClearSpace"),
-            WalOpType::AlterSpaceComment => write!(f, "AlterSpaceComment"),
             WalOpType::OutboxIntent => write!(f, "OutboxIntent"),
             WalOpType::TransactionCommit => write!(f, "TransactionCommit"),
             WalOpType::TransactionAbort => write!(f, "TransactionAbort"),

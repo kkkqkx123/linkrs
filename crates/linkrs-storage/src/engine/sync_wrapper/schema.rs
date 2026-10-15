@@ -19,7 +19,6 @@ macro_rules! forward_auto_commit_methods {
 impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
     forward_auto_commit_methods!(inner;
         fn create_space(&mut self, space: &mut linkrs_core::types::SpaceInfo) -> Result<bool, StorageError>;
-        fn alter_space_comment(&mut self, space_id: u64, comment: String) -> Result<bool, StorageError>;
         fn create_tag(&mut self, space: &str, tag: &linkrs_core::types::TagInfo) -> Result<u32, StorageError>;
         fn alter_tag(
             &mut self,

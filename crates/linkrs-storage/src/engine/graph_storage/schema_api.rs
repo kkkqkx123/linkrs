@@ -23,15 +23,6 @@ impl StorageSchemaOps for GraphStorage {
         schema_writer::clear_space(&self.ctx, space)
     }
 
-    fn alter_space_comment(
-        &mut self,
-        space_id: u64,
-        comment: String,
-    ) -> Result<bool, StorageError> {
-        self.ctx.check_write_admission()?;
-        schema_writer::alter_space_comment(&self.ctx, space_id, comment)
-    }
-
     fn create_tag(&mut self, space: &str, tag: &TagInfo) -> Result<u32, StorageError> {
         self.ctx.check_write_admission()?;
         schema_writer::create_tag(&self.ctx, space, tag)

@@ -522,13 +522,6 @@ impl linkrs_storage::StorageSchemaOps for TestStorage {
     fn clear_space(&mut self, _space: &str) -> Result<bool, StorageError> {
         Ok(true)
     }
-    fn alter_space_comment(
-        &mut self,
-        _space_id: u64,
-        _comment: String,
-    ) -> Result<bool, StorageError> {
-        Ok(true)
-    }
     fn create_tag(&mut self, _space: &str, _tag: &TagInfo) -> Result<u32, StorageError> {
         Ok(1)
     }

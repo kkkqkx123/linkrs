@@ -62,6 +62,7 @@ pub(super) fn handle(
                     skip_rows: false,
                     emit_raw_ids: false,
                     lightweight_source: false,
+                    ttl_active: None,
                 },
             )? {
                 return Ok(Some(output));
@@ -208,6 +209,7 @@ pub(super) fn handle_all(
                         skip_rows,
                         emit_raw_ids,
                         lightweight_source,
+                        ttl_active: None,
                     },
                 )?;
                 if count > 0 {
@@ -235,6 +237,7 @@ pub(super) fn handle_all(
                 skip_rows,
                 emit_raw_ids,
                 lightweight_source,
+                ttl_active: None,
             };
             let expand_result = if let Some(limits) = step_limits.clone() {
                 let var_eligible = !limits.is_empty()

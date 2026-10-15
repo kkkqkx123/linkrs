@@ -53,6 +53,7 @@ impl<S: StorageClient + 'static> StorageAdmin for SyncWrapper<S> {
         fn save_to_disk(&self) -> Result<(), StorageError>;
         fn get_storage_stats(&self) -> crate::StorageStats;
         fn find_dangling_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+        fn purge_expired(&self, space: &str, target: Option<crate::PurgeTarget<'_>>) -> Result<Vec<crate::TtlPurgeEntry>, StorageError>;
         fn get_db_path(&self) -> &str;
     );
 }

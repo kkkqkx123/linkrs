@@ -107,13 +107,15 @@ TTL（Time To Live）用于自动清理过期数据。
 1. 数据插入时，记录 `ttl_col` 指定属性的值作为基准时间（整数为 Unix 秒，`TIMESTAMP`/`DATETIME` 按其纪元秒换算）
 2. 当 `当前时间 > 基准时间 + ttl_duration` 时，数据被视为过期
 3. 过期数据在读取时被过滤：所有会物化属性行的读路径（点查、按标签/属性扫描、边查询、邻接查询、
-   导出等）均按 Schema 的 TTL 配置判定并跳过过期行；不物化 `ttl_col` 属性的纯拓扑快路径
-   （仅取邻接 ID / 度统计的展开）与 `count_*` 近似统计不过滤，统计类数值可能包含过期行。
-   过期行的物理删除通过存储层过期清理接口（按 schema 扫描并删除）执行
+   导出等）均按 Schema 的 TTL 配置判定并跳过过期行。纯拓扑快路径（仅取邻接 ID 的多跳中间跳、
+   度统计展开、GET NEIGHBORS 等）会先判定所涉及的边类型是否配置了 TTL：若有，则降级到物化路径
+   从而正确跳过过期边；未配置 TTL 时保持零物化快路径，行为与性能不变。`count_vertices_by_tag` /
+   `count_edges_by_type` 计数路径不解码属性、不判定 TTL，统计类数值仍可能包含过期行。
+   过期行的物理删除通过 `PURGE EXPIRED` 语句执行（语法见本文档第 15 节）
 4. `ttl_col` 为 `NULL`、缺失或类型不符的行永不过期；删除 `ttl_col` 属性会清除该 Schema 的 TTL 配置，
    重命名该属性会自动跟随新的属性名
-5. TTL 配置随 Schema 元数据持久化，重命名/删除属性时的联动规则见上；过期清理接口需要被显式调用
-   （无后台定时任务代为执行）
+5. TTL 配置随 Schema 元数据持久化，重命名/删除属性时的联动规则见上；过期行的物理删除需要显式执行
+   `PURGE EXPIRED` 语句，无后台定时任务代为执行
 
 **TTL 使用场景：**
 - 会话数据自动清理（如用户登录令牌）
@@ -667,6 +669,54 @@ SHOW CREATE INDEX idx_person_name
 | )                                                                      |
 +------------------------------------------------------------------------+
 ```
+
+---
+
+## 15. PURGE EXPIRED - 过期数据物理清理
+
+### 功能
+物理删除已配置 TTL 的 Schema 中过期的行。TTL 在读取时只做"逻辑过期"（过滤），
+占用的存储不会自动释放；`PURGE EXPIRED` 是将其真正回收的唯一入口。删除走正常写入路径，
+因此会记录 WAL，可被崩溃恢复。当前仅提供 SQL 入口，无对应的 gRPC / HTTP 接口。
+
+### 语法结构
+```cypher
+PURGE EXPIRED [TAG <tag_name> | EDGE <edge_name>] IN <space_name>
+```
+
+- 省略 `TAG` / `EDGE` 时，清理该空间内**所有**配置了 TTL 的标签与边类型。
+- 指定 `TAG <tag_name>` 或 `EDGE <edge_name>` 时，只清理该目标 Schema。
+- `IN <space_name>` 必填，避免误清其他空间的数据。
+
+### 关键特性
+- **无后台任务**：不设定时清扫线程，仅在语句被显式执行时运行。
+- **按 Schema 汇报**：结果集为每个被扫描的 TTL Schema 返回一行（含删除 0 行的情况），
+  便于观测清理进度。
+- **有界批量**：按 Schema 顺序删除，删除按批（每批固定条数）提交，避免大表一次性
+  收集全部过期行造成内存尖峰。
+- **不改写 WAL 格式**：删除复用既有 `DeleteVertex` / `DeleteEdge` 记录。
+
+### 结果集
+列固定为 `space_name` / `schema_name` / `schema_type`（`TAG` 或 `EDGE`）/ `removed_rows`（bigint）。
+空间内没有 TTL Schema 时结果集为空。
+
+### 示例
+```cypher
+-- 清理空间内所有配置了 TTL 的标签与边类型
+PURGE EXPIRED IN my_space
+
+-- 只清理指定的标签
+PURGE EXPIRED TAG user_session IN my_space
+
+-- 只清理指定的边类型
+PURGE EXPIRED EDGE temp_rel IN my_space
+```
+
+### 错误形态
+- 空间不存在：显式报错。
+- `TAG` / `EDGE` 目标 Schema 不存在：显式报错。
+- 目标 Schema 存在但未配置 TTL：不报错，`removed_rows` 为 0（未配置即无过期数据）。
+- 同时使用 `TAG` 与 `EDGE`：语法错误。
 
 ---
 

@@ -113,13 +113,6 @@ impl RecoveryApplier for RecordingApplier {
     ) -> Result<(), StorageError> {
         Ok(())
     }
-    fn replay_alter_space_comment(
-        &self,
-        _redo: &linkrs::transaction::wal::AlterSpaceCommentRedo,
-        _ts: Timestamp,
-    ) -> Result<(), StorageError> {
-        Ok(())
-    }
     fn replay_create_vertex_type(
         &self,
         _redo: &linkrs::transaction::wal::CreateVertexTypeRedo,

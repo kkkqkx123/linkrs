@@ -664,6 +664,14 @@ fn test_stmt_category_exhaustive() {
         ),
         (Stmt::Checkpoint(CheckpointStmt { span }), Admin),
         (
+            Stmt::PurgeExpired(PurgeExpiredStmt {
+                span,
+                space_name: "s".to_string(),
+                target: Some(PurgeTarget::Tag("t".to_string())),
+            }),
+            Ddl,
+        ),
+        (
             Stmt::LoadFrom(LoadFromStmt {
                 span,
                 headers: vec![],
@@ -746,7 +754,7 @@ fn test_stmt_category_exhaustive() {
             Admin,
         ),
     ];
-    assert_eq!(cases.len(), 79, "Stmt has 79 variants; update this test");
+    assert_eq!(cases.len(), 80, "Stmt has 80 variants; update this test");
     for (stmt, expected) in cases {
         assert_eq!(
             stmt.category(),

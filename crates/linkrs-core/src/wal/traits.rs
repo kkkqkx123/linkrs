@@ -5,13 +5,12 @@ use crate::Value;
 use std::sync::Arc;
 
 use super::redo::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
-    CreateEdgeTypeRedo, CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
-    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo,
-    DropMacroRedo, DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo,
-    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
-    UpdateEdgePropRedo, UpdateSequenceRedo,
+    AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeIndexRedo, CreateEdgeTypeRedo,
+    CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo, CreateVertexTypeRedo,
+    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
+    DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo, DropSpaceRedo,
+    DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo,
+    RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 use super::types::{WalOpType, WalResult};
 
@@ -84,12 +83,6 @@ pub trait RecoveryApplier {
     fn replay_drop_space(&self, redo: &DropSpaceRedo, ts: Timestamp) -> StorageResult<()>;
 
     fn replay_clear_space(&self, redo: &ClearSpaceRedo, ts: Timestamp) -> StorageResult<()>;
-
-    fn replay_alter_space_comment(
-        &self,
-        redo: &AlterSpaceCommentRedo,
-        ts: Timestamp,
-    ) -> StorageResult<()>;
 
     fn replay_create_vertex_type(
         &self,

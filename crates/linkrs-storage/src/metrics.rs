@@ -471,7 +471,6 @@ impl<S: StorageClient> StorageSchemaOps for MetricsStorage<S> {
         fn create_space(&mut self, space: &mut SpaceInfo) -> Result<bool, StorageError>;
         fn drop_space(&mut self, space: &str) -> Result<bool, StorageError>;
         fn clear_space(&mut self, space: &str) -> Result<bool, StorageError>;
-        fn alter_space_comment(&mut self, space_id: u64, comment: String) -> Result<bool, StorageError>;
         fn create_tag(&mut self, space: &str, tag: &TagInfo) -> Result<u32, StorageError>;
         fn alter_tag(&mut self, space: &str, tag: &str, additions: Vec<PropertyDef>, deletions: Vec<String>) -> Result<bool, StorageError>;
         fn rename_vertex_property(&mut self, label: LabelId, old_name: &str, new_name: &str) -> Result<(), StorageError>;
@@ -524,6 +523,7 @@ impl<S: StorageClient> StorageAdmin for MetricsStorage<S> {
         fn get_storage_stats(&self) -> StorageStats;
         fn get_db_path(&self) -> &str;
         fn find_dangling_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+        fn purge_expired(&self, space: &str, target: Option<crate::PurgeTarget<'_>>) -> Result<Vec<crate::TtlPurgeEntry>, StorageError>;
     );
 }
 

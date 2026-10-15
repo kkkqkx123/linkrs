@@ -11,8 +11,6 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
     fn create_space(&mut self, space: &mut SpaceInfo) -> Result<bool, StorageError>;
     fn drop_space(&mut self, space: &str) -> Result<bool, StorageError>;
     fn clear_space(&mut self, space: &str) -> Result<bool, StorageError>;
-    fn alter_space_comment(&mut self, space_id: u64, comment: String)
-        -> Result<bool, StorageError>;
 
     fn create_tag(&mut self, space: &str, tag: &TagInfo) -> Result<u32, StorageError>;
     fn create_tag_with_estimate(

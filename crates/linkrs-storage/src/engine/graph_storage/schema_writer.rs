@@ -4,10 +4,10 @@ use linkrs_core::error::storage::StorageErrorKind;
 use linkrs_core::types::{EdgeTypeInfo, Index, PropertyDef, SpaceInfo, TagInfo};
 use linkrs_core::{StorageError, StorageResult};
 use linkrs_transaction::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
-    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
-    DeleteEdgePropRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo,
-    DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, WalOpType,
+    AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeIndexRedo, CreateEdgeTypeRedo,
+    CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo, DeleteEdgePropRedo,
+    DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo,
+    DropSpaceRedo, DropTagIndexRedo, WalOpType,
 };
 use linkrs_transaction::MutationResult;
 use std::sync::Arc;
@@ -190,27 +190,6 @@ pub(crate) fn clear_space(ctx: &GraphStorageContext, space: &str) -> StorageResu
     ctx.schema_manager().clear_space(space)?;
     ctx.serial_allocator().clear_space(space_id);
     Ok(true)
-}
-
-pub(crate) fn alter_space_comment(
-    ctx: &GraphStorageContext,
-    space_id: u64,
-    comment: String,
-) -> StorageResult<bool> {
-    if ctx.schema_manager().get_space_by_id(space_id)?.is_none() {
-        return Ok(false);
-    }
-
-    append_schema_redo(
-        ctx,
-        WalOpType::AlterSpaceComment,
-        &AlterSpaceCommentRedo {
-            space_id,
-            comment: comment.clone(),
-        },
-    )?;
-
-    ctx.schema_manager().alter_space_comment(space_id, comment)
 }
 
 pub(crate) fn create_tag_index(

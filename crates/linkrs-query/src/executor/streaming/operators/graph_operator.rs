@@ -42,6 +42,31 @@ pub(super) struct ExpandCtx<'a> {
     pub(super) skip_rows: bool,
     pub(super) emit_raw_ids: bool,
     pub(super) lightweight_source: bool,
+    /// Lazily computed TTL-activeness over the operator's edge types. A plan
+    /// fixes the edge-type set, so the flag is constant for the operator and
+    /// is computed at most once per `ExpandCtx`.
+    pub(super) ttl_active: Option<bool>,
+}
+
+impl ExpandCtx<'_> {
+    /// Whether any edge type this expand can reach has TTL configured.
+    ///
+    /// Topology fast paths read raw CSR adjacency and cannot evaluate TTL;
+    /// they check this first and degrade to the materializing path when it is
+    /// true, so results honor the "expired means absent" contract. The result
+    /// is cached per `ExpandCtx` because the edge-type set is a plan-time
+    /// constant.
+    pub(super) fn edge_ttl_active(
+        &mut self,
+        reader: &dyn QueryStorage,
+    ) -> Result<bool, QueryError> {
+        if let Some(active) = self.ttl_active {
+            return Ok(active);
+        }
+        let active = reader.edge_types_ttl_active(self.space_name, self.edge_types)?;
+        self.ttl_active = Some(active);
+        Ok(active)
+    }
 }
 
 #[derive(Debug)]

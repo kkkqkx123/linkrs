@@ -600,6 +600,14 @@ impl StorageAdmin for GraphStorage {
         ops::repair_dangling_edges(&self.ctx, space)
     }
 
+    fn purge_expired(
+        &self,
+        space: &str,
+        target: Option<crate::PurgeTarget<'_>>,
+    ) -> Result<Vec<crate::TtlPurgeEntry>, StorageError> {
+        GraphStorage::purge_expired(self, space, target)
+    }
+
     fn get_db_path(&self) -> &str {
         self.ctx.db_path()
     }

@@ -385,3 +385,36 @@ fn test_ttl_expired_edge_is_filtered() {
         .assert_success()
         .assert_edge_count("TempRel", 1);
 }
+
+#[test]
+fn test_purge_expired_edge_physical_delete() {
+    // Executor-layer edge purge (mirrors the vertex-side coverage): the
+    // expired edge is filtered from reads, then PURGE EXPIRED physically
+    // deletes it and reports one removed row.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG P(pid: INT64, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE TAG Q(pid: INT64, name: STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE TempRel(expire_at: INT64, ttl_duration=100, ttl_col=expire_at) FROM P TO Q")
+        .assert_success()
+        .exec_dml("INSERT VERTEX P(name) VALUES 1:('a'), 2:('b')")
+        .assert_success()
+        .exec_dml("INSERT VERTEX Q(name) VALUES 3:('c'), 4:('d')")
+        .assert_success()
+        .exec_dml("INSERT EDGE TempRel(expire_at) VALUES 1 -> 3:(0)")
+        .assert_success()
+        .exec_dml("INSERT EDGE TempRel(expire_at) VALUES 2 -> 4:(9999999999)")
+        .assert_success()
+        .assert_edge_count("TempRel", 1)
+        .exec_ddl("PURGE EXPIRED EDGE TempRel IN test_space")
+        .assert_success()
+        .assert_result_columns(&["space_name", "schema_name", "schema_type", "removed_rows"])
+        .assert_result_contains(vec![
+            Value::string("TempRel".to_string()),
+            Value::string("EDGE".to_string()),
+            Value::BigInt(1),
+        ]);
+}

@@ -1,5 +1,6 @@
 //! Immutable configuration for DDL operators and schema/user manage payloads.
 
+use crate::parser::ast::stmt::PurgeTarget;
 use linkrs_core::metadata::MacroParamDef;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::user::PasswordInfo;
@@ -50,6 +51,10 @@ pub enum SpaceManageCommand {
     },
     DetachDatabase {
         alias: String,
+    },
+    PurgeExpired {
+        space_name: String,
+        target: Option<PurgeTarget>,
     },
 }
 
@@ -383,6 +388,7 @@ impl SpaceManageCommand {
             | Self::Drop { .. }
             | Self::Clear { .. }
             | Self::Checkpoint
+            | Self::PurgeExpired { .. }
             | Self::ExportDatabase { .. }
             | Self::ImportDatabase { .. } => true,
             // Attach/Detach only mutate the in-memory attached-database

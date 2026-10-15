@@ -8,3 +8,6 @@
 [submodule "crates/llm-suite"]
 	path = crates/llm-suite
 	url = https://github.com/kkkqkx123/llm-suite.git
+[submodule "crates/gpui-kit"]
+	path = crates/gpui-kit
+	url = https://github.com/kkkqkx123/gpui-kit.git

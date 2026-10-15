@@ -143,6 +143,10 @@ impl Planner for MaintainPlanner {
 
             Stmt::Checkpoint(_) => system::plan_checkpoint(),
 
+            Stmt::PurgeExpired(purge_stmt) => {
+                system::plan_purge_expired(&purge_stmt.space_name, purge_stmt.target.as_ref())
+            }
+
             Stmt::ExportDatabase(export_stmt) => system::plan_export_database(export_stmt),
 
             Stmt::ImportDatabase(import_stmt) => system::plan_import_database(import_stmt),
@@ -189,6 +193,7 @@ impl Planner for MaintainPlanner {
                 | Stmt::ReleaseSavepoint(_)
                 | Stmt::Migrate(_)
                 | Stmt::Checkpoint(_)
+                | Stmt::PurgeExpired(_)
                 | Stmt::ExportDatabase(_)
                 | Stmt::ImportDatabase(_)
                 | Stmt::AttachDatabase(_)

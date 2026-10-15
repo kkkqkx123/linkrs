@@ -19,8 +19,8 @@ pub mod traits_schema;
 pub mod traits_writer;
 
 pub use traits_admin::{
-    StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContextOps, StoragePersistenceOps,
-    StorageSnapshotOps, StorageStats, StorageSyncContextOps,
+    PurgeTarget, StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContextOps,
+    StoragePersistenceOps, StorageSnapshotOps, StorageStats, StorageSyncContextOps, TtlPurgeEntry,
 };
 pub use traits_reader::StorageReader;
 pub use traits_schema::{StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps};

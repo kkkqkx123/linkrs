@@ -118,6 +118,7 @@ pub fn is_ddl(stmt: &Stmt) -> bool {
             | Stmt::DropMacro(_)
             | Stmt::CreateType(_)
             | Stmt::DropType(_)
+            | Stmt::PurgeExpired(_)
     )
 }
 
@@ -173,6 +174,7 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
                 | Stmt::ImportDatabase(_)
                 | Stmt::AttachDatabase(_)
                 | Stmt::DetachDatabase(_)
+                | Stmt::PurgeExpired(_)
         ),
     }
 }
@@ -184,4 +186,29 @@ pub fn build_validated_fallback(
         ast.clone(),
         crate::binder::validation::ValidationInfo::new(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::stmt::{CheckpointStmt, PurgeExpiredStmt, PurgeTarget};
+    use linkrs_core::types::Span;
+
+    #[test]
+    fn purge_expired_is_not_read_only_cacheable() {
+        let stmt = Stmt::PurgeExpired(PurgeExpiredStmt {
+            span: Span::default(),
+            space_name: "s".to_string(),
+            target: Some(PurgeTarget::Tag("t".to_string())),
+        });
+        assert!(!is_read_only_cacheable(&stmt));
+    }
+
+    #[test]
+    fn checkpoint_is_not_read_only_cacheable() {
+        let stmt = Stmt::Checkpoint(CheckpointStmt {
+            span: Span::default(),
+        });
+        assert!(!is_read_only_cacheable(&stmt));
+    }
 }

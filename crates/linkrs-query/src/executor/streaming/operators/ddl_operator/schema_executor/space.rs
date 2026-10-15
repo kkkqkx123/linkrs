@@ -234,6 +234,77 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
+        SpaceManageCommand::PurgeExpired { space_name, target } => {
+            use crate::parser::ast::stmt::PurgeTarget;
+            let name = space_name.as_str();
+            let Some(lock) = storage else {
+                return Ok(Some(super::super::make_manage_result(
+                    "purge_expired",
+                    None,
+                    "no-storage",
+                )));
+            };
+            // Space must exist: a purge never touches an unnamed space.
+            if !lock.read().space_exists(name) {
+                return Err(QueryError::execution(format!(
+                    "Space '{}' does not exist",
+                    name
+                )));
+            }
+            // A targeted purge must name an existing schema; a schema with no
+            // TTL still yields a zero-row entry (handled by storage).
+            if let Some(target) = target.as_ref() {
+                let reader = lock.read();
+                let exists = match target {
+                    PurgeTarget::Tag(t) => reader.get_tag(name, t)?.is_some(),
+                    PurgeTarget::Edge(e) => reader.get_edge_type(name, e)?.is_some(),
+                };
+                if !exists {
+                    return Err(QueryError::execution(format!(
+                        "PURGE EXPIRED target schema not found in space '{}'",
+                        name
+                    )));
+                }
+            }
+            let storage_target = target.as_ref().map(|target| match target {
+                PurgeTarget::Tag(t) => crate::storage::PurgeTarget::Tag(t.as_str()),
+                PurgeTarget::Edge(e) => crate::storage::PurgeTarget::Edge(e.as_str()),
+            });
+            let entries = lock
+                .write()
+                .purge_expired(name, storage_target)
+                .map_err(|e| QueryError::execution(format!("PURGE EXPIRED failed: {}", e)))?;
+            let schema = Arc::new(Schema::new(vec![
+                ColumnInfo {
+                    name: "space_name".to_string(),
+                    data_type: "string".to_string(),
+                },
+                ColumnInfo {
+                    name: "schema_name".to_string(),
+                    data_type: "string".to_string(),
+                },
+                ColumnInfo {
+                    name: "schema_type".to_string(),
+                    data_type: "string".to_string(),
+                },
+                ColumnInfo {
+                    name: "removed_rows".to_string(),
+                    data_type: "bigint".to_string(),
+                },
+            ]));
+            let rows: Vec<Vec<Value>> = entries
+                .into_iter()
+                .map(|entry| {
+                    vec![
+                        Value::string(name.to_string()),
+                        Value::string(entry.schema_name),
+                        Value::string(if entry.is_edge { "EDGE" } else { "TAG" }),
+                        Value::BigInt(entry.removed as i64),
+                    ]
+                })
+                .collect();
+            Ok(Some(DataChunk::new(rows, schema)))
+        }
         SpaceManageCommand::Checkpoint => super::super::exec_auth(storage, |s| {
             let result = s
                 .create_checkpoint()

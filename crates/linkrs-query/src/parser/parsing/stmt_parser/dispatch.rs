@@ -24,6 +24,9 @@ pub(super) fn parse_keyword_statement(ctx: &mut ParseContext) -> Option<Result<S
     if ctx.check_keyword("CHECKPOINT") {
         return Some(admin::parse_checkpoint_statement(ctx));
     }
+    if ctx.check_keyword("PURGE") {
+        return Some(admin::parse_purge_expired_statement(ctx));
+    }
     if ctx.check_keyword("LOAD") {
         if ctx.check_keyword_sequence(&["LOAD", "EXTENSION"]) {
             return Some(admin::parse_extension_statement(ctx));

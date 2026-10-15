@@ -402,7 +402,7 @@ fn test_schema_wal_replays_drop_after_restart() {
 }
 
 #[test]
-fn test_space_wal_replays_create_alter_and_clear_after_restart() {
+fn test_space_wal_replays_create_and_clear_after_restart() {
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let work_dir = temp_dir.path().to_path_buf();
 
@@ -442,9 +442,6 @@ fn test_space_wal_replays_create_alter_and_clear_after_restart() {
             .expect("Failed to persist recovered schema");
 
         storage
-            .alter_space_comment(space_id, "updated comment".to_string())
-            .expect("Failed to alter space comment");
-        storage
             .clear_space("test_space")
             .expect("Failed to clear space");
         storage.flush().expect("Failed to sync WAL");
@@ -456,7 +453,7 @@ fn test_space_wal_replays_create_alter_and_clear_after_restart() {
         .get_space("test_space")
         .expect("Failed to load space")
         .expect("Space should still exist after clear");
-    assert_eq!(space.comment, Some("updated comment".to_string()));
+    assert_eq!(space.comment, Some("test".to_string()));
     assert_eq!(
         storage
             .list_tags("test_space")

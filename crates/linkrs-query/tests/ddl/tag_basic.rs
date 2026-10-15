@@ -777,3 +777,93 @@ fn test_ttl_purge_removes_expired_vertices() {
         assert_eq!(removed, 1, "purge must remove exactly the expired vertex");
     }
 }
+
+// ==================== PURGE EXPIRED Statement Tests ====================
+
+#[test]
+fn test_purge_expired_vertex_physical_delete() {
+    // The expired vertex is already filtered from reads; the purge must
+    // physically delete it and report the removed-row count, and a second
+    // purge finds nothing left.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("ttl_space")
+        .exec_ddl("CREATE TAG UserSession(sid: INT64, tok: STRING, created_at: INT64, ttl_duration=100, ttl_col=created_at)")
+        .assert_success()
+        .exec_dml("INSERT VERTEX UserSession(tok, created_at) VALUES 1:('old', 0)")
+        .assert_success()
+        .exec_dml("INSERT VERTEX UserSession(tok, created_at) VALUES 2:('fresh', 9999999999)")
+        .assert_success()
+        .assert_vertex_not_exists(1, "UserSession")
+        .assert_vertex_exists(2, "UserSession")
+        .exec_ddl("PURGE EXPIRED TAG UserSession IN ttl_space")
+        .assert_success()
+        .assert_result_columns(&["space_name", "schema_name", "schema_type", "removed_rows"])
+        .assert_result_contains(vec![
+            Value::string("ttl_space".to_string()),
+            Value::string("UserSession".to_string()),
+            Value::string("TAG".to_string()),
+            Value::BigInt(1),
+        ])
+        .exec_ddl("PURGE EXPIRED TAG UserSession IN ttl_space")
+        .assert_success()
+        .assert_result_contains(vec![Value::BigInt(0)]);
+}
+
+#[test]
+fn test_purge_expired_all_schemas_without_target() {
+    // Omitting the target scans every TTL-configured schema and reports one
+    // row per schema.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("ttl_space")
+        .exec_ddl("CREATE TAG UserSession(sid: INT64, created_at: INT64, ttl_duration=100, ttl_col=created_at)")
+        .assert_success()
+        .exec_dml("INSERT VERTEX UserSession(created_at) VALUES 1:(0)")
+        .assert_success()
+        .exec_ddl("PURGE EXPIRED IN ttl_space")
+        .assert_success()
+        .assert_result_columns(&["space_name", "schema_name", "schema_type", "removed_rows"])
+        .assert_result_contains(vec![
+            Value::string("UserSession".to_string()),
+            Value::string("TAG".to_string()),
+            Value::BigInt(1),
+        ]);
+}
+
+#[test]
+fn test_purge_expired_without_ttl_reports_zero() {
+    // A schema that exists but has no TTL is scanned and reports zero removed
+    // rows rather than erroring.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("ttl_space")
+        .exec_ddl("CREATE TAG Keep(sid: INT64)")
+        .assert_success()
+        .exec_dml("INSERT VERTEX Keep(sid) VALUES 1:(1)")
+        .assert_success()
+        .exec_ddl("PURGE EXPIRED TAG Keep IN ttl_space")
+        .assert_success()
+        .assert_result_contains(vec![
+            Value::string("Keep".to_string()),
+            Value::string("TAG".to_string()),
+            Value::BigInt(0),
+        ]);
+}
+
+#[test]
+fn test_purge_expired_unknown_space_errors() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .exec_ddl("PURGE EXPIRED IN no_such_space")
+        .assert_error();
+}
+
+#[test]
+fn test_purge_expired_unknown_target_errors() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("ttl_space")
+        .exec_ddl("PURGE EXPIRED TAG Missing IN ttl_space")
+        .assert_error();
+}

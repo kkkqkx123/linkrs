@@ -120,7 +120,8 @@ impl Binder {
             | Stmt::LoadFrom(_)
             | Stmt::InQueryCall(_)
             | Stmt::ExportDatabase(_)
-            | Stmt::ImportDatabase(_) => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
+            | Stmt::ImportDatabase(_)
+            | Stmt::PurgeExpired(_) => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
             _ => Ok(BoundStatement::Other(Box::new(stmt.clone()))),
         }
     }

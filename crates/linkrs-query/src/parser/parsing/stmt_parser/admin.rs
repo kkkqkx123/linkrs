@@ -78,6 +78,40 @@ pub(super) fn parse_checkpoint_statement(ctx: &mut ParseContext) -> Result<Stmt,
     Ok(Stmt::Checkpoint(CheckpointStmt { span }))
 }
 
+/// Parse `PURGE EXPIRED [TAG <tag> | EDGE <edge>] IN <space>`.
+///
+/// `IN <space>` is mandatory so a purge can never target a space other than
+/// the named one. `TAG` and `EDGE` are mutually exclusive and restrict the
+/// scan to a single schema; omitting both scans every TTL-configured schema.
+pub(super) fn parse_purge_expired_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    let start_span = ctx.current_span();
+    ctx.consume_keyword("PURGE")?;
+    ctx.consume_keyword("EXPIRED")?;
+    let target = if ctx.check_keyword("TAG") {
+        ctx.consume_keyword("TAG")?;
+        Some(PurgeTarget::Tag(ctx.expect_identifier()?))
+    } else if ctx.check_keyword("EDGE") {
+        ctx.consume_keyword("EDGE")?;
+        Some(PurgeTarget::Edge(ctx.expect_identifier()?))
+    } else {
+        None
+    };
+    if !ctx.match_token(TokenKind::In) {
+        return Err(ParseError::new(
+            ParseErrorKind::SyntaxError,
+            "PURGE EXPIRED expects IN <space>".to_string(),
+            ctx.current_position(),
+        ));
+    }
+    let space_name = ctx.expect_dcl_name()?;
+    let span = ctx.span_since(start_span.start);
+    Ok(Stmt::PurgeExpired(PurgeExpiredStmt {
+        span,
+        space_name,
+        target,
+    }))
+}
+
 /// Parse `LOAD [WITH HEADERS (...)] FROM <source> [OPTIONS (...)] [RETURN ...]`.
 ///
 /// Sources are tried in order: GLOB keyword form, parenthesized query,

@@ -17,6 +17,8 @@ mod aggregation;
 mod common;
 #[path = "dql/constant_folding.rs"]
 mod constant_folding;
+#[path = "dql/edge_ttl_fast_path.rs"]
+mod edge_ttl_fast_path;
 #[path = "dql/expand_columnar.rs"]
 mod expand_columnar;
 #[path = "dql/fetch.rs"]

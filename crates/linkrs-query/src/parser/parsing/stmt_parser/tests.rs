@@ -818,6 +818,82 @@ fn test_parse_checkpoint() {
 }
 
 #[test]
+fn test_parse_purge_expired_all_types() {
+    let mut ctx = create_parser_context("PURGE EXPIRED IN my_space");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "PURGE EXPIRED parse failure: {:?}",
+        result.err()
+    );
+    match result.unwrap() {
+        Stmt::PurgeExpired(stmt) => {
+            assert_eq!(stmt.space_name, "my_space");
+            assert!(stmt.target.is_none());
+        }
+        other => panic!("Expected PurgeExpired, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_purge_expired_tag_target() {
+    let mut ctx = create_parser_context("PURGE EXPIRED TAG user_session IN my_space");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(result.is_ok(), "parse failure: {:?}", result.err());
+    match result.unwrap() {
+        Stmt::PurgeExpired(stmt) => {
+            assert_eq!(stmt.space_name, "my_space");
+            assert_eq!(
+                stmt.target,
+                Some(PurgeTarget::Tag("user_session".to_string()))
+            );
+        }
+        other => panic!("Expected PurgeExpired, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_purge_expired_edge_target() {
+    let mut ctx = create_parser_context("PURGE EXPIRED EDGE knows IN my_space");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(result.is_ok(), "parse failure: {:?}", result.err());
+    match result.unwrap() {
+        Stmt::PurgeExpired(stmt) => {
+            assert_eq!(stmt.space_name, "my_space");
+            assert_eq!(stmt.target, Some(PurgeTarget::Edge("knows".to_string())));
+        }
+        other => panic!("Expected PurgeExpired, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_purge_expired_requires_in() {
+    let mut ctx = create_parser_context("PURGE EXPIRED my_space");
+    assert!(
+        StmtParser::parse_statement(&mut ctx).is_err(),
+        "PURGE EXPIRED without IN must fail"
+    );
+}
+
+#[test]
+fn test_parse_purge_expired_missing_space() {
+    let mut ctx = create_parser_context("PURGE EXPIRED TAG session IN");
+    assert!(
+        StmtParser::parse_statement(&mut ctx).is_err(),
+        "PURGE EXPIRED without a space name must fail"
+    );
+}
+
+#[test]
+fn test_parse_purge_expired_rejects_tag_and_edge_together() {
+    let mut ctx = create_parser_context("PURGE EXPIRED TAG a EDGE b IN my_space");
+    assert!(
+        StmtParser::parse_statement(&mut ctx).is_err(),
+        "PURGE EXPIRED must not accept TAG and EDGE together"
+    );
+}
+
+#[test]
 fn test_parse_load_extension() {
     let mut ctx = create_parser_context("LOAD EXTENSION '/tmp/udf_plugin.so'");
     let result = StmtParser::parse_statement(&mut ctx);

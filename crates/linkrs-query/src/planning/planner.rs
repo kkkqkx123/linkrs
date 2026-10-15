@@ -242,6 +242,7 @@ impl PlannerEnum {
             | Stmt::Savepoint(_)
             | Stmt::ReleaseSavepoint(_)
             | Stmt::Checkpoint(_)
+            | Stmt::PurgeExpired(_)
             | Stmt::ExportDatabase(_)
             | Stmt::ImportDatabase(_)
             | Stmt::AttachDatabase(_)

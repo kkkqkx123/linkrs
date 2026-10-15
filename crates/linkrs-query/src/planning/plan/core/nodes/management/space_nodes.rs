@@ -206,6 +206,7 @@ impl SpaceManageInfo {
 }
 
 use crate::parser::ast::stmt::ExportOption;
+use crate::parser::ast::stmt::PurgeTarget;
 
 define_plan_node! {
     pub struct CheckpointNode {
@@ -222,6 +223,36 @@ impl CheckpointNode {
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+}
+
+define_plan_node! {
+    pub struct PurgeExpiredNode {
+        space_name: String,
+        target: Option<PurgeTarget>,
+    }
+    manage_enum: SpaceManageNode::PurgeExpired as SpaceManage
+    input: ZeroInputNode
+}
+
+impl PurgeExpiredNode {
+    pub fn new(id: i64, space_name: String, target: Option<PurgeTarget>) -> Self {
+        Self {
+            id,
+            space_name,
+            target,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: vec![],
+        }
+    }
+
+    pub fn space_name(&self) -> &str {
+        &self.space_name
+    }
+
+    pub fn target(&self) -> Option<&PurgeTarget> {
+        self.target.as_ref()
     }
 }
 

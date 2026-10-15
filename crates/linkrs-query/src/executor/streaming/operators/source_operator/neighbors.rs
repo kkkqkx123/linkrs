@@ -25,6 +25,7 @@ pub enum NeighborScanState {
         direction: EdgeDirection,
         seen: HashSet<VertexId>,
         neighbor_ids: Vec<VertexId>,
+        ttl_active: bool,
     },
     Fetching {
         neighbor_ids: Vec<VertexId>,
@@ -97,6 +98,11 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                         storage_error("GetNeighbors", "scan vertices", space_name, error)
                     })?;
                 let ids: Vec<VertexId> = vertices.into_iter().map(|v| v.vid).collect();
+                let ttl_active = guard
+                    .edge_types_ttl_active(space_name, &[])
+                    .map_err(|error| {
+                        storage_error("GetNeighbors", "edge ttl check", space_name, error)
+                    })?;
                 drop(guard);
 
                 *state = NeighborScanState::Collecting {
@@ -105,6 +111,7 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                     direction: dir,
                     seen: HashSet::new(),
                     neighbor_ids: Vec::new(),
+                    ttl_active,
                 };
             }
             NeighborScanState::Collecting {
@@ -113,6 +120,7 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                 direction,
                 seen,
                 neighbor_ids,
+                ttl_active,
             } => {
                 if *position >= vertex_ids.len() {
                     if neighbor_ids.is_empty() {
@@ -128,22 +136,51 @@ fn next_get_neighbors(op: &mut SourceOperator) -> Result<Option<DataChunk>, Quer
                 }
                 let end = (*position + op.config.chunk_size).min(vertex_ids.len());
                 let guard = storage_ref.read();
-                // Topology-only batched fanout: no Edge or property decoding,
-                // one schema resolution for the whole chunk slice.
-                let batch = guard
-                    .neighbor_dst_ids_batch(
-                        space_name,
-                        &vertex_ids[*position..end],
-                        *direction,
-                        &[],
-                    )
-                    .map_err(|error| {
-                        storage_error("GetNeighbors", "get node edges", space_name, error)
-                    })?;
-                for nids in &batch {
-                    for nid in nids {
-                        if seen.insert(*nid) {
-                            neighbor_ids.push(*nid);
+                // Topology-only neighbor fanout. The batched CSR read cannot
+                // evaluate TTL; when any edge type in the space has TTL,
+                // materialize per-node edges (which filter expired rows) and
+                // take the far endpoint instead, keeping chunking and dedup
+                // semantics unchanged.
+                if *ttl_active {
+                    for vid in &vertex_ids[*position..end] {
+                        let edges = guard
+                            .get_node_edges(space_name, vid, *direction, &[])
+                            .map_err(|error| {
+                                storage_error("GetNeighbors", "get node edges", space_name, error)
+                            })?;
+                        for edge in &edges {
+                            let far = match *direction {
+                                EdgeDirection::Out => *edge.dst(),
+                                EdgeDirection::In => *edge.src(),
+                                EdgeDirection::Both => {
+                                    if edge.src() == vid {
+                                        *edge.dst()
+                                    } else {
+                                        *edge.src()
+                                    }
+                                }
+                            };
+                            if seen.insert(far) {
+                                neighbor_ids.push(far);
+                            }
+                        }
+                    }
+                } else {
+                    let batch = guard
+                        .neighbor_dst_ids_batch(
+                            space_name,
+                            &vertex_ids[*position..end],
+                            *direction,
+                            &[],
+                        )
+                        .map_err(|error| {
+                            storage_error("GetNeighbors", "get node edges", space_name, error)
+                        })?;
+                    for nids in &batch {
+                        for nid in nids {
+                            if seen.insert(*nid) {
+                                neighbor_ids.push(*nid);
+                            }
                         }
                     }
                 }

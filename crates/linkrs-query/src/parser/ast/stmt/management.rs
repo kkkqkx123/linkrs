@@ -177,6 +177,27 @@ pub struct KillQueryStmt {
     pub plan_id: i64,
 }
 
+/// Target schema of a [`PurgeExpiredStmt`]: a single tag or edge type.
+/// `None` (when the whole field is `None`) means "every TTL-configured
+/// schema in the space".
+#[derive(Debug, Clone, PartialEq)]
+pub enum PurgeTarget {
+    Tag(String),
+    Edge(String),
+}
+
+/// `PURGE EXPIRED [TAG <tag> | EDGE <edge>] IN <space>` statement.
+///
+/// Physically deletes TTL-expired rows. Without a target it scans every
+/// TTL-configured tag and edge type in the space; a target restricts the
+/// scan to one schema.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PurgeExpiredStmt {
+    pub span: Span,
+    pub space_name: String,
+    pub target: Option<PurgeTarget>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShowConfigsStmt {
     pub span: Span,
