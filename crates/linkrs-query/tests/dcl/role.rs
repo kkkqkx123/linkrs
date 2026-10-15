@@ -163,7 +163,7 @@ fn test_show_roles_execution() {
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'password123'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON test_space TO alice")
         .assert_success()
@@ -181,7 +181,7 @@ fn test_show_roles_execution() {
 #[test]
 fn test_show_roles_in_empty_space() {
     new_scenario()
-        .exec_dcl("CREATE SPACE empty_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE empty_space")
         .assert_success()
         // SHOW ROLES IN empty space should succeed
         .exec_dcl("SHOW ROLES IN empty_space")
@@ -202,7 +202,7 @@ fn test_show_roles_nonexistent_space() {
 fn test_role_hierarchy_all_types() {
     // Test that all 5 role types can be granted and revoked
     let mut scenario = new_scenario()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success();
 
     for role in ["GOD", "ADMIN", "DBA", "USER", "GUEST"] {
@@ -256,7 +256,7 @@ fn test_role_hierarchy_admin_cannot_grant_god() {
     // An ADMIN user should not be able to grant GOD role
     // This tests the permission enforcement layer through the pipeline
     new_scenario()
-        .exec_dcl("CREATE SPACE system WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE system")
         .assert_success()
         .exec_dcl("CREATE USER admin1 WITH PASSWORD 'pass'")
         .assert_success()
@@ -273,7 +273,7 @@ fn test_role_hierarchy_admin_cannot_grant_god() {
 #[test]
 fn test_new_dcl_statements_lifecycle() {
     new_scenario()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         .exec_dcl("CREATE USER adminuser WITH PASSWORD 'Admin@2024'")
         .assert_success()
@@ -311,6 +311,38 @@ fn test_new_dcl_statements_lifecycle() {
         .assert_success()
         .exec_dcl("DROP USER adminuser")
         .assert_success();
+}
+
+// ==================== REVOKE Role Validation Tests ====================
+
+#[test]
+fn test_revoke_mismatched_role_rejected() {
+    // Revoking a role the user does not hold must report an error instead of
+    // silently clearing the mapping.
+    new_scenario()
+        .exec_dcl("CREATE SPACE test_space")
+        .assert_success()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
+        .assert_success()
+        .exec_dcl("GRANT USER ON test_space TO alice")
+        .assert_success()
+        // Actual role is USER, not ADMIN
+        .exec_dcl("REVOKE ADMIN ON test_space FROM alice")
+        .assert_error()
+        // The USER role remains intact
+        .exec_dcl("REVOKE USER ON test_space FROM alice")
+        .assert_success();
+}
+
+#[test]
+fn test_revoke_without_role_rejected() {
+    new_scenario()
+        .exec_dcl("CREATE SPACE test_space")
+        .assert_success()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
+        .assert_success()
+        .exec_dcl("REVOKE GUEST ON test_space FROM alice")
+        .assert_error();
 }
 
 #[test]
@@ -363,7 +395,7 @@ fn test_describe_user_with_active_grants() {
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON test_space TO alice")
         .assert_success()
@@ -383,9 +415,9 @@ fn test_describe_user_multiple_spaces() {
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE space_a WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE space_a")
         .assert_success()
-        .exec_dcl("CREATE SPACE space_b WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE space_b")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON space_a TO alice")
         .assert_success()
@@ -419,7 +451,7 @@ fn test_show_roles_no_grants() {
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         .exec_dcl("SHOW ROLES")
         .assert_success()

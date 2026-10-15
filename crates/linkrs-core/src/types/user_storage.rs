@@ -180,10 +180,15 @@ impl UserStorage {
     }
 
     /// Create a new user.
+    ///
+    /// Returns `Ok(true)` when the user was inserted, `Ok(false)` when the
+    /// username already exists (the existing account is left untouched). The
+    /// caller decides whether a duplicate is an error (`CREATE USER`) or
+    /// silently acceptable (`IF NOT EXISTS`).
     pub fn create_user(&self, info: &UserInfo) -> Result<bool, StorageError> {
         let mut users = self.users.write();
         if users.contains_key(&info.username) {
-            return Ok(true);
+            return Ok(false);
         }
         users.insert(info.username.clone(), info.clone());
         Ok(true)
@@ -363,7 +368,7 @@ mod tests {
             .create_user(&user)
             .expect("create_user should succeed");
         let result = storage.create_user(&user);
-        assert!(result.unwrap());
+        assert!(!result.expect("duplicate create_user should not error"));
     }
 
     #[test]

@@ -54,7 +54,7 @@ fn test_concurrent_create_same_user_idempotent() {
             let mut guard = scenario_clone.lock().unwrap();
             update(
                 &mut guard,
-                "CREATE USER concurrent_user WITH PASSWORD 'password123'",
+                "CREATE USER IF NOT EXISTS concurrent_user WITH PASSWORD 'password123'",
             );
         });
         handles.push(handle);
@@ -73,7 +73,7 @@ fn test_concurrent_grant_different_roles() {
         new_scenario()
             .exec_dcl("CREATE USER perm_user WITH PASSWORD 'pass'")
             .assert_success()
-            .exec_dcl("CREATE SPACE perm_space WITH DIMENSION=128")
+            .exec_dcl("CREATE SPACE perm_space")
             .assert_success(),
     ));
 
@@ -101,7 +101,7 @@ fn test_concurrent_grant_same_role_idempotent() {
         new_scenario()
             .exec_dcl("CREATE USER grant_user WITH PASSWORD 'pass'")
             .assert_success()
-            .exec_dcl("CREATE SPACE grant_space WITH DIMENSION=128")
+            .exec_dcl("CREATE SPACE grant_space")
             .assert_success(),
     ));
 
@@ -155,7 +155,7 @@ fn test_concurrent_password_change() {
 fn test_concurrent_create_and_grant() {
     let scenario = Arc::new(Mutex::new(
         new_scenario()
-            .exec_dcl("CREATE SPACE share_space WITH DIMENSION=128")
+            .exec_dcl("CREATE SPACE share_space")
             .assert_success(),
     ));
 
@@ -261,7 +261,7 @@ fn test_stress_concurrent_operations() {
             let mut sc = taken.exec_dcl(&create_query).assert_success();
 
             let space_name = format!("stress_space_{}", i);
-            let space_query = format!("CREATE SPACE {} WITH DIMENSION=128", space_name);
+            let space_query = format!("CREATE SPACE {}", space_name);
             sc = sc.exec_dcl(&space_query).assert_success();
 
             let grant_query = format!("GRANT ADMIN ON {} TO {}", space_name, username);

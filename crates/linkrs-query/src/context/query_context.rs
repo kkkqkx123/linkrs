@@ -207,6 +207,16 @@ impl QueryContext {
         self.password_history_depth
     }
 
+    /// The authenticated user that issued this query, when the request came
+    /// from an authenticated session.
+    ///
+    /// Self-service password changes omit the username in the statement; the
+    /// planner backfills it from here so the execution chain targets the
+    /// caller instead of failing on an empty username.
+    pub fn authenticated_user(&self) -> Option<&str> {
+        self.rctx.user_name.as_deref()
+    }
+
     /// Generate an ID.
     pub fn gen_id(&self) -> i64 {
         self.id_gen.id()

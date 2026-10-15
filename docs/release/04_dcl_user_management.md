@@ -13,21 +13,20 @@
 
 ### 语法结构
 ```cypher
-CREATE USER [IF NOT EXISTS] <user_name> [WITH] PASSWORD '<password>' [WITH ROLE <role>]
+CREATE USER [IF NOT EXISTS] <user_name> [WITH] PASSWORD '<password>'
 ```
 
 ### 关键特性
-- 支持IF NOT EXISTS
+- 支持 IF NOT EXISTS：重名且带该旗标时静默成功且不改动既有账户；不带旗标的重名创建报「用户已存在」
 - 支持密码设置（`PASSWORD` 前的 `WITH` 可省略）
-- 支持创建时分配角色
 - 用户名与密码支持 Unicode 与特殊字符
+- 角色不在此处分配，统一通过空间显式的 `GRANT`（见 §5）
 - 也可通过通用 `CREATE USER ...` 语法触发（与 DDL 的 CREATE 语句共用入口）
 
 ### 示例
 ```cypher
 CREATE USER IF NOT EXISTS alice WITH PASSWORD 'secure_password'
-CREATE USER bob WITH PASSWORD 'password123' WITH ROLE ADMIN
-CREATE USER carol PASSWORD 'password123'   -- WITH省略形式
+CREATE USER bob PASSWORD 'password123'   -- WITH省略形式
 ```
 
 ---
@@ -39,20 +38,18 @@ CREATE USER carol PASSWORD 'password123'   -- WITH省略形式
 
 ### 语法结构
 ```cypher
-ALTER USER <user_name> [WITH PASSWORD '<new_password>'] [WITH ROLE <role>]
-ALTER USER <user_name> SET ROLE = <role>
+ALTER USER <user_name> [WITH PASSWORD '<new_password>']
 ALTER USER <user_name> SET LOCKED = <true|false>
 ```
 
 ### 关键特性
 - 支持密码修改
-- 支持角色修改
-- 支持账户锁定/解锁
+- 支持账户锁定/解锁；`SET LOCKED` 等号用单个 `=`，布尔值仅接受 `true`/`false`（`yes`、`1` 等显式报错）
+- 角色不在此处修改，改经空间显式的 `GRANT` / `REVOKE`
 
 ### 示例
 ```cypher
 ALTER USER alice WITH PASSWORD 'new_secure_password'
-ALTER USER bob SET ROLE = DBA
 ALTER USER alice SET LOCKED = true
 ```
 
@@ -91,16 +88,17 @@ CHANGE PASSWORD [<user_name>] '<old_password>' TO '<new_password>'
 
 ### 关键特性
 - 需要验证旧密码
-- 支持密码强度检查
-- 管理员可修改其他用户密码
+- 支持密码强度检查（默认策略：长度 ≥ 8，需含大写、小写与数字；见文末说明）
+- 自助改密：省略 `<user_name>` 时目标为当前已认证用户，仅需正确旧密码
+- 改密通道分流：本语句（DCL）仅允许“本人或 GOD”；HTTP 管理通道由 Admin 直接重置他人密码，不校验旧密码
 
 ### 示例
 ```cypher
--- 修改当前用户密码
-CHANGE PASSWORD 'old_pass' TO 'new_pass'
+-- 修改当前用户密码（自助形态）
+CHANGE PASSWORD 'OldPass123' TO 'NewPass123'
 
--- 管理员修改其他用户密码
-CHANGE PASSWORD alice 'old_pass' TO 'new_pass'
+-- GOD 修改其他用户密码
+CHANGE PASSWORD alice 'OldPass123' TO 'NewPass123'
 ```
 
 ---
@@ -152,8 +150,8 @@ REVOKE [ROLE] <role_type> ON <space_name> FROM <user_name>
 
 ### 关键特性
 - ROLE关键字可选
-- 撤销指定角色权限
-- 不影响其他角色权限
+- 模型为「每用户每空间一个角色」：`REVOKE` 前会校验该用户在当前空间的现有角色与命名角色一致，不一致或不存在均报错，不再静默清除
+- 因此撤销成功即表示该用户在该空间已无角色
 - 撤销同样受角色层级约束（与授权规则一致）
 
 ### 示例

@@ -51,7 +51,7 @@ fn test_sql_injection_in_space_name() {
 
     scenario
         // Injection in space name
-        .exec_dcl("CREATE SPACE \"inject'; DROP SPACE --\" WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE \"inject'; DROP SPACE --\"")
         .assert_success()
         // Should be treated as literal name
         .exec_dcl("GRANT ADMIN ON \"inject'; DROP SPACE --\" TO inj_user")
@@ -162,7 +162,9 @@ fn test_very_long_password() {
 // ==================== Role Validation Tests ====================
 
 #[test]
-fn test_invalid_role_rejected() {
+fn test_create_user_with_role_clause_rejected() {
+    // Role assignment is space-scoped and only reachable through GRANT; the
+    // CREATE USER role clause no longer exists in the grammar.
     new_scenario()
         .exec_dcl("CREATE USER user WITH PASSWORD 'pass' WITH ROLE SUPERUSER")
         .assert_error();
@@ -173,7 +175,7 @@ fn test_invalid_role_in_grant() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER grantuser WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE grantspace WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE grantspace")
         .assert_success();
 
     scenario
@@ -186,7 +188,7 @@ fn test_invalid_role_in_grant() {
 #[test]
 fn test_grant_nonexistent_user_error() {
     new_scenario()
-        .exec_dcl("CREATE SPACE safe_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE safe_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON safe_space TO nonexistent_user")
         .assert_error();
@@ -237,7 +239,7 @@ fn test_system_state_after_invalid_role_attempt() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER role_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE role_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE role_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON role_space TO role_user")
         .assert_success();

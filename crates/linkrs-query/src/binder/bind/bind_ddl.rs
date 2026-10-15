@@ -108,7 +108,6 @@ impl Binder {
         Ok(BoundStatement::CreateUser(BoundCreateUser {
             username: stmt.username.clone(),
             password: stmt.password.clone(),
-            role: stmt.role.clone(),
             if_not_exists: stmt.if_not_exists,
         }))
     }
@@ -130,7 +129,6 @@ impl Binder {
         Ok(BoundStatement::AlterUser(BoundAlterUser {
             username: stmt.username.clone(),
             password: stmt.password.clone(),
-            new_role: stmt.new_role.clone(),
             is_locked: stmt.is_locked,
         }))
     }

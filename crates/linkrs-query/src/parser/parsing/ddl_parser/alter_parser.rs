@@ -25,7 +25,8 @@ impl DdlParser {
         }
 
         if ctx.check_token(TokenKind::User) {
-            return self.parse_alter_user_internal(ctx, start_span);
+            return crate::parser::parsing::user_parser::UserParser::new()
+                .parse_alter_user_internal(ctx, start_span);
         }
 
         if ctx.match_token(TokenKind::Sequence) {
@@ -223,48 +224,5 @@ impl DdlParser {
         }
 
         Ok((additions, deletions, changes, new_comment))
-    }
-
-    fn parse_alter_user_internal(
-        &mut self,
-        ctx: &mut ParseContext,
-        start_span: crate::parser::ast::types::Span,
-    ) -> Result<Stmt, ParseError> {
-        ctx.expect_token(TokenKind::User)?;
-
-        let username = ctx.expect_identifier()?;
-
-        let mut password = None;
-        let mut new_role = None;
-        let mut is_locked = None;
-
-        if ctx.match_token(TokenKind::With) {
-            if ctx.match_token(TokenKind::Password) {
-                password = Some(ctx.expect_string_literal()?);
-            } else if ctx.match_token(TokenKind::Role) {
-                new_role = Some(ctx.expect_identifier()?);
-            }
-        }
-
-        while ctx.match_token(TokenKind::Set) {
-            if ctx.match_token(TokenKind::Role) {
-                ctx.expect_token(TokenKind::Eq)?;
-                new_role = Some(ctx.expect_identifier()?);
-            } else if ctx.match_token(TokenKind::Locked) {
-                ctx.expect_token(TokenKind::Eq)?;
-                let value = ctx.expect_identifier()?;
-                is_locked = Some(value.to_lowercase() == "true");
-            }
-        }
-
-        let span = ctx.span_since(start_span.start);
-
-        Ok(Stmt::AlterUser(AlterUserStmt {
-            span,
-            username,
-            password,
-            new_role,
-            is_locked,
-        }))
     }
 }

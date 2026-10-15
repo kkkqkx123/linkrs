@@ -57,19 +57,12 @@ impl UserParser {
 
         let password = ctx.expect_string_literal()?;
 
-        let mut role = None;
-        if ctx.match_token(TokenKind::With) {
-            ctx.expect_token(TokenKind::Role)?;
-            role = Some(ctx.expect_identifier()?);
-        }
-
         let span = ctx.span_since(start_span.start);
 
         Ok(Stmt::CreateUser(CreateUserStmt {
             span,
             username,
             password,
-            role,
             if_not_exists,
         }))
     }
@@ -95,27 +88,25 @@ impl UserParser {
         let username = ctx.expect_dcl_name()?;
 
         let mut password = None;
-        let mut new_role = None;
         let mut is_locked = None;
 
-        // Analyzing the WITH PASSWORD or SET clause
+        // Analyzing the WITH PASSWORD clause
         if ctx.match_token(TokenKind::With) {
-            if ctx.match_token(TokenKind::Password) {
-                password = Some(ctx.expect_string_literal()?);
-            } else if ctx.match_token(TokenKind::Role) {
-                new_role = Some(ctx.expect_identifier()?);
-            }
+            ctx.expect_token(TokenKind::Password)?;
+            password = Some(ctx.expect_string_literal()?);
         }
 
-        // The SET ROLE = ... and SET LOCKED = ... syntax are also supported.
+        // The SET LOCKED = <true|false> syntax is also supported.
         while ctx.match_token(TokenKind::Set) {
-            if ctx.match_token(TokenKind::Role) {
-                ctx.expect_token(TokenKind::Eq)?;
-                new_role = Some(ctx.expect_identifier()?);
-            } else if ctx.match_token(TokenKind::Locked) {
-                ctx.expect_token(TokenKind::Eq)?;
-                let value = ctx.expect_identifier()?;
-                is_locked = Some(value.to_lowercase() == "true");
+            if ctx.match_token(TokenKind::Locked) {
+                ctx.expect_token(TokenKind::Assign)?;
+                is_locked = Some(ctx.expect_boolean_literal()?);
+            } else {
+                return Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    "Expected LOCKED after SET in ALTER USER".to_string(),
+                    ctx.current_position(),
+                ));
             }
         }
 
@@ -125,7 +116,6 @@ impl UserParser {
             span,
             username,
             password,
-            new_role,
             is_locked,
         }))
     }
@@ -426,21 +416,56 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_create_user_with_all_roles() {
-        for role in ["GOD", "ADMIN", "DBA", "USER", "GUEST"] {
-            let query = format!(
-                "CREATE USER testuser WITH PASSWORD 'pass' WITH ROLE {}",
-                role
-            );
+    fn test_parse_create_user_rejects_with_role() {
+        let query = "CREATE USER testuser WITH PASSWORD 'pass' WITH ROLE ADMIN";
+        let mut parser = Parser::new(query);
+        assert!(
+            parser.parse().is_err(),
+            "WITH ROLE is no longer part of CREATE USER syntax"
+        );
+    }
+
+    #[test]
+    fn test_parse_alter_user_set_locked() {
+        for (value, expected) in [("true", true), ("false", false)] {
+            let query = format!("ALTER USER testuser SET LOCKED = {}", value);
             let mut parser = Parser::new(&query);
             let result = parser.parse();
             assert!(
                 result.is_ok(),
-                "CREATE USER with role {} should parse: {:?}",
-                role,
+                "SET LOCKED = {} should parse: {:?}",
+                value,
                 result.err()
             );
+            match result.expect("parsed").ast.stmt() {
+                crate::parser::ast::Stmt::AlterUser(stmt) => assert_eq!(stmt.is_locked, Some(expected)),
+                other => panic!("expected AlterUser, got {:?}", other),
+            }
         }
+    }
+
+    #[test]
+    fn test_parse_alter_user_set_locked_rejects_non_boolean() {
+        for query in [
+            "ALTER USER testuser SET LOCKED = yes",
+            "ALTER USER testuser SET LOCKED = 1",
+        ] {
+            let mut parser = Parser::new(query);
+            assert!(
+                parser.parse().is_err(),
+                "{} should be rejected, not silently treated as false",
+                query
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_alter_user_set_role_rejected() {
+        let mut parser = Parser::new("ALTER USER testuser SET ROLE = DBA");
+        assert!(
+            parser.parse().is_err(),
+            "SET ROLE is no longer part of ALTER USER syntax"
+        );
     }
 
     #[test]

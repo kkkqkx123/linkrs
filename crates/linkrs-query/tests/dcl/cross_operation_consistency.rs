@@ -19,7 +19,7 @@ fn test_delete_space_cleans_permissions() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER space_cleanup_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE space_cleanup_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE space_cleanup_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON space_cleanup_space TO space_cleanup_user")
         .assert_success();
@@ -43,7 +43,7 @@ fn test_delete_user_with_permissions() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER delete_perm_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE delete_perm_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE delete_perm_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON delete_perm_space TO delete_perm_user")
         .assert_success()
@@ -79,7 +79,7 @@ fn test_complex_workflow_create_grant_alter_revoke_drop() {
         .exec_dcl("CREATE USER workflow_user WITH PASSWORD 'user_pass'")
         .assert_success()
         // Step 2: Create space
-        .exec_dcl("CREATE SPACE workflow_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE workflow_space")
         .assert_success()
         // Step 3: Grant initial permissions
         .exec_dcl("GRANT ADMIN ON workflow_space TO workflow_admin")
@@ -127,9 +127,9 @@ fn test_complex_workflow_create_grant_alter_revoke_drop() {
 #[test]
 fn test_cascade_permission_revoke_on_user_delete() {
     let scenario = new_scenario()
-        .exec_dcl("CREATE SPACE cascade_space1 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cascade_space1")
         .assert_success()
-        .exec_dcl("CREATE SPACE cascade_space2 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cascade_space2")
         .assert_success()
         .exec_dcl("CREATE USER cascade_user WITH PASSWORD 'pass'")
         .assert_success();
@@ -165,7 +165,7 @@ fn test_recreate_user_with_same_name() {
         // Create and grant
         .exec_dcl("CREATE USER reuse_user WITH PASSWORD 'pass1'")
         .assert_success()
-        .exec_dcl("CREATE SPACE reuse_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE reuse_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON reuse_space TO reuse_user")
         .assert_success()
@@ -206,9 +206,9 @@ fn test_consistency_after_mixed_operations() {
         .exec_dcl("CREATE USER mixed_user3 WITH PASSWORD 'pass3'")
         .assert_success()
         // Create multiple spaces
-        .exec_dcl("CREATE SPACE mixed_space1 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE mixed_space1")
         .assert_success()
-        .exec_dcl("CREATE SPACE mixed_space2 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE mixed_space2")
         .assert_success()
         // Cross-grant permissions
         .exec_dcl("GRANT ADMIN ON mixed_space1 TO mixed_user1")
@@ -251,9 +251,9 @@ fn test_modify_user_permissions_across_spaces() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER modify_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE modify_space1 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE modify_space1")
         .assert_success()
-        .exec_dcl("CREATE SPACE modify_space2 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE modify_space2")
         .assert_success();
 
     scenario
@@ -298,7 +298,7 @@ fn test_consistency_bulk_user_and_permission_operations() {
 
     for i in 0..5 {
         scenario = scenario
-            .exec_dcl(&format!("CREATE SPACE bulk_space_{} WITH DIMENSION=128", i))
+            .exec_dcl(&format!("CREATE SPACE bulk_space_{}", i))
             .assert_success();
     }
 

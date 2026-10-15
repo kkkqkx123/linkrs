@@ -109,11 +109,27 @@ fn test_create_user_execution_with_if_not_exists() {
 
 #[test]
 fn test_create_user_duplicate() {
-    // Implementation is IDEMPOTENT — duplicate user creation succeeds
+    // Duplicate creation without IF NOT EXISTS reports the existing account
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'password123'")
         .assert_success()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'password123'")
+        .assert_error()
+        .exec_dcl("DROP USER alice")
+        .assert_success();
+}
+
+#[test]
+fn test_create_user_if_not_exists_keeps_existing() {
+    // IF NOT EXISTS silently succeeds and leaves the original account intact:
+    // the second, different password must not take effect.
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'original_password'")
+        .assert_success()
+        .exec_dcl("CREATE USER IF NOT EXISTS alice WITH PASSWORD 'replacement_password'")
+        .assert_success()
+        // Original password still works; replacement never applied
+        .exec_dcl("CHANGE PASSWORD alice 'original_password' TO 'rotated_password'")
         .assert_success()
         .exec_dcl("DROP USER alice")
         .assert_success();
@@ -187,6 +203,26 @@ fn test_alter_user_execution_basic() {
 fn test_alter_user_nonexistent() {
     new_scenario()
         .exec_dcl("ALTER USER nonexistent_user WITH PASSWORD 'newpassword'")
+        .assert_error();
+}
+
+#[test]
+fn test_alter_user_set_locked_execution() {
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'password123'")
+        .assert_success()
+        .exec_dcl("ALTER USER alice SET LOCKED = true")
+        .assert_success()
+        .exec_dcl("ALTER USER alice SET LOCKED = false")
+        .assert_success();
+}
+
+#[test]
+fn test_alter_user_set_locked_invalid_value() {
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'password123'")
+        .assert_success()
+        .exec_dcl("ALTER USER alice SET LOCKED = yes")
         .assert_error();
 }
 
@@ -354,14 +390,27 @@ fn test_change_password_wrong_old_password() {
 
 #[test]
 fn test_change_password_self() {
-    // CHANGE PASSWORD without username requires active session context
-    // Without a valid session, this should fail
+    // Self-service change with the caller's own correct old password succeeds
+    // once the authenticated username is threaded into planning.
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'oldpassword'")
         .assert_success()
-        // Self-password-change without username and without session context
-        // should fail because no user context is available
-        .exec_dcl("CHANGE PASSWORD 'wrongpassword' TO 'newpassword'")
+        .exec_dcl_as("alice", "CHANGE PASSWORD 'oldpassword' TO 'newpassword'")
+        .assert_success()
+        // Old password no longer works
+        .exec_dcl_as("alice", "CHANGE PASSWORD 'oldpassword' TO 'otherpassword'")
+        .assert_error()
+        // New password allows the next change
+        .exec_dcl_as("alice", "CHANGE PASSWORD 'newpassword' TO 'newerpassword'")
+        .assert_success();
+}
+
+#[test]
+fn test_change_password_self_wrong_old_password() {
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'oldpassword'")
+        .assert_success()
+        .exec_dcl_as("alice", "CHANGE PASSWORD 'wrongpassword' TO 'newpassword'")
         .assert_error();
 }
 
@@ -568,7 +617,7 @@ fn test_drop_user_with_active_grants() {
     new_scenario()
         .exec_dcl("CREATE USER grantuser WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON test_space TO grantuser")
         .assert_success()

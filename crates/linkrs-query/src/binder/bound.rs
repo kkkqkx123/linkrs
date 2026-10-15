@@ -693,7 +693,6 @@ pub struct BoundClearSpace {
 pub struct BoundCreateUser {
     pub username: String,
     pub password: String,
-    pub role: Option<String>,
     pub if_not_exists: bool,
 }
 
@@ -707,7 +706,6 @@ pub struct BoundDropUser {
 pub struct BoundAlterUser {
     pub username: String,
     pub password: Option<String>,
-    pub new_role: Option<String>,
     pub is_locked: Option<bool>,
 }
 

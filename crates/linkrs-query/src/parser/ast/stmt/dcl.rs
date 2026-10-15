@@ -5,7 +5,6 @@ pub struct CreateUserStmt {
     pub span: Span,
     pub username: String,
     pub password: String,
-    pub role: Option<String>,
     pub if_not_exists: bool,
 }
 
@@ -14,7 +13,6 @@ pub struct AlterUserStmt {
     pub span: Span,
     pub username: String,
     pub password: Option<String>,
-    pub new_role: Option<String>,
     pub is_locked: Option<bool>,
 }
 

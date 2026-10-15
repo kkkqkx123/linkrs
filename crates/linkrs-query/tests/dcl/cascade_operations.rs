@@ -19,7 +19,7 @@ fn test_delete_user_removes_single_permission() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER cascade_user1 WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE cascade_space1 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cascade_space1")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON cascade_space1 TO cascade_user1")
         .assert_success();
@@ -41,7 +41,7 @@ fn test_delete_user_removes_multiple_permissions_single_space() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER multi_role_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE multi_role_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE multi_role_space")
         .assert_success();
 
     scenario
@@ -67,11 +67,11 @@ fn test_delete_user_removes_permissions_across_spaces() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER cross_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE cross_space1 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cross_space1")
         .assert_success()
-        .exec_dcl("CREATE SPACE cross_space2 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cross_space2")
         .assert_success()
-        .exec_dcl("CREATE SPACE cross_space3 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cross_space3")
         .assert_success();
 
     scenario
@@ -97,7 +97,7 @@ fn test_delete_user_removes_permissions_across_spaces() {
 #[test]
 fn test_delete_multiple_users_each_with_permissions() {
     let scenario = new_scenario()
-        .exec_dcl("CREATE SPACE shared_cascade_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE shared_cascade_space")
         .assert_success();
 
     let mut scenario = scenario;
@@ -136,7 +136,7 @@ fn test_delete_space_cleans_user_permissions() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER space_del_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE space_del_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE space_del_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON space_del_space TO space_del_user")
         .assert_success();
@@ -157,7 +157,7 @@ fn test_delete_space_cleans_user_permissions() {
 #[test]
 fn test_delete_space_with_multiple_users() {
     let scenario = new_scenario()
-        .exec_dcl("CREATE SPACE multi_user_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE multi_user_space")
         .assert_success();
 
     let mut scenario = scenario;
@@ -196,7 +196,7 @@ fn test_cascade_delete_user_then_space() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER cascade_both_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE cascade_both_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cascade_both_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON cascade_both_space TO cascade_both_user")
         .assert_success();
@@ -224,7 +224,7 @@ fn test_cascade_delete_space_then_user() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER cascade_user_then_space WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE cascade_space_then_user WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cascade_space_then_user")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON cascade_space_then_user TO cascade_user_then_space")
         .assert_success();
@@ -254,7 +254,7 @@ fn test_no_orphaned_permissions_after_user_delete() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER orphan_test_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE orphan_test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE orphan_test_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON orphan_test_space TO orphan_test_user")
         .assert_success()
@@ -275,7 +275,7 @@ fn test_no_orphaned_permissions_after_space_delete() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER user_orphan_test WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE space_orphan_test WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE space_orphan_test")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON space_orphan_test TO user_orphan_test")
         .assert_success();
@@ -298,7 +298,7 @@ fn test_cascade_with_recreate() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER cascade_recreate WITH PASSWORD 'pass1'")
         .assert_success()
-        .exec_dcl("CREATE SPACE cascade_recreate_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cascade_recreate_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON cascade_recreate_space TO cascade_recreate")
         .assert_success();
@@ -323,7 +323,7 @@ fn test_cascade_with_recreate() {
 #[test]
 fn test_bulk_cascade_delete_multiple_users() {
     let scenario = new_scenario()
-        .exec_dcl("CREATE SPACE bulk_cascade_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE bulk_cascade_space")
         .assert_success();
 
     let mut scenario = scenario;
@@ -363,7 +363,7 @@ fn test_bulk_cascade_delete_multiple_spaces() {
     for i in 0..5 {
         let space_name = format!("bulk_space_cascade_{}", i);
         scenario = scenario
-            .exec_dcl(&format!("CREATE SPACE {} WITH DIMENSION=128", space_name))
+            .exec_dcl(&format!("CREATE SPACE {}", space_name))
             .assert_success()
             .exec_dcl(&format!(
                 "GRANT ADMIN ON {} TO bulk_space_cascade_user",

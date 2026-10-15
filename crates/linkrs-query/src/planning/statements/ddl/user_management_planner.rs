@@ -32,15 +32,12 @@ impl Planner for UserManagementPlanner {
 
         let final_node = match bound {
             BoundStatement::CreateUser(create) => {
-                let mut node = crate::planning::plan::core::nodes::CreateUserNode::new(
+                let node = crate::planning::plan::core::nodes::CreateUserNode::new(
                     1,
                     create.username.clone(),
                     create.password.clone(),
-                );
-                if let Some(ref role) = create.role {
-                    node = node.with_role(role.clone());
-                }
-                node = node.with_if_not_exists(create.if_not_exists);
+                )
+                .with_if_not_exists(create.if_not_exists);
                 PlanNodeEnum::UserManage(UserManageNode::Create(node))
             }
             BoundStatement::AlterUser(alter) => {
@@ -51,9 +48,6 @@ impl Planner for UserManagementPlanner {
                 .with_password_history_depth(qctx.password_history_depth());
                 if let Some(ref password) = alter.password {
                     node = node.with_password(password.clone());
-                }
-                if let Some(ref role) = alter.new_role {
-                    node = node.with_role(role.clone());
                 }
                 if let Some(locked) = alter.is_locked {
                     node = node.with_locked(locked);
@@ -86,15 +80,12 @@ impl Planner for UserManagementPlanner {
 
         let final_node = match validated.stmt() {
             Stmt::CreateUser(create_stmt) => {
-                let mut node = crate::planning::plan::core::nodes::CreateUserNode::new(
+                let node = crate::planning::plan::core::nodes::CreateUserNode::new(
                     1,
                     create_stmt.username.clone(),
                     create_stmt.password.clone(),
-                );
-                if let Some(ref role) = create_stmt.role {
-                    node = node.with_role(role.clone());
-                }
-                node = node.with_if_not_exists(create_stmt.if_not_exists);
+                )
+                .with_if_not_exists(create_stmt.if_not_exists);
                 PlanNodeEnum::UserManage(UserManageNode::Create(node))
             }
             Stmt::AlterUser(alter_stmt) => {
@@ -105,9 +96,6 @@ impl Planner for UserManagementPlanner {
                 .with_password_history_depth(qctx.password_history_depth());
                 if let Some(ref password) = alter_stmt.password {
                     node = node.with_password(password.clone());
-                }
-                if let Some(ref role) = alter_stmt.new_role {
-                    node = node.with_role(role.clone());
                 }
                 if let Some(locked) = alter_stmt.is_locked {
                     node = node.with_locked(locked);
@@ -123,8 +111,12 @@ impl Planner for UserManagementPlanner {
                 PlanNodeEnum::UserManage(UserManageNode::Drop(node))
             }
             Stmt::ChangePassword(change_stmt) => {
+                let username = change_stmt
+                    .username
+                    .clone()
+                    .or_else(|| qctx.authenticated_user().map(|user| user.to_string()));
                 let password_info = linkrs_core::types::PasswordInfo {
-                    username: change_stmt.username.clone(),
+                    username,
                     old_password: change_stmt.old_password.clone(),
                     new_password: change_stmt.new_password.clone(),
                     history_limit: qctx.password_history_depth(),
@@ -148,6 +140,7 @@ impl Planner for UserManagementPlanner {
                     6,
                     revoke_stmt.username.clone(),
                     revoke_stmt.space_name.clone(),
+                    format!("{:?}", revoke_stmt.role).to_lowercase(),
                 );
                 PlanNodeEnum::UserManage(UserManageNode::RevokeRole(node))
             }

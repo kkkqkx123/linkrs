@@ -25,7 +25,7 @@ pub(super) fn execute_user_manage(
         UserManageCommand::Create {
             username,
             password,
-            role,
+            if_not_exists,
         } => super::exec_auth(storage, |s| {
             if username.is_empty() {
                 return Err(QueryError::execution(
@@ -37,16 +37,16 @@ pub(super) fn execute_user_manage(
                     "Password cannot be empty".to_string(),
                 ));
             }
-            if !role.is_empty() && role.parse::<RoleType>().is_err() {
-                return Err(QueryError::execution(format!(
-                    "Unknown role type: {}",
-                    role
-                )));
-            }
             let info = UserInfo::new(username.clone(), password.clone())
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            StorageAuthOps::create_user(s, &info)
+            let created = StorageAuthOps::create_user(s, &info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
+            if !created && !*if_not_exists {
+                return Err(QueryError::execution(format!(
+                    "User {} already exists",
+                    username
+                )));
+            }
             Ok(())
         }),
         UserManageCommand::Drop {
@@ -66,18 +66,9 @@ pub(super) fn execute_user_manage(
         UserManageCommand::Alter {
             username,
             new_password,
-            new_role,
             is_locked,
             history_limit,
         } => super::exec_auth(storage, |s| {
-            if let Some(role) = new_role {
-                if role.parse::<RoleType>().is_err() {
-                    return Err(QueryError::execution(format!(
-                        "Unknown role type: {}",
-                        role
-                    )));
-                }
-            }
             let mut alter_info = UserAlterInfo::new(username.clone());
             alter_info.history_limit = *history_limit;
             if let Some(password) = new_password {
@@ -126,10 +117,32 @@ pub(super) fn execute_user_manage(
         UserManageCommand::RevokeRole {
             username,
             space_name,
+            role,
         } => super::exec_auth(storage, |s| {
             let space_id = s
                 .get_space_id(space_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
+            let role = role.parse::<RoleType>().map_err(QueryError::execution)?;
+            let actual = s
+                .list_user_roles(username)
+                .into_iter()
+                .find(|(id, _)| *id == space_id as i64)
+                .map(|(_, assigned)| assigned);
+            match actual {
+                None => {
+                    return Err(QueryError::execution(format!(
+                        "User {} has no role in space {}",
+                        username, space_name
+                    )));
+                }
+                Some(assigned) if assigned != role => {
+                    return Err(QueryError::execution(format!(
+                        "User {} holds role {} in space {}, cannot revoke {}",
+                        username, assigned, space_name, role
+                    )));
+                }
+                Some(_) => {}
+            }
             StorageAuthOps::revoke_role(s, username, space_id as i64)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())

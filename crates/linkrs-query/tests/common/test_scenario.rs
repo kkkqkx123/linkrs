@@ -80,6 +80,43 @@ impl TestScenario {
         self
     }
 
+    /// Execute a DCL statement as an authenticated user.
+    ///
+    /// Threads the caller identity through the request context so
+    /// self-service statements (e.g. a username-less `CHANGE PASSWORD`) can
+    /// resolve the target account, mirroring the server channel.
+    pub fn exec_dcl_as(
+        mut self,
+        username: &str,
+        query: &str,
+    ) -> Self {
+        let rctx = std::sync::Arc::new(
+            linkrs_query::QueryRequestContext::new(query.to_string())
+                .with_user_name(username.to_string()),
+        );
+        match self.pipeline.execute_query_with_request(
+            query,
+            rctx,
+            self.current_space.clone(),
+        ) {
+            Ok(result) => match &result {
+                ExecutionResult::Error(e) => {
+                    self.last_error = Some(e.clone());
+                    self.last_result = Some(result);
+                }
+                _ => {
+                    self.last_result = Some(result);
+                    self.last_error = None;
+                }
+            },
+            Err(e) => {
+                self.last_error = Some(format!("{:?}", e));
+                self.last_result = None;
+            }
+        }
+        self
+    }
+
     /// Execute a DDL statement
     pub fn exec_ddl(self, query: &str) -> Self {
         self.exec_dcl(query)

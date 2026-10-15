@@ -49,7 +49,7 @@ fn test_password_very_long() {
 #[test]
 fn test_space_name_very_long() {
     let long_space = "s".repeat(255);
-    let query = format!("CREATE SPACE {} WITH DIMENSION=128", long_space);
+    let query = format!("CREATE SPACE {}", long_space);
 
     let scenario = new_scenario()
         .exec_dcl(&query)
@@ -140,7 +140,7 @@ fn test_role_case_insensitivity() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER role_case WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE role_case_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE role_case_space")
         .assert_success();
 
     scenario
@@ -194,7 +194,7 @@ fn test_unicode_space_name() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER unicode_space_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE 空间 WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE 空间")
         .assert_success();
 
     scenario
@@ -223,7 +223,7 @@ fn test_reserved_keyword_as_username() {
 
 #[test]
 fn test_reserved_keyword_as_space_name() {
-    let query = "CREATE SPACE CREATE WITH DIMENSION=128";
+    let query = "CREATE SPACE CREATE";
     let scenario = new_scenario();
     let result = scenario.exec_dcl(query);
     // Should either accept or reject gracefully
@@ -320,7 +320,7 @@ fn test_grant_revoke_cycle() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER cycle_perm_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE cycle_perm_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE cycle_perm_space")
         .assert_success();
 
     let mut scenario = scenario;
@@ -368,7 +368,7 @@ fn test_all_operations_same_user() {
         .exec_dcl("ALTER USER all_ops WITH PASSWORD 'pass1'")
         .assert_success()
         // Create space
-        .exec_dcl("CREATE SPACE all_ops_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE all_ops_space")
         .assert_success()
         // Grant
         .exec_dcl("GRANT ADMIN ON all_ops_space TO all_ops")
@@ -395,7 +395,7 @@ fn test_all_roles_in_sequence() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER all_roles_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE all_roles_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE all_roles_space")
         .assert_success();
 
     let mut scenario = scenario;

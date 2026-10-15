@@ -238,12 +238,11 @@ pub enum UserManageCommand {
     Create {
         username: String,
         password: String,
-        role: String,
+        if_not_exists: bool,
     },
     Alter {
         username: String,
         new_password: Option<String>,
-        new_role: Option<String>,
         is_locked: Option<bool>,
         /// Retained password-history depth applied on rotation; zero clears.
         history_limit: usize,
@@ -263,6 +262,7 @@ pub enum UserManageCommand {
     RevokeRole {
         username: String,
         space_name: String,
+        role: String,
     },
     ShowUsers,
     ShowRoles,

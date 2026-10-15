@@ -549,6 +549,32 @@ impl<'a> ParseContext<'a> {
         }
     }
 
+    /// Parse a boolean literal (`true` / `false`).
+    ///
+    /// Unlike a fuzzy identifier comparison, any non-boolean token is reported
+    /// explicitly so that `SET LOCKED = yes` fails instead of silently
+    /// behaving as `false`.
+    pub fn expect_boolean_literal(&mut self) -> Result<bool, ParseError> {
+        match self.current_token.kind {
+            TokenKind::BooleanLiteral(value) => {
+                self.next_token();
+                Ok(value)
+            }
+            _ => {
+                let pos = self.current_position();
+                Err(ParseError::new(
+                    ParseErrorKind::UnexpectedToken,
+                    format!(
+                        "Expected boolean value, found {:?}",
+                        self.current_token.kind
+                    ),
+                    pos,
+                )
+                .with_expected_tokens(vec!["true".to_string(), "false".to_string()]))
+            }
+        }
+    }
+
     /// Parse a DCL object name (username / space name).
     ///
     /// Accepts identifiers, keywords, numbers, string literals and hyphenated

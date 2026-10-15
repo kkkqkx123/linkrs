@@ -27,14 +27,15 @@ fn test_create_user_atomicity() {
 
 #[test]
 fn test_failed_create_user_no_partial_state() {
-    let scenario = new_scenario();
-    // Invalid role should not partially create user
+    let scenario = new_scenario()
+        .exec_dcl("CREATE USER partial_user WITH PASSWORD 'pass123'")
+        .assert_success();
+    // Duplicate create must fail and leave the original account untouched
     scenario
-        .exec_dcl("CREATE USER partial_user WITH PASSWORD 'pass' WITH ROLE INVALID_ROLE")
+        .exec_dcl("CREATE USER partial_user WITH PASSWORD 'other_pass'")
         .assert_error()
-        // User should not exist at all
         .exec_dcl("DESCRIBE USER partial_user")
-        .assert_error();
+        .assert_success();
 }
 
 // ==================== Atomic Grant/Revoke Tests ====================
@@ -44,7 +45,7 @@ fn test_grant_atomicity() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER grant_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE grant_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE grant_space")
         .assert_success();
 
     scenario
@@ -60,7 +61,7 @@ fn test_revoke_atomicity() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER revoke_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE revoke_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE revoke_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON revoke_space TO revoke_user")
         .assert_success();
@@ -108,7 +109,7 @@ fn test_system_state_after_invalid_grant() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER valid_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE valid_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE valid_space")
         .assert_success();
 
     // Grant non-existent role should fail
@@ -154,7 +155,7 @@ fn test_permission_state_consistency() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER perm_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE perm_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE perm_space")
         .assert_success();
 
     // Grant role
@@ -219,7 +220,7 @@ fn test_drop_if_exists_isolation() {
 #[test]
 fn test_consistency_multiple_users_and_permissions() {
     let scenario = new_scenario()
-        .exec_dcl("CREATE SPACE multi_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE multi_space")
         .assert_success();
 
     let mut scenario = scenario;
@@ -254,14 +255,14 @@ fn test_consistency_partial_rollback_scenario() {
     let scenario = new_scenario()
         .exec_dcl("CREATE USER rollback_user WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE rollback_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE rollback_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON rollback_space TO rollback_user")
         .assert_success();
 
     // Attempt invalid operation
     scenario
-        .exec_dcl("ALTER USER rollback_user WITH ROLE INVALID")
+        .exec_dcl("ALTER USER nonexistent_user WITH PASSWORD 'new_pass'")
         .assert_error()
         // System should remain consistent
         .exec_dcl("DESCRIBE USER rollback_user")

@@ -9,7 +9,6 @@ define_plan_node! {
     pub struct CreateUserNode {
         username: String,
         password: String,
-        role: String,
         if_not_exists: bool,
     }
     manage_enum: UserManageNode::Create as UserManage
@@ -22,17 +21,11 @@ impl CreateUserNode {
             id,
             username,
             password,
-            role: "user".to_string(),
             if_not_exists: false,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
-    }
-
-    pub fn with_role(mut self, role: String) -> Self {
-        self.role = role;
-        self
     }
 
     pub fn with_if_not_exists(mut self, if_not_exists: bool) -> Self {
@@ -48,10 +41,6 @@ impl CreateUserNode {
         &self.password
     }
 
-    pub fn role(&self) -> &str {
-        &self.role
-    }
-
     pub fn if_not_exists(&self) -> bool {
         self.if_not_exists
     }
@@ -61,7 +50,6 @@ define_plan_node! {
     pub struct AlterUserNode {
         username: String,
         new_password: Option<String>,
-        new_role: Option<String>,
         is_locked: Option<bool>,
         password_history_depth: usize,
     }
@@ -75,7 +63,6 @@ impl AlterUserNode {
             id,
             username,
             new_password: None,
-            new_role: None,
             is_locked: None,
             password_history_depth: 0,
             output_var: None,
@@ -86,11 +73,6 @@ impl AlterUserNode {
 
     pub fn with_password(mut self, password: String) -> Self {
         self.new_password = Some(password);
-        self
-    }
-
-    pub fn with_role(mut self, role: String) -> Self {
-        self.new_role = Some(role);
         self
     }
 
@@ -112,10 +94,6 @@ impl AlterUserNode {
 
     pub fn new_password(&self) -> Option<&String> {
         self.new_password.as_ref()
-    }
-
-    pub fn new_role(&self) -> Option<&String> {
-        self.new_role.as_ref()
     }
 
     pub fn is_locked(&self) -> Option<bool> {
@@ -226,17 +204,19 @@ define_plan_node! {
     pub struct RevokeRoleNode {
         username: String,
         space_name: String,
+        role: String,
     }
     manage_enum: UserManageNode::RevokeRole as UserManage
     input: ZeroInputNode
 }
 
 impl RevokeRoleNode {
-    pub fn new(id: i64, username: String, space_name: String) -> Self {
+    pub fn new(id: i64, username: String, space_name: String, role: String) -> Self {
         Self {
             id,
             username,
             space_name,
+            role,
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -249,6 +229,10 @@ impl RevokeRoleNode {
 
     pub fn space_name(&self) -> &str {
         &self.space_name
+    }
+
+    pub fn role(&self) -> &str {
+        &self.role
     }
 }
 

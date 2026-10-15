@@ -462,12 +462,11 @@ fn user_manage_to_command(
         Create(n) => UserManageCommand::Create {
             username: n.username().to_string(),
             password: n.password().to_string(),
-            role: n.role().to_string(),
+            if_not_exists: n.if_not_exists(),
         },
         Alter(n) => UserManageCommand::Alter {
             username: n.username().to_string(),
             new_password: n.new_password().cloned(),
-            new_role: n.new_role().cloned(),
             is_locked: n.is_locked(),
             history_limit: n.password_history_depth(),
         },
@@ -486,6 +485,7 @@ fn user_manage_to_command(
         RevokeRole(n) => UserManageCommand::RevokeRole {
             username: n.username().to_string(),
             space_name: n.space_name().to_string(),
+            role: n.role().to_string(),
         },
         ShowUsers(_) => UserManageCommand::ShowUsers,
         ShowRoles(_) => UserManageCommand::ShowRoles,

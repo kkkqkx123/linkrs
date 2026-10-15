@@ -110,7 +110,7 @@ fn test_grant_revoke_execution() {
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'password123'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON test_space TO alice")
         .assert_success()
@@ -131,7 +131,7 @@ fn test_grant_multiple_roles() {
 
     for space_name in ["space1", "space2", "space3"] {
         scenario = scenario
-            .exec_dcl(&format!("CREATE SPACE {} WITH DIMENSION=128", space_name))
+            .exec_dcl(&format!("CREATE SPACE {}", space_name))
             .assert_success();
     }
 
@@ -177,11 +177,11 @@ fn test_revoke_nonexistent_permission() {
     new_scenario()
         .exec_dcl("CREATE USER testuser WITH PASSWORD 'password'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
-        // Revoking a permission that was never granted
+        // Revoking a permission that was never granted must fail loudly
         .exec_dcl("REVOKE ADMIN ON test_space FROM testuser")
-        .assert_success()
+        .assert_error()
         .exec_dcl("DROP USER testuser")
         .assert_success();
 }
@@ -189,7 +189,7 @@ fn test_revoke_nonexistent_permission() {
 #[test]
 fn test_revoke_nonexistent_user() {
     new_scenario()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         // REVOKE from a user that was never created
         .exec_dcl("REVOKE ADMIN ON test_space FROM nonexistent_user")
@@ -212,7 +212,7 @@ fn test_grant_duplicate_role() {
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON test_space TO alice")
         .assert_success()
@@ -225,40 +225,37 @@ fn test_grant_duplicate_role() {
 
 #[test]
 fn test_revoke_twice() {
-    // Revoke the same permission twice
+    // Revoke reports a missing role instead of silently succeeding
     new_scenario()
         .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success()
         .exec_dcl("GRANT ADMIN ON test_space TO alice")
         .assert_success()
         .exec_dcl("REVOKE ADMIN ON test_space FROM alice")
         .assert_success()
-        // Second revoke should succeed (no-op since already revoked)
+        // Second revoke finds no role and must fail loudly
         .exec_dcl("REVOKE ADMIN ON test_space FROM alice")
-        .assert_success()
+        .assert_error()
         .exec_dcl("DROP USER alice")
         .assert_success();
 }
 
 #[test]
 fn test_grant_revoke_all_role_types() {
-    // Test GRANT/REVOKE cycle for all 5 role types
+    // The model keeps one role per (user, space): each GRANT overwrites the
+    // previous role, so the matching REVOKE must name the current role.
     let mut scenario = new_scenario()
         .exec_dcl("CREATE USER role_test WITH PASSWORD 'pass'")
         .assert_success()
-        .exec_dcl("CREATE SPACE test_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE test_space")
         .assert_success();
 
     for role in ["GOD", "ADMIN", "DBA", "USER", "GUEST"] {
         scenario = scenario
             .exec_dcl(&format!("GRANT {} ON test_space TO role_test", role))
-            .assert_success();
-    }
-
-    for role in ["GOD", "ADMIN", "DBA", "USER", "GUEST"] {
-        scenario = scenario
+            .assert_success()
             .exec_dcl(&format!("REVOKE {} ON test_space FROM role_test", role))
             .assert_success();
     }
@@ -270,7 +267,7 @@ fn test_grant_revoke_all_role_types() {
 fn test_grant_multiple_users_same_space() {
     // Grant multiple users roles on the same space
     let mut scenario = new_scenario()
-        .exec_dcl("CREATE SPACE shared_space WITH DIMENSION=128")
+        .exec_dcl("CREATE SPACE shared_space")
         .assert_success();
 
     for user in ["alice", "bob", "charlie"] {
