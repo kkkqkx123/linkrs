@@ -7,6 +7,7 @@ pub mod bulk_insert;
 pub mod cost_profile;
 pub mod error;
 pub mod query_api;
+pub(crate) mod query_api_builder;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
 pub mod rebuild_source;
 pub mod schema_api;
