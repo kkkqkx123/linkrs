@@ -49,6 +49,7 @@ fn create_test_ctx<'a>(
         metadata_context,
         expr_context,
         where_expression: None,
+        optional: false,
     }
 }
 

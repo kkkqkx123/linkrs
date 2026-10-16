@@ -51,6 +51,9 @@ pub enum GraphSpec {
         /// flat `{var}.{prop}` columns, always with a closed loop and a
         /// column-capable consumer.
         skip_rows: bool,
+        /// Whether seed vertices without any matching edge must still emit a
+        /// row (edge and destination projected as NULL). Used for OPTIONAL MATCH.
+        include_empty_paths: bool,
     },
     Traverse {
         edge_types: Vec<String>,

@@ -7,9 +7,10 @@ use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::next_node_id;
 use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
+use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
 use crate::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeEnum, ProjectNode};
 use crate::planning::plan::logical::logical_nodes::operation::{
-    LogicalFilterNode, LogicalLimitNode, LogicalProjectNode, LogicalSampleNode,
+    LogicalDedupNode, LogicalFilterNode, LogicalLimitNode, LogicalProjectNode, LogicalSampleNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
@@ -54,6 +55,7 @@ impl YieldClausePlanner {
         skip: Option<usize>,
         limit: Option<usize>,
         sample: Option<usize>,
+        distinct: bool,
         input_plan: &SubPlan,
     ) -> Result<SubPlan, PlannerError> {
         let mut current_plan = input_plan.clone();
@@ -98,6 +100,29 @@ impl YieldClausePlanner {
                 tail: current_plan.tail.clone(),
                 logical_root,
             };
+        }
+
+        // 2.5 Apply DISTINCT if requested.
+        if distinct {
+            let input_node = current_plan.root().as_ref().ok_or_else(|| {
+                PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
+            })?;
+            if let Ok(dedup_node) = DedupNode::new(input_node.clone()) {
+                let logical_root = wrap_logical(&current_plan, |input| {
+                    LogicalNodeEnum::Dedup(LogicalDedupNode {
+                        id: next_node_id(),
+                        input: Some(Box::new(input)),
+                        output_var: None,
+                        col_names: vec![],
+                        column_types: vec![],
+                    })
+                });
+                current_plan = SubPlan {
+                    root: Some(PlanNodeEnum::Dedup(dedup_node)),
+                    tail: current_plan.tail.clone(),
+                    logical_root,
+                };
+            }
         }
 
         // 3. Apply SAMPLE clause if present (before pagination)
@@ -226,12 +251,29 @@ impl ClausePlanner for YieldClausePlanner {
         let (yield_columns, filter_condition, skip, limit, sample) =
             Self::extract_yield_info(stmt)?;
 
+        let distinct = match stmt {
+            Stmt::Yield(y) => y.distinct,
+            _ => false,
+        };
+
+        // Ensure standalone YIELD skip/limit/sample are extracted from the
+        // statement itself (not only from an inner YieldClause).
+        let (skip, limit, sample) = match stmt {
+            Stmt::Yield(y) => (
+                y.skip.as_ref().map(|s| s.count).or(skip),
+                y.limit.as_ref().map(|l| l.count).or(limit),
+                y.sample.as_ref().map(|s| s.count).or(sample),
+            ),
+            _ => (skip, limit, sample),
+        };
+
         self.plan_yield_clause(
             &yield_columns,
             filter_condition,
             skip,
             limit,
             sample,
+            distinct,
             &input_plan,
         )
     }
@@ -252,12 +294,15 @@ impl YieldClausePlanner {
         match stmt {
             Stmt::Yield(yield_stmt) => {
                 let yield_columns = Self::convert_yield_items(&yield_stmt.items)?;
+                let skip = yield_stmt.skip.as_ref().map(|s| s.count);
+                let limit = yield_stmt.limit.as_ref().map(|l| l.count);
+                let sample = yield_stmt.sample.as_ref().map(|s| s.count);
                 Ok((
                     yield_columns,
                     yield_stmt.where_clause.clone(),
-                    None,
-                    None,
-                    None,
+                    skip,
+                    limit,
+                    sample,
                 ))
             }
             Stmt::Go(go_stmt) => {
@@ -340,6 +385,7 @@ mod tests {
             order_by: None,
             skip: None,
             limit: None,
+            sample: None,
         });
 
         let (columns, filter, skip, limit, _sample) =
@@ -465,6 +511,7 @@ mod tests {
             order_by: None,
             skip: None,
             limit: None,
+            sample: None,
         });
 
         let start_node = StartNode::new();
@@ -520,6 +567,7 @@ mod tests {
             order_by: None,
             skip: None,
             limit: None,
+            sample: None,
         });
 
         let input_plan = SubPlan {

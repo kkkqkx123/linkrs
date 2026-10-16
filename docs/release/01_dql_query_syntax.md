@@ -24,12 +24,11 @@ MATCH <pattern> [, <pattern> ...] [WHERE <condition>] [RETURN <projection>] [ORD
 - 支持路径模式: `(a)-[e]->(b)`
 - 支持可变长边: `-[e*]->`、`-[e*2..5]->`、`-[e*..3]->`、`-[e*2]->`，同时支持方括号形式 `-[e*[2..5]]->`
 - 支持路径语义修饰: `*TRAIL`（不重复经过边）、`*ACYCLIC`（不重复经过点）、`*SHORTEST`、`*ALL SHORTEST`、`*WEIGHTED(weight_prop)`（带权最短路径）
-- 支持递归模式推导: `-[e*(v | WHERE ... | {node_proj}, {edge_proj})]->`（两个投影依次为节点投影、边投影）
 - 支持谓词过滤（WHERE 可出现在 RETURN 之前，也可在 RETURN 之后追加第二个 WHERE，两者取 AND）
 - 支持属性投影（RETURN 支持 `*`、DISTINCT、GROUP BY、HAVING、SAMPLE、ORDER BY、SKIP、LIMIT）
 - 支持 OPTIONAL MATCH
 - 支持多模式逗号连接（join），支持 join hint：`USING JOIN BINARY(left, right)` 或 `USING JOIN MULTIWAY(probe, build, ...)`
-- MATCH 模式之后还支持 `DELETE VERTEX/EDGE` 子句与 `MERGE` 子句
+- MATCH 模式之后还支持 `DELETE VERTEX/EDGE` 子句
 
 ### 示例
 ```cypher
@@ -165,7 +164,7 @@ FETCH PROP ON follow "101" -> "102" @0
 
 ### 语法结构
 ```cypher
-FIND <SHORTEST | ALL> PATH [WITH LOOP] [WITH TRAIL] [WITH WALK] FROM <src_id> [, <src_id> ...] [TO <dst_id>] [OVER <edge_type> [, <edge_type> ...] [REVERSELY | BIDIRECT]] [UPTO <steps> STEP] [WEIGHT <weight_property>] [WHERE <condition>] [YIELD <properties>]
+FIND <SHORTEST | ALL> PATH [WITH LOOP] [WITH TRAIL] [WITH WALK] FROM <src_id> [, <src_id> ...] TO <dst_id> [OVER <edge_type> [, <edge_type> ...] [REVERSELY | BIDIRECT]] [UPTO <steps> STEP] [WEIGHT <weight_property>] [WHERE <condition>] [YIELD <properties>]
 ```
 
 ### 关键特性
@@ -175,7 +174,7 @@ FIND <SHORTEST | ALL> PATH [WITH LOOP] [WITH TRAIL] [WITH WALK] FROM <src_id> [,
 - `WEIGHT` 仅支持 `FIND SHORTEST PATH`；与 `FIND ALL PATH` 组合会在绑定阶段报错
 - 支持路径长度限制（`UPTO <steps> STEP`，`STEPS` 亦可）；省略时默认最大 10 步
 - 支持多边类型路径（`OVER <type> [, <type> ...]`）：端点标签由全部所列边类型的 schema 分方向推导，任一角色无法收敛到唯一标签时报显式错误
-- `TO` 子句可省略；目前 `TO` 后仅支持单个目标点表达式，不支持逗号分隔的 id 列表
+- `TO` 子句为必填；`TO` 后仅支持单个目标点表达式，不支持逗号分隔的 id 列表
 - OVER 子句可省略（遍历所有边类型，方向缺省为正向）
 - 支持条件过滤与属性投影（WHERE 在路径结果之上过滤）
 
@@ -366,14 +365,14 @@ RETURN embedding
 
 ### 语法结构
 ```cypher
-GET SUBGRAPH [WITH PROP | WITH EDGE] [<steps> STEPS | STEPS <steps>] FROM <vertex_id> [, <vertex_id> ...] [OVER <edge_type> [, <edge_type> ...] [REVERSELY | BIDIRECT]] [WHERE <condition>] [YIELD <properties>]
+GET SUBGRAPH [WITH PROP] [<steps> STEPS | STEPS <steps>] FROM <vertex_id> [, <vertex_id> ...] [OVER <edge_type> [, <edge_type> ...] [REVERSELY | BIDIRECT]] [WHERE <condition>] [YIELD <properties>]
 ```
 
 ### 关键特性
 - 支持指定起始节点（多个）
 - 支持入边、出边、双向扩展
 - 支持扩展步数限制：规范形式 `GET SUBGRAPH <n> STEPS FROM ...`，也支持 `GET SUBGRAPH STEPS <n> FROM ...`（`STEP`/`STEPS` 均可，且步数必须在 `FROM` 之前）；两者都省略时默认 1 步
-- `WITH PROP` / `WITH EDGE` 目前仅完成语法解析，绑定与执行阶段尚未接入（不影响返回内容）
+- `WITH PROP` 目前仅完成语法解析，绑定与执行阶段尚未接入（不影响返回内容）
 - 包含属性信息
 - 支持条件过滤与属性投影
 
@@ -403,7 +402,7 @@ YIELD [DISTINCT] <expression> [AS <alias>] [, ...] [WHERE <condition>] [ORDER BY
 - YIELD 子句语法支持 DISTINCT 去重
 - 支持 WHERE 条件过滤（在投影后过滤）
 - 支持 ORDER BY、SKIP、LIMIT、SAMPLE
-- 可作为独立语句使用（注意：独立 YIELD 语句当前实现会丢弃 DISTINCT 与 SAMPLE，仅作为后缀子句时完整生效）
+- 可作为独立语句使用
 - 可与其他语句组合使用（GO / LOOKUP / FETCH / FIND PATH / GET SUBGRAPH 等语句的 YIELD 后缀）
 
 #### 示例

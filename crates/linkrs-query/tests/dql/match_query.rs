@@ -437,7 +437,7 @@ fn test_optional_match_execution_with_edge() {
         .assert_success()
         .query("OPTIONAL MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
         .assert_success()
-        .assert_result_count(1);
+        .assert_result_count(3);
 }
 
 // ==================== MATCH Variable-Length Path Semantics Tests ====================

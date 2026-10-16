@@ -62,6 +62,7 @@ pub(super) fn handle(
                     skip_rows: false,
                     emit_raw_ids: false,
                     lightweight_source: false,
+                    include_empty_paths: false,
                     ttl_active: None,
                 },
             )? {
@@ -133,6 +134,7 @@ pub(super) fn handle_all(
         dst_required_props,
         closed_loop,
         skip_rows,
+        include_empty_paths,
     } = &mut op.kind
     else {
         return Err(QueryError::execution(
@@ -156,6 +158,7 @@ pub(super) fn handle_all(
     let edge_required_props = edge_required_props.clone();
     let dst_required_props = dst_required_props.clone();
     let closed_loop = *closed_loop;
+    let include_empty_paths = *include_empty_paths;
     let mut skip_rows = *skip_rows;
     if skip_rows && !crate::executor::streaming::chunk::use_columnar_path(&op.runtime) {
         skip_rows = false;
@@ -209,6 +212,7 @@ pub(super) fn handle_all(
                         skip_rows,
                         emit_raw_ids,
                         lightweight_source,
+                        include_empty_paths,
                         ttl_active: None,
                     },
                 )?;
@@ -237,6 +241,7 @@ pub(super) fn handle_all(
                 skip_rows,
                 emit_raw_ids,
                 lightweight_source,
+                include_empty_paths,
                 ttl_active: None,
             };
             let expand_result = if let Some(limits) = step_limits.clone() {

@@ -37,17 +37,9 @@ fn apply_edge_range(expand_node: &mut ExpandAllNode, edge: &EdgePattern) -> Opti
         (Some(min), Some(max)) if max > min => {
             let lo = min.max(1);
             let hi = max;
-            if hi - lo > 64 {
-                expand_node.set_step_limit(1);
-                return edge.path_semantic.clone();
-            }
             expand_node.set_step_limits((lo..=hi).map(|v| v as u32).collect());
         }
         (None, Some(max)) if max >= 1 => {
-            if max > 64 {
-                expand_node.set_step_limit(1);
-                return edge.path_semantic.clone();
-            }
             expand_node.set_step_limits((1..=max).map(|v| v as u32).collect());
         }
         (Some(min), None) => {
@@ -75,6 +67,7 @@ pub fn plan_pattern_edge(
     space_id: u64,
     _space_name: &str,
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
+    optional: bool,
 ) -> Result<SubPlan, PlannerError> {
     if edge.recursive_comprehension.is_some() {
         return Err(PlannerError::UnsupportedOperation(
@@ -117,6 +110,7 @@ pub fn plan_pattern_edge(
         None,
         step_limit,
         step_limits,
+        optional,
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),
@@ -181,6 +175,7 @@ pub fn plan_pattern_edge_with_input(
     dst_var: Option<&str>,
     dst_labels: &[String],
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
+    optional: bool,
 ) -> Result<SubPlan, PlannerError> {
     if edge.recursive_comprehension.is_some() {
         return Err(PlannerError::UnsupportedOperation(
@@ -219,7 +214,7 @@ pub fn plan_pattern_edge_with_input(
         dst_col_name.clone(),
     ]);
 
-    expand_node.set_include_empty_paths(false);
+    expand_node.set_include_empty_paths(optional);
 
     let step_limit = expand_node.step_limit();
     let step_limits = expand_node.step_limits().cloned();
@@ -236,6 +231,7 @@ pub fn plan_pattern_edge_with_input(
         Some(dst_tag),
         step_limit,
         step_limits,
+        optional,
     );
     let mut plan = SubPlan {
         root: Some(expand_root.clone()),

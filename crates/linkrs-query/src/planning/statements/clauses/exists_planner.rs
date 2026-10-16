@@ -206,6 +206,7 @@ fn plan_scalar_subquery(
         metadata_context: &None,
         expr_context: &Some(expr_context.clone()),
         where_expression: None,
+        optional: false,
     };
 
     let mut sub_plan = if patterns.is_empty() {
@@ -406,6 +407,7 @@ pub fn plan_subquery(
         metadata_context: &None,
         expr_context: &Some(expr_context.clone()),
         where_expression: None,
+        optional: false,
     };
 
     let mut sub_plan = if patterns.is_empty() {

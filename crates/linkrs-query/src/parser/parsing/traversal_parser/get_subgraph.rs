@@ -14,10 +14,9 @@ impl TraversalParser {
 
         ctx.expect_token(TokenKind::Subgraph)?;
 
-        let with_prop = ctx.match_token(TokenKind::With) && ctx.match_token(TokenKind::Prop);
-
-        let _with_edge = if !with_prop {
-            ctx.match_token(TokenKind::With) && ctx.match_token(TokenKind::Edge)
+        let with_prop = if ctx.match_token(TokenKind::With) {
+            ctx.expect_token(TokenKind::Prop)?;
+            true
         } else {
             false
         };
@@ -83,6 +82,7 @@ impl TraversalParser {
             over,
             where_clause,
             yield_clause,
+            with_prop,
         }))
     }
 }

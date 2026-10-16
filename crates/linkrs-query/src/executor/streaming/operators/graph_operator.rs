@@ -42,6 +42,7 @@ pub(super) struct ExpandCtx<'a> {
     pub(super) skip_rows: bool,
     pub(super) emit_raw_ids: bool,
     pub(super) lightweight_source: bool,
+    pub(super) include_empty_paths: bool,
     /// Lazily computed TTL-activeness over the operator's edge types. A plan
     /// fixes the edge-type set, so the flag is constant for the operator and
     /// is computed at most once per `ExpandCtx`.
@@ -98,6 +99,7 @@ pub enum GraphOperatorKind {
         dst_required_props: Option<Vec<String>>,
         closed_loop: bool,
         skip_rows: bool,
+        include_empty_paths: bool,
     },
     Traverse {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -248,6 +250,7 @@ impl GraphOperator {
                 dst_required_props,
                 closed_loop,
                 skip_rows,
+                include_empty_paths,
             } => GraphOperatorKind::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -267,6 +270,7 @@ impl GraphOperator {
                 dst_required_props: dst_required_props.clone(),
                 closed_loop: *closed_loop,
                 skip_rows: *skip_rows,
+                include_empty_paths: *include_empty_paths,
             },
             GraphSpec::Traverse {
                 edge_types,

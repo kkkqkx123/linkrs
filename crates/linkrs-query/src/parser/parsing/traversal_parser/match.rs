@@ -3,7 +3,6 @@ use crate::parser::ast::pattern::Pattern;
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::clause_parser::ClauseParser;
-use crate::parser::parsing::dml_parser::DmlParser;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
 
@@ -159,10 +158,6 @@ impl TraversalParser {
                 where_clause = Some(post);
             }
             where_explicit = true;
-        }
-
-        if ctx.check_token(TokenKind::Merge) {
-            DmlParser::new().parse_merge_statement(ctx)?;
         }
 
         Ok(ParsedMatchClause {

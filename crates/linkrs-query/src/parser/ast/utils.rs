@@ -491,6 +491,7 @@ impl StmtFactory {
             over,
             where_clause,
             yield_clause,
+            with_prop: false,
         })
     }
 

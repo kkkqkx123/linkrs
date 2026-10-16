@@ -55,18 +55,8 @@ impl TraversalParser {
             },
         )?;
 
-        let to_present = ctx.recover_clause(
-            |_| Ok(false),
-            |c| {
-                c.expect_token(TokenKind::To)?;
-                Ok(true)
-            },
-        )?;
-        let to_vertex = if to_present {
-            ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?
-        } else {
-            Self::create_true_expression(ctx)?
-        };
+        ctx.expect_token(TokenKind::To)?;
+        let to_vertex = ctx.recover_clause(Self::create_true_expression, |c| self.parse_expression(c))?;
 
         // OVER is optional: inspect whether the token is present without
         // recording a parse error when it is absent, then consume it only in

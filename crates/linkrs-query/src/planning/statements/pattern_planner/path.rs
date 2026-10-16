@@ -99,6 +99,7 @@ pub fn plan_path_pattern(
                             dst_var,
                             &dst_labels,
                             ctx.expr_context,
+                            ctx.optional,
                         )?;
 
                         plan = if let Some(existing_root) = plan.root.take() {
@@ -241,7 +242,7 @@ pub fn plan_optional_element(
             ctx.where_expression,
         )?,
         PathElement::Edge(edge) => {
-            plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context)?
+            plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context, false)?
         }
         _ => {
             return Err(PlannerError::PlanGenerationFailed(
@@ -272,7 +273,7 @@ pub fn plan_repeated_element(
             expr_context,
             None,
         )?,
-        PathElement::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context)?,
+        PathElement::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context, false)?,
         _ => {
             return Err(PlannerError::PlanGenerationFailed(
                 "Repeated paths do not support nested complex patterns".to_string(),

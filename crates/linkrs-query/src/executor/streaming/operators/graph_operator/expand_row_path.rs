@@ -112,6 +112,13 @@ pub(super) fn expand_single_step(
             reader.neighbor_dst_ids_batch(space_name, &seed_vids, direction, edge_types)?
         };
         for (dst_ids, seed_row) in neighbors.iter().zip(seed_rows.iter()) {
+            if dst_ids.is_empty() && ctx.include_empty_paths {
+                buf.push_row(
+                    seed_row,
+                    Value::Null(linkrs_core::NullType::Null),
+                    Value::Null(linkrs_core::NullType::Null),
+                );
+            }
             for dst in dst_ids {
                 buf.push_row(
                     seed_row,
@@ -138,6 +145,7 @@ pub(super) fn expand_single_step(
     }
 
     let mut pending: Vec<PendingExpand> = Vec::new();
+    let mut successful_seeds: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut tag_groups: HashMap<String, Vec<VertexId>> = HashMap::new();
     for (seed_idx, vid) in seed_vids.iter().enumerate() {
         let edges = reader.get_node_edges(space_name, vid, direction, edge_types)?;
@@ -193,6 +201,7 @@ pub(super) fn expand_single_step(
                 Value::Edge(Box::new(req.edge.clone())),
                 dst_vertex.clone(),
             );
+            successful_seeds.insert(req.seed_idx);
         }
     }
 
@@ -241,6 +250,24 @@ pub(super) fn expand_single_step(
             out_rows.first().map(Vec::len),
         )?;
     }
+    if ctx.include_empty_paths {
+        for (seed_idx, seed_row) in seed_rows.iter().enumerate() {
+            if successful_seeds.contains(&seed_idx) {
+                continue;
+            }
+            let mut new_row = seed_row.clone();
+            new_row.push(Value::Null(linkrs_core::NullType::Null));
+            new_row.push(Value::Null(linkrs_core::NullType::Null));
+            for _ in &edge_bypass {
+                new_row.push(Value::Null(linkrs_core::NullType::Null));
+            }
+            for _ in &dst_bypass {
+                new_row.push(Value::Null(linkrs_core::NullType::Null));
+            }
+            out_rows.push(new_row);
+        }
+    }
+
     if out_rows.is_empty() {
         return Ok(None);
     }

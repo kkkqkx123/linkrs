@@ -231,6 +231,7 @@ impl MatchStatementPlanner {
                     metadata_context: &self.metadata_context,
                     expr_context: &self.expr_context,
                     where_expression: match_stmt.where_clause.as_ref(),
+                    optional: match_stmt.optional,
                 };
 
                 // The join-order path covers every pattern at once; the

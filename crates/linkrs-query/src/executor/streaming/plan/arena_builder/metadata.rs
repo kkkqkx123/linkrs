@@ -1035,6 +1035,7 @@ mod tests {
             dst_required_props: dst_props,
             closed_loop: true,
             skip_rows: true,
+            include_empty_paths: false,
         })
     }
 

@@ -72,6 +72,7 @@ pub(super) fn logical_expand_all(
         dst_tag,
         Some(1),
         None,
+        false,
     )
 }
 
@@ -90,6 +91,7 @@ pub(super) fn logical_expand_all_with_range(
     dst_tag: Option<String>,
     step_limit: Option<u32>,
     step_limits: Option<Vec<u32>>,
+    include_empty_paths: bool,
 ) -> LogicalNodeEnum {
     LogicalNodeEnum::ExpandAll(LogicalExpandAllNode {
         id: next_node_id(),
@@ -106,7 +108,7 @@ pub(super) fn logical_expand_all_with_range(
         vertex_props: vec![],
         filter: None,
         src_vids: vec![],
-        include_empty_paths: false,
+        include_empty_paths,
         input_var,
         path_semantic,
         dst_tag,

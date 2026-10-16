@@ -121,6 +121,7 @@ fn test_stmt_category_exhaustive() {
                 over: None,
                 where_clause: None,
                 yield_clause: None,
+                with_prop: false,
             }),
             Dql,
         ),
@@ -190,6 +191,7 @@ fn test_stmt_category_exhaustive() {
                 order_by: None,
                 skip: None,
                 limit: None,
+                sample: None,
             }),
             Dql,
         ),
@@ -842,6 +844,7 @@ fn test_subgraph_stmt() {
         over: None,
         where_clause: None,
         yield_clause: None,
+        with_prop: false,
     });
 
     assert!(matches!(stmt, Stmt::Subgraph(_)));

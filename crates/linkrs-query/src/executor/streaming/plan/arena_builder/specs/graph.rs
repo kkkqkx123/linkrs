@@ -405,6 +405,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_expand_all_spec
         dst_required_props: node.dst_required_props().cloned(),
         closed_loop: node.closed_loop(),
         skip_rows: node.skip_rows(),
+        include_empty_paths: node.include_empty_paths(),
     })
 }
 

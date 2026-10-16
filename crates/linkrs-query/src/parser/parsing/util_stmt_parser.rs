@@ -461,10 +461,11 @@ impl UtilStmtParser {
             span: start_span,
             items: yield_clause.items,
             where_clause: yield_clause.where_clause,
-            distinct: false,
+            distinct: yield_clause.distinct,
             order_by: yield_clause.order_by,
             skip: yield_clause.skip,
             limit: yield_clause.limit,
+            sample: yield_clause.sample,
         }))
     }
 

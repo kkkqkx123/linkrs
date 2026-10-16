@@ -273,49 +273,11 @@ impl TraversalParser {
                     path_semantic = Some(PathSemantic::WeightedShortest(weight_prop));
                     range = Some(EdgeRange::any());
                 } else if ctx.match_token(TokenKind::LParen) {
-                    let start_span = ctx.current_span();
-                    let variable = ctx.expect_identifier()?;
-
-                    let mut edge_variable = None;
-                    if ctx.match_token(TokenKind::Comma) {
-                        edge_variable = Some(ctx.expect_identifier()?);
-                    }
-
-                    let mut filter_predicate = None;
-                    if ctx.match_token(TokenKind::Pipe) && ctx.check_keyword("WHERE") {
-                        ctx.consume_keyword("WHERE")?;
-                        filter_predicate = Some(self.parse_expression(ctx)?);
-                    }
-
-                    let mut node_projection = None;
-                    let mut edge_projection = None;
-                    if ctx.match_token(TokenKind::Pipe) {
-                        if ctx.match_token(TokenKind::LBrace) {
-                            node_projection = Some(self.parse_expression(ctx)?);
-                            ctx.expect_token(TokenKind::RBrace)?;
-                        }
-                        if ctx.match_token(TokenKind::Comma) && ctx.match_token(TokenKind::LBrace) {
-                            edge_projection = Some(self.parse_expression(ctx)?);
-                            ctx.expect_token(TokenKind::RBrace)?;
-                        }
-                    }
-
-                    ctx.expect_token(TokenKind::RParen)?;
-
-                    let span = ctx.span_since(start_span.start);
-
-                    let rc = RecursiveComprehension {
-                        span,
-                        variable,
-                        edge_variable,
-                        filter_predicate,
-                        node_projection,
-                        edge_projection,
-                    };
-                    path_semantic = Some(PathSemantic::Walk);
-                    range = Some(EdgeRange::any());
-
-                    ctx.set_recursive_comprehension(rc);
+                    return Err(ParseError::new(
+                        ParseErrorKind::UnsupportedFeature,
+                        "Recursive comprehension patterns are not supported".to_string(),
+                        ctx.current_position(),
+                    ));
                 } else if ctx.match_token(TokenKind::LBracket) {
                     let min = if matches!(ctx.current_token().kind, TokenKind::IntegerLiteral(_)) {
                         let n = ctx.expect_integer_literal()? as usize;
@@ -397,7 +359,12 @@ impl TraversalParser {
                 ctx.next_token();
                 Ok(Steps::Fixed(n as usize))
             }
-            _ => Ok(Steps::Fixed(1)),
+            TokenKind::Step | TokenKind::From => Ok(Steps::Fixed(1)),
+            _ => Err(ParseError::new(
+                ParseErrorKind::UnsupportedFeature,
+                "GO step count must be an integer literal".to_string(),
+                ctx.current_position(),
+            )),
         }
     }
 

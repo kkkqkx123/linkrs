@@ -196,6 +196,7 @@ pub struct SubgraphStmt {
     pub over: Option<OverClause>,
     pub where_clause: Option<ContextualExpression>,
     pub yield_clause: Option<YieldClause>,
+    pub with_prop: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -239,6 +240,7 @@ pub struct YieldStmt {
     pub order_by: Option<OrderByClause>,
     pub skip: Option<SkipClause>,
     pub limit: Option<LimitClause>,
+    pub sample: Option<SampleClause>,
 }
 
 /// `LOAD FROM <source> [OPTIONS (...)] [RETURN ...]` reading clause.

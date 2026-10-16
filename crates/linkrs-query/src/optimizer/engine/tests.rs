@@ -705,7 +705,7 @@ mod factorization_fallback_tests {
         };
         let input = SubPlan::from_logical_root(scan_logical("a"));
         let out = YieldClausePlanner::new()
-            .plan_yield_clause(&[column], None, None, None, None, &input)
+            .plan_yield_clause(&[column], None, None, None, None, false, &input)
             .expect("yield planning should succeed");
         assert!(matches!(out.root, Some(PlanNodeEnum::Project(_))));
         assert!(

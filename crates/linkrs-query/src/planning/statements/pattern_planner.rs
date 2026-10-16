@@ -50,6 +50,7 @@ pub struct PlanningContext<'a> {
     pub metadata_context: &'a Option<MetadataContext>,
     pub expr_context: &'a Option<Arc<ExpressionAnalysisContext>>,
     pub where_expression: Option<&'a ContextualExpression>,
+    pub optional: bool,
 }
 
 pub fn plan_match_delete(
@@ -182,7 +183,7 @@ pub fn plan_pattern(pattern: &Pattern, ctx: &PlanningContext) -> Result<SubPlan,
             ctx.where_expression,
         ),
         Pattern::Edge(edge) => {
-            plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context)
+            plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context, ctx.optional)
         }
         Pattern::Path(_) => plan_path_pattern(pattern, ctx),
         Pattern::Variable(var) => plan_variable_pattern(var, ctx.space_id, ctx.validation_info),

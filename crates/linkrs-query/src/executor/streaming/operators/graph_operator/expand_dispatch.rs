@@ -363,6 +363,7 @@ pub(super) fn expand_on_chunk(
         .zip(seed_vertices.iter())
     {
         let _ = vid;
+        let rows_before_seed = out_rows.len();
         let mut config =
             TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec());
         if step_limit > 1 {
@@ -438,7 +439,27 @@ pub(super) fn expand_on_chunk(
                 out_rows.push(out_row);
             }
         }
+        // OPTIONAL MATCH: seed with no matching traversal event still emits a
+        // row whose edge and destination are NULL.
+        if ctx.include_empty_paths && out_rows.len() == rows_before_seed {
+            let mut out_row = row.clone();
+            out_row.push(Value::Null(linkrs_core::NullType::Null));
+            out_row.push(Value::Null(linkrs_core::NullType::Null));
+            for _ in &edge_bypass {
+                out_row.push(Value::Null(linkrs_core::NullType::Null));
+            }
+            for _ in &dst_bypass {
+                out_row.push(Value::Null(linkrs_core::NullType::Null));
+            }
+            let mut out_col_names = ctx.col_names_template.clone();
+            out_col_names.push("_expand_edge".to_string());
+            out_col_names.push("_expand_dst".to_string());
+            if row_passes_filter(&out_row, &out_col_names, filter_expr) {
+                out_rows.push(out_row);
+            }
+        }
     }
+
 
     if out_rows.is_empty() {
         return Ok(None);
