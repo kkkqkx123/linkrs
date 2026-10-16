@@ -59,7 +59,33 @@ impl<'a> Parser<'a> {
         self.expr_context = expr_context;
         self.ctx.reset_recovery_count();
 
-        let stmt = self.parse_statement()?;
+        let stmt = match self.parse_statement() {
+            Ok(stmt) => stmt,
+            Err(e) => {
+                // Recovery may replace the original cause with a generic
+                // "Too many parse errors" terminator. Prefer the first recorded
+                // error so callers see the actionable diagnostic.
+                let recorded = self.ctx.errors();
+                if !recorded.is_empty() {
+                    let first = &recorded.errors[0];
+                    return Err(ParseError {
+                        kind: first.kind.clone(),
+                        message: Box::from(first.message.as_ref()),
+                        position: first.position,
+                        offset: first.offset,
+                        unexpected_token: first
+                            .unexpected_token
+                            .as_ref()
+                            .map(|t| Box::from(t.as_ref())),
+                        expected_tokens: first.expected_tokens.clone(),
+                        context: None,
+                        hints: first.hints.clone(),
+                        recovered: first.recovered,
+                    });
+                }
+                return Err(e);
+            }
+        };
 
         // A statement must consume the whole input. An optional trailing
         // semicolon terminator is allowed; any further token is a syntax
