@@ -374,7 +374,7 @@ mod complex_plans {
             .expect("Failed to create test scenario")
             .setup_space("test_path_plan")
             .exec_ddl("CREATE TAG person(id INT, name STRING)")
-            .exec_ddl("CREATE EDGE knows()")
+            .exec_ddl("CREATE EDGE knows() FROM person TO person")
             .assert_success()
             .query("FIND SHORTEST PATH FROM 1 TO 2 OVER knows")
             .assert_success();

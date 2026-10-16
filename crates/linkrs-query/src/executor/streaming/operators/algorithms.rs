@@ -342,9 +342,14 @@ pub(crate) fn bidir_bfs_shortest_path(
                     if let Some(neighbor_vertex) =
                         storage.get_vertex(cfg.space_name, &neighbor_tag, neighbor_id)?
                     {
+                        // The right side walks backward from the end vertex,
+                        // so store the edge flipped: the resulting path then
+                        // keeps edge endpoints and step dsts consistent.
+                        let mut backward_edge = (*edge).clone();
+                        std::mem::swap(&mut backward_edge.src, &mut backward_edge.dst);
                         let new_npath = Arc::new(NPath::extend(
                             current_npath.clone(),
-                            Arc::new((*edge).clone()),
+                            Arc::new(backward_edge),
                             Arc::new(neighbor_vertex),
                         ));
                         right_next.push((*neighbor_id, new_npath.clone()));

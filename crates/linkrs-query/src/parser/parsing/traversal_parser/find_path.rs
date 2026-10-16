@@ -68,14 +68,12 @@ impl TraversalParser {
             Self::create_true_expression(ctx)?
         };
 
-        let over_present = ctx.recover_clause(
-            |_| Ok(false),
-            |c| {
-                c.expect_token(TokenKind::Over)?;
-                Ok(true)
-            },
-        )?;
+        // OVER is optional: inspect whether the token is present without
+        // recording a parse error when it is absent, then consume it only in
+        // that case.
+        let over_present = ctx.check_token(TokenKind::Over);
         let over = if over_present {
+            ctx.expect_token(TokenKind::Over)?;
             ctx.recover_clause(
                 |c| {
                     Ok(OverClause {

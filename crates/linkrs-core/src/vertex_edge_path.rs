@@ -648,15 +648,27 @@ impl Path {
             return;
         }
 
-        self.steps.reverse();
-
-        for step in &mut self.steps {
-            std::mem::swap(&mut step.edge.src, &mut step.edge.dst);
+        // Vertex sequence from the start of this path to its end.
+        let mut vertices = Vec::with_capacity(self.steps.len() + 1);
+        vertices.push((*self.src).clone());
+        for step in &self.steps {
+            vertices.push((*step.dst).clone());
         }
 
-        if let Some(last_step) = self.steps.first() {
-            *self.src = (*last_step.dst).clone();
+        // The reversed path starts at the original end vertex. Each edge is
+        // flipped and each step's dst is set to the vertex at the flipped
+        // edge's dst, keeping edge endpoints and step dsts consistent.
+        let mut reversed_steps = Vec::with_capacity(self.steps.len());
+        for i in (0..self.steps.len()).rev() {
+            let mut edge = (*self.steps[i].edge).clone();
+            std::mem::swap(&mut edge.src, &mut edge.dst);
+            reversed_steps.push(Step {
+                dst: Box::new(vertices[i].clone()),
+                edge: Box::new(edge),
+            });
         }
+        self.src = Box::new(vertices[vertices.len() - 1].clone());
+        self.steps = reversed_steps;
     }
 
     /// Append reverse path (for bidirectional BFS path splicing)
