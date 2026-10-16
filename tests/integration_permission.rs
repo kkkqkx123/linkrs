@@ -900,3 +900,154 @@ fn test_cross_space_permission_isolation() {
     // In Space 3 (without any characters), there are no permissions available at all.
     assert!(pm.check_permission("user1", 3, Permission::Read).is_err());
 }
+
+// ==================== DCL permission-matrix conformance ====================
+//
+// The query channel derives one Permission per statement category
+// (`GraphService::permission_for_stmt`: DML writes → Write/Delete, schema
+// objects → Schema, spaces → Admin, reads → Read) and the HTTP probe handlers
+// enforce the same table through PermissionChecker. This test pins the probe
+// side of that contract cell by cell.
+
+#[test]
+fn test_permission_matrix_write_rows() {
+    // UPDATE / UPSERT / MERGE require Write: USER passes, GUEST is rejected.
+    let pm = PermissionManager::new();
+    pm.grant_role("user1", 1, RoleType::User)
+        .expect("grant User should succeed");
+    pm.grant_role("guest1", 1, RoleType::Guest)
+        .expect("grant Guest should succeed");
+    let checker = PermissionChecker::new(pm, create_test_config());
+    let user_session = create_client_session_with_role("user1", 1, RoleType::User);
+    let guest_session = create_client_session_with_role("guest1", 1, RoleType::Guest);
+
+    assert!(RoleType::User.has_permission(Permission::Write));
+    assert!(!RoleType::Guest.has_permission(Permission::Write));
+    assert!(checker.can_write_data(&user_session, 1).is_ok());
+    assert!(checker.can_write_data(&guest_session, 1).is_err());
+}
+
+#[test]
+fn test_permission_matrix_schema_rows() {
+    // CREATE INDEX / CREATE TAG require Schema: DBA passes, USER is rejected.
+    // CREATE / DROP SPACE require Admin: DBA is rejected.
+    let pm = PermissionManager::new();
+    pm.grant_role("dba1", 1, RoleType::Dba)
+        .expect("grant Dba should succeed");
+    pm.grant_role("user1", 1, RoleType::User)
+        .expect("grant User should succeed");
+    let checker = PermissionChecker::new(pm, create_test_config());
+    let dba_session = create_client_session_with_role("dba1", 1, RoleType::Dba);
+    let user_session = create_client_session_with_role("user1", 1, RoleType::User);
+
+    assert!(RoleType::Dba.has_permission(Permission::Schema));
+    assert!(!RoleType::User.has_permission(Permission::Schema));
+    assert!(checker.can_write_schema(&dba_session, 1).is_ok());
+    assert!(checker.can_write_schema(&user_session, 1).is_err());
+
+    assert!(!RoleType::Dba.has_permission(Permission::Admin));
+    assert!(checker.can_write_space(&dba_session).is_err());
+    assert!(checker.can_write_user(&dba_session).is_err());
+}
+
+#[test]
+fn test_permission_matrix_grant_rows() {
+    // GRANT / REVOKE follow the can_grant hierarchy: God grants anything but
+    // God, Admin grants Dba/User/Guest, Dba grants User/Guest, others grant nothing.
+    let pm = PermissionManager::new();
+    let config = create_test_config();
+    let checker = PermissionChecker::new(pm, config);
+    let space_id = 1i64;
+
+    checker
+        .permission_manager()
+        .grant_role("dba1", space_id, RoleType::Dba)
+        .expect("grant Dba should succeed");
+    checker
+        .permission_manager()
+        .grant_role("user1", space_id, RoleType::User)
+        .expect("grant User should succeed");
+    let dba_session = create_client_session_with_role("dba1", space_id, RoleType::Dba);
+    let user_session = create_client_session_with_role("user1", space_id, RoleType::User);
+
+    assert!(RoleType::Dba.can_grant(RoleType::User));
+    assert!(RoleType::Dba.can_grant(RoleType::Guest));
+    assert!(!RoleType::Dba.can_grant(RoleType::Dba));
+    assert!(!RoleType::Dba.can_grant(RoleType::Admin));
+    assert!(!RoleType::Dba.can_grant(RoleType::God));
+    assert!(checker
+        .can_write_role(&dba_session, space_id, "target", RoleType::User)
+        .is_ok());
+    assert!(checker
+        .can_write_role(&dba_session, space_id, "target", RoleType::Guest)
+        .is_ok());
+    assert!(checker
+        .can_write_role(&dba_session, space_id, "target", RoleType::Dba)
+        .is_err());
+    assert!(checker
+        .can_write_role(&dba_session, space_id, "target", RoleType::Admin)
+        .is_err());
+    assert!(checker
+        .can_write_role(&user_session, space_id, "target", RoleType::Guest)
+        .is_err());
+}
+
+#[test]
+fn test_probe_and_channel_share_one_table() {
+    // Probe verdicts must equal the role capability table the query channel
+    // enforces: for every role, each checker operation agrees with the
+    // corresponding Permission level (Delete coincides with Write: the role
+    // sets holding each are identical).
+    let pm = PermissionManager::new();
+    for (name, role) in [
+        ("admin1", RoleType::Admin),
+        ("dba1", RoleType::Dba),
+        ("user1", RoleType::User),
+        ("guest1", RoleType::Guest),
+    ] {
+        pm.grant_role(name, 1, role)
+            .expect("grant should succeed");
+    }
+    let checker = PermissionChecker::new(pm, create_test_config());
+
+    for (name, role) in [
+        ("admin1", RoleType::Admin),
+        ("dba1", RoleType::Dba),
+        ("user1", RoleType::User),
+        ("guest1", RoleType::Guest),
+    ] {
+        let session = create_client_session_with_role(name, 1, role);
+        assert_eq!(
+            checker.can_read_data(&session, 1).is_ok(),
+            role.has_permission(Permission::Read),
+            "{name} Read mismatch"
+        );
+        assert_eq!(
+            checker.can_write_data(&session, 1).is_ok(),
+            role.has_permission(Permission::Write),
+            "{name} Write mismatch"
+        );
+        assert_eq!(
+            checker.can_write_data(&session, 1).is_ok(),
+            role.has_permission(Permission::Delete),
+            "{name} Delete mismatch"
+        );
+        assert_eq!(
+            checker.can_write_schema(&session, 1).is_ok(),
+            role.has_permission(Permission::Schema),
+            "{name} Schema mismatch"
+        );
+        assert_eq!(
+            checker.can_write_space(&session).is_ok(),
+            role.has_permission(Permission::Admin),
+            "{name} Admin mismatch"
+        );
+    }
+
+    // God and Admin behavior is unchanged: full rights on every level.
+    let god_session = create_client_session_with_role("root", GOD_SPACE_ID, RoleType::God);
+    assert!(checker.can_write_space(&god_session).is_ok());
+    assert!(checker.can_write_schema(&god_session, 1).is_ok());
+    assert!(checker.can_write_data(&god_session, 1).is_ok());
+    assert!(checker.can_write_user(&god_session).is_ok());
+}

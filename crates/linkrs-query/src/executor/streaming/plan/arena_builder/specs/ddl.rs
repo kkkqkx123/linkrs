@@ -488,7 +488,9 @@ fn user_manage_to_command(
             role: n.role().to_string(),
         },
         ShowUsers(_) => UserManageCommand::ShowUsers,
-        ShowRoles(_) => UserManageCommand::ShowRoles,
+        ShowRoles(n) => UserManageCommand::ShowRoles {
+            space_name: n.space_name().to_string(),
+        },
         DescribeUser(n) => UserManageCommand::DescribeUser {
             username: n.username().to_string(),
         },

@@ -77,9 +77,10 @@ impl UtilStmtParser {
     ) -> Result<Stmt, ParseError> {
         ctx.expect_token(TokenKind::Roles)?;
 
-        // Optional IN <space_name> clause
+        // Optional IN <space_name> clause; space names accept the same
+        // hyphenated/quoted forms as other DCL object names.
         let space_name = if ctx.match_token(TokenKind::In) {
-            Some(ctx.expect_identifier()?)
+            Some(ctx.expect_dcl_name()?)
         } else {
             None
         };

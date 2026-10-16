@@ -8,6 +8,7 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
+use linkrs_core::Value;
 use linkrs_query::parser::Parser;
 
 fn new_scenario() -> TestScenario {
@@ -473,4 +474,148 @@ fn test_parser_kind_show_roles_with_space() {
     );
     let stmt = result.expect("SHOW ROLES IN parsing should succeed");
     assert_eq!(stmt.ast.stmt.kind(), "SHOW ROLES");
+}
+
+// ==================== DESCRIBE USER Output Tests ====================
+
+#[test]
+fn test_describe_user_output_columns_and_assignment() {
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
+        .assert_success()
+        .exec_dcl("CREATE SPACE test_space")
+        .assert_success()
+        .exec_dcl("GRANT ADMIN ON test_space TO alice")
+        .assert_success()
+        .exec_dcl("DESCRIBE USER alice")
+        .assert_success()
+        .assert_result_columns(&[
+            "username",
+            "locked",
+            "created_at",
+            "last_login_at",
+            "space_name",
+            "role",
+        ])
+        .assert_result_count(1)
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::Bool(false),
+            Value::string("test_space"),
+            Value::string("ADMIN"),
+        ])
+        .exec_dcl("REVOKE ADMIN ON test_space FROM alice")
+        .assert_success()
+        .exec_dcl("DESCRIBE USER alice")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![Value::string("alice")])
+        .exec_dcl("DROP USER alice")
+        .assert_success();
+}
+
+#[test]
+fn test_describe_user_without_assignments_has_empty_space_and_role() {
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
+        .assert_success()
+        .exec_dcl("DESCRIBE USER alice")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::string(String::new()),
+            Value::string(String::new()),
+        ])
+        .exec_dcl("DROP USER alice")
+        .assert_success();
+}
+
+#[test]
+fn test_describe_user_multiple_spaces_lists_each_assignment() {
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
+        .assert_success()
+        .exec_dcl("CREATE SPACE space_a")
+        .assert_success()
+        .exec_dcl("CREATE SPACE space_b")
+        .assert_success()
+        .exec_dcl("GRANT ADMIN ON space_a TO alice")
+        .assert_success()
+        .exec_dcl("GRANT USER ON space_b TO alice")
+        .assert_success()
+        .exec_dcl("DESCRIBE USER alice")
+        .assert_success()
+        .assert_result_count(2)
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::string("space_a"),
+            Value::string("ADMIN"),
+        ])
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::string("space_b"),
+            Value::string("USER"),
+        ])
+        .exec_dcl("REVOKE ADMIN ON space_a FROM alice")
+        .assert_success()
+        .exec_dcl("REVOKE USER ON space_b FROM alice")
+        .assert_success()
+        .exec_dcl("DROP USER alice")
+        .assert_success();
+}
+
+// ==================== SHOW ROLES Output Tests ====================
+
+#[test]
+fn test_show_roles_output_columns_and_filter() {
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
+        .assert_success()
+        .exec_dcl("CREATE USER bob WITH PASSWORD 'pass'")
+        .assert_success()
+        .exec_dcl("CREATE SPACE space_a")
+        .assert_success()
+        .exec_dcl("CREATE SPACE space_b")
+        .assert_success()
+        .exec_dcl("GRANT ADMIN ON space_a TO alice")
+        .assert_success()
+        .exec_dcl("GRANT USER ON space_b TO bob")
+        .assert_success()
+        .exec_dcl("SHOW ROLES")
+        .assert_success()
+        .assert_result_columns(&["username", "space_name", "role"])
+        .assert_result_count(2)
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::string("space_a"),
+            Value::string("ADMIN"),
+        ])
+        .assert_result_contains(vec![
+            Value::string("bob"),
+            Value::string("space_b"),
+            Value::string("USER"),
+        ])
+        .exec_dcl("SHOW ROLES IN space_a")
+        .assert_success()
+        .assert_result_count(1)
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::string("space_a"),
+            Value::string("ADMIN"),
+        ])
+        .exec_dcl("SHOW ROLES IN space_b")
+        .assert_success()
+        .assert_result_count(1)
+        .exec_dcl("REVOKE ADMIN ON space_a FROM alice")
+        .assert_success()
+        .exec_dcl("REVOKE USER ON space_b FROM bob")
+        .assert_success()
+        .exec_dcl("SHOW ROLES")
+        .assert_success()
+        .assert_result_count(0)
+        .exec_dcl("DROP USER alice")
+        .assert_success()
+        .exec_dcl("DROP USER bob")
+        .assert_success();
 }

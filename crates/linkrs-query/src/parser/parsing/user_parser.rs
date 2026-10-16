@@ -208,7 +208,7 @@ impl UserParser {
                 ctx.next_token();
                 "GOD".to_string()
             }
-            TokenKind::Admin | TokenKind::AdminRole => {
+            TokenKind::Admin => {
                 ctx.next_token();
                 "ADMIN".to_string()
             }
@@ -298,60 +298,6 @@ impl UserParser {
             space_name,
             username,
         }))
-    }
-
-    /// Analysis of the DESCRIBE USER statement
-    /// Grammar: DESCRIBE USER <username>
-    pub fn parse_describe_user_statement(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Desc)?;
-        ctx.expect_token(TokenKind::User)?;
-
-        let username = ctx.expect_dcl_name()?;
-
-        let span = ctx.span_since(start_span.start);
-
-        Ok(Stmt::DescribeUser(DescribeUserStmt { span, username }))
-    }
-
-    /// Analysis of the SHOW USERS statement
-    /// Syntax: SHOW USERS
-    pub fn parse_show_users_statement(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Show)?;
-        ctx.expect_token(TokenKind::Users)?;
-
-        let span = ctx.span_since(start_span.start);
-
-        Ok(Stmt::ShowUsers(ShowUsersStmt { span }))
-    }
-
-    /// Analysis of the SHOW ROLES statement
-    /// Syntax: SHOW ROLES [IN <space_name>]
-    pub fn parse_show_roles_statement(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Stmt, ParseError> {
-        let start_span = ctx.current_span();
-        ctx.expect_token(TokenKind::Show)?;
-        ctx.expect_token(TokenKind::Roles)?;
-
-        // Optional IN <space_name> clause
-        let space_name = if ctx.match_token(TokenKind::In) {
-            Some(ctx.expect_dcl_name()?)
-        } else {
-            None
-        };
-
-        let span = ctx.span_since(start_span.start);
-
-        Ok(Stmt::ShowRoles(ShowRolesStmt { span, space_name }))
     }
 }
 

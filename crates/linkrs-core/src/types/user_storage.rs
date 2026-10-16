@@ -84,6 +84,12 @@ impl UserStorage {
     }
 
     /// Persist users to a directory snapshot.
+    ///
+    /// The snapshot is plaintext JSON holding bcrypt password hashes. Writes
+    /// are atomic (tmp file plus rename) but carry no encryption and no
+    /// explicit file mode: the file inherits the process umask, so operators
+    /// must restrict the directory permissions. At-rest encryption is tracked
+    /// as an independent issue and deliberately out of scope here.
     pub fn save_to_dir<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         let path = path.as_ref();
         fs::create_dir_all(path)?;
@@ -133,7 +139,7 @@ impl UserStorage {
             StorageError::deserialize_error(format!("Failed to deserialize user storage: {}", e))
         })?;
 
-        if snapshot.version != USER_STORAGE_FORMAT_VERSION && snapshot.version != 1 {
+        if snapshot.version != USER_STORAGE_FORMAT_VERSION {
             return Err(StorageError::deserialize_error(format!(
                 "Unsupported user storage version: {}",
                 snapshot.version

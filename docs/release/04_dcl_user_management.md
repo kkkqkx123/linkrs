@@ -25,8 +25,8 @@ CREATE USER [IF NOT EXISTS] <user_name> [WITH] PASSWORD '<password>'
 
 ### 示例
 ```cypher
-CREATE USER IF NOT EXISTS alice WITH PASSWORD 'secure_password'
-CREATE USER bob PASSWORD 'password123'   -- WITH省略形式
+CREATE USER IF NOT EXISTS alice WITH PASSWORD 'SecurePass123'
+CREATE USER bob PASSWORD 'SecurePass456'   -- WITH省略形式
 ```
 
 ---
@@ -49,7 +49,7 @@ ALTER USER <user_name> SET LOCKED = <true|false>
 
 ### 示例
 ```cypher
-ALTER USER alice WITH PASSWORD 'new_secure_password'
+ALTER USER alice WITH PASSWORD 'NewSecurePass456'
 ALTER USER alice SET LOCKED = true
 ```
 
@@ -79,7 +79,7 @@ DROP USER IF EXISTS alice
 ## 4. CHANGE PASSWORD - 修改密码
 
 ### 功能
-修改当前用户或其他用户密码。
+修改本人密码（GOD 可修改其他用户密码）。
 
 ### 语法结构
 ```cypher
@@ -88,9 +88,18 @@ CHANGE PASSWORD [<user_name>] '<old_password>' TO '<new_password>'
 
 ### 关键特性
 - 需要验证旧密码
-- 支持密码强度检查（默认策略：长度 ≥ 8，需含大写、小写与数字；见文末说明）
+- 支持密码强度检查，默认策略与强制范围见下
 - 自助改密：省略 `<user_name>` 时目标为当前已认证用户，仅需正确旧密码
 - 改密通道分流：本语句（DCL）仅允许“本人或 GOD”；HTTP 管理通道由 Admin 直接重置他人密码，不校验旧密码
+
+### 默认密码策略与强制范围
+
+- 默认取值（`PasswordPolicyConfig::default`）：长度 ≥ 8，且必须同时包含大写字母、
+  小写字母与数字；默认不要求特殊字符，无过期、无历史保留；密码不得包含用户名。
+- 强制范围：仅 server 查询通道在执行前强制（`guard.rs` 的
+  `enforce_new_password_policy`，覆盖 CREATE USER / ALTER USER / CHANGE PASSWORD）；
+  嵌入式与 API 直调路径不经过该门禁。嵌入式路径是否纳入强制作为独立议题记录，
+  本阶段不实现。
 
 ### 示例
 ```cypher
@@ -175,9 +184,23 @@ DESC USER <user_name>
 ```
 
 ### 关键特性
-- 显示用户信息
-- 显示角色分配
-- 显示权限详情
+- 显示用户信息（用户名、锁定状态、创建/最近登录时间）
+- 显示该用户在各空间的角色分配（每分配一行）
+- 准入：仅允许本人或 Admin/God；GUEST 不可枚举他人信息
+
+### 输出列
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| `username` | string | 用户名 |
+| `locked` | bool | 账户是否锁定 |
+| `created_at` | bigint | 创建时间（毫秒时间戳） |
+| `last_login_at` | bigint | 最近登录时间（毫秒时间戳，无登录时为空） |
+| `space_name` | string | 空间名（无分配时为空） |
+| `role` | string | 该空间上的角色（无分配时为空） |
+
+无任何角色分配的用户输出一行且 `space_name` / `role` 为空；
+空间已删除但角色映射残留时 `space_name` 显示数字 id；不存在的用户报错。
 
 ### 示例
 ```cypher
@@ -190,7 +213,7 @@ DESC USER bob
 ## 8. SHOW USERS - 显示用户列表
 
 ### 功能
-显示所有用户列表。
+显示所有用户列表。仅 Admin/God 可执行。
 
 ### 语法结构
 ```cypher
@@ -207,12 +230,23 @@ SHOW USERS
 ## 9. SHOW ROLES - 显示角色信息
 
 ### 功能
-显示角色信息或在指定空间的角色分配。
+显示全部 用户→空间→角色 分配。仅 Admin/God 可执行。
 
 ### 语法结构
 ```cypher
 SHOW ROLES [IN <space_name>]
 ```
+
+### 输出列
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| `username` | string | 用户名 |
+| `space_name` | string | 空间名 |
+| `role` | string | 该用户在该空间的角色 |
+
+带 `IN <space_name>` 时按空间名过滤；无分配时返回空结果；
+空间不存在（含从未创建）同样返回空结果而非报错。
 
 ### 示例
 ```cypher
@@ -232,7 +266,7 @@ SHOW ROLES IN test_space
 |------|-----|-------|-----|------|-------|
 | 创建/删除Space | ✓ | ✓ | ✗ | ✗ | ✗ |
 | 创建/删除用户 | ✓ | ✓ | ✗ | ✗ | ✗ |
-| 授权/撤销角色 | ✓ | ✓ | ✗ | ✗ | ✗ |
+| 授权/撤销角色 | ✓ | ✓ | ✓* | ✗ | ✗ |
 | 创建/删除标签 | ✓ | ✓ | ✓ | ✗ | ✗ |
 | 创建/删除边类型 | ✓ | ✓ | ✓ | ✗ | ✗ |
 | 修改标签/边类型注释（`ALTER ... COMMENT`） | ✓ | ✓ | ✓ | ✗ | ✗ |
@@ -244,3 +278,17 @@ SHOW ROLES IN test_space
 | `PURGE EXPIRED`（维护） | ✓ | ✓ | ✓ | ✗ | ✗ |
 | `CHECKPOINT`（维护） | ✓ | ✓ | ✓ | ✓ | ✗ |
 | 配置语句（`SHOW/UPDATE CONFIGS`） | ✓ | ✓ | ✗ | ✗ | ✗ |
+| `SHOW USERS` / `SHOW ROLES` / `DESCRIBE` 他人 | ✓ | ✓ | ✗ | ✗ | ✗ |
+| `DESCRIBE` 本人 | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+* `✓*`：DBA 仅可授予/撤销 USER/GUEST；ADMIN 可授予 DBA/USER/GUEST；
+GOD 可授予除 GOD 外的所有角色。层级约束见 §5（`RoleType::can_grant`）。
+
+### 权限模型分工
+
+查询通道按上表判定（语句类别推导，`GraphService::permission_for_stmt`）；
+HTTP 探测与管理接口走 `PermissionChecker`（`OperationType` 体系，
+`http::handlers::authz` 经同一推导消费）。两者以同一角色能力表
+（`RoleType::has_permission` / `can_grant`）为底，因此判定结果一致。
+`WriteRole` 层级校验、`ReadUser` 的 self-or-admin、`ChangePassword` 的
+self-or-god 等语义仅保留在 checker 内，查询通道不经过它们。

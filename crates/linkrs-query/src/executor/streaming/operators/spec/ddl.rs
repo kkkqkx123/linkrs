@@ -265,7 +265,10 @@ pub enum UserManageCommand {
         role: String,
     },
     ShowUsers,
-    ShowRoles,
+    ShowRoles {
+        /// Space-name filter from `SHOW ROLES IN <space>`; empty means all spaces.
+        space_name: String,
+    },
     DescribeUser {
         username: String,
     },
@@ -489,7 +492,7 @@ impl UserManageCommand {
             | Self::ChangePassword { .. }
             | Self::GrantRole { .. }
             | Self::RevokeRole { .. } => true,
-            Self::ShowUsers | Self::ShowRoles | Self::DescribeUser { .. } => false,
+            Self::ShowUsers | Self::ShowRoles { .. } | Self::DescribeUser { .. } => false,
         }
     }
 }

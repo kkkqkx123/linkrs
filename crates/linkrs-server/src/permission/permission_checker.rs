@@ -5,6 +5,17 @@ use crate::session::ClientSession;
 use linkrs_core::{Permission, RoleType};
 
 /// Operation type – corresponds to different permission checks
+///
+/// Division of labor with the query channel: the query path classifies parsed
+/// statements into [`Permission`] via `GraphService::permission_for_stmt`
+/// (statement-category derivation in `graph_service/guard.rs`) and enforces
+/// them with [`PermissionManager`]. This checker serves the HTTP management
+/// and probe surface instead. Both sides agree because they bottom out in the
+/// same role semantics (`RoleType::has_permission` / `can_grant`):
+/// WriteData/ReadData mirror Write/Read, WriteSchema mirrors Schema,
+/// WriteSpace/WriteUser mirror Admin. Query-channel-only semantics stay here
+/// and must not be reimplemented by callers: the WriteRole grant hierarchy,
+/// the ReadUser self-or-admin rule, and the ChangePassword self-or-god rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationType {
     // Space operations

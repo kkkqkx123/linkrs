@@ -478,7 +478,6 @@ impl<'a> ParseContext<'a> {
                 Ok("edges".to_string())
             }
             TokenKind::Admin
-            | TokenKind::AdminRole
             | TokenKind::God
             | TokenKind::Dba
             | TokenKind::Guest

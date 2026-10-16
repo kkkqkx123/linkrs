@@ -214,6 +214,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_listing_reads_require_admin_or_self() {
+        use super::context::QueryExecutionContext;
+
+        let fixture = MaintenanceTestService::new().await;
+        let service = &fixture.service;
+        let admin = fixture
+            .session_with_role("read_admin", linkrs_core::RoleType::Admin)
+            .await;
+        let _user = fixture
+            .session_with_role("read_user", linkrs_core::RoleType::User)
+            .await;
+        let guest = fixture
+            .session_with_role("read_guest", linkrs_core::RoleType::Guest)
+            .await;
+
+        fn gate(
+            service: &GraphService<crate::storage::GraphStorage>,
+            username: &str,
+            space_id: i64,
+            stmt: &str,
+        ) -> Result<(), super::GraphServiceError> {
+            let context = QueryExecutionContext {
+                stmt,
+                parsed_ast: None,
+                space_id,
+                parameters: None,
+                session_variables: None,
+            };
+            service.check_query_permission(username, &context)
+        }
+
+        // SHOW USERS / SHOW ROLES: Admin passes, User and Guest are rejected.
+        gate(service, "read_admin", fixture.space_id, "SHOW USERS").expect("admin lists users");
+        gate(service, "read_admin", fixture.space_id, "SHOW ROLES IN maint_space")
+            .expect("admin lists roles");
+        for stmt in ["SHOW USERS", "SHOW ROLES", "SHOW ROLES IN maint_space"] {
+            for username in ["read_user", "read_guest"] {
+                let error = gate(service, username, fixture.space_id, stmt)
+                    .expect_err("non-admin must not list users/roles");
+                assert!(
+                    error.message().contains("only Admin or God"),
+                    "unexpected error for {username} {stmt}: {}",
+                    error.message()
+                );
+            }
+        }
+
+        // DESCRIBE USER: self always passes, others require Admin.
+        for username in ["read_admin", "read_user", "read_guest"] {
+            gate(
+                service,
+                username,
+                fixture.space_id,
+                &format!("DESCRIBE USER {username}"),
+            )
+            .unwrap_or_else(|_| panic!("{username} must describe self"));
+        }
+        for username in ["read_user", "read_guest"] {
+            let error = gate(service, username, fixture.space_id, "DESCRIBE USER someone_else")
+                .expect_err("non-admin must not describe others");
+            assert!(
+                error.message().contains("only Admin or God"),
+                "unexpected error: {}",
+                error.message()
+            );
+        }
+
+        // Both entries enforce the same gate.
+        let error = service
+            .execute(guest, "SHOW USERS")
+            .await
+            .expect_err("guest must not list users");
+        assert!(
+            error.message().contains("Permission check failed"),
+            "unexpected error: {}",
+            error.message()
+        );
+        service
+            .execute(admin, "SHOW USERS")
+            .await
+            .expect("admin lists users");
+        service
+            .execute_stream(admin, "SHOW ROLES")
+            .await
+            .expect("admin lists roles on the streaming entry");
+
+        // Self-description runs end to end once the account exists.
+        service
+            .execute(admin, "CREATE USER self_user WITH PASSWORD 'SelfPass123'")
+            .await
+            .expect("admin creates the account");
+        let flown = service
+            .get_session_manager()
+            .create_session("self_user".to_string(), "127.0.0.1".to_string())
+            .await
+            .expect("create session");
+        flown.set_space(fixture.space.clone());
+        service
+            .execute(flown.id(), "DESCRIBE USER self_user")
+            .await
+            .expect("self-description succeeds");
+        let denied = service
+            .execute(guest, "DESCRIBE USER self_user")
+            .await
+            .expect_err("guest must not describe others");
+        assert!(
+            denied.message().contains("Permission check failed"),
+            "unexpected error: {}",
+            denied.message()
+        );
+    }
+
+    #[tokio::test]
     async fn purge_expired_requires_maintenance_permission_on_every_entry() {
         let fixture = MaintenanceTestService::new().await;
         let stmt = "PURGE EXPIRED IN maint_space";
@@ -364,6 +477,57 @@ mod tests {
             Some(fixture.space_id as u64),
             "streaming space switch must bind the session space",
         );
+    }
+
+    #[test]
+    fn write_and_schema_statements_map_above_read() {
+        use crate::graph_service::GraphService as TestService;
+        use crate::query::parser::ast::StmtCategory;
+        use crate::storage::MockStorage;
+
+        fn classified(text: &str) -> (Option<linkrs_core::Permission>, StmtCategory) {
+            let stmt = TestService::<MockStorage>::parse_stmt(text)
+                .unwrap_or_else(|| panic!("statement should parse: {text}"));
+            let category = stmt.category();
+            let permission = TestService::<MockStorage>::permission_for_stmt(&stmt);
+            (permission, category)
+        }
+
+        // DML writes never fall through to the read default: UPDATE and UPSERT
+        // share the Update variant (`is_upsert` only changes the write mode).
+        for (text, kind) in [
+            ("UPDATE 1 ON Person SET age = 2", "UPDATE"),
+            (
+                "UPSERT VERTEX ON Person SET name = 'Alice' WHERE id(vid) == 1",
+                "UPSERT",
+            ),
+            ("MERGE (v:Person {name: 'Alice'}) SET v.age = 30", "MERGE"),
+        ] {
+            let (permission, category) = classified(text);
+            assert_eq!(
+                permission,
+                Some(linkrs_core::Permission::Write),
+                "{kind} must require Write"
+            );
+            assert_eq!(category, StmtCategory::Dml, "{kind} must classify as DML");
+            let stmt = TestService::<MockStorage>::parse_stmt(text).expect("parses");
+            assert_eq!(stmt.kind(), kind);
+        }
+
+        // Schema objects require Schema (USER cannot create them); spaces stay Admin.
+        for (text, expected) in [
+            ("CREATE TAG t (id: INT)", linkrs_core::Permission::Schema),
+            (
+                "CREATE INDEX idx ON Person (name)",
+                linkrs_core::Permission::Schema,
+            ),
+            ("CREATE SPACE s", linkrs_core::Permission::Admin),
+            ("DROP SPACE s", linkrs_core::Permission::Admin),
+        ] {
+            let (permission, category) = classified(text);
+            assert_eq!(permission, Some(expected), "{text} misclassified");
+            assert_eq!(category, StmtCategory::Ddl, "{text} must classify as DDL");
+        }
     }
 
     #[test]

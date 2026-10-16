@@ -62,7 +62,7 @@ impl std::str::FromStr for RoleType {
             "DBA" => Ok(RoleType::Dba),
             "USER" => Ok(RoleType::User),
             "GUEST" => Ok(RoleType::Guest),
-            _ => Err(format!("Unknown character type: {}", s)),
+            _ => Err(format!("Unknown role type: {}", s)),
         }
     }
 }

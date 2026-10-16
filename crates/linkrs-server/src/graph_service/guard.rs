@@ -34,6 +34,19 @@ impl<
     ///
     /// Returns `None` for statements handled outside the space gate:
     /// session commands and access-control statements with a dedicated path.
+    ///
+    /// Derivation input is the parsed [`Stmt`](crate::query::parser::ast::Stmt),
+    /// grouped by [`StmtCategory`](crate::query::parser::ast::StmtCategory):
+    /// DML writes (INSERT/UPDATE/UPSERT/MERGE/SET/REMOVE, plus CHECKPOINT and
+    /// COPY FROM) require Write, DELETE requires Delete; DDL schema objects
+    /// (TAG/EDGE/INDEX/SEQUENCE, ALTER, full-text/vector indexes, CLEAR SPACE,
+    /// PURGE EXPIRED, migrations and database attach/detach) require Schema
+    /// while CREATE/DROP SPACE require Admin; DQL and search reads require
+    /// Read; server configuration (SHOW/UPDATE CONFIGS, KILL QUERY, extensions)
+    /// requires Admin. The HTTP probe handlers in
+    /// `crate::http::handlers::authz` mirror this table through
+    /// [`PermissionChecker`](crate::permission::PermissionChecker); both sides
+    /// must stay aligned (see `dcl-permission-matrix-drift`).
     pub(crate) fn permission_for_stmt(
         stmt: &crate::query::parser::ast::Stmt,
     ) -> Option<Permission> {
@@ -92,6 +105,7 @@ impl<
                     Some(Permission::Read)
                 }
             }
+            // DQL and search reads (StmtCategory::Dql / Search).
             S::Go(_)
             | S::Fetch(_)
             | S::Lookup(_)
@@ -120,6 +134,9 @@ impl<
             | S::LoadFrom(_)
             | S::InQueryCall(_)
             | S::ExportDatabase(_) => Some(Permission::Read),
+            // DML writes (StmtCategory::Dml). `Update` covers both UPDATE and
+            // UPSERT spellings (`is_upsert` only changes the write mode), so
+            // neither falls through to the read default; MERGE is a write likewise.
             S::Insert(_)
             | S::Update(_)
             | S::Merge(_)
@@ -131,6 +148,10 @@ impl<
                 crate::query::parser::ast::CopyDirection::To => Some(Permission::Read),
             },
             S::Delete(_) => Some(Permission::Delete),
+            // Schema objects (StmtCategory::Ddl): space creation is an Admin
+            // operation, data-shape creation stays at Write, and every other
+            // schema object (TAG/EDGE types, indexes, sequences, AS-query
+            // definitions) requires Schema so USER cannot create them.
             S::Create(create) => Some(match &create.target {
                 crate::query::parser::ast::CreateTarget::Space { .. } => Permission::Admin,
                 crate::query::parser::ast::CreateTarget::Node { .. }
@@ -337,7 +358,7 @@ impl<
         &self,
         username: &str,
         stmt: &crate::query::parser::ast::Stmt,
-        space_id: i64,
+        _space_id: i64,
     ) -> Result<(), GraphServiceError> {
         use crate::query::parser::ast::Stmt as S;
         let denied =
@@ -370,10 +391,24 @@ impl<
                     Err(denied("can only change own password".to_string()))
                 }
             }
-            S::ShowUsers(_) | S::ShowRoles(_) | S::DescribeUser(_) => self
-                .permission_manager
-                .check_permission(username, space_id, Permission::Read)
-                .map_err(|e| GraphServiceError::new(format!("Permission check failed: {}", e))),
+            S::ShowUsers(_) | S::ShowRoles(_) => {
+                if self.permission_manager.is_admin(username) {
+                    Ok(())
+                } else {
+                    Err(denied(
+                        "only Admin or God can list users and roles".to_string(),
+                    ))
+                }
+            }
+            S::DescribeUser(describe) => {
+                if describe.username == username || self.permission_manager.is_admin(username) {
+                    Ok(())
+                } else {
+                    Err(denied(
+                        "only Admin or God can describe other users".to_string(),
+                    ))
+                }
+            }
             _ => Err(denied("not an access-control statement".to_string())),
         }
     }

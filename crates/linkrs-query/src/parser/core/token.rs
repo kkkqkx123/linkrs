@@ -144,7 +144,6 @@ pub enum TokenKind {
     Macros,
     Locked,
     God,
-    AdminRole,
     Dba,
     Guest,
     Comment,
