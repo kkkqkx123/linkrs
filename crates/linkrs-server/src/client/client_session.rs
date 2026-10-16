@@ -56,6 +56,7 @@ impl ClientSession {
     }
 
     pub fn set_space(&self, space: SpaceSummary) {
+        self.session_context.update_space_name(space.name.clone());
         self.space_context.set_space(space);
     }
 

@@ -63,7 +63,7 @@ impl<
         let session_id = session.id();
         if Self::is_config_statement(stmt) {
             return Err(GraphServiceError::new(
-                "UPDATE CONFIGS and SHOW CONFIGS are not supported on streaming endpoints; use the unary query endpoint instead",
+                "UPDATE CONFIGS and SHOW CONFIGS are not supported on streaming or export endpoints; use the unary query endpoint instead",
             ));
         }
         match Self::parse_command(stmt) {
@@ -77,12 +77,16 @@ impl<
             Ok(None) => {}
         }
 
-        // A space switch mutates session state. It runs on the materialized
-        // path, whose single implementation binds the session space, and comes
-        // back as a one-chunk stream; the streaming request below snapshots the
-        // session space up front, so routing the switch through it would leave
-        // the session on the previous space.
-        if Self::parse_stmt(stmt).is_some_and(|parsed| Self::is_use_statement(&parsed)) {
+        // Session inspection (SHOW SESSIONS / SHOW QUERIES / KILL QUERY)
+        // mutates no session state but answers from the live registries.
+        // It runs on the materialized path, whose single implementation
+        // serves all three from the session and query managers, and comes
+        // back as a one-chunk stream; the streaming request below snapshots
+        // execution state up front, so routing inspection through it would
+        // bypass the registry lookup.
+        if Self::parse_stmt(stmt).is_some_and(|parsed| {
+            Self::is_use_statement(&parsed) || Self::is_session_inspection(&parsed)
+        }) {
             return self
                 .execute_with_params(session_id, stmt, parameters, session_variables)
                 .await
@@ -103,6 +107,15 @@ impl<
         self.check_query_permission(&session.user(), &permission_context)?;
 
         let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed) as u32;
+        // Streaming executions share the service-wide id lane with unary
+        // ones, so SHOW QUERIES rows stay valid KILL QUERY targets.
+        let _ = self.query_manager.register_query_with_id(
+            query_id as i64,
+            session.id(),
+            session.user(),
+            session.space().map(|space| space.name),
+            stmt.to_string(),
+        );
         let query_request = linkrs_api::api_core::QueryRequest {
             isolation_level: None,
             space_id: session.space().map(|s| s.id),
@@ -151,8 +164,17 @@ impl<
         session.register_streaming_query(query_id, stmt.to_string(), result.runtime_downgrade());
 
         let session_clone = session.clone();
+        let tracked_manager = Arc::clone(&self.query_manager);
+        let tracked_id = query_id as i64;
         result.set_on_drop(Box::new(move || {
             session_clone.unregister_streaming_query(query_id);
+            if tracked_manager
+                .get_query(tracked_id)
+                .is_some_and(|info| info.status == crate::query::query_manager::QueryStatus::Running)
+            {
+                let _ = tracked_manager.finish_query(tracked_id);
+            }
+            tracked_manager.cleanup_finished_queries(1000);
         }));
 
         Ok(result)

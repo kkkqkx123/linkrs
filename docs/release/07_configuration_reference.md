@@ -26,7 +26,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - `[fulltext]` - 全文检索配置
 - `[embedded.runtime]` - 嵌入式运行时配置
 
-> **注意：** 旧版本中的 `[vector.connection]`、`[vector.timeout]`、`[vector.retry]`、`[vector.embedding]` 已迁移至 `[vector.qdrant.*]` 子节；事务配置中的 `enable_2pc`、`auto_cleanup`、`cleanup_interval` 已移除。
+> **注意：** 旧版本中的 `[vector.connection]`、`[vector.timeout]`、`[vector.retry]`、`[vector.embedding]` 已迁移至 `[vector.qdrant.*]` 子节；事务文件配置中的 `enable_2pc`、`cleanup_interval` 已移除。`auto_cleanup` 不在文件配置中，但事务管理器内部默认为开启并由服务启动后台清理任务。
 
 ---
 
@@ -59,11 +59,11 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
   - 确保目录有足够的磁盘空间
   - 生产环境建议使用独立的数据盘
 
-### 1.4 max_connections
+### 1.4 max_sessions
 - **类型**: usize
-- **默认值**: `10`
-- **说明**: 最大客户端连接数
-- **实际效果**: 限制同时连接到数据库的客户端数量
+- **默认值**: `100`
+- **说明**: 最大客户端会话数
+- **实际效果**: 限制同时连接到数据库的客户端会话数量（大于 0）
 - **配置建议**: 
   - 根据服务器资源和并发需求调整
   - 建议值: 10-100
@@ -99,7 +99,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
   - `false`: 需要显式事务控制
 - **配置建议**: 交互式/嵌入式场景可开启，批量导入场景保持 `false`
 
-> **注意：** 当前版本没有 `enable_2pc`、`auto_cleanup`、`cleanup_interval` 配置项。
+> **注意：** 文件配置中没有 `enable_2pc`、`cleanup_interval` 配置项。`auto_cleanup` 同样不在文件配置中，但事务管理器内部默认为开启（服务启动后台过期事务清理任务）。
 
 ---
 
@@ -122,21 +122,21 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - **实际效果**: 日志文件将存储在此目录下
 - **配置建议**: 确保目录有写入权限和足够空间
 
-### 3.3 file
+### 3.3 basename
 - **类型**: String
 - **默认值**: `"linkrs"`
-- **说明**: 日志文件基础名称
+- **说明**: 日志文件基础名称（不含扩展名）
 - **实际效果**: 生成的日志文件名为 `linkrs.YYYY-MM-DD.N.log`
 - **配置建议**: 根据部署环境自定义
 
-### 3.4 max_file_size
+### 3.4 max_file_size_mb
 - **类型**: u64
-- **默认值**: `104857600`（100MB）
-- **说明**: 单个日志文件最大大小（字节）
+- **默认值**: `100`（MB）
+- **说明**: 单个日志文件最大大小（MB）
 - **实际效果**: 超过此大小将自动创建新日志文件
 - **配置建议**: 
-  - 磁盘充足: 100-500MB
-  - 磁盘紧张: 10-50MB
+  - 磁盘充足: 100-500
+  - 磁盘紧张: 10-50
 
 ### 3.5 max_files
 - **类型**: usize
@@ -146,6 +146,16 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - **配置建议**: 
   - 高流量场景: 10-30
   - 低流量场景: 3-5
+
+### 3.6 stdout
+- **类型**: bool
+- **默认值**: `false`
+- **说明**: 是否同时向标准输出镜像日志记录
+
+### 3.7 json_format
+- **类型**: bool
+- **默认值**: `false`
+- **说明**: 是否以 JSON 单行格式输出日志（替代纯文本格式）
 
 ---
 
@@ -300,6 +310,12 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | enable_adaptive_iteration | bool | true | 是否启用自适应迭代 |
 | stable_threshold | usize | 2 | 连续多轮无改进时停止优化 |
 | min_iteration_rounds | usize | 1 | 最小迭代轮数（不得大于 max_iteration_rounds） |
+| statistics_sample_limit | usize | 10000 | 统计信息采样上限（>0） |
+| statistics_min_epoch_delta | u64 | 100 | 统计信息最小 epoch 间隔 |
+| storage_cost_profile | String | 默认画像 | 存储代价画像 |
+| space_cost_profiles | Map | `{}` | 分空间代价画像 |
+
+> **注意：** `[optimizer.rules]` 的 `disabled_rules` / `enabled_rules` 不在查询配置词汇内，仅能通过配置文件与管理接口维护。
 
 ### 7.2 优化器规则配置 [optimizer.rules]
 
@@ -682,7 +698,7 @@ history_size = 5
 host = "127.0.0.1"
 port = 9758
 storage_path = "data/linkrs"
-max_connections = 10
+max_sessions = 100
 
 [transaction]
 default_timeout = 60
@@ -692,8 +708,8 @@ auto_commit = false
 [log]
 level = "debug"
 dir = "logs"
-file = "linkrs"
-max_file_size = 52428800  # 50MB
+basename = "linkrs"
+max_file_size_mb = 50
 max_files = 3
 
 [auth]
@@ -747,7 +763,7 @@ slow_query_threshold_ms = 500
 host = "0.0.0.0"
 port = 9758
 storage_path = "/var/lib/linkrs/data"
-max_connections = 100
+max_sessions = 100
 
 [transaction]
 default_timeout = 30
@@ -757,8 +773,8 @@ auto_commit = false
 [log]
 level = "info"
 dir = "/var/log/linkrs"
-file = "linkrs"
-max_file_size = 524288000  # 500MB
+basename = "linkrs"
+max_file_size_mb = 500
 max_files = 20
 
 [auth]
@@ -862,10 +878,14 @@ max_files = 10
 4. 运行时可通过查询语句查看/修改部分配置（`SHOW CONFIGS` / `UPDATE CONFIGS`，
    详见《05_other_statements.md》配置管理节）
 
-查询可访问的模块仅限 database、transaction、log、auth、bootstrap、
-optimizer、monitoring 七个节；grpc、parallel、storage、query_resource、
-columnar、monitoring 慢查询子节、vector、fulltext、embedded 等其余节
+查询可访问的模块为 database、transaction、log、auth、bootstrap、
+http、security、optimizer、monitoring 九个节；grpc、parallel、storage、
+query_resource、columnar、monitoring 慢查询子节与 `progress_report_rows_interval`、
+vector、fulltext、embedded 等其余节，以及 `migration` 节，
 仅能通过配置文件与管理接口维护，不在查询配置词汇内。
+`security` 节经查询访问时使用 `password_` 前缀的扁平键名
+（如 `password_min_length` 对应 `[security.password_policy]` 的 `min_length`）；
+`auth` 的口令秘密键不可经查询读写。
 
 ---
 

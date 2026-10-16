@@ -20,6 +20,17 @@ impl TransactionManager {
         staged_mark: Option<StagedWriteMark>,
     ) -> Result<SavepointId, TransactionError> {
         let context = self.get_context(txn_id)?;
+        context.can_execute()?;
+        // Savepoint names resolve to the latest match, so a duplicate
+        // would silently shadow the earlier one; reject it instead.
+        if let Some(ref wanted) = name {
+            if context.find_savepoint_by_name(wanted).is_some() {
+                return Err(TransactionError::savepoint_failed(format!(
+                    "Savepoint '{}' already exists",
+                    wanted
+                )));
+            }
+        }
         let sync_sequence = self
             .sync_manager
             .as_ref()

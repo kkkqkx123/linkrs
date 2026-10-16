@@ -126,6 +126,19 @@ impl<
             parameters,
             session_variables,
         };
+        if let Some(parsed_stmt) = Self::parse_stmt(stmt) {
+            use crate::query::parser::ast::Stmt as ParsedStmt;
+            match parsed_stmt {
+                ParsedStmt::ShowSessions(_)
+                | ParsedStmt::ShowQueries(_)
+                | ParsedStmt::KillQuery(_) => {
+                    return self
+                        .execute_session_inspection(session_id, stmt, parsed_stmt)
+                        .await;
+                }
+                _ => {}
+            }
+        }
         let parsed = Self::parse_stmt(stmt);
         let mut result =
             self.execute_query_with_permission(session_id, &context, consistency.clone());
@@ -285,6 +298,11 @@ impl<
         let username = session.user();
         self.check_query_permission(&username, context)?;
 
+        // Track the execution under the service-wide id so SHOW QUERIES
+        // lists it and KILL QUERY can target it; the same id travels in
+        // the engine request and backs the registry cancellation token.
+        let tracked_query_id = self.assign_tracked_query_id(&session, &username, context.stmt);
+
         let mut statement_guard = None;
         let execution = if let Some(txn_id) = session.current_transaction() {
             if let Some(ref txn_manager) = self.transaction_manager {
@@ -314,13 +332,22 @@ impl<
             None
         };
 
-        let mut result = self.run_query_plan(&session, context, None, execution, consistency);
+        let mut result = self.run_query_plan(
+            &session,
+            context,
+            None,
+            execution,
+            consistency,
+            tracked_query_id.map(|tracked| tracked as u64),
+        );
 
         if let Some((txn_manager, context, statement_start)) = statement_guard {
             if let Err(error) = txn_manager.finish_statement(&context, statement_start) {
                 result = Err(GraphServiceError::new(error.to_string()));
             }
         }
+
+        self.finish_tracked_query(tracked_query_id, result.is_ok());
 
         if result.is_err() {
             self.cleanup_invalid_transaction(&session);
@@ -362,6 +389,7 @@ impl<
         transaction_id: Option<TransactionId>,
         execution: Option<TransactionExecution>,
         consistency: ConsistencyLevel,
+        query_id: Option<u64>,
     ) -> Result<QueryResult, GraphServiceError> {
         let merged_session_variables = match context.session_variables {
             Some(ref client_variables) => {
@@ -379,7 +407,7 @@ impl<
             transaction_id: transaction_id.or_else(|| session.current_transaction()),
             parameters: context.parameters.clone(),
             session_variables: merged_session_variables,
-            query_id: None,
+            query_id,
             parsed_statement: context.parsed_ast.clone(),
             consistency,
         };

@@ -9,6 +9,7 @@ mod certify;
 mod durability;
 mod error;
 mod lifecycle;
+mod savepoint_guards;
 mod savepoint_owner_undo;
 mod snapshot;
 

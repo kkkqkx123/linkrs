@@ -42,8 +42,8 @@ impl<
     /// (TAG/EDGE/INDEX/SEQUENCE, ALTER, full-text/vector indexes, CLEAR SPACE,
     /// PURGE EXPIRED, migrations and database attach/detach) require Schema
     /// while CREATE/DROP SPACE require Admin; DQL and search reads require
-    /// Read; server configuration (SHOW/UPDATE CONFIGS, KILL QUERY, extensions)
-    /// requires Admin. The HTTP probe handlers in
+    /// Read; server configuration (SHOW/UPDATE CONFIGS, KILL QUERY, SHOW
+    /// SESSIONS, extensions) requires Admin while SHOW QUERIES stays Read. The HTTP probe handlers in
     /// `crate::http::handlers::authz` mirror this table through
     /// [`PermissionChecker`](crate::permission::PermissionChecker); both sides
     /// must stay aligned (see `dcl-permission-matrix-drift`).
@@ -121,7 +121,6 @@ impl<
             | S::Show(_)
             | S::Desc(_)
             | S::ShowCreate(_)
-            | S::ShowSessions(_)
             | S::ShowQueries(_)
             | S::Search(_)
             | S::LookupFulltext(_)
@@ -191,9 +190,11 @@ impl<
             | S::AttachDatabase(_)
             | S::DetachDatabase(_)
             | S::Analyze(_) => Some(Permission::Schema),
-            S::ShowConfigs(_) | S::UpdateConfigs(_) | S::KillQuery(_) | S::Extension(_) => {
-                Some(Permission::Admin)
-            }
+            S::ShowConfigs(_)
+            | S::UpdateConfigs(_)
+            | S::KillQuery(_)
+            | S::ShowSessions(_)
+            | S::Extension(_) => Some(Permission::Admin),
         }
     }
 
@@ -234,6 +235,17 @@ impl<
     /// text prefix would miss those spellings and leave the session unrouted.
     pub(crate) fn is_use_statement(stmt: &crate::query::parser::ast::Stmt) -> bool {
         matches!(stmt, crate::query::parser::ast::Stmt::Use(_))
+    }
+
+    /// Whether the parsed statement is answered from the live session or
+    /// query registries instead of the query engine.
+    pub(crate) fn is_session_inspection(stmt: &crate::query::parser::ast::Stmt) -> bool {
+        matches!(
+            stmt,
+            crate::query::parser::ast::Stmt::ShowSessions(_)
+                | crate::query::parser::ast::Stmt::ShowQueries(_)
+                | crate::query::parser::ast::Stmt::KillQuery(_)
+        )
     }
 
     /// Whether a parsed statement writes user state and needs post-execution alignment.

@@ -364,6 +364,56 @@ impl QueryManager {
         query_id
     }
 
+    /// Register a new query under a caller-assigned id.
+    ///
+    /// The network service assigns one monotonic id per execution and uses
+    /// it for the engine request, this registry, and the session tracker,
+    /// so SHOW QUERIES rows double as KILL QUERY targets. The id lane
+    /// advances past the fixed id to keep generated ids collision-free.
+    /// An id already held by a running query is rejected; a stale finished
+    /// entry under the same id is replaced.
+    pub fn register_query_with_id(
+        &self,
+        query_id: i64,
+        session_id: i64,
+        user_name: String,
+        space_name: Option<String>,
+        query_text: String,
+    ) -> ManagerResult<()> {
+        if query_id < 0 {
+            return Err(ManagerError::InvalidInput(format!(
+                "invalid query id {query_id}"
+            )));
+        }
+        if let Some(existing) = self.queries.get(&query_id) {
+            if existing.status == QueryStatus::Running {
+                return Err(ManagerError::InvalidInput(format!(
+                    "query id {query_id} is already running"
+                )));
+            }
+        }
+        self.next_query_id
+            .fetch_max(query_id.saturating_add(1), Ordering::SeqCst);
+        let query_info = QueryInfo::new(
+            query_id,
+            session_id,
+            user_name,
+            space_name,
+            query_text.clone(),
+        );
+        self.queries.insert(query_id, query_info);
+        info!(
+            "Query registered: id={}, session_id={}, query={}",
+            query_id, session_id, query_text
+        );
+        self.emit_session_event(SessionEvent::QueryStarted {
+            session_id,
+            query_id,
+            query_text,
+        });
+        Ok(())
+    }
+
     /// Complete the query.
     pub fn finish_query(&self, query_id: i64) -> ManagerResult<()> {
         if let Some(mut query) = self.queries.get_mut(&query_id) {

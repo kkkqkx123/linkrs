@@ -67,7 +67,6 @@ pub fn is_command_like(text: &str) -> bool {
     let upper = text.trim().to_uppercase();
     upper == "BEGIN"
         || upper.starts_with("BEGIN ")
-        || upper.starts_with("START TRANSACTION")
         || upper.starts_with("COMMIT")
         || upper.starts_with("ROLLBACK")
         || upper.starts_with("SAVEPOINT")

@@ -556,4 +556,268 @@ impl<
             let _ = self.permission_manager.grant_role(username, space_id, role);
         }
     }
+
+    /// Serve SHOW SESSIONS from the live session registry.
+    ///
+    /// Columns: session_id, user_name, space_name, created_at,
+    /// last_active, active_queries, graph_addr. Times are unix epoch
+    /// seconds; an unset space or address renders as NULL.
+    pub(crate) async fn serve_show_sessions(
+        &self,
+    ) -> Result<linkrs_api::api_core::QueryResult, super::error::GraphServiceError> {
+        use linkrs_core::{NullType, Value};
+        let mut sessions = self.list_sessions().await;
+        sessions.sort_by_key(|info| info.session_id);
+        let rows = sessions
+            .iter()
+            .map(|info| {
+                vec![
+                    Value::BigInt(info.session_id),
+                    Value::string(info.user_name.clone()),
+                    info.space_name
+                        .clone()
+                        .map(Value::string)
+                        .unwrap_or(Value::Null(NullType::Null)),
+                    Value::BigInt(epoch_secs(info.create_time)),
+                    Value::BigInt(epoch_secs(info.last_access_time)),
+                    Value::BigInt(info.active_queries as i64),
+                    info.graph_addr
+                        .clone()
+                        .map(Value::string)
+                        .unwrap_or(Value::Null(NullType::Null)),
+                ]
+            })
+            .collect();
+        Ok(Self::inspection_result(
+            rows,
+            vec![
+                "session_id".to_string(),
+                "user_name".to_string(),
+                "space_name".to_string(),
+                "created_at".to_string(),
+                "last_active".to_string(),
+                "active_queries".to_string(),
+                "graph_addr".to_string(),
+            ],
+        ))
+    }
+
+    /// Serve SHOW QUERIES from tracked running queries.
+    ///
+    /// Columns: query_id, session_id, user_name, space_name, status,
+    /// duration_ms, query. The query_id values are the KILL QUERY targets.
+    /// Only executions registered through the service carry entries;
+    /// durations of running queries are measured live.
+    pub(crate) fn serve_show_queries(
+        &self,
+    ) -> Result<linkrs_api::api_core::QueryResult, super::error::GraphServiceError> {
+        use linkrs_core::{NullType, Value};
+        let mut running = self.query_manager.get_running_queries();
+        running.sort_by_key(|info| info.query_id);
+        let rows = running
+            .iter()
+            .map(|info| {
+                vec![
+                    Value::BigInt(info.query_id),
+                    Value::BigInt(info.session_id),
+                    Value::string(info.user_name.clone()),
+                    info.space_name
+                        .clone()
+                        .map(Value::string)
+                        .unwrap_or(Value::Null(NullType::Null)),
+                    Value::string(query_status_name(info.status)),
+                    Value::BigInt(live_duration_ms(info)),
+                    Value::string(info.query_text.clone()),
+                ]
+            })
+            .collect();
+        Ok(Self::inspection_result(
+            rows,
+            vec![
+                "query_id".to_string(),
+                "session_id".to_string(),
+                "user_name".to_string(),
+                "space_name".to_string(),
+                "status".to_string(),
+                "duration_ms".to_string(),
+                "query".to_string(),
+            ],
+        ))
+    }
+
+    /// Serve KILL QUERY against tracked query ids.
+    ///
+    /// The target session must exist and own a running query with the
+    /// given id; the kill marks the entry and cancels the shared
+    /// execution token, with a best-effort session-level cancel for
+    /// streaming executions under the same id.
+    pub(crate) fn serve_kill_query(
+        &self,
+        target_session_id: i64,
+        query_id: i64,
+    ) -> Result<linkrs_api::api_core::QueryResult, super::error::GraphServiceError> {
+        use linkrs_core::Value;
+        let target = self.session_manager.find_session(target_session_id).ok_or_else(|| {
+            super::error::GraphServiceError::new(format!(
+                "SessionId[{}] does not exist",
+                target_session_id
+            ))
+        })?;
+        let info =
+            self.query_manager
+                .get_query(query_id)
+                .ok_or_else(|| {
+                    super::error::GraphServiceError::new(format!(
+                        "ExecutionPlanId[{}] does not exist",
+                        query_id
+                    ))
+                })?;
+        if info.session_id != target_session_id {
+            return Err(super::error::GraphServiceError::new(format!(
+                "ExecutionPlanId[{}] does not exist in Session[{}]",
+                query_id, target_session_id
+            )));
+        }
+        if info.status != linkrs_query::query_manager::QueryStatus::Running {
+            return Err(super::error::GraphServiceError::new(format!(
+                "ExecutionPlanId[{}] is not running (status: {})",
+                query_id,
+                query_status_name(info.status)
+            )));
+        }
+        self.query_manager
+            .kill_query(query_id)
+            .map_err(|e| super::error::GraphServiceError::new(e.to_string()))?;
+        if let Ok(streaming_id) = u32::try_from(query_id) {
+            let _ = target.kill_query(streaming_id);
+        }
+        Ok(Self::inspection_result(
+            vec![vec![
+                Value::BigInt(target_session_id),
+                Value::BigInt(query_id),
+                Value::string("killed".to_string()),
+            ]],
+            vec![
+                "session_id".to_string(),
+                "query_id".to_string(),
+                "status".to_string(),
+            ],
+        ))
+    }
+
+    /// Assign the service-wide execution id used by the engine request,
+    /// the query tracker, and the session tracker alike.
+    pub(crate) fn assign_tracked_query_id(
+        &self,
+        session: &Arc<crate::session::ClientSession>,
+        username: &str,
+        stmt: &str,
+    ) -> Option<i64> {
+        let id = self
+            .next_query_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tracked: i64 = id as i64;
+        self.query_manager
+            .register_query_with_id(
+                tracked,
+                session.id(),
+                username.to_string(),
+                session.space().map(|space| space.name),
+                stmt.to_string(),
+            )
+            .ok()?;
+        Some(tracked)
+    }
+
+    /// Close a tracked execution and bound the retained finished history.
+    pub(crate) fn finish_tracked_query(&self, query_id: Option<i64>, success: bool) {
+        if let Some(tracked) = query_id {
+            if success {
+                let _ = self.query_manager.finish_query(tracked);
+            } else {
+                let _ = self.query_manager.fail_query(tracked);
+            }
+            self.query_manager.cleanup_finished_queries(1000);
+        }
+    }
+
+    /// Route session-inspection statements to the live registries.
+    ///
+    /// SHOW SESSIONS, SHOW QUERIES, and KILL QUERY never reach the query
+    /// engine: the engine has no session-registry access, so the service
+    /// answers them directly after the standard permission gate.
+    pub(crate) async fn execute_session_inspection(
+        &self,
+        session_id: i64,
+        stmt: &str,
+        parsed: crate::query::parser::ast::Stmt,
+    ) -> Result<linkrs_api::api_core::QueryResult, super::error::GraphServiceError> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| {
+                super::error::GraphServiceError::new(format!("Invalid session ID: {}", session_id))
+            })?;
+        let space_id = session.space().map(|space| space.id as i64).unwrap_or(0);
+        let context = super::context::QueryExecutionContext {
+            stmt,
+            parsed_ast: None,
+            space_id,
+            parameters: None,
+            session_variables: None,
+        };
+        let username = session.user();
+        self.check_query_permission(&username, &context)?;
+        match parsed {
+            crate::query::parser::ast::Stmt::ShowSessions(_) => self.serve_show_sessions().await,
+            crate::query::parser::ast::Stmt::ShowQueries(_) => self.serve_show_queries(),
+            crate::query::parser::ast::Stmt::KillQuery(kill) => {
+                self.serve_kill_query(kill.session_id, kill.plan_id)
+            }
+            _ => Err(super::error::GraphServiceError::new(
+                "Statement is not a session inspection statement".to_string(),
+            )),
+        }
+    }
+
+    fn inspection_result(
+        rows: Vec<Vec<linkrs_core::Value>>,
+        columns: Vec<String>,
+    ) -> linkrs_api::api_core::QueryResult {
+        let returned = rows.len() as u64;
+        linkrs_api::api_core::QueryResult::new(
+            linkrs_query::executor::base::ExecutionResult::DataSet {
+                data: linkrs_core::DataSet::from_rows(rows, columns),
+            },
+            linkrs_api::api_core::types::ExecutionMetadata {
+                rows_returned: returned,
+                ..Default::default()
+            },
+        )
+    }
+}
+
+fn epoch_secs(time: std::time::SystemTime) -> i64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn query_status_name(status: linkrs_query::query_manager::QueryStatus) -> String {
+    match status {
+        linkrs_query::query_manager::QueryStatus::Running => "running".to_string(),
+        linkrs_query::query_manager::QueryStatus::Finished => "finished".to_string(),
+        linkrs_query::query_manager::QueryStatus::Failed => "failed".to_string(),
+        linkrs_query::query_manager::QueryStatus::Killed => "killed".to_string(),
+    }
+}
+
+fn live_duration_ms(info: &linkrs_query::query_manager::QueryInfo) -> i64 {
+    if let Some(elapsed) = info.duration_ms {
+        return elapsed;
+    }
+    std::time::SystemTime::now()
+        .duration_since(info.start_time)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
 }

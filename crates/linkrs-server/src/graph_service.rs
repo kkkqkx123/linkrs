@@ -158,6 +158,18 @@ mod tests {
             Some(linkrs_core::Permission::Write)
         );
         assert_eq!(
+            permission("SHOW SESSIONS"),
+            Some(linkrs_core::Permission::Admin)
+        );
+        assert_eq!(
+            permission("SHOW QUERIES"),
+            Some(linkrs_core::Permission::Read)
+        );
+        assert_eq!(
+            permission("KILL QUERY 1, 2"),
+            Some(linkrs_core::Permission::Admin)
+        );
+        assert_eq!(
             permission("MATCH (n) RETURN n"),
             Some(linkrs_core::Permission::Read)
         );
@@ -477,6 +489,99 @@ mod tests {
             Some(fixture.space_id as u64),
             "streaming space switch must bind the session space",
         );
+    }
+
+    #[tokio::test]
+    async fn session_inspection_serves_live_registries() {
+        let fixture = MaintenanceTestService::new().await;
+        let service = &fixture.service;
+        let admin = fixture
+            .session_with_role("inspect_admin", linkrs_core::RoleType::Admin)
+            .await;
+        let user = fixture
+            .session_with_role("inspect_user", linkrs_core::RoleType::User)
+            .await;
+
+        // SHOW SESSIONS requires Admin and lists the caller's own row.
+        let sessions = service
+            .execute(admin, "SHOW SESSIONS")
+            .await
+            .expect("admin lists sessions");
+        assert!(sessions
+            .columns()
+            .contains(&"session_id".to_string()));
+        assert!(
+            sessions.rows().iter().any(|row| row.first()
+                .is_some_and(|value| *value == linkrs_core::Value::BigInt(admin))),
+            "own session row must be present"
+        );
+        let denied = service
+            .execute(user, "SHOW SESSIONS")
+            .await
+            .expect_err("user must not list sessions");
+        assert!(
+            denied.message().contains("Permission check failed"),
+            "unexpected error: {}",
+            denied.message()
+        );
+
+        // SHOW QUERIES is readable and empty while nothing runs.
+        let queries = service
+            .execute(user, "SHOW QUERIES")
+            .await
+            .expect("user lists queries");
+        assert!(queries.columns().contains(&"query_id".to_string()));
+        assert!(queries.rows().is_empty());
+
+        // A tracked stand-in is killable through the statement path; the
+        // second attempt reports the non-running state.
+        service
+            .query_manager()
+            .register_query_with_id(
+                424201,
+                admin,
+                "inspect_admin".to_string(),
+                None,
+                "MATCH (n) RETURN n".to_string(),
+            )
+            .expect("register tracked query");
+        let killed = service
+            .execute(admin, &format!("KILL QUERY {admin}, 424201"))
+            .await
+            .expect("kill tracked query");
+        assert_eq!(
+            killed.columns(),
+            &[
+                "session_id".to_string(),
+                "query_id".to_string(),
+                "status".to_string()
+            ]
+        );
+        assert_eq!(killed.rows().len(), 1);
+        let repeat = service
+            .execute(admin, &format!("KILL QUERY {admin}, 424201"))
+            .await
+            .expect_err("repeat kill must fail");
+        assert!(
+            repeat.message().contains("not running"),
+            "unexpected error: {}",
+            repeat.message()
+        );
+        let foreign = service
+            .execute(admin, "KILL QUERY 999999, 424201")
+            .await
+            .expect_err("unknown session must fail");
+        assert!(
+            foreign.message().contains("does not exist"),
+            "unexpected error: {}",
+            foreign.message()
+        );
+
+        // The streaming entry reroutes inspection to the same path.
+        service
+            .execute_stream(admin, "SHOW SESSIONS")
+            .await
+            .expect("streaming inspection must execute");
     }
 
     #[test]

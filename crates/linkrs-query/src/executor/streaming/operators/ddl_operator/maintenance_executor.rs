@@ -104,45 +104,39 @@ pub(super) fn execute_show_configs(
 pub(super) fn execute_show_queries(
     op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let super::DdlOperatorKind::ShowQueries {
-        storage,
-        space_name: _,
-        emitted,
-    } = &mut op.kind
-    else {
+    let super::DdlOperatorKind::ShowQueries { emitted, .. } = &mut op.kind else {
         return Ok(None);
     };
-    let _ = storage;
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    Ok(Some(super::make_single_row(
-        super::make_single_col_schema("queries", "string"),
-        vec![],
-    )))
+    // Session-scoped query tracking lives in the server session service;
+    // the engine has no registry access here, so report the boundary
+    // instead of an empty placeholder that reads as "no queries".
+    Err(QueryError::execution(
+        "SHOW QUERIES is served by the network service from live query tracking and is not available in this execution path; use the unary query endpoint"
+            .to_string(),
+    ))
 }
 
 pub(super) fn execute_show_sessions(
     op: &mut super::DdlOperator,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let super::DdlOperatorKind::ShowSessions {
-        storage,
-        space_name: _,
-        emitted,
-    } = &mut op.kind
-    else {
+    let super::DdlOperatorKind::ShowSessions { emitted, .. } = &mut op.kind else {
         return Ok(None);
     };
-    let _ = storage;
     if *emitted {
         return Ok(None);
     }
     *emitted = true;
-    Ok(Some(super::make_single_row(
-        super::make_single_col_schema("sessions", "string"),
-        vec![],
-    )))
+    // Session state lives in the server session manager; the engine has
+    // no access to it, so report the boundary instead of an empty
+    // placeholder that reads as "no sessions".
+    Err(QueryError::execution(
+        "SHOW SESSIONS is served by the network service from the live session registry and is not available in this execution path; use the unary query endpoint"
+            .to_string(),
+    ))
 }
 
 pub(super) fn execute_show_functions(
@@ -785,10 +779,13 @@ pub(super) fn execute_analyze(
         }
         "tag" | "edge" => {
             let name = target_name.as_deref().unwrap_or("");
-            Ok(Some(super::make_manage_result(
-                "analyze",
-                Some(name),
-                "executed",
+            // Per-tag/edge statistics collection has no storage
+            // implementation behind it; fail loudly instead of reporting a
+            // success that collected nothing. Whole-space collection runs
+            // on the ANALYZE fast path before planning reaches this operator.
+            Err(QueryError::execution(format!(
+                "ANALYZE for tag/edge '{}' is not supported; use ANALYZE [SPACE <name>] for whole-space statistics collection",
+                name
             )))
         }
         _ => Err(QueryError::execution(format!(

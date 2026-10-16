@@ -886,8 +886,8 @@ fn test_kill_query_execution() {
     match result {
         Ok(_) => panic!("KILL QUERY should not execute in the embedded pipeline"),
         Err(e) => assert!(
-            format!("{e:?}").contains("not supported"),
-            "KILL QUERY should report unsupported, got: {e:?}"
+            format!("{e:?}").contains("is not plannable here"),
+            "KILL QUERY should report the service boundary, got: {e:?}"
         ),
     };
 }
@@ -1133,10 +1133,12 @@ fn test_show_execution_sessions() {
     let query = "SHOW SESSIONS";
     let result = pipeline_manager.execute_query(query);
 
+    // Session state lives in the network service; the engine reports the
+    // boundary instead of an empty placeholder.
     assert!(
-        result.is_ok(),
-        "Execution should return Ok result: {:?}",
-        result.err()
+        result.is_err(),
+        "SHOW SESSIONS must not succeed in the embedded pipeline: {:?}",
+        result.ok()
     );
 }
 
@@ -1155,10 +1157,12 @@ fn test_show_execution_queries() {
     let query = "SHOW QUERIES";
     let result = pipeline_manager.execute_query(query);
 
+    // Query tracking lives in the network service; the engine reports the
+    // boundary instead of an empty placeholder.
     assert!(
-        result.is_ok(),
-        "Execution should return Ok result: {:?}",
-        result.err()
+        result.is_err(),
+        "SHOW QUERIES must not succeed in the embedded pipeline: {:?}",
+        result.ok()
     );
 }
 
@@ -1279,19 +1283,23 @@ fn test_management_show_operations() {
 
     // SHOW TAGS / SHOW EDGES require a selected space; they are covered
     // with space context in test_show_execution_tags/edges.
-    let show_queries = [
-        "SHOW SPACES",
-        "SHOW SESSIONS",
-        "SHOW QUERIES",
-        "SHOW CONFIGS",
-    ];
-
-    for query in &show_queries {
+    // SHOW SESSIONS / SHOW QUERIES are served from the network service
+    // registries and report the service boundary in the embedded pipeline.
+    for query in &["SHOW SPACES", "SHOW CONFIGS"] {
         let result = pipeline_manager.execute_query(query);
         assert!(
             result.is_ok(),
             "Execution should return Ok result: {:?}",
             result.err()
+        );
+    }
+
+    for query in &["SHOW SESSIONS", "SHOW QUERIES"] {
+        let result = pipeline_manager.execute_query(query);
+        assert!(
+            result.is_err(),
+            "{query} must report the service boundary: {:?}",
+            result.ok()
         );
     }
 }
@@ -1406,8 +1414,8 @@ fn test_management_kill_query_operations() {
         match result {
             Ok(_) => panic!("{query} should not execute in the embedded pipeline"),
             Err(e) => assert!(
-                format!("{e:?}").contains("not supported"),
-                "{query} should report unsupported, got: {e:?}"
+                format!("{e:?}").contains("is not plannable here"),
+                "{query} should report the service boundary, got: {e:?}"
             ),
         };
     }
@@ -1564,9 +1572,9 @@ fn test_management_combined_operations() {
         .query("SHOW TAGS")
         .assert_success()
         .query("SHOW SESSIONS")
-        .assert_success()
+        .assert_error()
         .query("SHOW QUERIES")
-        .assert_success()
+        .assert_error()
         .query("SHOW CONFIGS")
         .assert_success()
         .query("EXPLAIN MATCH (n:Person) RETURN n")
@@ -1866,9 +1874,9 @@ fn test_new_management_features() {
         .query("PROFILE MATCH (n:Person) RETURN n LIMIT 10")
         .assert_success()
         .query("SHOW SESSIONS")
-        .assert_success()
+        .assert_error()
         .query("SHOW QUERIES")
-        .assert_success()
+        .assert_error()
         .query("SHOW CONFIGS")
         .assert_success()
         .query("SHOW CONFIGS storage")

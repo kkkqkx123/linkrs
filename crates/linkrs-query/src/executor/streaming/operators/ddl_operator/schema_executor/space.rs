@@ -305,15 +305,31 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        SpaceManageCommand::Checkpoint => super::super::exec_auth(storage, |s| {
-            let result = s
+        SpaceManageCommand::Checkpoint => {
+            let Some(lock) = storage else {
+                return Ok(Some(super::super::make_manage_result(
+                    "auth",
+                    Some(""),
+                    "no-storage",
+                )));
+            };
+            let writer = lock.write();
+            let outcome = writer
                 .create_checkpoint()
                 .map_err(|e| QueryError::execution(format!("Checkpoint failed: {}", e)))?;
-            match result {
-                Some(_stats) => Ok(()),
-                None => Ok(()),
-            }
-        }),
+            // A present storage without persistence returns no snapshot;
+            // report it as a no-op instead of masking it as executed.
+            let status = if outcome.is_some() {
+                "executed"
+            } else {
+                "no-storage"
+            };
+            Ok(Some(super::super::make_manage_result(
+                "auth",
+                Some(""),
+                status,
+            )))
+        }
         SpaceManageCommand::ExportDatabase { path } => {
             super::super::exec_auth(storage, |s| {
                 let export_path = std::path::Path::new(path);

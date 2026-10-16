@@ -2,7 +2,8 @@
 
 本文档列出了 Linkrs 查询语言中所有保留关键字。保留关键字不能用作**属性名**、**标签名**、**边类型名**或**标识符**。
 
-> 关键字表来源：词法器 `lookup_keyword`（`crates/linkrs-query/src/parser/lexing/lexer/token.rs`），与代码一一对应。
+> 关键字表来源：词法器 `lookup_keyword`（`crates/linkrs-query/src/parser/lexing/lexer/token.rs`），与代码一一对应；
+> 上下文软关键字（`GRAPH`、`CHECKPOINT`、`PURGE`、`EXPIRED`）不在该映射内，见第 13 节末尾说明。
 
 ---
 
@@ -295,6 +296,12 @@
 | `DIVIDE`               | `Divide`               | 切分操作                    |
 
 > 注意：`BALANCE` 在词法器中被映射为 `Tk::Identifier("balance")`，**不是**保留关键字，可作为普通标识符使用。
+
+> 软关键字：`GRAPH`、`CHECKPOINT`、`PURGE`、`EXPIRED` 没有独立 TokenKind，
+> 以标识符形态参与词法、凭上下文关键字匹配生效，因此在无关位置仍可用作标识符。
+> 例外：`USE graph` 表示切换到名为 `graph` 的空间（`GRAPH` 仅在后跟另一标识符时
+> 作为 `USE GRAPH <name>` 别名前缀）；`SPACE`（单数）是保留关键字，不可直接用作
+> 裸标识符，而 `GRAPH` 可以。
 
 ## 14. 特殊引用
 

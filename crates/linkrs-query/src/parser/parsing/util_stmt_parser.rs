@@ -28,8 +28,25 @@ impl UtilStmtParser {
         // `SPACE` is intentionally not consumed here: it stays a legal
         // space name in USE position, unlike CREATE/DROP where SPACE is
         // the object keyword (see ddl_parser::consume_space_or_graph).
+        // A lone `USE graph` names the space `graph`: GRAPH only acts as
+        // the alias keyword when another identifier follows it.
         if ctx.check_keyword("GRAPH") {
+            let graph_word = ctx.current_token().lexeme.clone();
             ctx.consume_keyword("GRAPH")?;
+            match ctx.expect_identifier() {
+                Ok(space) => {
+                    return Ok(Stmt::Use(UseStmt {
+                        span: start_span,
+                        space,
+                    }));
+                }
+                Err(_) => {
+                    return Ok(Stmt::Use(UseStmt {
+                        span: start_span,
+                        space: graph_word,
+                    }));
+                }
+            }
         }
 
         let space = ctx.expect_identifier()?;

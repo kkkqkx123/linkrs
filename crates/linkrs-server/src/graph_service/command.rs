@@ -323,7 +323,7 @@ impl<
             }
         });
 
-        self.run_query_plan(&session, context, transaction_id, execution, consistency)
+        self.run_query_plan(&session, context, transaction_id, execution, consistency, None)
     }
 
     /// Execute a `LET $name = expr` session-variable assignment.

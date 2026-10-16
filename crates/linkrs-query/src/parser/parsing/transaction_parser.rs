@@ -81,7 +81,10 @@ impl TransactionParser {
 
     /// Parse ROLLBACK TRANSACTION statement
     ///
-    /// Grammar: `ROLLBACK [TRANSACTION] [TO <savepoint-name>]`
+    /// Grammar: `ROLLBACK [TRANSACTION] [TO [SAVEPOINT] <savepoint-name>]`.
+    /// The SAVEPOINT keyword is optional; a savepoint literally named
+    /// `savepoint` is unreachable because the name position never accepts
+    /// the reserved word (see `expect_identifier`).
     pub fn parse_rollback_transaction(
         &mut self,
         ctx: &mut ParseContext,
@@ -95,6 +98,7 @@ impl TransactionParser {
 
         let savepoint_name = if ctx.check_token(TokenKind::To) {
             ctx.expect_token(TokenKind::To)?;
+            ctx.match_token(TokenKind::Savepoint);
             Some(ctx.expect_identifier()?)
         } else {
             None

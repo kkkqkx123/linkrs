@@ -107,18 +107,22 @@ fn test_show_parts() {
 
 #[test]
 fn test_show_sessions() {
+    // Served from the live session registry in the network service; the
+    // embedded pipeline parses but reports the service boundary.
     TestScenario::new()
         .expect("Failed to create test scenario")
         .query("SHOW SESSIONS")
-        .assert_success();
+        .assert_error();
 }
 
 #[test]
 fn test_show_queries() {
+    // Served from live query tracking in the network service; the
+    // embedded pipeline parses but reports the service boundary.
     TestScenario::new()
         .expect("Failed to create test scenario")
         .query("SHOW QUERIES")
-        .assert_success();
+        .assert_error();
 }
 
 #[test]
@@ -195,6 +199,21 @@ fn test_profile_match() {
         .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
         .assert_success()
         .query("PROFILE MATCH (n:Person) RETURN n")
+        .assert_success();
+}
+
+#[test]
+fn test_profile_format_dot() {
+    // DOT renders the profiled plan as a graph instead of the
+    // per-operator TABLE rows.
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .assert_success()
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30), 2:('Bob', 25)")
+        .assert_success()
+        .query("PROFILE FORMAT = DOT MATCH (n:Person) RETURN n")
         .assert_success();
 }
 

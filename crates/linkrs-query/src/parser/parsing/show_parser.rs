@@ -42,10 +42,16 @@ impl ShowParser {
             Ok(Stmt::ShowQueries(ShowQueriesStmt { span }))
         } else if ctx.check_token(TokenKind::Configs) {
             ctx.expect_token(TokenKind::Configs)?;
-            let module = if ctx.is_identifier_or_in_token() {
-                Some(ctx.expect_identifier()?)
-            } else {
-                None
+            // Module names share the identifier vocabulary with UPDATE
+            // CONFIGS (reserved words like `transaction` included): probe
+            // with a checkpoint so bare `SHOW CONFIGS` consumes nothing.
+            let ckpt = ctx.checkpoint();
+            let module = match ctx.expect_identifier() {
+                Ok(name) => Some(name),
+                Err(_) => {
+                    ctx.restore(ckpt);
+                    None
+                }
             };
             let span = ctx.span_since(start_span.start);
             Ok(Stmt::ShowConfigs(ShowConfigsStmt { span, module }))

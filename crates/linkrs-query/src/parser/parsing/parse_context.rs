@@ -486,9 +486,11 @@ impl<'a> ParseContext<'a> {
                 self.next_token();
                 Ok(s)
             }
-            // Reserved words commonly used as tag/property names (e.g.
-            // `CREATE TAG ... (data STRING)`, `MATCH (:transaction)`).
-            TokenKind::Data | TokenKind::Transaction => {
+            // Reserved words usable as tag/property names (e.g.
+            // `CREATE TAG ... (data STRING)`, `MATCH (:transaction)`)
+            // and as configuration module/key names (e.g.
+            // `SHOW CONFIGS transaction`, `UPDATE CONFIGS database host`).
+            TokenKind::Data | TokenKind::Transaction | TokenKind::Host => {
                 let s = self.current_token.lexeme.clone();
                 self.next_token();
                 Ok(s)

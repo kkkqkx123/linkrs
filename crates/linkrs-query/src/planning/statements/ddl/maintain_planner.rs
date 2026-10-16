@@ -121,6 +121,12 @@ impl Planner for MaintainPlanner {
 
             Stmt::ShowSessions(_) => system::plan_show_sessions(),
 
+            Stmt::KillQuery(_) => {
+                return Err(PlannerError::UnsupportedOperation(
+                    "KILL QUERY executes in the network service against live query tracking and is not plannable here; use the unary query endpoint with a query id from SHOW QUERIES".to_string(),
+                ));
+            }
+
             Stmt::BeginTransaction(_) => system::plan_begin_transaction(),
 
             Stmt::CommitTransaction(_) => system::plan_commit(),

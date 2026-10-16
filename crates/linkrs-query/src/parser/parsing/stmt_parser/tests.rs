@@ -569,6 +569,56 @@ fn test_parse_show_configs_with_module() {
 }
 
 #[test]
+fn test_parse_show_configs_all_service_modules() {
+    // Every module in the service vocabulary parses, including reserved
+    // words like `transaction` that share the identifier vocabulary with
+    // UPDATE CONFIGS.
+    for module in [
+        "database",
+        "transaction",
+        "log",
+        "auth",
+        "bootstrap",
+        "http",
+        "security",
+        "optimizer",
+        "monitoring",
+    ] {
+        let text = format!("SHOW CONFIGS {module}");
+        let mut ctx = create_parser_context(&text);
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_ok(),
+            "SHOW CONFIGS {module} parse failure: {:?}",
+            result.err()
+        );
+
+        if let Ok(Stmt::ShowConfigs(stmt)) = result {
+            assert_eq!(stmt.module, Some(module.to_string()));
+        } else {
+            panic!("Expected ShowConfigs statement");
+        }
+    }
+}
+
+#[test]
+fn test_parse_show_configs_bare_has_no_module() {
+    let mut ctx = create_parser_context("SHOW CONFIGS");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "SHOW CONFIGS parse failure: {:?}",
+        result.err()
+    );
+
+    if let Ok(Stmt::ShowConfigs(stmt)) = result {
+        assert!(stmt.module.is_none());
+    } else {
+        panic!("Expected ShowConfigs statement");
+    }
+}
+
+#[test]
 fn test_parse_update_configs() {
     let mut ctx = create_parser_context("UPDATE CONFIGS max_sessions = 100");
     let result = StmtParser::parse_statement(&mut ctx);
@@ -601,6 +651,71 @@ fn test_parse_update_configs_with_module() {
         assert_eq!(stmt.config_name, "cache_size");
     } else {
         panic!("Expected UpdateConfigs statement");
+    }
+}
+
+#[test]
+fn test_parse_update_configs_reserved_key_name() {
+    // `host` is a reserved word but a settable `database` key.
+    let mut ctx = create_parser_context("UPDATE CONFIGS database host = '127.0.0.1'");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "UPDATE CONFIGS database host parse failure: {:?}",
+        result.err()
+    );
+
+    if let Ok(Stmt::UpdateConfigs(stmt)) = result {
+        assert_eq!(stmt.module, Some("database".to_string()));
+        assert_eq!(stmt.config_name, "host");
+    } else {
+        panic!("Expected UpdateConfigs statement");
+    }
+}
+
+#[test]
+fn test_parse_use_graph_space_name() {
+    // A lone `USE graph` names the space; GRAPH only acts as the alias
+    // keyword when another identifier follows it.
+    let mut ctx = create_parser_context("USE graph");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(result.is_ok(), "USE graph parse failure: {:?}", result.err());
+    if let Ok(Stmt::Use(stmt)) = result {
+        assert_eq!(stmt.space, "graph");
+    } else {
+        panic!("Expected Use statement");
+    }
+
+    let mut ctx = create_parser_context("USE GRAPH basketball");
+    let result = StmtParser::parse_statement(&mut ctx);
+    assert!(
+        result.is_ok(),
+        "USE GRAPH basketball parse failure: {:?}",
+        result.err()
+    );
+    if let Ok(Stmt::Use(stmt)) = result {
+        assert_eq!(stmt.space, "basketball");
+    } else {
+        panic!("Expected Use statement");
+    }
+}
+
+#[test]
+fn test_parse_rollback_savepoint_keyword_optional() {
+    for query in [
+        "ROLLBACK TO sp1",
+        "ROLLBACK TO SAVEPOINT sp1",
+        "ROLLBACK TRANSACTION TO sp1",
+        "ROLLBACK TRANSACTION TO SAVEPOINT sp1",
+    ] {
+        let mut ctx = create_parser_context(query);
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(result.is_ok(), "{query} parse failure: {:?}", result.err());
+        if let Ok(Stmt::RollbackTransaction(stmt)) = result {
+            assert_eq!(stmt.savepoint_name, Some("sp1".to_string()));
+        } else {
+            panic!("Expected RollbackTransaction statement");
+        }
     }
 }
 

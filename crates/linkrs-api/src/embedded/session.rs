@@ -167,6 +167,24 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         self.function_registry.read().list_dynamic_udfs()
     }
 
+    /// Configuration statements resolve against the server-owned config
+    /// store, which embedded sessions do not have: the pipeline emits an
+    /// unresolved intent that would otherwise surface as empty rows.
+    fn reject_server_only_config_intent(
+        result: &crate::api_core::QueryResult,
+    ) -> CoreResult<()> {
+        use linkrs_query::executor::base::ExecutionResult;
+        match &result.execution {
+            ExecutionResult::ShowConfigs { .. } | ExecutionResult::ConfigUpdate { .. } => {
+                Err(CoreError::InvalidParameter(
+                    "SHOW CONFIGS and UPDATE CONFIGS require the server unary query interface and are not supported in embedded sessions"
+                        .to_string(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Execute an extension management statement
     /// (`LOAD EXTENSION` / `INSTALL EXTENSION` / `UNINSTALL EXTENSION` /
     /// `UPDATE EXTENSION`).
@@ -840,6 +858,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         } else {
             query_api.execute(query, ctx)?
         };
+        Self::reject_server_only_config_intent(&result)?;
 
         // Update statistical information
         self.statistics
@@ -1077,6 +1096,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             let mut query_api = self.db.query_api.write();
             query_api.execute_with_execution(query, query_ctx, &execution)?
         };
+        Self::reject_server_only_config_intent(&result)?;
         txn_manager
             .finish_statement(&ctx, statement_start)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))?;
@@ -1248,6 +1268,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         } else {
             query_api.execute(query, ctx)?
         };
+        Self::reject_server_only_config_intent(&result)?;
 
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);
@@ -1322,6 +1343,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         } else {
             query_api.execute(query, ctx)?
         };
+        Self::reject_server_only_config_intent(&result)?;
 
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);
