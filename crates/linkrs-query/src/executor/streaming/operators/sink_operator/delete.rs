@@ -222,6 +222,7 @@ pub(super) fn handle_pipe_delete_vertices(
         space_name,
         vertex_id_col,
         cascade,
+        vertex_id_is_literal,
         rows_deleted,
         summary_returned,
         ..
@@ -235,6 +236,11 @@ pub(super) fn handle_pipe_delete_vertices(
     if *summary_returned {
         return Ok(None);
     }
+    if *vertex_id_is_literal {
+        return Err(QueryError::execution(
+            "Pipe DELETE VERTEX requires a vertex value with tag; bare id is illegal".to_string(),
+        ));
+    }
 
     while let Some(mut chunk) = input.advance()? {
         chunk.normalize_for_opaque("Sink");
@@ -247,34 +253,31 @@ pub(super) fn handle_pipe_delete_vertices(
 
             for row in &chunk.rows {
                 let context = ValueRowContext::new(row.clone(), layout.clone());
-                if let Some(vid_val) = context.get_variable(vertex_id_col) {
-                    if matches!(vid_val, Value::Null(_)) {
-                        continue;
-                    }
-                    let (tag, vid) = match &vid_val {
-                        Value::Vertex(vertex) => (vertex.tag.name.clone(), vertex.vid),
-                        _ => {
-                            return Err(QueryError::execution(
-                                "Pipe DELETE VERTEX requires a vertex value with tag; bare id is illegal".to_string(),
-                            ));
-                        }
-                    };
-                    {
-                        if *cascade {
-                            StorageWriter::delete_vertex_with_edges(
-                                &mut *writer,
-                                space_name,
-                                &tag,
-                                &vid,
-                            )
-                            .map_err(|e| QueryError::execution(e.to_string()))?;
-                        } else {
-                            StorageWriter::delete_vertex(&mut *writer, space_name, &tag, &vid)
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                        }
-                        *rows_deleted += 1;
-                    }
+                let Some(vid_val) = context.get_variable(vertex_id_col) else {
+                    return Err(QueryError::execution(
+                        "Pipe DELETE VERTEX requires a vertex value with tag; bare id is illegal"
+                            .to_string(),
+                    ));
+                };
+                if matches!(vid_val, Value::Null(_)) {
+                    continue;
                 }
+                let (tag, vid) = match &vid_val {
+                    Value::Vertex(vertex) => (vertex.tag.name.clone(), vertex.vid),
+                    _ => {
+                        return Err(QueryError::execution(
+                            "Pipe DELETE VERTEX requires a vertex value with tag; bare id is illegal".to_string(),
+                        ));
+                    }
+                };
+                if *cascade {
+                    StorageWriter::delete_vertex_with_edges(&mut *writer, space_name, &tag, &vid)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                } else {
+                    StorageWriter::delete_vertex(&mut *writer, space_name, &tag, &vid)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                }
+                *rows_deleted += 1;
             }
         } else {
             *rows_deleted += chunk.rows.len() as u64;

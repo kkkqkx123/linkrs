@@ -62,3 +62,71 @@ fn test_standalone_remove_rejected() {
     );
     scenario.assert_error();
 }
+
+#[test]
+fn test_standalone_set_variable_target_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("SET p.age = 31");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+        "standalone SET on a variable target should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_standalone_set_bare_property_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("SET age = 31");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+        "standalone SET on a bare property should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_standalone_set_map_overwrite_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("SET p = {age: 31}");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+        "standalone SET with a whole-map target should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_standalone_set_mixed_map_and_property_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("SET v = {age: 31}, name = 'Bob'");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+        "standalone SET mixing map overwrite and property assignment should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}

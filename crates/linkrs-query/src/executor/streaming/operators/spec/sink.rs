@@ -65,6 +65,7 @@ pub enum SinkSpec {
         space_name: String,
         vertex_id_col: String,
         cascade: bool,
+        vertex_id_is_literal: bool,
     },
     PipeDeleteEdges {
         space_name: String,

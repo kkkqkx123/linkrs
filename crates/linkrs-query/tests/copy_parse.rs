@@ -68,3 +68,25 @@ fn test_copy_parsing() {
         }
     }
 }
+
+#[test]
+fn test_copy_batch_size_boundary_parse_layers() {
+    // A negative batch size is rejected by the parser; zero parses and is
+    // rejected later at plan time (`COPY batch_size must be > 0`, covered
+    // in `copy_e2e.rs`).
+    let mut negative = Parser::new("COPY VERTEX person FROM \"data.csv\" WITH BATCH_SIZE -1");
+    assert!(
+        negative.parse().is_err() || negative.has_errors(),
+        "negative BATCH_SIZE should fail at parse level"
+    );
+
+    let mut zero = Parser::new("COPY VERTEX person FROM \"data.csv\" WITH BATCH_SIZE 0");
+    let parsed = zero.parse().expect("BATCH_SIZE 0 should parse");
+    assert!(!zero.has_errors());
+    match parsed.ast.stmt() {
+        linkrs_query::parser::ast::Stmt::Copy(copy) => {
+            assert_eq!(copy.batch_size, Some(0));
+        }
+        _ => panic!("NOT COPY"),
+    }
+}

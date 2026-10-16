@@ -110,15 +110,16 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_pipe_delete_ver
     node: &crate::planning::plan::core::nodes::data_modification::delete_nodes::PipeDeleteVerticesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
-    let vertex_id_col = node
-        .vertex_ids()
-        .first()
+    let first = node.vertex_ids().first();
+    let vertex_id_col = first
         .and_then(pipe_reference_column)
         .unwrap_or_else(|| "vid".to_string());
+    let vertex_id_is_literal = first.and_then(pipe_reference_column).is_none();
     Ok(SinkSpec::PipeDeleteVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         vertex_id_col,
         cascade: node.cascade(),
+        vertex_id_is_literal,
     })
 }
 

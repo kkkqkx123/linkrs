@@ -124,6 +124,13 @@ impl MergePlanner {
                         let mut names = Vec::new();
                         let mut values = Vec::new();
                         for (key, value) in entries {
+                            if !Self::is_constant_expression(&value) {
+                                return Err(PlannerError::PlanGenerationFailed(format!(
+                                    "MERGE pattern property '{}' must be a constant expression; \
+                                     row variables, property references, and subqueries are not allowed",
+                                    key
+                                )));
+                            }
                             names.push(key.clone());
                             let value_meta = ExpressionMeta::new(value.clone());
                             let value_id = expr_context.register_expression(value_meta);
@@ -160,6 +167,54 @@ impl MergePlanner {
         matches!(pattern, Pattern::Edge(_))
     }
 
+    /// Returns `true` when the expression is a compile-time constant that can
+    /// be used as a MERGE pattern property value. Literals, query parameters
+    /// and session variables are accepted (mirroring the standalone UPDATE
+    /// vid contract); row variables, property references, function calls
+    /// and subqueries are rejected.
+    fn is_constant_expression(expr: &Expression) -> bool {
+        match expr {
+            Expression::Literal(_)
+            | Expression::Parameter(_)
+            | Expression::SessionVariable(_)
+            | Expression::Vector(_) => true,
+            Expression::List(items) => items.iter().all(Self::is_constant_expression),
+            Expression::Map(entries) => {
+                entries.iter().all(|(_, v)| Self::is_constant_expression(v))
+            }
+            Expression::Binary { left, right, .. } => {
+                Self::is_constant_expression(left) && Self::is_constant_expression(right)
+            }
+            Expression::Unary { operand, .. } => Self::is_constant_expression(operand),
+            Expression::TypeCast { expression, .. } => Self::is_constant_expression(expression),
+            _ => false,
+        }
+    }
+
+    /// Bound-statement counterpart of [`is_constant_expression`]: after DML
+    /// shape normalization every literal leaf reaches the planner as a
+    /// `@__dml_N` parameter, so any `ParameterRef` is accepted here while
+    /// row variables, property references and subqueries are rejected.
+    fn is_constant_bound_expression(expr: &crate::binder::bound::BoundExpression) -> bool {
+        use crate::binder::bound::BoundExpression;
+        match expr {
+            BoundExpression::Literal(..)
+            | BoundExpression::ParameterRef(..)
+            | BoundExpression::SessionVariable(..) => true,
+            BoundExpression::List(items, _) => items.iter().all(Self::is_constant_bound_expression),
+            BoundExpression::Map(entries, _) => entries
+                .iter()
+                .all(|(_, v)| Self::is_constant_bound_expression(v)),
+            BoundExpression::BinaryOp { left, right, .. } => {
+                Self::is_constant_bound_expression(left)
+                    && Self::is_constant_bound_expression(right)
+            }
+            BoundExpression::UnaryOp { operand, .. } => Self::is_constant_bound_expression(operand),
+            BoundExpression::Cast { expr, .. } => Self::is_constant_bound_expression(expr),
+            _ => false,
+        }
+    }
+
     fn extract_properties_and_vid(
         &self,
         props_expr: &ContextualExpression,
@@ -170,6 +225,13 @@ impl MergePlanner {
             let mut prop_values = Vec::new();
 
             for (key, value) in entries {
+                if !Self::is_constant_expression(&value) {
+                    return Err(PlannerError::PlanGenerationFailed(format!(
+                        "MERGE pattern property '{}' must be a constant expression; \
+                         row variables, property references, and subqueries are not allowed",
+                        key
+                    )));
+                }
                 prop_names.push(key.clone());
 
                 let value_meta = ExpressionMeta::new(value.clone());
@@ -314,6 +376,13 @@ impl MergePlanner {
                 let mut names = Vec::new();
                 let mut values = Vec::new();
                 for (key, bound_expr) in props {
+                    if !Self::is_constant_bound_expression(bound_expr) {
+                        return Err(PlannerError::PlanGenerationFailed(format!(
+                            "MERGE pattern property '{}' must be a constant expression; \
+                             row variables, property references, and subqueries are not allowed",
+                            key
+                        )));
+                    }
                     names.push(key.clone());
                     let ctx = bound_expr_to_contextual(bound_expr, expr_ctx)
                         .map_err(PlannerError::PlanGenerationFailed)?;

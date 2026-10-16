@@ -818,3 +818,120 @@ fn test_merge_on_match_map_overwrite_replaces_row() {
         .assert_vertex_props(1, "Person", expected)
         .assert_vertex_prop_absent(1, "Person", "name");
 }
+
+// ==================== MATCH...MERGE Parser Rejection Tests ====================
+
+#[test]
+fn test_match_merge_stays_rejected_at_parse() {
+    let query = "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) MERGE (a)-[r:KNOWS]->(b) SET r.weight = 1.0";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_err() || parser.has_errors(),
+        "MATCH...MERGE must stay rejected at parse level: {:?}",
+        result.err()
+    );
+}
+
+// ==================== MERGE Pattern Constant Contract Tests ====================
+
+#[test]
+fn test_merge_pattern_property_reference_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("MERGE (v:Person {name: v.name})");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("must be a constant expression")),
+        "MERGE pattern with a property reference should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+#[test]
+fn test_merge_pattern_variable_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id BIGINT, name STRING, age INT)")
+        .exec_dml("MERGE (v:Person {name: n})");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("must be a constant expression")),
+        "MERGE pattern with a row variable should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}
+
+// ==================== UPSERT Short-Form Residual Predicate with Rank Tests ====================
+
+#[test]
+fn test_upsert_edge_short_form_residual_with_rank_applies() {
+    let mut expected = HashMap::new();
+    expected.insert("since", Value::Int(2021));
+    expected.insert("degree", Value::Double(1.0));
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since INT, degree DOUBLE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml(
+            "INSERT EDGE KNOWS(since, degree) VALUES 1 -> 2 @0:(2020, 0.5), 1 -> 2 @1:(2021, 0.9)",
+        )
+        .assert_success()
+        .exec_dml("UPSERT EDGE 1 -> 2 @1 OF KNOWS SET degree = 1.0 WHERE degree < 1.0")
+        .assert_success()
+        .exec_dml("DELETE EDGE 1 -> 2 @0 OF KNOWS")
+        .assert_success()
+        .assert_edge_count("KNOWS", 1)
+        .assert_edge_props(1, 2, "KNOWS", expected);
+}
+
+#[test]
+fn test_upsert_edge_short_form_residual_miss_skips_update() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since INT, degree DOUBLE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(since, degree) VALUES 1 -> 2 @0:(2020, 0.5)")
+        .assert_success()
+        .exec_dml("UPSERT EDGE 1 -> 2 @0 OF KNOWS SET degree = 9.9 WHERE degree > 100.0")
+        .assert_success()
+        .assert_edge_count("KNOWS", 1)
+        .query("FETCH PROP ON KNOWS 1 -> 2 @0")
+        .assert_vertex_or_edge_has_property("degree", Value::Double(0.5));
+}
+
+#[test]
+fn test_upsert_edge_short_form_rank_insert_creates_rank() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since INT, degree DOUBLE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(since, degree) VALUES 1 -> 2 @0:(2020, 0.5)")
+        .assert_success()
+        .exec_dml("UPSERT EDGE 1 -> 2 @3 OF KNOWS SET degree = 0.7")
+        .assert_success()
+        .assert_edge_count("KNOWS", 2)
+        .exec_dml("DELETE EDGE 1 -> 2 @0 OF KNOWS")
+        .assert_success()
+        .assert_edge_count("KNOWS", 1)
+        .assert_edge_props(
+            1,
+            2,
+            "KNOWS",
+            HashMap::from([("degree", Value::Double(0.7))]),
+        );
+}

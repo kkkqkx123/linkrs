@@ -568,3 +568,39 @@ fn test_insert_vertex_empty_parens_vid_only() {
         .assert_success()
         .assert_vertex_exists(1, "Person");
 }
+
+// ==================== Empty Brackets Grammar Boundary Tests ====================
+
+#[test]
+fn test_insert_parser_empty_parens_accepted() {
+    let query = "INSERT VERTEX person() VALUES 1";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "INSERT VERTEX with empty brackets parsing should succeed: {:?}",
+        result.err()
+    );
+
+    let stmt = result.expect("INSERT statement parsing should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "INSERT");
+    assert!(!parser.has_errors());
+}
+
+#[test]
+fn test_insert_empty_parens_with_values_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person() VALUES 1:('Alice')");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("only writes vertex ids")),
+        "empty property list with values should fail, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}

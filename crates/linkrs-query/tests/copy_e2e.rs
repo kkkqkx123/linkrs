@@ -214,3 +214,23 @@ fn test_copy_to_export_roundtrip() {
 
     let _ = std::fs::remove_file(&out_path);
 }
+
+#[test]
+fn test_copy_zero_batch_size_rejected_at_plan() {
+    // BATCH_SIZE 0 parses but fails at plan time, before any file is
+    // touched, so a nonexistent path is sufficient here.
+    let scenario = TestScenario::new()
+        .unwrap()
+        .setup_space("test")
+        .exec_ddl("CREATE TAG person(id: INT, name: STRING, age: INT)")
+        .assert_success()
+        .query("COPY VERTEX person FROM '/tmp/definitely_missing_copy_input.csv' WITH HEADER BATCH_SIZE 0");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("COPY batch_size must be > 0")),
+        "BATCH_SIZE 0 should fail at plan time, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error();
+}

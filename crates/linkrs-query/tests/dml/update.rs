@@ -735,3 +735,75 @@ fn test_update_yield_rejected() {
     );
     scenario.assert_error();
 }
+
+// ==================== UPDATE EDGE Expression-Endpoint Grammar Tests ====================
+
+#[test]
+fn test_update_edge_expression_endpoints_parser() {
+    let query = "UPDATE EDGE v -> dst OF KNOWS SET degree = 1.0";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "UPDATE EDGE with expression endpoints parsing should succeed: {:?}",
+        result.err()
+    );
+
+    let stmt = result.expect("UPDATE statement parsing should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "UPDATE");
+}
+
+#[test]
+fn test_update_edge_expression_endpoints_with_rank_parser() {
+    let query = "UPDATE EDGE v -> dst @0 OF KNOWS SET degree = 1.0";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "UPDATE EDGE with expression endpoints and rank parsing should succeed: {:?}",
+        result.err()
+    );
+
+    let stmt = result.expect("UPDATE statement parsing should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "UPDATE");
+}
+
+#[test]
+fn test_update_edge_variable_endpoints_execution_rejected() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since INT)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .assert_success()
+        .exec_dml("UPDATE EDGE v -> dst OF KNOWS SET since = 2024")
+        .assert_error();
+}
+
+// ==================== UPDATE EDGE Mixed Map Overwrite with Rank Tests ====================
+
+#[test]
+fn test_update_edge_mixed_map_and_property_with_rank() {
+    let mut expected = HashMap::new();
+    expected.insert("degree", Value::Double(1.0));
+    expected.insert("since", Value::Int(2022));
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since INT, degree DOUBLE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml(
+            "INSERT EDGE KNOWS(since, degree) VALUES 1 -> 2 @0:(2020, 0.5), 1 -> 2 @1:(2021, 0.9)",
+        )
+        .assert_success()
+        .exec_dml("UPDATE EDGE 1 -> 2 @1 OF KNOWS SET e = {degree: 1.0}, since = 2022")
+        .assert_success()
+        .exec_dml("DELETE EDGE 1 -> 2 @0 OF KNOWS")
+        .assert_success()
+        .assert_edge_count("KNOWS", 1)
+        .assert_edge_props(1, 2, "KNOWS", expected);
+}

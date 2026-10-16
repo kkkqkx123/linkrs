@@ -704,3 +704,97 @@ fn test_update_edge_rank_honored() {
             std::collections::HashMap::from([("strength", linkrs_core::Value::Double(0.5))]),
         );
 }
+
+// ==================== DELETE EDGE Expression-Endpoint Grammar Tests ====================
+
+#[test]
+fn test_delete_edge_expression_endpoints_parser() {
+    let query = "DELETE EDGE v -> dst OF KNOWS";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "DELETE EDGE with expression endpoints parsing should succeed: {:?}",
+        result.err()
+    );
+
+    let stmt = result.expect("DELETE statement parsing should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "DELETE");
+}
+
+#[test]
+fn test_delete_edge_expression_endpoints_with_rank_parser() {
+    let query = "DELETE EDGE v -> dst @0 OF KNOWS";
+    let mut parser = Parser::new(query);
+
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "DELETE EDGE with expression endpoints and rank parsing should succeed: {:?}",
+        result.err()
+    );
+
+    let stmt = result.expect("DELETE statement parsing should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "DELETE");
+}
+
+// ==================== MATCH...DELETE Vertex Value Contract Tests ====================
+
+#[test]
+fn test_match_delete_bare_vid_execution_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("MATCH (v:Person) DELETE VERTEX 1");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("bare id is illegal")),
+        "MATCH...DELETE with a bare vid should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error().assert_vertex_exists(1, "Person");
+}
+
+#[test]
+fn test_match_delete_non_vertex_value_execution_rejected() {
+    let scenario = TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING, age INT)")
+        .exec_dml("INSERT VERTEX Person(name, age) VALUES 1:('Alice', 30)")
+        .assert_success()
+        .exec_dml("MATCH (v:Person) DELETE VERTEX v.age");
+    assert!(
+        scenario
+            .error()
+            .is_some_and(|e| e.contains("bare id is illegal")),
+        "MATCH...DELETE with a non-vertex value should fail explicitly, got: {:?}",
+        scenario.error()
+    );
+    scenario.assert_error().assert_vertex_exists(1, "Person");
+}
+
+// ==================== MATCH Skips Dangling Edges Tests ====================
+
+#[test]
+fn test_match_skips_dangling_edges() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE)")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
+        .assert_success()
+        .exec_dml("DELETE VERTEX Person FROM 1")
+        .assert_success()
+        .assert_edge_exists(1, 2, "KNOWS")
+        .query("MATCH (a)-[e:KNOWS]->(b) RETURN e")
+        .assert_success()
+        .assert_result_count(0);
+}
