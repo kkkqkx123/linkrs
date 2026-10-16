@@ -27,6 +27,8 @@ mod fetch;
 mod find_path;
 #[path = "dql/go.rs"]
 mod go;
+#[path = "dql/execution_contracts.rs"]
+mod execution_contracts;
 #[path = "dql/lookup.rs"]
 mod lookup;
 #[path = "dql/match_query.rs"]

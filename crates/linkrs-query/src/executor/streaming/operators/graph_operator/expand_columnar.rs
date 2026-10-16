@@ -235,6 +235,12 @@ pub(super) fn expand_single_step_columnar(
         }
     }
     if pending.is_empty() {
+        // OPTIONAL MATCH must preserve seeds with no reachable neighbour.
+        // The columnar path has no pending hops to project; decline so the
+        // row path emits the NULL-filled rows instead of dropping them.
+        if ctx.include_empty_paths {
+            return Ok(ColumnarOutcome::Declined);
+        }
         return Ok(ColumnarOutcome::Empty);
     }
     let dst_tag_owned = closed_loop_dst_tag(reader, space_name, edge_types, direction, ctx.dst_tag)
