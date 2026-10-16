@@ -301,11 +301,21 @@ impl DmlParser {
             // or UPDATE EDGE Syntax: OF edge_type FROM src TO dst [@rank]
             // or UPDATE EDGE Syntax (short): src -> dst [@rank] OF edge_type
             let is_upsert = ctx.is_upsert_mode();
-            let is_literal = ctx.current_token().kind.is_literal();
-
-            if is_upsert || is_literal {
-                // UPSERT EDGE or short UPDATE EDGE Syntax: src -> dst [@rank] OF edge_type
-                let src = self.parse_expression(ctx)?;
+            // UPSERT EDGE always uses the short shape.
+            // For UPDATE, distinguish by syntax, not by whether the endpoint is a literal.
+            if is_upsert || ctx.check_token(TokenKind::Of) == false {
+                // UPDATE/UPSERT EDGE short shape: src -> dst [@rank] OF edge_type.
+                // We already hold `src` if the caller parsed nothing; parse it here.
+                let src = if ctx.check_token(TokenKind::Arrow) {
+                    // Defensive: caller unexpectedly consumed nothing; handled below.
+                    return Err(ParseError::new(
+                        ParseErrorKind::UnexpectedToken,
+                        "Expected edge source expression before ->".to_string(),
+                        ctx.current_position(),
+                    ));
+                } else {
+                    self.parse_expression(ctx)?
+                };
                 ctx.expect_token(TokenKind::Arrow)?;
                 let dst = self.parse_expression(ctx)?;
 
@@ -325,7 +335,7 @@ impl DmlParser {
                     rank,
                 })
             } else {
-                // UPDATE EDGE Syntax: OF edge_type FROM src TO dst [@rank]
+                // UPDATE EDGE long shape: OF edge_type FROM src TO dst [@rank].
                 ctx.expect_token(TokenKind::Of)?;
 
                 // Analyzing edge types

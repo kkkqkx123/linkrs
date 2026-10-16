@@ -33,14 +33,15 @@ impl DmlParser {
                 // Two syntaxes:
                 // 1) DELETE EDGE <edge_type> <src> -> <dst> [@rank] [, ...]
                 // 2) DELETE EDGE <src> -> <dst> [@rank] OF <edge_type> [, ...]
-                // Disambiguate: if the current token is a literal, it's syntax 2 (src -> dst OF edge_type)
-                let is_literal = ctx.current_token().kind.is_literal();
-
-                let (edge_type, edges) = if is_literal {
-                    // Syntax 2: <src> -> <dst> [@rank] OF <edge_type>
+                // Disambiguate by syntax, not by whether the first token is a literal.
+                // Short form starts with an endpoint expression immediately followed by `->`.
+                // Long form starts with the edge type, then `source -> destination`.
+                let first = self.parse_expression(ctx)?;
+                let (edge_type, edges) = if ctx.check_token(TokenKind::Arrow) {
+                    // Short form: <src> -> <dst> [@rank] [, ...] OF <edge_type>
                     let mut edges = vec![];
+                    let mut current_src = first;
                     loop {
-                        let src = self.parse_expression(ctx)?;
                         ctx.expect_token(TokenKind::Arrow)?;
                         let dst = self.parse_expression(ctx)?;
 
@@ -50,19 +51,35 @@ impl DmlParser {
                             None
                         };
 
-                        edges.push((src, dst, rank));
+                        edges.push((current_src.clone(), dst, rank));
 
                         if !ctx.match_token(TokenKind::Comma) {
                             break;
                         }
+                        current_src = self.parse_expression(ctx)?;
                     }
                     ctx.expect_token(TokenKind::Of)?;
-                    let edge_type = Some(ctx.expect_identifier()?);
-
-                    (edge_type, edges)
+                    let type_name = ctx.expect_identifier()?;
+                    (Some(type_name), edges)
                 } else {
-                    // Syntax 1: <edge_type> <src> -> <dst> [@rank] [, ...]
-                    let edge_type = Some(ctx.expect_identifier()?);
+                    // Long form: <edge_type> <src> -> <dst> [@rank] [, ...]
+                    let type_name = match first.expression().map(|meta| meta.inner().clone()) {
+                        Some(linkrs_core::types::Expression::Variable(name)) => name,
+                        Some(linkrs_core::types::Expression::Literal(linkrs_core::Value::FixedString(s))) => {
+                            s.to_string()
+                        }
+                        Some(linkrs_core::types::Expression::Literal(linkrs_core::Value::String(s))) => {
+                            s.to_string()
+                        }
+                        _ => {
+                            return Err(ParseError::new(
+                                ParseErrorKind::UnexpectedToken,
+                                "Expected edge type name before source expression".to_string(),
+                                ctx.current_position(),
+                            ));
+                        }
+                    };
+                    let edge_type = Some(type_name);
 
                     let mut edges = vec![];
                     loop {

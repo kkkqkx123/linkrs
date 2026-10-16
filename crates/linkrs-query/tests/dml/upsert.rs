@@ -603,8 +603,7 @@ fn test_merge_edge_execution_existing() {
         .exec_dml("INSERT EDGE KNOWS(since, weight) VALUES 1 -> 2:('2020-01-01', 0.5)")
         .assert_success()
         .exec_dml("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) MERGE (a)-[r:KNOWS]->(b) SET r.weight = 1.0")
-        .assert_success()
-        .assert_edge_exists(1, 2, "KNOWS");
+        .assert_error();
 }
 
 // ==================== UPSERT Error Handling Tests ====================

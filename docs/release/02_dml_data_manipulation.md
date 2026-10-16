@@ -24,7 +24,7 @@ INSERT EDGE [IF NOT EXISTS] <edge_type> [(<prop_list>)] [VALUES] <src_vid> -> <d
 ### 关键特性
 - 支持批量插入（逗号分隔多行）；边插入的 `@<rank>` 端到端生效于写入、去重与删除
 - **每语句仅单个标签**：存储层顶点恰好挂一个 tag；多标签写法会被解析器显式拒绝
-- 顶点形式的属性名列表不允许空括号（`person()` 报语法错误）；边形式支持 `()` 与 `:()`
+- 顶点形式支持空括号（`person()` 等价于只写 VID，与 `ON <tag>` 简写一致）；边形式支持 `()` 与 `:()`
 - **缺省属性名列表时只写入 VID**：省略括号或使用 `ON <tag>` 简写形式时只写 VID；
   若同时给出值组，绑定层报
   `INSERT VERTEX without a property name list only writes vertex ids; specify property names to write properties`
@@ -310,7 +310,7 @@ MERGE EDGE|VERTEX ON <tag_or_edge_type> [SET <prop> = <value>] WHERE id(vid|src)
 - 无动作的合并保持 `IF NOT EXISTS` 插入路径
 - 支持 UPSERT 风格的 `MERGE VERTEX/EDGE ON ...` 语法（内部按 UPSERT 目标规则执行，
   含第 4 节所述的 `id(...)` 提取与剩余谓词规则）
-- MATCH 语句支持跟随 MERGE 子句（解析校验，不改变匹配结果）
+
 - 模式后的裸 `SET` 子句同时作用于创建与匹配两条分支，
   其赋值会合并进已有的 `ON CREATE` / `ON MATCH` 子句
 - 条件分支复用插入与更新写入能力，不新增流式算子；

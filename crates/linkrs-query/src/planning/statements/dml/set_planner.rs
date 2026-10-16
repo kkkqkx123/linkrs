@@ -8,11 +8,7 @@
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::{SetStmt, Stmt};
-use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::VertexUpdateInfo;
-use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
-use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalAssignNode;
-use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
@@ -181,41 +177,10 @@ impl Planner for SetPlanner {
             }
         }
 
-        if !vertex_updates.is_empty() {
-            return Err(PlannerError::PlanGenerationFailed(
-                "standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead"
-                    .to_string(),
-            ));
-        }
-
-        if !variable_assignments.is_empty() {
-            let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
-                id: next_node_id(),
-                var: "set_input".to_string(),
-                output_var: None,
-                col_names: vec![],
-                column_types: vec![],
-            });
-
-            let logical_root = LogicalNodeEnum::Assign(LogicalAssignNode {
-                id: next_node_id(),
-                input: Some(Box::new(arg_logical)),
-                assignments: variable_assignments,
-                output_var: None,
-                col_names: vec![],
-                column_types: vec![],
-            });
-            return Ok(SubPlan::from_logical_root(logical_root));
-        }
-
-        let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
-            id: next_node_id(),
-            var: "set_input".to_string(),
-            output_var: None,
-            col_names: vec![],
-            column_types: vec![],
-        });
-        Ok(SubPlan::from_logical_root(arg_logical))
+        return Err(PlannerError::PlanGenerationFailed(
+            "standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead"
+                .to_string(),
+        ));
     }
 
     fn transform(
@@ -284,45 +249,13 @@ impl Planner for SetPlanner {
             }
         }
 
-        // Direct vertex writes have no tag context, so they are rejected
-        // instead of silently dropping all but the first assignment.
-        if !vertex_updates.is_empty() {
-            return Err(PlannerError::PlanGenerationFailed(
-                "standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead"
-                    .to_string(),
-            ));
-        }
-
-        // If no vertex updates, fall back to AssignNode for variable assignments
-        if !variable_assignments.is_empty() {
-            let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
-                id: next_node_id(),
-                var: "set_input".to_string(),
-                output_var: None,
-                col_names: vec![],
-                column_types: vec![],
-            });
-
-            let logical_root = LogicalNodeEnum::Assign(LogicalAssignNode {
-                id: next_node_id(),
-                input: Some(Box::new(arg_logical)),
-                assignments: variable_assignments,
-                output_var: None,
-                col_names: vec![],
-                column_types: vec![],
-            });
-            return Ok(SubPlan::from_logical_root(logical_root));
-        }
-
-        // If no assignments at all, return an empty plan
-        let arg_logical = LogicalNodeEnum::Argument(LogicalArgumentNode {
-            id: next_node_id(),
-            var: "set_input".to_string(),
-            output_var: None,
-            col_names: vec![],
-            column_types: vec![],
-        });
-        Ok(SubPlan::from_logical_root(arg_logical))
+        // Standalone SET has no upstream row stream and therefore no tag
+        // context. Every assignment form is rejected explicitly instead of
+        // being materialized as a storage-less Assign node.
+        return Err(PlannerError::PlanGenerationFailed(
+            "standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead"
+                .to_string(),
+        ));
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {
