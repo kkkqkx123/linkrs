@@ -14,13 +14,15 @@
 ### 语法结构
 ```cypher
 CREATE TAG [IF NOT EXISTS] <tag_name> (
-    <prop_name>[: <prop_type>] [SERIAL] [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>']
+    <prop_name>: <prop_type> [SERIAL] [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>']
     [, <prop_name>: <prop_type> [NOT NULL | NULL] [DEFAULT <value>] [COMMENT '<text>'] ...]
     [, ttl_duration=<seconds>]
     [, ttl_col=<prop_name>]
 )
 
 -- 从查询结果定义标签
+-- 注意：该语法仅在嵌入式 / 会话 API 入口支持，通用 ExecuteQuery / gRPC / HTTP / CLI
+-- 路径执行时直接报错（错误信息含 "is only supported through the session API"）。
 CREATE TAG [IF NOT EXISTS] <tag_name> AS (<query>)
 ```
 
@@ -32,7 +34,7 @@ CREATE TAG [IF NOT EXISTS] <tag_name> AS (<query>)
 - 支持COMMENT属性注释
 - 支持TTL自动过期
 - 支持 `SERIAL` 类型修饰（自增整数，隐含 NOT NULL；不能指定 DEFAULT、不能作为主键，每个标签/边类型最多一列）
-- 支持 `AS (<query>)` 从子查询定义标签
+- 支持 `AS (<query>)` 从子查询定义标签（仅嵌入式 / 会话 API 入口；通用 DDL 执行路径显式报错）
 
 ### 支持的数据类型
 | 类型 | 实际类型与位宽 | 说明 |
@@ -153,6 +155,7 @@ CREATE TAG UserSession(
 )
 
 -- 从查询定义标签
+-- 仅在嵌入式 / 会话 API 入口可执行；通用 SQL / gRPC / HTTP / CLI 路径报错。
 CREATE TAG adult AS (MATCH (p:Person) WHERE p.age >= 18 RETURN p)
 ```
 

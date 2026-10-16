@@ -13,7 +13,7 @@
 
 ### 语法结构
 ```cypher
-CREATE USER [IF NOT EXISTS] <user_name> [WITH] PASSWORD '<password>'
+CREATE USER [IF NOT EXISTS] <user_name> [[WITH] [PASSWORD] '<password>']
 ```
 
 ### 关键特性
@@ -83,7 +83,7 @@ DROP USER IF EXISTS alice
 
 ### 语法结构
 ```cypher
-CHANGE PASSWORD [<user_name>] '<old_password>' TO '<new_password>'
+CHANGE PASSWORD [<user_name>] [FROM] '<old_password>' TO '<new_password>'
 ```
 
 ### 关键特性

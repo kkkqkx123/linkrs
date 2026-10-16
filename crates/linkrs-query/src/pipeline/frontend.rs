@@ -27,9 +27,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             // User-defined type aliases resolve in CAST targets and DDL
             // column types against the shared engine-wide catalog.
             .with_type_alias_manager(self.type_alias_manager.clone());
-        let result = parser
-            .parse()
-            .map_err(|e| DBError::from(QueryError::pipeline_parse_error(e)))?;
+        let result = match parser.parse() {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                if parser.has_errors() {
+                    return Err(DBError::from(QueryError::pipeline_parse_error(
+                        parser.take_errors(),
+                    )));
+                }
+                return Err(DBError::from(QueryError::pipeline_parse_error(e)));
+            }
+        };
         if parser.has_errors() {
             return Err(DBError::from(QueryError::pipeline_parse_error(
                 parser.take_errors(),

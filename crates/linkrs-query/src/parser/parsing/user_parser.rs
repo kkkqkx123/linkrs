@@ -51,11 +51,21 @@ impl UserParser {
 
         let username = ctx.expect_dcl_name()?;
 
-        // Support for the WITH PASSWORD syntax
-        ctx.match_token(TokenKind::With);
-        ctx.expect_token(TokenKind::Password)?;
-
-        let password = ctx.expect_string_literal()?;
+        // Password is optional for Nebula compatibility; when omitted it
+        // defaults to an empty password that still has to pass the password
+        // policy at execution time.
+        let mut password = String::new();
+        if ctx.match_token(TokenKind::With) {
+            // Nebula writes `WITH PASSWORD '...'`; the PASSWORD keyword is
+            // accepted but optional so both spellings parse.
+            ctx.match_token(TokenKind::Password);
+            password = ctx.expect_string_literal()?;
+        } else if ctx.match_token(TokenKind::Password) {
+            password = ctx.expect_string_literal()?;
+        } else if matches!(ctx.current_token().kind, TokenKind::StringLiteral(_)) {
+            // Bare `CREATE USER name 'password'` is also accepted.
+            password = ctx.expect_string_literal()?;
+        }
 
         let span = ctx.span_since(start_span.start);
 
@@ -162,12 +172,20 @@ impl UserParser {
         ctx: &mut ParseContext,
         start_span: Span,
     ) -> Result<Stmt, ParseError> {
-        // Parse the optional username (if the next token is not the old password literal).
-        let username = if matches!(ctx.current_token().kind, TokenKind::StringLiteral(_)) {
+        // Parse the optional username. A username is present only when the next
+        // token is not the old password literal and not the Nebula `FROM`
+        // keyword that introduces the old password.
+        let username = if matches!(ctx.current_token().kind, TokenKind::StringLiteral(_))
+            || ctx.check_token(TokenKind::From)
+        {
             None
         } else {
             Some(ctx.expect_dcl_name()?)
         };
+
+        // Nebula spells `CHANGE PASSWORD name FROM 'old' TO 'new'`; both that
+        // form and the shorter positional form are accepted here.
+        ctx.match_token(TokenKind::From);
 
         let old_password = ctx.expect_string_literal()?;
         ctx.expect_token(TokenKind::To)?;
