@@ -168,10 +168,9 @@ impl<
         let tracked_id = query_id as i64;
         result.set_on_drop(Box::new(move || {
             session_clone.unregister_streaming_query(query_id);
-            if tracked_manager
-                .get_query(tracked_id)
-                .is_some_and(|info| info.status == crate::query::query_manager::QueryStatus::Running)
-            {
+            if tracked_manager.get_query(tracked_id).is_some_and(|info| {
+                info.status == crate::query::query_manager::QueryStatus::Running
+            }) {
                 let _ = tracked_manager.finish_query(tracked_id);
             }
             tracked_manager.cleanup_finished_queries(1000);

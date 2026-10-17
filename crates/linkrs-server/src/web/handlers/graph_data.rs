@@ -83,7 +83,9 @@ async fn get_vertex<
 
     let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
     if let Some(vertex) = result.first_value() {
-        return Ok(Json(ApiResponse::success(serde_json::json!({"vertex": vertex}))));
+        return Ok(Json(ApiResponse::success(
+            serde_json::json!({"vertex": vertex}),
+        )));
     }
 
     Err(WebError::NotFound(format!(
@@ -137,7 +139,9 @@ async fn get_edge<
 
     let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
     if let Some(edge) = result.first_value() {
-        return Ok(Json(ApiResponse::success(serde_json::json!({"edge": edge}))));
+        return Ok(Json(ApiResponse::success(
+            serde_json::json!({"edge": edge}),
+        )));
     }
 
     Err(WebError::NotFound(format!(
@@ -203,10 +207,7 @@ async fn get_neighbors<
     };
 
     let id = vid_literal(&web_state, &params.space, &vid)?;
-    let query = format!(
-        "MATCH {} WHERE id(v) == {} RETURN n LIMIT 100",
-        pattern, id
-    );
+    let query = format!("MATCH {} WHERE id(v) == {} RETURN n LIMIT 100", pattern, id);
 
     let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
     let neighbors: Vec<serde_json::Value> = result

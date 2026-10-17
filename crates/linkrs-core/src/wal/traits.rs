@@ -6,11 +6,12 @@ use std::sync::Arc;
 
 use super::redo::{
     AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeIndexRedo, CreateEdgeTypeRedo,
-    CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo, CreateVertexTypeRedo,
-    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo, DropSpaceRedo,
-    DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, RenameEdgePropRedo, RenameEdgeTypeRedo,
-    RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
+    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
+    DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo,
+    DropMacroRedo, DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo,
+    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
+    UpdateEdgePropRedo, UpdateSequenceRedo,
 };
 use super::types::{WalOpType, WalResult};
 

@@ -1053,11 +1053,7 @@ impl SchemaManager {
 
             if let Some(key) = key {
                 if let Some(data) = edge_types.get_mut(&key) {
-                    if let Some(prop) = data
-                        .info
-                        .properties
-                        .iter_mut()
-                        .find(|p| p.name == old_name)
+                    if let Some(prop) = data.info.properties.iter_mut().find(|p| p.name == old_name)
                     {
                         prop.name = new_name.to_string();
                         if data.info.ttl_col.as_deref() == Some(old_name) {

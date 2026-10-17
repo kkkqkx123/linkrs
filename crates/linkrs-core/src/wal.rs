@@ -12,9 +12,9 @@ pub use redo::{
     AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CompactRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexPropsRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo,
-    DropTagIndexRedo, InsertEdgeRedo, InsertVertexRedo, RenameEdgePropRedo, RenameVertexPropRedo,
-    UpdateEdgePropRedo, UpdateSequenceRedo, UpdateVertexPropRedo,
+    DeleteVertexPropsRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo,
+    DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo, InsertVertexRedo, RenameEdgePropRedo,
+    RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo, UpdateVertexPropRedo,
 };
 pub use sync::{
     EntityRef, IndexMutation, IndexOperation, LifecycleMutation, OutboxIntent, TransactionAbort,

@@ -492,10 +492,7 @@ mod tests {
 
     #[test]
     fn test_filtered_disabled_removes_rule() {
-        let registry = RuleRegistry::filtered(
-            &["LeftJoinToInnerJoin".to_string()],
-            &[],
-        );
+        let registry = RuleRegistry::filtered(&["LeftJoinToInnerJoin".to_string()], &[]);
         assert_eq!(registry.len(), 57);
         assert!(registry
             .iter()
@@ -506,7 +503,10 @@ mod tests {
     fn test_filtered_enabled_keeps_only_selected() {
         let registry = RuleRegistry::filtered(
             &[],
-            &["EliminateFilterRule".to_string(), "CombineFilter".to_string()],
+            &[
+                "EliminateFilterRule".to_string(),
+                "CombineFilter".to_string(),
+            ],
         );
         assert_eq!(registry.len(), 2);
         let names: Vec<&str> = registry.iter().map(|rule| rule.name()).collect();

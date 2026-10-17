@@ -95,8 +95,12 @@ impl<
             | S::DescribeUser(_)
             | S::ShowUsers(_)
             | S::ShowRoles(_) => None,
-            S::Use(_) | S::AssignVariable(_) | S::BeginTransaction(_)
-            | S::CommitTransaction(_) | S::RollbackTransaction(_) | S::Savepoint(_)
+            S::Use(_)
+            | S::AssignVariable(_)
+            | S::BeginTransaction(_)
+            | S::CommitTransaction(_)
+            | S::RollbackTransaction(_)
+            | S::Savepoint(_)
             | S::ReleaseSavepoint(_) => None,
             S::Match(matched) => {
                 if matched.delete_clause.is_some() {
@@ -161,9 +165,7 @@ impl<
                 | crate::query::parser::ast::CreateTarget::Index { .. }
                 | crate::query::parser::ast::CreateTarget::Sequence { .. }
                 | crate::query::parser::ast::CreateTarget::TagAsQuery { .. }
-                | crate::query::parser::ast::CreateTarget::EdgeAsQuery { .. } => {
-                    Permission::Schema
-                }
+                | crate::query::parser::ast::CreateTarget::EdgeAsQuery { .. } => Permission::Schema,
             }),
             S::Drop(drop) => Some(match &drop.target {
                 crate::query::parser::ast::DropTarget::Space(_) => Permission::Admin,
@@ -249,9 +251,7 @@ impl<
     }
 
     /// Whether a parsed statement writes user state and needs post-execution alignment.
-    pub(crate) fn is_user_management_write_stmt(
-        stmt: &crate::query::parser::ast::Stmt,
-    ) -> bool {
+    pub(crate) fn is_user_management_write_stmt(stmt: &crate::query::parser::ast::Stmt) -> bool {
         matches!(
             stmt,
             crate::query::parser::ast::Stmt::CreateUser(_)
@@ -316,8 +316,12 @@ impl<
             | S::ShowUsers(_)
             | S::ShowRoles(_)
             | S::DescribeUser(_) => self.enforce_user_management(username, stmt, space_id),
-            S::Use(_) | S::AssignVariable(_) | S::BeginTransaction(_)
-            | S::CommitTransaction(_) | S::RollbackTransaction(_) | S::Savepoint(_)
+            S::Use(_)
+            | S::AssignVariable(_)
+            | S::BeginTransaction(_)
+            | S::CommitTransaction(_)
+            | S::RollbackTransaction(_)
+            | S::Savepoint(_)
             | S::ReleaseSavepoint(_) => Ok(()),
             S::Query(query) => {
                 for inner in &query.statements {

@@ -6,12 +6,13 @@ use serde::de::DeserializeOwned;
 
 use crate::wal::{
     AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeIndexRedo, CreateEdgeTypeRedo,
-    CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo, CreateVertexTypeRedo,
-    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
-    DeleteVertexPropsRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropMacroRedo,
-    DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo, InsertEdgeRedo, InsertVertexRedo, Lsn,
-    ParsedWalEntry, RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo,
-    UpdateEdgePropRedo, UpdateSequenceRedo, UpdateVertexPropRedo, WalOpType,
+    CreateMacroRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateTypeAliasRedo,
+    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
+    DeleteVertexPropRedo, DeleteVertexPropsRedo, DeleteVertexRedo, DeleteVertexTypeRedo,
+    DropEdgeIndexRedo, DropMacroRedo, DropSpaceRedo, DropTagIndexRedo, DropTypeAliasRedo,
+    InsertEdgeRedo, InsertVertexRedo, Lsn, ParsedWalEntry, RenameEdgePropRedo, RenameEdgeTypeRedo,
+    RenameTagRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateSequenceRedo,
+    UpdateVertexPropRedo, WalOpType,
 };
 use linkrs_core::types::Timestamp;
 use linkrs_core::{StorageError, StorageResult};

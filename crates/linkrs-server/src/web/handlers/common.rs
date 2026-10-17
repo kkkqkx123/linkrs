@@ -149,10 +149,7 @@ where
 {
     let space = resolve_space(web_state, space_name)?;
     Ok(match space.vid_type {
-        DataType::String => format!(
-            "\"{}\"",
-            vid.replace('\\', "\\\\").replace('"', "\\\"")
-        ),
+        DataType::String => format!("\"{}\"", vid.replace('\\', "\\\\").replace('"', "\\\"")),
         _ => vid.to_string(),
     })
 }

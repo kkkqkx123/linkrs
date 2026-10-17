@@ -139,8 +139,7 @@ impl<
             Duration::from_secs(config.server.auth.session_idle_timeout_secs.max(1));
         let session_events = Arc::new(EventSubscriptions::<SessionEvent>::new());
         let query_manager = Arc::new(QueryManager::new_with_shared(session_events.clone()));
-        query_manager
-            .set_slow_query_threshold_ms(config.monitoring.slow_query_threshold_ms as i64);
+        query_manager.set_slow_query_threshold_ms(config.monitoring.slow_query_threshold_ms as i64);
         let session_manager = GraphSessionManager::new_with_shared(
             format!("{}:{}", config.database.host, config.database.port),
             config.database.max_sessions,
@@ -186,15 +185,16 @@ impl<
         optimizer_engine.set_partitioning_config(Self::partitioning_config_from(&config));
         {
             let rules = &config.common.optimizer.rules;
-            for name in rules.disabled_rules.iter().chain(rules.enabled_rules.iter()) {
+            for name in rules
+                .disabled_rules
+                .iter()
+                .chain(rules.enabled_rules.iter())
+            {
                 if !Self::is_known_optimizer_rule(name) {
                     log::warn!("Unknown optimizer rule name '{name}' in [optimizer.rules]");
                 }
             }
-            optimizer_engine.set_rule_selection(
-                &rules.disabled_rules,
-                &rules.enabled_rules,
-            );
+            optimizer_engine.set_rule_selection(&rules.disabled_rules, &rules.enabled_rules);
         }
         let shared_scheduler = Arc::new(SharedScheduler::new(
             optimizer_engine.partitioning_config().max_workers.max(1),

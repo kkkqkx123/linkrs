@@ -1005,8 +1005,7 @@ fn test_probe_and_channel_share_one_table() {
         ("user1", RoleType::User),
         ("guest1", RoleType::Guest),
     ] {
-        pm.grant_role(name, 1, role)
-            .expect("grant should succeed");
+        pm.grant_role(name, 1, role).expect("grant should succeed");
     }
     let checker = PermissionChecker::new(pm, create_test_config());
 

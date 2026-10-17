@@ -657,21 +657,21 @@ impl<
         query_id: i64,
     ) -> Result<linkrs_api::api_core::QueryResult, super::error::GraphServiceError> {
         use linkrs_core::Value;
-        let target = self.session_manager.find_session(target_session_id).ok_or_else(|| {
+        let target = self
+            .session_manager
+            .find_session(target_session_id)
+            .ok_or_else(|| {
+                super::error::GraphServiceError::new(format!(
+                    "SessionId[{}] does not exist",
+                    target_session_id
+                ))
+            })?;
+        let info = self.query_manager.get_query(query_id).ok_or_else(|| {
             super::error::GraphServiceError::new(format!(
-                "SessionId[{}] does not exist",
-                target_session_id
+                "ExecutionPlanId[{}] does not exist",
+                query_id
             ))
         })?;
-        let info =
-            self.query_manager
-                .get_query(query_id)
-                .ok_or_else(|| {
-                    super::error::GraphServiceError::new(format!(
-                        "ExecutionPlanId[{}] does not exist",
-                        query_id
-                    ))
-                })?;
         if info.session_id != target_session_id {
             return Err(super::error::GraphServiceError::new(format!(
                 "ExecutionPlanId[{}] does not exist in Session[{}]",

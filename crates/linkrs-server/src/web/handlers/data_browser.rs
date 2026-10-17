@@ -135,11 +135,7 @@ async fn list_vertices_by_tag<
     // Then, get paginated data
     let query = format!(
         "MATCH (v:{}) RETURN v{}{} SKIP {} LIMIT {}",
-        tag_name,
-        filter_clause,
-        sort_clause,
-        params.offset,
-        params.limit
+        tag_name, filter_clause, sort_clause, params.offset, params.limit
     );
 
     let result = execute_in_space(&web_state, caller_session_id, &space_name, &query).await?;
@@ -227,11 +223,7 @@ async fn list_edges_by_type<
     // Then, get paginated data
     let query = format!(
         "MATCH ()-[e:{}]->() RETURN e{}{} SKIP {} LIMIT {}",
-        edge_name,
-        filter_clause,
-        sort_clause,
-        params.offset,
-        params.limit
+        edge_name, filter_clause, sort_clause, params.offset, params.limit
     );
 
     let result = execute_in_space(&web_state, caller_session_id, &space_name, &query).await?;

@@ -43,7 +43,9 @@ fn test_user_storage_persists_across_reload() {
         GraphStorage::open(temp_dir.path().to_path_buf()).expect("Failed to reopen GraphStorage");
 
     assert!(reloaded.user_exists("persist_user"));
-    assert!(!reloaded.create_user(&user).expect("duplicate create should not error"));
+    assert!(!reloaded
+        .create_user(&user)
+        .expect("duplicate create should not error"));
 }
 
 #[test]

@@ -259,8 +259,13 @@ mod tests {
 
         // SHOW USERS / SHOW ROLES: Admin passes, User and Guest are rejected.
         gate(service, "read_admin", fixture.space_id, "SHOW USERS").expect("admin lists users");
-        gate(service, "read_admin", fixture.space_id, "SHOW ROLES IN maint_space")
-            .expect("admin lists roles");
+        gate(
+            service,
+            "read_admin",
+            fixture.space_id,
+            "SHOW ROLES IN maint_space",
+        )
+        .expect("admin lists roles");
         for stmt in ["SHOW USERS", "SHOW ROLES", "SHOW ROLES IN maint_space"] {
             for username in ["read_user", "read_guest"] {
                 let error = gate(service, username, fixture.space_id, stmt)
@@ -284,8 +289,13 @@ mod tests {
             .unwrap_or_else(|_| panic!("{username} must describe self"));
         }
         for username in ["read_user", "read_guest"] {
-            let error = gate(service, username, fixture.space_id, "DESCRIBE USER someone_else")
-                .expect_err("non-admin must not describe others");
+            let error = gate(
+                service,
+                username,
+                fixture.space_id,
+                "DESCRIBE USER someone_else",
+            )
+            .expect_err("non-admin must not describe others");
             assert!(
                 error.message().contains("only Admin or God"),
                 "unexpected error: {}",
@@ -507,11 +517,10 @@ mod tests {
             .execute(admin, "SHOW SESSIONS")
             .await
             .expect("admin lists sessions");
-        assert!(sessions
-            .columns()
-            .contains(&"session_id".to_string()));
+        assert!(sessions.columns().contains(&"session_id".to_string()));
         assert!(
-            sessions.rows().iter().any(|row| row.first()
+            sessions.rows().iter().any(|row| row
+                .first()
                 .is_some_and(|value| *value == linkrs_core::Value::BigInt(admin))),
             "own session row must be present"
         );

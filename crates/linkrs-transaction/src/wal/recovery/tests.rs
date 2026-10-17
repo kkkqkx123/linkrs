@@ -10,10 +10,10 @@ use crate::wal::writer::{LocalWalWriter, WalWriter};
 use crate::wal::{
     AddEdgePropRedo, AddVertexPropRedo, ClearSpaceRedo, CreateEdgeIndexRedo, CreateEdgeTypeRedo,
     CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo,
-    DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo,
-    DropTagIndexRedo, InsertEdgeRedo, InsertVertexRedo, LabelId, Lsn, RenameEdgePropRedo,
-    RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, Timestamp, TransactionWalEntry,
-    UpdateEdgePropRedo, VertexId, WalOpType, WalRecoveryMode,
+    DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo,
+    DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo, InsertVertexRedo, LabelId, Lsn,
+    RenameEdgePropRedo, RenameEdgeTypeRedo, RenameTagRedo, RenameVertexPropRedo, Timestamp,
+    TransactionWalEntry, UpdateEdgePropRedo, VertexId, WalOpType, WalRecoveryMode,
 };
 use linkrs_core::{StorageError, StorageResult, Value};
 

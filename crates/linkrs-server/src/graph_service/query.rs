@@ -143,7 +143,10 @@ impl<
         let mut result =
             self.execute_query_with_permission(session_id, &context, consistency.clone());
 
-        if parsed.as_ref().is_some_and(|parsed| Self::is_use_statement(parsed)) {
+        if parsed
+            .as_ref()
+            .is_some_and(|parsed| Self::is_use_statement(parsed))
+        {
             if let Ok(ref exec_result) = result {
                 if let Some(space_summary) = Self::extract_space_summary_from_result(exec_result) {
                     session.set_space(space_summary);
