@@ -13,14 +13,14 @@ pub mod batch;
 pub mod builder;
 pub mod checkpoint_manifest;
 pub mod circuit_breaker;
-#[cfg(feature = "fulltext")]
-pub mod coordinator;
 pub mod dead_letter_queue;
+#[cfg(feature = "fulltext")]
+pub mod fulltext_rebuild;
+#[cfg(feature = "fulltext")]
+pub mod fulltext_sync;
 pub mod manager;
 mod outbox;
 pub mod outbox_recovery;
-#[cfg(feature = "fulltext")]
-pub mod rebuild;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
 pub mod rebuild_common;
 pub mod receiver;
@@ -51,12 +51,17 @@ pub use circuit_breaker::{
     with_circuit_breaker, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
     CircuitBreakerStats, CircuitState,
 };
-#[cfg(feature = "fulltext")]
-pub use coordinator::{
-    ChangeContext, ChangeData, RecoveryResult, SyncCoordinator, SyncCoordinatorError,
-};
 pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-pub use linkrs_fulltext::SyncConfig;
+#[cfg(feature = "fulltext")]
+pub use fulltext_rebuild::{
+    fulltext_edge_doc_basis, fulltext_field_index_id, fulltext_tag_index_id,
+    fulltext_vertex_doc_id, FulltextRebuildOptions, RebuildDoc, RebuildDocSource, RebuildEntity,
+};
+#[cfg(feature = "fulltext")]
+pub use fulltext_sync::{
+    ChangeContext, FulltextCoordinatorError, FulltextSyncCoordinator, RecoveryResult,
+};
+pub use linkrs_config::SyncConfig;
 pub use manager::{
     EdgeProps, EdgeRef, OutboxBackpressureConfig, OutboxConsumerConfig, SyncError, SyncManager,
 };
@@ -64,11 +69,6 @@ pub use outbox::{OutboxPayload, OutboxStats};
 pub use outbox_recovery::{
     find_latest_snapshot, find_latest_snapshot_at_or_before, live_database_exists, recover_outbox,
     restore_latest_snapshot, restore_snapshot_sync, verify_live_database,
-};
-#[cfg(feature = "fulltext")]
-pub use rebuild::{
-    fulltext_edge_doc_basis, fulltext_field_index_id, fulltext_tag_index_id,
-    fulltext_vertex_doc_id, FulltextRebuildOptions, RebuildDoc, RebuildDocSource, RebuildEntity,
 };
 #[cfg(feature = "fulltext")]
 pub use receiver::FulltextReceiver;

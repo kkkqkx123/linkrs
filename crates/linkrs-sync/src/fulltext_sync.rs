@@ -1,25 +1,53 @@
-#![cfg(feature = "fulltext")]
-
 use std::sync::Arc;
 use std::time::Instant;
 
 use dashmap::DashMap;
 use tracing::{debug, warn};
 
-use super::types::{ChangeContext, ChangeData, ChangeType};
 use crate::batch::{BatchConfig, BatchProcessor, FulltextBatchProcessor, TransactionBatchBuffer};
+use crate::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
+use crate::retry::{default_local_retry_config, with_retry};
+use crate::types::{ChangeType, IndexOpKey, IndexOperation};
 use linkrs_fulltext::manager::FulltextIndexManager;
 use linkrs_fulltext::ConsistencyState;
 use linkrs_fulltext::SyncFailurePolicy;
 use linkrs_metrics::StatsManager;
 
-use crate::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-use crate::retry::{default_local_retry_config, with_retry};
-use crate::types::{IndexOpKey, IndexOperation};
-
 type FulltextProcessor = FulltextBatchProcessor;
 
-pub struct SyncCoordinator {
+/// A change to a fulltext-indexed field, produced by a mutation of a vertex.
+#[derive(Debug, Clone)]
+pub struct ChangeContext {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub change_type: ChangeType,
+    pub vertex_id: String,
+    /// Indexed document text; ignored for deletes.
+    pub data: String,
+}
+
+impl ChangeContext {
+    pub fn new_fulltext(
+        space_id: u64,
+        tag_name: impl Into<String>,
+        field_name: impl Into<String>,
+        change_type: ChangeType,
+        vertex_id: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            space_id,
+            tag_name: tag_name.into(),
+            field_name: field_name.into(),
+            change_type,
+            vertex_id: vertex_id.into(),
+            data: text.into(),
+        }
+    }
+}
+
+pub struct FulltextSyncCoordinator {
     fulltext_manager: Arc<FulltextIndexManager>,
     fulltext_processors: DashMap<(u64, String, String), Arc<FulltextProcessor>>,
     transaction_buffers: DashMap<linkrs_core::types::TransactionId, Arc<TransactionBatchBuffer>>,
@@ -28,16 +56,16 @@ pub struct SyncCoordinator {
     stats_manager: Option<Arc<StatsManager>>,
 }
 
-impl std::fmt::Debug for SyncCoordinator {
+impl std::fmt::Debug for FulltextSyncCoordinator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut d = f.debug_struct("SyncCoordinator");
+        let mut d = f.debug_struct("FulltextSyncCoordinator");
         d.field("fulltext_processors_count", &self.fulltext_processors.len());
         d.field("config", &self.config);
         d.finish_non_exhaustive()
     }
 }
 
-impl SyncCoordinator {
+impl FulltextSyncCoordinator {
     pub fn new(fulltext_manager: Arc<FulltextIndexManager>, config: BatchConfig) -> Self {
         let dead_letter_queue = Arc::new(DeadLetterQueue::new(DeadLetterQueueConfig::default()));
 
@@ -127,7 +155,7 @@ impl SyncCoordinator {
         Some(processor)
     }
 
-    pub async fn on_change(&self, ctx: ChangeContext) -> Result<(), SyncCoordinatorError> {
+    pub async fn on_change(&self, ctx: ChangeContext) -> Result<(), FulltextCoordinatorError> {
         let start = Instant::now();
         let operation = self.create_operation(&ctx)?;
 
@@ -137,7 +165,7 @@ impl SyncCoordinator {
             {
                 processor.add(operation).await?;
             }
-            Ok::<(), SyncCoordinatorError>(())
+            Ok::<(), FulltextCoordinatorError>(())
         }
         .await;
 
@@ -152,34 +180,19 @@ impl SyncCoordinator {
     fn create_operation(
         &self,
         ctx: &ChangeContext,
-    ) -> Result<IndexOperation, SyncCoordinatorError> {
+    ) -> Result<IndexOperation, FulltextCoordinatorError> {
         let key = IndexOpKey::new(ctx.space_id, &ctx.tag_name, &ctx.field_name);
-        let is_delete = ctx.change_type == ChangeType::Delete;
-
-        match &ctx.data {
-            ChangeData::Fulltext(text) => {
-                let text = if is_delete { None } else { Some(text.clone()) };
-                Ok(IndexOperation::new_fulltext(
-                    key,
-                    ctx.change_type,
-                    ctx.vertex_id.clone(),
-                    text,
-                ))
-            }
-            ChangeData::Vector(vector) => {
-                let vector = if is_delete {
-                    None
-                } else {
-                    Some(vector.clone())
-                };
-                Ok(IndexOperation::new_vector(
-                    key,
-                    ctx.change_type,
-                    ctx.vertex_id.clone(),
-                    vector,
-                ))
-            }
-        }
+        let text = if ctx.change_type == ChangeType::Delete {
+            None
+        } else {
+            Some(ctx.data.clone())
+        };
+        Ok(IndexOperation::new_fulltext(
+            key,
+            ctx.change_type,
+            ctx.vertex_id.clone(),
+            text,
+        ))
     }
 
     pub async fn on_vertex_change(
@@ -189,7 +202,7 @@ impl SyncCoordinator {
         vertex_id: &linkrs_core::Value,
         properties: &[(String, linkrs_core::Value)],
         change_type: ChangeType,
-    ) -> Result<(), SyncCoordinatorError> {
+    ) -> Result<(), FulltextCoordinatorError> {
         let vid_str = format!("{}", vertex_id);
 
         for (field_name, value) in properties {
@@ -220,7 +233,7 @@ impl SyncCoordinator {
         &self,
         txn_id: linkrs_core::types::TransactionId,
         ctx: ChangeContext,
-    ) -> Result<(), SyncCoordinatorError> {
+    ) -> Result<(), FulltextCoordinatorError> {
         self.buffer_operation_with_sequence(txn_id, 0, ctx)
     }
 
@@ -229,7 +242,7 @@ impl SyncCoordinator {
         txn_id: linkrs_core::types::TransactionId,
         sequence: u64,
         ctx: ChangeContext,
-    ) -> Result<(), SyncCoordinatorError> {
+    ) -> Result<(), FulltextCoordinatorError> {
         // Creating Index Operations
         let operation = self.create_operation(&ctx)?;
 
@@ -243,7 +256,7 @@ impl SyncCoordinator {
         // Adding operations to the buffer
         buffer
             .prepare_with_sequence(txn_id, sequence, operation)
-            .map_err(SyncCoordinatorError::BatchError)?;
+            .map_err(FulltextCoordinatorError::BatchError)?;
 
         if let Some(ref sm) = self.stats_manager {
             let total_depth: u64 = self
@@ -277,13 +290,13 @@ impl SyncCoordinator {
     pub async fn prepare_transaction(
         &self,
         txn_id: linkrs_core::types::TransactionId,
-    ) -> Result<(), SyncCoordinatorError> {
+    ) -> Result<(), FulltextCoordinatorError> {
         if let Some(buffer) = self.transaction_buffers.get(&txn_id) {
             let count = buffer.pending_count(txn_id);
 
             let grouped_ops = buffer
                 .peek_operations(txn_id)
-                .map_err(SyncCoordinatorError::BatchError)?;
+                .map_err(FulltextCoordinatorError::BatchError)?;
 
             for (key, _) in &grouped_ops {
                 if let Some(engine) =
@@ -291,7 +304,7 @@ impl SyncCoordinator {
                         .get_engine(key.space_id, &key.tag_name, &key.field_name)
                 {
                     if engine.consistency_state() == ConsistencyState::Inconsistent {
-                        return Err(SyncCoordinatorError::InvalidOperation(format!(
+                        return Err(FulltextCoordinatorError::InvalidOperation(format!(
                             "Engine for {}.{}.{} is marked Inconsistent. Repair before committing.",
                             key.space_id, key.tag_name, key.field_name
                         )));
@@ -319,11 +332,11 @@ impl SyncCoordinator {
     pub async fn commit_transaction(
         &self,
         txn_id: linkrs_core::types::TransactionId,
-    ) -> Result<(), SyncCoordinatorError> {
+    ) -> Result<(), FulltextCoordinatorError> {
         let result = if let Some((_, buffer)) = self.transaction_buffers.remove(&txn_id) {
             let grouped_ops = buffer
                 .take_operations(txn_id)
-                .map_err(SyncCoordinatorError::BatchError)?;
+                .map_err(FulltextCoordinatorError::BatchError)?;
 
             // Pre-commit validation: check consistency of all involved engines
             for (key, _) in &grouped_ops {
@@ -332,7 +345,7 @@ impl SyncCoordinator {
                         .get_engine(key.space_id, &key.tag_name, &key.field_name)
                 {
                     if engine.consistency_state() == ConsistencyState::Inconsistent {
-                        return Err(SyncCoordinatorError::InvalidOperation(format!(
+                        return Err(FulltextCoordinatorError::InvalidOperation(format!(
                             "Engine for {}.{}.{} is marked Inconsistent. Repair required before committing.",
                             key.space_id, key.tag_name, key.field_name
                         )));
@@ -389,7 +402,7 @@ impl SyncCoordinator {
             if fulltext_failed {
                 match self.config.failure_policy {
                     SyncFailurePolicy::FailClosed => {
-                        return Err(SyncCoordinatorError::BatchError(
+                        return Err(FulltextCoordinatorError::BatchError(
                             crate::batch::BatchError::InvalidOperation(format!(
                                 "Fulltext commit failed for {} indexes under FailClosed policy",
                                 failed_keys.len()
@@ -414,7 +427,7 @@ impl SyncCoordinator {
                         }
                         // Still try to commit the successful batch processors
                         self.commit_all().await.ok();
-                        return Err(SyncCoordinatorError::BatchError(
+                        return Err(FulltextCoordinatorError::BatchError(
                             crate::batch::BatchError::InvalidOperation(format!(
                                 "Fulltext commit failed for {} indexes, marked as Inconsistent. Repair with the online rebuild driver, or by dropping and recreating the affected indexes.",
                                 failed_keys.len()
@@ -448,7 +461,7 @@ impl SyncCoordinator {
         result
     }
 
-    pub async fn commit_all(&self) -> Result<(), SyncCoordinatorError> {
+    pub async fn commit_all(&self) -> Result<(), FulltextCoordinatorError> {
         let processors: Vec<Arc<FulltextProcessor>> = self
             .fulltext_processors
             .iter()
@@ -457,7 +470,7 @@ impl SyncCoordinator {
 
         for processor in &processors {
             processor.commit_all().await.map_err(|e| {
-                SyncCoordinatorError::BatchError(crate::batch::BatchError::InvalidOperation(
+                FulltextCoordinatorError::BatchError(crate::batch::BatchError::InvalidOperation(
                     format!("commit_all failed: {:?}", e),
                 ))
             })?;
@@ -470,7 +483,7 @@ impl SyncCoordinator {
     pub fn rollback_transaction(
         &self,
         txn_id: linkrs_core::types::TransactionId,
-    ) -> Result<(), SyncCoordinatorError> {
+    ) -> Result<(), FulltextCoordinatorError> {
         if let Some(buffer) = self.transaction_buffers.get(&txn_id) {
             buffer.rollback(txn_id)?;
         }
@@ -482,11 +495,11 @@ impl SyncCoordinator {
         &self,
         txn_id: linkrs_core::types::TransactionId,
         sequence: u64,
-    ) -> Result<(), SyncCoordinatorError> {
+    ) -> Result<(), FulltextCoordinatorError> {
         if let Some(buffer) = self.transaction_buffers.get(&txn_id) {
             buffer
                 .truncate_operations(txn_id, sequence)
-                .map_err(SyncCoordinatorError::BatchError)?;
+                .map_err(FulltextCoordinatorError::BatchError)?;
         }
         Ok(())
     }
@@ -519,7 +532,7 @@ impl SyncCoordinator {
     }
 
     /// Recover operations from the dead letter queue.
-    pub async fn recover_dead_letter(&self) -> Result<RecoveryResult, SyncCoordinatorError> {
+    pub async fn recover_dead_letter(&self) -> Result<RecoveryResult, FulltextCoordinatorError> {
         let dead_letter_entries = self.dead_letter_queue.get_all();
         let mut result = RecoveryResult {
             total: dead_letter_entries.len(),
@@ -553,7 +566,7 @@ impl SyncCoordinator {
     pub async fn retry_dead_letter(
         &self,
         max_entries: Option<usize>,
-    ) -> Result<RecoveryResult, SyncCoordinatorError> {
+    ) -> Result<RecoveryResult, FulltextCoordinatorError> {
         let all_entries = self.dead_letter_queue.get_all();
         let mut result = RecoveryResult::default();
         let mut processed = 0;
@@ -592,7 +605,7 @@ impl SyncCoordinator {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-    ) -> Result<RecoveryResult, SyncCoordinatorError> {
+    ) -> Result<RecoveryResult, FulltextCoordinatorError> {
         let target_key = IndexOpKey::new(space_id, tag_name, field_name);
         let entries = self.dead_letter_queue.get_all();
         let mut result = RecoveryResult::default();
@@ -626,7 +639,7 @@ impl SyncCoordinator {
     async fn recover_operation(
         &self,
         operation: &IndexOperation,
-    ) -> Result<(), SyncCoordinatorError> {
+    ) -> Result<(), FulltextCoordinatorError> {
         let key = &operation.key;
         if let Some(processor) =
             self.get_or_create_fulltext_processor(key.space_id, &key.tag_name, &key.field_name)
@@ -634,7 +647,7 @@ impl SyncCoordinator {
             match operation.change_type {
                 ChangeType::Insert => {
                     processor.add(operation.clone()).await.map_err(|e| {
-                        SyncCoordinatorError::BatchError(
+                        FulltextCoordinatorError::BatchError(
                             crate::batch::BatchError::InvalidOperation(format!(
                                 "Recovery failed: {:?}",
                                 e
@@ -647,7 +660,7 @@ impl SyncCoordinator {
                         .execute_now(vec![operation.clone()])
                         .await
                         .map_err(|e| {
-                            SyncCoordinatorError::BatchError(
+                            FulltextCoordinatorError::BatchError(
                                 crate::batch::BatchError::InvalidOperation(format!(
                                     "Recovery failed: {:?}",
                                     e
@@ -691,7 +704,7 @@ impl RecoveryResult {
 
 /// Error types for the sync coordinator
 #[derive(Debug, thiserror::Error)]
-pub enum SyncCoordinatorError {
+pub enum FulltextCoordinatorError {
     #[error("Batch error: {0}")]
     BatchError(crate::batch::BatchError),
 
@@ -705,8 +718,8 @@ pub enum SyncCoordinatorError {
     RecoveryError(String),
 }
 
-impl From<crate::batch::BatchError> for SyncCoordinatorError {
+impl From<crate::batch::BatchError> for FulltextCoordinatorError {
     fn from(e: crate::batch::BatchError) -> Self {
-        SyncCoordinatorError::BatchError(e)
+        FulltextCoordinatorError::BatchError(e)
     }
 }

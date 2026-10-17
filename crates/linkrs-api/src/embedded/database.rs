@@ -165,7 +165,7 @@ fn build_secondary_managers(
             failure_policy: SyncFailurePolicy::FailOpen,
         };
         let batch_config = linkrs_sync::batch::BatchConfig::from(sync_config.clone());
-        let sync_coordinator = Arc::new(linkrs_sync::coordinator::SyncCoordinator::new(
+        let sync_coordinator = Arc::new(linkrs_sync::fulltext_sync::FulltextSyncCoordinator::new(
             manager.clone(),
             batch_config,
         ));

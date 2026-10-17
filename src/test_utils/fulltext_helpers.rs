@@ -12,7 +12,7 @@ use tempfile::TempDir;
 
 /// Fulltext Test Context
 ///
-/// Provides a test environment with FulltextIndexManager and optional SyncCoordinator
+/// Provides a test environment with FulltextIndexManager and optional FulltextSyncCoordinator
 pub struct FulltextTestContext {
     pub manager: Arc<FulltextIndexManager>,
     pub temp_dir: TempDir,

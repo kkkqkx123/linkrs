@@ -1,7 +1,7 @@
 //! SyncManager Integration Tests
 //!
 //! Test scope:
-//! - SyncCoordinator functionality
+//! - FulltextSyncCoordinator functionality
 //! - Batch processing
 //! - Transaction integration
 //! - Concurrent safety
@@ -17,15 +17,15 @@ use linkrs::search::{
     EngineType, FulltextConfig, FulltextIndexManager, TantivyConfig, TokenizerKind,
 };
 use linkrs::sync::batch::BatchConfig;
-use linkrs::sync::coordinator::{ChangeType, SyncCoordinator};
 use linkrs::sync::manager::SyncManager;
+use linkrs::sync::{ChangeType, FulltextSyncCoordinator};
 use tempfile::TempDir;
 use tokio::time::sleep;
 
 // ==================== Test Fixtures ====================
 
 struct SyncTestContext {
-    coordinator: Arc<SyncCoordinator>,
+    coordinator: Arc<FulltextSyncCoordinator>,
     sync_manager: Arc<SyncManager>,
     _temp_dir: TempDir,
 }
@@ -52,7 +52,8 @@ impl SyncTestContext {
             Arc::new(FulltextIndexManager::new(config.clone()).expect("Failed to create manager"));
 
         let batch_config = BatchConfig::default();
-        let sync_coordinator = Arc::new(SyncCoordinator::new(manager.clone(), batch_config));
+        let sync_coordinator =
+            Arc::new(FulltextSyncCoordinator::new(manager.clone(), batch_config));
 
         let sync_manager = Arc::new(SyncManager::new(sync_coordinator.clone()));
 
@@ -83,7 +84,8 @@ impl SyncTestContext {
         let manager =
             Arc::new(FulltextIndexManager::new(config.clone()).expect("Failed to create manager"));
 
-        let sync_coordinator = Arc::new(SyncCoordinator::new(manager.clone(), batch_config));
+        let sync_coordinator =
+            Arc::new(FulltextSyncCoordinator::new(manager.clone(), batch_config));
 
         let sync_manager = Arc::new(SyncManager::new(sync_coordinator.clone()));
 
@@ -97,7 +99,7 @@ impl SyncTestContext {
 
 fn create_test_vertex(vid: i64, tag_name: &str, content: &str) -> Vertex {
     let mut props = HashMap::new();
-    props.insert("content".to_string(), Value::string(content));
+    props.insert("content".into(), Value::string(content));
     let tag = Tag::new(tag_name.to_string(), props);
     Vertex::new(VertexId::try_from_int64(vid).expect("test vertex id"), tag)
 }
@@ -133,7 +135,7 @@ async fn test_sync_vertex_change() {
         .tag
         .properties
         .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
 
     // Sync vertex change
@@ -192,7 +194,7 @@ async fn test_sync_batch_processing() {
             .tag
             .properties
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (k.to_string(), v.clone()))
             .collect();
 
         ctx.coordinator
@@ -235,7 +237,7 @@ async fn test_sync_delete_operation() {
         .tag
         .properties
         .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
 
     ctx.coordinator
@@ -290,7 +292,7 @@ async fn test_concurrent_sync_operations() {
                 .tag
                 .properties
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
+                .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect();
 
             coordinator
@@ -340,7 +342,7 @@ async fn test_sync_nonexistent_index() {
         .tag
         .properties
         .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
 
     // Should succeed but not index anything (index doesn't exist, so field is skipped)
@@ -411,7 +413,7 @@ async fn test_custom_batch_size() {
             .tag
             .properties
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (k.to_string(), v.clone()))
             .collect();
 
         ctx.coordinator

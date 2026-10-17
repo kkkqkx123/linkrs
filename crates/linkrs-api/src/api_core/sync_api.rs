@@ -55,9 +55,10 @@ impl SyncApi {
         self.sync_manager.vector_coordinator()
     }
 
-    /// Get sync coordinator
+    /// Get fulltext sync coordinator. Returns `None` when the fulltext feature
+    /// is not enabled.
     #[cfg(feature = "fulltext")]
-    pub fn sync_coordinator(&self) -> &Arc<linkrs_sync::SyncCoordinator> {
+    pub fn sync_coordinator(&self) -> Option<&Arc<linkrs_sync::FulltextSyncCoordinator>> {
         self.sync_manager.sync_coordinator()
     }
 
@@ -73,6 +74,13 @@ impl SyncApi {
     #[cfg(feature = "fulltext")]
     pub fn inconsistent_fulltext_indexes(&self) -> Vec<linkrs_fulltext::IndexMetadata> {
         self.sync_manager.inconsistent_fulltext_indexes()
+    }
+
+    /// Vector indexes whose engine is in the `Inconsistent` state. These
+    /// reject writes and need operator attention. Empty when vector is not configured.
+    #[cfg(feature = "vector")]
+    pub fn inconsistent_vector_indexes(&self) -> Vec<linkrs_core::index_events::RebuildProgress> {
+        self.sync_manager.inconsistent_vector_indexes()
     }
 
     /// Fail stranded rebuild generations and collect rebuild scratch state.

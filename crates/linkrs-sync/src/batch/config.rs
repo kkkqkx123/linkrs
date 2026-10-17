@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use linkrs_fulltext::SyncFailurePolicy;
+use linkrs_config::SyncFailurePolicy;
 
 /// Batch processing configuration
 #[derive(Debug, Clone)]

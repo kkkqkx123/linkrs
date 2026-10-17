@@ -98,17 +98,20 @@ impl FulltextBatchProcessor {
                     engine
                         .index_batch(vec![(operation.id.clone(), text.to_string())])
                         .await
-                        .map_err(BatchError::from)?;
+                        .map_err(|e| BatchError::EngineError(e.to_string()))?;
                 }
             }
             ChangeType::Delete => {
                 engine
                     .delete_batch(vec![operation.id.as_str()])
                     .await
-                    .map_err(BatchError::from)?;
+                    .map_err(|e| BatchError::EngineError(e.to_string()))?;
             }
         }
-        engine.commit().await.map_err(BatchError::from)?;
+        engine
+            .commit()
+            .await
+            .map_err(|e| BatchError::EngineError(e.to_string()))?;
         Ok(())
     }
 
@@ -120,7 +123,7 @@ impl FulltextBatchProcessor {
             .await
             .commit()
             .await
-            .map_err(BatchError::from)?;
+            .map_err(|e| BatchError::EngineError(e.to_string()))?;
         Ok(())
     }
 
@@ -146,11 +149,17 @@ impl FulltextBatchProcessor {
         let engine = self.engine.read().await;
         if !deletes.is_empty() {
             let ids: Vec<&str> = deletes.iter().map(|s| s.as_str()).collect();
-            engine.delete_batch(ids).await.map_err(BatchError::from)?;
+            engine
+                .delete_batch(ids)
+                .await
+                .map_err(|e| BatchError::EngineError(e.to_string()))?;
         }
 
         if !items.is_empty() {
-            engine.index_batch(items).await.map_err(BatchError::from)?;
+            engine
+                .index_batch(items)
+                .await
+                .map_err(|e| BatchError::EngineError(e.to_string()))?;
         }
 
         Ok(())
@@ -191,7 +200,7 @@ impl FulltextBatchProcessor {
             let ids: Vec<&str> = entry.deletes.iter().map(|s| s.as_str()).collect();
             engine.delete_batch(ids).await.map_err(|e| {
                 self.buffer.re_enqueue(key, entry.clone());
-                BatchError::from(e)
+                BatchError::EngineError(e.to_string())
             })?;
         }
 
@@ -210,14 +219,14 @@ impl FulltextBatchProcessor {
             if !items.is_empty() {
                 engine.index_batch(items).await.map_err(|e| {
                     self.buffer.re_enqueue(key, entry.clone());
-                    BatchError::from(e)
+                    BatchError::EngineError(e.to_string())
                 })?;
             }
         }
 
         engine.commit().await.map_err(|e| {
             self.buffer.re_enqueue(key, entry.clone());
-            BatchError::from(e)
+            BatchError::EngineError(e.to_string())
         })?;
 
         self.buffer.drain_all(key);
@@ -302,7 +311,7 @@ impl BatchProcessor for FulltextBatchProcessor {
                 .await
                 .commit()
                 .await
-                .map_err(BatchError::from)?;
+                .map_err(|e| BatchError::EngineError(e.to_string()))?;
         }
         Ok(())
     }

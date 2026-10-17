@@ -1,9 +1,5 @@
 use thiserror::Error;
 
-#[cfg(feature = "fulltext")]
-use crate::coordinator::CoordinatorError;
-use linkrs_fulltext::SearchError;
-
 #[derive(Debug, Error)]
 pub enum BatchError {
     #[error("Buffer overflow: {0}")]
@@ -14,10 +10,6 @@ pub enum BatchError {
 
     #[error("Queue is closed")]
     QueueClosed,
-
-    #[cfg(feature = "fulltext")]
-    #[error("Coordinator error: {0}")]
-    CoordinatorError(#[from] CoordinatorError),
 
     #[error("Commit error: {0}")]
     CommitError(String),
@@ -31,8 +23,11 @@ pub enum BatchError {
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
 
-    #[error("Search engine error: {0}")]
-    SearchError(#[from] SearchError),
+    /// Engine-specific error message from the underlying search engine.
+    /// The engine type is encapsulated within the processor; only the
+    /// human-readable message crosses the BatchError boundary.
+    #[error("Engine error: {0}")]
+    EngineError(String),
 }
 
 pub type BatchResult<T> = Result<T, BatchError>;

@@ -1,7 +1,7 @@
 //! Fulltext Integration Tests - Sync Mechanism
 //!
 //! Test scope:
-//! - SyncCoordinator basic functionality
+//! - FulltextSyncCoordinator basic functionality
 //! - Vertex change auto-sync (insert, update, delete)
 //! - Transaction buffering
 //! - Sync with BM25 engine
@@ -11,13 +11,13 @@
 use super::common::FulltextTestContext;
 use linkrs_fulltext::EngineType;
 use linkrs_sync::batch::BatchConfig;
-use linkrs_sync::coordinator::{ChangeType, SyncCoordinator};
 use linkrs_sync::manager::SyncManager;
+use linkrs_sync::{ChangeType, FulltextSyncCoordinator};
 use std::sync::Arc;
 
 #[allow(dead_code)]
 struct SyncTestContext {
-    coordinator: Arc<SyncCoordinator>,
+    coordinator: Arc<FulltextSyncCoordinator>,
     sync_manager: Arc<SyncManager>,
     fulltext_ctx: FulltextTestContext,
 }
@@ -26,7 +26,7 @@ impl SyncTestContext {
     async fn new() -> Self {
         let fulltext_ctx = FulltextTestContext::new();
         let batch_config = BatchConfig::default();
-        let coordinator = Arc::new(SyncCoordinator::new(
+        let coordinator = Arc::new(FulltextSyncCoordinator::new(
             fulltext_ctx.manager.clone(),
             batch_config,
         ));

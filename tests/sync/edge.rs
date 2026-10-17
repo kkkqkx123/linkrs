@@ -173,7 +173,7 @@ fn test_edge_with_fulltext_property_sync() {
 
     let mut props = HashMap::new();
     props.insert(
-        "description".to_string(),
+        "description".into(),
         Value::string("Alice knows Bob since 2020"),
     );
     let edge = linkrs::core::Edge::new(
@@ -263,7 +263,7 @@ fn test_edge_delete_sync_via_manager() {
 
     // Insert an edge first (non-txn)
     let mut props = HashMap::new();
-    props.insert("description".to_string(), Value::string("Alice knows Bob"));
+    props.insert("description".into(), Value::string("Alice knows Bob"));
     let edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
@@ -368,7 +368,7 @@ fn test_edge_update_sync_via_manager() {
 
     // Insert initial edge
     let mut old_props = HashMap::new();
-    old_props.insert("description".to_string(), Value::string("old description"));
+    old_props.insert("description".into(), Value::string("old description"));
     let old_edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
@@ -386,7 +386,7 @@ fn test_edge_update_sync_via_manager() {
 
     // Update edge
     let mut new_props = HashMap::new();
-    new_props.insert("description".to_string(), Value::string("new description"));
+    new_props.insert("description".into(), Value::string("new description"));
     let new_edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),
         VertexId::try_from_int64(2).expect("test vertex id"),
@@ -419,8 +419,8 @@ fn test_edge_update_sync_via_manager() {
             space_id,
             EdgeRef::new(&Value::Int(1), &Value::Int(2), "KNOWS"),
             EdgeProps::new(
-                &[("description".to_string(), Value::string("old description"))],
-                &[("description".to_string(), Value::string("new description"))],
+                &[("description".into(), Value::string("old description"))],
+                &[("description".into(), Value::string("new description"))],
             ),
         )
         .expect("Failed to sync edge update");

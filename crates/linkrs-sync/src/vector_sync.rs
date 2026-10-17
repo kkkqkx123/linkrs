@@ -669,7 +669,7 @@ impl VectorSyncCoordinator {
                     }
                 }
                 if !ops.is_empty() {
-                    local.apply_txn(txn_id, ops).map_err(|e| {
+                    local.apply_txn(ops).map_err(|e| {
                         VectorCoordinatorError::Vector(crate::vector_error::VectorError::from(e))
                     })?;
                     debug!("Local vector group-commit txn {} applied", txn_id);

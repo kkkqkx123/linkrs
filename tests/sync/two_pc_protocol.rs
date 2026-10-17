@@ -19,7 +19,7 @@ fn create_harness_with_paths(
     };
     use linkrs::storage::GraphStorage;
     use linkrs::sync::batch::BatchConfig;
-    use linkrs::sync::coordinator::SyncCoordinator;
+    use linkrs::sync::fulltext_sync::FulltextSyncCoordinator;
     use linkrs::sync::manager::SyncManager;
     use std::time::Duration;
 
@@ -53,7 +53,10 @@ fn create_harness_with_paths(
         failure_policy: linkrs::search::SyncFailurePolicy::FailOpen,
     };
 
-    let sync_coordinator = Arc::new(SyncCoordinator::new(fulltext_manager.clone(), batch_config));
+    let sync_coordinator = Arc::new(FulltextSyncCoordinator::new(
+        fulltext_manager.clone(),
+        batch_config,
+    ));
 
     // Create sync manager
     let mut sync_manager = SyncManager::new(sync_coordinator.clone());

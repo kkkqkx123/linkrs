@@ -1,6 +1,6 @@
 //! Sync Manager
 //!
-//! Unified synchronization manager using SyncCoordinator.
+//! Unified synchronization manager using FulltextSyncCoordinator.
 //!
 //! The implementation is split by responsibility across submodules:
 //! `types` (shared types), `lifecycle` (construction and runtime),
@@ -30,7 +30,7 @@ pub use self::types::{
 };
 
 #[cfg(feature = "fulltext")]
-use crate::coordinator::SyncCoordinator;
+use crate::fulltext_sync::FulltextSyncCoordinator;
 use crate::sqlite_outbox::SqliteOutbox;
 #[cfg(feature = "vector")]
 use crate::vector_sync::VectorSyncCoordinator;
@@ -46,7 +46,7 @@ type JoinHandleGuard = Mutex<Option<tokio::task::JoinHandle<()>>>;
 
 pub struct SyncManager {
     #[cfg(feature = "fulltext")]
-    sync_coordinator: Option<Arc<SyncCoordinator>>,
+    sync_coordinator: Option<Arc<FulltextSyncCoordinator>>,
     #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pending_intents: DashMap<TransactionId, Vec<linkrs_core::wal::OutboxIntent>>,
@@ -255,7 +255,7 @@ mod tests {
             .create_index(1, "Node", "text", None)
             .await
             .expect("fulltext index should be created");
-        let coordinator = Arc::new(crate::SyncCoordinator::new(
+        let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(
             fulltext_manager,
             crate::BatchConfig::default(),
         ));
@@ -301,7 +301,7 @@ mod tests {
             .create_index(1, "Node", "text", None)
             .await
             .expect("receiver index should be created");
-        let coordinator = Arc::new(crate::SyncCoordinator::new(
+        let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(
             fulltext_manager.clone(),
             crate::BatchConfig::default(),
         ));

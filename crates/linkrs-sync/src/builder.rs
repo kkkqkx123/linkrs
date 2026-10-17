@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 #[cfg(feature = "fulltext")]
-use crate::coordinator::SyncCoordinator;
+use crate::fulltext_sync::FulltextSyncCoordinator;
 #[cfg(feature = "vector")]
 use crate::vector_sync::VectorSyncCoordinator;
 use crate::DeadLetterQueue;
@@ -9,7 +9,7 @@ use crate::SyncManager;
 
 pub struct SyncManagerBuilder {
     #[cfg(feature = "fulltext")]
-    sync_coordinator: Option<Arc<SyncCoordinator>>,
+    sync_coordinator: Option<Arc<FulltextSyncCoordinator>>,
     #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     dead_letter_queue: Option<Arc<DeadLetterQueue>>,
@@ -39,7 +39,7 @@ impl SyncManagerBuilder {
     }
 
     #[cfg(feature = "fulltext")]
-    pub fn with_sync_coordinator(mut self, coordinator: Arc<SyncCoordinator>) -> Self {
+    pub fn with_sync_coordinator(mut self, coordinator: Arc<FulltextSyncCoordinator>) -> Self {
         self.sync_coordinator = Some(coordinator);
         self
     }
@@ -95,21 +95,21 @@ impl SyncManagerBuilder {
 }
 
 #[cfg(feature = "fulltext")]
-pub struct SyncCoordinatorBuilder {
+pub struct FulltextSyncCoordinatorBuilder {
     fulltext_manager: Option<Arc<linkrs_fulltext::manager::FulltextIndexManager>>,
     config: Option<crate::batch::BatchConfig>,
     stats_manager: Option<Arc<linkrs_metrics::StatsManager>>,
 }
 
 #[cfg(feature = "fulltext")]
-impl Default for SyncCoordinatorBuilder {
+impl Default for FulltextSyncCoordinatorBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[cfg(feature = "fulltext")]
-impl SyncCoordinatorBuilder {
+impl FulltextSyncCoordinatorBuilder {
     pub fn new() -> Self {
         Self {
             fulltext_manager: None,
@@ -136,13 +136,13 @@ impl SyncCoordinatorBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Arc<SyncCoordinator>, crate::SyncError> {
+    pub fn build(self) -> Result<Arc<FulltextSyncCoordinator>, crate::SyncError> {
         let manager = self.fulltext_manager.ok_or_else(|| {
             crate::SyncError::Internal("FulltextIndexManager is required".to_string())
         })?;
         let config = self.config.unwrap_or_default();
 
-        let mut coordinator = SyncCoordinator::new(manager, config);
+        let mut coordinator = FulltextSyncCoordinator::new(manager, config);
 
         if let Some(stats) = self.stats_manager {
             coordinator = coordinator.with_stats_manager(stats);

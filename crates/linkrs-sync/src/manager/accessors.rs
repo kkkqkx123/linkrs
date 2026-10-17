@@ -1,9 +1,11 @@
 //! Read-only accessors, rebuild status and index facades.
 use super::*;
 #[cfg(feature = "fulltext")]
-use crate::coordinator::SyncCoordinator;
+use crate::fulltext_sync::FulltextSyncCoordinator;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
 use crate::sqlite_outbox::SqliteOutbox;
+#[cfg(feature = "vector")]
+use crate::vector_index_manager::VectorIndexManager;
 #[cfg(feature = "vector")]
 use crate::vector_sync::VectorSyncCoordinator;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
@@ -28,15 +30,10 @@ impl super::SyncManager {
             .clone()
     }
 
+    /// Fulltext sync coordinator. Returns `None` when the fulltext feature is
+    /// not enabled or the coordinator has not been initialized.
     #[cfg(feature = "fulltext")]
-    pub fn sync_coordinator(&self) -> &Arc<SyncCoordinator> {
-        self.sync_coordinator
-            .as_ref()
-            .expect("SyncCoordinator not available without fulltext feature")
-    }
-
-    #[cfg(feature = "fulltext")]
-    pub(crate) fn sync_coordinator_opt(&self) -> Option<&Arc<SyncCoordinator>> {
+    pub fn sync_coordinator(&self) -> Option<&Arc<FulltextSyncCoordinator>> {
         self.sync_coordinator.as_ref()
     }
 
@@ -52,11 +49,8 @@ impl super::SyncManager {
 
     #[cfg(feature = "fulltext")]
     pub fn fulltext_manager(&self) -> Arc<linkrs_fulltext::manager::FulltextIndexManager> {
-        self.sync_coordinator
-            .as_ref()
-            .expect("SyncCoordinator not available without fulltext feature")
-            .fulltext_manager()
-            .clone()
+        self.fulltext_manager_opt()
+            .expect("FulltextIndexManager not available without fulltext feature")
     }
 
     /// Non-panicking fulltext manager access for read-only diagnostics and
@@ -66,8 +60,7 @@ impl super::SyncManager {
     pub fn fulltext_manager_opt(
         &self,
     ) -> Option<Arc<linkrs_fulltext::manager::FulltextIndexManager>> {
-        self.sync_coordinator
-            .as_ref()
+        self.sync_coordinator()
             .map(|coordinator| coordinator.fulltext_manager().clone())
     }
 
@@ -97,8 +90,25 @@ impl super::SyncManager {
             .unwrap_or_default()
     }
 
+    /// Vector index manager. Panics when the vector feature is not enabled.
+    #[cfg(feature = "vector")]
+    pub fn vector_manager(&self) -> Arc<VectorIndexManager> {
+        self.vector_coordinator
+            .as_ref()
+            .map(|coordinator| coordinator.index_manager().clone())
+            .expect("VectorIndexManager not available without vector feature")
+    }
+
+    /// Non-panicking vector index manager access for read-only diagnostics and
+    /// maintenance endpoints. `None` when the vector target is not configured.
+    #[cfg(feature = "vector")]
+    pub fn vector_manager_opt(&self) -> Option<Arc<VectorIndexManager>> {
+        self.vector_coordinator
+            .as_ref()
+            .map(|coordinator| coordinator.index_manager().clone())
+    }
+
     /// True when any configured engine reports an index needing attention.
-    #[cfg(any(feature = "fulltext", feature = "vector"))]
     pub fn has_inconsistent_indexes(&self) -> bool {
         #[cfg(feature = "fulltext")]
         if !self.inconsistent_fulltext_indexes().is_empty() {
@@ -118,7 +128,10 @@ impl super::SyncManager {
     /// first and then the vector coordinator, so operators poll a single
     /// endpoint instead of knowing which engine backs `(space, tag, field)`.
     /// Returns `None` when neither target has ever run a rebuild for the key.
-    #[cfg(any(feature = "fulltext", feature = "vector"))]
+    #[cfg_attr(
+        not(any(feature = "fulltext", feature = "vector")),
+        allow(unused_variables)
+    )]
     pub fn rebuild_progress(
         &self,
         space_id: u64,
@@ -137,17 +150,6 @@ impl super::SyncManager {
                 return Some(progress);
             }
         }
-        None
-    }
-
-    /// No rebuild engines are compiled in, so no progress can exist.
-    #[cfg(not(any(feature = "fulltext", feature = "vector")))]
-    pub fn rebuild_progress(
-        &self,
-        _space_id: u64,
-        _tag_name: &str,
-        _field_name: &str,
-    ) -> Option<linkrs_core::index_events::RebuildProgress> {
         None
     }
 

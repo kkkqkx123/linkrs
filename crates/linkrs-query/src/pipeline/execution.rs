@@ -333,7 +333,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         // Populate unified search providers for discovery
         {
-            #[cfg(any(feature = "fulltext", feature = "vector"))]
+            #[cfg_attr(not(any(feature = "fulltext", feature = "vector")), allow(unused_mut))]
             let mut providers: Vec<
                 Arc<dyn crate::executor::base::traits::SearchProvider>,
             > = Vec::new();
@@ -349,8 +349,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     crate::executor::base::traits::VectorProvider::new(coordinator.clone()),
                 ));
             }
-            #[cfg(not(any(feature = "fulltext", feature = "vector")))]
-            let providers: Vec<Arc<dyn crate::executor::base::traits::SearchProvider>> = Vec::new();
             context.search.search_providers = providers;
         }
         if let Some(ref space_name) = query_context.space_name() {

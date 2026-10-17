@@ -21,12 +21,12 @@ vector-qdrant = ["vector", "dep:vector-client", "linkrs-config/vector-qdrant"]
 # top of `vector-qdrant`; enabling both compiles in HTTP + gRPC.
 vector-http = ["vector-qdrant", "vector-client/qdrant-http"]
 vector-grpc = ["vector-qdrant", "vector-client/qdrant-grpc"]
-fulltext = ["linkrs-fulltext/fulltext"]
+fulltext = ["dep:linkrs-fulltext", "linkrs-fulltext/fulltext"]
 
 [dependencies]
 linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
 linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
-linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext" }
+linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext", optional = true }
 linkrs-config = { version = "0.1.0", path = "../linkrs-config" }
 llm-embedding = { version = "0.1.0", package = "llm-suite-embedding", path = "../llm-suite/crates/llm-suite-embedding", optional = true }
 llm-rerank = { version = "0.1.0", package = "llm-suite-rerank", path = "../llm-suite/crates/llm-suite-rerank", optional = true }

@@ -6,8 +6,8 @@ use linkrs::core::types::DataType;
 use linkrs::core::Value;
 use linkrs::search::SyncFailurePolicy;
 use linkrs::sync::batch::BatchConfig;
-use linkrs::sync::coordinator::SyncCoordinator;
 use linkrs::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
+use linkrs::sync::fulltext_sync::FulltextSyncCoordinator;
 use linkrs::sync::types::{ChangeType, IndexData, IndexType};
 use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use std::sync::Arc;
@@ -45,6 +45,7 @@ fn test_failed_sync_to_dead_letter_queue() {
     let dlq = harness
         .sync_manager
         .sync_coordinator()
+        .expect("fulltext sync coordinator is configured")
         .dead_letter_queue()
         .clone();
 
@@ -417,7 +418,7 @@ fn test_failure_policy_configuration() {
         "Should support FailClosed policy"
     );
 
-    // Verify FailOpen behavior through a SyncCoordinator
+    // Verify FailOpen behavior through a FulltextSyncCoordinator
     let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
     let index_path = temp_dir.path().join("index");
 
@@ -442,7 +443,7 @@ fn test_failure_policy_configuration() {
     // Create coordinator with FailClosed policy
     let fail_closed_config =
         BatchConfig::default().with_failure_policy(SyncFailurePolicy::FailClosed);
-    let _coordinator = SyncCoordinator::new(fulltext_manager.clone(), fail_closed_config);
+    let _coordinator = FulltextSyncCoordinator::new(fulltext_manager.clone(), fail_closed_config);
 
     // Verify the coordinator is functional (happy path)
     // Note: Full failure-policy behavior (FailClosed halting on first error)

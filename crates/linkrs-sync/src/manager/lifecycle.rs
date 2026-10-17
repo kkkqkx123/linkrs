@@ -34,7 +34,7 @@ impl super::SyncManager {
     }
 
     #[cfg(feature = "fulltext")]
-    pub fn new(sync_coordinator: Arc<SyncCoordinator>) -> Self {
+    pub fn new(sync_coordinator: Arc<FulltextSyncCoordinator>) -> Self {
         Self {
             sync_coordinator: Some(sync_coordinator),
             ..Self::new_common()
@@ -60,7 +60,7 @@ impl super::SyncManager {
 
     #[cfg(feature = "fulltext")]
     pub fn with_sync_config(
-        sync_coordinator: Arc<SyncCoordinator>,
+        sync_coordinator: Arc<FulltextSyncCoordinator>,
         _sync_config: SyncConfig,
     ) -> Self {
         Self::new(sync_coordinator)

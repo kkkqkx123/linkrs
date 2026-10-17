@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use linkrs_core::types::VertexId;
 use linkrs_sync::batch::BatchConfig;
 use linkrs_sync::builder::SyncManagerBuilder;
-use linkrs_sync::coordinator::SyncCoordinator;
+use linkrs_sync::fulltext_sync::FulltextSyncCoordinator;
 use linkrs_sync::{FulltextRebuildOptions, RebuildDoc, RebuildDocSource, RebuildEntity};
 use std::sync::Arc;
 
@@ -87,7 +87,7 @@ async fn test_edge_fulltext_lifecycle() {
 
     // Rebuild from a primary-storage-style scan source: the scratch engine
     // backfills both edge documents and publish swaps it in.
-    let coordinator = Arc::new(SyncCoordinator::new(
+    let coordinator = Arc::new(FulltextSyncCoordinator::new(
         ctx.manager.clone(),
         BatchConfig::default(),
     ));

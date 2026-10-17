@@ -48,7 +48,7 @@ fn test_batch_flush_on_timeout() {
 
     // Insert single vertex (below batch size)
     let mut properties = std::collections::HashMap::new();
-    properties.insert("name".to_string(), Value::string("Timeout Test"));
+    properties.insert("name".into(), Value::string("Timeout Test"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
@@ -95,7 +95,7 @@ fn test_batch_flush_on_size_trigger() {
 
     for i in 0..100 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("name".to_string(), Value::string(format!("Doc{}", i)));
+        properties.insert("name".into(), Value::string(format!("Doc{}", i)));
         let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = linkrs::core::Vertex::new(
             linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
@@ -156,10 +156,7 @@ fn test_large_batch_processing() {
 
     for i in 0..200 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert(
-            "name".to_string(),
-            Value::string(format!("LargeBatch{}", i)),
-        );
+        properties.insert("name".into(), Value::string(format!("LargeBatch{}", i)));
         let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = linkrs::core::Vertex::new(
             linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
@@ -220,7 +217,7 @@ fn test_mixed_operation_types_in_batch() {
 
     for i in 0..5 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("name".to_string(), Value::string(format!("Initial{}", i)));
+        properties.insert("name".into(), Value::string(format!("Initial{}", i)));
         let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = linkrs::core::Vertex::new(
             linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
@@ -236,7 +233,7 @@ fn test_mixed_operation_types_in_batch() {
 
     for i in 0..3 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("name".to_string(), Value::string(format!("Updated{}", i)));
+        properties.insert("name".into(), Value::string(format!("Updated{}", i)));
         let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = linkrs::core::Vertex::new(
             linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
@@ -280,7 +277,7 @@ fn test_rapid_successive_commits() {
 
     for i in 0..10 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("name".to_string(), Value::string(format!("Rapid{}", i)));
+        properties.insert("name".into(), Value::string(format!("Rapid{}", i)));
         let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = linkrs::core::Vertex::new(
             linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),

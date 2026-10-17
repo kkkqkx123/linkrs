@@ -45,7 +45,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
     use linkrs_config::fulltext::FulltextConfig;
     use linkrs_fulltext::FulltextIndexManager;
     use linkrs_sync::batch::BatchConfig;
-    use linkrs_sync::coordinator::SyncCoordinator;
+    use linkrs_sync::fulltext_sync::FulltextSyncCoordinator;
 
     let directory = tempfile::tempdir().expect("temporary directory should be created");
     let work_dir = directory.path().to_path_buf();
@@ -75,7 +75,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
     .expect("fulltext index should be created")
     .expect("fulltext index should be created");
 
-    let sync_coordinator = Arc::new(SyncCoordinator::new(
+    let sync_coordinator = Arc::new(FulltextSyncCoordinator::new(
         fulltext_manager,
         BatchConfig::default(),
     ));

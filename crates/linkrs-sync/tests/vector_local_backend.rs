@@ -140,7 +140,7 @@ async fn test_batch_delivery_applies_upserts_and_deletes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_engine_replay_is_idempotent_per_txn_id() {
+async fn test_engine_replay_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let engine = make_engine(dir.path().join("vec").as_path());
 
@@ -155,11 +155,11 @@ async fn test_engine_replay_is_idempotent_per_txn_id() {
         collection: "space_1".to_string(),
         point: VectorPoint::new("v1_user_embedding", vec![0.5, 0.5, 0.0, 0.0]),
     }];
-    engine.apply_txn(7u64, txn_ops.clone()).unwrap();
+    engine.apply_txn(txn_ops.clone()).unwrap();
     assert_eq!(engine.count("space_1").unwrap(), 1);
 
-    // Replaying the same transaction id is a no-op for the same point.
-    engine.apply_txn(7u64, txn_ops).unwrap();
+    // Re-applying the same upsert is a no-op for the same point.
+    engine.apply_txn(txn_ops).unwrap();
     assert_eq!(engine.count("space_1").unwrap(), 1);
 }
 

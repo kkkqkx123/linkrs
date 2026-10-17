@@ -54,14 +54,37 @@ for crate in "${CRATES[@]}"; do
         echo ""
         continue
     fi
+    # linkrs-fulltext has a dev-dependency on linkrs-sync, creating a
+    # publish-time cycle (linkrs-sync depends on linkrs-fulltext). Strip
+    # the dev-dependency and skip verification (tests require linkrs-sync),
+    # then restore the manifest.
+    restore_manifest=""
+    if [[ "$crate" == "crates/linkrs-fulltext" ]]; then
+        if grep -q '^linkrs-sync = ' "$manifest"; then
+            sed -i 's/^linkrs-sync = /# linkrs-sync = /' "$manifest"
+            restore_manifest="linkrs-sync"
+        fi
+    fi
+
     set +e
     if $DRY_RUN; then
-        (cd "$crate" && cargo publish --dry-run --allow-dirty --registry crates-io)
+        if [[ -n "$restore_manifest" ]]; then
+            (cd "$crate" && cargo publish --dry-run --no-verify --allow-dirty --registry crates-io)
+        else
+            (cd "$crate" && cargo publish --dry-run --allow-dirty --registry crates-io)
+        fi
     else
-        (cd "$crate" && cargo publish --allow-dirty --registry crates-io)
+        if [[ -n "$restore_manifest" ]]; then
+            (cd "$crate" && cargo publish --no-verify --allow-dirty --registry crates-io)
+        else
+            (cd "$crate" && cargo publish --allow-dirty --registry crates-io)
+        fi
     fi
     rc=$?
     set -e
+    if [[ -n "$restore_manifest" ]]; then
+        sed -i 's/^# linkrs-sync = /linkrs-sync = /' "$manifest"
+    fi
     if [[ $rc -ne 0 ]]; then
         # In dry-run mode, unpublished internal dependencies cannot be
         # resolved from the real index yet; warn instead of aborting.

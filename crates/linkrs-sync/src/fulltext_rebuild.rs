@@ -149,7 +149,7 @@ impl SyncManager {
         source: &mut dyn RebuildDocSource,
         options: FulltextRebuildOptions,
     ) -> Result<u64, SyncError> {
-        let coordinator = self.sync_coordinator_opt().ok_or_else(|| {
+        let coordinator = self.sync_coordinator().ok_or_else(|| {
             SyncError::PersistenceError("fulltext target is not configured".to_string())
         })?;
         let manager = coordinator.fulltext_manager().clone();
@@ -483,7 +483,7 @@ impl SyncManager {
             )
             .await
             .map_err(|error| SyncError::PersistenceError(error.to_string()))?;
-        if let Some(coordinator) = self.sync_coordinator_opt() {
+        if let Some(coordinator) = self.sync_coordinator() {
             coordinator
                 .repoint_fulltext_processor(space_id, tag_name, field_name, Arc::clone(engine))
                 .await;
@@ -584,7 +584,7 @@ impl SyncManager {
     /// every known fulltext index, and collect scratch poll left by crashes.
     /// Idempotent; safe to run at startup before serving traffic.
     pub async fn recover_stale_fulltext_rebuilds(&self) -> Result<usize, SyncError> {
-        let coordinator = self.sync_coordinator_opt().ok_or_else(|| {
+        let coordinator = self.sync_coordinator().ok_or_else(|| {
             SyncError::PersistenceError("fulltext target is not configured".to_string())
         })?;
         let manager = coordinator.fulltext_manager();

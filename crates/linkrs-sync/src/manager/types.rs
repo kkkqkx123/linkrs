@@ -1,6 +1,4 @@
 //! Shared types for the sync manager: error, configs, edge views.
-#[cfg(feature = "fulltext")]
-use crate::coordinator::CoordinatorError;
 use linkrs_core::Value;
 #[derive(Debug, Clone)]
 pub struct IndexCreateRequest {
@@ -82,13 +80,11 @@ impl<'a> EdgeProps<'a> {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
+    /// Fulltext engine failure, carried as an opaque message so the generic
+    /// sync error stays independent of the fulltext engine's error types.
     #[cfg(feature = "fulltext")]
-    #[error("Coordinator error: {0}")]
-    CoordinatorError(#[from] CoordinatorError),
-
-    #[cfg(feature = "fulltext")]
-    #[error("Sync coordinator error: {0}")]
-    SyncCoordinatorError(#[from] crate::coordinator::SyncCoordinatorError),
+    #[error("Fulltext error: {0}")]
+    FulltextError(String),
 
     #[error("Buffer error: {0}")]
     BufferError(String),

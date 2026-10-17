@@ -234,10 +234,11 @@ pub async fn start_service_with_config_path(
                 };
 
                 let batch_config = linkrs_sync::batch::BatchConfig::from(sync_config.clone());
-                let sync_coordinator = Arc::new(linkrs_sync::coordinator::SyncCoordinator::new(
-                    manager.clone(),
-                    batch_config,
-                ));
+                let sync_coordinator =
+                    Arc::new(linkrs_sync::fulltext_sync::FulltextSyncCoordinator::new(
+                        manager.clone(),
+                        batch_config,
+                    ));
 
                 let sync_manager = SyncManager::with_sync_config(sync_coordinator, sync_config);
 

@@ -185,7 +185,9 @@ pub(crate) fn format_vector_point_id(
     format!("{}#{}#{}", encoded, tag, field)
 }
 impl super::SyncManager {
-    #[cfg(any(feature = "fulltext", feature = "vector"))]
+    /// Names of the engines that are compiled in and configured. Empty when no
+    /// engine is configured.
+    #[cfg_attr(not(any(feature = "fulltext", feature = "vector")), allow(unused_mut))]
     fn delivery_target_names(&self) -> Vec<&'static str> {
         let mut targets = Vec::new();
         #[cfg(feature = "fulltext")]
@@ -197,12 +199,6 @@ impl super::SyncManager {
             targets.push("vector");
         }
         targets
-    }
-
-    /// No sync engines are compiled in, so there are no delivery targets.
-    #[cfg(not(any(feature = "fulltext", feature = "vector")))]
-    fn delivery_target_names(&self) -> Vec<&'static str> {
-        Vec::new()
     }
 
     fn payload_needs_vector(&self, payload: &OutboxPayload) -> bool {

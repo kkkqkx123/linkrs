@@ -67,7 +67,7 @@ fn create_sync_manager() -> Arc<SyncManager> {
         std::mem::forget(fulltext_temp_dir);
         let sync_config = SyncConfig::default();
         let batch_config = linkrs::sync::batch::BatchConfig::from(sync_config.clone());
-        let sync_coordinator = Arc::new(linkrs::sync::coordinator::SyncCoordinator::new(
+        let sync_coordinator = Arc::new(linkrs::sync::fulltext_sync::FulltextSyncCoordinator::new(
             manager,
             batch_config,
         ));

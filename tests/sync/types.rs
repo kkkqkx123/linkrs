@@ -58,22 +58,6 @@ fn test_index_operation_types() {
     assert_eq!(key, (3, "tag3".to_string(), "field3".to_string()));
 }
 
-/// TC-223: Fulltext error types
-#[cfg(feature = "fulltext")]
-#[test]
-fn test_fulltext_error_types() {
-    use linkrs::sync::coordinator::FulltextError;
-
-    let not_found = FulltextError::IndexNotFound("my_index".to_string());
-    assert!(matches!(not_found, FulltextError::IndexNotFound(_)));
-
-    let timeout = FulltextError::Timeout;
-    assert!(matches!(timeout, FulltextError::Timeout));
-
-    let internal = FulltextError::Internal("something went wrong".to_string());
-    assert!(matches!(internal, FulltextError::Internal(_)));
-}
-
 /// TC-225: Vector error types
 #[test]
 fn test_vector_error_types() {
@@ -102,11 +86,14 @@ fn test_vector_error_types() {
 #[cfg(feature = "fulltext")]
 #[test]
 fn test_coordinator_error_types() {
-    use linkrs::sync::coordinator::{CoordinatorError, FulltextError};
     use linkrs::sync::vector_error::{VectorCoordinatorError, VectorError};
+    use linkrs::sync::FulltextCoordinatorError;
 
-    let fulltext_coord_err = CoordinatorError::Fulltext(FulltextError::Timeout);
-    assert!(matches!(fulltext_coord_err, CoordinatorError::Fulltext(_)));
+    let fulltext_coord_err = FulltextCoordinatorError::InvalidOperation("x".to_string());
+    assert!(matches!(
+        fulltext_coord_err,
+        FulltextCoordinatorError::InvalidOperation(_)
+    ));
 
     let vec_coord_err = VectorCoordinatorError::Vector(VectorError::Timeout);
     assert!(matches!(vec_coord_err, VectorCoordinatorError::Vector(_)));
@@ -145,7 +132,7 @@ fn test_dead_letter_entry() {
 #[cfg(feature = "fulltext")]
 #[test]
 fn test_change_type_conversion() {
-    use linkrs::sync::coordinator::ChangeType;
+    use linkrs::sync::ChangeType;
     use linkrs::sync::VectorChangeType;
 
     let vt: VectorChangeType = ChangeType::Insert.into();

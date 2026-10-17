@@ -15,8 +15,8 @@ use crate::search::{
 use crate::storage::GraphStorage;
 use crate::storage::{StorageCommitOps, StorageReader, StorageSchemaOps, StorageWriter};
 use crate::sync::batch::BatchConfig;
-use crate::sync::coordinator::{ChangeType, SyncCoordinator};
 use crate::sync::manager::SyncManager;
+use crate::sync::{ChangeType, FulltextSyncCoordinator};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,7 +26,7 @@ use tempfile::TempDir;
 pub struct SyncTestHarness {
     pub storage: GraphStorage,
     pub sync_manager: Arc<SyncManager>,
-    pub sync_coordinator: Arc<SyncCoordinator>,
+    pub sync_coordinator: Arc<FulltextSyncCoordinator>,
     pub temp_dir: TempDir,
     pub current_txn_id: Option<u64>,
     pub current_txn_seq: u64,
@@ -70,8 +70,10 @@ impl SyncTestHarness {
             failure_policy: crate::search::SyncFailurePolicy::FailOpen,
         };
 
-        let sync_coordinator =
-            Arc::new(SyncCoordinator::new(fulltext_manager.clone(), batch_config));
+        let sync_coordinator = Arc::new(FulltextSyncCoordinator::new(
+            fulltext_manager.clone(),
+            batch_config,
+        ));
 
         // Create sync manager
         let mut sync_manager = SyncManager::new(sync_coordinator.clone());
@@ -131,7 +133,10 @@ impl SyncTestHarness {
         // Create fulltext index for specified fields
         let space_id = self.storage.get_space_id(space_name)?;
         self.rt.block_on(async {
-            let coordinator = self.sync_manager.sync_coordinator();
+            let coordinator = self
+                .sync_manager
+                .sync_coordinator()
+                .expect("fulltext sync coordinator is configured");
             for field in fulltext_fields {
                 let _ = coordinator
                     .fulltext_manager()
@@ -241,6 +246,7 @@ impl SyncTestHarness {
             if !properties.is_empty() {
                 self.sync_manager
                     .sync_coordinator()
+                    .expect("fulltext sync coordinator is configured")
                     .on_vertex_change(
                         space_id,
                         &tag_name,
@@ -289,7 +295,7 @@ impl SyncTestHarness {
                         &old_tag_name,
                         &Value::from(vertex_id),
                         &[(field_name.clone(), value.clone())],
-                        crate::sync::coordinator::ChangeType::Delete,
+                        crate::sync::ChangeType::Delete,
                     )?;
                 }
             }
@@ -301,7 +307,7 @@ impl SyncTestHarness {
                     &tag_name,
                     &Value::from(vertex_id),
                     &[(field_name.clone(), value.clone())],
-                    crate::sync::coordinator::ChangeType::Insert,
+                    crate::sync::ChangeType::Insert,
                 )?;
             }
 
@@ -314,7 +320,7 @@ impl SyncTestHarness {
                     &tag_name,
                     &Value::from(vertex_id),
                     &[(field_name.clone(), value.clone())],
-                    crate::sync::coordinator::ChangeType::Insert,
+                    crate::sync::ChangeType::Insert,
                 )?;
             }
 
@@ -360,7 +366,7 @@ impl SyncTestHarness {
                     &tag_name,
                     &vid_value,
                     &[(field_name.clone(), value.clone())],
-                    crate::sync::coordinator::ChangeType::Delete,
+                    crate::sync::ChangeType::Delete,
                 )?;
             }
             self.storage
@@ -382,6 +388,7 @@ impl SyncTestHarness {
         let results = self.rt.block_on(async {
             self.sync_manager
                 .sync_coordinator()
+                .expect("fulltext sync coordinator is configured")
                 .fulltext_manager()
                 .search(space_id, tag_name, field_name, query, limit)
                 .await

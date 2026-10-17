@@ -13,13 +13,13 @@ use super::common::FulltextTestContext;
 use linkrs_core::types::TransactionId;
 use linkrs_fulltext::EngineType;
 use linkrs_sync::batch::BatchConfig;
-use linkrs_sync::coordinator::{ChangeContext, ChangeType, SyncCoordinator};
 use linkrs_sync::manager::SyncManager;
+use linkrs_sync::{ChangeContext, ChangeType, FulltextSyncCoordinator};
 use std::sync::Arc;
 
 #[allow(dead_code)]
 struct TransactionTestContext {
-    coordinator: Arc<SyncCoordinator>,
+    coordinator: Arc<FulltextSyncCoordinator>,
     sync_manager: Arc<SyncManager>,
     fulltext_ctx: FulltextTestContext,
 }
@@ -28,7 +28,7 @@ impl TransactionTestContext {
     async fn new() -> Self {
         let fulltext_ctx = FulltextTestContext::new();
         let batch_config = BatchConfig::default();
-        let coordinator = Arc::new(SyncCoordinator::new(
+        let coordinator = Arc::new(FulltextSyncCoordinator::new(
             fulltext_ctx.manager.clone(),
             batch_config,
         ));

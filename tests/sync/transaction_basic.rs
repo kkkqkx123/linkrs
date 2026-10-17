@@ -499,8 +499,8 @@ fn test_transaction_edge_with_properties_sync() {
         .expect("Failed to begin transaction");
 
     let mut edge_props = HashMap::new();
-    edge_props.insert("position".to_string(), Value::string("Engineer"));
-    edge_props.insert("since".to_string(), Value::Int(2020));
+    edge_props.insert("position".into(), Value::string("Engineer"));
+    edge_props.insert("since".into(), Value::Int(2020));
 
     let edge = linkrs::core::Edge::new(
         VertexId::try_from_int64(1).expect("test vertex id"),

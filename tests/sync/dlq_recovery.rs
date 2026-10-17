@@ -30,6 +30,7 @@ fn test_dlq_recovery_flow() {
     let dlq = harness
         .sync_manager
         .sync_coordinator()
+        .expect("fulltext sync coordinator is configured")
         .dead_letter_queue()
         .clone();
 
@@ -87,6 +88,7 @@ fn test_dlq_retry_flow() {
     let dlq = harness
         .sync_manager
         .sync_coordinator()
+        .expect("fulltext sync coordinator is configured")
         .dead_letter_queue()
         .clone();
 
@@ -148,6 +150,7 @@ fn test_dlq_recovery_with_limit() {
     let dlq = harness
         .sync_manager
         .sync_coordinator()
+        .expect("fulltext sync coordinator is configured")
         .dead_letter_queue()
         .clone();
 
@@ -193,6 +196,7 @@ fn test_recover_operations_for_specific_index() {
     let dlq = harness
         .sync_manager
         .sync_coordinator()
+        .expect("fulltext sync coordinator is configured")
         .dead_letter_queue()
         .clone();
 

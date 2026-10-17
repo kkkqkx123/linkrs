@@ -29,7 +29,7 @@ fn test_complete_sync_and_verify() {
         .expect("Failed to create tag");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::string("Complete Test"));
+    properties.insert("title".into(), Value::string("Complete Test"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
@@ -70,7 +70,7 @@ fn test_transaction_commit_and_verify() {
         .expect("Failed to begin transaction");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::string("Transaction Test"));
+    properties.insert("title".into(), Value::string("Transaction Test"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
@@ -115,7 +115,7 @@ fn test_transaction_rollback_and_verify() {
         .expect("Failed to begin transaction");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::string("Rollback Test"));
+    properties.insert("title".into(), Value::string("Rollback Test"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
@@ -191,7 +191,7 @@ fn test_multiple_sequential_transactions() {
             let vid = txn_num * 3 + i + 1;
             let mut properties = std::collections::HashMap::new();
             properties.insert(
-                "title".to_string(),
+                "title".into(),
                 Value::string(format!("Seq{}{}", txn_num, i)),
             );
             let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
@@ -241,7 +241,7 @@ fn test_interleaved_txn_non_txn() {
         .expect("Failed to create tag");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::string("NonTxn1"));
+    properties.insert("title".into(), Value::string("NonTxn1"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
@@ -258,7 +258,7 @@ fn test_interleaved_txn_non_txn() {
         .expect("Failed to begin transaction");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::string("Txn1"));
+    properties.insert("title".into(), Value::string("Txn1"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(2).expect("test vertex id"),
@@ -276,7 +276,7 @@ fn test_interleaved_txn_non_txn() {
     harness.wait_for_async(200);
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::string("NonTxn2"));
+    properties.insert("title".into(), Value::string("NonTxn2"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(3).expect("test vertex id"),
@@ -319,7 +319,7 @@ fn test_large_transaction() {
 
     for i in 0..50 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("title".to_string(), Value::string(format!("Large{}", i)));
+        properties.insert("title".into(), Value::string(format!("Large{}", i)));
         let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = linkrs::core::Vertex::new(
             linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
@@ -374,7 +374,7 @@ fn test_rollback_does_not_corrupt_existing_data() {
         .expect("Failed to create tag");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::string("Initial"));
+    properties.insert("title".into(), Value::string("Initial"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(1).expect("test vertex id"),
@@ -395,7 +395,7 @@ fn test_rollback_does_not_corrupt_existing_data() {
         .expect("Failed to begin transaction");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::string("Failed"));
+    properties.insert("title".into(), Value::string("Failed"));
     let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex = linkrs::core::Vertex::new(
         linkrs::core::types::VertexId::try_from_int64(2).expect("test vertex id"),
@@ -437,7 +437,7 @@ fn test_storage_consistency_after_multi_insert() {
 
     for i in 0..10 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("title".to_string(), Value::string(format!("Doc{}", i)));
+        properties.insert("title".into(), Value::string(format!("Doc{}", i)));
         let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = linkrs::core::Vertex::new(
             linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),
@@ -478,7 +478,7 @@ fn test_delete_and_verify_remaining() {
 
     for i in 0..5 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("title".to_string(), Value::string(format!("Initial{}", i)));
+        properties.insert("title".into(), Value::string(format!("Initial{}", i)));
         let tag = linkrs::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = linkrs::core::Vertex::new(
             linkrs::core::types::VertexId::try_from_int64(i + 1).expect("test vertex id"),

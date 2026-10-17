@@ -453,7 +453,7 @@ impl super::SyncManager {
                     commit_lsn,
                     space_id: *space_id,
                     index_name: tag_name,
-                    entity_id: crate::rebuild::fulltext_vertex_doc_id(vertex_id),
+                    entity_id: crate::fulltext_rebuild::fulltext_vertex_doc_id(vertex_id),
                     properties,
                     deleted: matches!(change_type, ChangeType::Delete),
                     engine_override: engine_override.clone(),
