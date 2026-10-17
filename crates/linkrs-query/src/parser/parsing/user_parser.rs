@@ -402,7 +402,9 @@ mod tests {
                 result.err()
             );
             match result.expect("parsed").ast.stmt() {
-                crate::parser::ast::Stmt::AlterUser(stmt) => assert_eq!(stmt.is_locked, Some(expected)),
+                crate::parser::ast::Stmt::AlterUser(stmt) => {
+                    assert_eq!(stmt.is_locked, Some(expected))
+                }
                 other => panic!("expected AlterUser, got {:?}", other),
             }
         }

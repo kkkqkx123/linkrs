@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use super::common::render_create_index;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::operators::spec::IndexManageCommand;
 use crate::storage::StorageSchemaOps;
 use linkrs_core::error::QueryError;
 use linkrs_core::types::index::{Index, IndexConfig, IndexType};
-use super::common::render_create_index;
 use linkrs_core::Value;
 
 pub(in crate::executor::streaming::operators) fn execute_index_manage(
@@ -230,11 +230,9 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 .get_tag_index(space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             if let Some(idx) = tag_hit {
-                let fields: Vec<String> =
-                    idx.fields.iter().map(|f| f.name.clone()).collect();
+                let fields: Vec<String> = idx.fields.iter().map(|f| f.name.clone()).collect();
                 let ddl = render_create_index("TAG", &idx.name, &idx.schema_name, &fields);
-                let schema =
-                    super::super::make_single_col_schema("create_statement", "string");
+                let schema = super::super::make_single_col_schema("create_statement", "string");
                 return Ok(Some(super::super::make_single_row(
                     schema,
                     vec![Value::string(ddl)],
@@ -245,11 +243,9 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?
             {
                 Some(idx) => {
-                    let fields: Vec<String> =
-                        idx.fields.iter().map(|f| f.name.clone()).collect();
+                    let fields: Vec<String> = idx.fields.iter().map(|f| f.name.clone()).collect();
                     let ddl = render_create_index("EDGE", &idx.name, &idx.schema_name, &fields);
-                    let schema =
-                        super::super::make_single_col_schema("create_statement", "string");
+                    let schema = super::super::make_single_col_schema("create_statement", "string");
                     Ok(Some(super::super::make_single_row(
                         schema,
                         vec![Value::string(ddl)],
@@ -304,11 +300,13 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        IndexManageCommand::RebuildTagIndex { index_name } => super::super::exec_ddl(storage, |s| {
-            StorageSchemaOps::rebuild_tag_index(s, space_name, index_name.as_str())
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
+        IndexManageCommand::RebuildTagIndex { index_name } => {
+            super::super::exec_ddl(storage, |s| {
+                StorageSchemaOps::rebuild_tag_index(s, space_name, index_name.as_str())
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                Ok(())
+            })
+        }
         IndexManageCommand::DescEdgeIndex { index_name } => {
             let reader = super::super::get_reader(storage)?;
             let name = index_name.as_str();
@@ -405,11 +403,13 @@ pub(in crate::executor::streaming::operators) fn execute_index_manage(
                 .collect();
             Ok(Some(DataChunk::new(rows, schema)))
         }
-        IndexManageCommand::RebuildEdgeIndex { index_name } => super::super::exec_ddl(storage, |s| {
-            StorageSchemaOps::rebuild_edge_index(s, space_name, index_name.as_str())
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
+        IndexManageCommand::RebuildEdgeIndex { index_name } => {
+            super::super::exec_ddl(storage, |s| {
+                StorageSchemaOps::rebuild_edge_index(s, space_name, index_name.as_str())
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                Ok(())
+            })
+        }
     };
     result
 }

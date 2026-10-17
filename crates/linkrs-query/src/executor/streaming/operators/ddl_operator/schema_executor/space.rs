@@ -145,8 +145,7 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                         &info.vid_type,
                         info.comment.as_deref(),
                     );
-                    let schema =
-                        super::super::make_single_col_schema("create_statement", "string");
+                    let schema = super::super::make_single_col_schema("create_statement", "string");
                     Ok(Some(super::super::make_single_row(
                         schema,
                         vec![Value::string(ddl)],

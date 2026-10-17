@@ -17,10 +17,10 @@
 #[path = "ddl/attach_detach.rs"]
 mod attach_detach;
 mod common;
-#[path = "ddl/contract_gaps.rs"]
-mod contract_gaps;
 #[path = "ddl/constraints.rs"]
 mod constraints;
+#[path = "ddl/contract_gaps.rs"]
+mod contract_gaps;
 #[path = "ddl/edge_alter.rs"]
 mod edge_alter;
 #[path = "ddl/edge_basic.rs"]

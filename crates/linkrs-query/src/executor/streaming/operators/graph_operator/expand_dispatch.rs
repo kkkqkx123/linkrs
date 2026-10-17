@@ -460,7 +460,6 @@ pub(super) fn expand_on_chunk(
         }
     }
 
-
     if out_rows.is_empty() {
         return Ok(None);
     }

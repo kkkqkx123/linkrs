@@ -221,9 +221,7 @@ pub(super) fn execute_user_manage(
                         .map(move |(space_id, role)| (username.clone(), space_id, role))
                 })
                 .collect();
-            pairs.sort_by(|left, right| {
-                left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1))
-            });
+            pairs.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
             if !space_name.is_empty() {
                 pairs.retain(|(_, space_id, _)| space_name_of(&spaces, *space_id) == *space_name);
             }

@@ -49,7 +49,10 @@ fn test_show_create_tag_full_constraints() {
         .assert_success()
         .assert_result_columns(&["create_statement"]);
     let ddl = ddl_text(&scenario);
-    assert!(ddl.contains("NOT NULL"), "DDL must carry NOT NULL, got: {ddl}");
+    assert!(
+        ddl.contains("NOT NULL"),
+        "DDL must carry NOT NULL, got: {ddl}"
+    );
     assert!(
         ddl.contains("DEFAULT 'unknown'"),
         "DDL must carry string default as SQL literal, got: {ddl}"
@@ -100,7 +103,10 @@ fn test_show_create_edge_with_endpoints() {
         ddl.contains("FROM Person TO Company"),
         "DDL must carry endpoint constraints, got: {ddl}"
     );
-    assert!(ddl.contains("NOT NULL"), "DDL must carry NOT NULL, got: {ddl}");
+    assert!(
+        ddl.contains("NOT NULL"),
+        "DDL must carry NOT NULL, got: {ddl}"
+    );
     assert!(
         ddl.contains("DEFAULT 'unknown'"),
         "DDL must carry defaults, got: {ddl}"

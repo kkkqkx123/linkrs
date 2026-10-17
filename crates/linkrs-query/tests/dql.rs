@@ -19,6 +19,8 @@ mod common;
 mod constant_folding;
 #[path = "dql/edge_ttl_fast_path.rs"]
 mod edge_ttl_fast_path;
+#[path = "dql/execution_contracts.rs"]
+mod execution_contracts;
 #[path = "dql/expand_columnar.rs"]
 mod expand_columnar;
 #[path = "dql/fetch.rs"]
@@ -27,8 +29,6 @@ mod fetch;
 mod find_path;
 #[path = "dql/go.rs"]
 mod go;
-#[path = "dql/execution_contracts.rs"]
-mod execution_contracts;
 #[path = "dql/lookup.rs"]
 mod lookup;
 #[path = "dql/match_query.rs"]

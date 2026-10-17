@@ -7,8 +7,6 @@
 use super::common;
 
 use common::test_scenario::TestScenario;
-use linkrs_core::Value;
-use linkrs_query::executor::base::ExecutionResult;
 use linkrs_query::parser::Parser;
 
 // ==================== Parser contract: unsupported/removed syntax ====================
@@ -106,7 +104,10 @@ fn test_varlen_invalid_range_is_error() {
             .exec_ddl("CREATE TAG Person(id INT, name STRING)")
             .query("MATCH (a:Person)-[r:KNOWS*2..1]->(b:Person) RETURN a");
         // Either an error or an empty result is acceptable; silent full traversal is not.
-        assert!(scenario.error().is_some() || scenario.last_result().map(|r| r.count()).unwrap_or(0) == 0);
+        assert!(
+            scenario.error().is_some()
+                || scenario.last_result().map(|r| r.count()).unwrap_or(0) == 0
+        );
     } else {
         assert!(result.is_err());
     }

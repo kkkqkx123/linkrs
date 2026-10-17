@@ -36,10 +36,10 @@ pub use join::{
     SemiJoinNode,
 };
 pub use management::{
-    AlterEdgeNode, AlterSequenceNode, AlterTagNode, AlterUserNode,
-    ChangePasswordNode, ClearSpaceNode, CreateEdgeIndexNode, CreateEdgeNode, CreateMacroNode,
-    CreateSequenceNode, CreateSpaceNode, CreateTagIndexNode, CreateTagNode, CreateTypeNode,
-    CreateUserNode, DescEdgeIndexNode, DescEdgeNode, DescSpaceNode, DescTagIndexNode, DescTagNode,
+    AlterEdgeNode, AlterSequenceNode, AlterTagNode, AlterUserNode, ChangePasswordNode,
+    ClearSpaceNode, CreateEdgeIndexNode, CreateEdgeNode, CreateMacroNode, CreateSequenceNode,
+    CreateSpaceNode, CreateTagIndexNode, CreateTagNode, CreateTypeNode, CreateUserNode,
+    DescEdgeIndexNode, DescEdgeNode, DescSpaceNode, DescTagIndexNode, DescTagNode,
     DescribeUserNode, DropEdgeIndexNode, DropEdgeNode, DropMacroNode, DropSequenceNode,
     DropSpaceNode, DropTagIndexNode, DropTagNode, DropTypeNode, DropUserNode, EdgeAlterInfo,
     EdgeManageInfo, GrantRoleNode, IndexManageInfo, MacroManageInfo, RebuildEdgeIndexNode,
@@ -47,8 +47,8 @@ pub use management::{
     ShowConfigsNode, ShowCreateEdgeNode, ShowCreateIndexNode, ShowCreateSpaceNode,
     ShowCreateTagNode, ShowEdgeIndexesNode, ShowEdgesNode, ShowIndexesNode, ShowQueriesNode,
     ShowRolesNode, ShowSessionsNode, ShowSpacesNode, ShowStatsNode, ShowStatsType,
-    ShowTagIndexesNode, ShowTagsNode, ShowUsersNode, SpaceManageInfo,
-    SwitchSpaceNode, TagAlterInfo, TagManageInfo, TypeManageInfo, UpdateEdgeEndpointsNode,
+    ShowTagIndexesNode, ShowTagsNode, ShowUsersNode, SpaceManageInfo, SwitchSpaceNode,
+    TagAlterInfo, TagManageInfo, TypeManageInfo, UpdateEdgeEndpointsNode,
 };
 pub use operation::{FilterNode, LimitNode, ProjectNode, SampleNode, SortItem, SortNode, TopNNode};
 pub use plan_node_factory::PlanNodeFactory;

@@ -227,9 +227,15 @@ impl CompiledExpr {
                 // the row evaluation environment. The compiled tree has no
                 // env access at function nodes, so keep them on the scalar
                 // interpreter path with the exact per-row semantics.
-                if global_registry_ref().get_builtin(name.as_str()).is_some_and(
-                    |f| matches!(f, crate::executor::expression::functions::BuiltinFunction::Sequence(_)),
-                ) {
+                if global_registry_ref()
+                    .get_builtin(name.as_str())
+                    .is_some_and(|f| {
+                        matches!(
+                            f,
+                            crate::executor::expression::functions::BuiltinFunction::Sequence(_)
+                        )
+                    })
+                {
                     return CompiledExpr::Fallback(expression.clone());
                 }
                 let args: Vec<CompiledExpr> = args

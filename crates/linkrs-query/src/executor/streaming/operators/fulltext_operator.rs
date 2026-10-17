@@ -55,9 +55,7 @@ fn make_manage_result(
 /// future engine variant fails to compile here instead of silently falling
 /// back to a default.
 #[cfg(feature = "fulltext")]
-fn map_engine_type(
-    engine: linkrs_core::types::FulltextEngineType,
-) -> linkrs_fulltext::EngineType {
+fn map_engine_type(engine: linkrs_core::types::FulltextEngineType) -> linkrs_fulltext::EngineType {
     match engine {
         linkrs_core::types::FulltextEngineType::Bm25 => linkrs_fulltext::EngineType::Bm25,
     }
@@ -89,7 +87,10 @@ fn fulltext_engine_config(
             config.insert("analyzer".to_string(), serde_json::json!(analyzer));
         }
         if let Some(store_original) = bm25.store_original {
-            config.insert("store_original".to_string(), serde_json::json!(store_original));
+            config.insert(
+                "store_original".to_string(),
+                serde_json::json!(store_original),
+            );
         }
         if !bm25.field_weights.is_empty() {
             config.insert(
@@ -127,7 +128,8 @@ fn plain_option_json(value: &linkrs_core::Value) -> serde_json::Value {
 }
 
 #[derive(Debug)]
-pub enum FulltextOperatorKind {    FulltextManage {
+pub enum FulltextOperatorKind {
+    FulltextManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: FulltextManageCommand,

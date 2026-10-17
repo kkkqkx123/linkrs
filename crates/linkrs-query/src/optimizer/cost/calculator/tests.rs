@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+use crate::optimizer::stats::StatisticsManager;
+use linkrs_core::value::Value;
+
 use super::*;
 
 use super::super::config::ESTIMATED_ROW_WIDTH_BYTES;

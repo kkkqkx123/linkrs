@@ -273,7 +273,9 @@ pub fn plan_repeated_element(
             expr_context,
             None,
         )?,
-        PathElement::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context, false)?,
+        PathElement::Edge(edge) => {
+            plan_pattern_edge(edge, space_id, space_name, expr_context, false)?
+        }
         _ => {
             return Err(PlannerError::PlanGenerationFailed(
                 "Repeated paths do not support nested complex patterns".to_string(),

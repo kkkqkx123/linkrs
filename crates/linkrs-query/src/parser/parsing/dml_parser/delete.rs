@@ -65,12 +65,12 @@ impl DmlParser {
                     // Long form: <edge_type> <src> -> <dst> [@rank] [, ...]
                     let type_name = match first.expression().map(|meta| meta.inner().clone()) {
                         Some(linkrs_core::types::Expression::Variable(name)) => name,
-                        Some(linkrs_core::types::Expression::Literal(linkrs_core::Value::FixedString(s))) => {
-                            s.to_string()
-                        }
-                        Some(linkrs_core::types::Expression::Literal(linkrs_core::Value::String(s))) => {
-                            s.to_string()
-                        }
+                        Some(linkrs_core::types::Expression::Literal(
+                            linkrs_core::Value::FixedString(s),
+                        )) => s.to_string(),
+                        Some(linkrs_core::types::Expression::Literal(
+                            linkrs_core::Value::String(s),
+                        )) => s.to_string(),
                         _ => {
                             return Err(ParseError::new(
                                 ParseErrorKind::UnexpectedToken,

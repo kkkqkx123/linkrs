@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use super::common::render_create_tag;
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::operators::spec::TagManageCommand;
 use crate::storage::StorageSchemaOps;
 use linkrs_core::error::QueryError;
 use linkrs_core::types::tag::TagInfo;
-use super::common::render_create_tag;
 use linkrs_core::Value;
 
 pub(in crate::executor::streaming::operators) fn execute_tag_manage(
@@ -234,8 +234,7 @@ pub(in crate::executor::streaming::operators) fn execute_tag_manage(
                         tag.ttl_col.as_deref(),
                         tag.comment.as_deref(),
                     );
-                    let schema =
-                        super::super::make_single_col_schema("create_statement", "string");
+                    let schema = super::super::make_single_col_schema("create_statement", "string");
                     Ok(Some(super::super::make_single_row(
                         schema,
                         vec![Value::string(ddl)],

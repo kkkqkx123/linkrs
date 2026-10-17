@@ -175,8 +175,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // DOT renders the same profiled plan as a graph; TABLE expands it
         // into the per-operator profiling rows below.
         if profile_stmt.format == crate::parser::ast::stmt::ExplainFormat::Dot {
-            let output =
-                crate::executor::explain::format::format_plan_as_dot(&plan_desc);
+            let output = crate::executor::explain::format::format_plan_as_dot(&plan_desc);
             let data_set = linkrs_core::DataSet::from_rows(
                 vec![vec![linkrs_core::Value::string(output)]],
                 vec!["plan".to_string()],

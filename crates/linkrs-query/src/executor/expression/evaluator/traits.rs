@@ -68,7 +68,9 @@ pub trait ExpressionContext {
     /// Obtain the sequence catalog manager for `curr_val` / `next_val`.
     /// Default implementation returns `None` — contexts without sequence
     /// support report the functions' missing-context error.
-    fn get_sequence_manager(&self) -> Option<std::sync::Arc<linkrs_core::metadata::SequenceManager>> {
+    fn get_sequence_manager(
+        &self,
+    ) -> Option<std::sync::Arc<linkrs_core::metadata::SequenceManager>> {
         None
     }
 

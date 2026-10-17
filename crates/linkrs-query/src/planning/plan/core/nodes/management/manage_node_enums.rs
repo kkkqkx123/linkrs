@@ -18,9 +18,6 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroI
 use crate::planning::plan::core::nodes::management::catalog_nodes::{
     CreateMacroNode, CreateTypeNode, DropMacroNode, DropTypeNode,
 };
-use crate::planning::plan::core::nodes::management::sequence_nodes::{
-    AlterSequenceNode, CreateSequenceNode, DropSequenceNode,
-};
 use crate::planning::plan::core::nodes::management::edge_nodes::{
     AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, RenameEdgeNode, ShowCreateEdgeNode,
     ShowEdgesNode, UpdateEdgeEndpointsNode,
@@ -30,10 +27,13 @@ use crate::planning::plan::core::nodes::management::index_nodes::{
     DropEdgeIndexNode, DropTagIndexNode, RebuildEdgeIndexNode, RebuildTagIndexNode,
     ShowCreateIndexNode, ShowEdgeIndexesNode, ShowIndexesNode, ShowTagIndexesNode,
 };
+use crate::planning::plan::core::nodes::management::sequence_nodes::{
+    AlterSequenceNode, CreateSequenceNode, DropSequenceNode,
+};
 use crate::planning::plan::core::nodes::management::space_nodes::{
     AttachDatabaseNode, CheckpointNode, ClearSpaceNode, CreateSpaceNode, DescSpaceNode,
-    DetachDatabaseNode, DropSpaceNode, ExportDatabaseNode, ImportDatabaseNode,
-    PurgeExpiredNode, ShowCreateSpaceNode, ShowSpacesNode, SwitchSpaceNode,
+    DetachDatabaseNode, DropSpaceNode, ExportDatabaseNode, ImportDatabaseNode, PurgeExpiredNode,
+    ShowCreateSpaceNode, ShowSpacesNode, SwitchSpaceNode,
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::{
     AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, RenameTagNode, ShowCreateTagNode,

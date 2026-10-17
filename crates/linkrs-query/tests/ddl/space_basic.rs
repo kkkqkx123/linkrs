@@ -155,7 +155,10 @@ fn test_show_create_space_renders_vid_type_and_comment() {
         .query("SHOW CREATE SPACE sc_space")
         .assert_success()
         .assert_result_columns(&["create_statement"]);
-    match scenario.last_result().expect("SHOW CREATE SPACE returns rows") {
+    match scenario
+        .last_result()
+        .expect("SHOW CREATE SPACE returns rows")
+    {
         ExecutionResult::DataSet { data: ds, .. } => {
             assert_eq!(ds.rows.len(), 1, "expected one DDL row");
             match &ds.rows[0][0] {

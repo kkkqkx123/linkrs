@@ -368,10 +368,7 @@ impl EdgeAlterInfo {
         self
     }
 
-    pub fn with_changes(
-        mut self,
-        changes: Vec<crate::parser::ast::stmt::PropertyChange>,
-    ) -> Self {
+    pub fn with_changes(mut self, changes: Vec<crate::parser::ast::stmt::PropertyChange>) -> Self {
         self.changes = changes;
         self
     }

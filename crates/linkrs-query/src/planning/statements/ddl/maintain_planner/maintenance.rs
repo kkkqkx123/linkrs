@@ -8,11 +8,11 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, MacroManageNode, SequenceManageNode, SpaceManageNode,
     TagManageNode, TypeManageNode,
 };
+use crate::planning::plan::core::nodes::management::sequence_nodes::SequenceManageInfo;
 use crate::planning::plan::core::nodes::management::space_nodes::{
     CreateSpaceNode, SpaceManageInfo,
 };
 use crate::planning::plan::core::nodes::management::tag_nodes::TagAlterInfo;
-use crate::planning::plan::core::nodes::management::sequence_nodes::SequenceManageInfo;
 use crate::planning::plan::core::nodes::{
     AlterEdgeNode, AlterSequenceNode, AlterTagNode, CreateEdgeNode, CreateMacroNode,
     CreateSequenceNode, CreateTagNode, CreateTypeNode, DropMacroNode, DropSequenceNode,
@@ -194,7 +194,8 @@ impl MaintainPlanner {
 
     fn contextual_body(
         body: &linkrs_core::types::expr::contextual::ContextualExpression,
-    ) -> Result<linkrs_core::Expression, PlannerError> {        body.expression()
+    ) -> Result<linkrs_core::Expression, PlannerError> {
+        body.expression()
             .map(|meta| meta.inner().clone())
             .ok_or_else(|| {
                 PlannerError::PlanGenerationFailed(
@@ -510,9 +511,7 @@ impl MaintainPlanner {
                 }
                 let node = DropSequenceNode::new(next_node_id(), seq_name.clone())
                     .with_if_exists(if_exists);
-                Ok(PlanNodeEnum::SequenceManage(SequenceManageNode::Drop(
-                    node,
-                )))
+                Ok(PlanNodeEnum::SequenceManage(SequenceManageNode::Drop(node)))
             }
         }
     }

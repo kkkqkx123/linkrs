@@ -88,8 +88,8 @@ pub(super) fn expand_single_step(
         let neighbors: Vec<Vec<VertexId>> = if ctx.edge_ttl_active(reader)? {
             let mut out = Vec::with_capacity(seed_vids.len());
             for vid in &seed_vids {
-                let edges =
-                    reader.get_node_edges_projected(space_name, vid, direction, edge_types, None, None)?;
+                let edges = reader
+                    .get_node_edges_projected(space_name, vid, direction, edge_types, None, None)?;
                 let mut ids = Vec::with_capacity(edges.len());
                 for edge in &edges {
                     let dst = match direction {

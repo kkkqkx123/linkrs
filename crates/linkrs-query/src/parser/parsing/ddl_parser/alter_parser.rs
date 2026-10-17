@@ -135,7 +135,10 @@ impl DdlParser {
         }
 
         let (additions, deletions, changes, new_comment) = self.parse_alter_operations(ctx)?;
-        if additions.is_empty() && deletions.is_empty() && changes.is_empty() && new_comment.is_none()
+        if additions.is_empty()
+            && deletions.is_empty()
+            && changes.is_empty()
+            && new_comment.is_none()
         {
             return Err(ParseError::new(
                 ParseErrorKind::SyntaxError,

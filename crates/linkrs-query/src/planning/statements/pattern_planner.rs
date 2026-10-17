@@ -182,9 +182,13 @@ pub fn plan_pattern(pattern: &Pattern, ctx: &PlanningContext) -> Result<SubPlan,
             ctx.expr_context,
             ctx.where_expression,
         ),
-        Pattern::Edge(edge) => {
-            plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context, ctx.optional)
-        }
+        Pattern::Edge(edge) => plan_pattern_edge(
+            edge,
+            ctx.space_id,
+            ctx.space_name,
+            ctx.expr_context,
+            ctx.optional,
+        ),
         Pattern::Path(_) => plan_path_pattern(pattern, ctx),
         Pattern::Variable(var) => plan_variable_pattern(var, ctx.space_id, ctx.validation_info),
     }

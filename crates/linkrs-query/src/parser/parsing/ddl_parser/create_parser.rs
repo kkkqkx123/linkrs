@@ -555,9 +555,7 @@ impl DdlParser {
                     ctx.next_token();
                     "comment".to_string()
                 }
-                TokenKind::PartitionNum
-                | TokenKind::ReplicaFactor
-                | TokenKind::VIdType => {
+                TokenKind::PartitionNum | TokenKind::ReplicaFactor | TokenKind::VIdType => {
                     let lexeme = ctx.current_token().lexeme.clone();
                     ctx.next_token();
                     lexeme

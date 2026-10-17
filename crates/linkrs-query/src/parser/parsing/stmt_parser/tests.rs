@@ -679,7 +679,11 @@ fn test_parse_use_graph_space_name() {
     // keyword when another identifier follows it.
     let mut ctx = create_parser_context("USE graph");
     let result = StmtParser::parse_statement(&mut ctx);
-    assert!(result.is_ok(), "USE graph parse failure: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "USE graph parse failure: {:?}",
+        result.err()
+    );
     if let Ok(Stmt::Use(stmt)) = result {
         assert_eq!(stmt.space, "graph");
     } else {

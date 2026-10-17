@@ -153,10 +153,7 @@ pub(super) fn vid_type_spelling(vid_type: &linkrs_core::types::DataType) -> Stri
     }
 }
 
-pub(super) fn render_ttl_parts(
-    ttl_duration: Option<i64>,
-    ttl_col: Option<&str>,
-) -> Vec<String> {
+pub(super) fn render_ttl_parts(ttl_duration: Option<i64>, ttl_col: Option<&str>) -> Vec<String> {
     match (ttl_duration, ttl_col) {
         (Some(duration), Some(col)) => vec![
             format!("ttl_duration={}", duration),

@@ -230,8 +230,7 @@ pub(in crate::executor::streaming::operators) fn execute_edge_manage(
                         et.ttl_col.as_deref(),
                         et.comment.as_deref(),
                     );
-                    let schema =
-                        super::super::make_single_col_schema("create_statement", "string");
+                    let schema = super::super::make_single_col_schema("create_statement", "string");
                     Ok(Some(super::super::make_single_row(
                         schema,
                         vec![Value::string(ddl)],

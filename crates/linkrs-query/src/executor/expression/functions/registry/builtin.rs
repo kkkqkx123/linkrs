@@ -393,8 +393,14 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Sequence(SequenceFunction::NextVal));
         // Nebula-style spellings without the underscore resolve to the same
         // variants so `nextval('s')` / `currval('s')` work as documented.
-        self.register_alias("NEXTVAL", BuiltinFunction::Sequence(SequenceFunction::NextVal));
-        self.register_alias("CURRVAL", BuiltinFunction::Sequence(SequenceFunction::CurrVal));
+        self.register_alias(
+            "NEXTVAL",
+            BuiltinFunction::Sequence(SequenceFunction::NextVal),
+        );
+        self.register_alias(
+            "CURRVAL",
+            BuiltinFunction::Sequence(SequenceFunction::CurrVal),
+        );
     }
 }
 

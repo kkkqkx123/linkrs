@@ -6,8 +6,8 @@
 use crate::binder::validation::CypherClauseKind;
 use crate::parser::ast::Stmt;
 use crate::planning::plan::core::next_node_id;
-use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
+use crate::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeEnum, ProjectNode};
 use crate::planning::plan::logical::logical_nodes::operation::{
     LogicalDedupNode, LogicalFilterNode, LogicalLimitNode, LogicalProjectNode, LogicalSampleNode,
