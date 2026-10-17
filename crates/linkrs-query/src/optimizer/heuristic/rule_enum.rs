@@ -436,6 +436,40 @@ impl Default for RuleRegistry {
     }
 }
 
+impl RuleRegistry {
+    /// Build a registry filtered by the `[optimizer.rules]` selection.
+    ///
+    /// `enabled` non-empty keeps only those rules (explicit selection wins
+    /// over the default rule set); `disabled` then removes rules. Names match
+    /// rule type names with or without the `Rule` suffix.
+    pub fn filtered(disabled: &[String], enabled: &[String]) -> Self {
+        fn normalise(name: &str) -> &str {
+            name.strip_suffix("Rule").unwrap_or(name)
+        }
+
+        let base = Self::default();
+        if disabled.is_empty() && enabled.is_empty() {
+            return base;
+        }
+        let enabled_set: std::collections::HashSet<&str> =
+            enabled.iter().map(|n| normalise(n)).collect();
+        let disabled_set: std::collections::HashSet<&str> =
+            disabled.iter().map(|n| normalise(n)).collect();
+        let mut registry = Self::new();
+        for rule in base.rules {
+            let name = normalise(rule.name());
+            if !enabled_set.is_empty() && !enabled_set.contains(name) {
+                continue;
+            }
+            if disabled_set.contains(name) {
+                continue;
+            }
+            registry.add(rule);
+        }
+        registry
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,5 +488,35 @@ mod tests {
             assert!(!name.is_empty());
             assert!(name.ends_with("Rule"));
         }
+    }
+
+    #[test]
+    fn test_filtered_disabled_removes_rule() {
+        let registry = RuleRegistry::filtered(
+            &["LeftJoinToInnerJoin".to_string()],
+            &[],
+        );
+        assert_eq!(registry.len(), 57);
+        assert!(registry
+            .iter()
+            .all(|rule| rule.name() != "LeftJoinToInnerJoinRule"));
+    }
+
+    #[test]
+    fn test_filtered_enabled_keeps_only_selected() {
+        let registry = RuleRegistry::filtered(
+            &[],
+            &["EliminateFilterRule".to_string(), "CombineFilter".to_string()],
+        );
+        assert_eq!(registry.len(), 2);
+        let names: Vec<&str> = registry.iter().map(|rule| rule.name()).collect();
+        assert!(names.contains(&"EliminateFilterRule"));
+        assert!(names.contains(&"CombineFilterRule"));
+    }
+
+    #[test]
+    fn test_filtered_unknown_names_select_nothing() {
+        let registry = RuleRegistry::filtered(&[], &["NoSuchRule".to_string()]);
+        assert!(registry.is_empty());
     }
 }

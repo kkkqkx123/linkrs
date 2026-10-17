@@ -11,17 +11,17 @@ homepage.workspace = true
 tonic-build = { workspace = true, optional = true }
 
 [dependencies]
-linkrs-core = { path = "../linkrs-core" }
-linkrs-config = { path = "../linkrs-config", features = ["server"] }
-linkrs-metrics = { path = "../linkrs-metrics" }
-linkrs-storage = { path = "../linkrs-storage" }
-linkrs-query = { path = "../linkrs-query" }
-linkrs-wire = { path = "../linkrs-wire" }
-linkrs-transaction = { path = "../linkrs-transaction" }
-linkrs-sync = { path = "../linkrs-sync" }
-linkrs-fulltext = { path = "../linkrs-fulltext" }
-linkrs-migration = { path = "../linkrs-migration" }
-linkrs-api = { path = "../linkrs-api" }
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-config = { version = "0.1.0", path = "../linkrs-config", features = ["server"] }
+linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
+linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
+linkrs-query = { version = "0.1.0", path = "../linkrs-query" }
+linkrs-wire = { version = "0.1.0", path = "../linkrs-wire" }
+linkrs-transaction = { version = "0.1.0", path = "../linkrs-transaction" }
+linkrs-sync = { version = "0.1.0", path = "../linkrs-sync" }
+linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext" }
+linkrs-migration = { version = "0.1.0", path = "../linkrs-migration" }
+linkrs-api = { version = "0.1.0", path = "../linkrs-api" }
 
 serde.workspace = true
 serde_json.workspace = true
@@ -50,10 +50,10 @@ async-trait.workspace = true
 
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
-vector-client = { path = "../vector-client", optional = true }
-simvec = { path = "../simvec", optional = true }
-llm-embedding = { path = "../llm-suite/crates/llm-embedding", optional = true }
-llm-rerank = { path = "../llm-suite/crates/llm-rerank", optional = true }
+vector-client = { version = "0.1.0", path = "../vector-client", optional = true }
+simvec = { version = "0.1.0", path = "../simvec", optional = true }
+llm-embedding = { version = "0.1.0", package = "llm-suite-embedding", path = "../llm-suite/crates/llm-suite-embedding", optional = true }
+llm-rerank = { version = "0.1.0", package = "llm-suite-rerank", path = "../llm-suite/crates/llm-suite-rerank", optional = true }
 reqwest = { workspace = true, optional = true }
 
 [features]
@@ -94,6 +94,6 @@ fulltext = [
 ]
 
 [dev-dependencies]
-linkrs-storage = { path = "../linkrs-storage", features = ["test-support"] }
+linkrs-storage = { version = "0.1.0", path = "../linkrs-storage", features = ["test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

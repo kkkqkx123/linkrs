@@ -659,14 +659,18 @@ impl Config {
         #[cfg(feature = "server")]
         {
             if let Ok(value) = env::var("LINKRS_HTTP_PORT") {
-                self.server.http.port = value
-                    .parse()
-                    .map_err(|_| "LINKRS_HTTP_PORT must be a valid port number")?;
+                if !value.is_empty() {
+                    self.server.http.port = value
+                        .parse()
+                        .map_err(|_| "LINKRS_HTTP_PORT must be a valid port number")?;
+                }
             }
             if let Ok(value) = env::var("LINKRS_GRPC_PORT") {
-                self.server.grpc.port = value
-                    .parse()
-                    .map_err(|_| "LINKRS_GRPC_PORT must be a valid port number")?;
+                if !value.is_empty() {
+                    self.server.grpc.port = value
+                        .parse()
+                        .map_err(|_| "LINKRS_GRPC_PORT must be a valid port number")?;
+                }
             }
             if let Ok(value) = env::var("LINKRS_HTTP_BIND") {
                 if !value.is_empty() {
@@ -1713,5 +1717,196 @@ fusion = "linear_weighted"
     #[test]
     fn test_validate_accepts_default_config() {
         assert!(Config::default().validate().is_ok());
+    }
+
+    /// The development example from `docs/release/07_configuration_reference.md`
+    /// must load and validate as-is: it is the contract of the reference doc.
+    #[cfg(all(feature = "server", feature = "vector"))]
+    #[test]
+    fn test_doc_dev_example_config_loads_and_validates() {
+        let file = NamedTempFile::new().expect("temp config file");
+        let content = r#"
+[database]
+host = "127.0.0.1"
+port = 9758
+storage_path = "data/linkrs"
+max_sessions = 100
+
+[transaction]
+default_timeout = 60
+max_concurrent_transactions = 100
+auto_commit = false
+
+[log]
+level = "debug"
+dir = "logs"
+basename = "linkrs"
+max_file_size_mb = 50
+max_files = 3
+
+[auth]
+enable_authorize = false
+failed_login_attempts = 0
+session_idle_timeout_secs = 7200
+default_username = "root"
+force_change_default_password = false
+bcrypt_cost = 6
+
+[bootstrap]
+auto_create_default_space = true
+default_space_name = "default"
+single_user_mode = true
+
+[grpc]
+enabled = true
+port = 9669
+
+[parallel]
+enabled = false
+
+[vector]
+enabled = true
+engine = "local"
+
+[fulltext]
+enabled = false
+
+[optimizer]
+max_iteration_rounds = 3
+max_exploration_rounds = 64
+enable_cost_model = true
+enable_multi_plan = true
+enable_property_pruning = true
+enable_adaptive_iteration = true
+stable_threshold = 2
+min_iteration_rounds = 1
+
+[monitoring]
+enabled = true
+memory_cache_size = 500
+slow_query_threshold_ms = 500
+"#;
+        std::fs::write(file.path(), content).expect("write config");
+        let config = Config::load(file.path()).expect("dev example must load");
+        config.validate().expect("dev example must validate");
+        assert!(config.is_local_vector());
+    }
+
+    /// The production example (Qdrant vector backend) must load and validate
+    /// as-is under the matching feature set.
+    #[cfg(all(feature = "server", feature = "vector-qdrant"))]
+    #[test]
+    fn test_doc_prod_example_config_loads_and_validates() {
+        let file = NamedTempFile::new().expect("temp config file");
+        let content = r#"
+[database]
+host = "0.0.0.0"
+port = 9758
+storage_path = "/var/lib/linkrs/data"
+max_sessions = 100
+
+[transaction]
+default_timeout = 30
+max_concurrent_transactions = 2000
+auto_commit = false
+
+[log]
+level = "info"
+dir = "/var/log/linkrs"
+basename = "linkrs"
+max_file_size_mb = 500
+max_files = 20
+
+[auth]
+enable_authorize = true
+failed_login_attempts = 5
+session_idle_timeout_secs = 3600
+default_username = "admin"
+force_change_default_password = true
+bcrypt_cost = 12
+
+[bootstrap]
+auto_create_default_space = true
+default_space_name = "production"
+single_user_mode = false
+
+[http]
+cors_enabled = true
+cors_allowed_origins = ["https://console.example.com"]
+
+[security.password_policy]
+min_length = 8
+require_uppercase = true
+require_lowercase = true
+require_digit = true
+require_special = false
+max_age_days = 90
+history_size = 5
+
+[query_resource]
+max_concurrent_queries = 100
+query_timeout_secs = 60
+
+[storage]
+max_memory_bytes = 1073741824
+index_memory_bytes = 268435456
+
+[vector]
+enabled = true
+engine = "qdrant"
+
+[vector.qdrant.connection]
+host = "qdrant.example.com"
+port = 6334
+http_port = 6333
+use_tls = true
+
+[vector.qdrant.timeout]
+request_timeout_secs = 30
+search_timeout_secs = 60
+upsert_timeout_secs = 30
+
+[vector.qdrant.embedding]
+base_url = "https://api.openai.com/v1/embeddings"
+api_key = "sk-xxx"
+model = "text-embedding-3-small"
+dimension = 1536
+timeout_secs = 60
+
+[fulltext]
+enabled = true
+index_path = "/var/lib/linkrs/fulltext"
+
+[fulltext.tantivy]
+writer_memory_budget = 100000000
+tokenizer = "jieba"
+
+[optimizer]
+max_iteration_rounds = 10
+max_exploration_rounds = 256
+enable_cost_model = true
+enable_multi_plan = true
+enable_property_pruning = true
+enable_adaptive_iteration = true
+stable_threshold = 2
+min_iteration_rounds = 1
+
+[monitoring]
+enabled = true
+memory_cache_size = 5000
+slow_query_threshold_ms = 1000
+
+[monitoring.slow_query_log]
+enabled = true
+threshold_ms = 1000
+log_file_path = "/var/log/linkrs/slow_query.log"
+max_file_size_mb = 500
+max_files = 10
+"#;
+        std::fs::write(file.path(), content).expect("write config");
+        let config = Config::load(file.path()).expect("prod example must load");
+        config.validate().expect("prod example must validate");
+        assert_eq!(config.vector_engine(), Some(VectorEngineKind::Qdrant));
+        assert_eq!(config.common.monitoring.slow_query_log.max_files, 10);
     }
 }

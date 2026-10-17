@@ -21,6 +21,7 @@ pub enum QdrantTransport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VectorClientConfig {
     pub enabled: bool,
     #[serde(default)]
@@ -97,6 +98,7 @@ impl Default for VectorClientConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConnectionConfig {
     pub host: String,
     pub port: u16,
@@ -175,6 +177,7 @@ impl Default for ConnectionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimeoutConfig {
     pub request_timeout_secs: u64,
     pub search_timeout_secs: u64,

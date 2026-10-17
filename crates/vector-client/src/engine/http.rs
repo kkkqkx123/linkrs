@@ -535,6 +535,8 @@ impl RemoteVectorEngine for QdrantEngine {
             config,
             status: parse_collection_status(raw.status.as_deref()),
             index: None,
+            // The remote service does not report an index memory estimate.
+            memory_bytes: 0,
         })
     }
 

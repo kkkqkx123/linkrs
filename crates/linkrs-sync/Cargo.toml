@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 description = "Synchronization primitives for Linkrs"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [features]
 # Built-in local vector engine. Enables the `vector_sync` module and
@@ -22,13 +24,13 @@ vector-grpc = ["vector-qdrant", "vector-client/qdrant-grpc"]
 fulltext = ["linkrs-fulltext/fulltext"]
 
 [dependencies]
-linkrs-core = { path = "../linkrs-core" }
-linkrs-metrics = { path = "../linkrs-metrics" }
-linkrs-fulltext = { path = "../linkrs-fulltext" }
-linkrs-config = { path = "../linkrs-config" }
-llm-embedding = { path = "../llm-suite/crates/llm-embedding", optional = true }
-llm-rerank = { path = "../llm-suite/crates/llm-rerank", optional = true }
-llm-token = { path = "../llm-suite/crates/llm-token", optional = true }
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
+linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext" }
+linkrs-config = { version = "0.1.0", path = "../linkrs-config" }
+llm-embedding = { version = "0.1.0", package = "llm-suite-embedding", path = "../llm-suite/crates/llm-suite-embedding", optional = true }
+llm-rerank = { version = "0.1.0", package = "llm-suite-rerank", path = "../llm-suite/crates/llm-suite-rerank", optional = true }
+llm-token = { version = "0.1.0", package = "llm-suite-token", path = "../llm-suite/crates/llm-suite-token", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -38,8 +40,8 @@ parking_lot.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 rand.workspace = true
-vector-client = { path = "../vector-client", features = ["qdrant-grpc", "qdrant-http"], optional = true }
-simvec = { path = "../simvec", optional = true }
+vector-client = { version = "0.1.0", path = "../vector-client", features = ["qdrant-grpc", "qdrant-http"], optional = true }
+simvec = { version = "0.1.0", path = "../simvec", optional = true }
 tracing.workspace = true
 tokio.workspace = true
 futures.workspace = true

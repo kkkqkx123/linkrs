@@ -4,10 +4,12 @@ version.workspace = true
 edition.workspace = true
 description = "Schema and data migration for Linkrs"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
-linkrs-core = { path = "../linkrs-core" }
-linkrs-storage = { path = "../linkrs-storage" }
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -16,5 +18,5 @@ sha2.workspace = true
 fs4.workspace = true
 
 [dev-dependencies]
-linkrs-storage = { path = "../linkrs-storage", features = ["test-support"] }
+linkrs-storage = { version = "0.1.0", path = "../linkrs-storage", features = ["test-support"] }
 tempfile.workspace = true

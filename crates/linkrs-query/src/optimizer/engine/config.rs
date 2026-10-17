@@ -258,6 +258,24 @@ impl OptimizerEngine {
             PartitioningPlanner::new(config).with_selectivity(self.selectivity_estimator.clone());
     }
 
+    /// Apply the `[optimizer.rules]` selection to the physical heuristic
+    /// phase. `enabled` non-empty keeps only those rules; `disabled` then
+    /// removes rules. Names match rule type names with or without the
+    /// `Rule` suffix.
+    pub fn set_rule_selection(&mut self, disabled: &[String], enabled: &[String]) {
+        if disabled.is_empty() && enabled.is_empty() {
+            return;
+        }
+        self.physical_heuristic = PhysicalHeuristicOptimizer::from_registry(
+            crate::optimizer::heuristic::rule_enum::RuleRegistry::filtered(disabled, enabled),
+        );
+        log::info!(
+            "Optimizer rule selection applied: {} disabled, {} explicitly enabled",
+            disabled.len(),
+            enabled.len()
+        );
+    }
+
     pub fn partitioning_config(&self) -> &PartitioningConfig {
         self.partitioning_planner.config()
     }

@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 description = "CLI for linkrs migration management"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [[bin]]
 name = "linkrs-migration"
@@ -16,6 +18,6 @@ serde_json.workspace = true
 anyhow.workspace = true
 log.workspace = true
 
-linkrs-core = { path = "../linkrs-core" }
-linkrs-storage = { path = "../linkrs-storage" }
-linkrs-migration = { path = "../linkrs-migration" }
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
+linkrs-migration = { version = "0.1.0", path = "../linkrs-migration" }

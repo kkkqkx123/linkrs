@@ -89,6 +89,9 @@ pub struct GraphSessionManager {
     host_addr: String,
     max_connections: usize,
     session_idle_timeout: Duration,
+    /// Initial auto-commit mode for newly created sessions, from
+    /// `[transaction].auto_commit`. Explicit BEGIN/COMMIT still overrides it.
+    default_auto_commit: AtomicBool,
     /// Is the background cleanup task currently running?
     cleanup_task_running: Arc<AtomicBool>,
     /// Cumulative number of sessions created (monotonic, never decremented).
@@ -141,6 +144,7 @@ impl GraphSessionManager {
             host_addr,
             max_connections,
             session_idle_timeout,
+            default_auto_commit: AtomicBool::new(true),
             cleanup_task_running: Arc::new(AtomicBool::new(false)),
             total_sessions_created: Arc::new(AtomicU64::new(0)),
             session_callbacks: shared,
@@ -164,6 +168,12 @@ impl GraphSessionManager {
     /// Session idle timeout driving reclamation and expiry responses.
     pub fn idle_timeout(&self) -> Duration {
         self.session_idle_timeout
+    }
+
+    /// Set the auto-commit mode applied to sessions created from now on.
+    pub fn set_default_auto_commit(&self, auto_commit: bool) {
+        self.default_auto_commit
+            .store(auto_commit, Ordering::SeqCst);
     }
 
     /// Point this manager at a shared session-event registry.
@@ -275,6 +285,7 @@ impl GraphSessionManager {
         };
 
         let client_session = ClientSession::new(session);
+        client_session.set_auto_commit(self.default_auto_commit.load(Ordering::SeqCst));
 
         // Add to sessions and active sessions
         let create_time = SystemTime::now();
@@ -581,6 +592,24 @@ mod tests {
         assert_eq!(session_manager.host_addr, "127.0.0.1:9669");
         assert_eq!(session_manager.get_sessions_from_local_cache().len(), 0);
         assert!(!session_manager.is_cleanup_task_running());
+    }
+
+    #[tokio::test]
+    async fn test_default_auto_commit_applies_to_new_sessions() {
+        let session_manager = create_test_session_manager();
+
+        let session = session_manager
+            .create_session("autocommit".into(), "127.0.0.1".to_string())
+            .await
+            .expect("Failed to create session");
+        assert!(session.is_auto_commit());
+
+        session_manager.set_default_auto_commit(false);
+        let session = session_manager
+            .create_session("explicit".into(), "127.0.0.1".to_string())
+            .await
+            .expect("Failed to create session");
+        assert!(!session.is_auto_commit());
     }
 
     #[tokio::test]

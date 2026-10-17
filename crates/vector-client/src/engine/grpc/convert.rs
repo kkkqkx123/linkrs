@@ -505,6 +505,8 @@ pub fn collection_info_from_proto(
         on_disk_payload: params.map(|p| p.on_disk_payload),
         shard_number: params.map(|p| p.shard_number as usize),
         ivf_config: None,
+        // Qdrant has no live-point admission cap concept; None = no cap.
+        max_points: None,
     };
 
     Ok(CollectionInfo {
@@ -516,6 +518,8 @@ pub fn collection_info_from_proto(
         config,
         status,
         index: None,
+        // The remote service does not report an index memory estimate.
+        memory_bytes: 0,
     })
 }
 

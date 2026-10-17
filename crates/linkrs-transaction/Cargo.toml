@@ -4,12 +4,14 @@ version.workspace = true
 edition.workspace = true
 description = "Transaction management for Linkrs"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 autobenches = false
 
 [dependencies]
-linkrs-core = { path = "../linkrs-core" }
-linkrs-metrics = { path = "../linkrs-metrics" }
-linkrs-sync = { path = "../linkrs-sync" }
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
+linkrs-sync = { version = "0.1.0", path = "../linkrs-sync" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -705,6 +705,10 @@ pub(crate) fn apply_config_update(
     let mut guard = store.write();
     let old = get_config_value(&guard, section, key);
     let requires_restart = set_config_value(&mut guard, section, key, value)?;
+    if let Err(e) = guard.validate() {
+        let _ = set_config_value(&mut guard, section, key, &old);
+        return Err(format!("update rejected by config validation: {e}"));
+    }
     let Some(path) = config_path else {
         return Ok((requires_restart, false));
     };
@@ -1009,6 +1013,28 @@ mod tests {
         )
         .expect("unqualified unique key should resolve");
         assert_eq!(store.read().common.database.max_sessions, 256);
+    }
+
+    #[test]
+    fn test_apply_intent_rejects_invalid_combination() {
+        let store = test_store();
+        let error = apply_config_update_intent(
+            &store,
+            None,
+            Some("transaction"),
+            "max_concurrent_transactions",
+            &linkrs_core::Value::Int(0),
+        )
+        .expect_err("zero concurrent transactions must fail config validation");
+        assert!(
+            error.contains("config validation"),
+            "unexpected error: {error}"
+        );
+        let after = store.read().common.transaction.max_concurrent_transactions;
+        assert!(
+            after > 0,
+            "rejected update must not leave a zeroed live value"
+        );
     }
 
     #[test]

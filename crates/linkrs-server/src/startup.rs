@@ -80,7 +80,8 @@ pub async fn start_service_with_config_path(
     );
 
     // Apply the bcrypt cost factor before any password hashing happens.
-    // Only the first call in the process takes effect.
+    // The cost lives in a global atomic; hot updates via UPDATE CONFIGS
+    // re-store it, so later calls take effect for subsequent hashes.
     set_bcrypt_cost(config.server.auth.bcrypt_cost);
 
     info!(

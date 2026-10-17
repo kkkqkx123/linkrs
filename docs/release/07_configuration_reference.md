@@ -35,17 +35,17 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 ### 1.1 host
 - **类型**: String
 - **默认值**: `"127.0.0.1"`
-- **说明**: 数据库服务监听的主机地址
-- **实际效果**: 控制 Linkrs 服务绑定的 IP 地址
+- **说明**: 客户端访问本实例的主机地址（信息性字段）
+- **实际效果**: **不驱动任何监听绑定**；实际绑定由 `[http].bind_address` 与 `[grpc].bind_address` 决定
 - **配置建议**: 
   - 本地开发: `127.0.0.1`
-  - 局域网访问: `0.0.0.0` 或具体内网 IP
-  - 生产环境: 根据网络架构配置
+  - 局域网访问: `0.0.0.0` 或具体内网 IP（需同步修改 `[http].bind_address` / `[grpc].bind_address`）
 
 ### 1.2 port
 - **类型**: u16
 - **默认值**: `9758`
-- **说明**: HTTP 服务监听的端口号（HTTP 服务默认启用并绑定 `0.0.0.0`，可用 `[http]` 节覆盖）
+- **说明**: 客户端访问本实例的 HTTP 端口（信息性字段，默认与 `[http].port` 一致）
+- **实际效果**: 不驱动监听绑定；HTTP 服务默认启用并绑定 `127.0.0.1`，可用 `[http].bind_address` / `[http].port` 覆盖。非回环绑定时强制严格 CORS 白名单且禁止 `single_user_mode`
 - **配置建议**: 确保端口未被其他服务占用
 
 ### 1.3 storage_path
@@ -185,7 +185,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - **类型**: u64
 - **默认值**: `3600`（1小时）
 - **说明**: 会话空闲超时时间（秒）
-- **实际效果**: 超过此时间未活动的会话将被关闭
+- **实际效果**: 超过此时间未活动的会话将被关闭；`0` 禁用空闲回收
 - **配置建议**: 
   - 交互式使用: 1800-3600 秒
   - 批处理场景: 86400 秒（1天）或更长
@@ -197,12 +197,14 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 - **实际效果**: 首次启动时创建的默认用户
 - **配置建议**: 生产环境建议修改
 
-### 4.5 default_password
-- **类型**: String
-- **默认值**: `"root"`
-- **说明**: 默认管理员密码
-- **实际效果**: 首次启动时默认用户的密码
-- **配置建议**: **生产环境必须修改**
+### 4.5 默认管理员口令（bootstrap_password）
+- **类型**: String（不入配置文件）
+- **来源**: 启动时按以下优先级解析：
+  1. 环境变量 `LINKRS_PASSWORD`（显式注入）
+  2. 秘密文件 `<storage_path>/bootstrap_password`（owner-only 权限；首次启动自动生成 24 位随机口令并写入，后续启动复用）
+- **说明**: `default_username` 对应的引导口令
+- **实际效果**: 首次启动创建默认用户时使用；`serde(skip)`，永不写入/读出配置文件，Debug 输出脱敏
+- **配置建议**: 生产环境通过 `LINKRS_PASSWORD` 注入后立即修改；本地开发可直接使用生成口令
 
 ### 4.6 force_change_default_password
 - **类型**: bool
@@ -267,7 +269,18 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 ### 6.2 port
 - **类型**: u16
 - **默认值**: `9669`
-- **说明**: gRPC 服务端口（不允许为 0）
+- **说明**: gRPC 服务端口（不允许为 0；与 `[http].port` 不得相同）
+
+### 6.2a bind_address
+- **类型**: String
+- **默认值**: `"127.0.0.1"`
+- **说明**: gRPC 监听绑定的接口地址（loopback 之外的绑定需配置 TLS）
+
+### 6.2b tls
+- **类型**: 子节 `[grpc.tls]`
+- **默认值**: `enabled = false`
+- **说明**: gRPC 监听的 TLS 配置（`enabled` / `cert_file` / `key_file`）；`enabled = true` 时证书与私钥路径必须齐全，否则启动失败
+- **配置建议**: 回环部署可关闭；对外监听必须提供证书与私钥
 
 ### 6.3 max_connections
 - **类型**: usize
@@ -324,12 +337,14 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | disabled_rules | Vec\<String\> | `[]` | 禁用的优化规则列表 |
 | enabled_rules | Vec\<String\> | `[]` | 显式启用的规则列表（优先级高于默认规则集） |
 
-**可用规则列表**:
-- `FilterPushDownRule` - 谓词下推
-- `PredicatePushDownRule` - 谓词下推
-- `RemoveUselessNodeRule` - 移除无用节点
-- `MergeFiltersRule` - 合并过滤条件
-- `LimitPushDownRule` - LIMIT 下推
+**可用规则列表**（实际规则名，按类别分组；`disabled_rules` / `enabled_rules` 在启动装配时过滤物理启发式规则集，名称带或不带 `Rule` 后缀均可匹配，未知规则名启动时告警）:
+- 谓词下推（predicate_pushdown）: `PushFilterDownInnerJoinRule`、`PushFilterDownLeftJoinRule`、`PushFilterDownCrossJoinRule`、`PushFilterDownTraverseRule`、`PushFilterDownGetNbrsRule`、`PushFilterDownScanVerticesRule`、`PushFilterDownScanEdgesRule`、`PushFilterDownExpandAllRule`、`PushFilterDownNodeRule`、`PushFilterDownAllPathsRule`、`PushVFilterDownScanVerticesRule`、`PushEFilterDownRule`、`EliminateRedundantTagFilterRule`
+- 投影下推（projection_pushdown）: `PushProjectDownJoinRule`、`PushProjectDownGetNeighborsRule`、`PushProjectDownGetVerticesRule`、`PushProjectDownGetEdgesRule`、`PushProjectDownScanVerticesRule`、`PushProjectDownScanEdgesRule`、`PushProjectDownAppendVerticesRule`
+- LIMIT 下推（limit_pushdown）: `PushLimitDownScanVerticesRule`、`PushLimitDownScanEdgesRule`、`PushLimitDownGetVerticesRule`、`PushLimitDownGetEdgesRule`、`PushLimitDownIndexScanRule`、`PushTopNDownIndexScanRule`、`ConvertSortLimitToTopNRule`
+- 合并（merge）: `CombineFilterRule`、`CollapseProjectRule`、`CollapseConsecutiveProjectRule`、`MergeGetNbrsAndDedupRule`、`MergeGetNbrsAndProjectRule`、`MergeGetVerticesAndDedupRule`、`MergeGetVerticesAndProjectRule`
+- 消除（elimination）: `EliminateFilterRule`、`EliminateSortRule`、`EliminateAppendVerticesRule`、`EliminateEmptySetOperationRule`、`EliminateRowCollectRule`、`RemoveNoopProjectRule`、`RemoveAppendVerticesBelowJoinRule`、`DedupEliminationRule`
+- Join 优化（join_optimization）: `LeftJoinToInnerJoinRule`、`JoinToExpandRule`、`JoinToAppendVerticesRule`、`JoinEliminationRule`、`JoinReorderRule`、`JoinConditionSimplifyRule`、`MergeConsecutiveExpandRule`
+- 聚合（aggregate）: `PushFilterDownAggregateRule`
 
 ---
 
@@ -359,6 +374,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | compression | String | none | 压缩算法（none/lz4/zstd/snappy） |
 | compression_level | u32 | 3 | 压缩级别（0-9） |
 | checkpoint_interval_secs | u64 | 300 | Checkpoint 间隔（秒，0 禁用） |
+| sync_mode | String | full | WAL 同步策略：`full` / `normal` / `off`（映射 WAL SyncPolicy） |
 | max_db_size | u64 | 0 | 最大数据库大小（字节，0 不限制） |
 | auto_statistics | bool | true | 是否自动收集统计信息 |
 | statistics_interval_secs | u64 | 60 | 统计信息收集间隔（秒） |
@@ -421,7 +437,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| column_block_enabled | bool | false | 是否启用存储列块扫描路径（输出与行式路径逐位一致；开启后 PROFILE/EXPLAIN ANALYZE 中可观察 `column_block_hits`） |
+| column_block_enabled | bool | true | 是否启用存储列块扫描路径（默认开启，行式路径保留为回退；输出与行式路径逐位一致，开启后 PROFILE/EXPLAIN ANALYZE 中可观察 `column_block_hits`；也可用环境变量 `LINKRS_COLUMN_BLOCK_ENABLED=0` 回退） |
 
 ---
 
@@ -435,6 +451,9 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | memory_cache_size | usize | 1000 | 内存缓存大小（保留最近N条查询，>0） |
 | slow_query_threshold_ms | u64 | 1000 | 内存执行画像慢查询阈值（毫秒）：控制内存查询画像保留与聚合统计的过滤口径，不控制文件落盘 |
 | progress_report_rows_interval | u64 | 0 | 查询进度通知的行间隔（0 禁用进度上报） |
+| histogram_max_samples | usize | 10000 | 精确直方图最大样本数（校验区间 100..=100000） |
+| timeseries_retention_secs | usize | 3600 | 时序环形缓冲保留时长（秒，校验区间 60..=86400） |
+| resource_sample_interval_secs | u64 | 60 | 资源采样间隔（秒，校验区间 1..=3600） |
 
 ### 12.2 慢查询日志 [monitoring.slow_query_log]
 
@@ -442,7 +461,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 |------|------|--------|------|
 | enabled | bool | true | 是否启用慢查询日志 |
 | threshold_ms | u64 | 1000 | 文件慢查询阈值（毫秒，>0）：控制落盘到 `log_file_path` 的口径，与顶层内存阈值独立配置 |
-| log_file_path | String | `"logs/slow_query.log"` | 慢查询日志文件路径 |
+| log_file_path | String | `"slow_query.log"` | 慢查询日志文件名或绝对路径；裸文件名解析到 `[log].dir` 下，含目录的相对路径会被拒绝，绝对路径原样使用 |
 | max_file_size_mb | u64 | 100 | 单文件轮转大小（MB） |
 | max_files | u32 | 5 | 保留的日志文件数 |
 | verbose_format | bool | false | 是否使用详细格式 |
@@ -478,6 +497,9 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | auto_embed_text | bool | false | 写时文本自动向量化（默认关闭；开启后写路径批量调用嵌入服务，失败则写事务失败） |
 | mvcc.ssi_read_set | bool | false | 向量搜索的 MVCC SSI 读集（默认关闭） |
 | collection.granularity | String | `"space"` | 向量集合粒度：`space`（单空间单集合，按`group_id`隔离）或 `field`（单字段单集合，物理隔离） |
+| embedding | 子节（可选） | 无 | 后端无关嵌入端点（feature `embedding`），本地与远程引擎共享；存在 `[vector.qdrant.embedding]` 时被其覆盖。结构同 §13.3 的 `[vector.qdrant.embedding]` |
+| embedding_query_preprocessor | 子节（可选） | 无 | 读侧预处理器覆盖（feature `embedding`）；共享 `embedding` 配置携带写侧（document）预处理器 |
+| rerank | 子节（可选） | 无 | 召回后重排（feature `rerank`）：`base_url` / `model` / `max_candidates`（1..=100，默认 20）/ `fusion` / `text_field`；缺省禁用零开销，配置非法仅告警并禁用，不阻断启动 |
 | retention.* | - | 见下 | Outbox 保留策略 |
 
 ### 13.2 本地引擎 [vector.local]
@@ -504,6 +526,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | quantization.quantile | Option\<f32\> | null | 量化分位数 |
 | quantization.compression | Option\<String\> | null | 压缩比（x4/x8/x16/x32/x64） |
 | quantization.always_ram | Option\<bool\> | null | 量化数据是否常驻内存 |
+| quantization.enabled | bool | false | 是否启用量化 |
 
 ### 13.3 Qdrant 引擎 [vector.qdrant]
 
@@ -513,6 +536,7 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | enabled | bool | false | 是否启用 qdrant 客户端（需与顶层`enabled`同时开启） |
+| engine | String | `"qdrant"` | 客户端引擎类型标识（当前固定 qdrant） |
 
 #### [vector.qdrant.connection]
 | 参数 | 类型 | 默认值 | 说明 |
@@ -617,7 +641,6 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 | cache_size_mb | usize | 64 | 页缓存大小（MB） |
 | default_timeout_secs | u64 | 30 | 默认操作超时（秒） |
 | enable_wal | bool | true | 是否启用 WAL（写前日志） |
-| sync_mode | String | `"normal"` | 同步模式 |
 | read_only | bool | false | 是否以只读方式打开 |
 | create_if_missing | bool | true | 数据库不存在时是否自动创建 |
 | max_open_files | usize | 100 | 最大打开文件数 |
@@ -630,7 +653,6 @@ Linkrs 使用 TOML 格式的配置文件，默认配置文件为 `config.toml`�
 path = "data/embedded"      # 省略则为纯内存模式
 cache_size_mb = 128
 enable_wal = true
-sync_mode = "normal"
 read_only = false
 create_if_missing = true
 max_open_files = 200
@@ -643,8 +665,17 @@ worker_threads = 4
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
+| enabled | bool | true | 是否启用 HTTP 服务（与 `[grpc].enabled` 至少一个为 true） |
+| bind_address | String | `127.0.0.1` | HTTP 监听绑定的接口地址；非回环绑定时强制严格 CORS 白名单且禁止 `single_user_mode` |
+| port | u16 | 9758 | HTTP 监听端口（不允许为 0；与 `[grpc].port` 不得相同） |
+| request_timeout_secs | u64 | 60 | 请求超时时间（秒） |
+| max_request_size | usize | 10485760 | 最大请求体大小（字节，>0） |
 | cors_enabled | bool | true | 是否挂载跨域层；关闭则不处理任何跨域头 |
 | cors_allowed_origins | Vec\<String\> | [] | 来源白名单；为空时保持开发宽松模式（任意来源）并输出警告日志 |
+| static_dir | Option\<String\> | null | 静态文件服务目录（相对配置文件目录解析） |
+| https_enabled | bool | false | 是否启用 HTTPS |
+| https_cert_file | Option\<String\> | null | HTTPS 证书路径（`https_enabled = true` 时必填） |
+| https_key_file | Option\<String\> | null | HTTPS 私钥路径（`https_enabled = true` 时必填） |
 
 来源条目格式为 `http(s)://host[:port]`，不带路径；非法条目启动失败。
 会话标识走 `X-Session-ID` 请求头而非 Cookie，默认不开启凭证模式。
@@ -673,6 +704,26 @@ cors_allowed_origins = ["https://console.example.com"]
 
 校验收敛在执行路径统一钩子：管理面建用户/重置口令与查询通道建用户/改用户（含新口令）/改密共用同一套规则，前端仅做强度提示。
 种子账号（默认 `root/root`）豁免一次策略校验，靠强制改密流程补偿。
+
+## 18. 审计日志配置 [security.audit]
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| enabled | bool | false | 是否启用审计日志 |
+| log_file | String | `"audit.log"` | 审计日志文件名或绝对路径；解析规则同 `[monitoring.slow_query_log].log_file_path`（裸文件名解析到 `[log].dir` 下，含目录的相对路径被拒绝） |
+
+## 19. 迁移配置 [migration]
+
+目录字段缺省时派生自 `<storage_path>/migration/`（`checkpoints`、`backups`、`migration.lock`）；无数据目录时对应能力禁用。相对路径相对配置文件目录解析。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| batch_size | usize | 1000 | 迁移批大小（>0） |
+| checkpoint_dir | Option\<PathBuf\> | null | Checkpoint 目录（缺省 `<storage_path>/migration/checkpoints`） |
+| backup_dir | Option\<PathBuf\> | null | 备份目录（缺省 `<storage_path>/migration/backups`） |
+| lock_path | Option\<PathBuf\> | null | 迁移锁文件路径（缺省 `<storage_path>/migration.lock`） |
+| drain_timeout_ms | u64 | 5000 | 排空超时（毫秒，>0） |
+| min_free_bytes | u64 | 0 | 目标盘最小剩余空间（字节，0 不检查） |
 
 ### 示例
 
@@ -717,7 +768,6 @@ enable_authorize = false
 failed_login_attempts = 0
 session_idle_timeout_secs = 7200
 default_username = "root"
-default_password = "root"
 force_change_default_password = false
 bcrypt_cost = 6  # 本地开发可调低，生产建议 12
 
@@ -782,9 +832,10 @@ enable_authorize = true
 failed_login_attempts = 5
 session_idle_timeout_secs = 3600
 default_username = "admin"
-default_password = "changeme"
 force_change_default_password = true
 bcrypt_cost = 12
+# 引导口令不入配置文件：通过环境变量 LINKRS_PASSWORD 注入，
+# 或使用首次启动自动生成并写入 <storage_path>/bootstrap_password 的随机口令
 
 [bootstrap]
 auto_create_default_space = true
@@ -873,10 +924,24 @@ max_files = 10
 ## 配置加载优先级
 
 1. 配置文件中的显式配置
-2. 配置文件中省略的字段使用默认值
-3. 路径类配置相对于配置文件所在目录解析
-4. 运行时可通过查询语句查看/修改部分配置（`SHOW CONFIGS` / `UPDATE CONFIGS`，
+2. 配置文件中省略的字段使用默认值（默认值与用户文件做**深合并**：表逐键覆盖，数组为整体替换——要改动数组项须整组重新赋值）
+3. **环境变量覆盖**（高于文件配置）：`LINKRS_STORAGE_PATH`、`LINKRS_LOG_DIR`、`LINKRS_LOG_LEVEL`、`LINKRS_HTTP_PORT`、`LINKRS_GRPC_PORT`、`LINKRS_HTTP_BIND`、`LINKRS_GRPC_BIND`、`LINKRS_PASSWORD`（引导口令）、`LINKRS_CONFIG_DIR`（用户配置目录）；空字符串视为未设置（端口变量除外，空串会解析失败）
+4. 路径类配置相对于配置文件所在目录解析；`~` 开头的路径展开为用户主目录；慢查询/审计日志文件名解析到 `[log].dir` 下（见 §12.2）
+5. 运行时可通过查询语句查看/修改部分配置（`SHOW CONFIGS` / `UPDATE CONFIGS`，
    详见《05_other_statements.md》配置管理节）
+
+## 配置 feature 门控
+
+以下配置节依赖编译期 feature，未启用对应 feature 时该节属于未知节、配置文件含它将启动失败：
+
+| 配置节 | 依赖 feature |
+|--------|--------------|
+| `[grpc]` / `[http]` / `[auth]` / `[bootstrap]` / `[security]` | `server` |
+| `[vector]` | `vector` |
+| `[vector.qdrant]` | `vector-qdrant` |
+| `[vector.embedding]` / `embedding_query_preprocessor` | `embedding` |
+| `[vector.rerank]` | `rerank` |
+| `[embedded.runtime]` | `embedded` |
 
 查询可访问的模块为 database、transaction、log、auth、bootstrap、
 http、security、optimizer、monitoring 九个节；grpc、parallel、storage、

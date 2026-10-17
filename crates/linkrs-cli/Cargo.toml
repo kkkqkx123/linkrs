@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 description = "Command-line interface for Linkrs"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 tokio.workspace = true
@@ -23,8 +25,8 @@ csv.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 
-linkrs-core = { path = "../linkrs-core" }
-linkrs-wire = { path = "../linkrs-wire" }
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-wire = { version = "0.1.0", path = "../linkrs-wire" }
 async-trait.workspace = true
 futures.workspace = true
 

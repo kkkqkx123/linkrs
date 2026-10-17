@@ -6,12 +6,13 @@ if [[ "${1:-}" == "--dry-run" ]]; then
     DRY_RUN=true
 fi
 
-# Crates to publish in dependency order. Submodules (tantivy, simvec,
-# llm-suite, gpui-kit) are excluded: they have their own release flows.
-# The root package is intentionally omitted — only sub-crates are
-# published from this script.
+# Crates to publish in dependency order. The final entry (`.`) is the
+# umbrella `linkrs` crate. Submodules (tantivy, simvec, llm-suite,
+# gpui-kit) are excluded: they live in their own repositories and ship
+# through their own release flows (simvec has a dedicated script).
 CRATES=(
     "crates/linkrs-metrics"
+    "crates/vector-client"
     "crates/linkrs-core"
     "crates/linkrs-config"
     "crates/linkrs-wire"
@@ -25,14 +26,23 @@ CRATES=(
     "crates/linkrs-server"
     "crates/linkrs-cli"
     "crates/linkrs-migration-cli"
-    "crates/vector-client"
+    "."
 )
 
 for crate in "${CRATES[@]}"; do
-    name=$(basename "$crate")
+    manifest="$crate/Cargo.toml"
+    # The package name comes from the manifest, not the directory: the two
+    # can differ (e.g. crates/linkrs-cli holds package `linkrs_cli`).
+    name=$(awk '
+        /^\[package\]/ { in_pkg = 1; next }
+        /^\[/ { in_pkg = 0 }
+        in_pkg && /^name[[:space:]]*=/ {
+            sub(/^[^"]*"/, ""); sub(/".*/, ""); print; exit
+        }
+    ' "$manifest")
     # Extract the package version; fall back to the workspace version
     # for crates using `version.workspace = true`.
-    version=$(sed -n 's/^version *= *"\(.*\)".*/\1/p' "$crate/Cargo.toml" | head -1)
+    version=$(sed -n 's/^version *= *"\(.*\)".*/\1/p' "$manifest" | head -1)
     if [[ -z "$version" ]]; then
         version=$(sed -n 's/^version *= *"\(.*\)".*/\1/p' Cargo.toml | head -1)
     fi

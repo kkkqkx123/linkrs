@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 description = "A vector database client crate with support for multiple backends"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [lib]
 name = "vector_client"
@@ -30,8 +32,8 @@ url.workspace = true
 chrono.workspace = true
 dashmap.workspace = true
 futures.workspace = true
-simvec = { path = "../simvec" }
-llm-embedding = { path = "../llm-suite/crates/llm-embedding" }
+simvec = { version = "0.1.0", path = "../simvec" }
+llm-embedding = { version = "0.1.0", package = "llm-suite-embedding", path = "../llm-suite/crates/llm-suite-embedding" }
 tonic = { workspace = true, optional = true }
 prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }

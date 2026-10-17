@@ -4,17 +4,19 @@ version.workspace = true
 edition.workspace = true
 description = "Transport-independent core API for Linkrs"
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
-linkrs-core = { path = "../linkrs-core" }
-linkrs-config = { path = "../linkrs-config" }
-linkrs-storage = { path = "../linkrs-storage" }
-linkrs-query = { path = "../linkrs-query" }
-linkrs-transaction = { path = "../linkrs-transaction" }
-linkrs-sync = { path = "../linkrs-sync" }
-linkrs-fulltext = { path = "../linkrs-fulltext" }
-linkrs-migration = { path = "../linkrs-migration" }
-linkrs-metrics = { path = "../linkrs-metrics" }
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-config = { version = "0.1.0", path = "../linkrs-config" }
+linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
+linkrs-query = { version = "0.1.0", path = "../linkrs-query" }
+linkrs-transaction = { version = "0.1.0", path = "../linkrs-transaction" }
+linkrs-sync = { version = "0.1.0", path = "../linkrs-sync" }
+linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext" }
+linkrs-migration = { version = "0.1.0", path = "../linkrs-migration" }
+linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -23,8 +25,8 @@ log.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 parking_lot.workspace = true
-vector-client = { path = "../vector-client", optional = true }
-simvec = { path = "../simvec", optional = true }
+vector-client = { version = "0.1.0", path = "../vector-client", optional = true }
+simvec = { version = "0.1.0", path = "../simvec", optional = true }
 
 [features]
 vector = [
@@ -49,6 +51,6 @@ c_api = []
 embedded = []
 
 [dev-dependencies]
-linkrs-storage = { path = "../linkrs-storage", features = ["test-support"] }
+linkrs-storage = { version = "0.1.0", path = "../linkrs-storage", features = ["test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

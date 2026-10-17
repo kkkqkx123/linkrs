@@ -139,12 +139,15 @@ impl<
             Duration::from_secs(config.server.auth.session_idle_timeout_secs.max(1));
         let session_events = Arc::new(EventSubscriptions::<SessionEvent>::new());
         let query_manager = Arc::new(QueryManager::new_with_shared(session_events.clone()));
+        query_manager
+            .set_slow_query_threshold_ms(config.monitoring.slow_query_threshold_ms as i64);
         let session_manager = GraphSessionManager::new_with_shared(
             format!("{}:{}", config.database.host, config.database.port),
             config.database.max_sessions,
             session_idle_timeout,
             session_events.clone(),
         );
+        session_manager.set_default_auto_commit(config.common.transaction.auto_commit);
 
         if start_cleanup_task {
             session_manager.start_cleanup_task().await;
@@ -181,6 +184,18 @@ impl<
         );
         let mut optimizer_engine = crate::query::OptimizerEngine::new(cost_config);
         optimizer_engine.set_partitioning_config(Self::partitioning_config_from(&config));
+        {
+            let rules = &config.common.optimizer.rules;
+            for name in rules.disabled_rules.iter().chain(rules.enabled_rules.iter()) {
+                if !Self::is_known_optimizer_rule(name) {
+                    log::warn!("Unknown optimizer rule name '{name}' in [optimizer.rules]");
+                }
+            }
+            optimizer_engine.set_rule_selection(
+                &rules.disabled_rules,
+                &rules.enabled_rules,
+            );
+        }
         let shared_scheduler = Arc::new(SharedScheduler::new(
             optimizer_engine.partitioning_config().max_workers.max(1),
         ));
@@ -372,6 +387,19 @@ impl<
         .with_default_cost_profile_label(format!("{cost_profile:?}"))
         .with_space_cost_profiles(&optimizer_config.space_cost_profiles, runtime)
         .with_password_history_depth(password_history_depth)
+    }
+
+    /// Whether a rule name is known to the physical heuristic registry.
+    ///
+    /// Accepts the type name with or without the `Rule` suffix, matching
+    /// `RuleRegistry::filtered`.
+    fn is_known_optimizer_rule(name: &str) -> bool {
+        let trimmed = name.strip_suffix("Rule").unwrap_or(name);
+        let registry = crate::query::optimizer::heuristic::rule_enum::RuleRegistry::default();
+        let known = registry
+            .iter()
+            .any(|rule| rule.name().strip_suffix("Rule") == Some(trimmed));
+        known
     }
 
     /// Map the `[parallel]` config section onto the query optimizer's
