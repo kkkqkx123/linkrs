@@ -32,7 +32,7 @@ fn validate_metric(distance: DistanceMetric) -> CoreResult<()> {
 /// Vector search result
 #[derive(Debug, Clone)]
 pub struct VectorSearchResult {
-    pub id: PointId,
+    pub doc_id: PointId,
     pub score: f32,
     pub vector: Option<Vec<f32>>,
     pub payload: Option<std::collections::HashMap<String, serde_json::Value>>,
@@ -40,7 +40,7 @@ pub struct VectorSearchResult {
 
 impl linkrs_core::types::search::IntoSearchHit for VectorSearchResult {
     fn into_search_hit(self) -> linkrs_core::types::search::SearchHit {
-        let mut hit = linkrs_core::types::search::SearchHit::new(self.id.to_string(), self.score);
+        let mut hit = linkrs_core::types::search::SearchHit::new(self.doc_id.to_string(), self.score);
         if let Some(p) = self.payload {
             let map: std::collections::HashMap<String, linkrs_core::Value> = p
                 .into_iter()
@@ -54,7 +54,7 @@ impl linkrs_core::types::search::IntoSearchHit for VectorSearchResult {
 
 impl linkrs_core::types::search::AsSearchHit for VectorSearchResult {
     fn as_search_hit(&self) -> linkrs_core::types::search::SearchHit {
-        let mut hit = linkrs_core::types::search::SearchHit::new(self.id.to_string(), self.score);
+        let mut hit = linkrs_core::types::search::SearchHit::new(self.doc_id.to_string(), self.score);
         if let Some(ref p) = self.payload {
             let map: std::collections::HashMap<String, linkrs_core::Value> = p
                 .iter()
@@ -451,7 +451,7 @@ impl VectorApi {
                 results
                     .into_iter()
                     .map(|r| VectorSearchResult {
-                        id: r.id,
+                        doc_id: r.id,
                         score: r.score,
                         vector: r.vector.map(|v| v.to_vec()),
                         payload: r.payload.map(|p| p.into_iter().collect()),

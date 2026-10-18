@@ -35,7 +35,7 @@ pub struct VectorSearchResponse {
 /// One scored hit of a [`VectorSearchResponse`].
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VectorSearchResult {
-    pub id: String,
+    pub doc_id: String,
     /// "Higher is better" similarity score, normalized across backends.
     pub score: f32,
     #[serde(default)]

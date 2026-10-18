@@ -7,9 +7,9 @@ use crate::parser::ast::stmt::Stmt;
 use crate::parser::ast::stmt::{OrderByClause, OrderByItem};
 use crate::parser::ast::types::{LimitClause, OrderDirection, SkipClause};
 use crate::parser::ast::vector::{
-    CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector, SearchVectorStatement,
-    VectorDistance, VectorIndexConfig, VectorMatchCondition, VectorQueryExpr, VectorQueryType,
-    VectorYieldClause, VectorYieldItem,
+    CreateVectorIndex, DescribeVectorIndex, DropVectorIndex, LookupVector, MatchVector,
+    SearchVectorStatement, ShowVectorIndex, VectorDistance, VectorIndexConfig,
+    VectorMatchCondition, VectorQueryExpr, VectorQueryType, VectorYieldClause, VectorYieldItem,
 };
 use crate::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::parser::parsing::parse_context::ParseContext;
@@ -22,6 +22,10 @@ pub fn parse_vector(ctx: &mut ParseContext) -> Result<Stmt, crate::parser::Parse
         return parse_create_vector_index(ctx);
     } else if ctx.check_keyword("DROP") {
         return parse_drop_vector_index(ctx);
+    } else if ctx.check_keyword("SHOW") {
+        return parse_show_vector_index(ctx);
+    } else if ctx.check_keyword("DESCRIBE") || ctx.check_keyword("DESC") {
+        return parse_describe_vector_index(ctx);
     } else if ctx.check_keyword("SEARCH") {
         return parse_search_vector_statement(ctx);
     } else if ctx.check_keyword("LOOKUP") {
@@ -329,6 +333,52 @@ pub fn parse_drop_vector_index_after_drop(
     };
 
     Ok(Stmt::DropVectorIndex(drop))
+}
+
+/// Parse SHOW VECTOR INDEX statement
+fn parse_show_vector_index(ctx: &mut ParseContext) -> Result<Stmt, crate::parser::ParseError> {
+    ctx.consume_keyword("SHOW")?;
+    ctx.consume_keyword("VECTOR")?;
+    ctx.consume_keyword("INDEX")?;
+
+    let mut pattern = None;
+    let mut from_schema = None;
+
+    if ctx.check_keyword("LIKE") {
+        ctx.consume_keyword("LIKE")?;
+        pattern = Some(ctx.consume_string()?);
+    }
+
+    if ctx.check_keyword("FROM") || ctx.check_keyword("IN") {
+        ctx.consume_keyword("FROM")?;
+        from_schema = Some(ctx.consume_identifier()?);
+    }
+
+    let show = ShowVectorIndex {
+        span: ctx.current_span(),
+        pattern,
+        from_schema,
+    };
+
+    Ok(Stmt::ShowVectorIndex(show))
+}
+
+/// Parse DESCRIBE VECTOR INDEX statement
+fn parse_describe_vector_index(
+    ctx: &mut ParseContext,
+) -> Result<Stmt, crate::parser::ParseError> {
+    ctx.consume_keyword("DESCRIBE")?;
+    ctx.consume_keyword("VECTOR")?;
+    ctx.consume_keyword("INDEX")?;
+
+    let index_name = ctx.consume_identifier()?;
+
+    let describe = DescribeVectorIndex {
+        span: ctx.current_span(),
+        index_name,
+    };
+
+    Ok(Stmt::DescribeVectorIndex(describe))
 }
 
 /// Parse SEARCH VECTOR statement
@@ -656,6 +706,43 @@ mod tests {
                 }
                 other => panic!("expected DROP VECTOR INDEX statement, got {:?}", other),
             }
+        }
+    }
+
+    #[test]
+    fn test_parse_show_vector_index_statement() {
+        let mut parser = Parser::new("SHOW VECTOR INDEX");
+        let result = parser.parse().expect("SHOW VECTOR INDEX should parse");
+        match result.ast.stmt() {
+            Stmt::ShowVectorIndex(show) => {
+                assert!(show.pattern.is_none());
+                assert!(show.from_schema.is_none());
+            }
+            other => panic!("expected SHOW VECTOR INDEX statement, got {:?}", other),
+        }
+
+        let mut parser = Parser::new("SHOW VECTOR INDEX LIKE 'idx_%' FROM shop");
+        let result = parser.parse().expect("SHOW VECTOR INDEX with filter should parse");
+        match result.ast.stmt() {
+            Stmt::ShowVectorIndex(show) => {
+                assert_eq!(show.pattern.as_deref(), Some("idx_%"));
+                assert_eq!(show.from_schema.as_deref(), Some("shop"));
+            }
+            other => panic!("expected SHOW VECTOR INDEX statement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_describe_vector_index_statement() {
+        let mut parser = Parser::new("DESCRIBE VECTOR INDEX idx_product_embedding");
+        let result = parser
+            .parse()
+            .expect("DESCRIBE VECTOR INDEX should parse");
+        match result.ast.stmt() {
+            Stmt::DescribeVectorIndex(describe) => {
+                assert_eq!(describe.index_name, "idx_product_embedding");
+            }
+            other => panic!("expected DESCRIBE VECTOR INDEX statement, got {:?}", other),
         }
     }
 

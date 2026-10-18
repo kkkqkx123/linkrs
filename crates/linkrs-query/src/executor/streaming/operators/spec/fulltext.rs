@@ -1,7 +1,7 @@
 //! Immutable configuration for fulltext search operators.
 
 use linkrs_core::types::expr::Expression;
-use linkrs_core::types::FulltextEngineType;
+use linkrs_core::types::{FulltextEngineType, ReadYourWritesConfig};
 use linkrs_fulltext::query::FulltextQuery;
 
 use crate::parser::ast::fulltext::{AlterIndexAction, IndexFieldDef, IndexOptions};
@@ -60,6 +60,8 @@ pub enum FulltextSpec {
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<ReadYourWritesConfig>,
     },
     FulltextLookup {
         space_name: String,
@@ -69,6 +71,8 @@ pub enum FulltextSpec {
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<ReadYourWritesConfig>,
     },
     MatchFulltext {
         space_name: String,
@@ -80,5 +84,19 @@ pub enum FulltextSpec {
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<ReadYourWritesConfig>,
     },
+}
+
+impl FulltextSpec {
+    /// Return the RYW consistency config, if any.
+    pub fn ryw_config(&self) -> Option<ReadYourWritesConfig> {
+        match self {
+            Self::FulltextManage { .. } => None,
+            Self::FulltextSearch { ryw_config, .. }
+            | Self::FulltextLookup { ryw_config, .. }
+            | Self::MatchFulltext { ryw_config, .. } => *ryw_config,
+        }
+    }
 }

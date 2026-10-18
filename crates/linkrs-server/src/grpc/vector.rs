@@ -297,7 +297,7 @@ impl<
                         .map(|(k, v)| (k.clone(), value_to_proto_value(crate::value::from_json(v))))
                         .collect();
                     super::proto::VectorSearchResult {
-                        vid: r.id.to_string(),
+                        vid: r.doc_id.to_string(),
                         score: r.score,
                         properties,
                         vector: if with_vector {

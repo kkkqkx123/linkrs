@@ -685,6 +685,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_search
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
         limit: node.limit,
+        ryw_config: exec_ctx.ryw_config,
     })
 }
 
@@ -700,6 +701,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_fulltext_lookup
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
         limit: node.limit,
+        ryw_config: exec_ctx.ryw_config,
     })
 }
 
@@ -721,6 +723,7 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_match_fulltext_
         tag_name: node.tag_name.clone(),
         field_name: node.field_name.clone(),
         limit: None,
+        ryw_config: exec_ctx.ryw_config,
     })
 }
 
@@ -752,6 +755,13 @@ fn vector_manage_to_command(
             space_id: n.space_id,
             tag_name: n.tag_name.clone(),
             field_name: n.field_name.clone(),
+        },
+        Show(n) => VectorManageCommand::Show {
+            pattern: n.pattern.clone(),
+            from_schema: n.from_schema.clone(),
+        },
+        Describe(n) => VectorManageCommand::Describe {
+            index_name: n.index_name.clone(),
         },
     }
 }

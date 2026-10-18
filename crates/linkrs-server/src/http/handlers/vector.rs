@@ -97,7 +97,7 @@ pub struct VectorSearchResponse {
 /// Single vector search result
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VectorSearchResult {
-    pub id: String,
+    pub doc_id: String,
     pub score: f32,
     pub vector: Option<Vec<f32>>,
     pub payload: Option<serde_json::Map<String, serde_json::Value>>,
@@ -464,7 +464,7 @@ pub async fn search<
         let search_results: Vec<VectorSearchResult> = results
             .into_iter()
             .map(|r| VectorSearchResult {
-                id: r.id.to_string(),
+                doc_id: r.doc_id.to_string(),
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),
                 payload: r.payload.map(|p| p.into_iter().collect()),
@@ -845,7 +845,7 @@ pub async fn scroll<
         let results: Vec<VectorSearchResult> = points
             .into_iter()
             .map(|p| VectorSearchResult {
-                id: p.id.to_string(),
+                doc_id: p.id.to_string(),
                 score: 0.0,
                 vector: if request.with_vector.unwrap_or(false) {
                     Some(p.vector)

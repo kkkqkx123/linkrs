@@ -3,7 +3,11 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::executor::streaming::chunk::DataChunk;
+#[cfg(feature = "vector")]
+use crate::executor::streaming::chunk::{ColumnInfo, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
+#[cfg(feature = "vector")]
+use crate::executor::streaming::operators::ddl_operator::make_single_row;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::VectorManageCommand;
 use crate::executor::streaming::runtime::ExecutionRuntime;
@@ -445,6 +449,136 @@ impl VectorOperator {
                                 field_name,
                             );
                             Err(QueryError::feature_disabled("vector", "DROP VECTOR INDEX"))
+                        }
+                    }
+                    VectorManageCommand::Show {
+                        pattern,
+                        from_schema,
+                    } => {
+                        #[cfg(feature = "vector")]
+                        {
+                            if let Some(coordinator) = vector_coordinator {
+                                let indexes: Vec<_> = coordinator
+                                    .list_indexes()
+                                    .into_iter()
+                                    .filter(|m| {
+                                        pattern.as_ref().is_none_or(|pattern| {
+                                            m.index_name
+                                                .as_deref()
+                                                .is_some_and(|name| name.contains(pattern))
+                                        }) && from_schema
+                                            .as_ref()
+                                            .is_none_or(|schema| &m.tag_name == schema)
+                                    })
+                                    .collect();
+                                let schema = Arc::new(Schema::new(vec![
+                                    ColumnInfo {
+                                        name: "index_id".to_string(),
+                                        data_type: "string".to_string(),
+                                    },
+                                    ColumnInfo {
+                                        name: "collection_name".to_string(),
+                                        data_type: "string".to_string(),
+                                    },
+                                    ColumnInfo {
+                                        name: "space_id".to_string(),
+                                        data_type: "bigint".to_string(),
+                                    },
+                                    ColumnInfo {
+                                        name: "tag_name".to_string(),
+                                        data_type: "string".to_string(),
+                                    },
+                                    ColumnInfo {
+                                        name: "field_name".to_string(),
+                                        data_type: "string".to_string(),
+                                    },
+                                ]));
+                                let rows: Vec<Vec<Value>> = indexes
+                                    .into_iter()
+                                    .map(|m| {
+                                        vec![
+                                            m.index_name.map(Value::string).unwrap_or(Value::Null(
+                                                linkrs_core::NullType::Null,
+                                            )),
+                                            Value::string(m.collection_name),
+                                            Value::BigInt(m.space_id as i64),
+                                            Value::string(m.tag_name),
+                                            Value::string(m.field_name),
+                                        ]
+                                    })
+                                    .collect();
+                                Ok(Some(DataChunk::new(rows, schema)))
+                            } else {
+                                return Err(QueryError::execution(
+                                    "SHOW VECTOR INDEXES cannot execute: no vector coordinator is configured",
+                                ));
+                            }
+                        }
+                        #[cfg(not(feature = "vector"))]
+                        {
+                            let _ = (pattern, from_schema);
+                            Err(QueryError::feature_disabled("vector", "SHOW VECTOR INDEX"))
+                        }
+                    }
+                    VectorManageCommand::Describe { index_name } => {
+                        #[cfg(feature = "vector")]
+                        {
+                            if let Some(coordinator) = vector_coordinator {
+                                let found = coordinator
+                                    .list_indexes()
+                                    .into_iter()
+                                    .find(|m| m.index_name.as_deref() == Some(index_name.as_str()));
+                                match found {
+                                    Some(m) => {
+                                        let vector_count = coordinator
+                                            .index_info(m.space_id, &m.tag_name, &m.field_name)
+                                            .map(|meta| meta.vector_count)
+                                            .unwrap_or(0);
+                                        let schema = Arc::new(Schema::new(vec![
+                                            ColumnInfo {
+                                                name: "index_id".to_string(),
+                                                data_type: "string".to_string(),
+                                            },
+                                            ColumnInfo {
+                                                name: "tag_name".to_string(),
+                                                data_type: "string".to_string(),
+                                            },
+                                            ColumnInfo {
+                                                name: "field_name".to_string(),
+                                                data_type: "string".to_string(),
+                                            },
+                                            ColumnInfo {
+                                                name: "vector_count".to_string(),
+                                                data_type: "bigint".to_string(),
+                                            },
+                                        ]));
+                                        Ok(Some(make_single_row(
+                                            schema,
+                                            vec![
+                                                Value::string(index_name),
+                                                Value::string(m.tag_name),
+                                                Value::string(m.field_name),
+                                                Value::BigInt(vector_count as i64),
+                                            ],
+                                        )))
+                                    }
+                                    None => Ok(Some(make_manage_result(
+                                        Arc::clone(&self.output_layout),
+                                        "describe_vector_index",
+                                        Some(index_name.as_str()),
+                                        "not-found",
+                                    ))),
+                                }
+                            } else {
+                                return Err(QueryError::execution(
+                                    "DESCRIBE VECTOR INDEX cannot execute: no vector coordinator is configured",
+                                ));
+                            }
+                        }
+                        #[cfg(not(feature = "vector"))]
+                        {
+                            let _ = index_name;
+                            Err(QueryError::feature_disabled("vector", "DESCRIBE VECTOR INDEX"))
                         }
                     }
                 }

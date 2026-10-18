@@ -18,6 +18,8 @@ use linkrs_core::Arena;
 use linkrs_core::Value;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::manager::FulltextIndexManager;
+#[cfg(feature = "fulltext")]
+use linkrs_sync::FulltextSyncCoordinator;
 #[cfg(feature = "vector")]
 use linkrs_sync::VectorSyncCoordinator;
 
@@ -30,6 +32,8 @@ use linkrs_sync::VectorSyncCoordinator;
 pub struct SearchContext {
     #[cfg(feature = "fulltext")]
     pub fulltext_manager: Option<Arc<FulltextIndexManager>>,
+    #[cfg(feature = "fulltext")]
+    pub fulltext_coordinator: Option<Arc<FulltextSyncCoordinator>>,
     #[cfg(feature = "vector")]
     pub vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     /// Unified search providers for discovery and enumeration.

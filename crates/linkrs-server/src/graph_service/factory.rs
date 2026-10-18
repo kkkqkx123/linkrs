@@ -259,13 +259,15 @@ impl<
                         );
                     api.install_shared_scheduler(shared_scheduler.clone(), query_registry.clone());
                     api.install_query_manager(Arc::clone(&query_manager));
+                    if let Some(sync_manager) = storage.get_sync_manager() {
+                        api = api.with_sync_manager(sync_manager);
+                    }
                     // The standalone VectorApi needs the sync manager that
                     // hosts the vector coordinator; without it the HTTP/gRPC
                     // vector endpoints cannot list indexes, so it is left
                     // unconfigured and those endpoints report unavailability
                     // instead of silently serving empty results.
-                    let vector_api = storage.get_sync_manager().and_then(|sync_manager| {
-                        sync_manager
+                    let vector_api = storage.get_sync_manager().and_then(|sync_manager| {                        sync_manager
                             .vector_coordinator()
                             .cloned()
                             .map(|coordinator| {
@@ -389,7 +391,7 @@ impl<
         password_history_depth: usize,
     ) -> QueryApi<S> {
         let inner = Arc::new(RwLock::new((**storage).clone()));
-        QueryApi::with_optimizer_engine(
+        let api = QueryApi::with_optimizer_engine(
             inner,
             stats_manager.clone(),
             optimizer_engine,
@@ -401,7 +403,13 @@ impl<
         )
         .with_default_cost_profile_label(format!("{cost_profile:?}"))
         .with_space_cost_profiles(&optimizer_config.space_cost_profiles, runtime)
-        .with_password_history_depth(password_history_depth)
+        .with_password_history_depth(password_history_depth);
+        // Surface the sync manager so fulltext/vector secondary-index SQL
+        // paths (planning + management) resolve their backends.
+        match storage.get_sync_manager() {
+            Some(sync_manager) => api.with_sync_manager(sync_manager),
+            None => api,
+        }
     }
 
     /// Whether a rule name is known to the physical heuristic registry.

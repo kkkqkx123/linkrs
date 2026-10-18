@@ -115,7 +115,7 @@ pub use crate::planning::plan::core::nodes::search::fulltext::management::{
     DropFulltextIndexNode, ShowFulltextIndexNode,
 };
 pub use crate::planning::plan::core::nodes::search::vector::management::{
-    CreateVectorIndexNode, DropVectorIndexNode,
+    CreateVectorIndexNode, DescribeVectorIndexNode, DropVectorIndexNode, ShowVectorIndexNode,
 };
 
 /// The PlanNode enumeration includes all possible node types.

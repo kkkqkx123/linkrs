@@ -251,6 +251,7 @@ pub fn create_router<
 
     let protected_routes = add_vector_routes(protected_routes);
     let protected_routes = add_fulltext_routes(protected_routes);
+    let protected_routes = add_fulltext_search_route(protected_routes);
 
     let router = Router::new()
         .nest("/v1", public_routes.merge(protected_routes))
@@ -338,6 +339,43 @@ fn add_fulltext_routes<
 
 #[cfg(not(feature = "fulltext"))]
 fn add_fulltext_routes<
+    S: crate::storage::StorageClient
+        + crate::storage::StorageSchemaContextOps
+        + crate::storage::StorageSyncContextOps
+        + crate::storage::StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    router: Router<super::state::AppState<S>>,
+) -> Router<super::state::AppState<S>> {
+    router
+}
+
+/// Add the fulltext search endpoint.
+///
+/// Symmetry with `POST /v1/vector/search`: exposes the same
+/// transport-level search capability so callers can choose either
+/// backend without routing through the query engine.
+#[cfg(feature = "fulltext")]
+fn add_fulltext_search_route<
+    S: crate::storage::StorageClient
+        + crate::storage::StorageSchemaContextOps
+        + crate::storage::StorageSyncContextOps
+        + crate::storage::StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    router: Router<super::state::AppState<S>>,
+) -> Router<super::state::AppState<S>> {
+    router.route("/fulltext/search", post(super::handlers::fulltext_search))
+}
+
+#[cfg(not(feature = "fulltext"))]
+fn add_fulltext_search_route<
     S: crate::storage::StorageClient
         + crate::storage::StorageSchemaContextOps
         + crate::storage::StorageSyncContextOps

@@ -42,6 +42,13 @@ pub enum VectorManageCommand {
         tag_name: String,
         field_name: String,
     },
+    Show {
+        pattern: Option<String>,
+        from_schema: Option<String>,
+    },
+    Describe {
+        index_name: String,
+    },
 }
 
 /// Immutable config for vector search operators.

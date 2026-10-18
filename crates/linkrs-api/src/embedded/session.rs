@@ -127,6 +127,8 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> Drop for Session<S> {
 pub(crate) mod create_as;
 pub(crate) mod execution;
 pub(crate) mod extension;
+#[cfg(feature = "fulltext")]
+pub(crate) mod fulltext;
 pub(crate) mod state;
 pub(crate) mod transactions;
 #[cfg(feature = "vector")]

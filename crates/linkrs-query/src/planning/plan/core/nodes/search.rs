@@ -11,7 +11,10 @@ pub use fulltext::{
     DropFulltextIndexNode, FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
     ShowFulltextIndexNode,
 };
-pub use vector::{CreateVectorIndexNode, CreateVectorIndexParams, DropVectorIndexNode};
+pub use vector::{
+    CreateVectorIndexNode, CreateVectorIndexParams, DescribeVectorIndexNode, DropVectorIndexNode,
+    ShowVectorIndexNode,
+};
 #[cfg(feature = "vector")]
 pub use vector::{
     OutputField, VectorLookupNode, VectorMatchNode, VectorOutputColumn, VectorSearchNode,

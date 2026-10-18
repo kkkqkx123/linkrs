@@ -18,6 +18,8 @@ pub mod stream;
 pub mod sync;
 pub mod transaction;
 pub mod users;
+#[cfg(feature = "fulltext")]
+pub mod fulltext;
 #[cfg(feature = "vector")]
 pub mod vector;
 
@@ -42,6 +44,8 @@ pub use statistics::{database, queries, search as search_stats, session, system}
 pub use stream::execute_stream;
 pub use sync::status;
 pub use transaction::{begin, commit, rollback};
+#[cfg(feature = "fulltext")]
+pub use fulltext::search as fulltext_search;
 #[cfg(feature = "vector")]
 pub use vector::{
     count, create_index, drop_index, get_index_info, get_vector, list_indexes, search,

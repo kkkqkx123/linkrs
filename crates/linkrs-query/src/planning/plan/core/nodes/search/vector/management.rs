@@ -256,3 +256,123 @@ impl MemoryEstimatable for DropVectorIndexNode {
             + self.field_name.capacity()
     }
 }
+
+/// SHOW VECTOR INDEX plan node
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowVectorIndexNode {
+    pub pattern: Option<String>,
+    pub from_schema: Option<String>,
+}
+
+impl ShowVectorIndexNode {
+    pub fn new(pattern: Option<String>, from_schema: Option<String>) -> Self {
+        Self {
+            pattern,
+            from_schema,
+        }
+    }
+}
+
+impl PlanNode for ShowVectorIndexNode {
+    fn id(&self) -> i64 {
+        0
+    }
+
+    fn name(&self) -> &'static str {
+        "ShowVectorIndex"
+    }
+
+    fn category(&self) -> PlanNodeCategory {
+        PlanNodeCategory::Management
+    }
+
+    fn output_var(&self) -> Option<&str> {
+        None
+    }
+
+    fn col_names(&self) -> &[String] {
+        &[]
+    }
+
+    fn set_output_var(&mut self, _var: String) {}
+
+    fn set_col_names(&mut self, _names: Vec<String>) {}
+
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        use crate::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorManage(
+            VectorManageNode::Show(self),
+        )
+    }
+}
+
+impl ZeroInputNode for ShowVectorIndexNode {}
+
+/// DESCRIBE VECTOR INDEX plan node
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DescribeVectorIndexNode {
+    pub index_name: String,
+}
+
+impl DescribeVectorIndexNode {
+    pub fn new(index_name: String) -> Self {
+        Self { index_name }
+    }
+}
+
+impl PlanNode for DescribeVectorIndexNode {
+    fn id(&self) -> i64 {
+        0
+    }
+
+    fn name(&self) -> &'static str {
+        "DescribeVectorIndex"
+    }
+
+    fn category(&self) -> PlanNodeCategory {
+        PlanNodeCategory::Management
+    }
+
+    fn output_var(&self) -> Option<&str> {
+        None
+    }
+
+    fn col_names(&self) -> &[String] {
+        &[]
+    }
+
+    fn set_output_var(&mut self, _var: String) {}
+
+    fn set_col_names(&mut self, _names: Vec<String>) {}
+
+    fn into_enum(self) -> crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
+        use crate::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
+        crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum::VectorManage(
+            VectorManageNode::Describe(self),
+        )
+    }
+}
+
+impl ZeroInputNode for DescribeVectorIndexNode {}
+
+impl MemoryEstimatable for ShowVectorIndexNode {
+    fn estimate_memory(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self
+                .pattern
+                .as_ref()
+                .map(|s| s.capacity())
+                .unwrap_or(0)
+            + self
+                .from_schema
+                .as_ref()
+                .map(|s| s.capacity())
+                .unwrap_or(0)
+    }
+}
+
+impl MemoryEstimatable for DescribeVectorIndexNode {
+    fn estimate_memory(&self) -> usize {
+        std::mem::size_of::<Self>() + self.index_name.capacity()
+    }
+}

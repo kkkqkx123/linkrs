@@ -535,6 +535,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     }
 
     pub fn with_sync_manager(mut self, sync_manager: Arc<SyncManager>) -> Self {
+        // The fulltext SQL path (planning + management) reads the manager;
+        // surface it from the sync manager so `SEARCH INDEX` resolves.
+        #[cfg(feature = "fulltext")]
+        if let Some(coordinator) = sync_manager.fulltext_coordinator() {
+            self.fulltext_manager = Some(coordinator.fulltext_manager().clone());
+        }
         self.sync_manager = Some(sync_manager);
         self
     }

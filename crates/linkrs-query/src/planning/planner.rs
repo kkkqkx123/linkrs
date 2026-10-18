@@ -49,6 +49,7 @@ use crate::planning::statements::dql::yield_planner::YieldPlanner;
 use crate::planning::statements::match_statement_planner::MatchStatementPlanner;
 #[cfg(feature = "vector")]
 use crate::planning::vector_planner::VectorSearchPlanner;
+use crate::planning::vector_ddl_planner::VectorDdlPlanner;
 
 ///  Planner Configuration
 #[derive(Debug, Clone)]
@@ -147,6 +148,7 @@ pub enum PlannerEnum {
     Pipe(PipePlanner),
     Explain(ExplainPlanner),
     FulltextSearch(FulltextSearchPlanner),
+    VectorDdl(VectorDdlPlanner),
     #[cfg(feature = "vector")]
     VectorSearch(VectorSearchPlanner),
 }
@@ -209,10 +211,12 @@ impl PlannerEnum {
             | Stmt::MatchFulltext(_) => {
                 Some(PlannerEnum::FulltextSearch(FulltextSearchPlanner::new()))
             }
-            #[cfg(feature = "vector")]
             Stmt::CreateVectorIndex(_)
             | Stmt::DropVectorIndex(_)
-            | Stmt::SearchVector(_)
+            | Stmt::ShowVectorIndex(_)
+            | Stmt::DescribeVectorIndex(_) => Some(PlannerEnum::VectorDdl(VectorDdlPlanner::new())),
+            #[cfg(feature = "vector")]
+            Stmt::SearchVector(_)
             | Stmt::LookupVector(_)
             | Stmt::MatchVector(_) => Some(PlannerEnum::VectorSearch(VectorSearchPlanner::new())),
             Stmt::CreateUser(_)
@@ -306,6 +310,7 @@ impl PlannerEnum {
             PlannerEnum::Pipe(planner) => planner.transform(validated, qctx),
             PlannerEnum::Explain(planner) => planner.transform(validated, qctx),
             PlannerEnum::FulltextSearch(planner) => planner.transform(validated, qctx),
+            PlannerEnum::VectorDdl(planner) => planner.transform(validated, qctx),
             #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(planner) => planner.transform(validated, qctx),
         }
@@ -362,14 +367,7 @@ impl PlannerEnum {
                 Some(PlannerEnum::FulltextSearch(FulltextSearchPlanner::new()))
             }
             BoundStatement::CreateVectorIndex(_) => {
-                #[cfg(feature = "vector")]
-                {
-                    Some(PlannerEnum::VectorSearch(VectorSearchPlanner::new()))
-                }
-                #[cfg(not(feature = "vector"))]
-                {
-                    None
-                }
+                Some(PlannerEnum::VectorDdl(VectorDdlPlanner::new()))
             }
             BoundStatement::Explain(_) => Some(PlannerEnum::Explain(ExplainPlanner::new())),
             BoundStatement::Profile(_) => Some(PlannerEnum::Explain(ExplainPlanner::new_profile())),
@@ -420,6 +418,7 @@ impl PlannerEnum {
             PlannerEnum::Pipe(_) => "PipePlanner",
             PlannerEnum::Explain(_) => "ExplainPlanner",
             PlannerEnum::FulltextSearch(_) => "FulltextSearchPlanner",
+            PlannerEnum::VectorDdl(_) => "VectorDdlPlanner",
             #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(_) => "VectorSearchPlanner",
         }
@@ -458,6 +457,7 @@ impl PlannerEnum {
             PlannerEnum::Pipe(planner) => planner.match_planner(stmt),
             PlannerEnum::Explain(planner) => planner.match_planner(stmt),
             PlannerEnum::FulltextSearch(planner) => planner.match_planner(stmt),
+            PlannerEnum::VectorDdl(planner) => planner.match_planner(stmt),
             #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(planner) => planner.match_planner(stmt),
         }
@@ -499,6 +499,7 @@ impl PlannerEnum {
             PlannerEnum::Pipe(planner) => planner.plan_bound(ctx),
             PlannerEnum::Explain(planner) => planner.plan_bound(ctx),
             PlannerEnum::FulltextSearch(planner) => planner.plan_bound(ctx),
+            PlannerEnum::VectorDdl(planner) => planner.plan_bound(ctx),
             #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(planner) => planner.plan_bound(ctx),
         }
@@ -625,5 +626,66 @@ mod tests {
 
         let planner = PlannerEnum::Match(Box::default());
         assert!(planner.matches(&match_stmt));
+    }
+
+    #[test]
+    fn test_vector_ddl_routing_is_feature_independent() {
+        use crate::parser::ast::vector::{DescribeVectorIndex, DropVectorIndex, ShowVectorIndex};
+        use linkrs_core::types::Span;
+
+        let stmts = [
+            Stmt::DropVectorIndex(DropVectorIndex {
+                span: Span::default(),
+                index_name: "idx".to_string(),
+                if_exists: false,
+            }),
+            Stmt::ShowVectorIndex(ShowVectorIndex {
+                span: Span::default(),
+                pattern: None,
+                from_schema: None,
+            }),
+            Stmt::DescribeVectorIndex(DescribeVectorIndex {
+                span: Span::default(),
+                index_name: "idx".to_string(),
+            }),
+        ];
+        for stmt in &stmts {
+            let planner = PlannerEnum::from_stmt_ref(stmt);
+            assert!(
+                matches!(planner, Some(PlannerEnum::VectorDdl(_))),
+                "vector DDL must route to VectorDdl in every feature combination, got: {:?}",
+                planner.map(|p| p.name()),
+            );
+        }
+    }
+
+    #[cfg(feature = "vector")]
+    #[test]
+    fn test_vector_search_routing() {
+        use crate::parser::ast::vector::{
+            SearchVectorStatement, VectorQueryExpr, VectorQueryType,
+        };
+        use linkrs_core::types::Span;
+
+        let stmt = Stmt::SearchVector(SearchVectorStatement {
+            span: Span::default(),
+            index_name: "idx".to_string(),
+            query: VectorQueryExpr {
+                span: Span::default(),
+                query_type: VectorQueryType::Vector,
+                query_data: "[0.1, 0.2]".to_string(),
+            },
+            threshold: None,
+            where_clause: None,
+            order_clause: None,
+            limit: None,
+            skip: None,
+            yield_clause: None,
+        });
+        let planner = PlannerEnum::from_stmt_ref(&stmt);
+        assert!(
+            matches!(planner, Some(PlannerEnum::VectorSearch(_))),
+            "vector search must route to VectorSearch when the feature is on"
+        );
     }
 }

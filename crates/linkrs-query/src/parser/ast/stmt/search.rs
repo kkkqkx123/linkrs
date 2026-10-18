@@ -5,6 +5,7 @@ pub use crate::parser::ast::fulltext::{
     ShowFulltextIndex,
 };
 pub use crate::parser::ast::vector::{
-    CreateVectorIndex, DropVectorIndex, LookupVector, MatchVector, SearchVectorStatement,
-    VectorQueryExpr, VectorQueryType, VectorYieldClause, VectorYieldItem,
+    CreateVectorIndex, DescribeVectorIndex, DropVectorIndex, LookupVector, MatchVector,
+    SearchVectorStatement, ShowVectorIndex, VectorQueryExpr, VectorQueryType, VectorYieldClause,
+    VectorYieldItem,
 };

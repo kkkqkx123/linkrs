@@ -13,4 +13,7 @@ pub use data_access::VectorSearchParams;
 pub use data_access::{
     OutputField, VectorLookupNode, VectorMatchNode, VectorOutputColumn, VectorSearchNode,
 };
-pub use management::{CreateVectorIndexNode, CreateVectorIndexParams, DropVectorIndexNode};
+pub use management::{
+    CreateVectorIndexNode, CreateVectorIndexParams, DescribeVectorIndexNode, DropVectorIndexNode,
+    ShowVectorIndexNode,
+};

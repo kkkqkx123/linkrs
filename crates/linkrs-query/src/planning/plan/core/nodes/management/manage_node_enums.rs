@@ -48,7 +48,7 @@ use crate::planning::plan::core::nodes::search::fulltext::management::{
     DropFulltextIndexNode, ShowFulltextIndexNode,
 };
 use crate::planning::plan::core::nodes::search::vector::management::{
-    CreateVectorIndexNode, DropVectorIndexNode,
+    CreateVectorIndexNode, DescribeVectorIndexNode, DropVectorIndexNode, ShowVectorIndexNode,
 };
 use crate::query_core::{NodeCategory, NodeType, NodeTypeMapping};
 
@@ -274,6 +274,8 @@ define_manage_node_enum! {
     pub enum VectorManageNode as VectorManage {
         Create(CreateVectorIndexNode, "CreateVectorIndex", "create_vector_index", "Create Vector Index", "create_vector_index"),
         Drop(DropVectorIndexNode, "DropVectorIndex", "drop_vector_index", "Drop Vector Index", "drop_vector_index"),
+        Show(ShowVectorIndexNode, "ShowVectorIndex", "show_vector_index", "Show Vector Index", "show_vector_index"),
+        Describe(DescribeVectorIndexNode, "DescribeVectorIndex", "describe_vector_index", "Describe Vector Index", "describe_vector_index"),
     }
 }
 

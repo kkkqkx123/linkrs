@@ -21,6 +21,7 @@ pub mod template_extractor;
 
 // Planner modules
 pub mod fulltext_planner;
+pub mod vector_ddl_planner;
 #[cfg(feature = "vector")]
 pub mod vector_planner;
 

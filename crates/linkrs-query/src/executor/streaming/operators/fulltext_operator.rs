@@ -17,6 +17,8 @@ use linkrs_core::types::expr::Expression;
 use linkrs_core::Value;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::manager::FulltextIndexManager;
+#[cfg(feature = "fulltext")]
+use linkrs_sync::FulltextSyncCoordinator;
 
 #[cfg(feature = "fulltext")]
 use crate::executor::streaming::chunk::{ColumnInfo, Schema};
@@ -145,8 +147,10 @@ pub enum FulltextOperatorKind {
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<linkrs_core::types::ReadYourWritesConfig>,
         #[cfg(feature = "fulltext")]
-        fulltext_manager: Option<Arc<FulltextIndexManager>>,
+        fulltext_coordinator: Option<Arc<FulltextSyncCoordinator>>,
     },
     FulltextLookup {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -157,8 +161,10 @@ pub enum FulltextOperatorKind {
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<linkrs_core::types::ReadYourWritesConfig>,
         #[cfg(feature = "fulltext")]
-        fulltext_manager: Option<Arc<FulltextIndexManager>>,
+        fulltext_coordinator: Option<Arc<FulltextSyncCoordinator>>,
     },
     MatchFulltext {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -171,8 +177,10 @@ pub enum FulltextOperatorKind {
         tag_name: String,
         field_name: String,
         limit: Option<usize>,
+        /// Read-your-writes consistency config; `None` = eventual.
+        ryw_config: Option<linkrs_core::types::ReadYourWritesConfig>,
         #[cfg(feature = "fulltext")]
-        fulltext_manager: Option<Arc<FulltextIndexManager>>,
+        fulltext_coordinator: Option<Arc<FulltextSyncCoordinator>>,
     },
 }
 
@@ -194,7 +202,7 @@ impl FulltextOperator {
     pub fn from_spec(
         spec: &super::spec::FulltextSpec,
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        #[cfg(feature = "fulltext")] fulltext_manager: Option<Arc<FulltextIndexManager>>,
+        #[cfg(feature = "fulltext")] fulltext_coordinator: Option<Arc<FulltextSyncCoordinator>>,
         output_layout: Arc<SlotLayout>,
     ) -> Self {
         let kind = match spec {
@@ -206,7 +214,9 @@ impl FulltextOperator {
                 space_name: space_name.clone(),
                 command: command.clone(),
                 #[cfg(feature = "fulltext")]
-                fulltext_manager: fulltext_manager.clone(),
+                fulltext_manager: fulltext_coordinator
+                    .as_ref()
+                    .map(|coordinator| coordinator.fulltext_manager().clone()),
             },
             super::spec::FulltextSpec::FulltextSearch {
                 space_name,
@@ -216,6 +226,7 @@ impl FulltextOperator {
                 tag_name,
                 field_name,
                 limit,
+                ..
             } => FulltextOperatorKind::FulltextSearch {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -225,8 +236,9 @@ impl FulltextOperator {
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
                 limit: *limit,
+                ryw_config: spec.ryw_config(),
                 #[cfg(feature = "fulltext")]
-                fulltext_manager: fulltext_manager.clone(),
+                fulltext_coordinator: fulltext_coordinator.clone(),
             },
             super::spec::FulltextSpec::FulltextLookup {
                 space_name,
@@ -236,6 +248,7 @@ impl FulltextOperator {
                 tag_name,
                 field_name,
                 limit,
+                ..
             } => FulltextOperatorKind::FulltextLookup {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -245,8 +258,9 @@ impl FulltextOperator {
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
                 limit: *limit,
+                ryw_config: spec.ryw_config(),
                 #[cfg(feature = "fulltext")]
-                fulltext_manager: fulltext_manager.clone(),
+                fulltext_coordinator: fulltext_coordinator.clone(),
             },
             super::spec::FulltextSpec::MatchFulltext {
                 space_name,
@@ -257,6 +271,7 @@ impl FulltextOperator {
                 tag_name,
                 field_name,
                 limit,
+                ..
             } => FulltextOperatorKind::MatchFulltext {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -267,8 +282,9 @@ impl FulltextOperator {
                 tag_name: tag_name.clone(),
                 field_name: field_name.clone(),
                 limit: *limit,
+                ryw_config: spec.ryw_config(),
                 #[cfg(feature = "fulltext")]
-                fulltext_manager: fulltext_manager.clone(),
+                fulltext_coordinator: fulltext_coordinator.clone(),
             },
         };
         Self::new(kind, output_layout)
@@ -473,7 +489,7 @@ impl FulltextOperator {
                                             .is_none_or(|schema| &metadata.tag_name == schema)
                                     })
                                     .collect();
-                                let _schema = Arc::new(Schema::new(vec![
+                                let schema = Arc::new(Schema::new(vec![
                                     ColumnInfo {
                                         name: "index_id".to_string(),
                                         data_type: "string".to_string(),
@@ -507,10 +523,7 @@ impl FulltextOperator {
                                         ]
                                     })
                                     .collect();
-                                Some(DataChunk::new_with_layout(
-                                    rows,
-                                    Arc::clone(&self.output_layout),
-                                ))
+                                Some(DataChunk::new(rows, schema))
                             } else {
                                 return Err(QueryError::execution(
                                     "SHOW FULLTEXT INDEXES cannot execute: no fulltext manager is configured",
@@ -594,25 +607,40 @@ impl FulltextOperator {
                 tag_name,
                 field_name,
                 limit,
+                ryw_config,
                 #[cfg(feature = "fulltext")]
-                fulltext_manager,
+                fulltext_coordinator,
                 ..
             } => {
                 #[cfg(feature = "fulltext")]
                 {
-                    if let Some(manager) = fulltext_manager {
+                    if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
-                        let search_results =
-                            crate::executor::streaming::helpers::runtime_bridge::wait(
+                        let search_results = match ryw_config {
+                            Some(cfg) => {
+                                crate::executor::streaming::helpers::runtime_bridge::wait(
+                                    "Fulltext search",
+                                    coordinator.search_with_consistency(
+                                        *space_id,
+                                        tag_name,
+                                        field_name,
+                                        structured_query,
+                                        search_limit,
+                                        *cfg,
+                                    ),
+                                )?
+                            }
+                            None => crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext search",
-                                manager.search_structured(
+                                coordinator.search_structured(
                                     *space_id,
                                     tag_name,
                                     field_name,
                                     structured_query,
                                     search_limit,
                                 ),
-                            )?;
+                            )?,
+                        };
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
@@ -628,7 +656,7 @@ impl FulltextOperator {
 
                     let _ = input;
                     Err(QueryError::execution(
-                        "FULLTEXT SEARCH cannot execute: no fulltext manager is configured",
+                        "FULLTEXT SEARCH cannot execute: no fulltext coordinator is configured",
                     ))
                 }
 
@@ -640,6 +668,7 @@ impl FulltextOperator {
                         &tag_name,
                         &field_name,
                         limit,
+                        &ryw_config,
                         input,
                     );
                     Err(QueryError::feature_disabled("fulltext", "FULLTEXT SEARCH"))
@@ -652,25 +681,40 @@ impl FulltextOperator {
                 tag_name,
                 field_name,
                 limit,
+                ryw_config,
                 #[cfg(feature = "fulltext")]
-                fulltext_manager,
+                fulltext_coordinator,
                 ..
             } => {
                 #[cfg(feature = "fulltext")]
                 {
-                    if let Some(manager) = fulltext_manager {
+                    if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
-                        let search_results =
-                            crate::executor::streaming::helpers::runtime_bridge::wait(
+                        let search_results = match ryw_config {
+                            Some(cfg) => {
+                                crate::executor::streaming::helpers::runtime_bridge::wait(
+                                    "Fulltext lookup",
+                                    coordinator.search_with_consistency(
+                                        *space_id,
+                                        tag_name,
+                                        field_name,
+                                        structured_query,
+                                        search_limit,
+                                        *cfg,
+                                    ),
+                                )?
+                            }
+                            None => crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext lookup",
-                                manager.search_structured(
+                                coordinator.search_structured(
                                     *space_id,
                                     tag_name,
                                     field_name,
                                     structured_query,
                                     search_limit,
                                 ),
-                            )?;
+                            )?,
+                        };
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
@@ -687,7 +731,7 @@ impl FulltextOperator {
 
                     let _ = input;
                     Err(QueryError::execution(
-                        "FULLTEXT LOOKUP cannot execute: no fulltext manager is configured",
+                        "FULLTEXT LOOKUP cannot execute: no fulltext coordinator is configured",
                     ))
                 }
 
@@ -699,6 +743,7 @@ impl FulltextOperator {
                         &tag_name,
                         &field_name,
                         limit,
+                        &ryw_config,
                         input,
                     );
                     Err(QueryError::feature_disabled("fulltext", "FULLTEXT LOOKUP"))
@@ -712,25 +757,40 @@ impl FulltextOperator {
                 tag_name,
                 field_name,
                 limit,
+                ryw_config,
                 #[cfg(feature = "fulltext")]
-                fulltext_manager,
+                fulltext_coordinator,
                 ..
             } => {
                 #[cfg(feature = "fulltext")]
                 {
-                    if let Some(manager) = fulltext_manager {
+                    if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
-                        let search_results =
-                            crate::executor::streaming::helpers::runtime_bridge::wait(
+                        let search_results = match ryw_config {
+                            Some(cfg) => {
+                                crate::executor::streaming::helpers::runtime_bridge::wait(
+                                    "Fulltext match",
+                                    coordinator.search_with_consistency(
+                                        *space_id,
+                                        tag_name,
+                                        field_name,
+                                        structured_query,
+                                        search_limit,
+                                        *cfg,
+                                    ),
+                                )?
+                            }
+                            None => crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext match",
-                                manager.search_structured(
+                                coordinator.search_structured(
                                     *space_id,
                                     tag_name,
                                     field_name,
                                     structured_query,
                                     search_limit,
                                 ),
-                            )?;
+                            )?,
+                        };
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
@@ -747,7 +807,7 @@ impl FulltextOperator {
 
                     let _ = input;
                     Err(QueryError::execution(
-                        "FULLTEXT MATCH cannot execute: no fulltext manager is configured",
+                        "FULLTEXT MATCH cannot execute: no fulltext coordinator is configured",
                     ))
                 }
 
@@ -760,6 +820,7 @@ impl FulltextOperator {
                         &tag_name,
                         &field_name,
                         limit,
+                        &ryw_config,
                         input,
                     );
                     Err(QueryError::feature_disabled("fulltext", "FULLTEXT MATCH"))

@@ -37,6 +37,12 @@ impl super::SyncManager {
         self.sync_coordinator.as_ref()
     }
 
+    /// Fulltext sync coordinator alias for embedded session access.
+    #[cfg(feature = "fulltext")]
+    pub fn fulltext_coordinator(&self) -> Option<&Arc<FulltextSyncCoordinator>> {
+        self.sync_coordinator()
+    }
+
     #[cfg(any(feature = "fulltext", feature = "vector"))]
     pub(crate) fn sqlite_outbox_opt(&self) -> Option<&SqliteOutbox> {
         self.sqlite_outbox.as_deref()

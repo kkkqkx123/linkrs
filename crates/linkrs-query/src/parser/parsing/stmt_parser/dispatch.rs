@@ -97,6 +97,10 @@ pub(super) fn parse_token_statement(ctx: &mut ParseContext) -> Result<Stmt, Pars
             if ctx.check_keyword_sequence(&["DESCRIBE", "FULLTEXT"]) {
                 return misc::parse_fulltext_statement(ctx);
             }
+            // DESCRIBE/DESC VECTOR INDEX is served by the vector parser.
+            if ctx.check_keyword_sequence(&["DESCRIBE", "VECTOR"]) {
+                return crate::parser::parsing::vector_parser::parse_vector(ctx);
+            }
             DdlParser::new().parse_desc_statement(ctx)
         }
         TokenKind::Alter => DdlParser::new().parse_alter_statement(ctx),
@@ -116,6 +120,10 @@ pub(super) fn parse_token_statement(ctx: &mut ParseContext) -> Result<Stmt, Pars
             // SHOW FULLTEXT INDEX is served by the full-text parser.
             if ctx.check_keyword_sequence(&["SHOW", "FULLTEXT"]) {
                 return misc::parse_fulltext_statement(ctx);
+            }
+            // SHOW VECTOR INDEX is served by the vector parser.
+            if ctx.check_keyword_sequence(&["SHOW", "VECTOR"]) {
+                return crate::parser::parsing::vector_parser::parse_vector(ctx);
             }
             ShowParser::new().parse_show_statement_extended(ctx)
         }

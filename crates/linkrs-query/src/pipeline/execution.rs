@@ -326,6 +326,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         #[cfg(feature = "fulltext")]
         {
             context.search.fulltext_manager = self.fulltext_manager.clone();
+            context.search.fulltext_coordinator = self
+                .sync_manager
+                .as_ref()
+                .and_then(|m| m.fulltext_coordinator().cloned());
         }
         #[cfg(feature = "vector")]
         {

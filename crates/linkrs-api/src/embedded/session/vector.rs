@@ -51,7 +51,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         Ok(results
             .into_iter()
             .map(|r| VectorSearchResult {
-                id: r.id,
+                doc_id: r.id,
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),
                 payload: r.payload.map(|p| p.into_iter().collect()),
@@ -101,7 +101,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         Ok(results
             .into_iter()
             .map(|r| VectorSearchResult {
-                id: r.id,
+                doc_id: r.id,
                 score: r.score,
                 vector: r.vector.map(|v| v.to_vec()),
                 payload: r.payload.map(|p| p.into_iter().collect()),

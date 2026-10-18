@@ -70,6 +70,21 @@ pub struct DropVectorIndex {
     pub if_exists: bool,
 }
 
+/// SHOW VECTOR INDEX statement
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowVectorIndex {
+    pub span: Span,
+    pub pattern: Option<String>,
+    pub from_schema: Option<String>,
+}
+
+/// DESCRIBE VECTOR INDEX statement
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DescribeVectorIndex {
+    pub span: Span,
+    pub index_name: String,
+}
+
 // ============================================================================
 // Vector Search DML Statements
 // ============================================================================

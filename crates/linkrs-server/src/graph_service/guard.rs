@@ -134,6 +134,8 @@ impl<
             | S::SearchVector(_)
             | S::ShowFulltextIndex(_)
             | S::DescribeFulltextIndex(_)
+            | S::ShowVectorIndex(_)
+            | S::DescribeVectorIndex(_)
             | S::LoadFrom(_)
             | S::InQueryCall(_)
             | S::ExportDatabase(_) => Some(Permission::Read),

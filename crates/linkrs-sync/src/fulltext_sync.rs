@@ -673,6 +673,62 @@ impl FulltextSyncCoordinator {
 
         Ok(())
     }
+
+    /// Search a fulltext index with a plain query string.
+    ///
+    /// Single entry point for embedded session and HTTP handler callers.
+    pub async fn search(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<linkrs_fulltext::SearchResult>, FulltextCoordinatorError> {
+        self.fulltext_manager
+            .search(space_id, tag_name, field_name, query, limit)
+            .await
+            .map_err(|e| FulltextCoordinatorError::SearchError(e.to_string()))
+    }
+
+    /// Search a fulltext index with a structured query.
+    pub async fn search_structured(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        query: &linkrs_fulltext::query::FulltextQuery,
+        limit: usize,
+    ) -> Result<Vec<linkrs_fulltext::SearchResult>, FulltextCoordinatorError> {
+        self.fulltext_manager
+            .search_structured(space_id, tag_name, field_name, query, limit)
+            .await
+            .map_err(|e| FulltextCoordinatorError::SearchError(e.to_string()))
+    }
+
+    /// Search with read-your-writes consistency.
+    ///
+    /// Forces all pending batch operations to commit before searching,
+    /// ensuring the caller sees their own writes.
+    pub async fn search_with_consistency(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        query: &linkrs_fulltext::query::FulltextQuery,
+        limit: usize,
+        _ryw_config: linkrs_core::types::ReadYourWritesConfig,
+    ) -> Result<Vec<linkrs_fulltext::SearchResult>, FulltextCoordinatorError> {
+        self.commit_all().await.map_err(|e| {
+            FulltextCoordinatorError::SearchError(format!(
+                "Read-your-writes commit failed: {}",
+                e
+            ))
+        })?;
+
+        self.search_structured(space_id, tag_name, field_name, query, limit)
+            .await
+    }
 }
 
 /// Result of a recovery operation
@@ -716,6 +772,9 @@ pub enum FulltextCoordinatorError {
 
     #[error("Recovery error: {0}")]
     RecoveryError(String),
+
+    #[error("Search error: {0}")]
+    SearchError(String),
 }
 
 impl From<crate::batch::BatchError> for FulltextCoordinatorError {

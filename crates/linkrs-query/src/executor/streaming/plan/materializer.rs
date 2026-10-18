@@ -314,12 +314,12 @@ impl PhysicalPlanMaterializer {
                     let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     #[cfg(feature = "fulltext")]
-                    let ft_mgr = runtime.search.fulltext_manager.clone();
+                    let ft_coord = runtime.search.fulltext_coordinator.clone();
                     let op = FulltextOperator::from_spec(
                         ft_spec,
                         storage,
                         #[cfg(feature = "fulltext")]
-                        ft_mgr,
+                        ft_coord,
                         output_layout.clone(),
                     );
                     StreamingExecutor::Fulltext(base, Box::new(child), op)

@@ -32,8 +32,6 @@ pub mod user_storage;
 pub mod fulltext_query;
 pub mod memory_estimation;
 pub mod search;
-pub mod search_discovery;
-pub mod search_manager;
 
 // C API type definitions (behind feature gate)
 pub mod c_api;
@@ -523,8 +521,6 @@ pub use self::graph_schema::{
 pub use self::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 pub use self::query::{ExecutionMode, PlanType, QueryHint, QueryOptions, QueryStatus, QueryType};
 pub use self::search::{IndexDescriptor, SearchHit, SearchHitPage};
-pub use self::search_discovery::SearchIndexDiscovery;
-pub use self::search_manager::{SearchIndexManager, SearchManagerResult};
 pub use self::semantic::{AliasType, ColumnDef, ValueType};
 pub use self::span::{Position, Span, ToSpan};
 

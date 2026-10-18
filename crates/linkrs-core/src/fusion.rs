@@ -25,7 +25,7 @@ pub fn rrf_fuse(lists: &[Vec<SearchHit>], k: u32, limit: usize) -> Vec<SearchHit
     }
     let mut fused: Vec<SearchHit> = totals
         .into_iter()
-        .map(|(id, (score, hit))| SearchHit {
+        .map(|(_, (score, hit))| SearchHit {
             score,
             ..hit.clone()
         })
@@ -60,7 +60,7 @@ pub fn weighted_fuse(
     }
     let mut fused: Vec<SearchHit> = totals
         .into_iter()
-        .map(|(id, (score, hit))| SearchHit {
+        .map(|(_, (score, hit))| SearchHit {
             score,
             ..hit.clone()
         })

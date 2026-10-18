@@ -10,10 +10,6 @@ pub mod metrics;
 pub mod query;
 pub mod result;
 #[cfg(feature = "fulltext")]
-pub mod search_discovery_impl;
-#[cfg(feature = "fulltext")]
-pub mod search_manager_impl;
-#[cfg(feature = "fulltext")]
 pub mod tantivy_index;
 #[cfg(feature = "fulltext")]
 pub mod warmup;
