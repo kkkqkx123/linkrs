@@ -18,6 +18,7 @@ use linkrs_core::Edge;
 use linkrs_core::Value;
 use linkrs_core::Vertex;
 use linkrs_query::classify_dml;
+use linkrs_query::dml_op_from_stmt;
 use linkrs_query::executor::base::ExecutionResult;
 use linkrs_query::executor::expression::functions::FunctionRegistry;
 use linkrs_query::DmlOp;
@@ -88,13 +89,54 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     /// (`HookBus::subscribe_dml`). Returns the classified operation so
     /// callers sharing the classification (e.g. the C-API update hook) do
     /// not scan the text twice.
+    ///
+    /// The prepared-statement classifier (`dml_op_from_stmt` over the parsed
+    /// `Stmt`) is authoritative; the text heuristic (`classify_dml`) is only
+    /// the fallback when parsing fails. This keeps hook classification
+    /// consistent with the execution-plan classification for composite
+    /// writes, piped statements, and schema DDL.
     pub(crate) fn notify_dml(&self, query: &str, rows: u64) -> Option<DmlOp> {
+        if let Some(op) = self.classify_prepared(query) {
+            let space = self
+                .current_space()
+                .unwrap_or_else(|| "default".to_string());
+            self.notify_dml_op(op, &space, rows);
+            return Some(op);
+        }
+        // Parsed Stmt says read-only/DDL: stay silent even if the text shim
+        // would fire (e.g. `CREATE TAG`, quoted `DELETE` literals).
+        if self.parses_as_non_dml(query) {
+            return None;
+        }
         let op = classify_dml(query)?;
         let space = self
             .current_space()
             .unwrap_or_else(|| "default".to_string());
         self.notify_dml_op(op, &space, rows);
         Some(op)
+    }
+
+    /// Authoritative classification from the parsed statement. Returns
+    /// `Some(op)` for DML, `None` for read-only/DDL or unparseable text
+    /// (caller falls back to the text shim only in the latter case via
+    /// [`Self::parses_as_non_dml`]).
+    fn classify_prepared(&self, query: &str) -> Option<DmlOp> {
+        let mut parser = linkrs_query::parser::Parser::new(query);
+        let parsed = parser.parse().ok()?;
+        if parser.has_errors() {
+            return None;
+        }
+        dml_op_from_stmt(parsed.ast.stmt())
+    }
+
+    /// Whether `query` parses successfully but is not DML. Distinguishes
+    /// "parsed as read-only" (stay silent) from "unparseable" (use shim).
+    fn parses_as_non_dml(&self, query: &str) -> bool {
+        let mut parser = linkrs_query::parser::Parser::new(query);
+        match parser.parse() {
+            Ok(parsed) => !parser.has_errors() && dml_op_from_stmt(parsed.ast.stmt()).is_none(),
+            Err(_) => false,
+        }
     }
 
     /// Emit one statement-level DML notification for an operation the
@@ -212,11 +254,41 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 
     /// Reject mutating statements on read-only databases.
     ///
-    /// `classify_dml` covers DML plus leading CREATE/DROP/ALTER/INSERT/
-    /// DELETE-family keywords; the extra set closes the remaining mutating
-    /// openers (bulk load/export/attach and extension management).
+    /// The prepared-statement classification (`StatementClass` over the
+    /// parsed `Stmt`) is authoritative; the text shim (`classify_dml` plus
+    /// the mutating-opener list below) is only the fallback for unparseable
+    /// text.
     pub(crate) fn ensure_writable(&self, query: &str) -> CoreResult<()> {
         if !self.db.read_only {
+            return Ok(());
+        }
+        if let Some(stmt) = self.parse_stmt(query) {
+            let class = linkrs_query::pipeline::prepared::classify_statement(&stmt);
+            match class {
+                linkrs_query::StatementClass::Dml
+                | linkrs_query::StatementClass::Ddl
+                | linkrs_query::StatementClass::Analyze => {
+                    return self.ensure_writable_op();
+                }
+                linkrs_query::StatementClass::ReadOnly
+                | linkrs_query::StatementClass::Transaction
+                | linkrs_query::StatementClass::Diagnostic => {}
+            }
+            // Bulk / admin mutators that are not DML/DDL by class still
+            // mutate storage; check them by kind.
+            match &stmt {
+                linkrs_query::parser::ast::Stmt::Copy(_)
+                | linkrs_query::parser::ast::Stmt::ExportDatabase(_)
+                | linkrs_query::parser::ast::Stmt::ImportDatabase(_)
+                | linkrs_query::parser::ast::Stmt::AttachDatabase(_)
+                | linkrs_query::parser::ast::Stmt::DetachDatabase(_)
+                | linkrs_query::parser::ast::Stmt::LoadFrom(_)
+                | linkrs_query::parser::ast::Stmt::Checkpoint(_)
+                | linkrs_query::parser::ast::Stmt::PurgeExpired(_) => {
+                    return self.ensure_writable_op();
+                }
+                _ => {}
+            }
             return Ok(());
         }
         if classify_dml(query).is_some() {
@@ -235,6 +307,15 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             return self.ensure_writable_op();
         }
         Ok(())
+    }
+
+    fn parse_stmt(&self, query: &str) -> Option<linkrs_query::parser::ast::Stmt> {
+        let mut parser = linkrs_query::parser::Parser::new(query);
+        let parsed = parser.parse().ok()?;
+        if parser.has_errors() {
+            return None;
+        }
+        Some(parsed.ast.stmt().clone())
     }
 
     // ── Session variables (`$name`) ─────────────────────────────────────

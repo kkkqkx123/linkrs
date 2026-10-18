@@ -2,6 +2,19 @@
 //!
 //! Provide query optimization capabilities, including the management of statistical information, cost calculation, and optimization strategies.
 //!
+//! Decision ownership (heuristic vs cost overlap eliminated):
+//! - Sort-to-TopN: cost wiring (`cost_based::topn_wiring`) is the sole
+//!   decision maker; no heuristic equivalent exists.
+//! - Join order: cost DP (`cost_based::join_order`) is the sole order
+//!   decision; heuristic join rules are shape normalization only.
+//! - Subquery unnesting: cost (`SubqueryUnnestingOptimizer`) decides
+//!   pre-CBO; the heuristic rule runs only as a post-CBO fallback over
+//!   cost-kept patterns. Cost model tuning itself is out of scope.
+//!
+//! Freeze: no new feedback types; new decisions reuse the existing
+//! cardinality feedback (`stats::feedback::cardinality`). Feedback-system
+//! consolidation is deferred by design.
+//!
 //! ## Module Structure
 //!
 //! The optimizer is organized into two main optimization phases:

@@ -149,18 +149,18 @@ impl BatchOptimizer {
                 OptimizationBatch::ExpandPushdown
             }
 
-            // Limit pushdown (part of normalize)
+            // Limit pushdown (part of normalize; Sort-to-TopN lives in the
+            // cost path only)
             PushLimitDownGetVertices(_)
             | PushLimitDownGetEdges(_)
             | PushLimitDownScanVertices(_)
             | PushLimitDownScanEdges(_)
             | PushLimitDownIndexScan(_)
             | PushTopNDownIndexScan(_)
-            | ConvertSortLimitToTopN(_)
             // Constant folding (part of normalize)
             | FoldConstants(_) => OptimizationBatch::Normalize,
 
-            // Join optimization (part of normalize/cleanup)
+            // Join optimization: shape normalization only (order by cost DP)
             PushProjectDownJoin(_)
             | ExtractEquiJoinKeys(_)
             | LeftJoinToInnerJoin(_)
@@ -168,9 +168,7 @@ impl BatchOptimizer {
             | JoinToExpand(_)
             | JoinToAppendVertices(_)
             | MergeConsecutiveExpand(_)
-            | JoinElimination(_)
-            | IndexJoinSelection(_)
-            | JoinReorder(_) => OptimizationBatch::Normalize,
+            | JoinElimination(_) => OptimizationBatch::Normalize,
 
             // Decorrelation batch: stat-free subquery unnesting gate.
             UnnestSimplePatternApply(_) => OptimizationBatch::Decorrelation,

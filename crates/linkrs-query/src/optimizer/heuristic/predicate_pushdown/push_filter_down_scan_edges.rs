@@ -55,6 +55,9 @@ impl RewriteRule for PushFilterDownScanEdgesRule {
             PlanNodeEnum::ScanEdges(s) => s,
             _ => return Ok(None),
         };
+        if crate::cte::is_cte_scan_edges(scan) {
+            return Ok(None);
+        }
         if scan.filter().is_some() {
             return Ok(None);
         }

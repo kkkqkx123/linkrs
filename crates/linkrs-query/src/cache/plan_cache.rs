@@ -646,6 +646,27 @@ impl QueryPlanCache {
         }
     }
 
+    /// Single compatibility exit for cached plans (memo, plan cache, and
+    /// partitioned entries alike).
+    ///
+    /// Wraps `PhysicalPlanValidator::check_compatibility` so success and
+    /// failure accounting stays aligned: success records a memo hit, failure
+    /// is reported to the caller for the compat-failure counter. Callers must
+    /// not duplicate the check inline.
+    pub fn serve_compatible(
+        &self,
+        plan: &Arc<crate::executor::streaming::plan::PhysicalPlan>,
+        schema_version: Option<u64>,
+    ) -> Result<(), linkrs_core::error::DBError> {
+        crate::executor::streaming::plan::PhysicalPlanValidator::check_compatibility(
+            plan,
+            schema_version,
+        )
+        .map_err(linkrs_core::error::DBError::from)?;
+        self.record_memo_hit();
+        Ok(())
+    }
+
     /// Get statistics snapshot
     pub fn stats_snapshot(&self) -> super::stats::PlanCacheStatsSnapshot {
         self.stats.snapshot()

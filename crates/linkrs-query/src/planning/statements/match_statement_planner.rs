@@ -168,6 +168,12 @@ impl Planner for MatchStatementPlanner {
             self.metadata_context = Some(metadata_context.clone());
         }
 
+        let validated = validated.ok_or_else(|| {
+            PlannerError::PlanGenerationFailed(
+                "MatchStatementPlanner requires a validated statement for MATCH planning"
+                    .to_string(),
+            )
+        })?;
         self.expr_context = Some(validated.ast.expr_context().clone());
 
         let validation_info = &validated.validation_info;

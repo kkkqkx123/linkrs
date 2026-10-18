@@ -80,6 +80,10 @@ pub type MatchFunc = fn(&Stmt) -> bool;
 pub trait Planner: std::fmt::Debug {
     /// Translate the verified statement into a sub-plan.
     ///
+    /// Legacy compatibility path: new code must use `plan_bound` instead.
+    /// Kept only because composite planners still forward AST fragments
+    /// during the bound-pipeline migration.
+    ///
     /// # Parameters
     /// `validated`: A verified statement that contains ValidationInfo and Ast.
     /// `qctx`: Query context
@@ -94,6 +98,7 @@ pub trait Planner: std::fmt::Debug {
 
     /// Translate a bound statement directly into a plan sub-tree.
     ///
+    /// Preferred entry point for all new planning work.
     /// The unified [`PlanContext`] bundles all inputs needed during
     /// bound-statement planning (bound statement, query context, metadata,
     /// validated statement). The default implementation returns
@@ -154,168 +159,6 @@ pub enum PlannerEnum {
 }
 
 impl PlannerEnum {
-    /// Create a planner directly from Arc<Stmt> (the recommended method).
-    /// Use the enumeration pattern for matching to completely eliminate the need for string matching.
-    pub fn from_stmt(stmt: &Arc<Stmt>) -> Option<Self> {
-        Self::from_stmt_ref(stmt.as_ref())
-    }
-
-    /// Create a planner directly from a statement reference.
-    /// This avoids cloning the whole statement tree when only dispatching.
-    pub fn from_stmt_ref(stmt: &Stmt) -> Option<Self> {
-        match stmt {
-            Stmt::Match(_) => Some(PlannerEnum::Match(Box::default())),
-            Stmt::Go(_) => Some(PlannerEnum::Go(GoPlanner::new())),
-            Stmt::Lookup(_) => Some(PlannerEnum::Lookup(LookupPlanner::new())),
-            Stmt::FindPath(_) => Some(PlannerEnum::Path(PathPlanner::new())),
-            Stmt::Subgraph(_) => Some(PlannerEnum::Subgraph(SubgraphPlanner::new())),
-            Stmt::Fetch(fetch_stmt) => match &fetch_stmt.target {
-                crate::parser::ast::FetchTarget::Vertices { .. } => {
-                    Some(PlannerEnum::FetchVertices(FetchVerticesPlanner::new()))
-                }
-                crate::parser::ast::FetchTarget::Edges { .. } => {
-                    Some(PlannerEnum::FetchEdges(FetchEdgesPlanner::new()))
-                }
-            },
-            Stmt::Insert(_) => Some(PlannerEnum::Insert(InsertPlanner::new())),
-            Stmt::Copy(_) => Some(PlannerEnum::Copy(CopyPlanner::new())),
-            Stmt::Delete(_) => Some(PlannerEnum::Delete(DeletePlanner::new())),
-            Stmt::Update(_) => Some(PlannerEnum::Update(UpdatePlanner::new())),
-            Stmt::Remove(_) => Some(PlannerEnum::Remove(RemovePlanner::new())),
-            Stmt::Set(_) => Some(PlannerEnum::Set(SetPlanner::new())),
-            Stmt::Merge(_) => Some(PlannerEnum::Merge(MergePlanner::new())),
-            Stmt::Assignment(_) => Some(PlannerEnum::Assignment(AssignmentPlanner::new())),
-            Stmt::GroupBy(_) => Some(PlannerEnum::GroupBy(GroupByPlanner::new())),
-            Stmt::Filter(_) => Some(PlannerEnum::Filter(FilterPlanner::new())),
-            Stmt::Collect(_) => Some(PlannerEnum::Collect(CollectPlanner::new())),
-            Stmt::SetOperation(_) => Some(PlannerEnum::SetOperation(SetOperationPlanner::new())),
-            Stmt::Use(_) => Some(PlannerEnum::Use(UsePlanner::new())),
-            Stmt::Unwind(_) => Some(PlannerEnum::Unwind(UnwindPlanner::new())),
-            Stmt::With(_) => Some(PlannerEnum::With(WithPlanner::new())),
-            Stmt::Return(_) => Some(PlannerEnum::Return(ReturnPlanner::new())),
-            Stmt::AssignVariable(_) => {
-                Some(PlannerEnum::AssignVariable(AssignVariablePlanner::new()))
-            }
-            Stmt::Yield(_) => Some(PlannerEnum::Yield(YieldPlanner::new())),
-            Stmt::Pipe(_) => Some(PlannerEnum::Pipe(PipePlanner::new())),
-            Stmt::Explain(_) => Some(PlannerEnum::Explain(ExplainPlanner::new())),
-            Stmt::Profile(_) => Some(PlannerEnum::Explain(ExplainPlanner::new_profile())),
-            // Full-text search statements
-            Stmt::CreateFulltextIndex(_)
-            | Stmt::DropFulltextIndex(_)
-            | Stmt::AlterFulltextIndex(_)
-            | Stmt::ShowFulltextIndex(_)
-            | Stmt::DescribeFulltextIndex(_)
-            | Stmt::Search(_)
-            | Stmt::LookupFulltext(_)
-            | Stmt::MatchFulltext(_) => {
-                Some(PlannerEnum::FulltextSearch(FulltextSearchPlanner::new()))
-            }
-            Stmt::CreateVectorIndex(_)
-            | Stmt::DropVectorIndex(_)
-            | Stmt::ShowVectorIndex(_)
-            | Stmt::DescribeVectorIndex(_) => Some(PlannerEnum::VectorDdl(VectorDdlPlanner::new())),
-            #[cfg(feature = "vector")]
-            Stmt::SearchVector(_)
-            | Stmt::LookupVector(_)
-            | Stmt::MatchVector(_) => Some(PlannerEnum::VectorSearch(VectorSearchPlanner::new())),
-            Stmt::CreateUser(_)
-            | Stmt::DropUser(_)
-            | Stmt::AlterUser(_)
-            | Stmt::ChangePassword(_)
-            | Stmt::Grant(_)
-            | Stmt::Revoke(_)
-            | Stmt::DescribeUser(_)
-            | Stmt::ShowUsers(_)
-            | Stmt::ShowRoles(_) => Some(PlannerEnum::UserManagement(UserManagementPlanner::new())),
-            Stmt::Create(_)
-            | Stmt::Drop(_)
-            | Stmt::Show(_)
-            | Stmt::Desc(_)
-            | Stmt::Alter(_)
-            | Stmt::ShowCreate(_)
-            | Stmt::ShowSessions(_)
-            | Stmt::ShowQueries(_)
-            | Stmt::KillQuery(_)
-            | Stmt::ShowConfigs(_)
-            | Stmt::UpdateConfigs(_)
-            | Stmt::ClearSpace(_)
-            | Stmt::BeginTransaction(_)
-            | Stmt::CommitTransaction(_)
-            | Stmt::RollbackTransaction(_)
-            | Stmt::Savepoint(_)
-            | Stmt::ReleaseSavepoint(_)
-            | Stmt::Checkpoint(_)
-            | Stmt::PurgeExpired(_)
-            | Stmt::ExportDatabase(_)
-            | Stmt::ImportDatabase(_)
-            | Stmt::AttachDatabase(_)
-            | Stmt::DetachDatabase(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
-            // New reading clause statements — no dedicated planner yet; route
-            // through the MaintainPlanner fallback (returns UnsupportedOperation
-            // until a proper planner is implemented).
-            Stmt::LoadFrom(_) | Stmt::InQueryCall(_) => {
-                Some(PlannerEnum::Maintain(MaintainPlanner::new()))
-            }
-            // Catalog DDL statements are planned by the MaintainPlanner into
-            // MacroManage / TypeManage plan nodes.
-            Stmt::CreateMacro(_) | Stmt::DropMacro(_) | Stmt::CreateType(_) | Stmt::DropType(_) => {
-                Some(PlannerEnum::Maintain(MaintainPlanner::new()))
-            }
-            // The type of the following sentence does not currently support direct planning.
-            _ => None,
-        }
-    }
-
-    /// Create a planner from Arc<Ast>.
-    /// This is the new recommendation method; the context of the expressions is defined within Ast.
-    pub fn from_ast(ast: &Arc<crate::parser::ast::stmt::Ast>) -> Option<Self> {
-        Self::from_stmt_ref(&ast.stmt)
-    }
-
-    /// Convert the verified statement into an execution plan.
-    pub fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        match self {
-            PlannerEnum::Match(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Go(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Lookup(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Path(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Subgraph(planner) => planner.transform(validated, qctx),
-            PlannerEnum::FetchVertices(planner) => planner.transform(validated, qctx),
-            PlannerEnum::FetchEdges(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Maintain(planner) => planner.transform(validated, qctx),
-            PlannerEnum::UserManagement(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Assignment(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Insert(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Copy(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Delete(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Update(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Remove(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Set(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Merge(planner) => planner.transform(validated, qctx),
-            PlannerEnum::GroupBy(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Filter(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Collect(planner) => planner.transform(validated, qctx),
-            PlannerEnum::SetOperation(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Use(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Unwind(planner) => planner.transform(validated, qctx),
-            PlannerEnum::With(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Return(planner) => planner.transform(validated, qctx),
-            PlannerEnum::AssignVariable(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Yield(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Pipe(planner) => planner.transform(validated, qctx),
-            PlannerEnum::Explain(planner) => planner.transform(validated, qctx),
-            PlannerEnum::FulltextSearch(planner) => planner.transform(validated, qctx),
-            PlannerEnum::VectorDdl(planner) => planner.transform(validated, qctx),
-            #[cfg(feature = "vector")]
-            PlannerEnum::VectorSearch(planner) => planner.transform(validated, qctx),
-        }
-    }
-
     /// Create a planner from a BoundStatement.
     pub fn from_bound_statement(bound: &BoundStatement) -> Option<Self> {
         match bound {
@@ -381,7 +224,98 @@ impl PlannerEnum {
             BoundStatement::Assignment(_) => {
                 Some(PlannerEnum::Assignment(AssignmentPlanner::new()))
             }
-            BoundStatement::Other(stmt) => Self::from_stmt_ref(stmt.as_ref()),
+            BoundStatement::Other(stmt) => match stmt.as_ref() {
+                Stmt::CreateVectorIndex(_)
+                | Stmt::DropVectorIndex(_)
+                | Stmt::ShowVectorIndex(_)
+                | Stmt::DescribeVectorIndex(_) => {
+                    Some(PlannerEnum::VectorDdl(VectorDdlPlanner::new()))
+                }
+                #[cfg(feature = "vector")]
+                Stmt::SearchVector(_) | Stmt::LookupVector(_) | Stmt::MatchVector(_) => {
+                    Some(PlannerEnum::VectorSearch(VectorSearchPlanner::new()))
+                }
+                _ => None,
+            },
+        }
+    }
+
+    /// Transitional AST dispatch for paths without bound IR (LOAD FROM inner,
+    /// AST CTE branches).
+    ///
+    /// Not part of the bound pipeline: exists only so the two AST-only
+    /// callers do not reintroduce `PlannerEnum` legacy dispatch. Removed in
+    /// step 2 once per-planner `transform` impls are deleted and these paths
+    /// gain bound IR or are stubbed.
+    pub(crate) fn legacy_plan_stmt_via_transform(
+        stmt: &Stmt,
+        validated: &ValidatedStatement,
+        qctx: Arc<QueryContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        match stmt {
+            Stmt::Match(_) => MatchStatementPlanner::default().transform(validated, qctx),
+            Stmt::Go(_) => GoPlanner::new().transform(validated, qctx),
+            Stmt::Lookup(_) => LookupPlanner::new().transform(validated, qctx),
+            Stmt::FindPath(_) => PathPlanner::new().transform(validated, qctx),
+            Stmt::Subgraph(_) => SubgraphPlanner::new().transform(validated, qctx),
+            Stmt::Fetch(fetch) => match &fetch.target {
+                crate::parser::ast::FetchTarget::Vertices { .. } => {
+                    FetchVerticesPlanner::new().transform(validated, qctx)
+                }
+                crate::parser::ast::FetchTarget::Edges { .. } => {
+                    FetchEdgesPlanner::new().transform(validated, qctx)
+                }
+            },
+            Stmt::Insert(_) => InsertPlanner::new().transform(validated, qctx),
+            Stmt::Copy(_) => CopyPlanner::new().transform(validated, qctx),
+            Stmt::Delete(_) => DeletePlanner::new().transform(validated, qctx),
+            Stmt::Update(_) => UpdatePlanner::new().transform(validated, qctx),
+            Stmt::Remove(_) => RemovePlanner::new().transform(validated, qctx),
+            Stmt::Set(_) => SetPlanner::new().transform(validated, qctx),
+            Stmt::Merge(_) => MergePlanner::new().transform(validated, qctx),
+            Stmt::Assignment(_) => AssignmentPlanner::new().transform(validated, qctx),
+            Stmt::GroupBy(_) => GroupByPlanner::new().transform(validated, qctx),
+            Stmt::Filter(_) => FilterPlanner::new().transform(validated, qctx),
+            Stmt::Collect(_) => CollectPlanner::new().transform(validated, qctx),
+            Stmt::SetOperation(_) => SetOperationPlanner::new().transform(validated, qctx),
+            Stmt::Use(_) => UsePlanner::new().transform(validated, qctx),
+            Stmt::Unwind(_) => UnwindPlanner::new().transform(validated, qctx),
+            Stmt::With(_) => WithPlanner::new().transform(validated, qctx),
+            Stmt::Return(_) => ReturnPlanner::new().transform(validated, qctx),
+            Stmt::AssignVariable(_) => AssignVariablePlanner::new().transform(validated, qctx),
+            Stmt::Yield(_) => YieldPlanner::new().transform(validated, qctx),
+            Stmt::Pipe(_) => PipePlanner::new().transform(validated, qctx),
+            Stmt::Explain(_) => ExplainPlanner::new().transform(validated, qctx),
+            Stmt::Profile(_) => ExplainPlanner::new_profile().transform(validated, qctx),
+            Stmt::CreateFulltextIndex(_)
+            | Stmt::DropFulltextIndex(_)
+            | Stmt::AlterFulltextIndex(_)
+            | Stmt::ShowFulltextIndex(_)
+            | Stmt::DescribeFulltextIndex(_)
+            | Stmt::Search(_)
+            | Stmt::LookupFulltext(_)
+            | Stmt::MatchFulltext(_) => FulltextSearchPlanner::new().transform(validated, qctx),
+            Stmt::CreateVectorIndex(_)
+            | Stmt::DropVectorIndex(_)
+            | Stmt::ShowVectorIndex(_)
+            | Stmt::DescribeVectorIndex(_) => VectorDdlPlanner::new().transform(validated, qctx),
+            #[cfg(feature = "vector")]
+            Stmt::SearchVector(_) | Stmt::LookupVector(_) | Stmt::MatchVector(_) => {
+                VectorSearchPlanner::new().transform(validated, qctx)
+            }
+            Stmt::CreateUser(_)
+            | Stmt::DropUser(_)
+            | Stmt::AlterUser(_)
+            | Stmt::ChangePassword(_)
+            | Stmt::Grant(_)
+            | Stmt::Revoke(_)
+            | Stmt::DescribeUser(_)
+            | Stmt::ShowUsers(_)
+            | Stmt::ShowRoles(_) => UserManagementPlanner::new().transform(validated, qctx),
+            _ => Err(PlannerError::NoSuitablePlanner(format!(
+                "legacy AST path has no planner for {}",
+                stmt.kind()
+            ))),
         }
     }
 
@@ -421,45 +355,6 @@ impl PlannerEnum {
             PlannerEnum::VectorDdl(_) => "VectorDdlPlanner",
             #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(_) => "VectorSearchPlanner",
-        }
-    }
-
-    /// Check whether there is a match.
-    pub fn matches(&self, stmt: &Stmt) -> bool {
-        match self {
-            PlannerEnum::Match(planner) => planner.match_planner(stmt),
-            PlannerEnum::Go(planner) => planner.match_planner(stmt),
-            PlannerEnum::Lookup(planner) => planner.match_planner(stmt),
-            PlannerEnum::Path(planner) => planner.match_planner(stmt),
-            PlannerEnum::Subgraph(planner) => planner.match_planner(stmt),
-            PlannerEnum::FetchVertices(planner) => planner.match_planner(stmt),
-            PlannerEnum::FetchEdges(planner) => planner.match_planner(stmt),
-            PlannerEnum::Maintain(planner) => planner.match_planner(stmt),
-            PlannerEnum::UserManagement(planner) => planner.match_planner(stmt),
-            PlannerEnum::Assignment(planner) => planner.match_planner(stmt),
-            PlannerEnum::Insert(planner) => planner.match_planner(stmt),
-            PlannerEnum::Copy(planner) => planner.match_planner(stmt),
-            PlannerEnum::Delete(planner) => planner.match_planner(stmt),
-            PlannerEnum::Update(planner) => planner.match_planner(stmt),
-            PlannerEnum::Remove(planner) => planner.match_planner(stmt),
-            PlannerEnum::Set(planner) => planner.match_planner(stmt),
-            PlannerEnum::Merge(planner) => planner.match_planner(stmt),
-            PlannerEnum::GroupBy(planner) => planner.match_planner(stmt),
-            PlannerEnum::Filter(planner) => planner.match_planner(stmt),
-            PlannerEnum::Collect(planner) => planner.match_planner(stmt),
-            PlannerEnum::SetOperation(planner) => planner.match_planner(stmt),
-            PlannerEnum::Use(planner) => planner.match_planner(stmt),
-            PlannerEnum::Unwind(planner) => planner.match_planner(stmt),
-            PlannerEnum::With(planner) => planner.match_planner(stmt),
-            PlannerEnum::Return(planner) => planner.match_planner(stmt),
-            PlannerEnum::AssignVariable(planner) => planner.match_planner(stmt),
-            PlannerEnum::Yield(planner) => planner.match_planner(stmt),
-            PlannerEnum::Pipe(planner) => planner.match_planner(stmt),
-            PlannerEnum::Explain(planner) => planner.match_planner(stmt),
-            PlannerEnum::FulltextSearch(planner) => planner.match_planner(stmt),
-            PlannerEnum::VectorDdl(planner) => planner.match_planner(stmt),
-            #[cfg(feature = "vector")]
-            PlannerEnum::VectorSearch(planner) => planner.match_planner(stmt),
         }
     }
 
@@ -586,46 +481,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_planner_enum_from_stmt() {
-        // Testing the creation of a planner from a Stmt
-        let match_stmt = Stmt::Match(crate::parser::ast::MatchStmt {
-            span: linkrs_core::types::Span::default(),
-            patterns: vec![],
-            where_clause: None,
-            return_clause: None,
-            order_by: None,
-            limit: None,
-            skip: None,
-            join_hint: None,
-            optional: false,
-            delete_clause: None,
-        });
+    fn test_planner_enum_from_bound() {
+        use crate::binder::bound::BoundUse;
 
-        let planner = PlannerEnum::from_stmt(&Arc::new(match_stmt));
+        let bound = BoundStatement::Use(BoundUse {
+            space: "test".to_string(),
+        });
+        let planner = PlannerEnum::from_bound_statement(&bound);
         assert!(planner.is_some());
-        assert_eq!(
-            planner.expect("Planner should exist").name(),
-            "MatchPlanner"
-        );
+        assert_eq!(planner.expect("Planner should exist").name(), "UsePlanner");
     }
 
     #[test]
-    fn test_planner_enum_matches() {
-        let match_stmt = Stmt::Match(crate::parser::ast::MatchStmt {
-            span: linkrs_core::types::Span::default(),
-            patterns: vec![],
-            where_clause: None,
-            return_clause: None,
-            order_by: None,
-            limit: None,
-            skip: None,
-            join_hint: None,
-            optional: false,
-            delete_clause: None,
-        });
+    fn test_planner_enum_bound_routing() {
+        use crate::binder::bound::BoundUse;
 
-        let planner = PlannerEnum::Match(Box::default());
-        assert!(planner.matches(&match_stmt));
+        let bound = BoundStatement::Use(BoundUse {
+            space: "test".to_string(),
+        });
+        let planner = PlannerEnum::from_bound_statement(&bound).expect("planner must exist");
+        assert_eq!(planner.name(), "UsePlanner");
     }
 
     #[test]
@@ -650,7 +525,8 @@ mod tests {
             }),
         ];
         for stmt in &stmts {
-            let planner = PlannerEnum::from_stmt_ref(stmt);
+            let bound = BoundStatement::Other(Box::new(stmt.clone()));
+            let planner = PlannerEnum::from_bound_statement(&bound);
             assert!(
                 matches!(planner, Some(PlannerEnum::VectorDdl(_))),
                 "vector DDL must route to VectorDdl in every feature combination, got: {:?}",
@@ -682,7 +558,8 @@ mod tests {
             skip: None,
             yield_clause: None,
         });
-        let planner = PlannerEnum::from_stmt_ref(&stmt);
+        let bound = BoundStatement::Other(Box::new(stmt));
+        let planner = PlannerEnum::from_bound_statement(&bound);
         assert!(
             matches!(planner, Some(PlannerEnum::VectorSearch(_))),
             "vector search must route to VectorSearch when the feature is on"

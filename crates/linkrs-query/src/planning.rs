@@ -1,14 +1,20 @@
-//! Planner module for generating execution plans from AST
+//! Planner module for generating execution plans from bound statements
 //! Contains the Planner trait, ExecutionPlan structure, and various specific planners
 //!
 //! # Planning Pipeline
 //!
 //! The planning process consists of:
-//! 1. AST to Execution Plan conversion
+//! 1. Bound statement to logical plan (logical is the single source of truth)
 //! 2. Heuristic optimization (via `optimizer::heuristic`)
 //! 3. Cost-based optimization (via `optimizer::cost_based`)
+//! 4. One-way logical-to-physical conversion (`physical_planner`,
+//!    `physical_mapper`); the reverse direction exists only for tests and
+//!    diagnostics and is never on the main path. Physical fallback merges
+//!    are explicitly noted, never silent.
 //!
 //! Note: The heuristic rewrite module has been moved to `optimizer::heuristic`.
+//! Logical/physical enum consolidation is deferred by design: new operators
+//! add one-way conversion plus single-side visitors only.
 
 // Core modules
 pub mod connector;

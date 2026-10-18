@@ -53,14 +53,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &physical_plan,
             );
 
-        let output = match explain_stmt.format {
-            crate::parser::ast::stmt::ExplainFormat::Table => {
-                crate::executor::explain::format::format_plan_as_table(&plan_desc)
-            }
-            crate::parser::ast::stmt::ExplainFormat::Dot => {
-                crate::executor::explain::format::format_plan_as_dot(&plan_desc)
-            }
-        };
+        let output = crate::executor::explain::format::render_plan(&plan_desc, explain_stmt.format.clone());
 
         let data_set = linkrs_core::DataSet::from_rows(
             vec![vec![linkrs_core::Value::string(output)]],
@@ -114,14 +107,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             );
         Self::overlay_execution_profile(&instance, &mut plan_desc, exec_ctx.max_workers);
 
-        let output = match explain_stmt.format {
-            crate::parser::ast::stmt::ExplainFormat::Table => {
-                crate::executor::explain::format::format_plan_as_table(&plan_desc)
-            }
-            crate::parser::ast::stmt::ExplainFormat::Dot => {
-                crate::executor::explain::format::format_plan_as_dot(&plan_desc)
-            }
-        };
+        let output = crate::executor::explain::format::render_plan(&plan_desc, explain_stmt.format.clone());
 
         let data_set = linkrs_core::DataSet::from_rows(
             vec![vec![linkrs_core::Value::string(output)]],
@@ -173,9 +159,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Self::overlay_execution_profile(&instance, &mut plan_desc, exec_ctx.max_workers);
 
         // DOT renders the same profiled plan as a graph; TABLE expands it
-        // into the per-operator profiling rows below.
+        // into the per-operator profiling rows below. Both go through the
+        // single `render_plan` dispatch for the string form; the TABLE
+        // DataSet below is the sole PROFILE assembly and reuses the shared
+        // spill/parallel/deps helpers so formatting stays single-sourced.
         if profile_stmt.format == crate::parser::ast::stmt::ExplainFormat::Dot {
-            let output = crate::executor::explain::format::format_plan_as_dot(&plan_desc);
+            let output =
+                crate::executor::explain::format::render_plan(&plan_desc, profile_stmt.format.clone());
             let data_set = linkrs_core::DataSet::from_rows(
                 vec![vec![linkrs_core::Value::string(output)]],
                 vec!["plan".to_string()],
@@ -193,17 +183,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             ids.push(Value::BigInt(node_desc.id));
             names.push(Value::string_from_owned(node_desc.name.clone()));
 
-            let deps = node_desc
-                .dependencies
-                .as_ref()
-                .map(|d| {
-                    d.iter()
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            dependencies.push(Value::string(&deps));
+            let deps = crate::executor::explain::format::format_deps(
+                node_desc.dependencies.as_ref(),
+            )
+            .replace(',', ", ");
+            dependencies.push(Value::string(if deps == "-" {
+                ""
+            } else {
+                &deps
+            }));
 
             let profile_str = if let Some(ref profiles) = node_desc.profiles {
                 profiles
@@ -211,17 +199,24 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     .map(|p| {
                         let base =
                             format!("rows: {}, exec_time: {}us", p.rows, p.exec_duration_in_us);
-                        let spilled = p.other_stats.get("spilled_bytes").map(String::as_str);
-                        let count = p.other_stats.get("spill_count").map(String::as_str);
-                        let rows = p.other_stats.get("spilled_rows").map(String::as_str);
-                        match (spilled, count, rows) {
-                            (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
-                                format!(
-                                    "{}, spilled_rows: {}, spilled_bytes: {}, spill_count: {}",
-                                    base, r, b, c
-                                )
-                            }
-                            _ => base,
+                        let spill =
+                            crate::executor::explain::format::format_spill_suffix(&p.other_stats);
+                        if spill.is_empty() {
+                            base
+                        } else {
+                            let pretty = spill
+                                .trim_start_matches(',')
+                                .split(',')
+                                .map(|part| {
+                                    let mut kv = part.splitn(2, ':');
+                                    match (kv.next(), kv.next()) {
+                                        (Some(k), Some(v)) => format!("{k}: {v}"),
+                                        _ => part.to_string(),
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("{base}, {pretty}")
                         }
                     })
                     .collect::<Vec<_>>()

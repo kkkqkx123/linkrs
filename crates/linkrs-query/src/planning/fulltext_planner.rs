@@ -61,7 +61,15 @@ impl Planner for FulltextSearchPlanner {
             crate::binder::BoundStatement::CreateFulltextIndex(c) => c,
             // DROP/ALTER/SHOW/DESCRIBE/SEARCH variants have no bound
             // representation yet and still use the AST path.
-            _ => return self.transform(ctx.validated, qctx),
+            _ => {
+                let validated = ctx.validated.ok_or_else(|| {
+                    PlannerError::PlanGenerationFailed(
+                        "FulltextSearchPlanner requires a validated statement for AST fallback"
+                            .to_string(),
+                    )
+                })?;
+                return self.transform(validated, qctx);
+            }
         };
 
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());

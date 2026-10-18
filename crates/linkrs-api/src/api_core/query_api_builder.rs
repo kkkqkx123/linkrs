@@ -14,7 +14,7 @@ use linkrs_core::metadata::SchemaManager;
 use linkrs_metrics::StatsManager;
 use linkrs_query::executor::streaming::pool::SharedScheduler;
 use linkrs_query::executor::streaming::query_registry::QueryRegistry;
-use linkrs_query::experimental_pipeline_extensions::ExtensionRegistry;
+use linkrs_query::extensions::ExtensionRegistry;
 use linkrs_query::optimizer::CostModelConfig;
 use linkrs_query::query_manager::QueryManager;
 use linkrs_query::OptimizerEngine;

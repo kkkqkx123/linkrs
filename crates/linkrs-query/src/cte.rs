@@ -36,6 +36,32 @@ pub fn is_cte_tag(tag: &str) -> bool {
     tag.starts_with(CTE_TAG_PREFIX)
 }
 
+/// Whether a `ScanVertices` node scans a CTE working table.
+///
+/// Single predicate for all scan-rewrite rules: any rule that mutates,
+/// annotates, or folds state into a `ScanVertices` must consult this first
+/// and leave CTE scans untouched. The executor routes CTE-tagged scans to a
+/// `CteScan` working-table source that ignores storage-only fields
+/// (`limit`, `filter`, `projected_properties`, `identity_only`), so mutating
+/// those fields would either silently drop (limit) or diverge plan from
+/// execution.
+pub fn is_cte_scan_vertices(
+    scan: &crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode,
+) -> bool {
+    scan.tag().is_some_and(|tag| is_cte_tag(tag))
+}
+
+/// Whether a `ScanEdges` node scans a CTE working table.
+///
+/// Edge tags are never CTE-mangled today, but the predicate exists so future
+/// edge-CTE support cannot silently mis-annotate; call it the same way as
+/// [`is_cte_scan_vertices`].
+pub fn is_cte_scan_edges(
+    scan: &crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode,
+) -> bool {
+    scan.edge_type().is_some_and(|t| is_cte_tag(&t))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,5 +73,23 @@ mod tests {
         assert_eq!(strip_cte_tag(&mangled), Some("r"));
         assert!(!is_cte_tag("Person"));
         assert_eq!(strip_cte_tag("Person"), None);
+    }
+
+    #[test]
+    fn cte_scan_predicates_are_single_source_of_truth() {
+        use crate::planning::plan::core::nodes::access::graph_scan_node::{
+            ScanEdgesNode, ScanVerticesNode,
+        };
+        let mut vertices = ScanVerticesNode::new(1, "space");
+        vertices.set_tag(&mangle_cte_name("r"));
+        assert!(is_cte_scan_vertices(&vertices));
+        let mut plain = ScanVerticesNode::new(1, "space");
+        plain.set_tag("Person");
+        assert!(!is_cte_scan_vertices(&plain));
+
+        let edges = ScanEdgesNode::new(1, &mangle_cte_name("r"));
+        assert!(is_cte_scan_edges(&edges));
+        let plain_edges = ScanEdgesNode::new(1, "KNOWS");
+        assert!(!is_cte_scan_edges(&plain_edges));
     }
 }

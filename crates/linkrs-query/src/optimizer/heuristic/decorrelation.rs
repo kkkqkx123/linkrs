@@ -1,16 +1,13 @@
-//! Decorrelation heuristic rule
+//! Decorrelation heuristic fallback (post-CBO only)
 //!
-//! Lightweight stat-free gate that converts simple, deterministic
-//! `PatternApply` subqueries into `SemiJoin` / `AntiJoin` nodes during the
-//! heuristic batch phase.
+//! Stat-free fallback for patterns the cost path (`SubqueryUnnestingOptimizer`)
+//! explicitly kept: simple, deterministic, bounded shapes that the cost
+//! decision rejected (e.g. stats-missing or over-threshold but trivially
+//! bounded). Never runs pre-CBO, so it can never preempt the cost decision.
+//! The cost implementation remains the sole primary decision maker; this rule
+//! only fires via `apply_unnesting_heuristic_fallback` or explicit opt-in.
 //!
-//! The cost-based path (`SubqueryUnnestingOptimizer`) keeps the heavy
-//! judgment: row-count estimates, selectivity correction, and cost
-//! comparison. This rule only handles the provably-safe shapes, so the
-//! CBO's `TooManyRows` / `TooComplex` decisions are never preempted by the
-//! heuristic path.
-//!
-//! # Gate
+//! # Gate (fallback-only)
 //!
 //! 1. Shape: the right input must be a single-table scan (vertex / edge /
 //!    index) wrapped in equality filters and projections, optionally capped

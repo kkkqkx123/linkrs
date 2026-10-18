@@ -93,15 +93,19 @@ impl Planner for LookupPlanner {
         );
 
         // Convert bound where clause to ContextualExpression for index selection
+        let expr_ctx = validated
+            .map(|v| v.expr_context().clone())
+            .unwrap_or_else(|| {
+                Arc::new(
+                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                )
+            });
         let where_ctx = lookup
             .where_clause
             .as_ref()
             .map(|wc| {
-                crate::binder::expr_converter::bound_expr_to_contextual(
-                    &wc.condition,
-                    validated.expr_context(),
-                )
-                .map_err(PlannerError::PlanGenerationFailed)
+                crate::binder::expr_converter::bound_expr_to_contextual(&wc.condition, &expr_ctx)
+                    .map_err(PlannerError::PlanGenerationFailed)
             })
             .transpose()?;
 
@@ -292,7 +296,7 @@ impl LookupPlanner {
         &self,
         lookup: &crate::binder::bound::BoundLookupStatement,
         qctx: Arc<QueryContext>,
-        validated: &ValidatedStatement,
+        validated: Option<&ValidatedStatement>,
         selected_index: Option<&IndexMetadata>,
         tag_id: i32,
         where_ctx: Option<ContextualExpression>,
@@ -416,15 +420,22 @@ impl LookupPlanner {
     fn build_yield_columns_from_bound(
         &self,
         lookup: &crate::binder::bound::BoundLookupStatement,
-        validated: &ValidatedStatement,
+        validated: Option<&ValidatedStatement>,
     ) -> Result<Vec<linkrs_core::YieldColumn>, PlannerError> {
+        let expr_ctx = validated
+            .map(|v| v.expr_context().clone())
+            .unwrap_or_else(|| {
+                Arc::new(
+                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                )
+            });
         let mut columns = Vec::new();
 
         if let Some(ref yield_clause) = lookup.yield_clause {
             for item in &yield_clause.items {
                 let column = crate::binder::expr_converter::bound_projection_to_yield_column(
                     item,
-                    validated.expr_context(),
+                    &expr_ctx,
                 )
                 .map_err(PlannerError::PlanGenerationFailed)?;
                 columns.push(column);
@@ -434,8 +445,8 @@ impl LookupPlanner {
         if columns.is_empty() {
             let expr = Expression::Variable("_vertex".to_string());
             let meta = linkrs_core::types::expr::ExpressionMeta::new(expr);
-            let id = validated.expr_context().register_expression(meta);
-            let ctx_expr = ContextualExpression::new(id, validated.expr_context().clone());
+            let id = expr_ctx.register_expression(meta);
+            let ctx_expr = ContextualExpression::new(id, expr_ctx.clone());
             columns.push(linkrs_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),

@@ -150,9 +150,19 @@ impl RewriteRule for EnrichScanSlotsWithFilterPropsRule {
                     chain.push(current.clone());
                     current = f.input().clone();
                 }
-                PlanNodeEnum::ScanVertices(s) => break ScanWithProjection::ScanVertices(s.clone()),
+                PlanNodeEnum::ScanVertices(s) => {
+                    if crate::cte::is_cte_scan_vertices(s) {
+                        return Ok(None);
+                    }
+                    break ScanWithProjection::ScanVertices(s.clone());
+                }
                 PlanNodeEnum::GetVertices(s) => break ScanWithProjection::GetVertices(s.clone()),
-                PlanNodeEnum::ScanEdges(s) => break ScanWithProjection::ScanEdges(s.clone()),
+                PlanNodeEnum::ScanEdges(s) => {
+                    if crate::cte::is_cte_scan_edges(s) {
+                        return Ok(None);
+                    }
+                    break ScanWithProjection::ScanEdges(s.clone());
+                }
                 _ => return Ok(None),
             }
         };

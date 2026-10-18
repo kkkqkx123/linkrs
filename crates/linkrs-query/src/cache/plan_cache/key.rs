@@ -159,6 +159,16 @@ impl PlanCacheKey {
         }
     }
 
+    /// Fingerprint-less plan key from the same context dimensions.
+    ///
+    /// Single constructor shared with the DML memo: a memo key is exactly a
+    /// fingerprint-less plan key over the shape-normalized text. Partition
+    /// fingerprints are never precomputed before binding; memo hits rely on
+    /// the post-hoc compatibility check instead.
+    pub fn fingerprint_less_from_context(query: &str, context: PlanCacheContext) -> Self {
+        Self::from_query_with_context(query, context)
+    }
+
     /// Create a key that additionally captures a physical partition layout,
     /// preventing stale cached plans from being reused after layout changes.
     pub fn from_query_with_partition(query: &str, spec: &PartitionSpec) -> Self {

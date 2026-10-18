@@ -1,7 +1,11 @@
-//! Unified implementation of the status enumeration definition
+//! Query execution state machines (executor-internal only).
 //!
-//! This module provides a unified status enumeration for the query execution process, integrating the status definitions that were previously scattered in various locations.
-//! The design adopts a hierarchical state machine to manage states at different levels separately.
+//! Ownership: execution cancellation is sourced solely from the executor
+//! [`QueryRegistry`](crate::executor::streaming::query_registry::QueryRegistry)
+//! token, display status from [`QueryManager`](crate::query_manager::QueryManager).
+//! The state machines below never leave the executor: do not base display or
+//! cancellation decisions on them, and do not introduce new state types for
+//! cross-layer signalling.
 
 use std::fmt;
 

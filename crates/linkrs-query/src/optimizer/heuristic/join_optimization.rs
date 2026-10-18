@@ -1,7 +1,9 @@
 //! JOIN Optimization Rules
 //!
-//! This module contains optimization rules specifically for JOIN operations.
-//! These rules aim to improve JOIN performance through various transformations.
+//! This module contains shape-normalization rules for JOIN operations. Join
+//! order is decided solely by the cost-based DP (`cost_based::join_order`);
+//! no heuristic rule here selects an order (ordering by leaf id only would
+//! be the only allowed canonicalization).
 //!
 //! # Basic JOIN Optimization
 //! - PushProjectDownJoinRule: Push projection operations down to JOIN inputs
@@ -16,14 +18,10 @@
 //!
 //! # Advanced Optimization
 //! - JoinEliminationRule: Eliminate redundant JOIN operations
-//! - IndexJoinSelectionRule: Select index-based JOIN when appropriate
-//! - JoinReorderRule: Reorder multi-table JOINs for better performance
 
 pub mod extract_equi_join_keys;
-pub mod index_join_selection;
 pub mod join_condition_simplify;
 pub mod join_elimination;
-pub mod join_reorder;
 pub mod join_to_append_vertices;
 pub mod join_to_expand;
 pub mod left_join_to_inner_join;
@@ -31,10 +29,8 @@ pub mod merge_consecutive_expand;
 pub mod push_project_down_join;
 
 pub use extract_equi_join_keys::ExtractEquiJoinKeysRule;
-pub use index_join_selection::IndexJoinSelectionRule;
 pub use join_condition_simplify::JoinConditionSimplifyRule;
 pub use join_elimination::JoinEliminationRule;
-pub use join_reorder::JoinReorderRule;
 pub use join_to_append_vertices::JoinToAppendVerticesRule;
 pub use join_to_expand::JoinToExpandRule;
 pub use left_join_to_inner_join::LeftJoinToInnerJoinRule;

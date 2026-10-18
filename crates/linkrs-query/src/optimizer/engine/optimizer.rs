@@ -301,8 +301,95 @@ impl OptimizerEngine {
         if let Some(root) = plan.root.take() {
             let mut notes = Vec::new();
             let rewritten = self.unnest_subqueries(&root, stats, &mut notes);
+            let rewritten = Self::apply_unnesting_heuristic_fallback(&rewritten, &mut notes);
             plan.set_root(rewritten);
             plan.cbo_notes.extend(notes);
+        }
+    }
+
+    /// Post-CBO fallback for patterns the cost path explicitly kept.
+    ///
+    /// Only remaining `PatternApply` nodes are considered, so cost decisions
+    /// are never preempted. A fallback unnest requires the same stat-free
+    /// gates as the heuristic rule (simple bounded shape, no aggregation,
+    /// fully deterministic) and is recorded as a heuristic note, keeping the
+    /// decision source traceable per pattern.
+    fn apply_unnesting_heuristic_fallback(
+        node: &PlanNodeEnum,
+        notes: &mut Vec<String>,
+    ) -> PlanNodeEnum {
+        use crate::optimizer::analysis::BatchPlanAnalyzer;
+        use crate::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
+        use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+        use PlanNodeEnum::*;
+
+        if let PatternApply(apply) = node {
+            let right = apply.right_input();
+            let shape_ok = SubqueryUnnestingOptimizer::is_simple_subquery_shape(right);
+            let no_agg = !SubqueryUnnestingOptimizer::contains_aggregation(right);
+            let deterministic = BatchPlanAnalyzer::new()
+                .analyze(right)
+                .expression_summary
+                .is_fully_deterministic;
+            if shape_ok && no_agg && deterministic {
+                match SubqueryUnnestingOptimizer::build_semi_join_from_pattern_apply(apply.clone())
+                {
+                    Ok(joined) => {
+                        notes.push(
+                            "unnest: heuristic fallback for cost-kept simple bounded subquery"
+                                .to_string(),
+                        );
+                        return Self::apply_unnesting_heuristic_fallback(&joined, notes);
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+
+        macro_rules! rewrite_single {
+            ($n:expr) => {{
+                let mut cloned = $n.clone();
+                let new_input =
+                    Self::apply_unnesting_heuristic_fallback(cloned.input(), notes);
+                cloned.set_input(new_input);
+                cloned
+            }};
+        }
+        macro_rules! rewrite_binary {
+            ($n:expr) => {{
+                let mut cloned = $n.clone();
+                let new_left =
+                    Self::apply_unnesting_heuristic_fallback(cloned.left_input(), notes);
+                let new_right =
+                    Self::apply_unnesting_heuristic_fallback(cloned.right_input(), notes);
+                cloned.set_left_input(new_left);
+                cloned.set_right_input(new_right);
+                cloned
+            }};
+        }
+
+        match node {
+            Project(n) => Project(rewrite_single!(n)),
+            Filter(n) => Filter(rewrite_single!(n)),
+            Sort(n) => Sort(rewrite_single!(n)),
+            Limit(n) => Limit(rewrite_single!(n)),
+            TopN(n) => TopN(rewrite_single!(n)),
+            Sample(n) => Sample(rewrite_single!(n)),
+            Dedup(n) => Dedup(rewrite_single!(n)),
+            Aggregate(n) => Aggregate(rewrite_single!(n)),
+            Window(n) => Window(rewrite_single!(n)),
+
+            InnerJoin(n) => InnerJoin(rewrite_binary!(n)),
+            LeftJoin(n) => LeftJoin(rewrite_binary!(n)),
+            RightJoin(n) => RightJoin(rewrite_binary!(n)),
+            CrossJoin(n) => CrossJoin(rewrite_binary!(n)),
+            FullOuterJoin(n) => FullOuterJoin(rewrite_binary!(n)),
+            SemiJoin(n) => SemiJoin(rewrite_binary!(n)),
+
+            PatternApply(n) => PatternApply(rewrite_single!(n)),
+            CorrelatedApply(n) => CorrelatedApply(rewrite_single!(n)),
+
+            _ => node.clone(),
         }
     }
 

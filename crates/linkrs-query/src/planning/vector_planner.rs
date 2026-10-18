@@ -54,7 +54,12 @@ impl Planner for VectorSearchPlanner {
         // is planned by VectorDdlPlanner; search statements use the AST path
         // with plan-phase metadata carrying the vector index registry.
         let qctx = ctx.qctx.clone();
-        self.transform_bound(ctx.validated, qctx, ctx.metadata)
+        let validated = ctx.validated.ok_or_else(|| {
+            PlannerError::PlanGenerationFailed(
+                "VectorSearchPlanner requires a validated statement for AST fallback".to_string(),
+            )
+        })?;
+        self.transform_bound(validated, qctx, ctx.metadata)
     }
 
     fn transform(

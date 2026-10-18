@@ -1,28 +1,55 @@
-//! Plan Formatting Utilities
+//! Plan Formatting Utilities (execution side)
 //!
-//! Provides formatting for query plan descriptions in different output formats:
-//! - Table format (default): Human-readable tabular output
-//! - Dot format: Graphviz DOT format for visualization
-//! - Tree format: Hierarchical tree structure showing plan relationships
+//! Execution side retains only stats-aware formatting over `PlanDescription`.
+//! The pipeline (`pipeline::diagnostics`) is the sole assembly entry and must
+//! go through [`render_plan`] instead of branching on formats inline. Row
+//! estimates (`est_rows` pairs) are built once in `physical_plan_explain`;
+//! actual rows arrive later as `ProfilingStats.rows` via the pipeline overlay.
 
 use crate::planning::plan::explain::{PlanDescription, PlanNodeDescription};
 
-/// Format plan description as a table
-pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
-    let mut output = String::new();
-
-    // Header with plan-level metadata
-    output.push_str("Execution Model: Batch Pull\n");
-    if let Some(ref part) = plan_desc.partition_spec_description {
-        output.push_str(&format!("Partitioning: {}\n", part));
+/// Single format dispatch for EXPLAIN-family assembly.
+///
+/// Replaces the three inline `match format { Table, Dot }` branches in the
+/// pipeline with one entry point.
+pub fn render_plan(
+    plan_desc: &PlanDescription,
+    format: crate::parser::ast::stmt::ExplainFormat,
+) -> String {
+    match format {
+        crate::parser::ast::stmt::ExplainFormat::Table => format_plan_as_table(plan_desc),
+        crate::parser::ast::stmt::ExplainFormat::Dot => format_plan_as_dot(plan_desc),
     }
-    // parallel configuration
-    output.push_str(&format!(
+}
+
+/// Shared spill suffix for per-operator profile rows.
+///
+/// Single source for the `(spilled_bytes, spill_count, spilled_rows)` guard
+/// previously duplicated across table/dot/profile formatters.
+pub fn format_spill_suffix(other_stats: &std::collections::HashMap<String, String>) -> String {
+    let spilled = other_stats.get("spilled_bytes").map(String::as_str);
+    let count = other_stats.get("spill_count").map(String::as_str);
+    let rows = other_stats.get("spilled_rows").map(String::as_str);
+    match (spilled, count, rows) {
+        (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
+            format!(",spilled_rows:{r},spilled_bytes:{b},spill_count:{c}")
+        }
+        _ => String::new(),
+    }
+}
+
+/// Shared parallel header for plan-level metadata.
+///
+/// Single source for the `requested/actual_workers, wall/work time, buffered
+/// peaks, fallback reason, CBO notes, statistics, columnar` rendering
+/// previously tripled across table/dot/profile paths.
+pub fn format_parallel_header(plan_desc: &PlanDescription) -> String {
+    let mut header = format!(
         "Parallel Workers: requested={}",
         plan_desc.requested_workers,
-    ));
+    );
     if plan_desc.actual_workers > 0 {
-        output.push_str(&format!(
+        header.push_str(&format!(
             ", actual={}, wall_time={}us, work_time={}us, buffered_chunks_peak={}, buffered_bytes_peak={}",
             plan_desc.actual_workers,
             plan_desc.parallel_wall_time_us,
@@ -32,21 +59,51 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
         ));
     }
     if !plan_desc.parallel_fallback_reason.is_empty() {
-        output.push_str(&format!(
+        header.push_str(&format!(
             ", fallback_reason=\"{}\"",
             plan_desc.parallel_fallback_reason,
         ));
     }
     if !plan_desc.cbo_notes.is_empty() {
-        output.push_str("\nCBO decisions: ");
-        output.push_str(&plan_desc.cbo_notes.join("; "));
+        header.push_str("\nCBO decisions: ");
+        header.push_str(&plan_desc.cbo_notes.join("; "));
     }
     if !plan_desc.statistics_summary.is_empty() {
-        output.push_str(&format!("\nStatistics: {}", plan_desc.statistics_summary));
+        header.push_str(&format!("\nStatistics: {}", plan_desc.statistics_summary));
     }
     if !plan_desc.columnar_summary.is_empty() {
-        output.push_str(&format!("\nColumnar: {}", plan_desc.columnar_summary));
+        header.push_str(&format!("\nColumnar: {}", plan_desc.columnar_summary));
     }
+    header
+}
+
+/// Format dependencies with the single `","` separator used by all plan
+/// formatters (pipeline PROFILE rows use the same helper).
+pub fn format_deps(dependencies: Option<&Vec<i64>>) -> String {
+    dependencies
+        .map(|d| {
+            if d.is_empty() {
+                "-".to_string()
+            } else {
+                d.iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Format plan description as a table
+pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
+    let mut output = String::new();
+
+    // Header with plan-level metadata (single shared helper).
+    output.push_str("Execution Model: Batch Pull\n");
+    if let Some(ref part) = plan_desc.partition_spec_description {
+        output.push_str(&format!("Partitioning: {}\n", part));
+    }
+    output.push_str(&format_parallel_header(plan_desc));
     output.push('\n');
     output.push('\n');
 
@@ -60,42 +117,16 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
         let id = format!("{:>4}", node.id);
         let name = truncate_or_pad(&node.name, 16);
 
-        // Format dependencies
-        let deps = node
-            .dependencies
-            .as_ref()
-            .map(|d| {
-                if d.is_empty() {
-                    "-".to_string()
-                } else {
-                    d.iter()
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                }
-            })
-            .unwrap_or_else(|| "-".to_string());
-        let deps = truncate_or_pad(&deps, 10);
+        // Format dependencies (single separator helper).
+        let deps = truncate_or_pad(&format_deps(node.dependencies.as_ref()), 10);
 
-        // Format profiling data
+        // Format profiling data (single spill helper).
         let profile = if let Some(ref profiles) = node.profiles {
             profiles
                 .iter()
                 .map(|p| {
                     let base = format!("rows:{},time:{}us", p.rows, p.exec_duration_in_us);
-                    match (
-                        p.other_stats.get("spilled_bytes"),
-                        p.other_stats.get("spill_count"),
-                        p.other_stats.get("spilled_rows"),
-                    ) {
-                        (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
-                            format!(
-                                "{},spilled_rows:{},spilled_bytes:{},spill_count:{}",
-                                base, r, b, c
-                            )
-                        }
-                        _ => base,
-                    }
+                    format!("{base}{}", format_spill_suffix(&p.other_stats))
                 })
                 .collect::<Vec<_>>()
                 .join(";")
@@ -360,17 +391,12 @@ fn format_plan_node_label(node: &PlanNodeDescription) -> String {
         for profile in profiles {
             lines.push(format!("rows: {}", profile.rows));
             lines.push(format!("time: {}us", profile.exec_duration_in_us));
-            match (
-                profile.other_stats.get("spilled_bytes"),
-                profile.other_stats.get("spill_count"),
-                profile.other_stats.get("spilled_rows"),
-            ) {
-                (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
-                    lines.push(format!("spilled_rows: {}", r));
-                    lines.push(format!("spilled_bytes: {}", b));
-                    lines.push(format!("spill_count: {}", c));
+            let spill = format_spill_suffix(&profile.other_stats);
+            if !spill.is_empty() {
+                for part in spill.trim_start_matches(',').split(',') {
+                    let pretty = part.replace(':', ": ");
+                    lines.push(pretty);
                 }
-                _ => {}
             }
         }
     }
@@ -398,175 +424,14 @@ fn truncate_or_pad(s: &str, width: usize) -> String {
     }
 }
 
-/// Format plan description using simple table formatter
+/// Compatibility shim over the single table formatter.
+///
+/// Retained only for external callers that depend on the previous
+/// `Result` signature; new code must use `format_plan_as_table`.
 pub fn format_plan_with_output_table(
     plan_desc: &PlanDescription,
 ) -> Result<String, serde_json::Error> {
-    // Use the built-in table formatter
-    let mut output = String::new();
-
-    // Plan-level metadata header
-    output.push_str("Execution Model: Batch Pull\n");
-    if let Some(ref part) = plan_desc.partition_spec_description {
-        output.push_str(&format!("Partitioning: {}\n", part));
-    }
-    output.push_str(&format!(
-        "Parallel Workers: requested={}",
-        plan_desc.requested_workers,
-    ));
-    if plan_desc.actual_workers > 0 {
-        output.push_str(&format!(
-            ", actual={}, wall_time={}us, work_time={}us, buffered_chunks_peak={}, buffered_bytes_peak={}",
-            plan_desc.actual_workers,
-            plan_desc.parallel_wall_time_us,
-            plan_desc.parallel_work_time_us,
-            plan_desc.parallel_buffered_chunks_peak,
-            plan_desc.parallel_buffered_bytes_peak,
-        ));
-    }
-    if !plan_desc.parallel_fallback_reason.is_empty() {
-        output.push_str(&format!(
-            ", fallback_reason=\"{}\"",
-            plan_desc.parallel_fallback_reason,
-        ));
-    }
-    if !plan_desc.statistics_summary.is_empty() {
-        output.push_str(&format!("\nStatistics: {}", plan_desc.statistics_summary));
-    }
-    output.push('\n');
-    output.push('\n');
-
-    // Calculate column widths
-    let headers = [
-        "id",
-        "name",
-        "deps",
-        "profiling_data",
-        "operator_info",
-        "output_var",
-    ];
-    let mut widths = headers.iter().map(|h| h.len()).collect::<Vec<_>>();
-
-    let rows: Vec<Vec<String>> = plan_desc
-        .plan_node_descs
-        .iter()
-        .map(|node| {
-            let id = node.id.to_string();
-            let deps = node
-                .dependencies
-                .as_ref()
-                .map(|d| {
-                    if d.is_empty() {
-                        "-".to_string()
-                    } else {
-                        d.iter()
-                            .map(|id| id.to_string())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    }
-                })
-                .unwrap_or_else(|| "-".to_string());
-            let profile = if let Some(ref profiles) = node.profiles {
-                profiles
-                    .iter()
-                    .map(|p| {
-                        let base = format!("rows:{},time:{}us", p.rows, p.exec_duration_in_us);
-                        match (
-                            p.other_stats.get("spilled_bytes"),
-                            p.other_stats.get("spill_count"),
-                            p.other_stats.get("spilled_rows"),
-                        ) {
-                            (Some(b), Some(c), Some(r)) if b != "0" || c != "0" || r != "0" => {
-                                format!(
-                                    "{},spilled_rows:{},spilled_bytes:{},spill_count:{}",
-                                    base, r, b, c
-                                )
-                            }
-                            _ => base,
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(";")
-            } else {
-                "-".to_string()
-            };
-            let info = node
-                .description
-                .as_ref()
-                .map(|descs| {
-                    descs
-                        .iter()
-                        .map(|p| format!("{}:{}", p.key, p.value))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                })
-                .unwrap_or_else(|| "-".to_string());
-            let output_var_str = if node.output_var.is_empty() {
-                "-".to_string()
-            } else {
-                node.output_var.clone()
-            };
-            vec![id, node.name.clone(), deps, profile, info, output_var_str]
-        })
-        .collect();
-
-    // Update column widths based on content
-    for row in &rows {
-        for (i, cell) in row.iter().enumerate() {
-            if i < widths.len() {
-                widths[i] = widths[i].max(cell.len());
-            }
-        }
-    }
-
-    let total_width = widths.iter().sum::<usize>() + widths.len() * 3 + 1;
-
-    // Helper function to format a cell
-    fn format_cell(content: &str, width: usize) -> String {
-        if content.len() > width {
-            if width > 3 {
-                format!("{}...", &content[..width - 3])
-            } else {
-                content[..width].to_string()
-            }
-        } else {
-            format!("{:width$}", content, width = width)
-        }
-    }
-
-    // Top border
-    output.push_str(&"-".repeat(total_width));
-    output.push('\n');
-
-    // Headers
-    output.push_str("| ");
-    for (i, header) in headers.iter().enumerate() {
-        let width = widths.get(i).copied().unwrap_or(10);
-        output.push_str(&format_cell(header, width));
-        output.push_str(" | ");
-    }
-    output.push('\n');
-
-    // Header separator
-    output.push_str(&"-".repeat(total_width));
-    output.push('\n');
-
-    // Rows
-    for row in &rows {
-        output.push_str("| ");
-        for (i, cell) in row.iter().enumerate() {
-            let width = widths.get(i).copied().unwrap_or(10);
-            output.push_str(&format_cell(cell, width));
-            output.push_str(" | ");
-        }
-        output.push('\n');
-    }
-
-    // Bottom border
-    output.push_str(&"-".repeat(total_width));
-    output.push('\n');
-
-    Ok(output)
+    Ok(format_plan_as_table(plan_desc))
 }
 
 /// Format plan description as JSON

@@ -527,14 +527,11 @@ impl WithPlanner {
     }
 
     /// Plan an arbitrary AST sub-statement (CTE anchor/step) through the
-    /// same planner dispatch as top-level statements.
+    /// transitional legacy path (no bound IR for AST CTE branches yet).
     fn plan_stmt_substatement(
         stmt: &Stmt,
         qctx: &Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let mut planner = PlannerEnum::from_stmt_ref(stmt).ok_or_else(|| {
-            PlannerError::NoSuitablePlanner("No planner for CTE branch statement".to_string())
-        })?;
         let sub_ast = Arc::new(crate::parser::ast::stmt::Ast::new(
             stmt.clone(),
             Arc::new(
@@ -545,7 +542,7 @@ impl WithPlanner {
             sub_ast,
             crate::binder::validation::ValidationInfo::new(),
         );
-        planner.transform(&sub_validated, qctx.clone())
+        PlannerEnum::legacy_plan_stmt_via_transform(stmt, &sub_validated, qctx.clone())
     }
 
     /// Assemble a [`RecursiveCteNode`] from planned anchor/step roots.

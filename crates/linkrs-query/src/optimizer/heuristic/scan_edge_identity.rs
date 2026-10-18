@@ -131,6 +131,11 @@ fn scan_edge_identity_eligible(
     if ancestors.is_empty() {
         return false;
     }
+    // CTE working-table scans lower to a `CteScan` source, not storage: the
+    // flag would be meaningless there. Single predicate in `crate::cte`.
+    if crate::cte::is_cte_scan_edges(scan) {
+        return false;
+    }
     // No minimum projection: with an empty projection every property read
     // fails the flat-service check below, so only plans with zero property
     // reads (pure edge counts) can pass the audit — all safe.

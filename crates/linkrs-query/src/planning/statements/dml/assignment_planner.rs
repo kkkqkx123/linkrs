@@ -46,7 +46,15 @@ impl Planner for AssignmentPlanner {
         let assignment = match bound {
             crate::binder::BoundStatement::Assignment(a) => a,
             // Legacy AST-only statements still use the AST path.
-            _ => return self.transform(validated, qctx),
+            _ => {
+                let validated = validated.ok_or_else(|| {
+                    PlannerError::PlanGenerationFailed(
+                        "AssignmentPlanner requires a validated statement for AST fallback"
+                            .to_string(),
+                    )
+                })?;
+                return self.transform(validated, qctx);
+            }
         };
 
         let mut inner_planner = PlannerEnum::from_bound_statement(&assignment.statement)
@@ -62,7 +70,7 @@ impl Planner for AssignmentPlanner {
             bound: &assignment.statement,
             qctx: qctx.clone(),
             metadata,
-            validated: inner_validated.as_ref().unwrap_or(validated),
+            validated: inner_validated.as_ref().or(validated),
         };
         let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
 
@@ -76,35 +84,13 @@ impl Planner for AssignmentPlanner {
 
     fn transform(
         &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
+        _validated: &ValidatedStatement,
+        _qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let assignment_stmt = self.extract_assignment_stmt(validated.stmt())?;
-
-        let inner_validated = ValidatedStatement::new(
-            Arc::new(crate::parser::ast::stmt::Ast::new(
-                (*assignment_stmt.statement).clone(),
-                validated.ast.expr_context().clone(),
-            )),
-            validated.validation_info.clone(),
-        );
-
-        let mut inner_planner =
-            PlannerEnum::from_stmt_ref(inner_validated.stmt()).ok_or_else(|| {
-                PlannerError::NoSuitablePlanner(format!(
-                    "assignment inner statement: {}",
-                    assignment_stmt.statement.kind()
-                ))
-            })?;
-
-        let inner_plan = inner_planner.transform(&inner_validated, qctx)?;
-
-        log::debug!(
-            "AssignmentPlanner: variable '{}' bound to inner plan",
-            assignment_stmt.variable
-        );
-
-        Ok(inner_plan)
+        Err(PlannerError::InvalidOperation(
+            "AssignmentPlanner::transform is not supported; use plan_bound with BoundStatement and sub-context derivation."
+                .to_string(),
+        ))
     }
 
     fn match_planner(&self, stmt: &Stmt) -> bool {

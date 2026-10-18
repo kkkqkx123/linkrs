@@ -57,7 +57,15 @@ impl Planner for VectorDdlPlanner {
             // the AST path; the plan-phase metadata carries the vector
             // index registry so index names resolve to their (space, tag,
             // field) location during planning.
-            _ => return self.transform_bound(ctx.validated, qctx, ctx.metadata),
+            _ => {
+                let validated = ctx.validated.ok_or_else(|| {
+                    PlannerError::PlanGenerationFailed(
+                        "VectorDdlPlanner requires a validated statement for AST fallback"
+                            .to_string(),
+                    )
+                })?;
+                return self.transform_bound(validated, qctx, ctx.metadata);
+            }
         };
 
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());

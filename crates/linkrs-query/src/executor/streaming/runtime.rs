@@ -475,11 +475,16 @@ impl ExecutionRuntime {
     ///
     /// Sets the [`CancelToken`], marks the query as Killed in the
     /// attached QueryManager, and cancels the registry entry (if configured).
+    /// The display mark uses the executor-internal path after the token is
+    /// cancelled, so it stays accurate even when the manager has no
+    /// registry attached (external `kill_query` still requires one).
     pub fn cancel_with_reason(&self, reason: CancelReason) {
         self.cancel_token_v2.lock().cancel(reason.clone());
         if let Some(qm) = self.query_manager.lock().as_ref() {
             let id = self.query_id();
-            let _ = qm.kill_query(id.query_id as i64);
+            if qm.kill_query(id.query_id as i64).is_err() {
+                let _ = qm.mark_query_killed(id.query_id as i64);
+            }
         }
         if let (Some(ref reg), Some(qid)) = (
             &*self.query_registry.lock(),

@@ -38,47 +38,18 @@ impl ExplainPlanner {
             )),
         }
     }
-
-    /// Plan the inner statement via the AST-based path (for backward compatibility).
-    fn plan_inner_ast(
-        &self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        _metadata_context: Option<&crate::metadata::MetadataContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let inner_stmt = self.extract_inner_stmt(validated.stmt())?;
-
-        let inner_validated = ValidatedStatement::new(
-            Arc::new(crate::parser::ast::stmt::Ast::new(
-                inner_stmt.clone(),
-                validated.ast.expr_context().clone(),
-            )),
-            validated.validation_info.clone(),
-        );
-
-        let mut inner_planner =
-            PlannerEnum::from_stmt_ref(inner_validated.stmt()).ok_or_else(|| {
-                PlannerError::NoSuitablePlanner(format!(
-                    "explain inner statement: {}",
-                    inner_stmt.kind()
-                ))
-            })?;
-
-        let inner_plan = inner_planner.transform(&inner_validated, qctx)?;
-
-        log::debug!("ExplainPlanner: inner plan generated via AST path",);
-
-        Ok(inner_plan)
-    }
 }
 
 impl Planner for ExplainPlanner {
     fn transform(
         &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
+        _validated: &ValidatedStatement,
+        _qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        self.plan_inner_ast(validated, qctx, None)
+        Err(PlannerError::InvalidOperation(
+            "ExplainPlanner::transform is not supported; use plan_bound with BoundStatement and sub-context derivation."
+                .to_string(),
+        ))
     }
 
     fn plan_bound(
@@ -113,7 +84,7 @@ impl Planner for ExplainPlanner {
             bound: inner_bound,
             qctx: qctx.clone(),
             metadata,
-            validated: inner_validated.as_ref().unwrap_or(validated),
+            validated: inner_validated.as_ref().or(validated),
         };
         let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
 

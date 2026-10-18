@@ -1,12 +1,14 @@
 //! Query Plan Explanation Module
 //!
-//! This module provides functionality to describe and format execution plans
-//! for human-readable output (EXPLAIN command).
+//! Planning side retains only the plan description DTOs (`description`).
+//! The legacy logical-tree `DescribeVisitor` was removed: the live builder
+//! is `executor::explain::physical_plan_explain::physical_plan_to_plan_description`
+//! over the physical arena. Row estimates (`est_rows`) are sourced there from
+//! `op_spec.estimated_cardinality` at build time; actual rows are overlaid
+//! later as `ProfilingStats.rows` by the pipeline assembly.
 
-pub mod describe_visitor;
 pub mod description;
 
-pub use describe_visitor::DescribeVisitor;
 pub use description::{
     Pair, PlanDescription, PlanNodeBranchInfo, PlanNodeDescription, ProfilingStats,
 };

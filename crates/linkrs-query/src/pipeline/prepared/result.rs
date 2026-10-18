@@ -322,6 +322,12 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
     pub(crate) fn invalidate_after_ddl(&self, space_name: Option<&str>) {
         self.schema_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Index DDL retires the same unified dimensions: bump the index
+        // generation conservatively on any DDL so index keys cannot survive
+        // schema changes, and clear the DML memo alongside the plan cache so
+        // all three layers share one cleanup semantic.
+        self.index_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.optimizer_engine
             .stats_manager()
             .invalidate_space(space_name);
@@ -338,6 +344,7 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         } else {
             self.plan_cache.clear();
         }
+        self.dml_plan_memo.lock().clear();
     }
 
     pub(crate) fn record_cache_execution(

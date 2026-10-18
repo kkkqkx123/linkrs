@@ -1,14 +1,14 @@
-//! Cost-based Sort + Limit → TopN rewriting.
+//! Cost-based Sort + Limit → TopN rewriting (sole decision maker).
 //!
-//! The heuristic phase already converts `Limit(offset=0) -> Sort` into
-//! `TopN` unconditionally. This phase handles the residual patterns and
-//! records the cost-based decision:
+//! No heuristic equivalent exists: every Sort-to-TopN conversion flows
+//! through [`SortEliminationOptimizer`] and is recorded as a cost note, so
+//! the decision source stays unique and traceable in EXPLAIN output.
 //!
 //! - `Limit(offset>0, count) -> Sort`: rewritten into
 //!   `Limit(offset>0, count) -> TopN(offset + count)` so the full sort is
 //!   avoided while preserving the offset semantics.
-//! - `Limit(offset=0, count) -> Sort` that survived the heuristic phase:
-//!   converted with the cost-based decision.
+//! - `Limit(offset=0, count) -> Sort`: converted only on the cost-based
+//!   decision (small limits keep Sort; no unconditional rewrite).
 //!
 //! The decision (convert or keep) always uses [`SortEliminationOptimizer`]
 //! so the choice is cost-driven rather than syntactic.

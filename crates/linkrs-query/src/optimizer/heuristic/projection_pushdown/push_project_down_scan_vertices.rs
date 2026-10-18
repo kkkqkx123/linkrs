@@ -92,6 +92,9 @@ impl RewriteRule for PushProjectDownScanVerticesRule {
         let mut new_project = project_node.clone();
         let new_input = match project_node.input() {
             PlanNodeEnum::ScanVertices(scan_node) => {
+                if crate::cte::is_cte_scan_vertices(scan_node) {
+                    return Ok(None);
+                }
                 let new_scan =
                     self.create_scan_vertices_with_projection(scan_node, project_node.columns());
                 if new_scan.projected_properties() == scan_node.projected_properties() {
@@ -117,6 +120,9 @@ impl RewriteRule for PushProjectDownScanVerticesRule {
                         _ => return Ok(None),
                     }
                 };
+                if crate::cte::is_cte_scan_vertices(&scan_node) {
+                    return Ok(None);
+                }
                 let mut new_scan =
                     self.create_scan_vertices_with_projection(&scan_node, project_node.columns());
                 for level in &chain {

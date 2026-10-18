@@ -21,8 +21,12 @@ pub struct PlanContext<'a> {
     /// Only populated when schema_manager is available.
     pub metadata: Option<&'a MetadataContext>,
     /// AST-derived validated statement (expression analysis context).
-    /// Needed by planners that still use AST-level info (e.g., MATCH YIELD columns).
-    pub validated: &'a ValidatedStatement,
+    /// Optional transitional input: the bound pipeline is authoritative, and
+    /// this is retained only for expression context that planners have not
+    /// yet sourced from the bound IR (e.g., MATCH YIELD columns). New code
+    /// must read output columns from the bound structure and not add new
+    /// readers of this field.
+    pub validated: Option<&'a ValidatedStatement>,
 }
 
 impl<'a> PlanContext<'a> {
@@ -31,7 +35,7 @@ impl<'a> PlanContext<'a> {
         bound: &'a BoundStatement,
         qctx: Arc<QueryContext>,
         metadata: Option<&'a MetadataContext>,
-        validated: &'a ValidatedStatement,
+        validated: Option<&'a ValidatedStatement>,
     ) -> Self {
         Self {
             bound,
@@ -45,7 +49,7 @@ impl<'a> PlanContext<'a> {
     pub fn without_metadata(
         bound: &'a BoundStatement,
         qctx: Arc<QueryContext>,
-        validated: &'a ValidatedStatement,
+        validated: Option<&'a ValidatedStatement>,
     ) -> Self {
         Self {
             bound,
@@ -85,16 +89,18 @@ impl<'a> PlanContext<'a> {
     /// the AST structure exactly, so the fragment is located by walking the
     /// parent AST and parent bound statement in parallel.
     ///
-    /// Returns `None` when the structures do not mirror each other; callers
-    /// then keep the parent `validated` (previous behavior).
+    /// Returns `None` when the structures do not mirror each other or when
+    /// no validated input was provided; callers then proceed without it
+    /// (bound IR is authoritative).
     pub fn derive_validated(&self, child: &BoundStatement) -> Option<ValidatedStatement> {
-        let stmt = find_aligned_stmt(self.validated.stmt(), self.bound, child)?;
+        let validated = self.validated?;
+        let stmt = find_aligned_stmt(validated.stmt(), self.bound, child)?;
         Some(ValidatedStatement::new(
             Arc::new(Ast::new(
                 stmt.clone(),
-                self.validated.ast.expr_context().clone(),
+                validated.ast.expr_context().clone(),
             )),
-            self.validated.validation_info.clone(),
+            validated.validation_info.clone(),
         ))
     }
 }

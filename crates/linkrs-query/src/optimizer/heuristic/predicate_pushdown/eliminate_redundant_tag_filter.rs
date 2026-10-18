@@ -108,6 +108,9 @@ impl RewriteRule for EliminateRedundantTagFilterRule {
             PlanNodeEnum::ScanVertices(s) => s,
             _ => return Ok(None),
         };
+        if crate::cte::is_cte_scan_vertices(scan) {
+            return Ok(None);
+        }
         let Some(tag) = scan.tag() else {
             return Ok(None);
         };

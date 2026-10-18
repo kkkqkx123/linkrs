@@ -186,7 +186,6 @@ define_rewrite_rules! {
         PushLimitDownScanEdges(limit_pushdown::PushLimitDownScanEdgesRule),
         PushLimitDownIndexScan(limit_pushdown::PushLimitDownIndexScanRule),
         PushTopNDownIndexScan(limit_pushdown::PushTopNDownIndexScanRule),
-        ConvertSortLimitToTopN(limit_pushdown::ConvertSortLimitToTopNRule),
 
         // ==================== Aggregation Optimization Rules ====================
         PushFilterDownAggregate(aggregate::PushFilterDownAggregateRule),
@@ -203,12 +202,18 @@ define_rewrite_rules! {
         ScanEdgeIdentityAnnotate(scan_edge_identity::ScanEdgeIdentityAnnotateRule),
 
         // ==================== Decorrelation Rules ====================
-        // Stat-free gate: converts simple deterministic PatternApply
-        // subqueries to SemiJoin/AntiJoin. Heavy cost-based judgment stays
-        // in the CBO phase (cost_based/subquery_unnesting.rs).
+        // Cost path (`SubqueryUnnestingOptimizer`) is the sole pre-CBO
+        // decision maker. The stat-free fallback
+        // (`UnnestSimplePatternApply`) is intentionally absent from the
+        // default pre-CBO registry: it runs post-CBO in
+        // `apply_unnesting_heuristic_fallback` over patterns the cost path
+        // explicitly kept, so the two decisions can never preempt each
+        // other. The variant stays for explicit opt-in via
+        // `RuleRegistry::filtered`.
         UnnestSimplePatternApply(decorrelation::UnnestSimplePatternApplyRule),
 
         // ==================== JOIN Optimization Rules ====================
+        // Shape normalization only: order is decided by the cost DP.
         PushProjectDownJoin(join_optimization::PushProjectDownJoinRule),
         ExtractEquiJoinKeys(join_optimization::ExtractEquiJoinKeysRule),
         LeftJoinToInnerJoin(join_optimization::LeftJoinToInnerJoinRule),
@@ -217,8 +222,6 @@ define_rewrite_rules! {
         JoinToAppendVertices(join_optimization::JoinToAppendVerticesRule),
         MergeConsecutiveExpand(join_optimization::MergeConsecutiveExpandRule),
         JoinElimination(join_optimization::JoinEliminationRule),
-        IndexJoinSelection(join_optimization::IndexJoinSelectionRule),
-        JoinReorder(join_optimization::JoinReorderRule),
     }
 }
 
@@ -384,9 +387,6 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::PushTopNDownIndexScan(
             limit_pushdown::PushTopNDownIndexScanRule::new(),
         ));
-        registry.add(RewriteRule::ConvertSortLimitToTopN(
-            limit_pushdown::ConvertSortLimitToTopNRule::new(),
-        ));
         registry.add(RewriteRule::PushFilterDownAggregate(
             aggregate::PushFilterDownAggregateRule::new(),
         ));
@@ -399,9 +399,9 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::ScanEdgeIdentityAnnotate(
             scan_edge_identity::ScanEdgeIdentityAnnotateRule::new(),
         ));
-        registry.add(RewriteRule::UnnestSimplePatternApply(
-            decorrelation::UnnestSimplePatternApplyRule::new(),
-        ));
+        // UnnestSimplePatternApply intentionally omitted from the default
+        // pre-CBO set; see the variant docs and
+        // `apply_unnesting_heuristic_fallback`.
         registry.add(RewriteRule::PushProjectDownJoin(
             join_optimization::PushProjectDownJoinRule::new(),
         ));
@@ -425,12 +425,6 @@ impl Default for RuleRegistry {
         ));
         registry.add(RewriteRule::JoinElimination(
             join_optimization::JoinEliminationRule::new(),
-        ));
-        registry.add(RewriteRule::IndexJoinSelection(
-            join_optimization::IndexJoinSelectionRule::new(),
-        ));
-        registry.add(RewriteRule::JoinReorder(
-            join_optimization::JoinReorderRule::new(),
         ));
         registry
     }
@@ -477,7 +471,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 58);
+        assert_eq!(registry.len(), 54);
     }
 
     #[test]
@@ -493,7 +487,7 @@ mod tests {
     #[test]
     fn test_filtered_disabled_removes_rule() {
         let registry = RuleRegistry::filtered(&["LeftJoinToInnerJoin".to_string()], &[]);
-        assert_eq!(registry.len(), 57);
+        assert_eq!(registry.len(), 53);
         assert!(registry
             .iter()
             .all(|rule| rule.name() != "LeftJoinToInnerJoinRule"));

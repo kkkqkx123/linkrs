@@ -48,16 +48,8 @@ pub use extensions::{
     BinderExtension, BinderExtensionContext, ExtensionRegistry, MapperExtension, ParserExtension,
     PlannerExtension,
 };
-/// Unstable alias for the experimental pipeline-extension surface.
-///
-/// New code should import from here instead of `extensions` so future
-/// stabilization (or removal) has one obvious place to change. The alias
-/// re-exports everything in [`extensions`]; both paths refer to the same
-/// types.
-pub mod experimental_pipeline_extensions {
-    pub use super::extensions::*;
-}
 pub use dml_events::{classify_dml, DmlOp, DmlStatementCallback, DmlStatementEvent};
+pub use pipeline::prepared::{dml_op_from_stmt, StatementClass};
 pub use session_events::{SessionEvent, SessionEventCallback};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;
@@ -67,7 +59,7 @@ pub use optimizer::OptimizerEngine;
 // (`fusion::fuse_fulltext_and_vector`) normalizes vector point IDs before
 // fusion because vector and fulltext ID spaces differ — prefer it over
 // wiring the raw core helpers by hand.
-pub use fusion::{fuse_fulltext_and_vector, FusionStrategy};
+pub use fusion::{fuse_fulltext_and_vector, FusionStrategy, HybridFusionRequest};
 pub use linkrs_core::fusion::{
     normalize_vector_hits, normalize_vector_point_id, rrf_fuse, weighted_fuse,
 };

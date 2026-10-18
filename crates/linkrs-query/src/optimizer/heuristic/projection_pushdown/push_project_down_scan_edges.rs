@@ -92,6 +92,9 @@ impl RewriteRule for PushProjectDownScanEdgesRule {
         let mut new_project = project_node.clone();
         let new_input = match project_node.input() {
             PlanNodeEnum::ScanEdges(scan_node) => {
+                if crate::cte::is_cte_scan_edges(scan_node) {
+                    return Ok(None);
+                }
                 let new_scan =
                     self.create_scan_edges_with_projection(scan_node, project_node.columns());
                 if new_scan.projected_properties() == scan_node.projected_properties() {
@@ -103,6 +106,9 @@ impl RewriteRule for PushProjectDownScanEdgesRule {
                 let PlanNodeEnum::ScanEdges(scan_node) = filter.input() else {
                     return Ok(None);
                 };
+                if crate::cte::is_cte_scan_edges(scan_node) {
+                    return Ok(None);
+                }
                 let mut new_scan =
                     self.create_scan_edges_with_projection(scan_node, project_node.columns());
                 let mut properties = new_scan.projected_properties().to_vec();

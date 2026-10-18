@@ -61,7 +61,15 @@ impl Planner for MaintainPlanner {
             BoundStatement::Rollback(r) => system::plan_rollback(r.savepoint_name.as_ref()),
             BoundStatement::Savepoint(s) => system::plan_savepoint(&s.name),
             BoundStatement::ReleaseSavepoint(s) => system::plan_release_savepoint(&s.name),
-            _ => return self.transform(validated, qctx),
+            _ => {
+                let validated = validated.ok_or_else(|| {
+                    PlannerError::PlanGenerationFailed(
+                        "MaintainPlanner requires a validated statement for AST fallback"
+                            .to_string(),
+                    )
+                })?;
+                return self.transform(validated, qctx);
+            }
         };
 
         Ok(SubPlan::from_single_node(final_node))

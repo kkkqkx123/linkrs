@@ -247,6 +247,9 @@ impl Planner for GoPlanner {
         // materialized at execution from the edge type schema, so the plan
         // leaves the neighbor label empty instead of guessing one.
         let space_id = qctx.space_id().unwrap_or(1);
+        let expr_ctx = validated
+            .map(|v| v.expr_context().clone())
+            .unwrap_or_else(|| Arc::new(ExpressionAnalysisContext::new()));
 
         // Handle FROM clause - extract source vertex IDs from bound expressions
         if go_stmt.from.is_empty() {
@@ -337,7 +340,7 @@ impl Planner for GoPlanner {
         if let Some(ref where_clause) = go_stmt.where_clause {
             let condition = crate::binder::expr_converter::bound_expr_to_contextual(
                 &where_clause.condition,
-                validated.expr_context(),
+                &expr_ctx,
             )
             .map_err(PlannerError::PlanGenerationFailed)?;
             logical_root = LogicalNodeEnum::Filter(LogicalFilterNode {
@@ -351,7 +354,7 @@ impl Planner for GoPlanner {
         }
 
         let project_columns =
-            self.build_yield_columns_from_bound(go_stmt, validated.expr_context())?;
+            self.build_yield_columns_from_bound(go_stmt, &expr_ctx)?;
         let column_types = projection_util::project_column_types(&project_columns);
         logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),

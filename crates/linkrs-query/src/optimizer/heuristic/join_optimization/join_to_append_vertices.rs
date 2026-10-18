@@ -89,6 +89,9 @@ impl JoinToAppendVerticesRule {
             (PlanNodeEnum::ScanVertices(v), PlanNodeEnum::ScanEdges(_)) => (v, false),
             _ => return Ok(None),
         };
+        if crate::cte::is_cte_scan_vertices(scan_vertices) {
+            return Ok(None);
+        }
 
         let (hash_keys, probe_keys) = if edge_on_left {
             (join.hash_keys(), join.probe_keys())

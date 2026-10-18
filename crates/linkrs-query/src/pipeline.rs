@@ -3,7 +3,7 @@ mod diagnostics;
 mod execution;
 mod frontend;
 mod merge_conditional;
-mod prepared;
+pub mod prepared;
 
 use crate::cache::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
 use crate::executor::streaming::plan::PhysicalPlan;
@@ -94,6 +94,7 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     /// [`DmlPlanMemoKey`]; see that struct for the key dimensions.
     pub(crate) dml_plan_memo: parking_lot::Mutex<Vec<DmlPlanMemoEntry>>,
     pub last_dml_plan_hits: std::sync::atomic::AtomicU64,
+    pub(crate) dml_memo_compat_failures: std::sync::atomic::AtomicU64,
     /// Parsed ASTs of normalized DML templates (`INSERT ... VALUES
     /// (@__dml_0, ...)`), avoiding a re-parse per execution. Bounded
     /// multi-entry map keyed by exact normalized text.
@@ -119,15 +120,48 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
 /// used by the plan cache cannot be part of this key; instead memo hits are
 /// validated with [`crate::executor::streaming::plan::PhysicalPlanValidator::check_compatibility`]
 /// before being served.
+/// Memoized DML plan key: a fingerprint-less plan key over shape-normalized text.
+///
+/// Constructed only via [`DmlPlanMemoKey::from_normalized`] so the prepare-time
+/// bind-skip probe and the compile-time serve/store paths stay identical.
+/// Dimensions are the unified invalidation set (space, schema generation,
+/// index generation, optimizer/cost version, planning config hash, parameter
+/// type signature); the partition fingerprint is absent by construction and
+/// covered post-hoc by the single compatibility exit
+/// (`QueryPlanCache::serve_compatible`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DmlPlanMemoKey {
-    pub normalized_text: String,
-    pub space_name: Option<String>,
-    pub schema_version: Option<u64>,
-    pub index_version: Option<u64>,
-    pub param_sig: u64,
-    pub optimizer_version: u64,
-    pub planning_config_hash: u64,
+    pub inner: crate::cache::PlanCacheKey,
+}
+
+impl DmlPlanMemoKey {
+    pub fn from_normalized(
+        normalized_text: String,
+        space_name: Option<String>,
+        schema_version: Option<u64>,
+        index_version: Option<u64>,
+        param_sig: Option<u64>,
+        optimizer_version: u64,
+        planning_config_hash: u64,
+    ) -> Self {
+        Self {
+            inner: crate::cache::PlanCacheKey::fingerprint_less_from_context(
+                &normalized_text,
+                crate::cache::PlanCacheContext {
+                    space_name,
+                    schema_version,
+                    index_version,
+                    param_type_signature: param_sig,
+                    optimizer_version,
+                    planning_config_hash,
+                },
+            ),
+        }
+    }
+
+    pub fn normalized_text(&self) -> &str {
+        self.inner.query_text()
+    }
 }
 
 pub(crate) struct DmlPlanMemoEntry {
@@ -186,6 +220,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_shape_cache_enabled: true,
             dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
+            dml_memo_compat_failures: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast: parking_lot::Mutex::new(Vec::new()),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
@@ -460,6 +495,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_shape_cache_enabled: true,
             dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
+            dml_memo_compat_failures: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast: parking_lot::Mutex::new(Vec::new()),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
@@ -571,6 +607,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    pub fn dml_memo_compat_failure_count(&self) -> u64 {
+        self.dml_memo_compat_failures
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// The underlying storage binding, if any.
     pub fn storage(&self) -> Option<Arc<RwLock<S>>> {
         self.storage.clone()
@@ -598,6 +639,52 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             optimizer_version: self.optimizer_engine.cost_epoch(),
             ..Default::default()
         }
+    }
+
+    /// Parameter type signature for a (possibly shape-normalized) query text,
+    /// using the same extract + `compute_param_type_signature` path as the
+    /// plan cache so memo and plan keys share one construction.
+    pub(crate) fn memo_param_signature(
+        &self,
+        normalized_text: &str,
+        parameters: &std::collections::HashMap<String, linkrs_core::Value>,
+    ) -> Option<u64> {
+        let mut positions = self.param_handler.extract_params(normalized_text);
+        for position in &mut positions {
+            let name = position
+                .name
+                .clone()
+                .unwrap_or_else(|| position.index.to_string());
+            position.expected_type = parameters.get(&name).map(|value| value.data_type());
+        }
+        crate::cache::plan_cache::QueryPlanCache::compute_param_type_signature(&positions)
+    }
+
+    /// Single memo-key constructor shared by the prepare-time probe and the
+    /// compile-time serve/store paths.
+    pub(crate) fn dml_memo_key_for(
+        &self,
+        normalized_text: String,
+        space_name: Option<String>,
+        parameters: &std::collections::HashMap<String, linkrs_core::Value>,
+    ) -> DmlPlanMemoKey {
+        let planning_config = self.dml_planning_config();
+        let param_sig = self.memo_param_signature(&normalized_text, parameters);
+        DmlPlanMemoKey::from_normalized(
+            normalized_text,
+            space_name,
+            Some(
+                self.schema_generation
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            Some(
+                self.index_generation
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            param_sig,
+            planning_config.optimizer_version,
+            planning_config.config_hash,
+        )
     }
 
     /// Look up a parsed normalized-DML template AST. Hits are moved to the

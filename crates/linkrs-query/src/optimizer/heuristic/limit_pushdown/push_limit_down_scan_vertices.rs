@@ -37,6 +37,9 @@ define_rewrite_pushdown_rule! {
     parent_node: Limit,
     child_node: ScanVertices,
     apply: |_ctx, limit_node: &LimitNode, scan_vertices_node: &ScanVerticesNode| {
+        if crate::cte::is_cte_scan_vertices(scan_vertices_node) {
+            return Ok(None::<TransformResult>);
+        }
         // Calculate the total number of rows that need to be retrieved (offset + count).
         let limit_rows = limit_node.offset() + limit_node.count();
 
@@ -77,5 +80,23 @@ mod tests {
         let rule = PushLimitDownScanVerticesRule::new();
         let pattern = rule.pattern();
         assert!(pattern.node.is_some());
+    }
+
+    #[test]
+    fn cte_scan_skips_limit_pushdown() {
+        use crate::planning::plan::PlanNodeEnum;
+        let mut scan = ScanVerticesNode::new(1, "space");
+        scan.set_tag(&crate::cte::mangle_cte_name("r"));
+        let limit =
+            LimitNode::new(PlanNodeEnum::ScanVertices(scan), 0, 10).expect("limit builds");
+        let node = PlanNodeEnum::Limit(limit);
+        let rule = PushLimitDownScanVerticesRule::new();
+        let mut ctx = crate::optimizer::heuristic::context::RewriteContext::new();
+        assert!(
+            rule.apply(&mut ctx, &node)
+                .expect("rewrite")
+                .is_none(),
+            "CTE working-table scans must not fold Limit into scan.limit"
+        );
     }
 }

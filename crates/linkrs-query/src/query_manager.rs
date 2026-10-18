@@ -203,13 +203,16 @@ impl QueryManager {
     }
 
     /// Attach the executor's query registry so `kill_query` also cancels the
-    /// execution token. Without it, `kill_query` only marks the query status.
+    /// execution token. Execution cancellation is sourced solely from the
+    /// registry token; this manager remains the display source only and is
+    /// never consulted on the execution hot path.
     pub fn set_query_registry(&self, registry: Arc<QueryRegistry>) {
         *self.query_registry.write() = Some(registry);
     }
 
-    /// Detach the executor's query registry; `kill_query` returns to
-    /// status-marking only.
+    /// Detach the executor's query registry. Subsequent `kill_query` calls
+    /// fail explicitly instead of marking status only, so display can never
+    /// diverge from execution.
     pub fn clear_query_registry(&self) {
         *self.query_registry.write() = None;
     }
@@ -284,6 +287,11 @@ impl QueryManager {
     }
 
     /// Configure the threshold used to emit `SlowQueryDetected`.
+    ///
+    /// Single source for slow-query display: `StatsManager` keeps a separate
+    /// microsecond threshold only for profile/log filtering and must be
+    /// derived from this value (`ms * 1000`) at assembly. Runtime updates go
+    /// through this setter.
     pub fn set_slow_query_threshold_ms(&self, threshold_ms: i64) {
         self.slow_query_threshold_ms
             .store(threshold_ms, Ordering::SeqCst);
@@ -292,6 +300,16 @@ impl QueryManager {
     /// Current slow-query threshold in milliseconds.
     pub fn slow_query_threshold_ms(&self) -> i64 {
         self.slow_query_threshold_ms.load(Ordering::SeqCst)
+    }
+
+    /// Current slow-query threshold in microseconds, for `StatsManager`
+    /// profile filtering (`threshold_ms * 1000`). Single conversion point so
+    /// millisecond/microsecond units cannot diverge.
+    pub fn slow_query_threshold_us(&self) -> u64 {
+        self.slow_query_threshold_ms
+            .load(Ordering::SeqCst)
+            .max(0) as u64
+            * 1000
     }
 
     fn emit_session_event(&self, event: SessionEvent) {
@@ -467,12 +485,12 @@ impl QueryManager {
 
     /// Terminate the query.
     ///
-    /// Marks the query Killed and, when a query registry is attached via
-    /// `set_query_registry`, cancels its execution token with
-    /// `CancelReason::UserKill` so a running query actually stops.
-    /// Without an attached registry this only marks the status; the
-    /// executor-side `QueryRegistry` remains the source of truth for
-    /// cancellation. Query ids are generated as positive `i64` values, so a
+    /// Display source is this manager (`QueryStatus`); execution source is
+    /// the attached [`QueryRegistry`] token cancelled with
+    /// `CancelReason::UserKill`. Without an attached registry termination
+    /// would only mark status while execution keeps running, so it now
+    /// fails explicitly with `InvalidInput` and leaves the status as
+    /// `Running`. Query ids are generated as positive `i64` values, so a
     /// negative id is rejected as invalid input instead of wrapping on the
     /// `i64` to executor `u64` id conversion.
     pub fn kill_query(&self, query_id: i64) -> ManagerResult<()> {
@@ -481,15 +499,19 @@ impl QueryManager {
                 "invalid query id {query_id}"
             )));
         }
+        let registry = self.query_registry.read().clone();
+        let Some(registry) = registry else {
+            return Err(ManagerError::InvalidInput(
+                "query registry not attached; kill would not stop execution".to_string(),
+            ));
+        };
         if let Some(mut query) = self.queries.get_mut(&query_id) {
             query.kill();
             let duration_ms = query.duration_ms.unwrap_or(0);
             let session_id = query.session_id;
             warn!("Query killed: id={}", query_id);
             drop(query);
-            if let Some(registry) = self.query_registry.read().as_ref() {
-                registry.cancel(QueryId(query_id as u64), CancelReason::UserKill);
-            }
+            registry.cancel(QueryId(query_id as u64), CancelReason::UserKill);
             self.emit_session_event(SessionEvent::QueryCompleted {
                 session_id,
                 query_id,
@@ -509,6 +531,40 @@ impl QueryManager {
     /// Obtain the query information
     pub fn get_query(&self, query_id: i64) -> Option<QueryInfo> {
         self.queries.get(&query_id).map(|v| v.clone())
+    }
+
+    /// Mark a query as killed in the display registry after execution has
+    /// already been stopped through the registry token.
+    ///
+    /// Executor-internal only: callers must have cancelled the registry
+    /// token (or the runtime token) before invoking this. External
+    /// termination must go through [`Self::kill_query`], which enforces the
+    /// registry-attached invariant.
+    pub fn mark_query_killed(&self, query_id: i64) -> ManagerResult<()> {
+        if query_id < 0 {
+            return Err(ManagerError::InvalidInput(format!(
+                "invalid query id {query_id}"
+            )));
+        }
+        if let Some(mut query) = self.queries.get_mut(&query_id) {
+            query.kill();
+            let duration_ms = query.duration_ms.unwrap_or(0);
+            let session_id = query.session_id;
+            drop(query);
+            self.emit_session_event(SessionEvent::QueryCompleted {
+                session_id,
+                query_id,
+                duration_ms,
+                success: false,
+            });
+            self.check_slow_query(session_id, query_id, duration_ms);
+            Ok(())
+        } else {
+            Err(ManagerError::NotFound(format!(
+                "Query {} not found",
+                query_id
+            )))
+        }
     }
 
     /// Retrieve all queries
@@ -602,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn kill_query_without_registry_only_marks_status() {
+    fn kill_query_without_registry_fails_explicitly() {
         let manager = QueryManager::new();
         let query_id = manager.register_query(
             7,
@@ -610,10 +666,29 @@ mod tests {
             None,
             "MATCH (n) RETURN n".to_string(),
         );
-        manager.kill_query(query_id).expect("kill must succeed");
+        let err = manager
+            .kill_query(query_id)
+            .expect_err("kill without a registry must fail instead of marking only");
+        assert!(
+            err.to_string().contains("query registry not attached"),
+            "unexpected error: {err}"
+        );
         assert_eq!(
             manager.get_query(query_id).map(|q| q.status),
-            Some(QueryStatus::Killed)
+            Some(QueryStatus::Running),
+            "failed kill must leave the display status untouched"
+        );
+    }
+
+    #[test]
+    fn slow_query_threshold_units_stay_aligned() {
+        let manager = QueryManager::new();
+        manager.set_slow_query_threshold_ms(1500);
+        assert_eq!(manager.slow_query_threshold_ms(), 1500);
+        assert_eq!(
+            manager.slow_query_threshold_us(),
+            1_500_000,
+            "StatsManager filtering threshold derives from the same millisecond source"
         );
     }
 

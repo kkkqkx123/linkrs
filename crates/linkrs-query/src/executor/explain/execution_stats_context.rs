@@ -70,10 +70,12 @@ impl GlobalExecutionStats {
     }
 }
 
-/// Execution statistics context
+/// Execution statistics context (legacy push model, not fed by the runtime).
 ///
-/// Manages statistics collection for all plan nodes during query execution.
-/// Used by EXPLAIN ANALYZE and PROFILE to gather actual execution data.
+/// Retained only for compatibility: the live PROFILE/EXPLAIN ANALYZE path
+/// pulls stats from `instance.runtime().profile().flush_to_collector()` in
+/// `pipeline::diagnostics::overlay_execution_profile`. New code must use the
+/// runtime pull collector, not this push collector.
 pub struct ExecutionStatsContext {
     node_stats: Mutex<HashMap<i64, NodeExecutionStats>>,
     global_stats: Mutex<GlobalExecutionStats>,

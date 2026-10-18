@@ -295,7 +295,7 @@ impl Planner for GroupByPlanner {
         // vertex of the current space; when the GROUP BY is the right side of
         // a pipe, PipePlanner replaces this adapter with the piped rows.
         let (input_enum, input_tail, mut current_logical) = self.build_standalone_input(
-            validated,
+            Some(validated),
             &group_keys,
             &aggregation_functions,
             &aggregation_args,
@@ -549,15 +549,17 @@ impl GroupByPlanner {
     /// logical mirror of the adapter.
     fn build_standalone_input(
         &self,
-        validated: &ValidatedStatement,
+        validated: Option<&ValidatedStatement>,
         group_keys: &[String],
         aggregation_functions: &[AggregateFunction],
         aggregation_args: &[Vec<Expression>],
         qctx: Arc<QueryContext>,
     ) -> Result<(PlanNodeEnum, PlanNodeEnum, LogicalNodeEnum), PlannerError> {
+        let validated_space = validated
+            .and_then(|v| v.validation_info.semantic_info.space_name.clone());
         let space_name = qctx
             .space_name()
-            .or_else(|| validated.validation_info.semantic_info.space_name.clone())
+            .or(validated_space)
             .unwrap_or_default();
 
         // Collect the property names referenced by the group keys and the
@@ -580,7 +582,11 @@ impl GroupByPlanner {
         let scan_enum = PlanNodeEnum::ScanVertices(scan_node);
 
         // Project the needed vertex properties into flat columns.
-        let expr_ctx = validated.expr_context();
+        let expr_ctx = validated.map(|v| v.expr_context().clone()).unwrap_or_else(|| {
+            Arc::new(
+                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            )
+        });
         let mut yield_columns = Vec::new();
         for property in &properties {
             let expression = Expression::Property {

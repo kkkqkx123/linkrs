@@ -146,11 +146,9 @@ fn scan_identity_eligible(
     // fails the flat-service check below, so only plans with zero property
     // reads (pure seeds, row counts) can pass the audit — all safe.
     // CTE-tagged scans lower to a working-table source, not storage: the
-    // flag would be meaningless there.
-    if let Some(tag) = scan.tag() {
-        if crate::cte::is_cte_tag(tag) {
-            return false;
-        }
+    // flag would be meaningless there. Single predicate in `crate::cte`.
+    if crate::cte::is_cte_scan_vertices(scan) {
+        return false;
     }
     let projected: HashSet<&str> = scan
         .projected_properties()

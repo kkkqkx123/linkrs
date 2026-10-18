@@ -40,85 +40,13 @@ impl PipePlanner {
 impl Planner for PipePlanner {
     fn transform(
         &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
+        _validated: &ValidatedStatement,
+        _qctx: Arc<QueryContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let pipe_stmt = self.extract_pipe_stmt(validated.stmt())?;
-
-        // Clone each branch once for its sub-context; planner dispatch below
-        // reuses those owned fragments by reference instead of cloning again.
-        let left_stmt = (*pipe_stmt.left).clone();
-        let right_stmt = (*pipe_stmt.right).clone();
-
-        let left_validated = ValidatedStatement::new(
-            Arc::new(crate::parser::ast::stmt::Ast::new(
-                left_stmt,
-                validated.ast.expr_context().clone(),
-            )),
-            validated.validation_info.clone(),
-        );
-
-        let right_validated = ValidatedStatement::new(
-            Arc::new(crate::parser::ast::stmt::Ast::new(
-                right_stmt,
-                validated.ast.expr_context().clone(),
-            )),
-            validated.validation_info.clone(),
-        );
-
-        let mut left_planner = PlannerEnum::from_stmt_ref(left_validated.stmt())
-            .ok_or_else(|| PlannerError::NoSuitablePlanner("left statement".to_string()))?;
-        let mut left_plan = left_planner.transform(&left_validated, qctx.clone())?;
-
-        let mut right_planner = PlannerEnum::from_stmt_ref(right_validated.stmt())
-            .ok_or_else(|| PlannerError::NoSuitablePlanner("right statement".to_string()))?;
-
-        let mut right_plan = right_planner.transform(&right_validated, qctx)?;
-
-        let left_logical = left_plan.logical_root.take();
-        let left_root = left_plan.root.take().ok_or_else(|| {
-            PlannerError::PlanGenerationFailed("Left plan has no root node".to_string())
-        })?;
-        let right_logical = right_plan.logical_root.take();
-        let right_root = right_plan.root.take().ok_or_else(|| {
-            PlannerError::PlanGenerationFailed("Right plan has no root node".to_string())
-        })?;
-
-        // When a standalone GO (no inline YIELD clause) is the left side of a
-        // pipe, the GoPlanner appends a default projection (dst, edge) and a
-        // trivial filter (true) to its plan. In a pipe context these are
-        // redundant: the pipe stages build their own projections and the
-        // filter is a no-op. Elide them so that downstream stages resolve
-        // their variables (e.g. target) against the ExpandAll output layout
-        // directly.
-        let left_root = if matches!(*pipe_stmt.left, Stmt::Go(_)) {
-            elide_go_default_adapter(left_root)
-        } else {
-            left_root
-        };
-
-        let mut combined_root = right_root;
-        replace_argument_node(&mut combined_root, &left_root);
-
-        let combined_logical = match (left_logical, right_logical) {
-            (Some(left_logical), Some(right_logical)) => {
-                let left_logical = if matches!(*pipe_stmt.left, Stmt::Go(_)) {
-                    elide_go_default_adapter_logical(left_logical)
-                } else {
-                    left_logical
-                };
-                let mut combined = right_logical;
-                replace_logical_argument(&mut combined, &left_logical);
-                Some(combined)
-            }
-            _ => None,
-        };
-
-        Ok(SubPlan {
-            root: Some(combined_root),
-            tail: None,
-            logical_root: combined_logical,
-        })
+        Err(PlannerError::InvalidOperation(
+            "PipePlanner::transform is not supported; use plan_bound with BoundStatement and sub-context derivation."
+                .to_string(),
+        ))
     }
 
     fn plan_bound(
@@ -151,12 +79,12 @@ impl Planner for PipePlanner {
         // each stage planner expects the AST fragment aligned with its own
         // bound sub-statement. Derive one per stage up front (owned here so
         // the sub-contexts below can borrow them).
-        let mut stage_validated: Vec<ValidatedStatement> =
+        let mut stage_validated: Vec<Option<ValidatedStatement>> =
             Vec::with_capacity(pipe.statements.len());
         for stmt in &pipe.statements {
             stage_validated.push(
                 ctx.derive_validated(stmt)
-                    .unwrap_or_else(|| ctx.validated.clone()),
+                    .or_else(|| ctx.validated.cloned()),
             );
         }
 
@@ -172,7 +100,7 @@ impl Planner for PipePlanner {
                 bound: stmt,
                 qctx: ctx.qctx.clone(),
                 metadata: ctx.metadata,
-                validated,
+                validated: validated.as_ref(),
             };
             let sub_plan = planner.plan_bound(&sub_ctx)?;
 

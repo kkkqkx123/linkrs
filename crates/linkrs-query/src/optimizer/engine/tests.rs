@@ -286,12 +286,14 @@ fn cost_based_phases_rewrite_and_emit_notes() {
         .optimize(plan, Some("test"))
         .expect("optimization should succeed");
 
-    // The heuristic phase converts Limit(offset=0) -> Sort to TopN, so
-    // the plan must contain a TopN and an IndexScan for the predicate.
+    // The cost path is the sole Sort-to-TopN decision maker: limit 50 is
+    // below the cost minimum, so Sort is kept and only the index rewrite
+    // applies. The plan must contain an IndexScan for the predicate and a
+    // cost keep note, and must not contain a heuristic TopN.
     let root = optimized.root.as_ref().expect("root should exist");
     assert!(
-        contains_variant(root, &|node| matches!(node, PlanNodeEnum::TopN(_))),
-        "expected TopN in optimized plan"
+        !contains_variant(root, &|node| matches!(node, PlanNodeEnum::TopN(_))),
+        "cost path must keep Sort for small limits"
     );
     assert!(
         contains_variant(root, &|node| matches!(node, PlanNodeEnum::IndexScan(_))),
@@ -899,15 +901,17 @@ fn cost_based_consumes_logical_plan_when_attached() {
         .optimize(plan, Some("test"))
         .expect("optimization should succeed");
 
-    // The structural rewrites still apply to the physical root.
+    // The structural rewrites still apply to the physical root. Limit 50 is
+    // below the cost minimum, so the cost path keeps Sort (no heuristic
+    // TopN); only the index rewrite applies.
     let root = optimized.root.as_ref().expect("root should exist");
     assert!(
         contains_variant(root, &|node| matches!(node, PlanNodeEnum::IndexScan(_))),
         "expected IndexScan in optimized plan"
     );
     assert!(
-        contains_variant(root, &|node| matches!(node, PlanNodeEnum::TopN(_))),
-        "expected TopN in optimized plan"
+        !contains_variant(root, &|node| matches!(node, PlanNodeEnum::TopN(_))),
+        "cost path must keep Sort for small limits"
     );
 
     // The decision notes come from the logical walkers.

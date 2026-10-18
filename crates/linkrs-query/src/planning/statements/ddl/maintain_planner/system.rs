@@ -169,18 +169,16 @@ pub(super) fn plan_load_from(
                 ));
             }
         }
-        let inner_planner = PlannerEnum::from_stmt_ref(inner.as_ref());
-        let Some(mut planner) = inner_planner else {
-            return Err(PlannerError::UnsupportedOperation(
-                "LOAD FROM (query) inner statement is not plannable".to_string(),
-            ));
-        };
         let inner_ast = std::sync::Arc::new(crate::parser::ast::stmt::Ast::new(
             inner.as_ref().clone(),
             validated.ast.expr_context().clone(),
         ));
         let inner_validated = ValidatedStatement::new(inner_ast, validated.validation_info.clone());
-        let mut sub_plan = planner.transform(&inner_validated, qctx)?;
+        let mut sub_plan = PlannerEnum::legacy_plan_stmt_via_transform(
+            inner.as_ref(),
+            &inner_validated,
+            qctx,
+        )?;
         if !load_stmt.headers.is_empty() {
             let declared: Vec<String> = load_stmt.headers.iter().map(|h| h.name.clone()).collect();
             let current: Vec<String> = sub_plan

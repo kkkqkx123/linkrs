@@ -134,7 +134,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     bound,
                     query_context.clone(),
                     metadata.as_ref(),
-                    &validated,
+                    Some(&validated),
                 );
                 planner_enum
                     .plan_bound(&ctx)
@@ -148,6 +148,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // Attach the natively produced logical tree when the planner emitted
         // one. Physical-only plans are left as-is here; the optimizer owns
         // the single reverse-conversion bridge and records its decision.
+        // The warning below keeps the silent fallback visible: physical-only
+        // output is supported, but new planners must emit both trees.
         if let Some(logical_root) = sub_plan.logical_root().cloned() {
             let mut logical = crate::planning::plan::logical_plan::LogicalPlan::new(logical_root);
             // A user join hint pins the join shape: flag the logical plan so
@@ -157,6 +159,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 logical.join_order_hinted = match_stmt.join_hint.is_some();
             }
             execution_plan.set_logical_plan(logical);
+        } else {
+            log::warn!(
+                "Planner emitted physical-only plan without logical tree: {}",
+                bound.kind()
+            );
         }
 
         Ok(execution_plan)
@@ -183,40 +190,33 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
-        let planning_config = self.dml_planning_config();
-        // Memo key. This is the second layer of the DML fast path (the
-        // first layer is the prepare-time check that skips binding); both
-        // layers must construct the key identically. Dimensions mirror the
-        // plan-cache key except the post-planning partition fingerprint,
-        // which is not computable before binding — memo hits are therefore
-        // validated with `check_compatibility` before being served.
+        // Memo key: fingerprint-less plan key over the normalized text,
+        // built by the single shared constructor. The partition fingerprint
+        // is not computable before binding; memo hits use the single
+        // compatibility exit before being served.
         let dml_memo_key = if dml_shape_cacheable {
-            Some(super::DmlPlanMemoKey {
-                normalized_text: query_text.to_string(),
-                space_name: space_name.clone(),
-                schema_version,
-                index_version,
-                param_sig: Self::dml_param_signature(&request.parameters),
-                optimizer_version: planning_config.optimizer_version,
-                planning_config_hash: planning_config.config_hash,
-            })
+            Some(self.dml_memo_key_for(
+                query_text.to_string(),
+                space_name.clone(),
+                &request.parameters,
+            ))
         } else {
             None
         };
 
         if let Some(key) = dml_memo_key.as_ref() {
             if let Some(plan) = self.find_dml_plan(key) {
-                if crate::executor::streaming::plan::PhysicalPlanValidator::check_compatibility(
-                    &plan,
-                    schema_version,
-                )
-                .is_ok()
+                if self
+                    .plan_cache
+                    .serve_compatible(&plan, schema_version)
+                    .is_ok()
                 {
                     self.last_dml_plan_hits
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    self.plan_cache.record_memo_hit();
                     return Ok(plan);
                 }
+                self.dml_memo_compat_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 log::debug!(
                     "DML memo plan failed compatibility check, falling through to replan: {}",
                     query_text
@@ -250,11 +250,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .plan_cache
             .get_with_context(query_text, cache_context.clone())
         {
-            crate::executor::streaming::plan::PhysicalPlanValidator::check_compatibility(
-                &cached.plan,
-                schema_version,
-            )
-            .map_err(DBError::from)?;
+            self.plan_cache
+                .serve_compatible(&cached.plan, schema_version)?;
             if let Some(key) = dml_memo_key.clone() {
                 self.store_dml_plan(key, cached.plan.clone());
             }
@@ -279,11 +276,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 self.plan_cache
                     .get_with_partition_context(query_text, spec, cache_context.clone())
             {
-                crate::executor::streaming::plan::PhysicalPlanValidator::check_compatibility(
-                    &cached.plan,
-                    schema_version,
-                )
-                .map_err(DBError::from)?;
+                self.plan_cache
+                    .serve_compatible(&cached.plan, schema_version)?;
                 if let Some(key) = dml_memo_key.clone() {
                     self.store_dml_plan(key, cached.plan.clone());
                 }
@@ -357,27 +351,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             None => {
                 hasher.write_u8(0);
             }
-        }
-        hasher.finish()
-    }
-
-    pub(crate) fn dml_param_signature(
-        params: &std::collections::HashMap<String, linkrs_core::Value>,
-    ) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut names: Vec<&String> = params
-            .keys()
-            .filter(|name| name.starts_with(crate::planning::dml_shape::DML_PARAM_PREFIX))
-            .collect();
-        names.sort_unstable();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for name in names {
-            name.hash(&mut hasher);
-            params
-                .get(name)
-                .expect("name comes from params keys")
-                .data_type()
-                .hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -699,35 +672,30 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
 /// Collect dependent table names from a BoundStatement for cache invalidation.
 fn collect_dependent_tables(bound: &crate::binder::BoundStatement) -> Vec<String> {
-    let mut tables = Vec::new();
-    if let crate::binder::BoundStatement::Match(match_stmt) = bound {
-        for node in &match_stmt.query_graph.nodes {
-            for tag in &node.tags {
-                tables.push(tag.tag_name.to_string());
-            }
-        }
-        for edge in &match_stmt.query_graph.edges {
-            for edge_type in &edge.edge_types {
-                tables.push(edge_type.edge_type_name.to_string());
-            }
-        }
-    }
+    let (tags, edges, _) = referenced_schema_objects(bound);
+    let mut tables = tags;
+    tables.extend(edges);
     tables
 }
 
 /// Split the schema objects referenced by a bound statement into referenced
 /// tag names and edge-type names, used to scope lazy metadata loading.
 ///
-/// Only [`BoundStatement::Match`] and [`BoundStatement::Lookup`] consume the
-/// metadata context during planning, so their references must be exact.  For
+/// DQL references must be exact because planners consume the metadata
+/// context. DML references are extracted from the bound targets so
+/// single-tag writes avoid full-space loading; DML planners ignore the
+/// metadata context today, so precise scoping only reduces load. For
 /// composite statements (`Pipe` / `SetOperation`) the references are merged
-/// from the child statements.  Statements bound as [`BoundStatement::Other`]
-/// (DDL / DML / management / fulltext / vector / EXPLAIN) cannot be
+/// from the child statements. Statements bound as [`BoundStatement::Other`]
+/// (DDL / management / fulltext / vector / EXPLAIN) cannot be
 /// introspected and must fall back to full-space metadata loading.
 fn referenced_schema_objects(
     bound: &crate::binder::BoundStatement,
 ) -> (Vec<String>, Vec<String>, bool) {
-    use crate::binder::bound::{BoundLookupTarget, BoundStatement};
+    use crate::binder::bound::{
+        BoundDeleteTarget, BoundInsertTarget, BoundLookupTarget, BoundMergePattern,
+        BoundStatement, BoundUpdateTarget,
+    };
 
     fn push_unique(target: &mut Vec<String>, name: &str) {
         if !target.iter().any(|t| t.as_str() == name) {
@@ -838,14 +806,83 @@ fn referenced_schema_objects(
         | BoundStatement::Yield(_)
         | BoundStatement::Collect(_)
         | BoundStatement::AssignVariable(_) => (tags, edges, false),
-        BoundStatement::Insert(_)
-        | BoundStatement::Update(_)
-        | BoundStatement::Delete(_)
-        | BoundStatement::Merge(_)
-        | BoundStatement::Set(_)
-        | BoundStatement::Remove(_)
-        | BoundStatement::Copy(_)
-        | BoundStatement::Drop(_)
+        BoundStatement::Insert(insert) => {
+            match &insert.target {
+                BoundInsertTarget::Vertices { tag, .. } => {
+                    push_unique(&mut tags, &tag.tag_name);
+                }
+                BoundInsertTarget::Edge { edge_name, .. } => {
+                    push_unique(&mut edges, edge_name);
+                }
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::Update(update) => {
+            match &update.target {
+                BoundUpdateTarget::Tag(name) => {
+                    push_unique(&mut tags, name);
+                }
+                BoundUpdateTarget::TagOnVertex { tag_name, .. } => {
+                    push_unique(&mut tags, tag_name);
+                }
+                BoundUpdateTarget::Edge(edge) => {
+                    if let Some(name) = &edge.edge_type {
+                        push_unique(&mut edges, name);
+                    }
+                }
+                BoundUpdateTarget::Vertex(_) => {}
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::Delete(delete) => {
+            match &delete.target {
+                BoundDeleteTarget::Vertices { tag, .. } => {
+                    push_unique(&mut tags, tag);
+                }
+                BoundDeleteTarget::Edges { edge_type, .. } => {
+                    if let Some(name) = edge_type {
+                        push_unique(&mut edges, name);
+                    }
+                }
+                BoundDeleteTarget::Index(_) => {}
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::Merge(merge) => {
+            match &merge.pattern {
+                BoundMergePattern::Node(vertex) => {
+                    for label in &vertex.labels {
+                        push_unique(&mut tags, label);
+                    }
+                }
+                BoundMergePattern::Edge { src, edge, dst } => {
+                    for label in &src.labels {
+                        push_unique(&mut tags, label);
+                    }
+                    for label in &dst.labels {
+                        push_unique(&mut tags, label);
+                    }
+                    for edge_type in &edge.edge_types {
+                        push_unique(&mut edges, edge_type);
+                    }
+                }
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::Copy(copy) => {
+            match &copy.target {
+                crate::parser::ast::CopyTarget::Vertex(name) => {
+                    push_unique(&mut tags, name);
+                }
+                crate::parser::ast::CopyTarget::Edge(name) => {
+                    push_unique(&mut edges, name);
+                }
+            }
+            (tags, edges, false)
+        }
+        BoundStatement::Set(_)
+        | BoundStatement::Remove(_) => (tags, edges, false),
+        BoundStatement::Drop(_)
         | BoundStatement::Alter(_)
         | BoundStatement::Show(_)
         | BoundStatement::ShowCreate(_)

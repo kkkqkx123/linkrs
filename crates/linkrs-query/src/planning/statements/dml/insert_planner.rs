@@ -16,12 +16,11 @@ use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::planning::statements::clauses::exists_planner;
 use crate::QueryContext;
 use linkrs_core::types::expr::contextual::ContextualExpression;
+use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use std::sync::Arc;
 
 #[cfg(test)]
 use crate::parser::ast::utils::ExprFactory;
-#[cfg(test)]
-use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 #[cfg(test)]
 use linkrs_core::YieldColumn;
 
@@ -142,7 +141,9 @@ impl Planner for InsertPlanner {
         // Bound expressions are converted back into contextual expressions so
         // downstream plan nodes keep the same shape as the AST path. The
         // validated expression context is still required as the id registry.
-        let expr_ctx = validated.expr_context().clone();
+        let expr_ctx = validated
+            .map(|v| v.expr_context().clone())
+            .unwrap_or_else(|| Arc::new(ExpressionAnalysisContext::new()));
         let convert = |bound_expr: &BoundExpression| {
             crate::binder::expr_converter::bound_expr_to_contextual(bound_expr, &expr_ctx)
                 .map_err(PlannerError::PlanGenerationFailed)

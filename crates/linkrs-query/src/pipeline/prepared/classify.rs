@@ -1,6 +1,58 @@
 use std::sync::Arc;
 
+use crate::dml_events::DmlOp;
 use crate::parser::ast::Stmt;
+
+/// Map a bound-equivalent parsed statement to its DML operation.
+///
+/// Single source of truth for statement-level DML hooks: external hooks
+/// must consume this (via the prepare-stage [`StatementClass`] / `Stmt`)
+/// instead of the text heuristic [`crate::dml_events::classify_dml`], which
+/// is retained only as a compatibility shim for text-only call sites.
+/// Composite writes (`Pipe` / `SetOperation`) merge branch operations with
+/// `Delete > Insert > Update` priority to preserve the single-event shape;
+/// DDL/DCL/reads/diagnostics return `None`.
+pub fn dml_op_from_stmt(stmt: &Stmt) -> Option<DmlOp> {
+    match stmt {
+        Stmt::Insert(_) | Stmt::Copy(_) | Stmt::Merge(_) => Some(DmlOp::Insert),
+        Stmt::Update(_) | Stmt::Set(_) | Stmt::Remove(_) => Some(DmlOp::Update),
+        Stmt::Delete(_) => Some(DmlOp::Delete),
+        Stmt::Match(m) => {
+            if m.delete_clause.is_some() {
+                Some(DmlOp::Delete)
+            } else {
+                None
+            }
+        }
+        Stmt::Pipe(pipe) => merge_dml_ops(
+            dml_op_from_stmt(&pipe.left),
+            dml_op_from_stmt(&pipe.right),
+        ),
+        Stmt::SetOperation(set_op) => merge_dml_ops(
+            dml_op_from_stmt(&set_op.left),
+            dml_op_from_stmt(&set_op.right),
+        ),
+        _ => None,
+    }
+}
+
+fn merge_dml_ops(left: Option<DmlOp>, right: Option<DmlOp>) -> Option<DmlOp> {
+    match (left, right) {
+        (None, other) => other,
+        (other, None) => other,
+        (Some(a), Some(b)) => Some(prioritize_dml_op(a, b)),
+    }
+}
+
+fn prioritize_dml_op(a: DmlOp, b: DmlOp) -> DmlOp {
+    if a == DmlOp::Delete || b == DmlOp::Delete {
+        DmlOp::Delete
+    } else if a == DmlOp::Insert || b == DmlOp::Insert {
+        DmlOp::Insert
+    } else {
+        DmlOp::Update
+    }
+}
 
 /// Classification of a prepared statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,7 +244,69 @@ pub fn build_validated_fallback(
 mod tests {
     use super::*;
     use crate::parser::ast::stmt::{CheckpointStmt, PurgeExpiredStmt, PurgeTarget};
+    use crate::parser::Parser;
     use linkrs_core::types::Span;
+
+    fn parse(query: &str) -> Stmt {
+        let mut parser = Parser::new(query);
+        let result = parser
+            .parse()
+            .unwrap_or_else(|e| panic!("parse failed for {query:?}: {e}"));
+        assert!(!parser.has_errors(), "parse errors for {query:?}");
+        result.ast.stmt().clone()
+    }
+
+    #[test]
+    fn dml_op_matches_execution_plan_classification() {
+        assert_eq!(
+            dml_op_from_stmt(&parse("INSERT VERTEX person(name) VALUES \"p1\": (\"a\")")),
+            Some(DmlOp::Insert)
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("COPY person FROM 'f.csv'")),
+            Some(DmlOp::Insert)
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("UPDATE VERTEX \"v1\" SET name = \"x\"")),
+            Some(DmlOp::Update)
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("MATCH (n:person) RETURN n")),
+            None,
+            "pure reads stay silent"
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("CREATE TAG IF NOT EXISTS Person(name: STRING)")),
+            None,
+            "schema DDL is not DML"
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("DROP TAG Person")),
+            None,
+            "schema DDL is not DML"
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("EXPLAIN MATCH (n) RETURN n")),
+            None,
+            "diagnostics stay silent"
+        );
+    }
+
+    #[test]
+    fn dml_op_pipe_merges_branches_with_delete_priority() {
+        let left = parse("INSERT VERTEX person(name) VALUES \"p1\": (\"a\")");
+        let right = parse("DELETE VERTEX person FROM \"v1\"");
+        if let (Stmt::Insert(_), Stmt::Delete(_)) = (&left, &right) {
+            let pipe = Stmt::Pipe(crate::parser::ast::stmt::PipeStmt {
+                span: Span::default(),
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+            assert_eq!(dml_op_from_stmt(&pipe), Some(DmlOp::Delete));
+        } else {
+            panic!("expected Insert/Delete branches");
+        }
+    }
 
     #[test]
     fn purge_expired_is_not_read_only_cacheable() {

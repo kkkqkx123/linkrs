@@ -55,6 +55,9 @@ impl RewriteRule for PushFilterDownScanVerticesRule {
             PlanNodeEnum::ScanVertices(s) => s,
             _ => return Ok(None),
         };
+        if crate::cte::is_cte_scan_vertices(scan) {
+            return Ok(None);
+        }
         if scan.filter().is_some() {
             return Ok(None);
         }

@@ -48,7 +48,7 @@ impl SetOperationPlanner {
         store: &'b mut Option<ValidatedStatement>,
     ) -> crate::planning::context::PlanContext<'b> {
         *store = ctx.derive_validated(side);
-        let validated = store.as_ref().unwrap_or(ctx.validated);
+        let validated = store.as_ref().or(ctx.validated);
         crate::planning::context::PlanContext {
             bound: side,
             qctx: ctx.qctx.clone(),

@@ -3,9 +3,17 @@
 //! Graph databases have no per-row identity to report, so the classic
 //! per-row update hook degrades to a statement-level notification: which
 //! kind of write a statement performed, in which space, affecting how many
-//! rows. [`classify_dml`] is the single shared classifier used by the
-//! embedded session path and the C-API update hook, so both report the
-//! same operation for the same text.
+//! rows. The authoritative classifier is
+//! [`crate::pipeline::prepared::dml_op_from_stmt`], derived from the parsed
+//! [`Stmt`](crate::parser::ast::Stmt) during preparation; external hooks
+//! must consume that (via `PreparedRequest::dml_op`) instead of reparsing
+//! text.
+//!
+//! [`classify_dml`] is retained only as a compatibility shim for text-only
+//! call sites (embedded session fast path, C-API update hook) until those
+//! call sites thread the prepared classification through. It is
+//! best-effort over the leading keyword and diverges on composite writes,
+//! quoted keywords, and schema DDL; new code must not rely on it.
 //!
 //! The mapping is a best-effort heuristic over the leading keyword (after
 //! skipping whitespace and `--` / `//` / `#` / `/* */` comments); the
@@ -39,6 +47,11 @@ pub type DmlStatementCallback = Arc<dyn Fn(&DmlStatementEvent) + Send + Sync>;
 /// Classify a query text into a DML operation, or `None` for read-only
 /// (or unrecognized) statements.
 ///
+/// Compatibility shim: prefers the prepared-statement classifier
+/// [`crate::pipeline::prepared::dml_op_from_stmt`] whenever a parsed
+/// [`Stmt`](crate::parser::ast::Stmt) is available. The text scan below is
+/// kept only for call sites that carry no `Stmt` (C-API, read-only gate).
+///
 /// `MATCH`/`WITH`/`UNWIND`/`OPTIONAL` openers carry the write in a trailing
 /// clause, so the whole text is scanned for a write keyword in that case.
 pub fn classify_dml(query_text: &str) -> Option<DmlOp> {
@@ -64,26 +77,61 @@ pub fn classify_dml(query_text: &str) -> Option<DmlOp> {
         }
         return None;
     }
-    if keyword.eq_ignore_ascii_case("INSERT")
-        || keyword.eq_ignore_ascii_case("CREATE")
-        || keyword.eq_ignore_ascii_case("MERGE")
-    {
+    if keyword.eq_ignore_ascii_case("COPY") {
         return Some(DmlOp::Insert);
+    }
+    if keyword.eq_ignore_ascii_case("INSERT") || keyword.eq_ignore_ascii_case("MERGE") {
+        return Some(DmlOp::Insert);
+    }
+    if keyword.eq_ignore_ascii_case("CREATE")
+        || keyword.eq_ignore_ascii_case("DROP")
+        || keyword.eq_ignore_ascii_case("ALTER")
+    {
+        // Schema DDL (`CREATE TAG`, `DROP SPACE`, `ALTER ...`) is not a DML
+        // write; only a bare data-form `CREATE` without a schema target keeps
+        // the legacy Insert mapping for compatibility.
+        if is_schema_ddl_second_keyword(query_text) {
+            return None;
+        }
+        if keyword.eq_ignore_ascii_case("CREATE") {
+            return Some(DmlOp::Insert);
+        }
+        if keyword.eq_ignore_ascii_case("ALTER") {
+            return Some(DmlOp::Update);
+        }
+        return Some(DmlOp::Delete);
     }
     if keyword.eq_ignore_ascii_case("UPDATE")
         || keyword.eq_ignore_ascii_case("SET")
         || keyword.eq_ignore_ascii_case("REMOVE")
-        || keyword.eq_ignore_ascii_case("ALTER")
     {
         return Some(DmlOp::Update);
     }
-    if keyword.eq_ignore_ascii_case("DELETE")
-        || keyword.eq_ignore_ascii_case("DETACH")
-        || keyword.eq_ignore_ascii_case("DROP")
-    {
+    if keyword.eq_ignore_ascii_case("DELETE") || keyword.eq_ignore_ascii_case("DETACH") {
         return Some(DmlOp::Delete);
     }
     None
+}
+
+/// Whether the statement is schema DDL by its second keyword (`TAG`, `EDGE`,
+/// `SPACE`, `INDEX`, `TYPE`, `MACRO`, `USER`, `ROLE`, ...). Used only to keep
+/// the text shim from reporting DDL as DML.
+fn is_schema_ddl_second_keyword(query_text: &str) -> bool {
+    let rest = skip_leading_keyword(query_text);
+    let end = rest
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':')
+        .unwrap_or(rest.len());
+    let second = &rest[..end];
+    second.eq_ignore_ascii_case("TAG")
+        || second.eq_ignore_ascii_case("EDGE")
+        || second.eq_ignore_ascii_case("SPACE")
+        || second.eq_ignore_ascii_case("INDEX")
+        || second.eq_ignore_ascii_case("TYPE")
+        || second.eq_ignore_ascii_case("MACRO")
+        || second.eq_ignore_ascii_case("USER")
+        || second.eq_ignore_ascii_case("ROLE")
+        || second.eq_ignore_ascii_case("ROLES")
+        || second.eq_ignore_ascii_case("USERS")
 }
 
 /// Extract the first keyword token, skipping whitespace and SQL/Cypher comments.
@@ -133,6 +181,43 @@ fn leading_keyword(query: &str) -> &str {
     token
 }
 
+/// Skip the first keyword token (with the same comment handling as
+/// [`leading_keyword`]) and return the remainder for second-keyword checks.
+fn skip_leading_keyword(query: &str) -> &str {
+    let bytes = query.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        if pos >= bytes.len() {
+            break;
+        }
+        if query[pos..].starts_with("--")
+            || query[pos..].starts_with("//")
+            || query[pos..].starts_with('#')
+        {
+            while pos < bytes.len() && bytes[pos] != b'\n' {
+                pos += 1;
+            }
+            continue;
+        }
+        if query[pos..].starts_with("/*") {
+            if let Some(end) = query[pos..].find("*/") {
+                pos += end + 2;
+                continue;
+            }
+            return "";
+        }
+        break;
+    }
+    let rest = &query[pos..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':')
+        .unwrap_or(rest.len());
+    rest[end..].trim_start()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,13 +225,24 @@ mod tests {
     #[test]
     fn leading_keywords_classify() {
         assert_eq!(classify_dml("INSERT INTO t"), Some(DmlOp::Insert));
-        assert_eq!(classify_dml("  CREATE TAG u"), Some(DmlOp::Insert));
+        assert_eq!(
+            classify_dml("  CREATE TAG u"),
+            None,
+            "schema DDL stays silent like the bound classifier"
+        );
+        assert_eq!(
+            classify_dml("CREATE (n:Person)"),
+            Some(DmlOp::Insert),
+            "bare data-form CREATE keeps the legacy Insert mapping"
+        );
         assert_eq!(classify_dml("-- comment\nMERGE (n)"), Some(DmlOp::Insert));
         assert_eq!(classify_dml("UPDATE t SET a"), Some(DmlOp::Update));
         assert_eq!(classify_dml("/* c */ SET n.a = 1"), Some(DmlOp::Update));
+        assert_eq!(classify_dml("COPY t FROM 'f'"), Some(DmlOp::Insert));
         assert_eq!(classify_dml("DELETE FROM t"), Some(DmlOp::Delete));
         assert_eq!(classify_dml("DETACH DELETE n"), Some(DmlOp::Delete));
-        assert_eq!(classify_dml("DROP TAG t"), Some(DmlOp::Delete));
+        assert_eq!(classify_dml("DROP TAG t"), None, "schema DDL stays silent");
+        assert_eq!(classify_dml("ALTER TAG t"), None, "schema DDL stays silent");
     }
 
     #[test]

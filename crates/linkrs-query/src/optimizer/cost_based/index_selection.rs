@@ -83,6 +83,9 @@ fn try_rewrite_scan(
     space_hint: Option<&str>,
     notes: &mut Vec<String>,
 ) -> Option<(PlanNodeEnum, String)> {
+    if crate::cte::is_cte_scan_vertices(scan) {
+        return None;
+    }
     let tag = scan.tag().cloned()?;
     let space: String = if scan.space_name().is_empty() {
         space_hint?.to_string()
@@ -417,6 +420,9 @@ fn try_decide_index_scan_logical(
     notes: &mut Vec<String>,
 ) -> Option<(IndexHint, u64, String)> {
     let tag = scan.tag.clone()?;
+    if crate::cte::is_cte_tag(&tag) {
+        return None;
+    }
     let space: String = if scan.space_name.is_empty() {
         space_hint?.to_string()
     } else {

@@ -37,6 +37,9 @@ define_rewrite_pushdown_rule! {
     parent_node: Limit,
     child_node: ScanEdges,
     apply: |_ctx, limit_node: &LimitNode, scan_edges_node: &ScanEdgesNode| {
+        if crate::cte::is_cte_scan_edges(scan_edges_node) {
+            return Ok(None::<TransformResult>);
+        }
         // Calculate the total number of rows that need to be retrieved (offset + count).
         let limit_rows = limit_node.offset() + limit_node.count();
 

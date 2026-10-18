@@ -63,6 +63,12 @@ impl Planner for UserManagementPlanner {
             _ => {
                 // Fallback to AST-based transform for non-migrated operations
                 // (ChangePassword, Grant, Revoke, ShowUsers, ShowRoles, DescribeUser)
+                let validated = validated.ok_or_else(|| {
+                    PlannerError::PlanGenerationFailed(
+                        "UserManagementPlanner requires a validated statement for AST fallback"
+                            .to_string(),
+                    )
+                })?;
                 return self.transform(validated, qctx.clone());
             }
         };

@@ -16,8 +16,8 @@ use crate::parser::ast::Stmt;
 use crate::QueryContext;
 use crate::QueryRequestContext;
 pub use classify::{
-    build_validated_fallback, classify_statement, is_analyze, is_ddl, is_diagnostic,
-    is_read_only_cacheable, is_transaction, requires_write_storage, StatementClass,
+    build_validated_fallback, classify_statement, dml_op_from_stmt, is_analyze, is_ddl,
+    is_diagnostic, is_read_only_cacheable, is_transaction, requires_write_storage, StatementClass,
 };
 pub use result::PreparedOutcome;
 
@@ -40,6 +40,10 @@ pub struct PreparedRequest {
     pub bound_statement: Option<BoundStatement>,
     /// Cloned AST statement for classification and diagnostic matching.
     pub stmt: Stmt,
+    /// Statement-level DML operation derived from [`Stmt`] via
+    /// `dml_op_from_stmt`. Hooks must consume this instead of reparsing
+    /// text; `None` means read-only / DDL / diagnostic.
+    pub dml_op: Option<crate::dml_events::DmlOp>,
     /// The parsed AST, retained for planning.
     pub ast: Arc<crate::parser::ast::stmt::Ast>,
     /// whether the query text is a shape-normalized DML template that may
@@ -182,24 +186,14 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         let query_context = self.query_context_for_request(effective_rctx, space_info.as_ref());
         let ast = parser_result.ast.clone();
         let memo_hit = if dml_shape_cacheable {
-            let planning_config = self.dml_planning_config();
-            let key = super::DmlPlanMemoKey {
-                normalized_text: effective_query.clone(),
-                space_name: query_context
-                    .space_name()
-                    .or_else(|| query_context.request_context().space_name.clone()),
-                schema_version: Some(
-                    self.schema_generation
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                ),
-                index_version: Some(
-                    self.index_generation
-                        .load(std::sync::atomic::Ordering::Relaxed),
-                ),
-                param_sig: Self::dml_param_signature(&query_context.request_context().parameters),
-                optimizer_version: planning_config.optimizer_version,
-                planning_config_hash: planning_config.config_hash,
-            };
+            let space_name = query_context
+                .space_name()
+                .or_else(|| query_context.request_context().space_name.clone());
+            let key = self.dml_memo_key_for(
+                effective_query.clone(),
+                space_name,
+                &query_context.request_context().parameters,
+            );
             self.find_dml_plan(&key).is_some()
         } else {
             false
@@ -245,12 +239,14 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
     ) -> DBResult<PreparedRequest> {
         let stmt = ast.stmt().clone();
         let statement_class = classify_statement(&stmt);
+        let dml_op = classify::dml_op_from_stmt(&stmt);
         let transaction_scope =
             transaction::resolve_transaction_scope(&stmt, query_context.request_context());
         Ok(PreparedRequest {
             query_text: query_text.to_string(),
             query_context,
             statement_class,
+            dml_op,
             transaction_scope,
             operation_storage,
             owns_operation_storage,
