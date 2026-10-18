@@ -44,6 +44,26 @@ impl StatsManager {
         }
     }
 
+    /// Record a search query operation without a known space.
+    /// Used by engine-level decorators that only see collection names;
+    /// records global and `unknown.{index}` buckets only, never polluting
+    /// real `space_{id}` keys.
+    pub fn record_search_unknown_space(&self, index_name: &str, latency_ms: u64, success: bool) {
+        let index_key = Self::unknown_index_key(index_name);
+        self.add_value(MetricType::NumSearchQueries);
+        self.add_index_metric(&index_key, MetricType::NumSearchQueries);
+        if !success {
+            self.add_value(MetricType::NumSearchErrors);
+            self.add_index_metric(&index_key, MetricType::NumSearchErrors);
+        }
+        self.add_value_with_amount(MetricType::SearchLatencyMs, latency_ms);
+        self.add_index_metric_with_amount(&index_key, MetricType::SearchLatencyMs, latency_ms);
+        {
+            let mut histogram = self.search_latency_histogram.write();
+            histogram.record_micros(latency_ms * 1000);
+        }
+    }
+
     /// Record an index operation
     pub fn record_index_operation(
         &self,
@@ -111,6 +131,25 @@ impl StatsManager {
 
         self.add_value_with_amount(MetricType::DeleteLatencyMs, latency_ms);
         self.add_space_metric_with_amount(&space_key, MetricType::DeleteLatencyMs, latency_ms);
+        self.add_index_metric_with_amount(&index_key, MetricType::DeleteLatencyMs, latency_ms);
+    }
+
+    /// Record a delete operation without a known space.
+    /// Used by engine-level decorators that only see collection names.
+    pub fn record_delete_operation_unknown_space(
+        &self,
+        index_name: &str,
+        latency_ms: u64,
+        success: bool,
+    ) {
+        let index_key = Self::unknown_index_key(index_name);
+        self.add_value(MetricType::NumDeleteOperations);
+        self.add_index_metric(&index_key, MetricType::NumDeleteOperations);
+        if !success {
+            self.add_value(MetricType::NumDeleteErrors);
+            self.add_index_metric(&index_key, MetricType::NumDeleteErrors);
+        }
+        self.add_value_with_amount(MetricType::DeleteLatencyMs, latency_ms);
         self.add_index_metric_with_amount(&index_key, MetricType::DeleteLatencyMs, latency_ms);
     }
 

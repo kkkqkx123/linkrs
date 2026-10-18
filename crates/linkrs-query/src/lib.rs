@@ -15,6 +15,7 @@ pub mod cte;
 pub mod dml_events;
 pub mod executor;
 pub mod extensions;
+pub mod fusion;
 pub mod metadata;
 pub mod optimizer;
 pub mod parser;
@@ -23,6 +24,7 @@ pub mod planning;
 pub mod query_core;
 pub mod query_manager;
 pub mod session_events;
+pub mod vector_ddl;
 
 // Re-export DataSet for convenience
 pub use linkrs_core::DataSet;
@@ -61,8 +63,11 @@ pub use session_events::{SessionEvent, SessionEventCallback};
 pub use optimizer::OptimizerEngine;
 
 // Application-layer hybrid retrieval helpers. Both search paths emit
-// identifier plus score rows independently; callers normalize vector point
-// IDs before fusion because vector and fulltext ID spaces differ.
+// identifier plus score rows independently; the operator-level entry point
+// (`fusion::fuse_fulltext_and_vector`) normalizes vector point IDs before
+// fusion because vector and fulltext ID spaces differ — prefer it over
+// wiring the raw core helpers by hand.
+pub use fusion::{fuse_fulltext_and_vector, FusionStrategy};
 pub use linkrs_core::fusion::{
     normalize_vector_hits, normalize_vector_point_id, rrf_fuse, weighted_fuse, FusedHit, ScoredHit,
 };

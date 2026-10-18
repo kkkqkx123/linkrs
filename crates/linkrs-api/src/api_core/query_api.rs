@@ -453,6 +453,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use linkrs_config::{RuntimeConfig, StorageCostProfile};
     use linkrs_storage::MockStorage;
 
     fn create_mock_storage() -> Arc<RwLock<MockStorage>> {

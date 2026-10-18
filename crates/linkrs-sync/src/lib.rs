@@ -19,6 +19,8 @@ pub mod fulltext_rebuild;
 #[cfg(feature = "fulltext")]
 pub mod fulltext_sync;
 pub mod manager;
+#[cfg(feature = "vector")]
+pub mod metrics_handle;
 mod outbox;
 pub mod outbox_recovery;
 #[cfg(any(feature = "fulltext", feature = "vector"))]

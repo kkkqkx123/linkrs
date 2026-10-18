@@ -80,7 +80,7 @@ async fn staged_vector_intent_is_delivered_to_local_backend() {
     assert_eq!(delivered, 1, "the staged vector intent must be delivered");
 
     assert_eq!(
-        engine.count("space_1").expect("collection count"),
+        engine.count("space_vec_1").expect("collection count"),
         1,
         "the vector point must land in the local engine instead of being retried into the dead-letter queue"
     );
@@ -127,7 +127,7 @@ async fn staged_vector_schema_intents_are_consumed_without_dead_letters() {
         .expect("outbox delivery should run");
 
     assert!(
-        !engine.collection_exists("space_1"),
+        !engine.collection_exists("space_vec_1"),
         "a delete without registered indexes must not create collections"
     );
     assert!(

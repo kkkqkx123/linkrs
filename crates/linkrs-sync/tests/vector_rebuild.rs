@@ -114,7 +114,7 @@ async fn purge_field_granularity_recreates_collection() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_1_user_embedding")
+            .count("space_vec_1_user_embedding")
             .await
             .expect("count"),
         1
@@ -133,7 +133,7 @@ async fn purge_field_granularity_recreates_collection() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_1_user_embedding")
+            .count("space_vec_1_user_embedding")
             .await
             .expect("count"),
         0,
@@ -155,7 +155,7 @@ async fn purge_space_granularity_keeps_siblings() {
         .index_info(1, "user", "embedding")
         .expect("index info should exist")
         .config;
-    coordinator.register_logical_index(1, "user", "bio", "space_1".to_string(), config, None);
+    coordinator.register_logical_index(1, "user", "bio", "space_vec_1".to_string(), config, None);
     for field in ["embedding", "bio"] {
         coordinator
             .on_vector_change_batch(vec![VectorChangeContext::new(
@@ -173,7 +173,11 @@ async fn purge_space_granularity_keeps_siblings() {
             .expect("point should upsert");
     }
     assert_eq!(
-        coordinator.backend().count("space_1").await.expect("count"),
+        coordinator
+            .backend()
+            .count("space_vec_1")
+            .await
+            .expect("count"),
         2
     );
 
@@ -184,7 +188,11 @@ async fn purge_space_granularity_keeps_siblings() {
         .expect("purge should succeed");
 
     assert_eq!(
-        coordinator.backend().count("space_1").await.expect("count"),
+        coordinator
+            .backend()
+            .count("space_vec_1")
+            .await
+            .expect("count"),
         1,
         "purge must only remove the rebuilt group, siblings survive"
     );
@@ -282,7 +290,11 @@ async fn rebuild_converges_backfill_and_pending_delivery() {
         "only the backfilled point is applied by the driver"
     );
     assert_eq!(
-        coordinator.backend().count("space_1").await.expect("count"),
+        coordinator
+            .backend()
+            .count("space_vec_1")
+            .await
+            .expect("count"),
         1,
         "purge plus backfill must converge to the scanned storage state"
     );
@@ -295,7 +307,11 @@ async fn rebuild_converges_backfill_and_pending_delivery() {
     // The pending v2 event drains through normal delivery afterwards.
     assert_eq!(manager.retry_outbox_sync().expect("delivery"), 1);
     assert_eq!(
-        coordinator.backend().count("space_1").await.expect("count"),
+        coordinator
+            .backend()
+            .count("space_vec_1")
+            .await
+            .expect("count"),
         2,
         "pending events at or below the snapshot must survive the rebuild"
     );
@@ -324,7 +340,11 @@ async fn rebuild_converges_backfill_and_pending_delivery() {
         .await
         .expect("second rebuild should succeed");
     assert_eq!(
-        coordinator.backend().count("space_1").await.expect("count"),
+        coordinator
+            .backend()
+            .count("space_vec_1")
+            .await
+            .expect("count"),
         2
     );
     assert_eq!(
@@ -345,12 +365,12 @@ async fn temp_naming_isolates_granularities() {
     let field_temp = coordinator
         .index_manager()
         .temp_name_for(1, "user", "embedding", 7);
-    assert_eq!(field_temp, "space_1_user_embedding.rebuild-7");
+    assert_eq!(field_temp, "space_vec_1_user_embedding.rebuild-7");
     coordinator.set_granularity(CollectionGranularity::Space);
     let space_temp = coordinator
         .index_manager()
         .temp_name_for(1, "user", "embedding", 7);
-    assert_eq!(space_temp, "space_1.rebuild-7__user_embedding");
+    assert_eq!(space_temp, "space_vec_1.rebuild-7__user_embedding");
     for temp in [&field_temp, &space_temp] {
         assert!(VectorBackend::is_temp_collection(temp));
         let (live, generation) =
@@ -358,8 +378,8 @@ async fn temp_naming_isolates_granularities() {
         assert_eq!(generation, 7);
         assert!(!VectorBackend::is_temp_collection(&live));
     }
-    assert!(!VectorBackend::is_temp_collection("space_1"));
-    assert!(VectorBackend::parse_temp_collection("space_1").is_none());
+    assert!(!VectorBackend::is_temp_collection("space_vec_1"));
+    assert!(VectorBackend::parse_temp_collection("space_vec_1").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -407,7 +427,7 @@ async fn temp_collections_are_invisible_to_search() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_1_user_embedding")
+            .count("space_vec_1_user_embedding")
             .await
             .expect("live count"),
         0,
@@ -489,7 +509,7 @@ async fn rebuild_failure_before_publish_leaves_live_untouched() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_1_user_embedding")
+            .count("space_vec_1_user_embedding")
             .await
             .expect("count"),
         1,
@@ -497,7 +517,7 @@ async fn rebuild_failure_before_publish_leaves_live_untouched() {
     );
     let kept = coordinator
         .backend()
-        .get_vector("space_1_user_embedding", "live-point")
+        .get_vector("space_vec_1_user_embedding", "live-point")
         .await
         .expect("get")
         .expect("live point must survive");
@@ -562,7 +582,7 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
     assert_eq!(
         coordinator
             .backend()
-            .count("space_1_user_embedding")
+            .count("space_vec_1_user_embedding")
             .await
             .expect("count"),
         1,
@@ -570,7 +590,13 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
     );
     let (live_points, _) = coordinator
         .backend()
-        .scroll("space_1_user_embedding", 100, None, Some(false), Some(true))
+        .scroll(
+            "space_vec_1_user_embedding",
+            100,
+            None,
+            Some(false),
+            Some(true),
+        )
         .await
         .expect("scroll");
     assert_eq!(live_points.len(), 1);
@@ -581,7 +607,7 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
         .await
         .expect("collection scan")
         .into_iter()
-        .filter(|name| name.starts_with("space_1_user_embedding.old-"))
+        .filter(|name| name.starts_with("space_vec_1_user_embedding.old-"))
         .collect();
     assert_eq!(backups.len(), 1, "field publish must retain one backup");
     assert_eq!(
@@ -607,7 +633,13 @@ async fn field_publish_swaps_collection_and_restore_reverses_it() {
     assert_eq!(restored, backups[0]);
     let (live_points, _) = coordinator
         .backend()
-        .scroll("space_1_user_embedding", 100, None, Some(false), Some(true))
+        .scroll(
+            "space_vec_1_user_embedding",
+            100,
+            None,
+            Some(false),
+            Some(true),
+        )
         .await
         .expect("scroll");
     assert_eq!(live_points.len(), 1);
@@ -630,7 +662,7 @@ async fn space_publish_preserves_sibling_slices() {
         .index_info(1, "user", "embedding")
         .expect("index info should exist")
         .config;
-    coordinator.register_logical_index(1, "user", "bio", "space_1".to_string(), config, None);
+    coordinator.register_logical_index(1, "user", "bio", "space_vec_1".to_string(), config, None);
     let sibling_vector = vec![0.0, 1.0, 0.0, 0.0];
     for (field, id, vector) in [
         ("embedding", "emb-old", vec![1.0, 0.0, 0.0, 0.0]),
@@ -669,7 +701,11 @@ async fn space_publish_preserves_sibling_slices() {
         .await
         .expect("rebuild should succeed");
     assert_eq!(
-        coordinator.backend().count("space_1").await.expect("count"),
+        coordinator
+            .backend()
+            .count("space_vec_1")
+            .await
+            .expect("count"),
         2,
         "slice publish must converge to one rebuilt point plus the sibling"
     );

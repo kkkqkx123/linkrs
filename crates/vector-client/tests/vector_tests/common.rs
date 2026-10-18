@@ -108,6 +108,7 @@ impl RemoteVectorEngine for MockVectorEngine {
             config: collection.config.clone(),
             status: CollectionStatus::Green,
             index: None,
+            memory_bytes: 0,
         })
     }
 

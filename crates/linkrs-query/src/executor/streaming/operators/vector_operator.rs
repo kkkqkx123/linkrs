@@ -307,104 +307,22 @@ impl VectorOperator {
                                         }
                                     }
                                 }
-                                let distance = match distance {
-                                    crate::parser::ast::vector::VectorDistance::Cosine => {
-                                        simvec::DistanceMetric::Cosine
-                                    }
-                                    crate::parser::ast::vector::VectorDistance::Euclidean => {
-                                        simvec::DistanceMetric::Euclid
-                                    }
-                                    crate::parser::ast::vector::VectorDistance::Dot => {
-                                        simvec::DistanceMetric::Dot
-                                    }
-                                    crate::parser::ast::vector::VectorDistance::Manhattan => {
-                                        simvec::DistanceMetric::Manhattan
-                                    }
-                                };
-                                // Build CollectionConfig with optional HNSW and quantization
-                                // (mirrors Qdrant scalar/product/binary builders).
-                                let mut config =
-                                    simvec::CollectionConfig::new(*vector_size, distance);
-                                if hnsw_m.is_some() || hnsw_ef_construct.is_some() {
-                                    let mut hnsw = simvec::HnswConfig::default();
-                                    if let Some(m) = hnsw_m {
-                                        hnsw.m = *m;
-                                    }
-                                    if let Some(ef) = hnsw_ef_construct {
-                                        hnsw.ef_construct = *ef;
-                                    }
-                                    hnsw.validate().map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "invalid HNSW parameters: {}",
-                                            e
-                                        ))
-                                    })?;
-                                    config = config.with_hnsw(hnsw);
-                                }
-                                if let Some(qkind) = quantization {
-                                    if compression.is_some()
-                                        && !matches!(
-                                            qkind,
-                                            crate::parser::ast::vector::QuantizationKind::Product
-                                        )
-                                    {
-                                        return Err(QueryError::execution(format!(
-                                            "compression requires quantization=PRODUCT, got quantization={:?}; omit compression or use PRODUCT",
-                                            qkind
-                                        )));
-                                    }
-                                    let quant_cfg = match qkind {
-                                        crate::parser::ast::vector::QuantizationKind::Scalar => {
-                                            let mut cfg = simvec::QuantizationConfig::scalar(
-                                                quantile.unwrap_or(0.99),
-                                            );
-                                            if let Some(ar) = always_ram {
-                                                cfg = cfg.with_always_ram(*ar);
-                                            }
-                                            cfg
-                                        }
-                                        crate::parser::ast::vector::QuantizationKind::Binary => {
-                                            let mut cfg = simvec::QuantizationConfig::binary();
-                                            if let Some(ar) = always_ram {
-                                                cfg = cfg.with_always_ram(*ar);
-                                            }
-                                            cfg
-                                        }
-                                        crate::parser::ast::vector::QuantizationKind::Product => {
-                                            let ratio = match compression {
-                                                Some(crate::parser::ast::vector::CompressionRatioKind::X4) => {
-                                                    simvec::CompressionRatio::X4
-                                                }
-                                                Some(crate::parser::ast::vector::CompressionRatioKind::X8) => {
-                                                    simvec::CompressionRatio::X8
-                                                }
-                                                Some(crate::parser::ast::vector::CompressionRatioKind::X16) => {
-                                                    simvec::CompressionRatio::X16
-                                                }
-                                                Some(crate::parser::ast::vector::CompressionRatioKind::X32) => {
-                                                    simvec::CompressionRatio::X32
-                                                }
-                                                Some(crate::parser::ast::vector::CompressionRatioKind::X64) => {
-                                                    simvec::CompressionRatio::X64
-                                                }
-                                                None => simvec::CompressionRatio::X4,
-                                            };
-                                            let mut cfg =
-                                                simvec::QuantizationConfig::product(ratio);
-                                            if let Some(ar) = always_ram {
-                                                cfg = cfg.with_always_ram(*ar);
-                                            }
-                                            cfg
-                                        }
-                                    };
-                                    quant_cfg.validate(*vector_size).map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "invalid quantization parameters: {}",
-                                            e
-                                        ))
-                                    })?;
-                                    config = config.with_quantization(quant_cfg);
-                                }
+                                let distance = crate::vector_ddl::distance_metric(*distance);
+                                // Shared DDL semantics: HNSW + quantization
+                                // mapping and validation live in vector_ddl so
+                                // the HTTP/gRPC index endpoints cannot drift
+                                // from the statement pipeline.
+                                let config = crate::vector_ddl::build_collection_config(
+                                    *vector_size,
+                                    distance,
+                                    *hnsw_m,
+                                    *hnsw_ef_construct,
+                                    *quantization,
+                                    *quantile,
+                                    *compression,
+                                    *always_ram,
+                                )
+                                .map_err(QueryError::execution)?;
                                 let res = if config.quantization_config.is_some()
                                     || config.hnsw_config.is_some()
                                 {

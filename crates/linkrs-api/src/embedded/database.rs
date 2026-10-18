@@ -156,7 +156,7 @@ fn build_secondary_managers(
     if fulltext_config.enabled {
         let manager: Arc<FulltextIndexManager> = Arc::new(
             FulltextIndexManager::new(fulltext_config.clone())
-                .map_err(|e| CoreError::Internal(e.to_string()))?,
+                .map_err(|e| CoreError::FulltextError(e.to_string()))?,
         );
         let sync_config = SyncConfig {
             queue_size: fulltext_config.sync.queue_size,

@@ -152,6 +152,6 @@ fn test_vector_index_location_tc229() {
     use linkrs::sync::VectorIndexLocation;
 
     let loc = VectorIndexLocation::new(1, "tag", "field");
-    assert_eq!(loc.to_collection_name(), format!("space_{}", 1));
+    assert_eq!(loc.to_collection_name(), format!("space_vec_{}", 1));
     assert_eq!(loc.group_id(), format!("{}_{}", "tag", "field"));
 }

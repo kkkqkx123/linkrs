@@ -84,6 +84,9 @@ pub enum CoreError {
 
     #[error("Vector error: {0}")]
     VectorError(String),
+
+    #[error("Fulltext error: {0}")]
+    FulltextError(String),
 }
 
 impl CoreError {
@@ -209,6 +212,15 @@ impl From<linkrs_core::error::DBError> for CoreError {
 impl From<linkrs_transaction::TransactionError> for CoreError {
     fn from(err: linkrs_transaction::TransactionError) -> Self {
         CoreError::TransactionFailed(err.to_string())
+    }
+}
+
+#[cfg(feature = "fulltext")]
+impl From<linkrs_fulltext::SearchError> for CoreError {
+    fn from(err: linkrs_fulltext::SearchError) -> Self {
+        // Index-subsystem errors keep their identity at the API boundary
+        // instead of degrading to `Internal`.
+        CoreError::FulltextError(err.to_string())
     }
 }
 

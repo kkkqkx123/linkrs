@@ -91,6 +91,7 @@ pub fn extended_error_code_from_core_error(error: &CoreError) -> linkrs_extended
         CoreError::Internal(_) => linkrs_extended_error_code_t::LINKRS_EXTENDED_NONE,
         CoreError::SyncError(_) => linkrs_extended_error_code_t::LINKRS_EXTENDED_NONE,
         CoreError::VectorError(_) => linkrs_extended_error_code_t::LINKRS_EXTENDED_NONE,
+        CoreError::FulltextError(_) => linkrs_extended_error_code_t::LINKRS_EXTENDED_NONE,
     }
 }
 
@@ -350,6 +351,10 @@ pub fn error_code_from_core_error(error: &CoreError) -> (i32, linkrs_extended_er
             linkrs_extended_error_code_t::LINKRS_EXTENDED_NONE,
         ),
         CoreError::VectorError(_) => (
+            linkrs_error_code_t::LINKRS_IOERR as i32,
+            linkrs_extended_error_code_t::LINKRS_EXTENDED_NONE,
+        ),
+        CoreError::FulltextError(_) => (
             linkrs_error_code_t::LINKRS_IOERR as i32,
             linkrs_extended_error_code_t::LINKRS_EXTENDED_NONE,
         ),

@@ -118,7 +118,7 @@ async fn index_location_naming_and_logical_isolation() {
 
     // All indexes of a space share one physical collection; the group id is
     // the logical isolation key inside it.
-    assert_eq!(location.to_collection_name(), "space_5");
+    assert_eq!(location.to_collection_name(), "space_vec_5");
     assert_eq!(location.group_id(), "Products_image_embedding");
 }
 

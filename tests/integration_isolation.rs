@@ -96,9 +96,9 @@ fn test_vector_collection_name_format() {
     use linkrs::sync::vector_sync::VectorIndexLocation;
 
     let test_cases = vec![
-        (1, "Article", "content", "space_1"),
-        (42, "User", "email", "space_42"),
-        (999, "Product", "description", "space_999"),
+        (1, "Article", "content", "space_vec_1"),
+        (42, "User", "email", "space_vec_42"),
+        (999, "Product", "description", "space_vec_999"),
     ];
 
     for (space_id, tag, field, expected) in test_cases {
@@ -146,7 +146,7 @@ fn test_naming_consistency_vector_fulltext() {
     );
     assert!(
         vec_collection.starts_with("space_"),
-        "Vector should use 'space_' prefix"
+        "Vector should use 'space_vec_' prefix"
     );
 }
 

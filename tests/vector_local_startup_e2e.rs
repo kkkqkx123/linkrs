@@ -50,7 +50,7 @@ async fn local_vector_engine_startup_e2e() {
         .create_index(1, "item", "vec", 3, DistanceMetric::Cosine)
         .await
         .expect("create_index should succeed");
-    assert_eq!(collection, "space_1");
+    assert_eq!(collection, "space_vec_1");
 
     {
         let backend = vector_api.backend();

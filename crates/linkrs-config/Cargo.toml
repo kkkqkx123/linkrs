@@ -17,7 +17,6 @@ thiserror.workspace = true
 log.workspace = true
 dirs.workspace = true
 rand.workspace = true
-vector-client = { version = "0.1.0", path = "../vector-client", optional = true }
 llm-embedding = { version = "0.1.0", package = "llm-suite-embedding", path = "../llm-suite/crates/llm-suite-embedding", optional = true }
 llm-rerank = { version = "0.1.0", package = "llm-suite-rerank", path = "../llm-suite/crates/llm-suite-rerank", optional = true }
 flexi_logger.workspace = true
@@ -29,7 +28,7 @@ embedded = []
 vector = []
 embedding = ["dep:llm-embedding"]
 rerank = ["dep:llm-rerank"]
-vector-qdrant = ["vector", "dep:vector-client"]
+vector-qdrant = ["vector"]
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -113,6 +113,7 @@ impl From<linkrs_api::api_core::CoreError> for HttpError {
             CoreError::DetailedQueryError { message, .. } => HttpError::InternalError(message),
             CoreError::SyncError(msg) => HttpError::InternalError(msg),
             CoreError::VectorError(msg) => HttpError::InternalError(msg),
+            CoreError::FulltextError(msg) => HttpError::InternalError(msg),
         }
     }
 }

@@ -177,101 +177,53 @@ pub async fn create_index<
                 )));
             }
         }
-        let collection_name = if request.quantization.is_some()
-            || request.hnsw_m.is_some()
-            || request.hnsw_ef_construct.is_some()
-            || request.quantile.is_some()
-            || request.compression.is_some()
-            || request.always_ram.is_some()
-        {
-            let mut config = simvec::CollectionConfig::new(request.vector_size, request.distance);
-            if request.hnsw_m.is_some() || request.hnsw_ef_construct.is_some() {
-                let mut hnsw = simvec::HnswConfig::default();
-                if let Some(m) = request.hnsw_m {
-                    hnsw.m = m;
+        // Shared DDL semantics: metric/quantization mapping and validation
+        // live in linkrs_query::vector_ddl so this endpoint cannot drift from
+        // the CREATE VECTOR INDEX statement pipeline.
+        let quantization = match request.quantization.as_deref() {
+            Some(raw) => match linkrs_query::vector_ddl::quantization_kind_from_str(raw) {
+                Some(parsed) => parsed,
+                None => {
+                    return Err(HttpError::BadRequest(format!(
+                        "unknown quantization '{}', expected scalar/binary/product/none",
+                        raw
+                    )))
                 }
-                if let Some(ef) = request.hnsw_ef_construct {
-                    hnsw.ef_construct = ef;
-                }
-                config = config.with_hnsw(hnsw);
-            }
-            if let Some(ref q) = request.quantization {
-                let q_lower = q.to_lowercase();
-                let quant_cfg = match q_lower.as_str() {
-                    "none" | "disabled" | "off" => None,
-                    "scalar" => {
-                        let mut cfg =
-                            simvec::QuantizationConfig::scalar(request.quantile.unwrap_or(0.99));
-                        if let Some(ar) = request.always_ram {
-                            cfg = cfg.with_always_ram(ar);
-                        }
-                        Some(cfg)
-                    }
-                    "binary" => {
-                        let mut cfg = simvec::QuantizationConfig::binary();
-                        if let Some(ar) = request.always_ram {
-                            cfg = cfg.with_always_ram(ar);
-                        }
-                        Some(cfg)
-                    }
-                    "product" | "pq" => {
-                        let ratio = match request
-                            .compression
-                            .as_deref()
-                            .unwrap_or("x4")
-                            .to_lowercase()
-                            .as_str()
-                        {
-                            "x4" | "4" => simvec::CompressionRatio::X4,
-                            "x8" | "8" => simvec::CompressionRatio::X8,
-                            "x16" | "16" => simvec::CompressionRatio::X16,
-                            "x32" | "32" => simvec::CompressionRatio::X32,
-                            "x64" | "64" => simvec::CompressionRatio::X64,
-                            other => {
-                                return Err(HttpError::InternalError(format!(
-                                    "unknown compression '{}', expected x4/x8/x16/x32/x64",
-                                    other
-                                )))
-                            }
-                        };
-                        let mut cfg = simvec::QuantizationConfig::product(ratio);
-                        if let Some(ar) = request.always_ram {
-                            cfg = cfg.with_always_ram(ar);
-                        }
-                        Some(cfg)
-                    }
-                    other => {
-                        return Err(HttpError::InternalError(format!(
-                            "unknown quantization '{}', expected scalar/binary/product/none",
-                            other
-                        )))
-                    }
-                };
-                if let Some(qc) = quant_cfg {
-                    config = config.with_quantization(qc);
-                }
-            }
-            vector_api
-                .create_index_with_config(
-                    request.space_id,
-                    &request.tag_name,
-                    &request.field_name,
-                    config,
-                )
-                .await
-                .map_err(|e| HttpError::InternalError(e.to_string()))?
-        } else {
-            vector_api
-                .create_index(
-                    request.space_id,
-                    &request.tag_name,
-                    &request.field_name,
-                    request.vector_size,
-                    request.distance,
-                )
-                .await
-                .map_err(|e| HttpError::InternalError(e.to_string()))?
+            },
+            None => None,
         };
+        let compression = match request.compression.as_deref() {
+            Some(raw) => match linkrs_query::vector_ddl::compression_from_str(raw) {
+                Some(parsed) => Some(parsed),
+                None => {
+                    return Err(HttpError::BadRequest(format!(
+                        "unknown compression '{}', expected x4/x8/x16/x32/x64",
+                        raw
+                    )))
+                }
+            },
+            None => None,
+        };
+        let config = linkrs_query::vector_ddl::build_collection_config(
+            request.vector_size,
+            request.distance,
+            request.hnsw_m,
+            request.hnsw_ef_construct,
+            quantization,
+            request.quantile,
+            compression,
+            request.always_ram,
+        )
+        .map_err(HttpError::BadRequest)?;
+        let collection_name = vector_api
+            .create_index_with_config(
+                request.space_id,
+                &request.tag_name,
+                &request.field_name,
+                config,
+            )
+            .await
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
         Ok(JsonResponse(serde_json::json!({
             "success": true,
@@ -372,7 +324,10 @@ pub async fn get_index_info<
     if let Some(vector_api) = vector_api {
         match vector_api.get_index_info(space_id, &tag_name, &field_name) {
             Ok(Some(info)) => Ok(JsonResponse(VectorIndexDetailsResponse {
-                collection_name: format!("space_{}_{}_{}", space_id, tag_name, field_name),
+                // Report the engine's actual collection name instead of
+                // re-deriving a display form that can drift from the real
+                // naming scheme.
+                collection_name: info.name.clone(),
                 status: "green".to_string(),
                 vectors_count: info.vector_count,
                 points_count: 0,

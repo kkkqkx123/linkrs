@@ -97,7 +97,7 @@ async fn setup_env() -> TestEnv {
 
     {
         // Direct backend insert for test setup; transactional path requires SyncManager.
-        let collection = "space_1".to_string();
+        let collection = "space_vec_1".to_string();
         let backend = vector_api.backend();
         for p in [
             point(1, vec![1.0, 0.0, 0.0], Some(names)),
@@ -201,7 +201,7 @@ async fn case3_vector_delete_visibility() {
     {
         env.vector_api
             .backend()
-            .delete("space_1", "1")
+            .delete("space_vec_1", "1")
             .await
             .expect("delete_vector should succeed");
     }

@@ -55,8 +55,8 @@ async fn test_local_index_create_and_search() {
         .create_vector_index(1, "user", "embedding", 4, DistanceMetric::Cosine)
         .await
         .unwrap();
-    assert_eq!(collection, "space_1");
-    assert!(engine.collection_exists("space_1"));
+    assert_eq!(collection, "space_vec_1");
+    assert!(engine.collection_exists("space_vec_1"));
     assert!(coordinator.index_exists(1, "user", "embedding"));
     assert_eq!(
         coordinator.engine_state(),
@@ -102,8 +102,11 @@ async fn test_batch_delivery_applies_upserts_and_deletes() {
         ])
         .await
         .unwrap();
-    assert_eq!(engine.count("space_1").unwrap(), 2);
-    let got = engine.get("space_1", "v1_user_embedding").unwrap().unwrap();
+    assert_eq!(engine.count("space_vec_1").unwrap(), 2);
+    let got = engine
+        .get("space_vec_1", "v1_user_embedding")
+        .unwrap()
+        .unwrap();
     assert_eq!(got.vector, vec![1.0, 0.0, 0.0, 0.0]);
 
     // Search scoped by group_id returns the nearest point first.
@@ -132,9 +135,9 @@ async fn test_batch_delivery_applies_upserts_and_deletes() {
         )])
         .await
         .unwrap();
-    assert_eq!(engine.count("space_1").unwrap(), 1);
+    assert_eq!(engine.count("space_vec_1").unwrap(), 1);
     assert!(engine
-        .get("space_1", "v1_user_embedding")
+        .get("space_vec_1", "v1_user_embedding")
         .unwrap()
         .is_none());
 }
@@ -146,21 +149,21 @@ async fn test_engine_replay_is_idempotent() {
 
     engine
         .create_collection(
-            "space_1",
+            "space_vec_1",
             &simvec::CollectionConfig::new(4, DistanceMetric::Cosine),
         )
         .unwrap();
 
     let txn_ops = vec![TxnOp::Upsert {
-        collection: "space_1".to_string(),
+        collection: "space_vec_1".to_string(),
         point: VectorPoint::new("v1_user_embedding", vec![0.5, 0.5, 0.0, 0.0]),
     }];
     engine.apply_txn(txn_ops.clone()).unwrap();
-    assert_eq!(engine.count("space_1").unwrap(), 1);
+    assert_eq!(engine.count("space_vec_1").unwrap(), 1);
 
     // Re-applying the same upsert is a no-op for the same point.
     engine.apply_txn(txn_ops).unwrap();
-    assert_eq!(engine.count("space_1").unwrap(), 1);
+    assert_eq!(engine.count("space_vec_1").unwrap(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -186,8 +189,8 @@ async fn test_batch_delivery_injects_group_id_payload() {
         .await
         .unwrap();
 
-    assert_eq!(engine.count("space_2").unwrap(), 1);
-    let got = engine.get("space_2", "10_item_vec").unwrap().unwrap();
+    assert_eq!(engine.count("space_vec_2").unwrap(), 1);
+    let got = engine.get("space_vec_2", "10_item_vec").unwrap().unwrap();
     assert_eq!(got.vector, vec![1.0, 0.0, 0.0]);
     assert_eq!(
         got.payload
@@ -236,7 +239,7 @@ async fn test_crash_recovery_replays_delivered_changes() {
         })
         .collect();
         coordinator.on_vector_change_batch(inserts).await.unwrap();
-        assert_eq!(engine.count("space_6").unwrap(), 3);
+        assert_eq!(engine.count("space_vec_6").unwrap(), 3);
         (engine, coordinator)
     };
 
@@ -246,14 +249,17 @@ async fn test_crash_recovery_replays_delivered_changes() {
     drop(engine);
 
     let recovered = make_engine(root.as_path());
-    assert_eq!(recovered.count("space_6").unwrap(), 3);
+    assert_eq!(recovered.count("space_vec_6").unwrap(), 3);
     let got = recovered
-        .get("space_6", "v2_item_vec")
+        .get("space_vec_6", "v2_item_vec")
         .unwrap()
         .expect("recovered point");
     assert_eq!(got.vector, vec![0.0, 1.0, 0.0, 0.0]);
     let results = recovered
-        .search("space_6", &SearchQuery::new(vec![1.0, 0.0, 0.0, 0.0], 1))
+        .search(
+            "space_vec_6",
+            &SearchQuery::new(vec![1.0, 0.0, 0.0, 0.0], 1),
+        )
         .unwrap();
     assert_eq!(results[0].id.to_string(), "v1_item_vec");
 }
@@ -293,7 +299,7 @@ async fn test_delete_then_compaction_keeps_search_consistent() {
         })
         .collect();
     coordinator.on_vector_change_batch(inserts).await.unwrap();
-    assert_eq!(engine.count("space_8").unwrap(), 5);
+    assert_eq!(engine.count("space_vec_8").unwrap(), 5);
 
     // Delete two of five (40% > 20% threshold): auto-compaction physically
     // removes the tombstones after the delivery.
@@ -312,13 +318,13 @@ async fn test_delete_then_compaction_keeps_search_consistent() {
         .collect();
     coordinator.on_vector_change_batch(deletes).await.unwrap();
 
-    assert_eq!(engine.count("space_8").unwrap(), 3);
+    assert_eq!(engine.count("space_vec_8").unwrap(), 3);
     assert!(engine
-        .get("space_8", "v1_user_embedding")
+        .get("space_vec_8", "v1_user_embedding")
         .unwrap()
         .is_none());
     assert!(engine
-        .get("space_8", "v3_user_embedding")
+        .get("space_vec_8", "v3_user_embedding")
         .unwrap()
         .is_none());
 
@@ -343,9 +349,9 @@ async fn test_delete_then_compaction_keeps_search_consistent() {
     drop(coordinator);
     drop(engine);
     let recovered = make_engine(root.as_path());
-    assert_eq!(recovered.count("space_8").unwrap(), 3);
+    assert_eq!(recovered.count("space_vec_8").unwrap(), 3);
     assert!(recovered
-        .get("space_8", "v2_user_embedding")
+        .get("space_vec_8", "v2_user_embedding")
         .unwrap()
         .is_some());
 }
@@ -365,7 +371,7 @@ async fn test_drop_reclaims_group_points_and_physical_collection() {
         .create_vector_index(1, "user", "avatar", 4, DistanceMetric::Cosine)
         .await
         .unwrap();
-    assert!(engine.collection_exists("space_1"));
+    assert!(engine.collection_exists("space_vec_1"));
 
     coordinator
         .on_vector_change_batch(vec![
@@ -404,7 +410,7 @@ async fn test_drop_reclaims_group_points_and_physical_collection() {
         ])
         .await
         .unwrap();
-    assert_eq!(engine.count("space_1").unwrap(), 4);
+    assert_eq!(engine.count("space_vec_1").unwrap(), 4);
 
     // Dropping the first index purges its group but keeps the collection
     // alive for the sibling index.
@@ -412,7 +418,7 @@ async fn test_drop_reclaims_group_points_and_physical_collection() {
         .drop_vector_index(1, "user", "embedding")
         .await
         .unwrap();
-    assert!(engine.collection_exists("space_1"));
+    assert!(engine.collection_exists("space_vec_1"));
     assert!(!coordinator.index_exists(1, "user", "embedding"));
     assert!(coordinator.index_exists(1, "user", "avatar"));
     let embedding_hits = coordinator
@@ -431,13 +437,13 @@ async fn test_drop_reclaims_group_points_and_physical_collection() {
         .drop_vector_index(1, "user", "avatar")
         .await
         .unwrap();
-    assert!(!engine.collection_exists("space_1"));
-    assert!(!dir.path().join("vec").join("space_1").exists());
+    assert!(!engine.collection_exists("space_vec_1"));
+    assert!(!dir.path().join("vec").join("space_vec_1").exists());
 
     // A same-named index can be recreated cleanly afterwards.
     coordinator
         .create_vector_index(1, "user", "avatar", 4, DistanceMetric::Cosine)
         .await
         .unwrap();
-    assert!(engine.collection_exists("space_1"));
+    assert!(engine.collection_exists("space_vec_1"));
 }

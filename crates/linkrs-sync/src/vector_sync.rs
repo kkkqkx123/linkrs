@@ -137,7 +137,10 @@ pub struct VectorIndexLocation {
     pub field_name: String,
 }
 
-const VECTOR_INDEX_PREFIX: &str = "space";
+/// Collection name prefix mirrors the fulltext scheme (`space_ft`): one
+/// distinct prefix per index subsystem keeps drop-space cleanup and startup
+/// recovery from ever confusing the two naming domains.
+const VECTOR_INDEX_PREFIX: &str = "space_vec";
 
 /// Collection granularity shared with configuration so naming stays consistent.
 pub use linkrs_config::VectorCollectionGranularity as CollectionGranularity;
@@ -472,6 +475,9 @@ impl VectorSyncCoordinator {
     #[cfg(any(feature = "embedding", feature = "rerank"))]
     pub fn set_stats_manager(&self, stats_manager: Arc<linkrs_metrics::StatsManager>) {
         *self.stats_manager.write() = Some(stats_manager);
+        // Engine-level ops (search, create/drop, batch writes) report through
+        // the backend's metrics decorator.
+        self.backend().set_stats_manager(stats_manager);
     }
 
     /// Record one embedding call against the bound handle, if any.

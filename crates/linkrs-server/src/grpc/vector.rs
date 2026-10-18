@@ -743,22 +743,15 @@ where
 pub(crate) fn grpc_collection_config(
     options: Option<super::proto::VectorIndexOptions>,
 ) -> Result<simvec::CollectionConfig, Status> {
-    use simvec::{CollectionConfig, CompressionRatio, HnswConfig, IndexType};
+    use simvec::IndexType;
     let opts = options.ok_or_else(|| Status::invalid_argument("index options are required"))?;
     if opts.dimension <= 0 {
         return Err(Status::invalid_argument("dimension must be greater than 0"));
     }
     let distance = proto_metric_to_distance(opts.metric)?;
-    let mut config = CollectionConfig::new(opts.dimension as usize, distance);
     let kind = opts.index_type.trim().to_uppercase();
     match kind.as_str() {
-        "" | "HNSW" => {}
-        "FLAT" => {
-            config = config.with_index_type(IndexType::FLAT);
-        }
-        "IVF" => {
-            config = config.with_index_type(IndexType::IVF);
-        }
+        "" | "HNSW" | "FLAT" | "IVF" => {}
         other => {
             return Err(Status::invalid_argument(format!(
                 "unknown index_type '{}', expected HNSW, FLAT or IVF",
@@ -769,70 +762,61 @@ pub(crate) fn grpc_collection_config(
     let params = &opts.parameters;
     let hnsw_m = parse_optional_param::<usize>(params, "hnsw_m")?;
     let hnsw_ef = parse_optional_param::<usize>(params, "hnsw_ef_construct")?;
-    if hnsw_m.is_some() || hnsw_ef.is_some() {
-        if kind.as_str() == "FLAT" || kind.as_str() == "IVF" {
-            return Err(Status::invalid_argument(
-                "hnsw parameters require index_type HNSW",
-            ));
-        }
-        let mut hnsw = HnswConfig::default();
-        if let Some(m) = hnsw_m {
-            hnsw.m = m;
-        }
-        if let Some(ef) = hnsw_ef {
-            hnsw.ef_construct = ef;
-        }
-        config = config.with_hnsw(hnsw);
+    if (hnsw_m.is_some() || hnsw_ef.is_some())
+        && (kind.as_str() == "FLAT" || kind.as_str() == "IVF")
+    {
+        return Err(Status::invalid_argument(
+            "hnsw parameters require index_type HNSW",
+        ));
     }
-    if let Some(quantization) = params.get("quantization") {
-        match quantization.to_lowercase().as_str() {
-            "none" | "disabled" | "off" => {}
-            "scalar" => {
-                let quantile = parse_optional_param::<f32>(params, "quantile")?.unwrap_or(0.99);
-                let mut cfg = simvec::QuantizationConfig::scalar(quantile);
-                if let Some(always_ram) = parse_optional_param::<bool>(params, "always_ram")? {
-                    cfg = cfg.with_always_ram(always_ram);
-                }
-                config = config.with_quantization(cfg);
-            }
-            "binary" => {
-                let mut cfg = simvec::QuantizationConfig::binary();
-                if let Some(always_ram) = parse_optional_param::<bool>(params, "always_ram")? {
-                    cfg = cfg.with_always_ram(always_ram);
-                }
-                config = config.with_quantization(cfg);
-            }
-            "product" | "pq" => {
-                let compression_raw = params
-                    .get("compression")
-                    .map(|s| s.to_lowercase())
-                    .unwrap_or_else(|| "x4".to_string());
-                let ratio = match compression_raw.as_str() {
-                    "x4" | "4" => CompressionRatio::X4,
-                    "x8" | "8" => CompressionRatio::X8,
-                    "x16" | "16" => CompressionRatio::X16,
-                    "x32" | "32" => CompressionRatio::X32,
-                    "x64" | "64" => CompressionRatio::X64,
-                    other => {
-                        return Err(Status::invalid_argument(format!(
-                            "unknown compression '{}', expected x4/x8/x16/x32/x64",
-                            other
-                        )))
-                    }
-                };
-                let mut cfg = simvec::QuantizationConfig::product(ratio);
-                if let Some(always_ram) = parse_optional_param::<bool>(params, "always_ram")? {
-                    cfg = cfg.with_always_ram(always_ram);
-                }
-                config = config.with_quantization(cfg);
-            }
-            other => {
+    // Shared DDL semantics: HNSW + quantization mapping and validation live
+    // in linkrs_query::vector_ddl so this endpoint cannot drift from the
+    // CREATE VECTOR INDEX statement pipeline.
+    let quantization = match params.get("quantization") {
+        Some(raw) => match linkrs_query::vector_ddl::quantization_kind_from_str(raw) {
+            Some(parsed) => parsed,
+            None => {
                 return Err(Status::invalid_argument(format!(
                     "unknown quantization '{}', expected scalar, binary, product or none",
-                    other
+                    raw
                 )))
             }
+        },
+        None => None,
+    };
+    let quantile = parse_optional_param::<f32>(params, "quantile")?;
+    let compression = match params.get("compression") {
+        Some(raw) => match linkrs_query::vector_ddl::compression_from_str(raw) {
+            Some(parsed) => Some(parsed),
+            None => {
+                return Err(Status::invalid_argument(format!(
+                    "unknown compression '{}', expected x4/x8/x16/x32/x64",
+                    raw
+                )))
+            }
+        },
+        None => None,
+    };
+    let always_ram = parse_optional_param::<bool>(params, "always_ram")?;
+    let mut config = linkrs_query::vector_ddl::build_collection_config(
+        opts.dimension as usize,
+        distance,
+        hnsw_m,
+        hnsw_ef,
+        quantization,
+        quantile,
+        compression,
+        always_ram,
+    )
+    .map_err(Status::invalid_argument)?;
+    match kind.as_str() {
+        "FLAT" => {
+            config = config.with_index_type(IndexType::FLAT);
         }
+        "IVF" => {
+            config = config.with_index_type(IndexType::IVF);
+        }
+        _ => {}
     }
     Ok(config)
 }
