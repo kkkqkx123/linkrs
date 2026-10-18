@@ -484,6 +484,23 @@ pub enum ConsistencyState {
     Rebuilding,
 }
 
+/// Common descriptor for secondary search indexes (fulltext/vector).
+///
+/// Engine-specific details stay in each backend's own metadata type; this
+/// struct captures the fields every backend can report so management and
+/// observability code can treat fulltext and vector indexes uniformly.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchIndexMetadata {
+    pub space_id: u64,
+    pub tag_name: String,
+    pub field_name: String,
+    pub index_name: Option<String>,
+    pub status: String,
+    pub doc_count: usize,
+    pub engine: String,
+    pub last_updated: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Generic index statistics
 #[derive(Debug, Clone)]
 pub struct IndexStats {

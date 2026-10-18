@@ -16,6 +16,8 @@ pub use error::GraphServiceError;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
+#[cfg(feature = "fulltext")]
+use linkrs_api::api_core::FulltextApi;
 #[cfg(feature = "vector")]
 use linkrs_api::api_core::VectorApi;
 use linkrs_api::api_core::{QueryApi, SyncApi};
@@ -39,6 +41,8 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
     permission_manager: Arc<PermissionManager>,
     pub stats_manager: Arc<StatsManager>,
     storage: Arc<S>,
+    #[cfg(feature = "fulltext")]
+    fulltext_api: Option<Arc<FulltextApi>>,
     #[cfg(feature = "vector")]
     vector_api: Option<Arc<VectorApi>>,
     sync_api: Option<Arc<SyncApi>>,

@@ -1,55 +1,33 @@
 //! Application-layer fusion for fulltext and vector results.
 //!
-//! Both search paths emit `(document id, score)` rows independently. This
-//! module merges those rows without touching the existing planners or
-//! operators. Rank fusion needs no score calibration; weighted fusion
-//! normalizes each input list before combining.
+//! Both search paths emit [`SearchHit`] rows independently. This module
+//! merges those rows without touching the existing planners or operators.
+//! Rank fusion needs no score calibration; weighted fusion normalizes each
+//! input list before combining.
 
+use crate::types::search::SearchHit;
 use std::collections::HashMap;
-
-/// One ranked hit from a single retrieval path.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScoredHit {
-    pub id: String,
-    pub score: f32,
-}
-
-impl ScoredHit {
-    pub fn new(id: impl Into<String>, score: f32) -> Self {
-        Self {
-            id: id.into(),
-            score,
-        }
-    }
-}
-
-/// Fused hit shared by both strategies.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FusedHit {
-    pub id: String,
-    pub score: f32,
-}
 
 /// Fuse ranked lists with reciprocal rank fusion.
 ///
 /// Each hit contributes `1 / (k + rank)` per list it appears in, with
 /// 1-based ranks. Output is sorted by fused score descending and truncated
 /// to `limit` entries.
-pub fn rrf_fuse(lists: &[Vec<ScoredHit>], k: u32, limit: usize) -> Vec<FusedHit> {
+pub fn rrf_fuse(lists: &[Vec<SearchHit>], k: u32, limit: usize) -> Vec<SearchHit> {
     let shift = k as f32;
-    let mut totals: HashMap<&str, f32> = HashMap::new();
+    let mut totals: HashMap<&str, (f32, &SearchHit)> = HashMap::new();
     for list in lists {
         for (position, hit) in list.iter().enumerate() {
             let rank = position as f32 + 1.0;
-            let entry = totals.entry(hit.id.as_str()).or_insert(0.0);
-            *entry += 1.0 / (shift + rank);
+            let entry = totals.entry(hit.id.as_str()).or_insert((0.0, hit));
+            entry.0 += 1.0 / (shift + rank);
         }
     }
-    let mut fused: Vec<FusedHit> = totals
+    let mut fused: Vec<SearchHit> = totals
         .into_iter()
-        .map(|(id, score)| FusedHit {
-            id: id.to_string(),
+        .map(|(id, (score, hit))| SearchHit {
             score,
+            ..hit.clone()
         })
         .collect();
     fused.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -63,28 +41,28 @@ pub fn rrf_fuse(lists: &[Vec<ScoredHit>], k: u32, limit: usize) -> Vec<FusedHit>
 /// `alpha * vector + (1 - alpha) * fulltext`. Degenerate lists where all
 /// scores are equal normalize to `1.0` so presence still counts.
 pub fn weighted_fuse(
-    vector: &[ScoredHit],
-    fulltext: &[ScoredHit],
+    vector: &[SearchHit],
+    fulltext: &[SearchHit],
     alpha: f32,
     limit: usize,
-) -> Vec<FusedHit> {
+) -> Vec<SearchHit> {
     let weight = alpha.clamp(0.0, 1.0);
     let vector_norm = normalize(vector);
     let fulltext_norm = normalize(fulltext);
-    let mut totals: HashMap<&str, f32> = HashMap::new();
+    let mut totals: HashMap<&str, (f32, &SearchHit)> = HashMap::new();
     for (id, score) in &vector_norm {
-        let entry = totals.entry(id.as_str()).or_insert(0.0);
-        *entry += weight * score;
+        let entry = totals.entry(id.as_str()).or_insert((0.0, fulltext.iter().find(|h| h.id == *id).unwrap_or_else(|| vector.iter().find(|h| h.id == *id).unwrap())));
+        entry.0 += weight * score;
     }
     for (id, score) in &fulltext_norm {
-        let entry = totals.entry(id.as_str()).or_insert(0.0);
-        *entry += (1.0 - weight) * score;
+        let entry = totals.entry(id.as_str()).or_insert((0.0, fulltext.iter().find(|h| h.id == *id).unwrap_or_else(|| vector.iter().find(|h| h.id == *id).unwrap())));
+        entry.0 += (1.0 - weight) * score;
     }
-    let mut fused: Vec<FusedHit> = totals
+    let mut fused: Vec<SearchHit> = totals
         .into_iter()
-        .map(|(id, score)| FusedHit {
-            id: id.to_string(),
+        .map(|(id, (score, hit))| SearchHit {
             score,
+            ..hit.clone()
         })
         .collect();
     fused.sort_by(|a, b| b.score.total_cmp(&a.score));
@@ -92,7 +70,7 @@ pub fn weighted_fuse(
     fused
 }
 
-fn normalize(hits: &[ScoredHit]) -> Vec<(String, f32)> {
+fn normalize(hits: &[SearchHit]) -> Vec<(String, f32)> {
     if hits.is_empty() {
         return Vec::new();
     }
@@ -134,11 +112,17 @@ pub fn normalize_vector_point_id(point_id: &str, tag: &str, field: &str) -> Stri
 
 /// Map one vector hit list to fusion keys, dropping hits that do not belong
 /// to the requested index.
-pub fn normalize_vector_hits(hits: &[ScoredHit], tag: &str, field: &str) -> Vec<ScoredHit> {
+pub fn normalize_vector_hits(hits: &[SearchHit], tag: &str, field: &str) -> Vec<SearchHit> {
     let suffix = format!("#{}#{}", tag, field);
     hits.iter()
         .filter(|hit| hit.id.ends_with(&suffix))
-        .map(|hit| ScoredHit::new(normalize_vector_point_id(&hit.id, tag, field), hit.score))
+        .map(|hit| {
+            let normalized_id = normalize_vector_point_id(&hit.id, tag, field);
+            SearchHit {
+                id: normalized_id,
+                ..hit.clone()
+            }
+        })
         .collect()
 }
 
@@ -146,10 +130,14 @@ pub fn normalize_vector_hits(hits: &[ScoredHit], tag: &str, field: &str) -> Vec<
 mod tests {
     use super::*;
 
+    fn hit(id: &str, score: f32) -> SearchHit {
+        SearchHit::new(id, score)
+    }
+
     #[test]
     fn rrf_prefers_hits_present_in_both_lists() {
-        let vector = vec![ScoredHit::new("a", 0.9), ScoredHit::new("b", 0.5)];
-        let fulltext = vec![ScoredHit::new("b", 2.0), ScoredHit::new("c", 1.0)];
+        let vector = vec![hit("a", 0.9), hit("b", 0.5)];
+        let fulltext = vec![hit("b", 2.0), hit("c", 1.0)];
         let fused = rrf_fuse(&[vector, fulltext], 60, 10);
         assert_eq!(fused.len(), 3);
         assert_eq!(fused[0].id, "b");
@@ -157,7 +145,7 @@ mod tests {
 
     #[test]
     fn rrf_respects_limit() {
-        let first = vec![ScoredHit::new("a", 1.0), ScoredHit::new("b", 0.5)];
+        let first = vec![hit("a", 1.0), hit("b", 0.5)];
         let fused = rrf_fuse(&[first], 60, 1);
         assert_eq!(fused.len(), 1);
         assert_eq!(fused[0].id, "a");
@@ -165,11 +153,8 @@ mod tests {
 
     #[test]
     fn weighted_fuse_blends_both_sources() {
-        let vector = vec![ScoredHit::new("a", 1.0), ScoredHit::new("b", 0.0)];
-        let fulltext = vec![ScoredHit::new("b", 5.0), ScoredHit::new("c", 1.0)];
-        // Min-max normalization puts both a and b at 1.0 in their own list,
-        // so only a weight below the balance point lets the fulltext lead
-        // decide; an even split would tie and leave the order to hash order.
+        let vector = vec![hit("a", 1.0), hit("b", 0.0)];
+        let fulltext = vec![hit("b", 5.0), hit("c", 1.0)];
         let fused = weighted_fuse(&vector, &fulltext, 0.3, 10);
         assert_eq!(fused.len(), 3);
         assert_eq!(fused[0].id, "b");
@@ -177,8 +162,8 @@ mod tests {
 
     #[test]
     fn weighted_fuse_handles_degenerate_lists() {
-        let vector = vec![ScoredHit::new("a", 2.0)];
-        let fulltext = vec![ScoredHit::new("a", 7.0)];
+        let vector = vec![hit("a", 2.0)];
+        let fulltext = vec![hit("a", 7.0)];
         let fused = weighted_fuse(&vector, &fulltext, 0.5, 10);
         assert_eq!(fused.len(), 1);
         assert_eq!(fused[0].id, "a");

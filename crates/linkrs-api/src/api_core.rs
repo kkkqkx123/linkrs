@@ -6,6 +6,8 @@
 pub mod bulk_insert;
 pub mod cost_profile;
 pub mod error;
+#[cfg(feature = "fulltext")]
+pub mod fulltext_api;
 pub mod query_api;
 pub(crate) mod query_api_builder;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
@@ -32,6 +34,8 @@ pub use session_command::{
 pub use sync_api::SyncApi;
 pub use transaction_api::TransactionApi;
 pub use types::*;
+#[cfg(feature = "fulltext")]
+pub use fulltext_api::FulltextApi;
 #[cfg(feature = "vector")]
 pub use vector_api::{VectorApi, VectorSearchResult};
 

@@ -69,8 +69,9 @@ pub use optimizer::OptimizerEngine;
 // wiring the raw core helpers by hand.
 pub use fusion::{fuse_fulltext_and_vector, FusionStrategy};
 pub use linkrs_core::fusion::{
-    normalize_vector_hits, normalize_vector_point_id, rrf_fuse, weighted_fuse, FusedHit, ScoredHit,
+    normalize_vector_hits, normalize_vector_point_id, rrf_fuse, weighted_fuse,
 };
+pub use linkrs_core::types::search::SearchHit;
 
 pub mod storage {
     pub use linkrs_storage::*;

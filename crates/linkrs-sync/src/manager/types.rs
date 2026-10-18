@@ -104,3 +104,33 @@ pub enum SyncError {
     #[error("Internal error: {0}")]
     Internal(String),
 }
+
+impl linkrs_core::error::search::ClassifySearchError for SyncError {
+    fn classify(&self) -> linkrs_core::error::search::SearchErrorKind {
+        use linkrs_core::error::search::SearchErrorKind;
+        match self {
+            #[cfg(feature = "fulltext")]
+            Self::FulltextError(msg) => classify_msg(msg),
+            Self::VectorError(msg) => classify_msg(msg),
+            Self::RebuildBusy(_) => SearchErrorKind::RebuildBusy,
+            Self::OutboxBackpressure(_) => SearchErrorKind::Io,
+            Self::PersistenceError(_) => SearchErrorKind::Io,
+            Self::BufferError(_) => SearchErrorKind::Internal,
+            Self::Internal(_) => SearchErrorKind::Internal,
+        }
+    }
+}
+
+fn classify_msg(msg: &str) -> linkrs_core::error::search::SearchErrorKind {
+    use linkrs_core::error::search::SearchErrorKind;
+    let lower = msg.to_lowercase();
+    if lower.contains("not found") || lower.contains("does not exist") {
+        SearchErrorKind::IndexNotFound
+    } else if lower.contains("already exists") {
+        SearchErrorKind::IndexAlreadyExists
+    } else if lower.contains("rebuild") && lower.contains("busy") {
+        SearchErrorKind::RebuildBusy
+    } else {
+        SearchErrorKind::Internal
+    }
+}

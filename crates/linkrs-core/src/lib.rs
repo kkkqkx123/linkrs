@@ -49,7 +49,9 @@ pub use types::{
 
 pub use types::graph_schema::EdgeDirection;
 
-pub use types::index::{ConsistencyState, IndexStats, SearchStats};
+pub use types::index::{ConsistencyState, IndexStats, SearchIndexMetadata, SearchStats};
+
+pub use types::search::{IndexDescriptor, SearchHit, SearchHitPage};
 
 pub use types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 

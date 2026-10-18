@@ -54,6 +54,27 @@ pub enum SearchError {
 
 pub type Result<T> = std::result::Result<T, SearchError>;
 
+impl linkrs_core::error::search::ClassifySearchError for SearchError {
+    fn classify(&self) -> linkrs_core::error::search::SearchErrorKind {
+        use linkrs_core::error::search::SearchErrorKind;
+        match self {
+            Self::IndexNotFound(_) => SearchErrorKind::IndexNotFound,
+            Self::IndexAlreadyExists(_) => SearchErrorKind::IndexAlreadyExists,
+            Self::EngineUnavailable => SearchErrorKind::EngineUnavailable,
+            Self::IndexCorrupted(_) => SearchErrorKind::IndexCorrupted,
+            Self::RebuildBusy(_) => SearchErrorKind::RebuildBusy,
+            Self::QueryParseError(_) => SearchErrorKind::QueryInvalid,
+            Self::SpaceNotFound(_) => SearchErrorKind::SpaceNotFound,
+            Self::TagNotFound(_) => SearchErrorKind::SchemaNotFound,
+            Self::FieldNotFound(_) => SearchErrorKind::SchemaNotFound,
+            Self::IoError(_) => SearchErrorKind::Io,
+            Self::SerializationError(_) => SearchErrorKind::Serialization,
+            Self::ConfigError(_) => SearchErrorKind::Config,
+            _ => SearchErrorKind::Internal,
+        }
+    }
+}
+
 impl From<SearchError> for linkrs_core::error::DBError {
     fn from(e: SearchError) -> Self {
         Self::search(e.to_string())

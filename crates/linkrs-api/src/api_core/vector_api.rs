@@ -3,6 +3,7 @@
 //! Provides transport layer independent vector index management and search operations.
 
 use crate::api_core::error::{CoreError, CoreResult};
+use linkrs_core::SearchIndexMetadata;
 use linkrs_sync::backend::VectorBackend;
 use linkrs_sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
 use simvec::{
@@ -35,6 +36,34 @@ pub struct VectorSearchResult {
     pub score: f32,
     pub vector: Option<Vec<f32>>,
     pub payload: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+impl linkrs_core::types::search::IntoSearchHit for VectorSearchResult {
+    fn into_search_hit(self) -> linkrs_core::types::search::SearchHit {
+        let mut hit = linkrs_core::types::search::SearchHit::new(self.id.to_string(), self.score);
+        if let Some(p) = self.payload {
+            let map: std::collections::HashMap<String, linkrs_core::Value> = p
+                .into_iter()
+                .map(|(k, v)| (k, linkrs_core::Value::from_json_value(v)))
+                .collect();
+            hit = hit.with_payload(map);
+        }
+        hit
+    }
+}
+
+impl linkrs_core::types::search::AsSearchHit for VectorSearchResult {
+    fn as_search_hit(&self) -> linkrs_core::types::search::SearchHit {
+        let mut hit = linkrs_core::types::search::SearchHit::new(self.id.to_string(), self.score);
+        if let Some(ref p) = self.payload {
+            let map: std::collections::HashMap<String, linkrs_core::Value> = p
+                .iter()
+                .map(|(k, v)| (k.clone(), linkrs_core::Value::from_json_value(v.clone())))
+                .collect();
+            hit = hit.with_payload(map);
+        }
+        hit
+    }
 }
 
 /// Write mode for vector point mutations.
@@ -177,6 +206,24 @@ impl VectorApi {
             .list_indexes()
             .into_iter()
             .map(|w| w.collection_name)
+            .collect()
+    }
+
+    /// List vector indexes as the common search-index descriptor.
+    pub fn list_index_descriptors(&self) -> Vec<SearchIndexMetadata> {
+        self.coordinator
+            .list_indexes()
+            .into_iter()
+            .map(|w| SearchIndexMetadata {
+                space_id: w.space_id,
+                tag_name: w.tag_name,
+                field_name: w.field_name,
+                index_name: w.index_name,
+                status: "Active".to_string(),
+                doc_count: 0,
+                engine: "vector".to_string(),
+                last_updated: None,
+            })
             .collect()
     }
 

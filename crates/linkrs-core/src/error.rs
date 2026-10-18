@@ -19,6 +19,7 @@ use thiserror::Error;
 pub mod codes;
 pub mod manager;
 pub mod query;
+pub mod search;
 pub mod storage;
 
 // Re-export the error code
@@ -28,6 +29,7 @@ pub use codes::{ErrorCategory as CodeErrorCategory, ErrorCode, PublicError, ToPu
 pub use manager::{ErrorCategory, ManagerError, ManagerResult};
 pub use query::PlanNodeVisitError;
 pub use query::QueryError;
+pub use search::SearchErrorKind;
 pub use query::QueryResult;
 pub use storage::StorageError;
 pub use storage::StorageResult;

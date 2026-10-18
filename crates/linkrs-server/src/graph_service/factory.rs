@@ -4,6 +4,8 @@ use std::time::Duration;
 use log::{info, warn};
 use parking_lot::RwLock;
 
+#[cfg(feature = "fulltext")]
+use linkrs_api::api_core::FulltextApi;
 #[cfg(feature = "vector")]
 use linkrs_api::api_core::VectorApi;
 use linkrs_api::api_core::{QueryApi, SyncApi};
@@ -339,6 +341,17 @@ impl<
             .get_sync_manager()
             .map(|sync_manager| Arc::new(SyncApi::new(sync_manager)));
 
+        #[cfg(feature = "fulltext")]
+        let fulltext_api = storage.get_sync_manager().and_then(|sync_manager| {
+            sync_manager.sync_coordinator().cloned().map(|coordinator| {
+                Arc::new(FulltextApi::new(
+                    coordinator.fulltext_manager().clone(),
+                    coordinator,
+                    sync_manager,
+                ))
+            })
+        });
+
         let service = Self {
             session_manager,
             query_api,
@@ -346,6 +359,8 @@ impl<
             permission_manager,
             stats_manager,
             storage,
+            #[cfg(feature = "fulltext")]
+            fulltext_api,
             #[cfg(feature = "vector")]
             vector_api,
             sync_api,

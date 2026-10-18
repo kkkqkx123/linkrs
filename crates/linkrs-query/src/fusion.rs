@@ -7,7 +7,8 @@
 //! call site remembering to normalize vector IDs first; the entry point in
 //! this module encapsulates that step so hybrid search cannot skip it.
 
-use linkrs_core::fusion::{normalize_vector_hits, rrf_fuse, weighted_fuse, FusedHit, ScoredHit};
+use linkrs_core::fusion::{normalize_vector_hits, rrf_fuse, weighted_fuse};
+use linkrs_core::types::search::SearchHit;
 
 /// Fusion strategy for a hybrid fulltext + vector search.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,13 +33,13 @@ impl Default for FusionStrategy {
 /// index are dropped. The lists then fuse under the given strategy and the
 /// result is sorted by fused score descending, truncated to `limit`.
 pub fn fuse_fulltext_and_vector(
-    fulltext: Vec<ScoredHit>,
-    vector: Vec<ScoredHit>,
+    fulltext: Vec<SearchHit>,
+    vector: Vec<SearchHit>,
     tag: &str,
     field: &str,
     strategy: FusionStrategy,
     limit: usize,
-) -> Vec<FusedHit> {
+) -> Vec<SearchHit> {
     let vector = normalize_vector_hits(&vector, tag, field);
     match strategy {
         FusionStrategy::Rrf { k } => rrf_fuse(&[fulltext, vector], k, limit),
@@ -55,8 +56,8 @@ mod tests {
         // The vector point encodes the same vertex the fulltext doc names;
         // `#` in the vertex display form is percent-encoded (`%23`), so the
         // two lists only recognize one hit after normalization.
-        let fulltext = vec![ScoredHit::new("vertex-1#Person", 3.0)];
-        let vector = vec![ScoredHit::new(
+        let fulltext = vec![SearchHit::new("vertex-1#Person", 3.0)];
+        let vector = vec![SearchHit::new(
             "vertex-1%23Person#Person#embedding",
             0.9,
         )];
@@ -74,8 +75,8 @@ mod tests {
 
     #[test]
     fn foreign_vector_hits_are_dropped() {
-        let fulltext = vec![ScoredHit::new("vertex-1", 3.0)];
-        let vector = vec![ScoredHit::new("vertex-1#OtherTag#other", 0.9)];
+        let fulltext = vec![SearchHit::new("vertex-1", 3.0)];
+        let vector = vec![SearchHit::new("vertex-1#OtherTag#other", 0.9)];
         let fused = fuse_fulltext_and_vector(
             fulltext,
             vector,
@@ -90,8 +91,8 @@ mod tests {
 
     #[test]
     fn weighted_fusion_blends_normalized_scores() {
-        let fulltext = vec![ScoredHit::new("vertex-1", 3.0)];
-        let vector = vec![ScoredHit::new("vertex-1#Person#embedding", 1.0)];
+        let fulltext = vec![SearchHit::new("vertex-1", 3.0)];
+        let vector = vec![SearchHit::new("vertex-1#Person#embedding", 1.0)];
         let fused = fuse_fulltext_and_vector(
             fulltext,
             vector,

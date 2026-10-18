@@ -315,6 +315,10 @@ fn add_fulltext_routes<
 ) -> Router<super::state::AppState<S>> {
     router
         .route(
+            "/fulltext/indexes",
+            get(rebuild_handlers::list_fulltext_indexes),
+        )
+        .route(
             "/fulltext/indexes/rebuild",
             post(rebuild_handlers::rebuild_fulltext),
         )

@@ -123,6 +123,29 @@ impl HighlightResult {
     }
 }
 
+// Unified SearchHit conversion
+impl linkrs_core::types::search::IntoSearchHit for SearchResult {
+    fn into_search_hit(self) -> linkrs_core::types::search::SearchHit {
+        let doc_id = self.doc_id.to_string().unwrap_or_else(|e| e);
+        let mut hit = linkrs_core::types::search::SearchHit::new(doc_id, self.score);
+        if let Some(hl) = self.highlights {
+            hit = hit.with_highlights(hl);
+        }
+        hit
+    }
+}
+
+impl linkrs_core::types::search::AsSearchHit for SearchResult {
+    fn as_search_hit(&self) -> linkrs_core::types::search::SearchHit {
+        let doc_id = self.doc_id.to_string().unwrap_or_else(|e| e);
+        let mut hit = linkrs_core::types::search::SearchHit::new(doc_id, self.score);
+        if let Some(ref hl) = self.highlights {
+            hit = hit.with_highlights(hl.clone());
+        }
+        hit
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

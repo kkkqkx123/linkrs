@@ -263,6 +263,58 @@ impl VectorCoordinatorError {
 pub type VectorResult<T> = std::result::Result<T, VectorError>;
 pub type VectorCoordinatorResult<T> = std::result::Result<T, VectorCoordinatorError>;
 
+impl linkrs_core::error::search::ClassifySearchError for VectorError {
+    fn classify(&self) -> linkrs_core::error::search::SearchErrorKind {
+        use linkrs_core::error::search::SearchErrorKind;
+        match self {
+            Self::IndexNotFound(_) | Self::CollectionNotFound(_) => SearchErrorKind::IndexNotFound,
+            Self::IndexAlreadyExists(_) => SearchErrorKind::IndexAlreadyExists,
+            Self::EngineUnavailable(_) | Self::EngineNotFound { .. } => {
+                SearchErrorKind::EngineUnavailable
+            }
+            Self::IndexCorrupted(_) => SearchErrorKind::IndexCorrupted,
+            Self::ConfigError(_) => SearchErrorKind::Config,
+            Self::DimensionMismatch { .. }
+            | Self::InvalidVector(_)
+            | Self::InvalidPointId(_)
+            | Self::Timeout
+            | Self::Cancelled
+            | Self::EmbeddingError(_)
+            | Self::ConnectionFailed(_)
+            | Self::QdrantError(_)
+            | Self::Locked(_)
+            | Self::Internal(_) => SearchErrorKind::Internal,
+        }
+    }
+}
+
+impl linkrs_core::error::search::ClassifySearchError for VectorCoordinatorError {
+    fn classify(&self) -> linkrs_core::error::search::SearchErrorKind {
+        use linkrs_core::error::search::SearchErrorKind;
+        match self {
+            Self::Vector(err) => err.classify(),
+            Self::SpaceNotFound(_) => SearchErrorKind::SpaceNotFound,
+            Self::TagNotFound(_) | Self::FieldNotIndexed { .. } => SearchErrorKind::SchemaNotFound,
+            Self::RebuildBusy(_) => SearchErrorKind::RebuildBusy,
+            Self::EngineDisabled | Self::EmbeddingServiceNotAvailable => {
+                SearchErrorKind::EngineUnavailable
+            }
+            Self::IndexCreationFailed { .. }
+            | Self::IndexDropFailed { .. }
+            | Self::IndexRebuildFailed(_)
+            | Self::VertexChangeFailed(_)
+            | Self::CollectionConfigConflict { .. }
+            | Self::NotInitialized
+            | Self::ShuttingDown
+            | Self::BufferError(_)
+            | Self::InvalidOperation(_)
+            | Self::EmbeddingError(_)
+            | Self::Sync(_)
+            | Self::Internal(_) => SearchErrorKind::Internal,
+        }
+    }
+}
+
 #[cfg(feature = "vector")]
 impl From<simvec::VectorSearchError> for VectorError {
     fn from(err: simvec::VectorSearchError) -> Self {

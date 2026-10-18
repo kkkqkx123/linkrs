@@ -18,6 +18,8 @@ pub mod embedded;
 // ── Core re-exports ──────────────────────────────────────────────
 pub use api_core::{CoreError, CoreResult, QueryApi, SchemaApi, SyncApi};
 
+#[cfg(feature = "fulltext")]
+pub use api_core::FulltextApi;
 #[cfg(feature = "vector")]
 pub use api_core::{VectorApi, VectorSearchResult};
 
@@ -25,8 +27,9 @@ pub use api_core::{VectorApi, VectorSearchResult};
 // point IDs carry index suffixes while fulltext doc IDs do not, so fusion
 // requires explicit normalization first.
 pub use linkrs_core::fusion::{
-    normalize_vector_hits, normalize_vector_point_id, rrf_fuse, weighted_fuse, FusedHit, ScoredHit,
+    normalize_vector_hits, normalize_vector_point_id, rrf_fuse, weighted_fuse,
 };
+pub use linkrs_core::types::search::SearchHit;
 
 /// Mapping helpers between raw linkrs-config settings and simvec
 /// types; keeps the two crates decoupled from each other.

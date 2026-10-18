@@ -415,6 +415,44 @@ pub async fn inconsistent_fulltext<
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/fulltext/indexes",
+    tag = "Fulltext",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Fulltext indexes"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// List all fulltext indexes.
+#[cfg(feature = "fulltext")]
+pub async fn list_fulltext_indexes<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::authz::require_admin_session(&state, session_id)?;
+    let graph_service = state.server.get_graph_service();
+    if let Some(api) = graph_service.fulltext_api() {
+        let indexes = api.list_index_descriptors();
+        return Ok(JsonResponse(serde_json::json!({ "indexes": indexes })));
+    }
+    let sync_manager = sync_manager_or_error(&state, "fulltext")?;
+    let manager = sync_manager
+        .fulltext_manager_opt()
+        .ok_or_else(|| HttpError::InternalError("fulltext target is not configured".to_string()))?;
+    let indexes = manager.list_indexes();
+    Ok(JsonResponse(serde_json::json!({ "indexes": indexes })))
+}
+
 // ── Vector ────────────────────────────────────────────────────────────────
 
 #[utoipa::path(

@@ -68,7 +68,7 @@ pub trait SearchProvider: Send + Sync + Debug + 'static {
     ///
     /// Returns all indexes (fulltext or vector) that belong to `space_id`.
     /// When `space_id` is `0` or not applicable, returns all indexes.
-    fn list_indexes(&self, space_id: u64) -> Vec<IndexInfo>;
+    fn list_indexes(&self, space_id: u64) -> Vec<linkrs_core::SearchIndexMetadata>;
 
     /// Drop a search index identified by `(space_id, tag_name, field_name)`.
     ///
@@ -122,17 +122,20 @@ impl SearchProvider for FulltextProvider {
         )
     }
 
-    fn list_indexes(&self, space_id: u64) -> Vec<IndexInfo> {
+    fn list_indexes(&self, space_id: u64) -> Vec<linkrs_core::SearchIndexMetadata> {
         self.manager
             .list_indexes()
             .into_iter()
             .filter(|m| space_id == 0 || m.space_id == space_id)
-            .map(|m| IndexInfo {
+            .map(|m| linkrs_core::SearchIndexMetadata {
                 space_id: m.space_id,
                 tag_name: m.tag_name,
                 field_name: m.field_name,
                 index_name: Some(m.index_name.clone()),
                 status: format!("{:?}", m.status),
+                doc_count: m.doc_count,
+                engine: m.engine_type.to_string(),
+                last_updated: Some(m.last_updated),
             })
             .collect()
     }
@@ -193,17 +196,20 @@ impl SearchProvider for VectorProvider {
         )
     }
 
-    fn list_indexes(&self, space_id: u64) -> Vec<IndexInfo> {
+    fn list_indexes(&self, space_id: u64) -> Vec<linkrs_core::SearchIndexMetadata> {
         self.coordinator
             .list_indexes()
             .into_iter()
             .filter(|m| space_id == 0 || m.space_id == space_id)
-            .map(|m| IndexInfo {
+            .map(|m| linkrs_core::SearchIndexMetadata {
                 space_id: m.space_id,
                 tag_name: m.tag_name,
                 field_name: m.field_name,
                 index_name: m.index_name.clone(),
                 status: "Active".to_string(),
+                doc_count: 0,
+                engine: "vector".to_string(),
+                last_updated: None,
             })
             .collect()
     }

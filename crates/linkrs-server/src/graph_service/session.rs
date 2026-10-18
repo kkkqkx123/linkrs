@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use linkrs_api::api_core::SyncApi;
+#[cfg(feature = "fulltext")]
+use linkrs_api::api_core::FulltextApi;
 #[cfg(feature = "vector")]
 use linkrs_api::api_core::VectorApi;
 use linkrs_metrics::{MetricType, StatsManager};
@@ -238,6 +240,11 @@ impl<
 
     pub fn get_stats_manager(&self) -> &Arc<StatsManager> {
         &self.stats_manager
+    }
+
+    #[cfg(feature = "fulltext")]
+    pub fn fulltext_api(&self) -> Option<&Arc<FulltextApi>> {
+        self.fulltext_api.as_ref()
     }
 
     #[cfg(feature = "vector")]

@@ -218,6 +218,7 @@ struct VectorDoc;
         crate::http::handlers::rebuild::fulltext_rebuild_status,
         crate::http::handlers::rebuild::clear_fulltext,
         crate::http::handlers::rebuild::inconsistent_fulltext,
+        crate::http::handlers::rebuild::list_fulltext_indexes,
     ),
     tags((name = "Fulltext", description = "Fulltext index management"))
 )]
