@@ -13,114 +13,6 @@ use crate::completion::context::{
     detect_context, get_function_completions, CompletionContext, FunctionEntry, SharedSchemaCache,
 };
 
-const GQL_KEYWORDS: &[&str] = &[
-    "MATCH",
-    "GO",
-    "LOOKUP",
-    "FETCH",
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "CREATE",
-    "ALTER",
-    "DROP",
-    "GRANT",
-    "REVOKE",
-    "RETURN",
-    "WHERE",
-    "ORDER",
-    "BY",
-    "LIMIT",
-    "SKIP",
-    "AND",
-    "OR",
-    "NOT",
-    "IN",
-    "AS",
-    "WITH",
-    "UNWIND",
-    "SET",
-    "REMOVE",
-    "MERGE",
-    "OPTIONAL",
-    "DISTINCT",
-    "UNION",
-    "ALL",
-    "EXISTS",
-    "CASE",
-    "WHEN",
-    "THEN",
-    "ELSE",
-    "END",
-    "ASC",
-    "DESC",
-    "TRUE",
-    "FALSE",
-    "NULL",
-    "IS",
-    "LIKE",
-    "CONTAINS",
-    "STARTS",
-    "OVER",
-    "STEPS",
-    "FROM",
-    "TO",
-    "YIELD",
-    "VERTEX",
-    "EDGE",
-    "VERTICES",
-    "EDGES",
-    "TAG",
-    "TAGS",
-    "SPACE",
-    "SPACES",
-    "INDEX",
-    "INDEXES",
-    "SHOW",
-    "USE",
-    "DESCRIBE",
-    "EXPLAIN",
-    "PROFILE",
-    "REBUILD",
-    "SUBGRAPH",
-    "GROUP",
-    "COUNT",
-    "SUM",
-    "AVG",
-    "MAX",
-    "MIN",
-    "COLLECT",
-    "HEAD",
-    "TAIL",
-    "SIZE",
-    "LENGTH",
-    "TYPE",
-    "PROPERTIES",
-    "ID",
-    "LABEL",
-    "RANK",
-    "DATETIME",
-    "TIMESTAMP",
-    "STRING",
-    "INT",
-    "INTEGER",
-    "FLOAT",
-    "DOUBLE",
-    "BOOL",
-    "BOOLEAN",
-    "LIST",
-    "MAP",
-    "SET",
-    "IF",
-    "COMMENT",
-    "DEFAULT",
-    "PARTITION_NUM",
-    "REPLICA_FACTOR",
-    "VID_TYPE",
-    "TTL_DURATION",
-    "TTL_COL",
-];
-
 const META_COMMANDS: &[&str] = &[
     "\\connect",
     "\\c",
@@ -218,7 +110,7 @@ impl Default for LinkrsCompleter {
 impl LinkrsCompleter {
     pub fn new() -> Self {
         Self {
-            keywords: GQL_KEYWORDS.iter().map(|s| s.to_string()).collect(),
+            keywords: inventory_keywords(),
             meta_commands: META_COMMANDS.iter().map(|s| s.to_string()).collect(),
             functions: get_function_completions(),
             schema_cache: Arc::new(Mutex::new(crate::completion::context::SchemaCache::new())),
@@ -238,6 +130,11 @@ impl LinkrsCompleter {
         if let Ok(mut v) = self.variables.lock() {
             *v = vars;
         }
+    }
+
+    fn is_keyword(&self, word: &str) -> bool {
+        let upper = word.to_uppercase();
+        self.keywords.iter().any(|keyword| keyword == &upper)
     }
 }
 
@@ -421,7 +318,11 @@ impl LinkrsCompleter {
         let mut completions: Vec<StringCandidate> = self
             .functions
             .iter()
-            .filter(|f| f.name.starts_with(&last_word.to_lowercase()))
+            .filter(|f| {
+                f.name
+                    .to_lowercase()
+                    .starts_with(&last_word.to_lowercase())
+            })
             .map(|f| StringCandidate {
                 display: format!("{}(", f.name),
                 replacement: format!("{}(", f.name)[last_word.len()..].to_string(),
@@ -629,7 +530,7 @@ impl Highlighter for LinkrsCompleter {
             if is_separator {
                 if word_start < i {
                     let word: String = chars[word_start..i].iter().collect();
-                    if is_gql_keyword(&word) {
+                    if self.is_keyword(&word) {
                         result.push_str(&word.to_uppercase().blue().to_string());
                     } else if word.parse::<f64>().is_ok() {
                         result.push_str(&word.yellow().to_string());
@@ -644,7 +545,7 @@ impl Highlighter for LinkrsCompleter {
 
         if word_start < chars.len() {
             let word: String = chars[word_start..].iter().collect();
-            if is_gql_keyword(&word) {
+            if self.is_keyword(&word) {
                 result.push_str(&word.to_uppercase().blue().to_string());
             } else if word.parse::<f64>().is_ok() {
                 result.push_str(&word.yellow().to_string());
@@ -665,9 +566,29 @@ impl Validator for LinkrsCompleter {}
 
 impl Helper for LinkrsCompleter {}
 
-fn is_gql_keyword(word: &str) -> bool {
-    let upper = word.to_uppercase();
-    GQL_KEYWORDS.contains(&upper.as_str())
+fn inventory_keywords() -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct Inventory {
+        #[serde(default)]
+        keywords: Vec<Keyword>,
+        #[serde(default)]
+        soft_keywords: Vec<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Keyword {
+        spelling: String,
+    }
+    let inventory: Inventory = serde_json::from_str(linkrs_grammar::inventory_json())
+        .expect("lexical inventory must parse");
+    let mut out: Vec<String> = inventory
+        .keywords
+        .into_iter()
+        .map(|keyword| keyword.spelling)
+        .chain(inventory.soft_keywords)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn get_last_word(input: &str) -> String {
@@ -749,12 +670,13 @@ mod tests {
 
     #[test]
     fn test_is_gql_keyword() {
-        assert!(is_gql_keyword("MATCH"));
-        assert!(is_gql_keyword("match"));
-        assert!(is_gql_keyword("RETURN"));
-        assert!(is_gql_keyword("WHERE"));
-        assert!(!is_gql_keyword("unknown"));
-        assert!(!is_gql_keyword("xyz"));
+        let completer = LinkrsCompleter::new();
+        assert!(completer.is_keyword("MATCH"));
+        assert!(completer.is_keyword("match"));
+        assert!(completer.is_keyword("RETURN"));
+        assert!(completer.is_keyword("WHERE"));
+        assert!(!completer.is_keyword("unknown"));
+        assert!(!completer.is_keyword("xyz"));
     }
 
     #[test]

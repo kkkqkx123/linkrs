@@ -262,160 +262,64 @@ fn detect_variable_context(before: &str, _variables: &HashMap<String, String>) -
 }
 
 pub fn get_function_completions() -> Vec<FunctionEntry> {
-    vec![
-        FunctionEntry::new(
-            "count",
-            "count(expr)",
-            "Count the number of rows",
-            FunctionCategory::Aggregate,
-        ),
-        FunctionEntry::new(
-            "sum",
-            "sum(expr)",
-            "Sum of values",
-            FunctionCategory::Aggregate,
-        ),
-        FunctionEntry::new(
-            "avg",
-            "avg(expr)",
-            "Average of values",
-            FunctionCategory::Aggregate,
-        ),
-        FunctionEntry::new(
-            "min",
-            "min(expr)",
-            "Minimum value",
-            FunctionCategory::Aggregate,
-        ),
-        FunctionEntry::new(
-            "max",
-            "max(expr)",
-            "Maximum value",
-            FunctionCategory::Aggregate,
-        ),
-        FunctionEntry::new(
-            "collect",
-            "collect(expr)",
-            "Collect values into a list",
-            FunctionCategory::Aggregate,
-        ),
-        FunctionEntry::new(
-            "length",
-            "length(str)",
-            "String length",
-            FunctionCategory::String,
-        ),
-        FunctionEntry::new(
-            "size",
-            "size(list)",
-            "List/string size",
-            FunctionCategory::String,
-        ),
-        FunctionEntry::new(
-            "trim",
-            "trim(str)",
-            "Trim whitespace",
-            FunctionCategory::String,
-        ),
-        FunctionEntry::new(
-            "lower",
-            "lower(str)",
-            "Convert to lowercase",
-            FunctionCategory::String,
-        ),
-        FunctionEntry::new(
-            "upper",
-            "upper(str)",
-            "Convert to uppercase",
-            FunctionCategory::String,
-        ),
-        FunctionEntry::new(
-            "substring",
-            "substring(str, start, len)",
-            "Extract substring",
-            FunctionCategory::String,
-        ),
-        FunctionEntry::new(
-            "replace",
-            "replace(str, old, new)",
-            "Replace substring",
-            FunctionCategory::String,
-        ),
-        FunctionEntry::new(
-            "abs",
-            "abs(num)",
-            "Absolute value",
-            FunctionCategory::Numeric,
-        ),
-        FunctionEntry::new("ceil", "ceil(num)", "Round up", FunctionCategory::Numeric),
-        FunctionEntry::new(
-            "floor",
-            "floor(num)",
-            "Round down",
-            FunctionCategory::Numeric,
-        ),
-        FunctionEntry::new(
-            "round",
-            "round(num)",
-            "Round to nearest",
-            FunctionCategory::Numeric,
-        ),
-        FunctionEntry::new(
-            "sqrt",
-            "sqrt(num)",
-            "Square root",
-            FunctionCategory::Numeric,
-        ),
-        FunctionEntry::new(
-            "head",
-            "head(list)",
-            "First element",
-            FunctionCategory::List,
-        ),
-        FunctionEntry::new(
-            "tail",
-            "tail(list)",
-            "All but first element",
-            FunctionCategory::List,
-        ),
-        FunctionEntry::new(
-            "reverse",
-            "reverse(list)",
-            "Reverse list",
-            FunctionCategory::List,
-        ),
-        FunctionEntry::new(
-            "type",
-            "type(edge)",
-            "Edge type name",
-            FunctionCategory::Type,
-        ),
-        FunctionEntry::new("id", "id(vertex)", "Vertex ID", FunctionCategory::Type),
-        FunctionEntry::new(
-            "label",
-            "label(vertex)",
-            "Vertex labels",
-            FunctionCategory::Type,
-        ),
-        FunctionEntry::new(
-            "properties",
-            "properties(vertex)",
-            "Vertex properties map",
-            FunctionCategory::Type,
-        ),
-        FunctionEntry::new(
-            "datetime",
-            "datetime()",
-            "Current datetime",
-            FunctionCategory::Date,
-        ),
-        FunctionEntry::new(
-            "timestamp",
-            "timestamp()",
-            "Current timestamp",
-            FunctionCategory::Date,
-        ),
-    ]
+    inventory_function_entries()
+}
+
+fn inventory_function_entries() -> Vec<FunctionEntry> {
+    let inventory: Inventory = serde_json::from_str(linkrs_grammar::inventory_json())
+        .expect("lexical inventory must parse");
+    inventory
+        .functions
+        .iter()
+        .map(|func| {
+            let display = func.name.to_lowercase();
+            let signature = render_signature(&display, func.arity, func.variadic);
+            let category = parse_category(&func.category);
+            FunctionEntry::new(&display, &signature, &func.description, category)
+        })
+        .collect()
+}
+
+fn render_signature(name: &str, arity: u64, variadic: bool) -> String {
+    if arity == 0 && !variadic {
+        return format!("{name}()");
+    }
+    let mut params: Vec<String> = (1..=arity).map(|i| format!("arg{i}")).collect();
+    if variadic {
+        params.push("...".to_string());
+    }
+    format!("{name}({})", params.join(", "))
+}
+
+fn parse_category(name: &str) -> FunctionCategory {
+    match name {
+        "aggregate" => FunctionCategory::Aggregate,
+        "string" => FunctionCategory::String,
+        "numeric" => FunctionCategory::Numeric,
+        "list" => FunctionCategory::List,
+        "type" => FunctionCategory::Type,
+        "date" => FunctionCategory::Date,
+        _ => FunctionCategory::Builtin,
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Inventory {
+    #[serde(default)]
+    functions: Vec<InventoryFunction>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct InventoryFunction {
+    name: String,
+    #[serde(default)]
+    arity: u64,
+    #[serde(default)]
+    variadic: bool,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    category: String,
 }
 
 #[derive(Debug, Clone)]
@@ -426,6 +330,7 @@ pub enum FunctionCategory {
     List,
     Type,
     Date,
+    Builtin,
 }
 
 #[derive(Debug, Clone)]
@@ -696,5 +601,27 @@ mod tests {
 
         let has_avg = functions.iter().any(|f| f.name == "avg");
         assert!(has_avg);
+    }
+
+    #[test]
+    fn test_inventory_categories_round_trip() {
+        let functions = get_function_completions();
+        assert!(!functions.is_empty());
+        assert!(
+            functions
+                .iter()
+                .any(|f| matches!(f.category, FunctionCategory::Aggregate)),
+            "inventory must carry at least one aggregate category"
+        );
+        assert!(
+            functions
+                .iter()
+                .any(|f| matches!(f.category, FunctionCategory::Builtin)),
+            "unknown categories must fall back to builtin"
+        );
+        assert!(matches!(
+            parse_category("bogus"),
+            FunctionCategory::Builtin
+        ));
     }
 }

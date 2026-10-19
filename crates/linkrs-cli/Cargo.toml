@@ -27,6 +27,7 @@ uuid.workspace = true
 
 linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
 linkrs-wire = { version = "0.1.0", path = "../linkrs-wire" }
+linkrs-grammar = { version = "0.1.0", path = "../linkrs-grammar" }
 async-trait.workspace = true
 futures.workspace = true
 

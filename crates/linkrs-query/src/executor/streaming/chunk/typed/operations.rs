@@ -73,6 +73,11 @@ pub(crate) fn typed_unary_batch(op: &UnaryOperator, batch: TypedBatch) -> Option
             TypedBatch::NullableBool(..) => None,
             _ => None,
         },
+        UnaryOperator::BitNot => match batch {
+            TypedBatch::I64(v) => Some(TypedBatch::I64(v.into_iter().map(|x| !x).collect())),
+            TypedBatch::I32(v) => Some(TypedBatch::I32(v.into_iter().map(|x| !x).collect())),
+            _ => None,
+        },
         _ => None,
     }
 }

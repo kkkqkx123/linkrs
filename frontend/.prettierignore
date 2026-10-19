@@ -7,3 +7,4 @@ project.inlang/cache
 src/lib/paraglide
 openapi.json
 package-lock.json
+src/lib/utils/generated

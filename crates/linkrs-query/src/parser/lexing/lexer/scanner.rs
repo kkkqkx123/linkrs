@@ -301,38 +301,4 @@ impl<'a> Lexer<'a> {
             _ => Ok(()),
         }
     }
-    /// Parse vector elements after '[' in VECTOR[...] syntax
-    pub(super) fn parse_vector_elements(&mut self) -> Vec<f32> {
-        let mut elements = Vec::new();
-
-        loop {
-            self.skip_whitespace();
-
-            // Parse number
-            if let Some(&ch) = self.peek_char() {
-                if ch.is_ascii_digit() || ch == '-' || ch == '.' {
-                    let number_str = self.read_number();
-                    if let Ok(num) = number_str.parse::<f32>() {
-                        elements.push(num);
-                    }
-                }
-            }
-
-            self.skip_whitespace();
-
-            // Check for comma or end
-            if let Some(&',') = self.peek_char() {
-                self.read_char(); // consume comma
-            } else {
-                break;
-            }
-        }
-
-        // consume ']'
-        if let Some(&']') = self.peek_char() {
-            self.read_char();
-        }
-
-        elements
-    }
 }

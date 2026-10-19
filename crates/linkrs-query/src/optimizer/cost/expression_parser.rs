@@ -226,6 +226,12 @@ impl ExpressionParser {
                 Value::Float(f) => Some(Value::Float(-f)),
                 _ => None,
             },
+            UnaryOperator::BitNot => match operand {
+                Value::SmallInt(i) => Some(Value::SmallInt(!i)),
+                Value::Int(i) => Some(Value::Int(!i)),
+                Value::BigInt(i) => Some(Value::BigInt(!i)),
+                _ => None,
+            },
             UnaryOperator::IsNull => Some(Value::Bool(operand.is_null())),
             UnaryOperator::IsNotNull => Some(Value::Bool(!operand.is_null())),
             _ => None,

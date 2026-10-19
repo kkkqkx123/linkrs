@@ -110,6 +110,7 @@
 | `SHORTEST`         | `Shortest`         | 最短路径     |
 | `ALLSHORTESTPATHS` | `AllShortestPaths` | 全部最短路径 |
 | `TRAIL`            | `Trail`            | 不重复经过边 |
+| `WALK`             | `Walk`             | 允许重复路径 |
 | `ACYCLIC`          | `Acyclic`          | 不重复经过点 |
 | `WEIGHTED`         | `Weighted`         | 带权路径     |
 | `RECURSIVE`        | `Recursive`        | 递归模式     |

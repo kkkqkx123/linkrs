@@ -1,0 +1,16 @@
+[package]
+name = "linkrs-grammar"
+version.workspace = true
+edition.workspace = true
+description = "Tree-sitter grammar and structural view for the Linkrs query language"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+build = "build.rs"
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-language.workspace = true
+
+[build-dependencies]
+cc.workspace = true

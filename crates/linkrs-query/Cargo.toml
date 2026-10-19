@@ -47,6 +47,7 @@ fulltext = ["linkrs-fulltext/fulltext", "linkrs-sync/fulltext"]
 criterion.workspace = true
 linkrs-storage = { version = "0.1.0", path = "../linkrs-storage", features = ["test-support"] }
 tempfile.workspace = true
+linkrs-grammar = { version = "0.1.0", path = "../linkrs-grammar" }
 
 [[bench]]
 name = "query_bench"

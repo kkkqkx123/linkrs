@@ -190,7 +190,9 @@ impl Expression {
             UnaryOperator::Not => DataType::Bool,
             UnaryOperator::IsNull | UnaryOperator::IsNotNull => DataType::Bool,
             UnaryOperator::IsEmpty | UnaryOperator::IsNotEmpty => DataType::Bool,
-            UnaryOperator::Plus | UnaryOperator::Minus => operand.deduce_type(),
+            UnaryOperator::Plus | UnaryOperator::Minus | UnaryOperator::BitNot => {
+                operand.deduce_type()
+            }
         }
     }
 

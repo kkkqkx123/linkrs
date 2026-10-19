@@ -183,6 +183,7 @@ pub enum UnaryOperator {
     Plus,
     Minus,
     Not,
+    BitNot,
     IsNull,
     IsNotNull,
     IsEmpty,
@@ -195,6 +196,7 @@ impl UnaryOperator {
             UnaryOperator::Plus => "+",
             UnaryOperator::Minus => "-",
             UnaryOperator::Not => "NOT",
+            UnaryOperator::BitNot => "~",
             UnaryOperator::IsNull => "IS NULL",
             UnaryOperator::IsNotNull => "IS NOT NULL",
             UnaryOperator::IsEmpty => "IS EMPTY",
@@ -204,7 +206,7 @@ impl UnaryOperator {
 
     pub fn precedence(&self) -> u8 {
         match self {
-            UnaryOperator::Plus | UnaryOperator::Minus | UnaryOperator::Not => 9,
+            UnaryOperator::Plus | UnaryOperator::Minus | UnaryOperator::Not | UnaryOperator::BitNot => 9,
             UnaryOperator::IsNull
             | UnaryOperator::IsNotNull
             | UnaryOperator::IsEmpty

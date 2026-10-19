@@ -6,7 +6,7 @@ use crate::parser::{Token, TokenKind as Tk};
 use super::Lexer;
 
 impl<'a> Lexer<'a> {
-    fn lookup_keyword(&self, identifier: &str) -> Tk {
+    pub(crate) fn lookup_keyword(&self, identifier: &str) -> Tk {
         match identifier.to_uppercase().as_str() {
             "CREATE" => Tk::Create,
             "MATCH" => Tk::Match,
@@ -44,8 +44,8 @@ impl<'a> Lexer<'a> {
             "OR" => Tk::Or,
             "XOR" => Tk::Xor,
             "CONTAINS" => Tk::Contains,
-            "STARTS" | "STARTS WITH" => Tk::StartsWith,
-            "ENDS" | "ENDS WITH" => Tk::EndsWith,
+            "STARTS" => Tk::StartsWith,
+            "ENDS" => Tk::EndsWith,
             "CASE" => Tk::Case,
             "WHEN" => Tk::When,
             "THEN" => Tk::Then,
@@ -255,13 +255,17 @@ impl<'a> Lexer<'a> {
             }
             break;
         }
+        let span_start = self.position;
 
-        let token = match self.peek_char() {
+        let mut token = match self.peek_char() {
             Some(&'=') => {
                 self.read_char();
                 if let Some(&'=') = self.peek_char() {
                     self.read_char();
                     Token::new(Tk::Eq, "==".to_string(), self.line, self.column)
+                } else if let Some(&'~') = self.peek_char() {
+                    self.read_char();
+                    Token::new(Tk::Regex, "=~".to_string(), self.line, self.column)
                 } else {
                     Token::new(Tk::Assign, "=".to_string(), self.line, self.column)
                 }
@@ -346,13 +350,7 @@ impl<'a> Lexer<'a> {
             }
             Some(&'~') => {
                 self.read_char();
-                if let Some(&'=') = self.peek_char() {
-                    self.read_char();
-                    Token::new(Tk::Regex, "=~".to_string(), self.line, self.column)
-                } else {
-                    self.read_char();
-                    Token::new(Tk::NotOp, "~".to_string(), self.line, self.column)
-                }
+                Token::new(Tk::Tilde, "~".to_string(), self.line, self.column)
             }
             Some(&'(') => {
                 self.read_char();
@@ -503,30 +501,6 @@ impl<'a> Lexer<'a> {
                     _ => {
                         let token_kind = self.lookup_keyword(&literal);
                         match token_kind {
-                            Tk::KeywordVector => {
-                                // Check if followed by '[' for VECTOR[...] syntax
-                                self.skip_whitespace();
-                                if let Some(&'[') = self.peek_char() {
-                                    // This is VECTOR[...] syntax, parse the vector
-                                    self.read_char(); // consume '['
-                                    let vector_data = self.parse_vector_elements();
-                                    return Token::new(
-                                        Tk::VectorLiteral(vector_data.clone()),
-                                        format!(
-                                            "VECTOR[{}]",
-                                            vector_data
-                                                .iter()
-                                                .map(|f| f.to_string())
-                                                .collect::<Vec<_>>()
-                                                .join(", ")
-                                        ),
-                                        start_line,
-                                        start_col,
-                                    );
-                                } else {
-                                    Token::new(token_kind, literal, start_line, start_col)
-                                }
-                            }
                             Tk::Not => {
                                 if self.peek_word() == "IN" {
                                     self.skip_word();
@@ -596,7 +570,7 @@ impl<'a> Lexer<'a> {
                 let literal = self.read_backtick_identifier();
                 Token::new(
                     Tk::Identifier(literal.clone()),
-                    literal,
+                    format!("`{literal}`"),
                     start_line,
                     start_col,
                 )
@@ -648,6 +622,8 @@ impl<'a> Lexer<'a> {
             None => Token::new(Tk::Eof, String::new(), self.line, self.column),
         };
 
+        token.start = span_start;
+        token.end = self.position;
         token
     }
     fn peek_word(&mut self) -> String {

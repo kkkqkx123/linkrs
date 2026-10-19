@@ -1,0 +1,4 @@
+# Parity allowlist: statements the handwritten parser accepts but the
+# tree-sitter subset grammar does not cover yet. One reason per line.
+# This list must only shrink over time.
+MATCH (a) RETURN a.age! AS x # postfix factorial has no rule in the subset grammar (unary_expr is prefix-only); regenerating parser.c requires the tree-sitter CLI

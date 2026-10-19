@@ -1,5 +1,8 @@
 use super::*;
 use linkrs_core::Value;
+use linkrs_core::types::operators::{BinaryOperator, UnaryOperator};
+
+use crate::parser::parsing::Parser;
 
 #[test]
 fn test_parse_simple_expression() {
@@ -375,5 +378,74 @@ fn test_parse_window_function_with_partition_and_order() {
             assert!(over_order_by.is_empty());
         }
         other => panic!("expected WindowFunction, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_tilde_prefix_parses_as_bit_not() {
+    let ctx = &mut ParseContext::new("~5");
+    let parse_result = parse_expression(ctx).expect("tilde prefix must parse");
+    match parse_result.expr {
+        Expression::Unary { op, operand } => {
+            assert_eq!(op, UnaryOperator::BitNot);
+            assert!(
+                matches!(*operand, Expression::Literal(_)),
+                "expected literal operand, got {:?}",
+                operand
+            );
+        }
+        other => panic!("expected unary bit-not, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_bang_prefix_stays_logical_not() {
+    let ctx = &mut ParseContext::new("!true");
+    let parse_result = parse_expression(ctx).expect("bang prefix must parse");
+    match parse_result.expr {
+        Expression::Unary { op, .. } => assert_eq!(op, UnaryOperator::Not),
+        other => panic!("expected unary logical-not, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_factorial_suffix_accepts_bang_only() {
+    let ctx = &mut ParseContext::new("5!");
+    let parse_result = parse_expression(ctx).expect("bang suffix must parse");
+    match parse_result.expr {
+        Expression::Function { name, args } => {
+            assert_eq!(name, "factorial");
+            assert_eq!(args.len(), 1);
+        }
+        other => panic!("expected factorial call, got {:?}", other),
+    }
+
+    let mut parser = Parser::new("RETURN 5!");
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "bang-suffixed RETURN must parse: {:?}",
+        result.err()
+    );
+    assert!(
+        !parser.has_errors(),
+        "bang-suffixed RETURN must not record errors"
+    );
+
+    let mut parser = Parser::new("RETURN 5~");
+    let result = parser.parse();
+    assert!(
+        result.is_err() || parser.has_errors(),
+        "tilde-suffixed RETURN must be rejected"
+    );
+}
+
+#[test]
+fn test_regex_comparison_parses_as_like() {
+    let ctx = &mut ParseContext::new("a =~ 'x'");
+    let parse_result = parse_expression(ctx).expect("regex comparison must parse");
+    match parse_result.expr {
+        Expression::Binary { op, .. } => assert_eq!(op, BinaryOperator::Like),
+        other => panic!("expected binary like, got {:?}", other),
     }
 }

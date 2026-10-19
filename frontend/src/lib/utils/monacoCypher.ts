@@ -1,92 +1,19 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js';
 import type { Tag, EdgeType } from '$types/schema';
+import { GENERATED_FUNCTIONS } from './generated/functions.ts';
+import {
+	GENERATED_KEYWORDS,
+	GENERATED_SOFT_KEYWORDS,
+} from './generated/keywords.ts';
 
 export const CYPHER_LANGUAGE_ID = 'cypher';
 
-export const CYPHER_KEYWORDS = [
-	'MATCH',
-	'OPTIONAL',
-	'WHERE',
-	'RETURN',
-	'WITH',
-	'GO',
-	'CREATE',
-	'DELETE',
-	'DETACH',
-	'SET',
-	'REMOVE',
-	'MERGE',
-	'UNWIND',
-	'CALL',
-	'YIELD',
-	'ORDER',
-	'BY',
-	'LIMIT',
-	'SKIP',
-	'COUNT',
-	'AS',
-	'AND',
-	'OR',
-	'NOT',
-	'IN',
-	'TAG',
-	'EDGE',
-	'SPACE',
-	'USE',
-	'VERTEX',
-	'INDEX',
-	'ALTER',
-	'DROP',
-	'FETCH',
-	'PROP',
-	'ON',
-	'LOOKUP',
-	'STARTS',
-	'ENDS',
-	'CONTAINS',
-	'DISTINCT',
-	'IF',
-	'EXISTS',
-	'ASC',
-	'DESC',
-	'SHOW',
-	'DESCRIBE',
-	'ADD',
-	'REBUILD',
-	'DEFAULT',
-];
+const RESERVED_WORDS = new Set([
+	...GENERATED_KEYWORDS,
+	...GENERATED_SOFT_KEYWORDS,
+]);
 
-export const CYPHER_FUNCTIONS = [
-	'count',
-	'sum',
-	'avg',
-	'min',
-	'max',
-	'id',
-	'keys',
-	'labels',
-	'type',
-	'exists',
-	'toInteger',
-	'toString',
-	'toFloat',
-	'abs',
-	'ceil',
-	'floor',
-	'round',
-	'length',
-	'substring',
-	'toUpper',
-	'toLower',
-	'trim',
-	'split',
-	'replace',
-	'size',
-	'head',
-	'last',
-	'range',
-	'coalesce',
-];
+const FUNCTION_NAMES = GENERATED_FUNCTIONS.map((func) => func.name);
 
 /**
  * Completion ordering. Monaco sorts suggestions by `sortText`, so a lower
@@ -132,7 +59,7 @@ function escapeRegex(value: string): string {
 /** Wrap a schema name in backticks when it is not a plain identifier. */
 function quoteIfNeeded(value: string): string {
 	return /^[A-Za-z_]\w*$/.test(value) &&
-		!CYPHER_KEYWORDS.includes(value.toUpperCase())
+		!RESERVED_WORDS.has(value.toUpperCase())
 		? value
 		: '`' + value.replace(/`/g, '') + '`';
 }
@@ -154,8 +81,9 @@ function buildSchemaRules(
 /** Collect property names that are safe to highlight as fields. */
 function collectFieldNames(schema: SchemaSnapshot): string[] {
 	const blocked = new Set([
-		...CYPHER_KEYWORDS.map((keyword) => keyword.toLowerCase()),
-		...CYPHER_FUNCTIONS.map((fn) => fn.toLowerCase()),
+		...GENERATED_KEYWORDS.map((keyword) => keyword.toLowerCase()),
+		...GENERATED_SOFT_KEYWORDS.map((keyword) => keyword.toLowerCase()),
+		...FUNCTION_NAMES.map((fn) => fn.toLowerCase()),
 	]);
 	const seen = new Set<string>();
 	const out: string[] = [];
@@ -184,8 +112,8 @@ function createTokenizer(
 	return {
 		defaultToken: '',
 		ignoreCase: true,
-		keywords: CYPHER_KEYWORDS,
-		functions: CYPHER_FUNCTIONS,
+		keywords: [...GENERATED_KEYWORDS],
+		functions: [...FUNCTION_NAMES],
 		operators: [
 			'==',
 			'!=',
@@ -208,8 +136,7 @@ function createTokenizer(
 				...buildSchemaRules(fields, 'field'),
 				[/--.*$/, 'comment'],
 				[/\/\/.*$/, 'comment'],
-				[/#.*$/, 'comment'],
-				[/\/\*/, 'comment', '@comment'],
+				[/\/\*.*$/, 'comment'],
 				[/'([^'\\]|\\.)*'/, 'string'],
 				[/"([^"\\]|\\.)*"/, 'string'],
 				[/`([^`\\]|\\.)*`/, 'identifier'],
@@ -229,11 +156,6 @@ function createTokenizer(
 				[/[(){}[\]]/, '@brackets'],
 				[/[;,]/, 'delimiter'],
 				[/[=<>!+\-*/%]/, 'operator'],
-			],
-			comment: [
-				[/[^/*]+/, 'comment'],
-				[/\*\//, 'comment', '@pop'],
-				[/[/*]/, 'comment'],
 			],
 		},
 	};
@@ -321,7 +243,7 @@ function buildKeywordItems(
 	monaco: typeof Monaco,
 	range: Monaco.IRange,
 ): Monaco.languages.CompletionItem[] {
-	return CYPHER_KEYWORDS.map((keyword) => ({
+	return [...GENERATED_KEYWORDS].map((keyword) => ({
 		label: keyword,
 		kind: monaco.languages.CompletionItemKind.Keyword,
 		insertText: keyword,
@@ -334,7 +256,7 @@ function buildFunctionItems(
 	monaco: typeof Monaco,
 	range: Monaco.IRange,
 ): Monaco.languages.CompletionItem[] {
-	return CYPHER_FUNCTIONS.map((fn) => ({
+	return FUNCTION_NAMES.map((fn) => ({
 		label: fn,
 		kind: monaco.languages.CompletionItemKind.Function,
 		insertText: `${fn}($0)`,

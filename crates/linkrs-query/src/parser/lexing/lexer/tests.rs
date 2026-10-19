@@ -212,3 +212,27 @@ fn test_ttl_keywords() {
     lexer.advance();
     assert_eq!(lexer.current_token.kind, Tk::TtlDuration);
 }
+
+#[test]
+fn test_bang_and_tilde_split_token_kinds() {
+    let mut lexer = Lexer::new("! ~");
+    assert_eq!(lexer.current_token.kind, Tk::NotOp);
+    assert_eq!(lexer.current_token.lexeme, "!");
+    lexer.advance();
+    assert_eq!(lexer.current_token.kind, Tk::Tilde);
+    assert_eq!(lexer.current_token.lexeme, "~");
+}
+
+#[test]
+fn test_regex_spelling_is_equals_tilde_only() {
+    let mut lexer = Lexer::new("=~");
+    assert_eq!(lexer.current_token.kind, Tk::Regex);
+    assert_eq!(lexer.current_token.lexeme, "=~");
+    lexer.advance();
+    assert_eq!(lexer.current_token.kind, Tk::Eof);
+
+    let mut lexer = Lexer::new("~=");
+    assert_eq!(lexer.current_token.kind, Tk::Tilde);
+    lexer.advance();
+    assert_eq!(lexer.current_token.kind, Tk::Assign);
+}

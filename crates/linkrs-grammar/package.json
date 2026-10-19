@@ -1,0 +1,16 @@
+{
+  "name": "linkrs-grammar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tree-sitter grammar for the Linkrs query language. Pinned generator toolchain.",
+  "devDependencies": {
+    "tree-sitter-cli": "0.27.1"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "verify": "node --check grammar.js && echo 'grammar.js syntax ok'"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

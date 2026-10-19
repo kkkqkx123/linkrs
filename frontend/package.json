@@ -16,7 +16,8 @@
 		"lint:fix": "eslint . --fix",
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
-		"gen:api": "npm run gen --prefix ../tools/openapi-codegen"
+		"gen:api": "npm run gen --prefix ../tools/openapi-codegen",
+		"gen:grammar": "npm run gen --prefix ../tools/grammar-codegen"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

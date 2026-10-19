@@ -1,0 +1,3111 @@
+{
+  "version": 1,
+  "generated_by": "linkrs-query/examples/export_keyword_inventory.rs",
+  "keywords": [
+    {
+      "spelling": "CREATE",
+      "kind": "Create"
+    },
+    {
+      "spelling": "MATCH",
+      "kind": "Match"
+    },
+    {
+      "spelling": "RETURN",
+      "kind": "Return"
+    },
+    {
+      "spelling": "WHERE",
+      "kind": "Where"
+    },
+    {
+      "spelling": "DELETE",
+      "kind": "Delete"
+    },
+    {
+      "spelling": "DETACH",
+      "kind": "Detach"
+    },
+    {
+      "spelling": "UPDATE",
+      "kind": "Update"
+    },
+    {
+      "spelling": "INSERT",
+      "kind": "Insert"
+    },
+    {
+      "spelling": "UPSERT",
+      "kind": "Upsert"
+    },
+    {
+      "spelling": "VALUES",
+      "kind": "Values"
+    },
+    {
+      "spelling": "FROM",
+      "kind": "From"
+    },
+    {
+      "spelling": "TO",
+      "kind": "To"
+    },
+    {
+      "spelling": "AS",
+      "kind": "As"
+    },
+    {
+      "spelling": "WITH",
+      "kind": "With"
+    },
+    {
+      "spelling": "YIELD",
+      "kind": "Yield"
+    },
+    {
+      "spelling": "GO",
+      "kind": "Go"
+    },
+    {
+      "spelling": "OVER",
+      "kind": "Over"
+    },
+    {
+      "spelling": "STEPS",
+      "kind": "Step"
+    },
+    {
+      "spelling": "STEP",
+      "kind": "Step"
+    },
+    {
+      "spelling": "UPTO",
+      "kind": "Upto"
+    },
+    {
+      "spelling": "LIMIT",
+      "kind": "Limit"
+    },
+    {
+      "spelling": "ASC",
+      "kind": "Asc"
+    },
+    {
+      "spelling": "DESC",
+      "kind": "Desc"
+    },
+    {
+      "spelling": "DESCRIBE",
+      "kind": "Desc"
+    },
+    {
+      "spelling": "ORDER",
+      "kind": "Order"
+    },
+    {
+      "spelling": "BY",
+      "kind": "By"
+    },
+    {
+      "spelling": "SKIP",
+      "kind": "Skip"
+    },
+    {
+      "spelling": "UNWIND",
+      "kind": "Unwind"
+    },
+    {
+      "spelling": "OPTIONAL",
+      "kind": "Optional"
+    },
+    {
+      "spelling": "DISTINCT",
+      "kind": "Distinct"
+    },
+    {
+      "spelling": "ALL",
+      "kind": "All"
+    },
+    {
+      "spelling": "NULL",
+      "kind": "Null"
+    },
+    {
+      "spelling": "IS",
+      "kind": "Is"
+    },
+    {
+      "spelling": "NOT",
+      "kind": "Not"
+    },
+    {
+      "spelling": "AND",
+      "kind": "And"
+    },
+    {
+      "spelling": "OR",
+      "kind": "Or"
+    },
+    {
+      "spelling": "XOR",
+      "kind": "Xor"
+    },
+    {
+      "spelling": "CONTAINS",
+      "kind": "Contains"
+    },
+    {
+      "spelling": "STARTS",
+      "kind": "StartsWith"
+    },
+    {
+      "spelling": "ENDS",
+      "kind": "EndsWith"
+    },
+    {
+      "spelling": "CASE",
+      "kind": "Case"
+    },
+    {
+      "spelling": "WHEN",
+      "kind": "When"
+    },
+    {
+      "spelling": "THEN",
+      "kind": "Then"
+    },
+    {
+      "spelling": "ELSE",
+      "kind": "Else"
+    },
+    {
+      "spelling": "END",
+      "kind": "End"
+    },
+    {
+      "spelling": "UNION",
+      "kind": "Union"
+    },
+    {
+      "spelling": "INTERSECT",
+      "kind": "Intersect"
+    },
+    {
+      "spelling": "MINUS",
+      "kind": "SetMinus"
+    },
+    {
+      "spelling": "GROUP",
+      "kind": "Group"
+    },
+    {
+      "spelling": "HAVING",
+      "kind": "Having"
+    },
+    {
+      "spelling": "FILTER",
+      "kind": "Filter"
+    },
+    {
+      "spelling": "ROLLUP",
+      "kind": "Rollup"
+    },
+    {
+      "spelling": "CUBE",
+      "kind": "Cube"
+    },
+    {
+      "spelling": "GROUPING",
+      "kind": "Grouping"
+    },
+    {
+      "spelling": "SETS",
+      "kind": "Sets"
+    },
+    {
+      "spelling": "BETWEEN",
+      "kind": "Between"
+    },
+    {
+      "spelling": "ADMIN",
+      "kind": "Admin"
+    },
+    {
+      "spelling": "EDGE",
+      "kind": "Edge"
+    },
+    {
+      "spelling": "EDGES",
+      "kind": "Edges"
+    },
+    {
+      "spelling": "VERTEX",
+      "kind": "Vertex"
+    },
+    {
+      "spelling": "VERTICES",
+      "kind": "Vertices"
+    },
+    {
+      "spelling": "TAG",
+      "kind": "Tag"
+    },
+    {
+      "spelling": "TAGS",
+      "kind": "Tags"
+    },
+    {
+      "spelling": "INDEX",
+      "kind": "Index"
+    },
+    {
+      "spelling": "INDEXES",
+      "kind": "Indexes"
+    },
+    {
+      "spelling": "LOOKUP",
+      "kind": "Lookup"
+    },
+    {
+      "spelling": "FIND",
+      "kind": "Find"
+    },
+    {
+      "spelling": "WEIGHT",
+      "kind": "Weight"
+    },
+    {
+      "spelling": "PATH",
+      "kind": "Path"
+    },
+    {
+      "spelling": "SHORTEST",
+      "kind": "Shortest"
+    },
+    {
+      "spelling": "ALLSHORTESTPATHS",
+      "kind": "AllShortestPaths"
+    },
+    {
+      "spelling": "TRAIL",
+      "kind": "Trail"
+    },
+    {
+      "spelling": "WALK",
+      "kind": "Walk"
+    },
+    {
+      "spelling": "ACYCLIC",
+      "kind": "Acyclic"
+    },
+    {
+      "spelling": "WEIGHTED",
+      "kind": "Weighted"
+    },
+    {
+      "spelling": "LOOP",
+      "kind": "Loop"
+    },
+    {
+      "spelling": "CYCLE",
+      "kind": "Cycle"
+    },
+    {
+      "spelling": "SUBGRAPH",
+      "kind": "Subgraph"
+    },
+    {
+      "spelling": "BOTH",
+      "kind": "Both"
+    },
+    {
+      "spelling": "OUT",
+      "kind": "Out"
+    },
+    {
+      "spelling": "IN",
+      "kind": "In"
+    },
+    {
+      "spelling": "REVERSELY",
+      "kind": "Reversely"
+    },
+    {
+      "spelling": "RECURSIVE",
+      "kind": "Recursive"
+    },
+    {
+      "spelling": "NO",
+      "kind": "No"
+    },
+    {
+      "spelling": "OVERWRITE",
+      "kind": "Overwrite"
+    },
+    {
+      "spelling": "SHOW",
+      "kind": "Show"
+    },
+    {
+      "spelling": "ADD",
+      "kind": "Add"
+    },
+    {
+      "spelling": "DROP",
+      "kind": "Drop"
+    },
+    {
+      "spelling": "REMOVE",
+      "kind": "Remove"
+    },
+    {
+      "spelling": "ALTER",
+      "kind": "Alter"
+    },
+    {
+      "spelling": "IF",
+      "kind": "If"
+    },
+    {
+      "spelling": "EXISTS",
+      "kind": "Exists"
+    },
+    {
+      "spelling": "SUBQUERY",
+      "kind": "Subquery"
+    },
+    {
+      "spelling": "CHANGE",
+      "kind": "Change"
+    },
+    {
+      "spelling": "CREATEUSER",
+      "kind": "CreateUser"
+    },
+    {
+      "spelling": "ALTERUSER",
+      "kind": "AlterUser"
+    },
+    {
+      "spelling": "DROPUSER",
+      "kind": "DropUser"
+    },
+    {
+      "spelling": "CHANGEPASSWORD",
+      "kind": "ChangePassword"
+    },
+    {
+      "spelling": "GRANT",
+      "kind": "Grant"
+    },
+    {
+      "spelling": "REVOKE",
+      "kind": "Revoke"
+    },
+    {
+      "spelling": "ON",
+      "kind": "On"
+    },
+    {
+      "spelling": "OF",
+      "kind": "Of"
+    },
+    {
+      "spelling": "GET",
+      "kind": "Get"
+    },
+    {
+      "spelling": "SET",
+      "kind": "Set"
+    },
+    {
+      "spelling": "HOST",
+      "kind": "Host"
+    },
+    {
+      "spelling": "HOSTS",
+      "kind": "Hosts"
+    },
+    {
+      "spelling": "SPACE",
+      "kind": "Space"
+    },
+    {
+      "spelling": "SPACES",
+      "kind": "Spaces"
+    },
+    {
+      "spelling": "SEQUENCE",
+      "kind": "Sequence"
+    },
+    {
+      "spelling": "SEQUENCES",
+      "kind": "Sequences"
+    },
+    {
+      "spelling": "USER",
+      "kind": "User"
+    },
+    {
+      "spelling": "USERS",
+      "kind": "Users"
+    },
+    {
+      "spelling": "PASSWORD",
+      "kind": "Password"
+    },
+    {
+      "spelling": "ROLE",
+      "kind": "Role"
+    },
+    {
+      "spelling": "ROLES",
+      "kind": "Roles"
+    },
+    {
+      "spelling": "FUNCTIONS",
+      "kind": "Functions"
+    },
+    {
+      "spelling": "GRAPHS",
+      "kind": "Graphs"
+    },
+    {
+      "spelling": "MACROS",
+      "kind": "Macros"
+    },
+    {
+      "spelling": "LOCKED",
+      "kind": "Locked"
+    },
+    {
+      "spelling": "GOD",
+      "kind": "God"
+    },
+    {
+      "spelling": "DBA",
+      "kind": "Dba"
+    },
+    {
+      "spelling": "GUEST",
+      "kind": "Guest"
+    },
+    {
+      "spelling": "COMMENT",
+      "kind": "Comment"
+    },
+    {
+      "spelling": "CHARSET",
+      "kind": "Charset"
+    },
+    {
+      "spelling": "COLLATE",
+      "kind": "Collate"
+    },
+    {
+      "spelling": "COLLATION",
+      "kind": "Collation"
+    },
+    {
+      "spelling": "VID_TYPE",
+      "kind": "VIdType"
+    },
+    {
+      "spelling": "PARTITION_NUM",
+      "kind": "PartitionNum"
+    },
+    {
+      "spelling": "REPLICA_FACTOR",
+      "kind": "ReplicaFactor"
+    },
+    {
+      "spelling": "REBUILD",
+      "kind": "Rebuild"
+    },
+    {
+      "spelling": "BOOL",
+      "kind": "Bool"
+    },
+    {
+      "spelling": "INT",
+      "kind": "Int"
+    },
+    {
+      "spelling": "INT8",
+      "kind": "Int8"
+    },
+    {
+      "spelling": "INT16",
+      "kind": "Int16"
+    },
+    {
+      "spelling": "INT32",
+      "kind": "Int32"
+    },
+    {
+      "spelling": "INT64",
+      "kind": "Int64"
+    },
+    {
+      "spelling": "FLOAT",
+      "kind": "Float"
+    },
+    {
+      "spelling": "DOUBLE",
+      "kind": "Double"
+    },
+    {
+      "spelling": "STRING",
+      "kind": "String"
+    },
+    {
+      "spelling": "FIXED_STRING",
+      "kind": "FixedString"
+    },
+    {
+      "spelling": "TIMESTAMP",
+      "kind": "Timestamp"
+    },
+    {
+      "spelling": "DATE",
+      "kind": "Date"
+    },
+    {
+      "spelling": "TIME",
+      "kind": "Time"
+    },
+    {
+      "spelling": "DATETIME",
+      "kind": "Datetime"
+    },
+    {
+      "spelling": "SERIAL",
+      "kind": "Serial"
+    },
+    {
+      "spelling": "DURATION",
+      "kind": "Duration"
+    },
+    {
+      "spelling": "GEOGRAPHY",
+      "kind": "Geography"
+    },
+    {
+      "spelling": "POINT",
+      "kind": "Point"
+    },
+    {
+      "spelling": "LINESTRING",
+      "kind": "Linestring"
+    },
+    {
+      "spelling": "POLYGON",
+      "kind": "Polygon"
+    },
+    {
+      "spelling": "LIST",
+      "kind": "List"
+    },
+    {
+      "spelling": "MAP",
+      "kind": "Map"
+    },
+    {
+      "spelling": "STRUCT",
+      "kind": "Struct"
+    },
+    {
+      "spelling": "ARRAY",
+      "kind": "Array"
+    },
+    {
+      "spelling": "DOWNLOAD",
+      "kind": "Download"
+    },
+    {
+      "spelling": "HDFS",
+      "kind": "HDFS"
+    },
+    {
+      "spelling": "UUID",
+      "kind": "UUID"
+    },
+    {
+      "spelling": "CONFIGS",
+      "kind": "Configs"
+    },
+    {
+      "spelling": "FORCE",
+      "kind": "Force"
+    },
+    {
+      "spelling": "PART",
+      "kind": "Part"
+    },
+    {
+      "spelling": "PARTS",
+      "kind": "Parts"
+    },
+    {
+      "spelling": "DATA",
+      "kind": "Data"
+    },
+    {
+      "spelling": "LEADER",
+      "kind": "Leader"
+    },
+    {
+      "spelling": "JOBS",
+      "kind": "Jobs"
+    },
+    {
+      "spelling": "JOB",
+      "kind": "Job"
+    },
+    {
+      "spelling": "BIDIRECT",
+      "kind": "Bidirect"
+    },
+    {
+      "spelling": "STATS",
+      "kind": "Stats"
+    },
+    {
+      "spelling": "STATUS",
+      "kind": "Status"
+    },
+    {
+      "spelling": "RECOVER",
+      "kind": "Recover"
+    },
+    {
+      "spelling": "EXPLAIN",
+      "kind": "Explain"
+    },
+    {
+      "spelling": "PROFILE",
+      "kind": "Profile"
+    },
+    {
+      "spelling": "ANALYZE",
+      "kind": "Analyze"
+    },
+    {
+      "spelling": "FORMAT",
+      "kind": "Format"
+    },
+    {
+      "spelling": "ATOMIC_EDGE",
+      "kind": "AtomicEdge"
+    },
+    {
+      "spelling": "DEFAULT",
+      "kind": "Default"
+    },
+    {
+      "spelling": "FLUSH",
+      "kind": "Flush"
+    },
+    {
+      "spelling": "COMPACT",
+      "kind": "Compact"
+    },
+    {
+      "spelling": "SUBMIT",
+      "kind": "Submit"
+    },
+    {
+      "spelling": "ASCENDING",
+      "kind": "Ascending"
+    },
+    {
+      "spelling": "DESCENDING",
+      "kind": "Descending"
+    },
+    {
+      "spelling": "FETCH",
+      "kind": "Fetch"
+    },
+    {
+      "spelling": "PROP",
+      "kind": "Prop"
+    },
+    {
+      "spelling": "BALANCE",
+      "kind": "Identifier(\"balance\")"
+    },
+    {
+      "spelling": "STOP",
+      "kind": "Stop"
+    },
+    {
+      "spelling": "REVERT",
+      "kind": "Revert"
+    },
+    {
+      "spelling": "USE",
+      "kind": "Use"
+    },
+    {
+      "spelling": "BEGIN",
+      "kind": "Begin"
+    },
+    {
+      "spelling": "COMMIT",
+      "kind": "Commit"
+    },
+    {
+      "spelling": "ROLLBACK",
+      "kind": "Rollback"
+    },
+    {
+      "spelling": "SAVEPOINT",
+      "kind": "Savepoint"
+    },
+    {
+      "spelling": "RELEASE",
+      "kind": "Release"
+    },
+    {
+      "spelling": "TRANSACTION",
+      "kind": "Transaction"
+    },
+    {
+      "spelling": "LET",
+      "kind": "Let"
+    },
+    {
+      "spelling": "READ",
+      "kind": "Read"
+    },
+    {
+      "spelling": "ONLY",
+      "kind": "Only"
+    },
+    {
+      "spelling": "WRITE",
+      "kind": "Write"
+    },
+    {
+      "spelling": "SETLIST",
+      "kind": "SetList"
+    },
+    {
+      "spelling": "CLEAR",
+      "kind": "Clear"
+    },
+    {
+      "spelling": "MERGE",
+      "kind": "Merge"
+    },
+    {
+      "spelling": "DIVIDE",
+      "kind": "Divide"
+    },
+    {
+      "spelling": "RENAME",
+      "kind": "Rename"
+    },
+    {
+      "spelling": "LOCAL",
+      "kind": "Local"
+    },
+    {
+      "spelling": "SESSIONS",
+      "kind": "Sessions"
+    },
+    {
+      "spelling": "SESSION",
+      "kind": "Session"
+    },
+    {
+      "spelling": "SAMPLE",
+      "kind": "Sample"
+    },
+    {
+      "spelling": "QUERIES",
+      "kind": "Queries"
+    },
+    {
+      "spelling": "QUERY",
+      "kind": "Query"
+    },
+    {
+      "spelling": "KILL",
+      "kind": "Kill"
+    },
+    {
+      "spelling": "TOP",
+      "kind": "Top"
+    },
+    {
+      "spelling": "TEXT",
+      "kind": "Text"
+    },
+    {
+      "spelling": "SEARCH",
+      "kind": "Search"
+    },
+    {
+      "spelling": "VECTOR",
+      "kind": "KeywordVector"
+    },
+    {
+      "spelling": "CLIENT",
+      "kind": "Client"
+    },
+    {
+      "spelling": "CLIENTS",
+      "kind": "Clients"
+    },
+    {
+      "spelling": "SIGN",
+      "kind": "Sign"
+    },
+    {
+      "spelling": "SERVICE",
+      "kind": "Service"
+    },
+    {
+      "spelling": "COUNT",
+      "kind": "Count"
+    },
+    {
+      "spelling": "SUM",
+      "kind": "Sum"
+    },
+    {
+      "spelling": "AVG",
+      "kind": "Avg"
+    },
+    {
+      "spelling": "MIN",
+      "kind": "Min"
+    },
+    {
+      "spelling": "MAX",
+      "kind": "Max"
+    },
+    {
+      "spelling": "TTL_DURATION",
+      "kind": "TtlDuration"
+    },
+    {
+      "spelling": "TTL_COL",
+      "kind": "TtlCol"
+    },
+    {
+      "spelling": "SOURCE",
+      "kind": "Source"
+    },
+    {
+      "spelling": "DESTINATION",
+      "kind": "Destination"
+    },
+    {
+      "spelling": "RANK",
+      "kind": "Rank"
+    },
+    {
+      "spelling": "INPUT",
+      "kind": "Input"
+    },
+    {
+      "spelling": "COPY",
+      "kind": "Copy"
+    },
+    {
+      "spelling": "HEADER",
+      "kind": "Header"
+    },
+    {
+      "spelling": "DELIMITER",
+      "kind": "Delimiter"
+    },
+    {
+      "spelling": "CSV",
+      "kind": "Csv"
+    },
+    {
+      "spelling": "TRUE",
+      "kind": "BooleanLiteral(true)"
+    },
+    {
+      "spelling": "FALSE",
+      "kind": "BooleanLiteral(false)"
+    }
+  ],
+  "soft_keywords": [
+    "GRAPH",
+    "CHECKPOINT",
+    "PURGE",
+    "EXPIRED"
+  ],
+  "multiword_unconditional": [
+    "IS NULL",
+    "IS NOT NULL",
+    "IS EMPTY",
+    "IS NOT EMPTY",
+    "NOT IN"
+  ],
+  "multiword_conditional": [
+    "SEARCH VECTOR",
+    "SEARCH INDEX",
+    "LOOKUP VECTOR",
+    "MATCH VECTOR",
+    "DESCRIBE VECTOR",
+    "SHOW VECTOR",
+    "DESCRIBE FULLTEXT",
+    "SHOW FULLTEXT",
+    "LOAD EXTENSION",
+    "UPDATE EXTENSION",
+    "DETACH DELETE",
+    "USING JOIN"
+  ],
+  "operators": [
+    {
+      "symbol": "+",
+      "kind": "Plus"
+    },
+    {
+      "symbol": "-",
+      "kind": "Minus"
+    },
+    {
+      "symbol": "*",
+      "kind": "Star"
+    },
+    {
+      "symbol": "/",
+      "kind": "Div"
+    },
+    {
+      "symbol": "%",
+      "kind": "Mod"
+    },
+    {
+      "symbol": "**",
+      "kind": "Exp"
+    },
+    {
+      "symbol": "==",
+      "kind": "Eq"
+    },
+    {
+      "symbol": "=",
+      "kind": "Assign"
+    },
+    {
+      "symbol": "!=",
+      "kind": "Ne"
+    },
+    {
+      "symbol": "<>",
+      "kind": "Ne"
+    },
+    {
+      "symbol": "<",
+      "kind": "Lt"
+    },
+    {
+      "symbol": "<=",
+      "kind": "Le"
+    },
+    {
+      "symbol": ">",
+      "kind": "Gt"
+    },
+    {
+      "symbol": ">=",
+      "kind": "Ge"
+    },
+    {
+      "symbol": "=~",
+      "kind": "Regex"
+    },
+    {
+      "symbol": "!",
+      "kind": "NotOp"
+    },
+    {
+      "symbol": "~",
+      "kind": "Tilde"
+    },
+    {
+      "symbol": "||",
+      "kind": "DoublePipe"
+    },
+    {
+      "symbol": "&",
+      "kind": "Ampersand"
+    },
+    {
+      "symbol": "<<",
+      "kind": "ShiftLeft"
+    },
+    {
+      "symbol": ">>",
+      "kind": "ShiftRight"
+    },
+    {
+      "symbol": "->",
+      "kind": "Arrow"
+    },
+    {
+      "symbol": "->>",
+      "kind": "ArrowRight"
+    },
+    {
+      "symbol": "#>",
+      "kind": "HashArrow"
+    },
+    {
+      "symbol": "#>>",
+      "kind": "HashArrowRight"
+    }
+  ],
+  "punctuation": [
+    {
+      "symbol": "(",
+      "kind": "LParen"
+    },
+    {
+      "symbol": ")",
+      "kind": "RParen"
+    },
+    {
+      "symbol": "[",
+      "kind": "LBracket"
+    },
+    {
+      "symbol": "]",
+      "kind": "RBracket"
+    },
+    {
+      "symbol": "{",
+      "kind": "LBrace"
+    },
+    {
+      "symbol": "}",
+      "kind": "RBrace"
+    },
+    {
+      "symbol": ",",
+      "kind": "Comma"
+    },
+    {
+      "symbol": ".",
+      "kind": "Dot"
+    },
+    {
+      "symbol": "..",
+      "kind": "DotDot"
+    },
+    {
+      "symbol": ":",
+      "kind": "Colon"
+    },
+    {
+      "symbol": "::",
+      "kind": "DoubleColon"
+    },
+    {
+      "symbol": ";",
+      "kind": "Semicolon"
+    },
+    {
+      "symbol": "?",
+      "kind": "QMark"
+    },
+    {
+      "symbol": "|",
+      "kind": "Pipe"
+    },
+    {
+      "symbol": "<-",
+      "kind": "BackArrow"
+    },
+    {
+      "symbol": "@",
+      "kind": "At"
+    },
+    {
+      "symbol": "$",
+      "kind": "Dollar"
+    },
+    {
+      "symbol": "$^",
+      "kind": "SrcRef"
+    },
+    {
+      "symbol": "$$",
+      "kind": "DstRef"
+    },
+    {
+      "symbol": "$-",
+      "kind": "InputRef"
+    }
+  ],
+  "functions": [
+    {
+      "name": "AVG",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculation of average values",
+      "category": "aggregate"
+    },
+    {
+      "name": "BOOL_AND",
+      "arity": 1,
+      "variadic": false,
+      "description": "logical AND",
+      "category": "builtin"
+    },
+    {
+      "name": "BOOL_OR",
+      "arity": 1,
+      "variadic": false,
+      "description": "logical OR",
+      "category": "builtin"
+    },
+    {
+      "name": "COLLECT",
+      "arity": 1,
+      "variadic": false,
+      "description": "Collect all values",
+      "category": "aggregate"
+    },
+    {
+      "name": "COLLECT_SET",
+      "arity": 1,
+      "variadic": false,
+      "description": "Collection of unique values",
+      "category": "builtin"
+    },
+    {
+      "name": "COUNT",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculated quantity",
+      "category": "aggregate"
+    },
+    {
+      "name": "CURRVAL",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the current value of a sequence without incrementing",
+      "category": "builtin"
+    },
+    {
+      "name": "GROUP_CONCAT",
+      "arity": 1,
+      "variadic": false,
+      "description": "Group concatenation with ORDER BY (WITHIN GROUP)",
+      "category": "builtin"
+    },
+    {
+      "name": "MAX",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the maximum value",
+      "category": "aggregate"
+    },
+    {
+      "name": "MEDIAN",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the median",
+      "category": "builtin"
+    },
+    {
+      "name": "MIN",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate minimum",
+      "category": "aggregate"
+    },
+    {
+      "name": "MODE",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the mode",
+      "category": "builtin"
+    },
+    {
+      "name": "NEXTVAL",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the next value of a sequence with atomic increment",
+      "category": "builtin"
+    },
+    {
+      "name": "PERCENTILE_CONT",
+      "arity": 2,
+      "variadic": false,
+      "description": "Continuous percentile (with interpolation)",
+      "category": "builtin"
+    },
+    {
+      "name": "PRODUCT",
+      "arity": 1,
+      "variadic": false,
+      "description": "Compute the product of values",
+      "category": "builtin"
+    },
+    {
+      "name": "STDDEV_POP",
+      "arity": 1,
+      "variadic": false,
+      "description": "Population standard deviation",
+      "category": "builtin"
+    },
+    {
+      "name": "STDDEV_SAMP",
+      "arity": 1,
+      "variadic": false,
+      "description": "Sample standard deviation",
+      "category": "builtin"
+    },
+    {
+      "name": "SUM",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the sum",
+      "category": "aggregate"
+    },
+    {
+      "name": "VARIANCE",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the variance",
+      "category": "builtin"
+    },
+    {
+      "name": "abs",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculating Absolute Values",
+      "category": "numeric"
+    },
+    {
+      "name": "acos",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the inverse cosine",
+      "category": "builtin"
+    },
+    {
+      "name": "age",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate age/interval from date/datetime to now",
+      "category": "builtin"
+    },
+    {
+      "name": "array_cosine_similarity",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute cosine similarity between two arrays",
+      "category": "builtin"
+    },
+    {
+      "name": "array_distance",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute Euclidean distance between two arrays",
+      "category": "builtin"
+    },
+    {
+      "name": "array_dot_product",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute dot product of two arrays",
+      "category": "builtin"
+    },
+    {
+      "name": "array_inner_product",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute inner product of two arrays",
+      "category": "builtin"
+    },
+    {
+      "name": "array_squared_distance",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute squared Euclidean distance between two arrays",
+      "category": "builtin"
+    },
+    {
+      "name": "array_value",
+      "arity": 0,
+      "variadic": true,
+      "description": "Create an array from values",
+      "category": "builtin"
+    },
+    {
+      "name": "asin",
+      "arity": 1,
+      "variadic": false,
+      "description": "calculate the arcsine",
+      "category": "builtin"
+    },
+    {
+      "name": "atan",
+      "arity": 1,
+      "variadic": false,
+      "description": "Compute the arctangent",
+      "category": "builtin"
+    },
+    {
+      "name": "atan2",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute the arctangent of y/x",
+      "category": "builtin"
+    },
+    {
+      "name": "bfs",
+      "arity": 2,
+      "variadic": false,
+      "description": "Breadth-first search traversal (start_vid, max_depth)",
+      "category": "builtin"
+    },
+    {
+      "name": "bit_and",
+      "arity": 2,
+      "variadic": false,
+      "description": "compatibility with",
+      "category": "builtin"
+    },
+    {
+      "name": "bit_or",
+      "arity": 2,
+      "variadic": false,
+      "description": "push-button or",
+      "category": "builtin"
+    },
+    {
+      "name": "bit_shift_left",
+      "arity": 2,
+      "variadic": false,
+      "description": "Bitwise left shift",
+      "category": "builtin"
+    },
+    {
+      "name": "bit_shift_right",
+      "arity": 2,
+      "variadic": false,
+      "description": "Bitwise right shift",
+      "category": "builtin"
+    },
+    {
+      "name": "bit_xor",
+      "arity": 2,
+      "variadic": false,
+      "description": "palindromic or binomial (math.)",
+      "category": "builtin"
+    },
+    {
+      "name": "cardinality",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get number of elements in map or set",
+      "category": "builtin"
+    },
+    {
+      "name": "cbrt",
+      "arity": 1,
+      "variadic": false,
+      "description": "calculate the cube root",
+      "category": "builtin"
+    },
+    {
+      "name": "ceil",
+      "arity": 1,
+      "variadic": false,
+      "description": "Round up",
+      "category": "numeric"
+    },
+    {
+      "name": "century",
+      "arity": 1,
+      "variadic": false,
+      "description": "Extract century from date/datetime",
+      "category": "builtin"
+    },
+    {
+      "name": "coalesce",
+      "arity": 1,
+      "variadic": true,
+      "description": "Returns the first non-NULL value",
+      "category": "builtin"
+    },
+    {
+      "name": "concat",
+      "arity": 1,
+      "variadic": true,
+      "description": "connection string",
+      "category": "builtin"
+    },
+    {
+      "name": "concat_ws",
+      "arity": 2,
+      "variadic": true,
+      "description": "Concatenate strings using delimiters",
+      "category": "builtin"
+    },
+    {
+      "name": "connected_components",
+      "arity": 0,
+      "variadic": false,
+      "description": "Find all connected components in the graph",
+      "category": "builtin"
+    },
+    {
+      "name": "contains",
+      "arity": 2,
+      "variadic": false,
+      "description": "Checks if it contains substrings",
+      "category": "builtin"
+    },
+    {
+      "name": "corr",
+      "arity": 2,
+      "variadic": false,
+      "description": "Return the correlation coefficient of two lists",
+      "category": "builtin"
+    },
+    {
+      "name": "cos",
+      "arity": 1,
+      "variadic": false,
+      "description": "calculate the cosine",
+      "category": "builtin"
+    },
+    {
+      "name": "cosh",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the hyperbolic cosine",
+      "category": "builtin"
+    },
+    {
+      "name": "cosine_similarity",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute cosine similarity between two vectors",
+      "category": "builtin"
+    },
+    {
+      "name": "covar_pop",
+      "arity": 2,
+      "variadic": false,
+      "description": "Return the population covariance of two lists",
+      "category": "builtin"
+    },
+    {
+      "name": "covar_samp",
+      "arity": 2,
+      "variadic": false,
+      "description": "Return the sample covariance of two lists",
+      "category": "builtin"
+    },
+    {
+      "name": "curr_val",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the current value of a sequence without incrementing",
+      "category": "builtin"
+    },
+    {
+      "name": "current_database",
+      "arity": 0,
+      "variadic": false,
+      "description": "Return the current database name",
+      "category": "builtin"
+    },
+    {
+      "name": "current_date",
+      "arity": 0,
+      "variadic": false,
+      "description": "Get current date",
+      "category": "builtin"
+    },
+    {
+      "name": "current_timestamp",
+      "arity": 0,
+      "variadic": false,
+      "description": "Get current timestamp",
+      "category": "builtin"
+    },
+    {
+      "name": "current_user",
+      "arity": 0,
+      "variadic": false,
+      "description": "Return the current user name",
+      "category": "builtin"
+    },
+    {
+      "name": "date",
+      "arity": 1,
+      "variadic": true,
+      "description": "Date of creation",
+      "category": "builtin"
+    },
+    {
+      "name": "date_add",
+      "arity": 2,
+      "variadic": false,
+      "description": "Add interval to date/datetime",
+      "category": "builtin"
+    },
+    {
+      "name": "date_diff",
+      "arity": 2,
+      "variadic": false,
+      "description": "Calculate difference between two dates/datetimes",
+      "category": "builtin"
+    },
+    {
+      "name": "date_part",
+      "arity": 2,
+      "variadic": false,
+      "description": "Extract date part (year, month, day, hour, minute, second, dow, doy, quarter)",
+      "category": "builtin"
+    },
+    {
+      "name": "date_sub",
+      "arity": 2,
+      "variadic": false,
+      "description": "Subtract interval from date/datetime",
+      "category": "builtin"
+    },
+    {
+      "name": "date_trunc",
+      "arity": 2,
+      "variadic": false,
+      "description": "Truncate date/datetime to specified precision",
+      "category": "builtin"
+    },
+    {
+      "name": "datetime",
+      "arity": 0,
+      "variadic": true,
+      "description": "Creation date and time",
+      "category": "date"
+    },
+    {
+      "name": "day",
+      "arity": 1,
+      "variadic": false,
+      "description": "Withdrawal date",
+      "category": "builtin"
+    },
+    {
+      "name": "day_name",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get day name from date/datetime",
+      "category": "builtin"
+    },
+    {
+      "name": "decode",
+      "arity": 1,
+      "variadic": false,
+      "description": "Decode a blob to string using encoding (UTF8, HEX, BASE64)",
+      "category": "builtin"
+    },
+    {
+      "name": "degree",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the degree (number of edges) of a vertex",
+      "category": "builtin"
+    },
+    {
+      "name": "degrees",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert radians to degrees",
+      "category": "builtin"
+    },
+    {
+      "name": "dense_rank",
+      "arity": 0,
+      "variadic": false,
+      "description": "Returns the rank of each row without gaps",
+      "category": "builtin"
+    },
+    {
+      "name": "dimension",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the dimension of a vector",
+      "category": "builtin"
+    },
+    {
+      "name": "dot_product",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute dot product of two vectors",
+      "category": "builtin"
+    },
+    {
+      "name": "dst",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the target vertex ID of the edge",
+      "category": "builtin"
+    },
+    {
+      "name": "e",
+      "arity": 0,
+      "variadic": false,
+      "description": "Returns the natural constant e",
+      "category": "builtin"
+    },
+    {
+      "name": "element_at",
+      "arity": 2,
+      "variadic": false,
+      "description": "Get element at index from list or map",
+      "category": "builtin"
+    },
+    {
+      "name": "encode",
+      "arity": 1,
+      "variadic": false,
+      "description": "Encode a string to blob using encoding (UTF8, HEX, BASE64)",
+      "category": "builtin"
+    },
+    {
+      "name": "endnode",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the target vertex of the edge",
+      "category": "builtin"
+    },
+    {
+      "name": "ends_with",
+      "arity": 2,
+      "variadic": false,
+      "description": "Checks if the specified string ends",
+      "category": "builtin"
+    },
+    {
+      "name": "epoch_ms",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert date/datetime to epoch milliseconds",
+      "category": "builtin"
+    },
+    {
+      "name": "euclidean_distance",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute Euclidean distance between two vectors",
+      "category": "builtin"
+    },
+    {
+      "name": "even",
+      "arity": 1,
+      "variadic": false,
+      "description": "Round up to nearest even integer",
+      "category": "builtin"
+    },
+    {
+      "name": "exp2",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculating powers of 2",
+      "category": "builtin"
+    },
+    {
+      "name": "factorial",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate factorial of a number",
+      "category": "builtin"
+    },
+    {
+      "name": "field_score",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the field-specific relevance score",
+      "category": "builtin"
+    },
+    {
+      "name": "first_value",
+      "arity": 1,
+      "variadic": false,
+      "description": "Returns the first value in an ordered set of values",
+      "category": "builtin"
+    },
+    {
+      "name": "floor",
+      "arity": 1,
+      "variadic": false,
+      "description": "round down",
+      "category": "numeric"
+    },
+    {
+      "name": "format",
+      "arity": 2,
+      "variadic": true,
+      "description": "Format string with placeholders",
+      "category": "builtin"
+    },
+    {
+      "name": "gamma",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate gamma function",
+      "category": "builtin"
+    },
+    {
+      "name": "gcd",
+      "arity": 2,
+      "variadic": false,
+      "description": "Greatest common divisor",
+      "category": "builtin"
+    },
+    {
+      "name": "gen_random_uuid",
+      "arity": 0,
+      "variadic": false,
+      "description": "Generate a random UUID v4",
+      "category": "builtin"
+    },
+    {
+      "name": "generate_series",
+      "arity": 2,
+      "variadic": true,
+      "description": "Generate a series of timestamps",
+      "category": "builtin"
+    },
+    {
+      "name": "greatest",
+      "arity": 2,
+      "variadic": true,
+      "description": "Return the largest of the arguments",
+      "category": "builtin"
+    },
+    {
+      "name": "hash",
+      "arity": 1,
+      "variadic": false,
+      "description": "Compute the hash",
+      "category": "builtin"
+    },
+    {
+      "name": "head",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the first element of the list",
+      "category": "list"
+    },
+    {
+      "name": "highlight",
+      "arity": 4,
+      "variadic": true,
+      "description": "Get highlighted text fragments for a field",
+      "category": "builtin"
+    },
+    {
+      "name": "hour",
+      "arity": 1,
+      "variadic": false,
+      "description": "Withdrawal hours",
+      "category": "builtin"
+    },
+    {
+      "name": "hypot",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute the hypotenuse of a right triangle",
+      "category": "builtin"
+    },
+    {
+      "name": "id",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the ID of the vertex",
+      "category": "type"
+    },
+    {
+      "name": "ifnull",
+      "arity": 2,
+      "variadic": false,
+      "description": "Return first argument if not NULL, otherwise second argument",
+      "category": "builtin"
+    },
+    {
+      "name": "in_edges",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all incoming edges of a vertex",
+      "category": "builtin"
+    },
+    {
+      "name": "initcap",
+      "arity": 1,
+      "variadic": false,
+      "description": "Capitalize first letter of each word",
+      "category": "builtin"
+    },
+    {
+      "name": "insert",
+      "arity": 4,
+      "variadic": false,
+      "description": "Insert substring at specified position",
+      "category": "builtin"
+    },
+    {
+      "name": "is_acyclic",
+      "arity": 1,
+      "variadic": false,
+      "description": "Check if path is acyclic (no repeated vertices)",
+      "category": "builtin"
+    },
+    {
+      "name": "is_trail",
+      "arity": 1,
+      "variadic": false,
+      "description": "Check if path is a trail (no repeated edges)",
+      "category": "builtin"
+    },
+    {
+      "name": "json_build_array",
+      "arity": 0,
+      "variadic": true,
+      "description": "Build a JSON array from a list of values",
+      "category": "builtin"
+    },
+    {
+      "name": "json_build_object",
+      "arity": 0,
+      "variadic": true,
+      "description": "Build a JSON object from key-value pairs",
+      "category": "builtin"
+    },
+    {
+      "name": "json_each",
+      "arity": 1,
+      "variadic": false,
+      "description": "Expand a JSON object into key-value pairs",
+      "category": "builtin"
+    },
+    {
+      "name": "json_extract",
+      "arity": 2,
+      "variadic": false,
+      "description": "Extract the value of a specified path from a JSON string",
+      "category": "builtin"
+    },
+    {
+      "name": "json_object_keys",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get keys from a JSON object",
+      "category": "builtin"
+    },
+    {
+      "name": "json_strip_nulls",
+      "arity": 1,
+      "variadic": false,
+      "description": "Strip null values from a JSON object or array",
+      "category": "builtin"
+    },
+    {
+      "name": "json_typeof",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the type of a JSON value",
+      "category": "builtin"
+    },
+    {
+      "name": "keys",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all the keys for vertices, edges, or mappings.",
+      "category": "builtin"
+    },
+    {
+      "name": "l2_norm",
+      "arity": 1,
+      "variadic": false,
+      "description": "Compute L2 norm of a vector",
+      "category": "builtin"
+    },
+    {
+      "name": "labels",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all labels (aliases) of a vertex",
+      "category": "builtin"
+    },
+    {
+      "name": "lag",
+      "arity": 2,
+      "variadic": false,
+      "description": "Returns the value of a column from the previous row",
+      "category": "builtin"
+    },
+    {
+      "name": "last",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the last element of the list",
+      "category": "builtin"
+    },
+    {
+      "name": "last_day",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get last day of the month",
+      "category": "builtin"
+    },
+    {
+      "name": "last_value",
+      "arity": 1,
+      "variadic": false,
+      "description": "Returns the last value in an ordered set of values",
+      "category": "builtin"
+    },
+    {
+      "name": "lcm",
+      "arity": 2,
+      "variadic": false,
+      "description": "Least common multiple",
+      "category": "builtin"
+    },
+    {
+      "name": "lead",
+      "arity": 2,
+      "variadic": false,
+      "description": "Returns the value of a column from the next row",
+      "category": "builtin"
+    },
+    {
+      "name": "least",
+      "arity": 2,
+      "variadic": true,
+      "description": "Return the smallest of the arguments",
+      "category": "builtin"
+    },
+    {
+      "name": "left",
+      "arity": 2,
+      "variadic": false,
+      "description": "Get first N characters of string",
+      "category": "builtin"
+    },
+    {
+      "name": "length",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the length of a string, path, or list",
+      "category": "string"
+    },
+    {
+      "name": "levenshtein",
+      "arity": 2,
+      "variadic": false,
+      "description": "Calculate Levenshtein edit distance between two strings",
+      "category": "builtin"
+    },
+    {
+      "name": "lgamma",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate natural logarithm of absolute value of gamma function",
+      "category": "builtin"
+    },
+    {
+      "name": "list_all",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if all elements in mask list are true",
+      "category": "builtin"
+    },
+    {
+      "name": "list_any",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if any element in mask list is true",
+      "category": "builtin"
+    },
+    {
+      "name": "list_append",
+      "arity": 2,
+      "variadic": false,
+      "description": "Append element to list",
+      "category": "builtin"
+    },
+    {
+      "name": "list_concat",
+      "arity": 2,
+      "variadic": true,
+      "description": "Concatenate multiple lists into one",
+      "category": "builtin"
+    },
+    {
+      "name": "list_contains",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if list contains a value",
+      "category": "builtin"
+    },
+    {
+      "name": "list_distinct",
+      "arity": 1,
+      "variadic": false,
+      "description": "Remove duplicate elements from list",
+      "category": "builtin"
+    },
+    {
+      "name": "list_extract",
+      "arity": 2,
+      "variadic": false,
+      "description": "Extract element from list at specified index",
+      "category": "builtin"
+    },
+    {
+      "name": "list_filter",
+      "arity": 2,
+      "variadic": false,
+      "description": "Filter list elements by predicate",
+      "category": "builtin"
+    },
+    {
+      "name": "list_prepend",
+      "arity": 2,
+      "variadic": false,
+      "description": "Prepend element to list",
+      "category": "builtin"
+    },
+    {
+      "name": "list_reduce",
+      "arity": 3,
+      "variadic": false,
+      "description": "Reduce list to a single value using accumulator",
+      "category": "builtin"
+    },
+    {
+      "name": "list_single",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if exactly one element in mask list is true",
+      "category": "builtin"
+    },
+    {
+      "name": "list_slice",
+      "arity": 3,
+      "variadic": false,
+      "description": "Extract a slice from a list",
+      "category": "builtin"
+    },
+    {
+      "name": "list_sort",
+      "arity": 1,
+      "variadic": false,
+      "description": "Sort list elements",
+      "category": "builtin"
+    },
+    {
+      "name": "list_to_string",
+      "arity": 2,
+      "variadic": false,
+      "description": "Convert a list to a string with delimiter",
+      "category": "builtin"
+    },
+    {
+      "name": "list_transform",
+      "arity": 2,
+      "variadic": false,
+      "description": "Transform list elements by function",
+      "category": "builtin"
+    },
+    {
+      "name": "list_unique",
+      "arity": 1,
+      "variadic": false,
+      "description": "Remove duplicate elements from list",
+      "category": "builtin"
+    },
+    {
+      "name": "log",
+      "arity": 2,
+      "variadic": false,
+      "description": "logarithmic",
+      "category": "builtin"
+    },
+    {
+      "name": "log10",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculating logarithms with base 10",
+      "category": "builtin"
+    },
+    {
+      "name": "log2",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculating logarithms with a base of 2",
+      "category": "builtin"
+    },
+    {
+      "name": "lower",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert to lowercase",
+      "category": "string"
+    },
+    {
+      "name": "lpad",
+      "arity": 3,
+      "variadic": false,
+      "description": "Left padding string",
+      "category": "builtin"
+    },
+    {
+      "name": "manhattan_distance",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compute Manhattan distance between two vectors",
+      "category": "builtin"
+    },
+    {
+      "name": "map",
+      "arity": 0,
+      "variadic": true,
+      "description": "Create a map from key-value pairs",
+      "category": "builtin"
+    },
+    {
+      "name": "map_extract",
+      "arity": 2,
+      "variadic": false,
+      "description": "Extract value from map by key",
+      "category": "builtin"
+    },
+    {
+      "name": "map_keys",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all keys from a map",
+      "category": "builtin"
+    },
+    {
+      "name": "map_values",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all values from a map",
+      "category": "builtin"
+    },
+    {
+      "name": "matched_fields",
+      "arity": 0,
+      "variadic": false,
+      "description": "Get the list of matched fields",
+      "category": "builtin"
+    },
+    {
+      "name": "minute",
+      "arity": 1,
+      "variadic": false,
+      "description": "Extraction minutes",
+      "category": "builtin"
+    },
+    {
+      "name": "month",
+      "arity": 1,
+      "variadic": false,
+      "description": "Month of withdrawal",
+      "category": "builtin"
+    },
+    {
+      "name": "month_name",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get month name from date/datetime",
+      "category": "builtin"
+    },
+    {
+      "name": "negate",
+      "arity": 1,
+      "variadic": false,
+      "description": "Negate a number",
+      "category": "builtin"
+    },
+    {
+      "name": "neighbors",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all neighbor vertex IDs of a vertex",
+      "category": "builtin"
+    },
+    {
+      "name": "next_val",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the next value of a sequence with atomic increment",
+      "category": "builtin"
+    },
+    {
+      "name": "nnz",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get number of non-zero elements in a vector",
+      "category": "builtin"
+    },
+    {
+      "name": "nodes",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all vertices in the path",
+      "category": "builtin"
+    },
+    {
+      "name": "normalize",
+      "arity": 1,
+      "variadic": false,
+      "description": "Normalize a vector to unit length",
+      "category": "builtin"
+    },
+    {
+      "name": "now",
+      "arity": 0,
+      "variadic": false,
+      "description": "current timestamp",
+      "category": "builtin"
+    },
+    {
+      "name": "nth_value",
+      "arity": 2,
+      "variadic": false,
+      "description": "Returns the Nth value in an ordered set of values",
+      "category": "builtin"
+    },
+    {
+      "name": "ntile",
+      "arity": 1,
+      "variadic": false,
+      "description": "Divides rows into N buckets",
+      "category": "builtin"
+    },
+    {
+      "name": "nullif",
+      "arity": 2,
+      "variadic": false,
+      "description": "Return NULL if two values are equal",
+      "category": "builtin"
+    },
+    {
+      "name": "octet_length",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the number of bytes in a string or blob",
+      "category": "builtin"
+    },
+    {
+      "name": "out_edges",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all outgoing edges of a vertex",
+      "category": "builtin"
+    },
+    {
+      "name": "pagerank",
+      "arity": 0,
+      "variadic": false,
+      "description": "Calculate PageRank scores for all vertices in the graph",
+      "category": "builtin"
+    },
+    {
+      "name": "path_properties",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all properties from vertices and edges in the path",
+      "category": "builtin"
+    },
+    {
+      "name": "pi",
+      "arity": 0,
+      "variadic": false,
+      "description": "Return to pi",
+      "category": "builtin"
+    },
+    {
+      "name": "position",
+      "arity": 2,
+      "variadic": false,
+      "description": "Find position of substring",
+      "category": "builtin"
+    },
+    {
+      "name": "pow",
+      "arity": 2,
+      "variadic": false,
+      "description": "exponentiate (math.)",
+      "category": "builtin"
+    },
+    {
+      "name": "properties",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all attributes of a vertex or edge",
+      "category": "type"
+    },
+    {
+      "name": "radians",
+      "arity": 1,
+      "variadic": false,
+      "description": "Angle to radian",
+      "category": "builtin"
+    },
+    {
+      "name": "rand",
+      "arity": 0,
+      "variadic": false,
+      "description": "Generate random floating point numbers",
+      "category": "builtin"
+    },
+    {
+      "name": "rand32",
+      "arity": 0,
+      "variadic": true,
+      "description": "Generate 32-bit random integers",
+      "category": "builtin"
+    },
+    {
+      "name": "rand64",
+      "arity": 0,
+      "variadic": false,
+      "description": "Generate 64-bit random integers",
+      "category": "builtin"
+    },
+    {
+      "name": "range",
+      "arity": 2,
+      "variadic": true,
+      "description": "Generate a list of integer ranges",
+      "category": "builtin"
+    },
+    {
+      "name": "rank",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the edge's rank value",
+      "category": "builtin"
+    },
+    {
+      "name": "regex_find",
+      "arity": 2,
+      "variadic": false,
+      "description": "regular expression lookup (computing)",
+      "category": "builtin"
+    },
+    {
+      "name": "regex_match",
+      "arity": 2,
+      "variadic": false,
+      "description": "regular expression matching (math.)",
+      "category": "builtin"
+    },
+    {
+      "name": "regex_replace",
+      "arity": 3,
+      "variadic": false,
+      "description": "regular expression substitution",
+      "category": "builtin"
+    },
+    {
+      "name": "regexp_extract",
+      "arity": 2,
+      "variadic": false,
+      "description": "Extract first match of regex pattern",
+      "category": "builtin"
+    },
+    {
+      "name": "regexp_extract_all",
+      "arity": 2,
+      "variadic": false,
+      "description": "Extract all matches of regex pattern",
+      "category": "builtin"
+    },
+    {
+      "name": "regexp_full_match",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if string fully matches regex pattern",
+      "category": "builtin"
+    },
+    {
+      "name": "regexp_split_to_array",
+      "arity": 2,
+      "variadic": false,
+      "description": "Split string by regex pattern into array",
+      "category": "builtin"
+    },
+    {
+      "name": "relationships",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all edges in the path",
+      "category": "builtin"
+    },
+    {
+      "name": "repeat",
+      "arity": 2,
+      "variadic": false,
+      "description": "Repeat string N times",
+      "category": "builtin"
+    },
+    {
+      "name": "replace",
+      "arity": 2,
+      "variadic": false,
+      "description": "Replacement String",
+      "category": "string"
+    },
+    {
+      "name": "reverse",
+      "arity": 1,
+      "variadic": false,
+      "description": "inversion list",
+      "category": "list"
+    },
+    {
+      "name": "reverse_string",
+      "arity": 1,
+      "variadic": false,
+      "description": "Reverse a string",
+      "category": "builtin"
+    },
+    {
+      "name": "right",
+      "arity": 2,
+      "variadic": false,
+      "description": "Get last N characters of string",
+      "category": "builtin"
+    },
+    {
+      "name": "round",
+      "arity": 1,
+      "variadic": false,
+      "description": "discard four, but treat five as whole (of decimal points)",
+      "category": "numeric"
+    },
+    {
+      "name": "row_number",
+      "arity": 0,
+      "variadic": false,
+      "description": "Returns the sequential number of a row within a result set",
+      "category": "builtin"
+    },
+    {
+      "name": "rpad",
+      "arity": 3,
+      "variadic": false,
+      "description": "Right Fill String",
+      "category": "builtin"
+    },
+    {
+      "name": "score",
+      "arity": 0,
+      "variadic": false,
+      "description": "Get the relevance score of a document in full-text search",
+      "category": "builtin"
+    },
+    {
+      "name": "search_match",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if a field matches a search query pattern",
+      "category": "builtin"
+    },
+    {
+      "name": "second",
+      "arity": 1,
+      "variadic": false,
+      "description": "withdrawal second",
+      "category": "builtin"
+    },
+    {
+      "name": "set_seed",
+      "arity": 1,
+      "variadic": false,
+      "description": "Set random seed",
+      "category": "builtin"
+    },
+    {
+      "name": "shortest_path",
+      "arity": 2,
+      "variadic": false,
+      "description": "Find the shortest path between two vertices (returns path length)",
+      "category": "builtin"
+    },
+    {
+      "name": "sign",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return Value Symbol",
+      "category": "builtin"
+    },
+    {
+      "name": "sin",
+      "arity": 1,
+      "variadic": false,
+      "description": "calculate the sine",
+      "category": "builtin"
+    },
+    {
+      "name": "sinh",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the hyperbolic sine",
+      "category": "builtin"
+    },
+    {
+      "name": "size",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the size of a string, list, map, or set",
+      "category": "string"
+    },
+    {
+      "name": "snippet",
+      "arity": 2,
+      "variadic": true,
+      "description": "Get a text snippet from a field",
+      "category": "builtin"
+    },
+    {
+      "name": "split",
+      "arity": 2,
+      "variadic": false,
+      "description": "Split String",
+      "category": "builtin"
+    },
+    {
+      "name": "split_part",
+      "arity": 3,
+      "variadic": false,
+      "description": "Split string by delimiter and return Nth part",
+      "category": "builtin"
+    },
+    {
+      "name": "sqrt",
+      "arity": 1,
+      "variadic": false,
+      "description": "square root calculation",
+      "category": "numeric"
+    },
+    {
+      "name": "src",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the starting vertex ID of the edge",
+      "category": "builtin"
+    },
+    {
+      "name": "st_area",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the area of a polygon in square kilometers",
+      "category": "builtin"
+    },
+    {
+      "name": "st_asgeojson",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert geography to GeoJSON string",
+      "category": "builtin"
+    },
+    {
+      "name": "st_astext",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert geographic objects to WKT text",
+      "category": "builtin"
+    },
+    {
+      "name": "st_boundary",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the boundary of a geometry",
+      "category": "builtin"
+    },
+    {
+      "name": "st_buffer",
+      "arity": 2,
+      "variadic": false,
+      "description": "Create a buffer around a geometry",
+      "category": "builtin"
+    },
+    {
+      "name": "st_centroid",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the center point of a geographic object",
+      "category": "builtin"
+    },
+    {
+      "name": "st_contains",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if geometry A contains geometry B",
+      "category": "builtin"
+    },
+    {
+      "name": "st_coveredby",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if the first geographic object is overwritten by the second",
+      "category": "builtin"
+    },
+    {
+      "name": "st_covers",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if the first geographic object overrides the second",
+      "category": "builtin"
+    },
+    {
+      "name": "st_crosses",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if geometry A crosses geometry B",
+      "category": "builtin"
+    },
+    {
+      "name": "st_distance",
+      "arity": 2,
+      "variadic": false,
+      "description": "Calculation of the distance between two geographical objects (in kilometers)",
+      "category": "builtin"
+    },
+    {
+      "name": "st_dwithin",
+      "arity": 3,
+      "variadic": false,
+      "description": "Check that two geographic objects are within the specified distance (in kilometers)",
+      "category": "builtin"
+    },
+    {
+      "name": "st_endpoint",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the end point of a linestring",
+      "category": "builtin"
+    },
+    {
+      "name": "st_envelope",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the bounding box of a geometry as a polygon",
+      "category": "builtin"
+    },
+    {
+      "name": "st_equals",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if two geometries are spatially equal",
+      "category": "builtin"
+    },
+    {
+      "name": "st_geogfromtext",
+      "arity": 1,
+      "variadic": false,
+      "description": "Creating geographic objects from WKT text",
+      "category": "builtin"
+    },
+    {
+      "name": "st_geometrytype",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the geometry type name",
+      "category": "builtin"
+    },
+    {
+      "name": "st_geomfromgeojson",
+      "arity": 1,
+      "variadic": false,
+      "description": "Create geography from GeoJSON string",
+      "category": "builtin"
+    },
+    {
+      "name": "st_intersects",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if two geographic objects intersect",
+      "category": "builtin"
+    },
+    {
+      "name": "st_isclosed",
+      "arity": 1,
+      "variadic": false,
+      "description": "Check if a linestring is closed",
+      "category": "builtin"
+    },
+    {
+      "name": "st_isring",
+      "arity": 1,
+      "variadic": false,
+      "description": "Check if a linestring is a ring",
+      "category": "builtin"
+    },
+    {
+      "name": "st_isvalid",
+      "arity": 1,
+      "variadic": false,
+      "description": "Checking the validity of geographic objects",
+      "category": "builtin"
+    },
+    {
+      "name": "st_length",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the length of a linestring in kilometers",
+      "category": "builtin"
+    },
+    {
+      "name": "st_npoints",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the number of points in a geometry",
+      "category": "builtin"
+    },
+    {
+      "name": "st_overlaps",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if geometry A overlaps geometry B",
+      "category": "builtin"
+    },
+    {
+      "name": "st_perimeter",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the perimeter of a polygon in kilometers",
+      "category": "builtin"
+    },
+    {
+      "name": "st_point",
+      "arity": 2,
+      "variadic": false,
+      "description": "Create Geographic Points (Longitude, Latitude)",
+      "category": "builtin"
+    },
+    {
+      "name": "st_startpoint",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the start point of a linestring",
+      "category": "builtin"
+    },
+    {
+      "name": "st_touches",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if geometry A touches geometry B",
+      "category": "builtin"
+    },
+    {
+      "name": "st_within",
+      "arity": 2,
+      "variadic": false,
+      "description": "Check if geometry A is within geometry B",
+      "category": "builtin"
+    },
+    {
+      "name": "startnode",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the starting vertex of the edge",
+      "category": "builtin"
+    },
+    {
+      "name": "starts_with",
+      "arity": 2,
+      "variadic": false,
+      "description": "Checks if it starts with the specified string",
+      "category": "builtin"
+    },
+    {
+      "name": "strcasecmp",
+      "arity": 2,
+      "variadic": false,
+      "description": "Compare strings case-insensitively",
+      "category": "builtin"
+    },
+    {
+      "name": "string_split",
+      "arity": 2,
+      "variadic": false,
+      "description": "Split string into substrings by delimiter",
+      "category": "builtin"
+    },
+    {
+      "name": "struct_extract",
+      "arity": 2,
+      "variadic": false,
+      "description": "Extract field from struct",
+      "category": "builtin"
+    },
+    {
+      "name": "struct_pack",
+      "arity": 0,
+      "variadic": true,
+      "description": "Pack values into a struct",
+      "category": "builtin"
+    },
+    {
+      "name": "substring",
+      "arity": 3,
+      "variadic": false,
+      "description": "Get substring",
+      "category": "string"
+    },
+    {
+      "name": "tags",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all labels of a vertex",
+      "category": "builtin"
+    },
+    {
+      "name": "tail",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get all elements of the list except the first one",
+      "category": "list"
+    },
+    {
+      "name": "tan",
+      "arity": 1,
+      "variadic": false,
+      "description": "arithmetic tangent (math.)",
+      "category": "builtin"
+    },
+    {
+      "name": "tanh",
+      "arity": 1,
+      "variadic": false,
+      "description": "Calculate the hyperbolic tangent",
+      "category": "builtin"
+    },
+    {
+      "name": "time",
+      "arity": 1,
+      "variadic": true,
+      "description": "Creation time",
+      "category": "builtin"
+    },
+    {
+      "name": "timestamp",
+      "arity": 0,
+      "variadic": true,
+      "description": "Get current timestamp or convert datetime to timestamp",
+      "category": "date"
+    },
+    {
+      "name": "to_bool",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert to Boolean",
+      "category": "builtin"
+    },
+    {
+      "name": "to_char",
+      "arity": 2,
+      "variadic": false,
+      "description": "Format datetime as string",
+      "category": "builtin"
+    },
+    {
+      "name": "to_date",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert string to date",
+      "category": "builtin"
+    },
+    {
+      "name": "to_days",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert number to days interval",
+      "category": "builtin"
+    },
+    {
+      "name": "to_epoch_ms",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert date/datetime to epoch milliseconds",
+      "category": "builtin"
+    },
+    {
+      "name": "to_float",
+      "arity": 1,
+      "variadic": false,
+      "description": "convert to floating point",
+      "category": "builtin"
+    },
+    {
+      "name": "to_hours",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert number to hours interval",
+      "category": "builtin"
+    },
+    {
+      "name": "to_int",
+      "arity": 1,
+      "variadic": false,
+      "description": "convert to an integer (math.)",
+      "category": "builtin"
+    },
+    {
+      "name": "to_microseconds",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert number to microseconds interval",
+      "category": "builtin"
+    },
+    {
+      "name": "to_milliseconds",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert number to milliseconds interval",
+      "category": "builtin"
+    },
+    {
+      "name": "to_minutes",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert number to minutes interval",
+      "category": "builtin"
+    },
+    {
+      "name": "to_months",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert number to months interval",
+      "category": "builtin"
+    },
+    {
+      "name": "to_seconds",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert number to seconds interval",
+      "category": "builtin"
+    },
+    {
+      "name": "to_string",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert to String",
+      "category": "builtin"
+    },
+    {
+      "name": "to_timestamp",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert epoch seconds to timestamp",
+      "category": "builtin"
+    },
+    {
+      "name": "to_years",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert number to years interval",
+      "category": "builtin"
+    },
+    {
+      "name": "toset",
+      "arity": 1,
+      "variadic": false,
+      "description": "Convert the list to a set.",
+      "category": "builtin"
+    },
+    {
+      "name": "translate",
+      "arity": 3,
+      "variadic": false,
+      "description": "Replace characters in string using mapping",
+      "category": "builtin"
+    },
+    {
+      "name": "trim",
+      "arity": 1,
+      "variadic": false,
+      "description": "Remove header and footer",
+      "category": "string"
+    },
+    {
+      "name": "type",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the type of the edge",
+      "category": "type"
+    },
+    {
+      "name": "typeof",
+      "arity": 1,
+      "variadic": false,
+      "description": "Return the type name of a value",
+      "category": "builtin"
+    },
+    {
+      "name": "union_extract",
+      "arity": 1,
+      "variadic": false,
+      "description": "Extract the value from a union value",
+      "category": "builtin"
+    },
+    {
+      "name": "union_tag",
+      "arity": 1,
+      "variadic": false,
+      "description": "Get the tag of a union value",
+      "category": "builtin"
+    },
+    {
+      "name": "union_value",
+      "arity": 2,
+      "variadic": false,
+      "description": "Create a union value with a tag and a value",
+      "category": "builtin"
+    },
+    {
+      "name": "upper",
+      "arity": 1,
+      "variadic": false,
+      "description": "convert to uppercase",
+      "category": "string"
+    },
+    {
+      "name": "variable_length_path",
+      "arity": 3,
+      "variadic": true,
+      "description": "Find all paths between two vertices within a depth range (start_vid, end_vid, max_depth) or (start_vid, end_vid, min_depth, max_depth)",
+      "category": "builtin"
+    },
+    {
+      "name": "version",
+      "arity": 0,
+      "variadic": false,
+      "description": "Return the Linkrs version string",
+      "category": "builtin"
+    },
+    {
+      "name": "year",
+      "arity": 1,
+      "variadic": false,
+      "description": "Year of extraction",
+      "category": "builtin"
+    }
+  ]
+}

@@ -542,6 +542,9 @@ impl UnaryOperationEvaluator {
             // Logical operations
             UnaryOperator::Not => Self::eval_not(value),
 
+            // Bitwise operations
+            UnaryOperator::BitNot => Self::eval_bit_not(value),
+
             // Existence check
             UnaryOperator::IsNull => Self::eval_is_null(value),
             UnaryOperator::IsNotNull => Self::eval_is_not_null(value),
@@ -560,6 +563,10 @@ impl UnaryOperationEvaluator {
 
     fn eval_not(value: &Value) -> Result<Value, ExpressionError> {
         value.not().map_err(ExpressionError::runtime_error)
+    }
+
+    fn eval_bit_not(value: &Value) -> Result<Value, ExpressionError> {
+        value.bit_not().map_err(ExpressionError::runtime_error)
     }
 
     fn eval_is_null(value: &Value) -> Result<Value, ExpressionError> {
@@ -590,5 +597,33 @@ impl UnaryOperationEvaluator {
                 "The EMPTY check requires the container type.",
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bit_not_negates_integer_types() {
+        assert_eq!(
+            UnaryOperationEvaluator::evaluate(&UnaryOperator::BitNot, &Value::SmallInt(5))
+                .expect("bit-not on SmallInt must succeed"),
+            Value::SmallInt(!5)
+        );
+        assert_eq!(
+            UnaryOperationEvaluator::evaluate(&UnaryOperator::BitNot, &Value::Int(5))
+                .expect("bit-not on Int must succeed"),
+            Value::Int(!5)
+        );
+        assert_eq!(
+            UnaryOperationEvaluator::evaluate(&UnaryOperator::BitNot, &Value::BigInt(5))
+                .expect("bit-not on BigInt must succeed"),
+            Value::BigInt(!5)
+        );
+        assert!(
+            UnaryOperationEvaluator::evaluate(&UnaryOperator::BitNot, &Value::Bool(true)).is_err(),
+            "bit-not on Bool must fail"
+        );
     }
 }

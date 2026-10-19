@@ -32,6 +32,7 @@ export default defineConfig(
 			'node_modules/**',
 			'.svelte-kit/**',
 			'src/lib/paraglide/**',
+			'src/lib/utils/generated/**',
 			'*.config.ts',
 			'*.config.js',
 		],

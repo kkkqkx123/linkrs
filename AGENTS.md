@@ -35,7 +35,7 @@ Workspace with 12 sub-crates under `crates/`:
 
 Root `src/` has `lib.rs`, `main.rs`, `c_api.rs` with `pub use dep_crate::api as api` re-exports.
 
-Dependency DAG: metrics → core → config → fulltext → sync → transaction → storage → query → api → server. `linkrs-core` re-exports `linkrs-metrics` under `core::stats` for compatibility; new code should depend on `linkrs-metrics` directly.
+Dependency DAG: metrics → core → config → fulltext → sync → transaction → storage → query → api → server, with `linkrs-grammar` alongside `linkrs-metrics`/`linkrs-core` at the bottom (no linkrs dependencies; only consumed by `linkrs-cli` and dev tooling). `linkrs-core` re-exports `linkrs-metrics` under `core::stats` for compatibility; new code should depend on `linkrs-metrics` directly.
 
 Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/linkrs-cli`, `crates/tantivy`
 

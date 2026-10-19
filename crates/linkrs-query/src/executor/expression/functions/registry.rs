@@ -30,6 +30,15 @@ pub struct RegistryEntry {
     pub return_type: DataType,
 }
 
+/// Exportable metadata for a registered builtin function.
+#[derive(Debug, Clone)]
+pub struct FunctionSpec {
+    pub name: String,
+    pub arity: usize,
+    pub variadic: bool,
+    pub description: String,
+}
+
 /// Function Registry
 ///
 /// Using a static distribution mechanism, functions are called directly through the BuiltinFunction and CustomFunction enumerations.
@@ -82,6 +91,33 @@ impl FunctionRegistry {
         let mut names: Vec<&str> = self.builtin_functions.keys().map(|s| s.as_str()).collect();
         names.extend(self.custom_functions.keys().map(|s| s.as_str()));
         names
+    }
+
+    /// Export metadata for every registered spelling. The map key is the
+    /// registered spelling, so compatibility aliases appear alongside their
+    /// canonical names instead of collapsing into duplicates.
+    pub fn function_specs(&self) -> Vec<FunctionSpec> {
+        let mut specs: Vec<FunctionSpec> = self
+            .builtin_functions
+            .iter()
+            .map(|(registered, entry)| {
+                let canonical = entry.function.name().to_string();
+                let name = if registered == &canonical.to_uppercase() {
+                    canonical
+                } else {
+                    registered.clone()
+                };
+                FunctionSpec {
+                    name,
+                    arity: entry.function.arity(),
+                    variadic: entry.function.is_variadic(),
+                    description: entry.function.description().to_string(),
+                }
+            })
+            .collect();
+        specs.sort_by(|a, b| a.name.cmp(&b.name));
+        specs.dedup_by(|a, b| a.name == b.name && a.arity == b.arity);
+        specs
     }
 
     /// Execute a function (based on its name)

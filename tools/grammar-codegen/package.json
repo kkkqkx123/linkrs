@@ -1,0 +1,13 @@
+{
+	"name": "@linkrs/grammar-codegen",
+	"version": "1.0.0",
+	"private": true,
+	"description": "On-demand TypeScript codegen from the committed lexical inventory snapshot",
+	"type": "module",
+	"scripts": {
+		"gen": "node gen.mjs"
+	},
+	"engines": {
+		"node": ">=22.0.0"
+	}
+}

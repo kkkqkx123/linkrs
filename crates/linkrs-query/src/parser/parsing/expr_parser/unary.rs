@@ -47,6 +47,14 @@ pub(crate) fn parse_unary_expression(
             expr: Expression::unary(op, operand.expr),
             span,
         })
+    } else if ctx.match_token(TokenKind::Tilde) {
+        let op = UnaryOperator::BitNot;
+        let operand = parse_unary_expression(ctx)?;
+        let span = ctx.merge_span(operand.span.start, operand.span.end);
+        Ok(ParseResult {
+            expr: Expression::unary(op, operand.expr),
+            span,
+        })
     } else {
         parse_exponentiation_expression(ctx)
     }

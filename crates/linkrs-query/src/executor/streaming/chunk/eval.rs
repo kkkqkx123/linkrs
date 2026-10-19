@@ -461,10 +461,12 @@ impl DataChunk {
         match expr {
             Expression::Literal(_) | Expression::Parameter(_) | Expression::Variable(_) => true,
             Expression::Unary { op, operand } => {
-                // `-` and `NOT` on a NULL row error in the value path, so the
+                // `-`, `NOT` and `~` on a NULL row error in the value path, so the
                 // promise does not hold over nullable columns.
-                if matches!(op, UnaryOperator::Minus | UnaryOperator::Not)
-                    && self.expr_references_nullable_column(operand)
+                if matches!(
+                    op,
+                    UnaryOperator::Minus | UnaryOperator::Not | UnaryOperator::BitNot
+                ) && self.expr_references_nullable_column(operand)
                 {
                     return false;
                 }

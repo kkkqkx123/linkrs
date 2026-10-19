@@ -381,7 +381,9 @@ impl<'a> ParseContext<'a> {
             TokenKind::Yield => keyword.eq_ignore_ascii_case("YIELD"),
             TokenKind::Go => keyword.eq_ignore_ascii_case("GO"),
             TokenKind::Over => keyword.eq_ignore_ascii_case("OVER"),
-            TokenKind::Step => keyword.eq_ignore_ascii_case("STEP"),
+            TokenKind::Step => {
+                keyword.eq_ignore_ascii_case("STEP") || keyword.eq_ignore_ascii_case("STEPS")
+            }
             TokenKind::Upto => keyword.eq_ignore_ascii_case("UPTO"),
             TokenKind::Limit => keyword.eq_ignore_ascii_case("LIMIT"),
             TokenKind::Asc => keyword.eq_ignore_ascii_case("ASC"),
@@ -398,8 +400,8 @@ impl<'a> ParseContext<'a> {
             TokenKind::Or => keyword.eq_ignore_ascii_case("OR"),
             TokenKind::Xor => keyword.eq_ignore_ascii_case("XOR"),
             TokenKind::Contains => keyword.eq_ignore_ascii_case("CONTAINS"),
-            TokenKind::StartsWith => keyword.eq_ignore_ascii_case("STARTS WITH"),
-            TokenKind::EndsWith => keyword.eq_ignore_ascii_case("ENDS WITH"),
+            TokenKind::StartsWith => keyword.eq_ignore_ascii_case("STARTS"),
+            TokenKind::EndsWith => keyword.eq_ignore_ascii_case("ENDS"),
             TokenKind::Case => keyword.eq_ignore_ascii_case("CASE"),
             TokenKind::When => keyword.eq_ignore_ascii_case("WHEN"),
             TokenKind::Then => keyword.eq_ignore_ascii_case("THEN"),
@@ -407,7 +409,7 @@ impl<'a> ParseContext<'a> {
             TokenKind::End => keyword.eq_ignore_ascii_case("END"),
             TokenKind::Union => keyword.eq_ignore_ascii_case("UNION"),
             TokenKind::Intersect => keyword.eq_ignore_ascii_case("INTERSECT"),
-            TokenKind::SetMinus => keyword.eq_ignore_ascii_case("SET MINUS"),
+            TokenKind::SetMinus => keyword.eq_ignore_ascii_case("MINUS"),
             TokenKind::Group => keyword.eq_ignore_ascii_case("GROUP"),
             TokenKind::Having => keyword.eq_ignore_ascii_case("HAVING"),
             TokenKind::Between => keyword.eq_ignore_ascii_case("BETWEEN"),

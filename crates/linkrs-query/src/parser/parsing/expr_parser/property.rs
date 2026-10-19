@@ -212,7 +212,9 @@ pub(crate) fn parse_postfix_expression(
                 ),
                 span,
             };
-        } else if ctx.check_token(TokenKind::NotOp) {
+        } else if ctx.check_token(TokenKind::NotOp)
+            && ctx.current_token().lexeme == "!"
+        {
             ctx.next_token();
             let span = ctx.merge_span(expression.span.start, ctx.current_position());
             expression = ParseResult {
@@ -326,6 +328,7 @@ pub(crate) fn is_pattern_predicate_follower(ctx: &ParseContext<'_>) -> bool {
             | TokenKind::ShiftLeft
             | TokenKind::ShiftRight
             | TokenKind::NotOp
+            | TokenKind::Tilde
             | TokenKind::Dot
             | TokenKind::DoubleColon
             | TokenKind::Colon

@@ -12,6 +12,8 @@ pub struct Token {
     pub lexeme: String,
     pub line: usize,
     pub column: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl Token {
@@ -21,6 +23,8 @@ impl Token {
             lexeme,
             line,
             column,
+            start: 0,
+            end: 0,
         }
     }
 
@@ -236,7 +240,6 @@ pub enum TokenKind {
     Text,
     Search,
     KeywordVector,
-    VectorLiteral(Vec<f32>),
     Client,
     Clients,
     Sign,
@@ -288,6 +291,7 @@ pub enum TokenKind {
     Ge,
     Regex,
     NotOp,
+    Tilde,
     LParen,
     RParen,
     LBracket,
@@ -429,6 +433,7 @@ impl TokenKindExt for TokenKind {
                 | TokenKind::Ge
                 | TokenKind::Regex
                 | TokenKind::NotOp
+                | TokenKind::Tilde
                 | TokenKind::Arrow
                 | TokenKind::ArrowRight
                 | TokenKind::HashArrow

@@ -361,8 +361,35 @@ pub(crate) fn parse_primary_expression(
             }
             Ok(ParseResult { expr, span })
         }
-        TokenKind::VectorLiteral(data) => {
+        TokenKind::KeywordVector => {
             ctx.next_token();
+            ctx.expect_token(TokenKind::LBracket)?;
+            let mut data = Vec::new();
+            if !matches!(ctx.current_token().kind, TokenKind::RBracket) {
+                loop {
+                    let value = match &ctx.current_token().kind {
+                        TokenKind::IntegerLiteral(n) => *n as f32,
+                        TokenKind::FloatLiteral(f) => *f as f32,
+                        _ => {
+                            return Err(ParseError::new(
+                                ParseErrorKind::SyntaxError,
+                                format!(
+                                    "Expected numeric literal in VECTOR[...], found {:?}",
+                                    ctx.current_token().kind
+                                ),
+                                ctx.current_position(),
+                            ));
+                        }
+                    };
+                    data.push(value);
+                    ctx.next_token();
+                    if ctx.match_token(TokenKind::Comma) {
+                        continue;
+                    }
+                    break;
+                }
+            }
+            ctx.expect_token(TokenKind::RBracket)?;
             let span = ctx.merge_span(start_pos, ctx.current_position());
             Ok(ParseResult {
                 expr: Expression::vector(data),

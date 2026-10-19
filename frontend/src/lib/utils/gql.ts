@@ -1,4 +1,4 @@
-import { CYPHER_KEYWORDS } from '$utils/monacoCypher';
+import { GENERATED_KEYWORDS } from '$utils/generated/keywords';
 
 interface ScannedStatement {
 	query: string;
@@ -214,7 +214,7 @@ export const formatQuery = (content: string): string => {
 	let inBlockComment = false;
 	let atLineStart = true;
 
-	const keywordSet = new Set(CYPHER_KEYWORDS);
+	const keywordSet = new Set(GENERATED_KEYWORDS);
 
 	const flushWord = () => {
 		if (!word) return;

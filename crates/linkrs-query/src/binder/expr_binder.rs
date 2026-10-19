@@ -79,7 +79,9 @@ impl<'a> ExpressionBinder<'a> {
             Expression::Unary { op, operand } => match op {
                 UnaryOperator::Not => DataType::Bool,
                 UnaryOperator::IsNull | UnaryOperator::IsNotNull => DataType::Bool,
-                UnaryOperator::Plus | UnaryOperator::Minus => self.resolve_type(operand),
+                UnaryOperator::Plus | UnaryOperator::Minus | UnaryOperator::BitNot => {
+                    self.resolve_type(operand)
+                }
                 UnaryOperator::IsEmpty | UnaryOperator::IsNotEmpty => DataType::Bool,
             },
 
