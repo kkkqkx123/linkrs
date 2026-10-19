@@ -5,38 +5,23 @@
 //! explain/profile execution mode at the executor layer.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::Stmt;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
-use crate::QueryContext;
-use std::sync::Arc;
+use crate::planning::planner::{Planner, PlannerEnum, PlannerError};
 
 /// Explain/Profile Statement Planner
 /// Responsible for converting EXPLAIN/PROFILE statements into execution plans.
 /// The planner delegates to the inner statement's planner and marks the result
 /// for explain/profile execution at the executor layer.
 #[derive(Debug, Clone)]
-pub struct ExplainPlanner {
-    is_profile: bool,
-}
+pub struct ExplainPlanner;
 
 impl ExplainPlanner {
     pub fn new() -> Self {
-        Self { is_profile: false }
+        Self
     }
 
     pub fn new_profile() -> Self {
-        Self { is_profile: true }
-    }
-
-    fn extract_inner_stmt<'a>(&self, stmt: &'a Stmt) -> Result<&'a Stmt, PlannerError> {
-        match stmt {
-            Stmt::Explain(explain_stmt) => Ok(explain_stmt.statement.as_ref()),
-            Stmt::Profile(profile_stmt) => Ok(profile_stmt.statement.as_ref()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement does not contain EXPLAIN or PROFILE".to_string(),
-            )),
-        }
+        Self
     }
 }
 

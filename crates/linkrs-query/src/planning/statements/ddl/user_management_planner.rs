@@ -2,12 +2,10 @@
 //! Handling query planning related to user management (CREATE USER, ALTER USER, DROP USER, CHANGE PASSWORD)
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::management::manage_node_enums::UserManageNode;
 use crate::planning::plan::core::{ArgumentNode, PlanNodeEnum};
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::QueryContext;
+use crate::planning::planner::{Planner, PlannerError};
 use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct UserManagementPlanner;
@@ -25,7 +23,6 @@ impl Planner for UserManagementPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let arg_node = ArgumentNode::new(1, "user_management_args");
 
         let final_node = match bound {

@@ -2,21 +2,17 @@
 //! Planning for the FETCH VERTICES query
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::{FetchTarget, Stmt};
 use crate::planning::plan::core::common::TagProp;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
-    ArgumentNode, GetVerticesNode, PlanNodeEnum, ProjectNode,
+    ArgumentNode, GetVerticesNode, PlanNodeEnum,
 };
 use crate::planning::plan::logical::logical_nodes::access::LogicalGetVerticesNode;
-use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::plan_combiner::logical_argument_root;
 use crate::planning::statements::projection_util;
-use crate::QueryContext;
-use std::sync::Arc;
 
 /// The FETCH VERTICES query planner
 /// Responsible for converting the FETCH VERTICES query into an execution plan.
@@ -38,7 +34,6 @@ impl Planner for FetchVerticesPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let fetch = match bound {
             BoundStatement::FetchVertices(f) => f,
             _ => {

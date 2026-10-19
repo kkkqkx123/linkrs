@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use crate::binder::{BoundExpression, BoundStatement};
 use crate::parser::ast::stmt::Steps;
-use crate::parser::ast::Stmt;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
     ArgumentNode as Argument, ExpandAllNode, FilterNode, GetVerticesNode, PlanNodeEnum,
@@ -23,12 +22,10 @@ use crate::planning::plan::logical::logical_nodes::operation::{
 use crate::planning::plan::logical::logical_nodes::traversal::LogicalExpandAllNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::plan_combiner::logical_argument_root;
-use crate::QueryContext;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use linkrs_core::types::EdgeDirection;
-use linkrs_core::Expression;
 
 /// SUBGRAPH Query Planner
 /// Responsible for converting SUBGRAPH queries into execution plans.
@@ -49,8 +46,6 @@ impl Planner for SubgraphPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let subgraph = match bound {
             BoundStatement::Subgraph(s) => s,
             _ => {
@@ -279,33 +274,6 @@ impl SubgraphPlanner {
             )
         })
     }
-
-    /// Apply all filters, returning the chained physical node together with
-    /// the registered filter conditions for the logical mirror.
-    fn apply_filters(
-        &self,
-        input: PlanNodeEnum,
-        filters: &[Expression],
-        expr_context: &Arc<ExpressionAnalysisContext>,
-    ) -> Result<(PlanNodeEnum, Vec<linkrs_core::types::ContextualExpression>), PlannerError> {
-        let mut current = input;
-        let mut conditions = Vec::new();
-
-        for condition in filters {
-            let expr_meta = linkrs_core::types::expr::ExpressionMeta::new(condition.clone());
-            let id = expr_context.register_expression(expr_meta);
-            let ctx_expr = linkrs_core::types::ContextualExpression::new(id, expr_context.clone());
-            current = match FilterNode::new(current.clone(), ctx_expr.clone()) {
-                Ok(node) => {
-                    conditions.push(ctx_expr);
-                    PlanNodeEnum::Filter(node)
-                }
-                Err(_) => current,
-            };
-        }
-
-        Ok((current, conditions))
-    }
 }
 
 /// Mirror a physical expand step over the standalone logical tree.
@@ -355,18 +323,6 @@ fn detect_pipe_input_from_bound(from: &[BoundExpression]) -> Option<String> {
         },
         _ => None,
     })
-}
-
-/// Check a single AST expression for a pipe reference (`$-`).
-fn expr_is_pipe_ref(expr: &Expression) -> Option<String> {
-    match expr {
-        Expression::Variable(name) if name == "$-" => Some(name.clone()),
-        Expression::Property { object, .. } => match object.as_ref() {
-            Expression::Variable(name) if name == "$-" => Some(name.clone()),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 impl Default for SubgraphPlanner {
@@ -424,40 +380,5 @@ mod tests {
     fn test_detect_pipe_input_from_bound_empty() {
         let from: Vec<BoundExpression> = vec![];
         assert_eq!(detect_pipe_input_from_bound(&from), None);
-    }
-
-    #[test]
-    fn test_expr_is_pipe_ref_variable() {
-        assert_eq!(
-            expr_is_pipe_ref(&Expression::Variable("$-".to_string())),
-            Some("$-".to_string())
-        );
-    }
-
-    #[test]
-    fn test_expr_is_pipe_ref_property() {
-        assert_eq!(
-            expr_is_pipe_ref(&Expression::Property {
-                object: Box::new(Expression::Variable("$-".to_string())),
-                property: "id".to_string(),
-            }),
-            Some("$-".to_string())
-        );
-    }
-
-    #[test]
-    fn test_expr_is_pipe_ref_non_pipe() {
-        assert_eq!(
-            expr_is_pipe_ref(&Expression::Variable("myvar".to_string())),
-            None
-        );
-    }
-
-    #[test]
-    fn test_expr_is_pipe_ref_literal() {
-        assert_eq!(
-            expr_is_pipe_ref(&Expression::Literal(linkrs_core::Value::Int(1))),
-            None
-        );
     }
 }

@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::Stmt;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{IntersectNode, MinusNode, UnionNode};
 use crate::planning::plan::logical::logical_nodes::graph_ops::{

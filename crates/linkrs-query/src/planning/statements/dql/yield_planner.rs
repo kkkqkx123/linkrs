@@ -3,19 +3,16 @@
 //! Query planning for processing the YIELD statement
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::Stmt;
 use crate::planning::plan::core::nodes::{
     DedupNode, FilterNode, LimitNode, ProjectNode, SortNode, StartNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::plan_combiner::{
     logical_start_root, wrap_logical_dedup, wrap_logical_filter, wrap_logical_limit,
     wrap_logical_project, wrap_logical_sort,
 };
-use crate::QueryContext;
-use linkrs_core::types::graph_schema::OrderDirection;
 use linkrs_core::YieldColumn;
 use std::sync::Arc;
 
@@ -38,8 +35,6 @@ impl Planner for YieldPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let yield_stmt = match bound {
             BoundStatement::Yield(y) => y,
             _ => {

@@ -6,25 +6,13 @@
 use std::sync::Arc;
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::Stmt;
 use crate::planning::physical_mapper::PhysicalMapper;
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
-use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::UnwindNode;
-use crate::planning::plan::core::nodes::{ArgumentNode, ProjectNode};
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
 use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
 use crate::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode;
-use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
-use crate::planning::plan::PlanNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::planning::statements::clauses::exists_planner;
-use crate::planning::statements::plan_combiner::logical_argument_root;
-use crate::planning::statements::projection_util;
-use crate::QueryContext;
-use linkrs_core::types::expr::contextual::ContextualExpression;
-use linkrs_core::YieldColumn;
+use crate::planning::planner::{Planner, PlannerError};
 
 /// UNWIND statement planner
 /// Responsible for converting the UNWIND statement into an execution plan.
@@ -35,31 +23,6 @@ impl UnwindPlanner {
     pub fn new() -> Self {
         Self
     }
-
-    fn extract_unwind_info(
-        &self,
-        stmt: &Stmt,
-    ) -> Result<(ContextualExpression, String, Option<Vec<YieldColumn>>), PlannerError> {
-        if let Stmt::Unwind(unwind_stmt) = stmt {
-            let return_columns = if let Some(return_clause) = &unwind_stmt.return_clause {
-                let mut columns = Vec::new();
-                for item in &return_clause.items {
-                    columns.push(projection_util::return_item_to_yield_column(item));
-                }
-                Some(columns)
-            } else {
-                None
-            };
-            return Ok((
-                unwind_stmt.expression.clone(),
-                unwind_stmt.variable.clone(),
-                return_columns,
-            ));
-        }
-        Err(PlannerError::PlanGenerationFailed(
-            "Expected UNWIND statement".to_string(),
-        ))
-    }
 }
 
 impl Planner for UnwindPlanner {
@@ -68,8 +31,6 @@ impl Planner for UnwindPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let unwind_stmt = match bound {
             BoundStatement::Unwind(stmt) => stmt,
             _ => {

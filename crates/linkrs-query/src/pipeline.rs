@@ -158,10 +158,6 @@ impl DmlPlanMemoKey {
             ),
         }
     }
-
-    pub fn normalized_text(&self) -> &str {
-        self.inner.query_text()
-    }
 }
 
 pub(crate) struct DmlPlanMemoEntry {

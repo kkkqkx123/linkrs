@@ -8,7 +8,6 @@
 //! - Add support for attribute projection.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::{GoStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
 use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
@@ -18,9 +17,8 @@ use crate::planning::plan::logical::logical_nodes::operation::{
 use crate::planning::plan::logical::logical_nodes::traversal::LogicalExpandAllNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::projection_util;
-use crate::QueryContext;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use linkrs_core::types::{ContextualExpression, EdgeDirection};
 use std::sync::Arc;
@@ -45,7 +43,6 @@ impl Planner for GoPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let go_stmt = match bound {
             BoundStatement::Go(go) => go,
             _ => {
@@ -202,54 +199,6 @@ impl Planner for GoPlanner {
 }
 
 impl GoPlanner {
-    /// Create the YIELD column from AST statement
-    fn build_yield_columns(
-        go_stmt: &GoStmt,
-        expr_context: &Arc<ExpressionAnalysisContext>,
-    ) -> Result<Vec<linkrs_core::YieldColumn>, PlannerError> {
-        let mut columns = Vec::new();
-
-        if let Some(ref yield_clause) = go_stmt.yield_clause {
-            for item in &yield_clause.items {
-                columns.push(projection_util::yield_item_to_yield_column(item));
-            }
-        } else {
-            let expr_meta = linkrs_core::types::expr::ExpressionMeta::new(
-                linkrs_core::Expression::Variable("dst".to_string()),
-            );
-            let id = expr_context.register_expression(expr_meta);
-            let ctx_expr = ContextualExpression::new(id, expr_context.clone());
-            columns.push(linkrs_core::YieldColumn {
-                expression: ctx_expr,
-                alias: "dst".to_string(),
-            });
-
-            let expr_meta = linkrs_core::types::expr::ExpressionMeta::new(
-                linkrs_core::Expression::Variable("edge".to_string()),
-            );
-            let id = expr_context.register_expression(expr_meta);
-            let ctx_expr = ContextualExpression::new(id, expr_context.clone());
-            columns.push(linkrs_core::YieldColumn {
-                expression: ctx_expr,
-                alias: "edge".to_string(),
-            });
-        }
-
-        if columns.is_empty() {
-            let expr_meta = linkrs_core::types::expr::ExpressionMeta::new(
-                linkrs_core::Expression::Variable("*".to_string()),
-            );
-            let id = expr_context.register_expression(expr_meta);
-            let ctx_expr = ContextualExpression::new(id, expr_context.clone());
-            columns.push(linkrs_core::YieldColumn {
-                expression: ctx_expr,
-                alias: "result".to_string(),
-            });
-        }
-
-        Ok(columns)
-    }
-
     /// Create YIELD columns from bound statement (plan_bound path)
     fn build_yield_columns_from_bound(
         &self,

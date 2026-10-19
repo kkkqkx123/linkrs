@@ -10,7 +10,6 @@
 
 use crate::binder::BoundStatement;
 use crate::metadata::{IndexMetadata, MetadataContext};
-use crate::parser::ast::{LookupStmt, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::access::{IndexLimit, ScanType};
 use crate::planning::plan::logical::logical_nodes::access::{
@@ -150,118 +149,6 @@ impl LookupPlanner {
         None
     }
 
-    fn plan_lookup(
-        &self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        selected_index: Option<&IndexMetadata>,
-        is_edge: bool,
-        tag_id: i32,
-    ) -> Result<SubPlan, PlannerError> {
-        let lookup_stmt = match validated.stmt() {
-            Stmt::Lookup(lookup_stmt) => lookup_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "LookupPlanner requires the Lookup statement.".to_string(),
-                ));
-            }
-        };
-
-        let space_id = qctx.space_id().unwrap_or(1);
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-
-        if space_id == 0 {
-            return Err(PlannerError::PlanGenerationFailed(
-                "Invalid space ID: 0".to_string(),
-            ));
-        }
-
-        // Use the verification information to optimize the planning process.
-        let validation_info = &validated.validation_info;
-
-        // 1. Check the optimization suggestions.
-        for hint in &validation_info.optimization_hints {
-            log::debug!("LOOKUP Optimization Tip: {:?}", hint);
-        }
-
-        // Extract the tag/edge name from the LOOKUP target for col_names
-        let target_name = match &lookup_stmt.target {
-            crate::parser::ast::LookupTarget::Tag(name) => name.clone(),
-            crate::parser::ast::LookupTarget::Edge(name) => name.clone(),
-            crate::parser::ast::LookupTarget::Unspecified(name) => name.clone(),
-        };
-
-        let _ = selected_index;
-        let _ = tag_id;
-
-        // Build the logical tree only (index scans are a physical choice
-        // that the logical representation drops).
-        let limit_from_yield = lookup_stmt
-            .yield_clause
-            .as_ref()
-            .and_then(|yc| yc.limit.as_ref().map(|limit| limit.count as i64));
-        let mut logical_root = if is_edge {
-            LogicalNodeEnum::ScanEdges(LogicalScanEdgesNode {
-                id: next_node_id(),
-                space_id,
-                edge_type: Some(target_name.clone()),
-                expression: None,
-                limit: limit_from_yield,
-                projected_properties: vec![],
-                index_hint: None,
-                estimated_cardinality: None,
-                output_var: None,
-                col_names: vec![target_name.clone()],
-                column_types: projection_util::unknown_column_types(1),
-            })
-        } else {
-            LogicalNodeEnum::ScanVertices(LogicalScanVerticesNode {
-                id: next_node_id(),
-                space_id,
-                space_name: space_name.clone(),
-                tag: Some(target_name.clone()),
-                expression: None,
-                limit: limit_from_yield,
-                projected_properties: vec![],
-                index_hint: None,
-                estimated_cardinality: None,
-                output_var: None,
-                col_names: vec![target_name.clone()],
-                column_types: projection_util::unknown_column_types(1),
-            })
-        };
-
-        if let Some(ref condition) = lookup_stmt.where_clause {
-            let logical_filter = LogicalFilterNode {
-                id: next_node_id(),
-                input: Some(Box::new(logical_root)),
-                condition: condition.clone(),
-                output_var: None,
-                col_names: vec![],
-                column_types: vec![],
-            };
-            logical_root = LogicalNodeEnum::Filter(logical_filter);
-        }
-
-        if lookup_stmt.yield_clause.is_some() {
-            let yield_columns = Self::build_yield_columns(lookup_stmt, validated)?;
-            let column_types = projection_util::project_column_types(&yield_columns);
-            let logical_project = LogicalProjectNode {
-                id: next_node_id(),
-                input: Some(Box::new(logical_root)),
-                columns: yield_columns.clone(),
-                subqueries: Vec::new(),
-                has_folded_expressions: false,
-                output_var: None,
-                col_names: yield_columns.iter().map(|col| col.alias.clone()).collect(),
-                column_types,
-            };
-            logical_root = LogicalNodeEnum::Project(logical_project);
-        }
-
-        Ok(SubPlan::from_logical_root(logical_root))
-    }
-
     /// Build a lookup plan from a bound statement (plan_bound path).
     fn plan_lookup_bound(
         &self,
@@ -391,7 +278,7 @@ impl LookupPlanner {
     fn build_yield_columns_from_bound(
         &self,
         lookup: &crate::binder::bound::BoundLookupStatement,
-        validated: Option<&ValidatedStatement>,
+        _validated: Option<&ValidatedStatement>,
     ) -> Result<Vec<linkrs_core::YieldColumn>, PlannerError> {
         let expr_ctx = Arc::new(
             linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
@@ -414,34 +301,6 @@ impl LookupPlanner {
             let meta = linkrs_core::types::expr::ExpressionMeta::new(expr);
             let id = expr_ctx.register_expression(meta);
             let ctx_expr = ContextualExpression::new(id, expr_ctx.clone());
-            columns.push(linkrs_core::YieldColumn {
-                expression: ctx_expr,
-                alias: "result".to_string(),
-            });
-        }
-
-        Ok(columns)
-    }
-
-    /// Construct the YIELD column
-    fn build_yield_columns(
-        lookup_stmt: &LookupStmt,
-        validated: &ValidatedStatement,
-    ) -> Result<Vec<linkrs_core::YieldColumn>, PlannerError> {
-        let mut columns = Vec::new();
-
-        if let Some(ref yield_clause) = lookup_stmt.yield_clause {
-            for item in &yield_clause.items {
-                columns.push(projection_util::yield_item_to_yield_column(item));
-            }
-        }
-
-        if columns.is_empty() {
-            let expr = Expression::Variable("_vertex".to_string());
-            let meta = linkrs_core::types::expr::ExpressionMeta::new(expr);
-            let id = validated.expr_context().register_expression(meta);
-            let ctx_expr =
-                linkrs_core::types::ContextualExpression::new(id, validated.expr_context().clone());
             columns.push(linkrs_core::YieldColumn {
                 expression: ctx_expr,
                 alias: "result".to_string(),

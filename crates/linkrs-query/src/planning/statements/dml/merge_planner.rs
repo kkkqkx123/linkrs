@@ -12,7 +12,7 @@ use crate::binder::bound::{
     BoundAssignment, BoundMergePattern, BoundPatternVertex, BoundStatement,
 };
 use crate::binder::expr_converter::bound_expr_to_contextual;
-use crate::parser::ast::{MergeStmt, Pattern, SetClause, Stmt};
+use crate::parser::ast::Stmt;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{
     EdgeInsertInfo, TagInsertSpec, UpdateTargetType, VertexInsertInfo, VertexUpdateInfo,
@@ -23,9 +23,7 @@ use crate::planning::plan::logical::logical_nodes::dml::{
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::planning::statements::clauses::exists_planner;
-use crate::QueryContext;
+use crate::planning::planner::{Planner, PlannerError};
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use linkrs_core::types::expr::ExpressionMeta;
@@ -48,150 +46,7 @@ impl MergePlanner {
         matches!(stmt, Stmt::Merge(_))
     }
 
-    fn extract_merge_stmt(&self, stmt: &Stmt) -> Result<MergeStmt, PlannerError> {
-        match stmt {
-            Stmt::Merge(merge_stmt) => Ok(merge_stmt.clone()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement does not contain the MERGE".to_string(),
-            )),
-        }
-    }
-
-    fn pattern_to_vertex_info(
-        &self,
-        pattern: &Pattern,
-        space_name: String,
-        expr_context: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
-    ) -> Result<VertexInsertInfo, PlannerError> {
-        match pattern {
-            Pattern::Node(node_pattern) => {
-                let tag_name = node_pattern
-                    .labels
-                    .first()
-                    .ok_or_else(|| {
-                        PlannerError::PlanGenerationFailed(
-                            "MERGE node pattern must have a label".to_string(),
-                        )
-                    })?
-                    .clone();
-
-                let (prop_names, prop_values, vid_expr) =
-                    if let Some(props_expr) = &node_pattern.properties {
-                        self.extract_properties_and_vid(props_expr, expr_context)?
-                    } else {
-                        let vid_expr = self.create_vid_expression(expr_context)?;
-                        (vec![], vec![], vid_expr)
-                    };
-
-                let tag_spec = TagInsertSpec {
-                    tag_name,
-                    prop_names,
-                };
-
-                Ok(VertexInsertInfo {
-                    space_name,
-                    tag: tag_spec,
-                    values: vec![(vid_expr, prop_values)],
-                    if_not_exists: true,
-                })
-            }
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "MERGE currently only supports node patterns".to_string(),
-            )),
-        }
-    }
-
-    fn pattern_to_edge_info(
-        &self,
-        pattern: &Pattern,
-        space_name: String,
-        expr_context: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
-    ) -> Result<EdgeInsertInfo, PlannerError> {
-        match pattern {
-            Pattern::Edge(edge_pattern) => {
-                let edge_name = edge_pattern
-                    .edge_types
-                    .first()
-                    .ok_or_else(|| {
-                        PlannerError::PlanGenerationFailed(
-                            "MERGE edge pattern must have an edge type".to_string(),
-                        )
-                    })?
-                    .clone();
-
-                let (prop_names, prop_values) = if let Some(props_expr) = &edge_pattern.properties {
-                    if let Some(Expression::Map(entries)) = props_expr.get_expression() {
-                        let mut names = Vec::new();
-                        let mut values = Vec::new();
-                        for (key, value) in entries {
-                            if !Self::is_constant_expression(&value) {
-                                return Err(PlannerError::PlanGenerationFailed(format!(
-                                    "MERGE pattern property '{}' must be a constant expression; \
-                                     row variables, property references, and subqueries are not allowed",
-                                    key
-                                )));
-                            }
-                            names.push(key.clone());
-                            let value_meta = ExpressionMeta::new(value.clone());
-                            let value_id = expr_context.register_expression(value_meta);
-                            let ctx_value =
-                                ContextualExpression::new(value_id, expr_context.clone());
-                            values.push(ctx_value);
-                        }
-                        (names, values)
-                    } else {
-                        (vec![], vec![])
-                    }
-                } else {
-                    (vec![], vec![])
-                };
-
-                let src_expr = self.create_vid_expression(expr_context)?;
-                let dst_expr = self.create_vid_expression(expr_context)?;
-
-                Ok(EdgeInsertInfo {
-                    space_name,
-                    edge_name,
-                    prop_names,
-                    edges: vec![(src_expr, dst_expr, None, prop_values)],
-                    if_not_exists: true,
-                })
-            }
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "pattern is not an edge pattern".to_string(),
-            )),
-        }
-    }
-
-    fn is_edge_pattern(&self, pattern: &Pattern) -> bool {
-        matches!(pattern, Pattern::Edge(_))
-    }
-
-    /// Returns `true` when the expression is a compile-time constant that can
-    /// be used as a MERGE pattern property value. Literals, query parameters
-    /// and session variables are accepted (mirroring the standalone UPDATE
-    /// vid contract); row variables, property references, function calls
-    /// and subqueries are rejected.
-    fn is_constant_expression(expr: &Expression) -> bool {
-        match expr {
-            Expression::Literal(_)
-            | Expression::Parameter(_)
-            | Expression::SessionVariable(_)
-            | Expression::Vector(_) => true,
-            Expression::List(items) => items.iter().all(Self::is_constant_expression),
-            Expression::Map(entries) => {
-                entries.iter().all(|(_, v)| Self::is_constant_expression(v))
-            }
-            Expression::Binary { left, right, .. } => {
-                Self::is_constant_expression(left) && Self::is_constant_expression(right)
-            }
-            Expression::Unary { operand, .. } => Self::is_constant_expression(operand),
-            Expression::TypeCast { expression, .. } => Self::is_constant_expression(expression),
-            _ => false,
-        }
-    }
-
-    /// Bound-statement counterpart of [`is_constant_expression`]: after DML
+    /// Bound-statement counterpart for constant checking: after DML
     /// shape normalization every literal leaf reaches the planner as a
     /// `@__dml_N` parameter, so any `ParameterRef` is accepted here while
     /// row variables, property references and subqueries are rejected.
@@ -215,48 +70,6 @@ impl MergePlanner {
         }
     }
 
-    fn extract_properties_and_vid(
-        &self,
-        props_expr: &ContextualExpression,
-        expr_context: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
-    ) -> Result<(Vec<String>, Vec<ContextualExpression>, ContextualExpression), PlannerError> {
-        if let Some(Expression::Map(entries)) = props_expr.get_expression() {
-            let mut prop_names = Vec::new();
-            let mut prop_values = Vec::new();
-
-            for (key, value) in entries {
-                if !Self::is_constant_expression(&value) {
-                    return Err(PlannerError::PlanGenerationFailed(format!(
-                        "MERGE pattern property '{}' must be a constant expression; \
-                         row variables, property references, and subqueries are not allowed",
-                        key
-                    )));
-                }
-                prop_names.push(key.clone());
-
-                let value_meta = ExpressionMeta::new(value.clone());
-                let value_id = expr_context.register_expression(value_meta);
-                let ctx_value = ContextualExpression::new(value_id, expr_context.clone());
-                prop_values.push(ctx_value);
-            }
-
-            let vid_expr = if let Some(Expression::Literal(Value::Int(i))) =
-                prop_values.first().and_then(|v| v.get_expression())
-            {
-                let vid_meta = ExpressionMeta::new(Expression::Literal(Value::Int(i)));
-                let vid_id = expr_context.register_expression(vid_meta);
-                ContextualExpression::new(vid_id, expr_context.clone())
-            } else {
-                self.create_vid_expression(expr_context)?
-            };
-
-            Ok((prop_names, prop_values, vid_expr))
-        } else {
-            let vid_expr = self.create_vid_expression(expr_context)?;
-            Ok((vec![], vec![], vid_expr))
-        }
-    }
-
     fn create_vid_expression(
         &self,
         expr_context: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
@@ -265,79 +78,6 @@ impl MergePlanner {
         let vid_meta = ExpressionMeta::new(Expression::Literal(Value::BigInt(random_id)));
         let vid_id = expr_context.register_expression(vid_meta);
         Ok(ContextualExpression::new(vid_id, expr_context.clone()))
-    }
-
-    fn build_update_info(
-        &self,
-        set_clause: &SetClause,
-        space_name: String,
-        expr_context: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
-    ) -> Result<VertexUpdateInfo, PlannerError> {
-        let mut properties = HashMap::new();
-
-        for assignment in &set_clause.assignments {
-            properties.insert(assignment.property.clone(), assignment.value.clone());
-        }
-
-        let exists_expr = Expression::Literal(Value::Bool(true));
-        let exists_meta = ExpressionMeta::new(exists_expr);
-        let exists_id = expr_context.register_expression(exists_meta);
-        let vid_expr = ContextualExpression::new(exists_id, expr_context.clone());
-
-        Ok(VertexUpdateInfo {
-            space_name,
-            vertex_id: vid_expr,
-            tag_name: None,
-            properties,
-            condition: None,
-            is_upsert: false,
-            replace_properties: set_clause.assignments.iter().any(|a| a.is_map_overwrite),
-        })
-    }
-
-    fn build_on_match_branch(
-        &self,
-        on_match: &SetClause,
-        space_name: String,
-        expr_context: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
-    ) -> Result<LogicalNodeEnum, PlannerError> {
-        let update_info = self.build_update_info(on_match, space_name, expr_context)?;
-        Ok(LogicalNodeEnum::Update(LogicalUpdateNode {
-            id: next_node_id(),
-            info: UpdateTargetType::Vertex(update_info),
-            output_var: None,
-            col_names: vec!["updated".to_string()],
-            column_types: vec![],
-        }))
-    }
-
-    fn build_on_create_branch(
-        &self,
-        vertex_info: VertexInsertInfo,
-        on_create: Option<&SetClause>,
-        space_name: String,
-        expr_context: &Arc<linkrs_core::types::expr::expression_context::ExpressionAnalysisContext>,
-    ) -> Result<LogicalNodeEnum, PlannerError> {
-        let mut current_node = LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
-            id: next_node_id(),
-            info: vertex_info,
-            output_var: None,
-            col_names: vec!["inserted".to_string()],
-            column_types: vec![],
-        });
-
-        if let Some(set_clause) = on_create {
-            let update_info = self.build_update_info(set_clause, space_name, expr_context)?;
-            current_node = LogicalNodeEnum::Update(LogicalUpdateNode {
-                id: next_node_id(),
-                info: UpdateTargetType::Vertex(update_info),
-                output_var: None,
-                col_names: vec!["updated".to_string()],
-                column_types: vec![],
-            });
-        }
-
-        Ok(current_node)
     }
 
     fn create_exists_condition(
@@ -526,7 +266,6 @@ impl Planner for MergePlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let merge = match bound {
             BoundStatement::Merge(m) => m,
             _ => {

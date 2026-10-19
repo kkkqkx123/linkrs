@@ -4,12 +4,10 @@
 //! e.g. `GO FROM 1 OVER KNOWS | YIELD target.name AS name | WHERE name != 'x'`.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::Stmt;
 use crate::planning::plan::core::nodes::{FilterNode, StartNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::plan_combiner::{logical_start_root, wrap_logical_filter};
-use crate::QueryContext;
 use std::sync::Arc;
 
 /// Standalone WHERE statement planner.
@@ -29,8 +27,6 @@ impl Planner for FilterPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let filter = match bound {
             BoundStatement::Filter(f) => f,
             _ => {

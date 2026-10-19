@@ -3,16 +3,13 @@
 //! Query planning for handling the USE <space> statement
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::Stmt;
 use crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode;
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
     nodes::{ArgumentNode, SwitchSpaceNode},
 };
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::QueryContext;
-use std::sync::Arc;
+use crate::planning::planner::{Planner, PlannerError};
 
 /// USE Statement Planner
 /// Responsible for converting USE statements into execution plans
@@ -32,8 +29,6 @@ impl Planner for UsePlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let space = match bound {
             BoundStatement::Use(u) => &u.space,
             _ => {

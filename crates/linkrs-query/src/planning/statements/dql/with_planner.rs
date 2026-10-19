@@ -3,21 +3,17 @@
 //! Query planning for queries that handle the WITH statement
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::{OrderDirection, Stmt, WithStmt};
 use crate::planning::plan::core::{
     next_node_id,
-    nodes::{DedupNode, FilterNode, LimitNode, ProjectNode, SortNode, StartNode},
+    nodes::{FilterNode, ProjectNode, StartNode},
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::{
-    logical_start_root, wrap_logical_dedup, wrap_logical_filter, wrap_logical_limit,
-    wrap_logical_project_with, wrap_logical_sort,
+    logical_start_root, wrap_logical_filter, wrap_logical_project_with,
 };
-use crate::planning::statements::projection_util::return_item_to_yield_column;
-use crate::QueryContext;
 use linkrs_core::YieldColumn;
 use std::sync::Arc;
 
@@ -31,16 +27,6 @@ impl WithPlanner {
     pub fn new() -> Self {
         Self
     }
-
-    /// Extract the WithStmt from the Stmt.
-    fn extract_with_stmt(&self, stmt: &Stmt) -> Result<WithStmt, PlannerError> {
-        match stmt {
-            Stmt::With(with_stmt) => Ok(with_stmt.clone()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement does not contain the WITH".to_string(),
-            )),
-        }
-    }
 }
 
 impl Planner for WithPlanner {
@@ -51,7 +37,6 @@ impl Planner for WithPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let with_stmt = match bound {
             BoundStatement::With(w) => w,
             _ => {
@@ -227,82 +212,6 @@ impl WithPlanner {
             ctx.metadata,
         );
         planner.plan_bound(&sub_ctx)
-    }
-
-    /// Plan one AST-level CTE into a [`RecursiveCteNode`] (legacy
-    /// AST-transform path; mirrors [`Self::plan_bound_cte_fixpoint`]).
-    fn plan_stmt_cte_fixpoint(
-        &self,
-        cte: &crate::parser::ast::stmt::CteDef,
-        recursive: bool,
-        qctx: &Arc<QueryContext>,
-    ) -> Result<
-        crate::planning::plan::core::nodes::control_flow::control_flow_node::RecursiveCteNode,
-        PlannerError,
-    > {
-        let (anchor_stmt, step_stmt) = if recursive {
-            let (anchor, step) = Self::split_recursive_body(&cte.name, &cte.body)?;
-            (anchor, Some(step))
-        } else {
-            (cte.body.as_ref(), None)
-        };
-        let anchor_plan = Self::plan_stmt_substatement(anchor_stmt, qctx)?;
-        let anchor_root = anchor_plan.root().clone().ok_or_else(|| {
-            PlannerError::PlanGenerationFailed(format!(
-                "CTE '{}' anchor plan has no root node",
-                cte.name
-            ))
-        })?;
-        let step_root = step_stmt
-            .map(|step| Self::plan_stmt_substatement(step, qctx))
-            .transpose()?
-            .map(|plan| {
-                plan.root().clone().ok_or_else(|| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "CTE '{}' step plan has no root node",
-                        cte.name
-                    ))
-                })
-            })
-            .transpose()?;
-        Self::build_fixpoint_node(&cte.name, anchor_root, step_root)
-    }
-
-    /// Split a recursive CTE body into its `anchor UNION ALL step` branches.
-    fn split_recursive_body<'a>(
-        cte_name: &str,
-        body: &'a Stmt,
-    ) -> Result<(&'a Stmt, &'a Stmt), PlannerError> {
-        use crate::parser::ast::stmt::SetOperationType;
-
-        match body {
-            Stmt::SetOperation(setop) if setop.op_type == SetOperationType::UnionAll => {
-                Ok((setop.left.as_ref(), setop.right.as_ref()))
-            }
-            _ => Err(PlannerError::PlanGenerationFailed(format!(
-                "Recursive CTE '{}' body must be `anchor UNION ALL step`",
-                cte_name
-            ))),
-        }
-    }
-
-    /// Plan an arbitrary AST sub-statement (CTE anchor/step) through the
-    /// transitional legacy path (no bound IR for AST CTE branches yet).
-    fn plan_stmt_substatement(
-        stmt: &Stmt,
-        qctx: &Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let sub_ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-            stmt.clone(),
-            Arc::new(
-                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-            ),
-        ));
-        let sub_validated = crate::binder::validation::ValidatedStatement::new(
-            sub_ast,
-            crate::binder::validation::ValidationInfo::new(),
-        );
-        PlannerEnum::legacy_plan_stmt_via_transform(stmt, &sub_validated, qctx.clone())
     }
 
     /// Assemble a [`RecursiveCteNode`] from planned anchor/step roots.

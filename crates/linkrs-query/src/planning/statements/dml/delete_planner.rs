@@ -8,17 +8,14 @@
 //! the logical mirror.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::{DeleteStmt, DeleteTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{EdgeDeleteInfo, IndexDeleteInfo, VertexDeleteInfo};
 use crate::planning::plan::logical::logical_nodes::dml::{
     LogicalDeleteEdgesNode, LogicalDeleteIndexNode, LogicalDeleteVerticesNode,
-    LogicalPipeDeleteEdgesNode, LogicalPipeDeleteVerticesNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::QueryContext;
+use crate::planning::planner::{Planner, PlannerError};
 use std::sync::Arc;
 
 /// Deletion Operation Planner
@@ -31,16 +28,6 @@ impl DeletePlanner {
     pub fn new() -> Self {
         Self
     }
-
-    /// Extract the DeleteStmt from the Stmt.
-    fn extract_delete_stmt(&self, stmt: &Stmt) -> Result<DeleteStmt, PlannerError> {
-        match stmt {
-            Stmt::Delete(delete_stmt) => Ok(delete_stmt.clone()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement does not contain a DELETE".to_string(),
-            )),
-        }
-    }
 }
 
 impl Planner for DeletePlanner {
@@ -50,7 +37,6 @@ impl Planner for DeletePlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let delete = match bound {
             BoundStatement::Delete(d) => d,
             _ => {
@@ -150,113 +136,6 @@ impl Planner for DeletePlanner {
     }
 
 
-}
-
-impl DeletePlanner {
-    /// Transform with optional input plan (for pipe DELETE)
-    fn transform_with_input(
-        &self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        input_plan: Option<SubPlan>,
-    ) -> Result<SubPlan, PlannerError> {
-        let _ = qctx;
-
-        let validation_info = &validated.validation_info;
-        let referenced_tags = &validation_info.semantic_info.referenced_tags;
-        if !referenced_tags.is_empty() {
-            log::debug!("DELETE Referenced tags: {:?}", referenced_tags);
-        }
-
-        let referenced_edges = &validation_info.semantic_info.referenced_edges;
-        if !referenced_edges.is_empty() {
-            log::debug!("DELETE Referenced edge type: {:?}", referenced_edges);
-        }
-
-        let delete_stmt = self.extract_delete_stmt(validated.stmt())?;
-
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-
-        // Determine the logical root for the pipe delete node. Prefer the
-        // upstream logical root (when the previous planner was migrated);
-        // otherwise fall back to the upstream physical root.
-        let upstream_logical = input_plan.as_ref().and_then(|p| p.logical_root().cloned());
-
-        let final_node = match &delete_stmt.target {
-            DeleteTarget::Vertices { tag, vids } => {
-                let info = VertexDeleteInfo {
-                    space_name,
-                    tag: Some(tag.clone()),
-                    vertex_ids: vids.clone(),
-                    with_edge: delete_stmt.with_edge,
-                    cascade: delete_stmt.with_edge || delete_stmt.detach,
-                };
-
-                if let Some(input) = upstream_logical {
-                    LogicalNodeEnum::PipeDeleteVertices(LogicalPipeDeleteVerticesNode {
-                        id: next_node_id(),
-                        input: Some(Box::new(input)),
-                        info,
-                        output_var: None,
-                        col_names: vec!["deleted".to_string()],
-                        column_types: vec![],
-                    })
-                } else {
-                    LogicalNodeEnum::DeleteVertices(LogicalDeleteVerticesNode {
-                        id: next_node_id(),
-                        info,
-                        output_var: None,
-                        col_names: vec!["deleted".to_string()],
-                        column_types: vec![],
-                    })
-                }
-            }
-            DeleteTarget::Edges { edge_type, edges } => {
-                let info = EdgeDeleteInfo {
-                    space_name,
-                    edge_type: edge_type.clone(),
-                    edges: edges
-                        .iter()
-                        .map(|(src, dst, rank)| (src.clone(), dst.clone(), rank.clone()))
-                        .collect(),
-                };
-
-                if let Some(input) = upstream_logical {
-                    LogicalNodeEnum::PipeDeleteEdges(LogicalPipeDeleteEdgesNode {
-                        id: next_node_id(),
-                        input: Some(Box::new(input)),
-                        info,
-                        output_var: None,
-                        col_names: vec!["deleted".to_string()],
-                        column_types: vec![],
-                    })
-                } else {
-                    LogicalNodeEnum::DeleteEdges(LogicalDeleteEdgesNode {
-                        id: next_node_id(),
-                        info,
-                        output_var: None,
-                        col_names: vec!["deleted".to_string()],
-                        column_types: vec![],
-                    })
-                }
-            }
-            DeleteTarget::Index(index_name) => {
-                let info = IndexDeleteInfo {
-                    space_name,
-                    index_name: index_name.clone(),
-                };
-                LogicalNodeEnum::DeleteIndex(LogicalDeleteIndexNode {
-                    id: next_node_id(),
-                    info,
-                    output_var: None,
-                    col_names: vec!["deleted".to_string()],
-                    column_types: vec![],
-                })
-            }
-        };
-
-        Ok(SubPlan::from_logical_root(final_node))
-    }
 }
 
 impl Default for DeletePlanner {

@@ -6,17 +6,14 @@
 //! performs the one-shot logical → physical lowering so the optimizer sees
 //! the logical mirror.
 
-use std::sync::Arc;
-
 use crate::binder::BoundStatement;
-use crate::parser::ast::{CopyDirection, CopyStmt, CopyTarget as AstCopyTarget, Stmt};
+use crate::parser::ast::{CopyDirection, CopyTarget as AstCopyTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::CopyTarget;
 use crate::planning::plan::logical::logical_nodes::dml::{LogicalCopyFromNode, LogicalCopyToNode};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::QueryContext;
+use crate::planning::planner::{Planner, PlannerError};
 
 #[derive(Debug, Clone)]
 pub struct CopyPlanner;
@@ -29,15 +26,6 @@ impl CopyPlanner {
     pub fn match_stmt(stmt: &Stmt) -> bool {
         matches!(stmt, Stmt::Copy(_))
     }
-
-    fn extract_copy_stmt(&self, stmt: &Stmt) -> Result<CopyStmt, PlannerError> {
-        match stmt {
-            Stmt::Copy(copy) => Ok(copy.clone()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement is not a COPY statement".to_string(),
-            )),
-        }
-    }
 }
 
 impl Planner for CopyPlanner {
@@ -47,7 +35,6 @@ impl Planner for CopyPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let copy = match bound {
             BoundStatement::Copy(c) => c,
             _ => {
@@ -125,10 +112,13 @@ impl Default for CopyPlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
+    use crate::QueryContext;
     use crate::binder::validation::ValidationInfo;
     use crate::parser::ast::{Ast, CopyStmt, CopyTarget as AstCopyTarget};
+    use crate::planning::planner::ValidatedStatement;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
     use linkrs_core::types::Span;
+    use std::sync::Arc;
 
     fn create_copy_stmt(target: AstCopyTarget) -> Ast {
         let stmt = Stmt::Copy(CopyStmt {
@@ -149,6 +139,8 @@ mod tests {
     fn test_copy_planner_match() {
         let ast = create_copy_stmt(AstCopyTarget::Vertex("person".to_string()));
         let planner = CopyPlanner::new();
+        assert_eq!(planner.name(), std::any::type_name::<CopyPlanner>());
+        assert!(CopyPlanner::match_stmt(&ast.stmt));
     }
 
     #[test]

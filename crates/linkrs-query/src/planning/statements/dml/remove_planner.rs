@@ -6,11 +6,8 @@
 //! explicitly instead of producing a plan that only strips row columns.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::{RemoveStmt, Stmt};
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::QueryContext;
-use std::sync::Arc;
+use crate::planning::planner::{Planner, PlannerError};
 
 /// Attribute/Tag Remover Planner
 /// Responsible for converting the REMOVE statement into an execution plan.
@@ -22,16 +19,6 @@ impl RemovePlanner {
     pub fn new() -> Self {
         Self
     }
-
-    /// Extract the `RemoveStmt` from the `Stmt`.
-    fn extract_remove_stmt(&self, stmt: &Stmt) -> Result<RemoveStmt, PlannerError> {
-        match stmt {
-            Stmt::Remove(remove_stmt) => Ok(remove_stmt.clone()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement does not contain a REMOVE".to_string(),
-            )),
-        }
-    }
 }
 
 impl Planner for RemovePlanner {
@@ -40,8 +27,6 @@ impl Planner for RemovePlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         match bound {
             BoundStatement::Remove(_) => {}
             _ => {

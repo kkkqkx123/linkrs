@@ -7,16 +7,12 @@
 //! the logical mirror.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::{Stmt, UpdateStmt, UpdateTarget};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{EdgeUpdateInfo, UpdateTargetType, VertexUpdateInfo};
 use crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::planning::statements::clauses::exists_planner;
-use crate::QueryContext;
-use linkrs_core::types::ContextualExpression;
+use crate::planning::planner::{Planner, PlannerError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -48,72 +44,10 @@ fn validate_bound_standalone_vid(
     }
 }
 
-/// Legacy-path counterpart of [`validate_bound_standalone_vid`]: the AST
-/// pipeline carries vid as a `ContextualExpression`, so the morphology
-/// check runs on the inner `Expression`.
-fn validate_ast_standalone_vid(vid: &ContextualExpression) -> Result<(), PlannerError> {
-    match vid.expression().map(|meta| meta.inner().clone()) {
-        Some(linkrs_core::Expression::Literal(_))
-        | Some(linkrs_core::Expression::Parameter(_))
-        | Some(linkrs_core::Expression::SessionVariable(_)) => Ok(()),
-        Some(linkrs_core::Expression::Variable(name)) => {
-            Err(PlannerError::PlanGenerationFailed(format!(
-                "Standalone UPDATE vid does not support query variable '{name}': use a literal, a parameter (@p) or a session variable ($v)"
-            )))
-        }
-        _ => Err(PlannerError::PlanGenerationFailed(
-            "Standalone UPDATE vid must be a literal, a parameter (@p) or a session variable ($v)".to_string(),
-        )),
-    }
-}
-
 impl UpdatePlanner {
     /// Create a new update planner.
     pub fn new() -> Self {
         Self
-    }
-
-    /// Extract the UpdateStmt from the Stmt.
-    fn extract_update_stmt(&self, stmt: &Stmt) -> Result<UpdateStmt, PlannerError> {
-        match stmt {
-            Stmt::Update(update_stmt) => Ok(update_stmt.clone()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "Statement does not contain UPDATE".to_string(),
-            )),
-        }
-    }
-
-    /// Build edge update info from UPDATE statement
-    fn build_edge_update_info(
-        &self,
-        update_stmt: &UpdateStmt,
-        src: ContextualExpression,
-        dst: ContextualExpression,
-        edge_type: Option<String>,
-        rank: Option<ContextualExpression>,
-        space_name: String,
-    ) -> Result<EdgeUpdateInfo, PlannerError> {
-        // Convert assignments to properties HashMap
-        let mut properties = HashMap::new();
-        for assignment in &update_stmt.set_clause.assignments {
-            properties.insert(assignment.property.clone(), assignment.value.clone());
-        }
-
-        Ok(EdgeUpdateInfo {
-            space_name,
-            src,
-            dst,
-            edge_type,
-            rank,
-            properties,
-            condition: update_stmt.where_clause.clone(),
-            is_upsert: update_stmt.is_upsert,
-            replace_properties: update_stmt
-                .set_clause
-                .assignments
-                .iter()
-                .any(|a| a.is_map_overwrite),
-        })
     }
 }
 
@@ -124,7 +58,6 @@ impl Planner for UpdatePlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let update = match bound {
             BoundStatement::Update(u) => u,
             _ => {

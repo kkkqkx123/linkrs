@@ -3,10 +3,8 @@
 //! Query planning for handling variable assignment statements.
 //! Supports syntax like: $var = GO FROM 1 OVER friend
 
-use crate::parser::ast::stmt::{AssignmentStmt, Stmt};
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
-use crate::QueryContext;
+use crate::planning::planner::{Planner, PlannerEnum, PlannerError};
 use std::sync::Arc;
 
 /// Assignment Statement Planner
@@ -19,18 +17,6 @@ pub struct AssignmentPlanner;
 impl AssignmentPlanner {
     pub fn new() -> Self {
         Self
-    }
-
-    fn extract_assignment_stmt<'a>(
-        &self,
-        stmt: &'a Stmt,
-    ) -> Result<&'a AssignmentStmt, PlannerError> {
-        match stmt {
-            Stmt::Assignment(assignment_stmt) => Ok(assignment_stmt),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement does not contain the Assignment".to_string(),
-            )),
-        }
     }
 }
 

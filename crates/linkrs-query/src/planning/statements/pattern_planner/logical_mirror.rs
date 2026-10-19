@@ -49,33 +49,6 @@ pub(super) fn logical_filter(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
-pub(super) fn logical_expand_all(
-    space_id: u64,
-    edge_types: Vec<String>,
-    direction: &str,
-    any_edge_type: bool,
-    input_var: Option<String>,
-    col_names: Vec<String>,
-    path_semantic: Option<crate::parser::ast::pattern::PathSemantic>,
-    dst_tag: Option<String>,
-) -> LogicalNodeEnum {
-    logical_expand_all_with_range(
-        space_id,
-        edge_types,
-        direction,
-        any_edge_type,
-        input_var,
-        col_names,
-        path_semantic,
-        dst_tag,
-        Some(1),
-        None,
-        false,
-    )
-}
-
 /// Mirror one expand hop into the logical plan. The step configuration is
 /// passed in rather than re-derived: the planner's range mapping is the
 /// single source of truth for both plan layers.

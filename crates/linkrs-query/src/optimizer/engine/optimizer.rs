@@ -34,6 +34,14 @@ impl OptimizerEngine {
 
         current_plan = self.apply_remove_factorization(current_plan)?;
 
+        // Partitioning is decided early so the chosen spec is available to
+        // downstream stages (physical build, plan-cache fingerprint, EXPLAIN).
+        // The decision only attaches a partition spec and does not rewrite
+        // the operator tree, so it does not change cost-based decisions:
+        // cost-based rules operate on the operator tree and stats without
+        // reading the partition spec.
+        current_plan = self.apply_partitioning_selection(current_plan, space, layout);
+
         if self.enable_heuristic {
             log::debug!("Starting logical heuristic optimization");
             current_plan = self.apply_logical_heuristic(current_plan)?;
@@ -57,8 +65,6 @@ impl OptimizerEngine {
             log::debug!("Physical heuristic optimization completed successfully");
         }
 
-        current_plan = self.apply_partitioning_selection(current_plan, space, layout);
-
         // Row estimates are collected last so the per-node map keys match the
         // final plan ids: physical mapping and the physical heuristic rebuild
         // scan/filter nodes with fresh ids after cost-based decisions, and a
@@ -74,6 +80,10 @@ impl OptimizerEngine {
     }
 
     fn ensure_logical_plan(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+        // Reverse conversion is the single bridge for physical-only
+        // statements, which stay flat by design. Factorized planners emit
+        // the logical tree natively, so a failure here records the reason
+        // and keeps flat execution instead of masking it.
         if plan.logical_plan.is_none() {
             if let Some(root) = plan.root.as_ref() {
                 let node_type = root.type_name().to_string();
@@ -179,6 +189,10 @@ impl OptimizerEngine {
     }
 
     fn apply_logical_heuristic(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
+        // Logical layer is the pre-CBO extension point on the logical tree;
+        // it currently holds no built-in rules. The active built-in rules
+        // live in the physical layer below, so the two calls are not
+        // overlapping passes to be merged.
         self.logical_heuristic
             .set_max_iterations(self.max_heuristic_iterations);
         if let Some(logical) = plan.logical_plan.as_mut() {
@@ -216,6 +230,11 @@ impl OptimizerEngine {
         let mut plan = plan;
         let stats = StatsView::new(&self.stats_manager, space);
 
+        // Dual path is intentional: statements that stay physical-only by
+        // design (algorithm, fulltext, vector nodes without a logical
+        // counterpart) keep flat execution through the physical path, while
+        // factorized statements use the logical path. The two paths share
+        // the underlying join, index, TopN, and aggregate primitives.
         if plan.logical_plan().is_some() {
             self.optimize_logical(&stats, space, &mut plan)?;
         } else {

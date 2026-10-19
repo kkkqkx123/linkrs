@@ -57,26 +57,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Ok(optimized)
     }
 
-    /// Compile a BoundStatement directly into a physical plan.
-    ///
-    /// Uses `plan_bound()` on the selected planner to produce a SubPlan,
-    /// then proceeds through optimization and physical plan building.
-    pub(crate) fn compile_from_bound(
-        &mut self,
-        query_context: Arc<QueryContext>,
-        bound: &BoundStatement,
-        ast: &Arc<crate::parser::ast::stmt::Ast>,
-    ) -> DBResult<Arc<PhysicalPlan>> {
-        let optimized_plan = self.optimize_from_bound(query_context.clone(), bound, ast)?;
-        let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
-        Ok(physical_plan)
-    }
-
     /// Bind + plan + optimize only, returning the optimized logical plan
     /// without materializing the physical plan.
     ///
-    /// Split out of [`compile_from_bound`] so callers can inspect the
-    /// partition layout and serve a cached physical plan before building it.
+    /// Callers can inspect the partition layout and serve a cached physical
+    /// plan before building it.
     pub(crate) fn optimize_from_bound(
         &mut self,
         query_context: Arc<QueryContext>,
@@ -100,7 +85,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         query_context: Arc<QueryContext>,
         bound: &BoundStatement,
-        ast: &Arc<crate::parser::ast::stmt::Ast>,
+        _ast: &Arc<crate::parser::ast::stmt::Ast>,
     ) -> DBResult<crate::planning::plan::ExecutionPlan> {
         use crate::planning::planner::PlannerError;
 

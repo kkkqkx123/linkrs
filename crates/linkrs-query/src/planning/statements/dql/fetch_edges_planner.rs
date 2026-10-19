@@ -2,18 +2,13 @@
 //! Planning for the execution of the FETCH EDGES query
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::{FetchTarget, Stmt};
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::{GetEdgesNode, PlanNodeEnum, ProjectNode};
+use crate::planning::plan::core::nodes::{GetEdgesNode, PlanNodeEnum};
 use crate::planning::plan::execution_plan::SubPlan;
 use crate::planning::plan::logical::logical_nodes::access::LogicalGetEdgesNode;
-use crate::planning::plan::logical::logical_nodes::operation::LogicalProjectNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::projection_util;
-use crate::QueryContext;
-use linkrs_core::types::expr::expression_utils::extract_string_from_expr;
-use std::sync::Arc;
 
 /// The FETCH EDGES query planner
 /// Responsible for converting the FETCH EDGES query into an execution plan.
@@ -34,8 +29,6 @@ impl Planner for FetchEdgesPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let fetch = match bound {
             BoundStatement::FetchEdges(f) => f,
             _ => {

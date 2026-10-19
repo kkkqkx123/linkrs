@@ -7,12 +7,10 @@
 //! touches session state.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::Stmt;
 use crate::planning::plan::core::nodes::{ProjectNode, StartNode};
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::plan_combiner::{logical_start_root, wrap_logical_project};
-use crate::QueryContext;
 use linkrs_core::YieldColumn;
 use std::sync::Arc;
 
@@ -35,8 +33,6 @@ impl Planner for AssignVariablePlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let assign = match bound {
             BoundStatement::AssignVariable(a) => a,
             _ => {

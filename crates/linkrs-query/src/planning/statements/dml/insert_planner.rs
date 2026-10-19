@@ -2,7 +2,9 @@
 //!
 //! Query planning for INSERT VERTEX and INSERT EDGE statements
 
-use crate::parser::ast::{InsertStmt, InsertTarget, Stmt, VertexRow};
+use crate::parser::ast::{Stmt, VertexRow};
+#[cfg(test)]
+use crate::parser::ast::InsertStmt;
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
     nodes::{EdgeInsertInfo, TagInsertSpec, VertexInsertInfo},
@@ -12,9 +14,8 @@ use crate::planning::plan::logical::logical_nodes::dml::{
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::clauses::exists_planner;
-use crate::QueryContext;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ impl InsertPlanner {
     }
 
     /// Extract the InsertStmt from the Stmt.
+    #[cfg(test)]
     fn extract_insert_stmt(&self, stmt: &Stmt) -> Result<InsertStmt, PlannerError> {
         match stmt {
             Stmt::Insert(insert_stmt) => Ok(insert_stmt.clone()),
@@ -310,6 +312,8 @@ mod tests {
                 values: vec![lit(Value::string("Alice")), lit(Value::Int(30))],
             }],
         });
+        assert_eq!(planner.name(), std::any::type_name::<InsertPlanner>());
+        assert!(InsertPlanner::match_stmt(&ast.stmt));
     }
 
     #[test]
@@ -510,5 +514,7 @@ mod tests {
             },
             values: vec![],
         });
+        assert_eq!(planner.name(), std::any::type_name::<InsertPlanner>());
+        assert!(InsertPlanner::match_stmt(&ast.stmt));
     }
 }

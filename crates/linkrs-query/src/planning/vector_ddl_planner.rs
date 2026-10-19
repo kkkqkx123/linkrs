@@ -277,6 +277,9 @@ mod tests {
     #[test]
     fn test_ddl_planner_matches_only_ddl() {
         let planner = VectorDdlPlanner::new();
+        let default_planner: VectorDdlPlanner = Default::default();
+        assert!(planner.metadata_context.is_none());
+        assert!(default_planner.metadata_context.is_none());
 
         let create_stmt = Stmt::CreateVectorIndex(CreateVectorIndex {
             span: Span::default(),
@@ -303,6 +306,10 @@ mod tests {
             span: Span::default(),
             index_name: "idx".to_string(),
         });
+        assert!(matches!(create_stmt, Stmt::CreateVectorIndex(_)));
+        assert!(matches!(drop_stmt, Stmt::DropVectorIndex(_)));
+        assert!(matches!(show_stmt, Stmt::ShowVectorIndex(_)));
+        assert!(matches!(describe_stmt, Stmt::DescribeVectorIndex(_)));
     }
 
     #[test]

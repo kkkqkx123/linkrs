@@ -8,10 +8,8 @@
 //! - `system` - transactions, maintenance and LOAD/CALL system planning
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::Stmt;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::QueryContext;
+use crate::planning::planner::{Planner, PlannerError};
 use std::sync::Arc;
 
 mod maintenance;
@@ -24,15 +22,6 @@ pub struct MaintainPlanner;
 impl MaintainPlanner {
     pub fn new() -> Self {
         Self
-    }
-
-    fn current_space(&self, validated: &ValidatedStatement) -> String {
-        validated
-            .validation_info
-            .semantic_info
-            .space_name
-            .clone()
-            .unwrap_or_default()
     }
 }
 

@@ -9,7 +9,6 @@
 //! Improve the logic for path filtering.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::Stmt;
 use crate::planning::plan::core::next_node_id;
 use crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness;
 use crate::planning::plan::core::nodes::traversal::{AllPathsNode, ShortestPathNode};
@@ -20,9 +19,8 @@ use crate::planning::plan::logical::logical_nodes::algorithm::{
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::plan_combiner::wrap_logical_filter;
-use crate::QueryContext;
 use linkrs_core::types::VertexId;
 use linkrs_core::Value;
 use std::sync::Arc;
@@ -52,7 +50,6 @@ impl Planner for PathPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let find_path = match bound {
             BoundStatement::FindPath(fp) => fp,
             _ => {
@@ -246,54 +243,6 @@ impl PathPlanner {
         Ok(shortest_path_node.into_enum())
     }
 
-    fn build_all_paths_plan(
-        &self,
-        params: PathPlanParams,
-        stmt: &crate::parser::ast::FindPathStmt,
-    ) -> Result<PlanNodeEnum, PlannerError> {
-        let right_node = StartNode::new();
-        let right_node_enum = PlanNodeEnum::Start(right_node);
-
-        // Default paths do not repeat vertices; WITH LOOP / WITH TRAIL /
-        // WITH WALK each relax a distinct part of that constraint (see
-        // PathUniqueness).
-        let path_uniqueness =
-            crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness::from_flags(
-                stmt.with_loop, stmt.with_trail, stmt.with_walk,
-            );
-        let direction = stmt
-            .over
-            .as_ref()
-            .map(|over| over.direction)
-            .unwrap_or(linkrs_core::EdgeDirection::Out);
-
-        let mut all_paths_node = AllPathsNode::new(
-            params.left_input,
-            right_node_enum,
-            params.space_id,
-            params.max_steps,
-            params.edge_types,
-            1,
-            params.max_steps,
-            path_uniqueness,
-        );
-        all_paths_node.set_direction(direction);
-        let start_vids: Vec<VertexId> = params
-            .start_vertex_ids
-            .iter()
-            .filter_map(|v| VertexId::try_from(v).ok())
-            .collect();
-        let end_vids: Vec<VertexId> = params
-            .end_vertex_ids
-            .iter()
-            .filter_map(|v| VertexId::try_from(v).ok())
-            .collect();
-        all_paths_node.set_start_vertex_ids(start_vids);
-        all_paths_node.set_end_vertex_ids(end_vids);
-
-        Ok(all_paths_node.into_enum())
-    }
-
     fn logical_start_leaf() -> LogicalNodeEnum {
         LogicalNodeEnum::Start(LogicalStartNode::new())
     }
@@ -324,42 +273,6 @@ impl PathPlanner {
             col_names: vec!["path".to_string()],
             column_types: vec![],
         })
-    }
-
-    fn all_paths_logical(
-        space_id: u64,
-        edge_types: Vec<String>,
-        max_steps: usize,
-        stmt: &crate::parser::ast::FindPathStmt,
-        start_vertex_ids: Vec<Value>,
-        end_vertex_ids: Vec<Value>,
-    ) -> LogicalNodeEnum {
-        let path_uniqueness =
-            crate::planning::plan::core::nodes::traversal::path_algorithms::PathUniqueness::from_flags(
-                stmt.with_loop, stmt.with_trail, stmt.with_walk,
-            );
-        let direction = stmt
-            .over
-            .as_ref()
-            .map(|over| over.direction)
-            .unwrap_or(linkrs_core::EdgeDirection::Out);
-        let start_vids: Vec<VertexId> = start_vertex_ids
-            .iter()
-            .filter_map(|v| VertexId::try_from(v).ok())
-            .collect();
-        let end_vids: Vec<VertexId> = end_vertex_ids
-            .iter()
-            .filter_map(|v| VertexId::try_from(v).ok())
-            .collect();
-        Self::all_paths_logical_from_parts(
-            space_id,
-            edge_types,
-            max_steps,
-            path_uniqueness,
-            direction,
-            start_vids,
-            end_vids,
-        )
     }
 
     fn all_paths_logical_from_parts(
@@ -395,43 +308,6 @@ impl PathPlanner {
             column_types: vec![],
         })
     }
-
-    fn is_shortest_path_stmt(&self, stmt: &crate::parser::ast::FindPathStmt) -> bool {
-        stmt.shortest
-    }
-
-    fn get_edge_types_from_stmt(&self, stmt: &crate::parser::ast::FindPathStmt) -> Vec<String> {
-        stmt.over
-            .as_ref()
-            .map(|over| over.edge_types.clone())
-            .unwrap_or_default()
-    }
-
-    fn get_max_steps_from_stmt(&self, stmt: &crate::parser::ast::FindPathStmt) -> usize {
-        stmt.max_steps.unwrap_or(10)
-    }
-
-    fn extract_vertex_ids_from_exprs(
-        &self,
-        exprs: &[linkrs_core::types::ContextualExpression],
-    ) -> Vec<Value> {
-        let mut ids = Vec::new();
-        for expr in exprs {
-            if let Some(meta) = expr.expression() {
-                if let Some(value) = meta.as_literal() {
-                    ids.push(value.clone());
-                }
-            }
-        }
-        ids
-    }
-
-    fn extract_vertex_ids_from_expr(
-        &self,
-        expr: &linkrs_core::types::ContextualExpression,
-    ) -> Vec<Value> {
-        self.extract_vertex_ids_from_exprs(std::slice::from_ref(expr))
-    }
 }
 
 impl Default for PathPlanner {
@@ -443,6 +319,7 @@ impl Default for PathPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::QueryContext;
     use crate::binder::validation::{ValidatedStatement, ValidationInfo};
     use crate::parser::ast::stmt::Ast;
     use crate::parser::ast::{FindPathStmt, FromClause, OverClause, Span, Stmt};

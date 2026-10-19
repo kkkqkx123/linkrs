@@ -10,6 +10,11 @@
 //! existence check and write observe a single snapshot. Branch bodies reuse
 //! the planner helpers, so property mapping, map-overwrite, and empty-map
 //! clearing behave exactly like standalone `INSERT` / `UPDATE`.
+//!
+//! Layering is intentional: `MergePlanner` stays pure (it only builds branch
+//! roots), while this module owns the impure half (storage probe,
+//! transaction scope, compile and execute). Moving the probe into the planner
+//! would couple plan construction to storage and transactions.
 
 use super::prepared::PreparedRequest;
 use super::QueryPipelineManager;

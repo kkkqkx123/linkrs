@@ -4,18 +4,15 @@
 //! Supports pipe DELETE syntax: GO ... | DELETE VERTEX $-.id
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::{PipeStmt, Stmt};
 use crate::planning::plan::core::nodes::{PipeDeleteEdgesNode, PipeDeleteVerticesNode, StartNode};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
     nodes::base::plan_node_traits::{MultipleInputNode, SingleInputNode},
 };
-use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
+use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
-use crate::QueryContext;
-use std::sync::Arc;
+use crate::planning::planner::{Planner, PlannerEnum, PlannerError};
 
 /// Pipe Statement Planner
 /// Responsible for converting pipe statements into execution plans.
@@ -26,15 +23,6 @@ impl PipePlanner {
     pub fn new() -> Self {
         Self
     }
-
-    fn extract_pipe_stmt<'a>(&self, stmt: &'a Stmt) -> Result<&'a PipeStmt, PlannerError> {
-        match stmt {
-            Stmt::Pipe(pipe_stmt) => Ok(pipe_stmt),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement does not contain the Pipe".to_string(),
-            )),
-        }
-    }
 }
 
 impl Planner for PipePlanner {
@@ -44,8 +32,6 @@ impl Planner for PipePlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let pipe = match bound {
             BoundStatement::Pipe(p) => p,
             _ => {

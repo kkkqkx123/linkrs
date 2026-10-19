@@ -5,17 +5,14 @@
 //! | COLLECT LIST(name) AS names`.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::Stmt;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{AggregateNode, StartNode};
 use crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::plan_combiner::logical_start_root;
-use crate::QueryContext;
 use linkrs_core::types::operators::AggregateFunction;
-use std::sync::Arc;
 
 /// Standalone COLLECT statement planner.
 #[derive(Debug, Clone)]
@@ -75,8 +72,6 @@ impl Planner for CollectPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let collect = match bound {
             BoundStatement::Collect(c) => c,
             _ => {

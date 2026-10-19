@@ -41,14 +41,6 @@ impl std::error::Error for ConversionError {}
 /// # Limitations
 /// Statements that remain physical-only by design return `NotYetImplemented`
 /// and keep flat execution without factorization.
-/// - `IndexScan` → `ScanVertices`
-/// - `InnerJoin` → `InnerJoin`
-/// - `LeftJoin` → `LeftJoin`
-/// - All other logical operators are preserved with recursive child conversion.
-///
-/// # Limitations
-/// Statements that remain physical-only by design return `NotYetImplemented`
-/// and keep flat execution without factorization.
 pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionError> {
     match node {
         // === Access nodes ===
@@ -115,7 +107,6 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         PlanNodeEnum::PipeDeleteEdges(n) => write::convert_pipe_delete_edges(n),
         PlanNodeEnum::CopyFrom(n) => write::convert_copy_from(n),
         PlanNodeEnum::CopyTo(n) => write::convert_copy_to(n),
-        // === Fallback for unsupported nodes ===
         // === Fallback for unsupported nodes ===
         // Intentionally not mapped: Algorithm nodes (MultiShortestPath/BFSShortest/AllPaths/ShortestPath)
         // and Fulltext/Vector search remain `NotYetImplemented`.

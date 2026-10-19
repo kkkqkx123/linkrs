@@ -7,21 +7,16 @@
 use std::sync::Arc;
 
 use crate::metadata::MetadataContext;
-use crate::parser::ast::fulltext::{
-    AlterFulltextIndex, AlterIndexAction, CreateFulltextIndex, DescribeFulltextIndex,
-    DropFulltextIndex, FulltextQueryExpr, LookupFulltext, MatchFulltext, SearchStatement,
-    ShowFulltextIndex,
-};
-use crate::parser::ast::Stmt;
+#[cfg(test)]
+use crate::parser::ast::fulltext::CreateFulltextIndex;
+#[cfg(test)]
+use crate::parser::ast::fulltext::{FulltextQueryExpr, LookupFulltext};
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
-use crate::planning::plan::core::nodes::search::fulltext::{
-    AlterFulltextIndexNode, CreateFulltextIndexNode, DescribeFulltextIndexNode,
-    DropFulltextIndexNode, FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
-    ShowFulltextIndexNode,
-};
+use crate::planning::plan::core::nodes::search::fulltext::CreateFulltextIndexNode;
+#[cfg(test)]
+use crate::planning::plan::core::nodes::search::fulltext::FulltextLookupNode;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::QueryContext;
+use crate::planning::planner::{Planner, PlannerError};
 
 /// Full-text search planner
 ///
@@ -30,7 +25,7 @@ use crate::QueryContext;
 /// - Search operations (SEARCH, LOOKUP FULLTEXT, MATCH with full-text)
 #[derive(Debug, Clone, Default)]
 pub struct FulltextSearchPlanner {
-    /// Metadata context for pre-resolved metadata (optional for backward compatibility)
+    /// Metadata context for pre-resolved metadata (optional override).
     metadata_context: Option<Arc<MetadataContext>>,
 }
 
@@ -131,98 +126,11 @@ impl Planner for FulltextSearchPlanner {
 }
 
 impl FulltextSearchPlanner {
-    fn transform_impl(
-        &self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-        metadata_context: Option<&MetadataContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let stmt = validated.stmt();
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-
-        let space_id = qctx.space_id().unwrap_or(0);
-
-        match stmt {
-            Stmt::CreateFulltextIndex(create) => match metadata_context {
-                Some(metadata_context) => self.transform_create_fulltext_index_with_metadata(
-                    create,
-                    &space_name,
-                    metadata_context,
-                    space_id,
-                ),
-                None => self.transform_create_fulltext_index(create, &space_name, space_id),
-            },
-            Stmt::DropFulltextIndex(drop) => self.transform_drop_fulltext_index(drop),
-            Stmt::AlterFulltextIndex(alter) => match metadata_context {
-                Some(metadata_context) => {
-                    self.transform_alter_fulltext_index_with_metadata(alter, metadata_context)
-                }
-                None => self.transform_alter_fulltext_index(alter),
-            },
-            Stmt::ShowFulltextIndex(show) => self.transform_show_fulltext_index(show, &space_name),
-            Stmt::DescribeFulltextIndex(describe) => match metadata_context {
-                Some(metadata_context) => {
-                    self.transform_describe_fulltext_index_with_metadata(describe, metadata_context)
-                }
-                None => self.transform_describe_fulltext_index(describe),
-            },
-            Stmt::Search(search) => match metadata_context {
-                Some(metadata_context) => {
-                    self.transform_search_with_metadata(search, metadata_context)
-                }
-                None => self.transform_search(search),
-            },
-            Stmt::LookupFulltext(lookup) => match metadata_context {
-                Some(metadata_context) => self.transform_lookup_fulltext_with_metadata(
-                    lookup,
-                    &space_name,
-                    metadata_context,
-                ),
-                None => self.transform_lookup_fulltext(lookup, &space_name),
-            },
-            Stmt::MatchFulltext(match_stmt) => match metadata_context {
-                Some(metadata_context) => {
-                    self.transform_match_fulltext_with_metadata(match_stmt, metadata_context)
-                }
-                None => self.transform_match_fulltext(match_stmt),
-            },
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "Not a full-text search statement".to_string(),
-            )),
-        }
-    }
-}
-
-impl FulltextSearchPlanner {
     // ============================================================================
     // Index Management Transformations
     // ============================================================================
 
-    fn transform_create_fulltext_index(
-        &self,
-        create: &CreateFulltextIndex,
-        space_name: &str,
-        space_id: u64,
-    ) -> Result<SubPlan, PlannerError> {
-        let schema_name = if create.schema_name.is_empty() {
-            space_name.to_string()
-        } else {
-            create.schema_name.clone()
-        };
-
-        let node = CreateFulltextIndexNode::new(
-            create.index_name.clone(),
-            schema_name,
-            create.fields.clone(),
-            create.engine_type,
-            create.options.clone(),
-            create.if_not_exists,
-            space_id,
-        );
-
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
+    #[cfg(test)]
     fn transform_create_fulltext_index_with_metadata(
         &self,
         create: &CreateFulltextIndex,
@@ -265,159 +173,11 @@ impl FulltextSearchPlanner {
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
-    fn transform_drop_fulltext_index(
-        &self,
-        drop: &DropFulltextIndex,
-    ) -> Result<SubPlan, PlannerError> {
-        let node = DropFulltextIndexNode::new(drop.index_name.clone(), drop.if_exists);
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
-    fn transform_alter_fulltext_index(
-        &self,
-        alter: &AlterFulltextIndex,
-    ) -> Result<SubPlan, PlannerError> {
-        Self::validate_alter_actions(&alter.actions)?;
-        let node = AlterFulltextIndexNode::new(alter.index_name.clone(), alter.actions.clone());
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
-    fn transform_alter_fulltext_index_with_metadata(
-        &self,
-        alter: &AlterFulltextIndex,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        // Validate that the index exists
-        if metadata_context
-            .get_index_metadata(&alter.index_name)
-            .is_none()
-        {
-            return Err(PlannerError::IndexNotFound(alter.index_name.clone()));
-        }
-
-        Self::validate_alter_actions(&alter.actions)?;
-        let node = AlterFulltextIndexNode::new(alter.index_name.clone(), alter.actions.clone());
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
-    fn transform_show_fulltext_index(
-        &self,
-        show: &ShowFulltextIndex,
-        space_name: &str,
-    ) -> Result<SubPlan, PlannerError> {
-        let from_schema = if show.from_schema.is_none() {
-            Some(space_name.to_string())
-        } else {
-            show.from_schema.clone()
-        };
-
-        let node = ShowFulltextIndexNode::new(show.pattern.clone(), from_schema);
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
-    fn transform_describe_fulltext_index(
-        &self,
-        describe: &DescribeFulltextIndex,
-    ) -> Result<SubPlan, PlannerError> {
-        let node = DescribeFulltextIndexNode::new(describe.index_name.clone());
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
-    fn transform_describe_fulltext_index_with_metadata(
-        &self,
-        describe: &DescribeFulltextIndex,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        // Validate that the index exists
-        if metadata_context
-            .get_index_metadata(&describe.index_name)
-            .is_none()
-        {
-            return Err(PlannerError::IndexNotFound(describe.index_name.clone()));
-        }
-
-        let node = DescribeFulltextIndexNode::new(describe.index_name.clone());
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
     // ============================================================================
     // Search Operations Transformations
     // ============================================================================
 
-    fn transform_search(&self, search: &SearchStatement) -> Result<SubPlan, PlannerError> {
-        // Validate query expression
-        self.validate_query_expr(&search.query)?;
-
-        let node = FulltextSearchNode::new(
-            search.index_name.clone(),
-            search.query.clone(),
-            search.yield_clause.clone(),
-            search.where_clause.clone(),
-            search.order_clause.clone(),
-            search.limit.as_ref().map(|l| l.count),
-            search.skip.as_ref().map(|s| s.count),
-        );
-
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
-    fn transform_search_with_metadata(
-        &self,
-        search: &SearchStatement,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        // Validate index exists and get metadata
-        let index_metadata = metadata_context
-            .get_index_metadata(&search.index_name)
-            .ok_or_else(|| PlannerError::IndexNotFound(search.index_name.clone()))?;
-
-        // Validate query expression
-        self.validate_query_expr(&search.query)?;
-        Self::validate_query_fields(&search.query, &index_metadata.field_name)?;
-
-        // Validate and optimize WHERE clause if present
-        let where_clause = search.where_clause.clone();
-
-        let node = FulltextSearchNode::new(
-            search.index_name.clone(),
-            search.query.clone(),
-            search.yield_clause.clone(),
-            where_clause,
-            search.order_clause.clone(),
-            search.limit.as_ref().map(|l| l.count),
-            search.skip.as_ref().map(|s| s.count),
-        )
-        .with_metadata(
-            index_metadata.space_id,
-            index_metadata.tag_name.clone(),
-            index_metadata.field_name.clone(),
-        );
-
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
-    fn transform_lookup_fulltext(
-        &self,
-        lookup: &LookupFulltext,
-        space_name: &str,
-    ) -> Result<SubPlan, PlannerError> {
-        let schema_name = if lookup.schema_name.is_empty() {
-            space_name.to_string()
-        } else {
-            lookup.schema_name.clone()
-        };
-
-        let node = FulltextLookupNode::new(
-            schema_name,
-            lookup.index_name.clone(),
-            lookup.query.clone(),
-            lookup.yield_clause.clone(),
-            lookup.limit,
-        );
-
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
+    #[cfg(test)]
     fn transform_lookup_fulltext_with_metadata(
         &self,
         lookup: &LookupFulltext,
@@ -458,62 +218,6 @@ impl FulltextSearchPlanner {
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
-    fn transform_match_fulltext(
-        &self,
-        match_stmt: &MatchFulltext,
-    ) -> Result<SubPlan, PlannerError> {
-        let node = MatchFulltextNode::new(
-            match_stmt.pattern.clone(),
-            match_stmt.fulltext_condition.clone(),
-            match_stmt.yield_clause.clone(),
-        );
-
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
-    fn transform_match_fulltext_with_metadata(
-        &self,
-        match_stmt: &MatchFulltext,
-        metadata_context: &MetadataContext,
-    ) -> Result<SubPlan, PlannerError> {
-        // Validate that the field exists if an index is specified
-        let mut space_id = 0u64;
-        let mut tag_name = String::new();
-        let mut field_name = String::new();
-
-        if let Some(ref index_name) = match_stmt.fulltext_condition.index_name {
-            let index_metadata = metadata_context
-                .get_index_metadata(index_name)
-                .ok_or_else(|| PlannerError::IndexNotFound(index_name.clone()))?;
-            space_id = index_metadata.space_id;
-            tag_name = index_metadata.tag_name.clone();
-            field_name = index_metadata.field_name.clone();
-        }
-
-        // Validate that the field name is not empty
-        if match_stmt.fulltext_condition.field.is_empty() {
-            return Err(PlannerError::InvalidOperation(
-                "Full-text field name cannot be empty".to_string(),
-            ));
-        }
-
-        if !field_name.is_empty() && match_stmt.fulltext_condition.field != field_name {
-            return Err(PlannerError::InvalidOperation(format!(
-                "MATCH field '{}' does not match index field '{}'",
-                match_stmt.fulltext_condition.field, field_name
-            )));
-        }
-
-        let node = MatchFulltextNode::new(
-            match_stmt.pattern.clone(),
-            match_stmt.fulltext_condition.clone(),
-            match_stmt.yield_clause.clone(),
-        )
-        .with_metadata(space_id, tag_name, field_name);
-
-        Ok(SubPlan::new(Some(node.into_enum()), None))
-    }
-
     // ============================================================================
     // Validation Helpers
     // ============================================================================
@@ -524,95 +228,11 @@ impl FulltextSearchPlanner {
     /// but not the sync driver plus primary-storage scan needed for online
     /// rebuild. Use the async HTTP rebuild instead; the old clear-only
     /// behavior destroyed indexed data, so it must not run silently.
+    #[cfg(feature = "fulltext")]
     pub(crate) const FULLTEXT_REBUILD_UNAVAILABLE: &str = "ALTER FULLTEXT INDEX REBUILD is not executed inline: trigger the async online rebuild via POST /v1/fulltext/indexes/rebuild and poll GET /v1/fulltext/rebuilds/{id}";
-    fn validate_alter_actions(actions: &[AlterIndexAction]) -> Result<(), PlannerError> {
-        if actions.is_empty() {
-            return Err(PlannerError::InvalidOperation(
-                "ALTER FULLTEXT INDEX requires at least one action".to_string(),
-            ));
-        }
-        for action in actions {
-            match action {
-                AlterIndexAction::Optimize => {}
-                AlterIndexAction::Rebuild => {
-                    return Err(PlannerError::UnsupportedOperation(
-                        Self::FULLTEXT_REBUILD_UNAVAILABLE.to_string(),
-                    ));
-                }
-                AlterIndexAction::AddField(f) => {
-                    return Err(PlannerError::UnsupportedOperation(format!(
-                        "ALTER FULLTEXT INDEX ADD FIELD '{}' is not supported: one index serves one field, create a new index instead",
-                        f.field_name
-                    )));
-                }
-                AlterIndexAction::DropField(f) => {
-                    return Err(PlannerError::UnsupportedOperation(format!(
-                        "ALTER FULLTEXT INDEX DROP FIELD '{}' is not supported: one index serves one field, drop the index instead",
-                        f
-                    )));
-                }
-                AlterIndexAction::SetOption(k, _) => {
-                    return Err(PlannerError::UnsupportedOperation(format!(
-                        "ALTER FULLTEXT INDEX SET '{}' is not supported: BM25 options are fixed at creation time",
-                        k
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Ensure field-scoped query nodes target the index's own field.
-    fn validate_query_fields(expr: &FulltextQueryExpr, expected: &str) -> Result<(), PlannerError> {
-        match expr {
-            FulltextQueryExpr::Simple(_)
-            | FulltextQueryExpr::Phrase(_)
-            | FulltextQueryExpr::Prefix(_)
-            | FulltextQueryExpr::Fuzzy(_, _)
-            | FulltextQueryExpr::Wildcard(_) => Ok(()),
-            FulltextQueryExpr::Field(field, _) => {
-                if field != expected {
-                    return Err(PlannerError::InvalidOperation(format!(
-                        "Query targets field '{}' but index serves field '{}'",
-                        field, expected
-                    )));
-                }
-                Ok(())
-            }
-            FulltextQueryExpr::MultiField(fields) => {
-                for (field, _) in fields {
-                    if field != expected {
-                        return Err(PlannerError::InvalidOperation(format!(
-                            "Multi-field query targets field '{}' but index serves field '{}'",
-                            field, expected
-                        )));
-                    }
-                }
-                Ok(())
-            }
-            FulltextQueryExpr::Boolean {
-                must,
-                should,
-                must_not,
-            } => {
-                for q in must.iter().chain(should.iter()).chain(must_not.iter()) {
-                    Self::validate_query_fields(q, expected)?;
-                }
-                Ok(())
-            }
-            FulltextQueryExpr::Range { field, .. } => {
-                if !field.is_empty() && field != expected {
-                    return Err(PlannerError::InvalidOperation(format!(
-                        "Range query targets field '{}' but index serves field '{}'",
-                        field, expected
-                    )));
-                }
-                Ok(())
-            }
-        }
-    }
 
     /// Validate full-text query expression
+    #[cfg(test)]
     fn validate_query_expr(&self, expr: &FulltextQueryExpr) -> Result<(), PlannerError> {
         match expr {
             FulltextQueryExpr::Simple(text) => {

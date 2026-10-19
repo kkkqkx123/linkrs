@@ -3,18 +3,16 @@
 //! Query planning for statements that handle the RETURN command
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::stmt::{OrderDirection, ReturnStmt, Stmt};
+use crate::parser::ast::stmt::OrderDirection;
 use crate::planning::plan::core::nodes::{DedupNode, LimitNode, ProjectNode, SortNode, StartNode};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::{
     logical_start_root, wrap_logical_dedup, wrap_logical_limit, wrap_logical_project_with,
     wrap_logical_sort,
 };
-use crate::planning::statements::projection_util::return_item_to_yield_column;
-use crate::QueryContext;
 use linkrs_core::YieldColumn;
 use std::sync::Arc;
 
@@ -28,16 +26,6 @@ impl ReturnPlanner {
     pub fn new() -> Self {
         Self
     }
-
-    /// Extract the ReturnStmt from the Stmt.
-    fn extract_return_stmt(&self, stmt: &Stmt) -> Result<ReturnStmt, PlannerError> {
-        match stmt {
-            Stmt::Return(return_stmt) => Ok(return_stmt.clone()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "statement does not contain a RETURN".to_string(),
-            )),
-        }
-    }
 }
 
 impl Planner for ReturnPlanner {
@@ -48,7 +36,6 @@ impl Planner for ReturnPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let return_stmt = match bound {
             BoundStatement::Return(r) => r,
             _ => {

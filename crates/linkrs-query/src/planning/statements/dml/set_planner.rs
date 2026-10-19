@@ -7,14 +7,10 @@
 //! the logical mirror.
 
 use crate::binder::BoundStatement;
-use crate::parser::ast::{SetStmt, Stmt};
 use crate::planning::plan::core::nodes::VertexUpdateInfo;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::planning::statements::clauses::exists_planner;
-use crate::QueryContext;
-use linkrs_core::types::{ContextualExpression, ExpressionMeta};
-use linkrs_core::Expression;
+use crate::planning::planner::{Planner, PlannerError};
+use linkrs_core::types::ContextualExpression;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -28,42 +24,6 @@ impl SetPlanner {
     pub fn new() -> Self {
         Self
     }
-
-    /// Extract the SetStmt from the Stmt.
-    fn extract_set_stmt(&self, stmt: &Stmt) -> Result<SetStmt, PlannerError> {
-        match stmt {
-            Stmt::Set(set_stmt) => Ok(set_stmt.clone()),
-            _ => Err(PlannerError::PlanGenerationFailed(
-                "Statement does not contain SET".to_string(),
-            )),
-        }
-    }
-
-    /// Extract vertex ID from target expression
-    /// For expressions like "1.age", extract the vertex ID "1" as a new ContextualExpression
-    fn extract_vertex_id(&self, target: &ContextualExpression) -> Option<ContextualExpression> {
-        let expr_meta = target.expression()?;
-        let expr = expr_meta.inner();
-
-        match expr {
-            Expression::Property { object, .. } => {
-                // The object should be the vertex ID
-                match object.as_ref() {
-                    Expression::Literal(_) | Expression::Variable(_) => {
-                        // Create a new ExpressionMeta with just the object
-                        let object_meta = ExpressionMeta::new((**object).clone());
-                        // Register the expression in the context
-                        let context = target.context();
-                        let object_id = context.register_expression(object_meta);
-                        // Create a new ContextualExpression with the object ID
-                        Some(ContextualExpression::new(object_id, context.clone()))
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
 }
 
 impl Planner for SetPlanner {
@@ -73,7 +33,6 @@ impl Planner for SetPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let set = match bound {
             BoundStatement::Set(s) => s,
             _ => {
