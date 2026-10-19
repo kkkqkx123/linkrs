@@ -197,18 +197,23 @@ impl Binder {
         &mut self,
         body: &linkrs_core::types::expr::SubqueryBody,
     ) -> DBResult<BoundStatement> {
-        let mut patterns = Vec::with_capacity(body.patterns.len());
-        let mut parser = crate::parser::parsing::TraversalParser::new();
-        for pattern_str in &body.patterns {
-            let pattern = parser
-                .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
-                .map_err(|e| {
-                    DBError::from(linkrs_core::error::QueryError::invalid_query(format!(
-                        "Invalid subquery pattern `{pattern_str}`: {e}"
-                    )))
-                })?;
-            patterns.push(pattern);
-        }
+        let patterns = if !body.parsed_patterns.is_empty() {
+            body.parsed_patterns.clone()
+        } else {
+            let mut parser = crate::parser::parsing::TraversalParser::new();
+            body.patterns
+                .iter()
+                .map(|pattern_str| {
+                    parser
+                        .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
+                        .map_err(|e| {
+                            DBError::from(linkrs_core::error::QueryError::invalid_query(format!(
+                                "Invalid subquery pattern `{pattern_str}`: {e}"
+                            )))
+                        })
+                })
+                .collect::<DBResult<Vec<_>>>()?
+        };
 
         let query_graph = self.build_query_graph(&patterns)?;
 

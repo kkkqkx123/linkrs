@@ -25,8 +25,6 @@ impl Planner for AssignmentPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let assignment = match bound {
             crate::binder::BoundStatement::Assignment(a) => a,
             _ => {
@@ -45,11 +43,7 @@ impl Planner for AssignmentPlanner {
                 ))
             })?;
 
-        let inner_ctx = crate::planning::context::PlanContext {
-            bound: &assignment.statement,
-            qctx: qctx.clone(),
-            metadata,
-        };
+        let inner_ctx = ctx.with_bound(&assignment.statement);
         let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
 
         log::debug!(

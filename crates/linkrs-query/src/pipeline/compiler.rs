@@ -85,7 +85,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         query_context: Arc<QueryContext>,
         bound: &BoundStatement,
-        _ast: &Arc<crate::parser::ast::stmt::Ast>,
+        ast: &Arc<crate::parser::ast::stmt::Ast>,
     ) -> DBResult<crate::planning::plan::ExecutionPlan> {
         use crate::planning::planner::PlannerError;
 
@@ -115,7 +115,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     bound,
                     query_context.clone(),
                     metadata.as_ref(),
-                );
+                )
+                .with_ast(std::sync::Arc::clone(ast));
                 planner_enum
                     .plan_bound(&ctx)
                     .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
@@ -170,15 +171,23 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
+        // Shared extract + type-fill path; the positions also feed the plan
+        // cache put below, and the signature feeds the memo key.
+        let param_positions = self.typed_param_positions(query_text, &request.parameters);
+        let param_signature =
+            crate::cache::plan_cache::QueryPlanCache::compute_param_type_signature(
+                &param_positions,
+            );
+
         // Memo key: fingerprint-less plan key over the normalized text,
-        // built by the single shared constructor. The partition fingerprint
-        // is not computable before binding; memo hits use the single
-        // compatibility exit before being served.
+        // built from the shared plan-cache identity context. The partition
+        // fingerprint is not computable before binding; memo hits use the
+        // single compatibility exit before being served.
+        let cache_context = self.plan_cache_context(space_name.clone(), param_signature);
         let dml_memo_key = if dml_shape_cacheable {
-            Some(self.dml_memo_key_for(
+            Some(super::DmlPlanMemoKey::from_context(
                 query_text.to_string(),
-                space_name.clone(),
-                &request.parameters,
+                cache_context.clone(),
             ))
         } else {
             None
@@ -204,28 +213,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         }
 
-        let mut param_positions = self.param_handler.extract_params(query_text);
-        for position in &mut param_positions {
-            let name = position
-                .name
-                .clone()
-                .unwrap_or_else(|| position.index.to_string());
-            position.expected_type = request.parameters.get(&name).map(|value| value.data_type());
-        }
-        let param_signature =
-            crate::cache::plan_cache::QueryPlanCache::compute_param_type_signature(
-                &param_positions,
-            );
-
-        let planning_config = self.dml_planning_config();
-        let cache_context = crate::cache::PlanCacheContext {
-            space_name: space_name.clone(),
-            schema_version,
-            index_version,
-            param_type_signature: param_signature,
-            optimizer_version: planning_config.optimizer_version,
-            planning_config_hash: planning_config.config_hash,
-        };
         if let Some(cached) = self
             .plan_cache
             .get_with_context(query_text, cache_context.clone())
@@ -278,16 +265,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     spec,
                     plan.clone(),
                     param_positions,
-                    crate::cache::plan_cache::PlanCachePutContext {
+                    crate::cache::plan_cache::PlanCachePutContext::from_identity(
+                        cache_context,
                         dependent_tables,
-                        space_name,
-                        schema_version,
-                        index_version,
-                        is_dml: dml_shape_cacheable,
-                        is_transaction: false,
-                        optimizer_version: planning_config.optimizer_version,
-                        planning_config_hash: planning_config.config_hash,
-                    },
+                        dml_shape_cacheable,
+                        false,
+                    ),
                 );
             } else {
                 let dependent_tables = collect_dependent_tables(bound);
@@ -295,16 +278,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     query_text,
                     plan.clone(),
                     param_positions,
-                    crate::cache::plan_cache::PlanCachePutContext {
+                    crate::cache::plan_cache::PlanCachePutContext::from_identity(
+                        cache_context,
                         dependent_tables,
-                        space_name,
-                        schema_version,
-                        index_version,
-                        is_dml: dml_shape_cacheable,
-                        is_transaction: false,
-                        optimizer_version: planning_config.optimizer_version,
-                        planning_config_hash: planning_config.config_hash,
-                    },
+                        dml_shape_cacheable,
+                        false,
+                    ),
                 );
             }
         }

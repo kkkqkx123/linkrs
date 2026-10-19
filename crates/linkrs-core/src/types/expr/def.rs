@@ -297,8 +297,16 @@ pub struct SubqueryBody {
     /// Planner-assigned stable identity. 0 at parse time; assigned
     /// monotonically during planning. Runtime dispatches on this id.
     pub id: u64,
-    /// Pattern elements (triples like `a:Person-[:KNOWS]->b:Person`)
+    /// Pattern elements (triples like `a:Person-[:KNOWS]->b:Person`).
+    /// Kept as the canonical textual form (template extraction, round-trip
+    /// tests, and the fallback path for programmatically built bodies).
     pub patterns: Vec<String>,
+    /// Already-parsed patterns filled in at parse time. Planners and the
+    /// binder must prefer these over re-parsing [`Self::patterns`]; the
+    /// string form remains the source of truth for normalization. Skipped
+    /// in serialization since it is derivable from `patterns`.
+    #[serde(skip)]
+    pub parsed_patterns: Vec<crate::types::pattern::Pattern>,
     /// WHERE clause expression
     pub where_clause: Option<Box<Expression>>,
     /// RETURN expression (single expression for scalar subquery)

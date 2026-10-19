@@ -3,6 +3,7 @@ use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
 use linkrs_core::types::expr::{Expression, FunctionArg, SubqueryBody};
+use linkrs_core::types::pattern::Pattern;
 
 pub(crate) fn parse_sql_subquery_body(
     ctx: &mut ParseContext<'_>,
@@ -23,6 +24,7 @@ pub(crate) fn parse_sql_subquery_body(
     // pattern `(tag)`, and bare identifiers in SELECT / WHERE are rewritten
     // into property accesses on the tag variable (`col` -> `tag.col`).
     let pattern_str = format!("({})", tag);
+    let parsed_pattern = parse_stored_pattern(&pattern_str)?;
     let return_expr = Some(Box::new(rewrite_sql_identifiers(first_item.expr, &tag)));
 
     let where_clause = if ctx.match_token(TokenKind::Where) {
@@ -35,6 +37,7 @@ pub(crate) fn parse_sql_subquery_body(
     Ok(SubqueryBody {
         id: 0,
         patterns: vec![pattern_str],
+        parsed_patterns: vec![parsed_pattern],
         where_clause,
         return_expr,
     })
@@ -141,11 +144,13 @@ pub(crate) fn rewrite_sql_identifiers(expr: Expression, tag: &str) -> Expression
 
 pub(crate) fn parse_subquery_body(ctx: &mut ParseContext<'_>) -> Result<SubqueryBody, ParseError> {
     let mut patterns = Vec::new();
+    let mut parsed = Vec::new();
     let mut where_clause = None;
     let mut return_expr = None;
 
     if ctx.match_token(TokenKind::Match) {
         let pattern_str = parse_pattern_string(ctx)?;
+        parsed.push(parse_stored_pattern(&pattern_str)?);
         patterns.push(pattern_str);
     } else if !matches!(
         ctx.current_token().kind,
@@ -154,6 +159,7 @@ pub(crate) fn parse_subquery_body(ctx: &mut ParseContext<'_>) -> Result<Subquery
         // Bare pattern without the MATCH keyword:
         // `EXISTS { a:person-[:knows]->b:person }`.
         let pattern_str = parse_pattern_string(ctx)?;
+        parsed.push(parse_stored_pattern(&pattern_str)?);
         patterns.push(pattern_str);
     }
 
@@ -170,9 +176,17 @@ pub(crate) fn parse_subquery_body(ctx: &mut ParseContext<'_>) -> Result<Subquery
     Ok(SubqueryBody {
         id: 0,
         patterns,
+        parsed_patterns: parsed,
         where_clause,
         return_expr,
     })
+}
+
+/// Parse a canonicalized stored pattern string once, at parse time, so the
+/// binder and planner can consume the parsed form without re-parsing.
+pub(crate) fn parse_stored_pattern(pattern_str: &str) -> Result<Pattern, ParseError> {
+    crate::parser::parsing::traversal_parser::TraversalParser::new()
+        .parse_pattern(&mut ParseContext::new(pattern_str))
 }
 
 pub(crate) fn parse_pattern_string(ctx: &mut ParseContext<'_>) -> Result<String, ParseError> {

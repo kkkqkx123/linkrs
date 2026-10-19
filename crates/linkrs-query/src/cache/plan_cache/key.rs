@@ -27,6 +27,29 @@ pub struct PlanCachePutContext {
     pub planning_config_hash: u64,
 }
 
+impl PlanCachePutContext {
+    /// Build the catalog/runtime identity fields from the shared
+    /// plan-cache context used by lookup keys, so put and get derive
+    /// their dimensions from one construction.
+    pub fn from_identity(
+        context: PlanCacheContext,
+        dependent_tables: Vec<String>,
+        is_dml: bool,
+        is_transaction: bool,
+    ) -> Self {
+        Self {
+            dependent_tables,
+            space_name: context.space_name,
+            schema_version: context.schema_version,
+            index_version: context.index_version,
+            is_dml,
+            is_transaction,
+            optimizer_version: context.optimizer_version,
+            planning_config_hash: context.planning_config_hash,
+        }
+    }
+}
+
 /// Complete request/catalog/runtime context used for every plan-cache operation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanCacheContext {

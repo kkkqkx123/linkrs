@@ -57,11 +57,7 @@ impl Planner for PipePlanner {
                 ))
             })?;
 
-            let sub_ctx = crate::planning::context::PlanContext {
-                bound: stmt,
-                qctx: ctx.qctx.clone(),
-                metadata: ctx.metadata,
-            };
+            let sub_ctx = ctx.with_bound(stmt);
             let sub_plan = planner.plan_bound(&sub_ctx)?;
 
             combined_plan = match combined_plan {

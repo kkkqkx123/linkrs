@@ -899,6 +899,7 @@ mod tests {
             body: Box::new(linkrs_core::types::expr::SubqueryBody {
                 id: 0,
                 patterns: vec![],
+                parsed_patterns: Vec::new(),
                 where_clause: None,
                 return_expr: None,
             }),

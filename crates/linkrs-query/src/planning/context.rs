@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::binder::BoundStatement;
 use crate::metadata::MetadataContext;
+use crate::parser::ast::stmt::Ast;
 use crate::QueryContext;
 
 /// Unified context for the plan_bound phase.
@@ -18,6 +19,9 @@ pub struct PlanContext<'a> {
     /// Pre-resolved metadata for referenced tags/edges/indexes.
     /// Only populated when schema_manager is available.
     pub metadata: Option<&'a MetadataContext>,
+    /// Already parsed statement for this query, when the caller has one.
+    /// Planners prefer this over re-parsing query text.
+    pub ast: Option<Arc<Ast>>,
 }
 
 impl<'a> PlanContext<'a> {
@@ -31,7 +35,14 @@ impl<'a> PlanContext<'a> {
             bound,
             qctx,
             metadata,
+            ast: None,
         }
+    }
+
+    /// Attach the already parsed statement for this query.
+    pub fn with_ast(mut self, ast: Arc<Ast>) -> Self {
+        self.ast = Some(ast);
+        self
     }
 
     /// Create a PlanContext with metadata injected later.
@@ -43,6 +54,7 @@ impl<'a> PlanContext<'a> {
             bound,
             qctx,
             metadata: None,
+            ast: None,
         }
     }
 
@@ -53,6 +65,7 @@ impl<'a> PlanContext<'a> {
             bound: self.bound,
             qctx: self.qctx.clone(),
             metadata: self.metadata,
+            ast: self.ast.clone(),
         }
     }
 
@@ -62,6 +75,7 @@ impl<'a> PlanContext<'a> {
             bound,
             qctx: self.qctx.clone(),
             metadata: self.metadata,
+            ast: self.ast.clone(),
         }
     }
 }

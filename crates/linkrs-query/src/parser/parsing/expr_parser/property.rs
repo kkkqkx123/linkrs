@@ -295,6 +295,7 @@ pub(crate) fn try_parse_inline_pattern_predicate(
     let body = SubqueryBody {
         id: 0,
         patterns: vec![pattern_str],
+        parsed_patterns: vec![pattern],
         where_clause: None,
         return_expr: None,
     };

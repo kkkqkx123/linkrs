@@ -206,6 +206,9 @@ impl WithPlanner {
                 bound_stmt.kind()
             ))
         })?;
+        // PlanContext::new leaves ast empty on purpose: the CTE branch is a
+        // sub-statement with its own text, while ctx.ast parses the whole
+        // WITH statement, so it must not leak into the branch planner.
         let sub_ctx = crate::planning::context::PlanContext::new(
             bound_stmt,
             ctx.qctx.clone(),

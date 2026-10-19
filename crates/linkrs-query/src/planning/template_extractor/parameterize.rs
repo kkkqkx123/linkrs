@@ -300,6 +300,7 @@ impl ParameterizingTransformer {
         linkrs_core::types::expr::SubqueryBody {
             id: body.id,
             patterns: body.patterns.clone(),
+            parsed_patterns: body.parsed_patterns.clone(),
             where_clause,
             return_expr,
         }

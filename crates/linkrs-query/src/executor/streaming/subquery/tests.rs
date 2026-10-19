@@ -133,6 +133,7 @@ fn body(id: u64) -> SubqueryBody {
     SubqueryBody {
         id,
         patterns: Vec::new(),
+        parsed_patterns: Vec::new(),
         where_clause: None,
         return_expr: None,
     }

@@ -140,28 +140,49 @@ impl Planner for MatchStatementPlanner {
             self.metadata_context = Some(metadata_context.clone());
         }
 
-        // Reconstruct a lightweight validated statement from the query text,
-        // since the bound pipeline no longer carries one. Expression context
-        // is fresh; validation info defaults to empty.
-        let mut parser = Parser::new(qctx.query());
-        let parsed = parser
-            .parse()
-            .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-        // A piped query carries the whole statement in `qctx`; when planning
+        // Prefer the parsed statement carried by the planning context so
+        // normal queries plan without parsing the text a second time.
+        // Direct planner invocations without that context fall back to
+        // parsing the query text.
+        let source_ast = match ctx.ast.clone() {
+            Some(ast) => ast,
+            None => {
+                let mut parser = Parser::new(qctx.query());
+                let parsed = parser
+                    .parse()
+                    .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
+                parsed.ast
+            }
+        };
+        // A piped query carries the whole statement in the parsed form; when planning
         // one of its stages, unwrap the pipe and plan its first MATCH stage.
-        let mut stmt = parsed.ast.stmt().clone();
+        let mut stmt = source_ast.stmt().clone();
+        let mut unwrapped = false;
         loop {
             match stmt {
-                Stmt::Pipe(pipe) => stmt = *pipe.left.clone(),
-                Stmt::Explain(explain) => stmt = *explain.statement.clone(),
-                Stmt::Profile(profile) => stmt = *profile.statement.clone(),
+                Stmt::Pipe(pipe) => {
+                    stmt = *pipe.left.clone();
+                    unwrapped = true;
+                }
+                Stmt::Explain(explain) => {
+                    stmt = *explain.statement.clone();
+                    unwrapped = true;
+                }
+                Stmt::Profile(profile) => {
+                    stmt = *profile.statement.clone();
+                    unwrapped = true;
+                }
                 _ => break,
             }
         }
-        let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-            stmt,
-            Arc::new(ExpressionAnalysisContext::new()),
-        ));
+        let ast = if unwrapped {
+            Arc::new(crate::parser::ast::stmt::Ast::new(
+                stmt,
+                source_ast.expr_context().clone(),
+            ))
+        } else {
+            source_ast
+        };
         let validated = ValidatedStatement::new(ast, ValidationInfo::new());
         self.expr_context = Some(validated.ast.expr_context().clone());
 

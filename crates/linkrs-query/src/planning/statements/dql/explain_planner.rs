@@ -32,8 +32,6 @@ impl Planner for ExplainPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
-        let qctx = ctx.qctx.clone();
-        let metadata = ctx.metadata;
         let (inner_bound, is_profile) = match bound {
             BoundStatement::Explain(e) => (e.statement.as_ref(), false),
             BoundStatement::Profile(p) => (p.statement.as_ref(), true),
@@ -52,11 +50,7 @@ impl Planner for ExplainPlanner {
                 ))
             })?;
 
-        let inner_ctx = crate::planning::context::PlanContext {
-            bound: inner_bound,
-            qctx: qctx.clone(),
-            metadata,
-        };
+        let inner_ctx = ctx.with_bound(inner_bound);
         let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
 
         let mode = if is_profile { "PROFILE" } else { "EXPLAIN" };

@@ -10,6 +10,7 @@ pub mod index;
 pub mod metadata_version;
 pub mod operators;
 pub mod parse;
+pub mod pattern;
 pub mod property;
 pub mod property_trait;
 pub mod query;

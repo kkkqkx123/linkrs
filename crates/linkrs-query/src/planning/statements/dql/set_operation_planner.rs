@@ -46,10 +46,14 @@ impl SetOperationPlanner {
         if let Some(space) = ctx.qctx.space_info() {
             qctx.set_space_info(space.clone());
         }
+        // ast stays None on purpose: this side carries its own query text
+        // (`rctx.query` above), while `ctx.ast` parses the whole set
+        // operation, so it must not leak into the side planner.
         crate::planning::context::PlanContext {
             bound: side,
             qctx: std::sync::Arc::new(qctx),
             metadata: ctx.metadata,
+            ast: None,
         }
     }
 

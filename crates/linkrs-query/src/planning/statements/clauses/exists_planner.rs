@@ -130,8 +130,29 @@ fn expression_subquery_position_error() -> PlannerError {
     )
 }
 
-/// Compile a single expression-level EXISTS / IN body into a standalone
-/// sub-plan.
+/// Resolve the parsed patterns of a subquery body, preferring the parse-time
+/// form and falling back to a string re-parse for bodies built without one
+/// (e.g. unit tests constructing `SubqueryBody` by hand).
+pub(crate) fn resolve_patterns(
+    body: &linkrs_core::types::expr::SubqueryBody,
+) -> Result<Vec<linkrs_core::types::pattern::Pattern>, PlannerError> {
+    if !body.parsed_patterns.is_empty() {
+        return Ok(body.parsed_patterns.clone());
+    }
+    body.patterns
+        .iter()
+        .map(|pattern_str| {
+            crate::parser::parsing::TraversalParser::new()
+                .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
+                .map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Invalid subquery pattern `{pattern_str}`: {e}"
+                    ))
+                })
+        })
+        .collect()
+}
+
 fn plan_scalar_subquery(
     body: &linkrs_core::types::expr::SubqueryBody,
     qctx: &Arc<QueryContext>,
@@ -140,17 +161,7 @@ fn plan_scalar_subquery(
     outer_col_names: &[String],
     id_alloc: &mut SubqueryIdAllocator,
 ) -> Result<PlannedSubquery, PlannerError> {
-    let mut patterns = Vec::with_capacity(body.patterns.len());
-    for pattern_str in &body.patterns {
-        let pattern = crate::parser::parsing::TraversalParser::new()
-            .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
-            .map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!(
-                    "Invalid subquery pattern `{pattern_str}`: {e}"
-                ))
-            })?;
-        patterns.push(pattern);
-    }
+    let patterns = resolve_patterns(body)?;
 
     let inner_vars: HashSet<String> = patterns
         .iter()
@@ -349,17 +360,7 @@ pub fn plan_subquery(
     space_name: &str,
     outer_col_names: &[String],
 ) -> Result<PlannedSubquery, PlannerError> {
-    let mut patterns = Vec::with_capacity(spec.body.patterns.len());
-    for pattern_str in &spec.body.patterns {
-        let pattern = crate::parser::parsing::TraversalParser::new()
-            .parse_pattern(&mut crate::parser::ParseContext::new(pattern_str))
-            .map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!(
-                    "Invalid subquery pattern `{pattern_str}`: {e}"
-                ))
-            })?;
-        patterns.push(pattern);
-    }
+    let patterns = resolve_patterns(&spec.body)?;
 
     let inner_vars: HashSet<String> = patterns
         .iter()

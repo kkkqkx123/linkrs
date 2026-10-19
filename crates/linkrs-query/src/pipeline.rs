@@ -135,26 +135,14 @@ pub(crate) struct DmlPlanMemoKey {
 }
 
 impl DmlPlanMemoKey {
-    pub fn from_normalized(
+    pub fn from_context(
         normalized_text: String,
-        space_name: Option<String>,
-        schema_version: Option<u64>,
-        index_version: Option<u64>,
-        param_sig: Option<u64>,
-        optimizer_version: u64,
-        planning_config_hash: u64,
+        context: crate::cache::PlanCacheContext,
     ) -> Self {
         Self {
             inner: crate::cache::PlanCacheKey::fingerprint_less_from_context(
                 &normalized_text,
-                crate::cache::PlanCacheContext {
-                    space_name,
-                    schema_version,
-                    index_version,
-                    param_type_signature: param_sig,
-                    optimizer_version,
-                    planning_config_hash,
-                },
+                context,
             ),
         }
     }
@@ -637,14 +625,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
     }
 
-    /// Parameter type signature for a (possibly shape-normalized) query text,
-    /// using the same extract + `compute_param_type_signature` path as the
-    /// plan cache so memo and plan keys share one construction.
-    pub(crate) fn memo_param_signature(
+    /// Extract parameter positions for a (possibly shape-normalized) query
+    /// text and fill each position's expected type from the request
+    /// parameters. Shared by the plan cache put path and the memo signature
+    /// so both derive from one construction.
+    pub(crate) fn typed_param_positions(
         &self,
         normalized_text: &str,
         parameters: &std::collections::HashMap<String, linkrs_core::Value>,
-    ) -> Option<u64> {
+    ) -> Vec<crate::cache::ParamPosition> {
         let mut positions = self.param_handler.extract_params(normalized_text);
         for position in &mut positions {
             let name = position
@@ -653,7 +642,44 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 .unwrap_or_else(|| position.index.to_string());
             position.expected_type = parameters.get(&name).map(|value| value.data_type());
         }
+        positions
+    }
+
+    /// Parameter type signature for a (possibly shape-normalized) query text,
+    /// using the same extract + `compute_param_type_signature` path as the
+    /// plan cache so memo and plan keys share one construction.
+    pub(crate) fn memo_param_signature(
+        &self,
+        normalized_text: &str,
+        parameters: &std::collections::HashMap<String, linkrs_core::Value>,
+    ) -> Option<u64> {
+        let positions = self.typed_param_positions(normalized_text, parameters);
         crate::cache::plan_cache::QueryPlanCache::compute_param_type_signature(&positions)
+    }
+
+    /// Single construction of the plan-cache identity context shared by the
+    /// memo key, the plan-cache lookup and the plan-cache put paths, so every
+    /// cache key derives its dimensions from one place.
+    pub(crate) fn plan_cache_context(
+        &self,
+        space_name: Option<String>,
+        param_type_signature: Option<u64>,
+    ) -> crate::cache::PlanCacheContext {
+        let planning_config = self.dml_planning_config();
+        crate::cache::PlanCacheContext {
+            space_name,
+            schema_version: Some(
+                self.schema_generation
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            index_version: Some(
+                self.index_generation
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            param_type_signature,
+            optimizer_version: planning_config.optimizer_version,
+            planning_config_hash: planning_config.config_hash,
+        }
     }
 
     /// Single memo-key constructor shared by the prepare-time probe and the
@@ -664,22 +690,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         space_name: Option<String>,
         parameters: &std::collections::HashMap<String, linkrs_core::Value>,
     ) -> DmlPlanMemoKey {
-        let planning_config = self.dml_planning_config();
         let param_sig = self.memo_param_signature(&normalized_text, parameters);
-        DmlPlanMemoKey::from_normalized(
+        DmlPlanMemoKey::from_context(
             normalized_text,
-            space_name,
-            Some(
-                self.schema_generation
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            Some(
-                self.index_generation
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            param_sig,
-            planning_config.optimizer_version,
-            planning_config.config_hash,
+            self.plan_cache_context(space_name, param_sig),
         )
     }
 
