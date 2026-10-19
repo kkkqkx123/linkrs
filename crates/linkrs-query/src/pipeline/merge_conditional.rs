@@ -165,6 +165,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 "Conditional merge requires a storage binding".to_string(),
             ))
         })?;
+        let probe_start = std::time::Instant::now();
         let matched = {
             let reader = storage.read();
             let candidates = reader
@@ -183,6 +184,15 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 })
                 .map(|vertex| vertex.vid)
         };
+        let probe_us = probe_start.elapsed().as_micros() as u64;
+        log::debug!(
+            "Conditional merge probe on tag '{tag}' took {probe_us}us in space '{space_name}'"
+        );
+        if probe_us > 50_000 {
+            log::warn!(
+                "Slow conditional merge probe on tag '{tag}' in space '{space_name}': {probe_us}us (full tag scan)"
+            );
+        }
 
         let scope = request.transaction_scope.clone();
         let planner = MergePlanner::new();

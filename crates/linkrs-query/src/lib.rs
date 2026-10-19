@@ -49,7 +49,7 @@ pub use extensions::{
     PlannerExtension,
 };
 pub use dml_events::{DmlOp, DmlStatementCallback, DmlStatementEvent};
-pub use pipeline::prepared::{dml_op_from_stmt, StatementClass};
+pub use pipeline::prepared::{dml_op_from_stmt, OwnedOperationGuard, StatementClass};
 pub use session_events::{SessionEvent, SessionEventCallback};
 // Re-export OptimizerEngine
 pub use optimizer::OptimizerEngine;

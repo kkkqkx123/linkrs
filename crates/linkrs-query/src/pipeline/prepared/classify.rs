@@ -176,7 +176,18 @@ pub fn is_ddl(stmt: &Stmt) -> bool {
             | Stmt::CreateType(_)
             | Stmt::DropType(_)
             | Stmt::PurgeExpired(_)
+            | Stmt::ImportDatabase(_)
+            | Stmt::ExportDatabase(_)
+            | Stmt::AttachDatabase(_)
+            | Stmt::DetachDatabase(_)
     )
+}
+
+/// Whether the statement changes process-global catalog state rather than
+/// one space. Attach/Detach mutate the process-global attached registry, so
+/// per-space invalidation would leave other spaces holding stale plans.
+pub fn is_global_catalog_change(stmt: &Stmt) -> bool {
+    matches!(stmt, Stmt::AttachDatabase(_) | Stmt::DetachDatabase(_))
 }
 
 pub fn is_diagnostic(stmt: &Stmt) -> bool {
@@ -350,5 +361,33 @@ mod tests {
             span: Span::default(),
         });
         assert!(!is_read_only_cacheable(&stmt));
+    }
+
+    #[test]
+    fn import_and_attach_are_ddl() {
+        for query in [
+            "IMPORT DATABASE '/tmp/x'",
+            "ATTACH '/tmp/a' AS analytics",
+            "DETACH analytics",
+        ] {
+            let stmt = parse(query);
+            assert!(is_ddl(&stmt), "DDL: {query}");
+            assert_eq!(classify_statement(&stmt), StatementClass::Ddl);
+            assert!(!is_read_only_cacheable(&stmt));
+        }
+    }
+
+    #[test]
+    fn only_attach_detach_are_global_catalog_changes() {
+        assert!(is_global_catalog_change(&parse(
+            "ATTACH '/tmp/a' AS analytics"
+        )));
+        assert!(is_global_catalog_change(&parse("DETACH analytics")));
+        assert!(!is_global_catalog_change(&parse(
+            "IMPORT DATABASE '/tmp/x'"
+        )));
+        assert!(!is_global_catalog_change(&parse(
+            "CREATE TAG IF NOT EXISTS Person(name: STRING)"
+        )));
     }
 }

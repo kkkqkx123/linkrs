@@ -16,6 +16,7 @@ pub struct StageMetrics {
     pub plan_us: u64,
     pub optimize_us: u64,
     pub execute_us: u64,
+    pub statistics_us: u64,
 }
 
 impl StageMetrics {
@@ -26,6 +27,7 @@ impl StageMetrics {
             plan_us: metrics.plan_time_us,
             optimize_us: metrics.optimize_time_us,
             execute_us: metrics.execute_time_us,
+            statistics_us: metrics.statistics_time_us,
         }
     }
 
@@ -53,6 +55,10 @@ impl StageMetrics {
 
     pub fn execute_ms(&self) -> f64 {
         micros_to_millis(self.execute_us)
+    }
+
+    pub fn statistics_ms(&self) -> f64 {
+        micros_to_millis(self.statistics_us)
     }
 }
 

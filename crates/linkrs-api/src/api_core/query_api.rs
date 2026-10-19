@@ -103,6 +103,15 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         )
     }
 
+    fn finalize_caller_storage(storage: Option<&S>, committed: bool) -> CoreResult<()> {
+        if let Some(storage) = storage {
+            storage
+                .finalize_operation(committed)
+                .map_err(|error| CoreError::StorageError(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     fn execute_with_operation_context_and_storage(
         &mut self,
         query: &str,
@@ -153,22 +162,14 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             Ok(result) => result,
             Err(error) => {
                 if ctx.auto_commit {
-                    if let Some(storage) = operation_finalizer.as_ref() {
-                        storage
-                            .finalize_operation(false)
-                            .map_err(|cleanup| CoreError::StorageError(cleanup.to_string()))?;
-                    }
+                    Self::finalize_caller_storage(operation_finalizer.as_ref(), false)?;
                 }
                 return Err(CoreError::from(error));
             }
         };
 
         if ctx.auto_commit {
-            if let Some(storage) = operation_finalizer.as_ref() {
-                storage
-                    .finalize_operation(true)
-                    .map_err(|error| CoreError::StorageError(error.to_string()))?;
-            }
+            Self::finalize_caller_storage(operation_finalizer.as_ref(), true)?;
         }
 
         // Wrap the engine execution result with API-layer metadata.

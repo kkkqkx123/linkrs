@@ -167,10 +167,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.schema_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
-        let index_version = Some(
-            self.index_generation
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
         // Shared extract + type-fill path; the positions also feed the plan
         // cache put below, and the signature feeds the memo key.
         let param_positions = self.typed_param_positions(query_text, &request.parameters);
@@ -193,36 +189,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             None
         };
 
-        if let Some(key) = dml_memo_key.as_ref() {
-            if let Some(plan) = self.find_dml_plan(key) {
-                if self
-                    .plan_cache
-                    .serve_compatible(&plan, schema_version)
-                    .is_ok()
-                {
-                    self.last_dml_plan_hits
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return Ok(plan);
-                }
-                self.dml_memo_compat_failures
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                log::debug!(
-                    "DML memo plan failed compatibility check, falling through to replan: {}",
-                    query_text
-                );
-            }
+        if let Some(plan) = self.serve_dml_memo(dml_memo_key.as_ref(), schema_version) {
+            return Ok(plan);
         }
 
-        if let Some(cached) = self
-            .plan_cache
-            .get_with_context(query_text, cache_context.clone())
+        if let Some(plan) =
+            self.serve_plain_cache(query_text, &cache_context, dml_memo_key.clone(), schema_version)
         {
-            self.plan_cache
-                .serve_compatible(&cached.plan, schema_version)?;
-            if let Some(key) = dml_memo_key.clone() {
-                self.store_dml_plan(key, cached.plan.clone());
-            }
-            return Ok(cached.plan.clone());
+            return Ok(plan);
         }
 
         let owned_bound;
@@ -243,12 +217,19 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 self.plan_cache
                     .get_with_partition_context(query_text, spec, cache_context.clone())
             {
-                self.plan_cache
-                    .serve_compatible(&cached.plan, schema_version)?;
-                if let Some(key) = dml_memo_key.clone() {
-                    self.store_dml_plan(key, cached.plan.clone());
+                if self
+                    .plan_cache
+                    .serve_compatible(&cached.plan, schema_version)
+                    .is_ok()
+                {
+                    if let Some(key) = dml_memo_key.clone() {
+                        self.store_dml_plan(key, cached.plan.clone());
+                    }
+                    return Ok(cached.plan.clone());
                 }
-                return Ok(cached.plan.clone());
+                log::debug!(
+                    "Partitioned plan failed compatibility check, falling through to rebuild"
+                );
             }
         }
 
@@ -288,6 +269,54 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         }
         Ok(plan)
+    }
+
+    /// Serve a DML memo hit through the single compatibility exit.
+    ///
+    /// Single resolver for the memo probe shared by the prepare-time
+    /// bind-skip check and the compile-time serve path. Returns the plan
+    /// only after `serve_compatible` validates the layout version; compat
+    /// failures fall through to replan and bump the failure counter.
+    pub(crate) fn serve_dml_memo(
+        &self,
+        key: Option<&super::DmlPlanMemoKey>,
+        schema_version: Option<u64>,
+    ) -> Option<Arc<PhysicalPlan>> {
+        let key = key?;
+        let plan = self.find_dml_plan(key)?;
+        if self.plan_cache.serve_compatible(&plan, schema_version).is_ok() {
+            self.last_dml_plan_hits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Some(plan);
+        }
+        self.dml_memo_compat_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        log::debug!("DML memo plan failed compatibility check, falling through to replan");
+        None
+    }
+
+    /// Serve a plain (non-partitioned) plan-cache hit.
+    ///
+    /// Memo backfill keeps the bind-skip fast path warm when the plan cache
+    /// serves a shape-normalized entry first. Partitioned entries are
+    /// resolved separately after optimization when the partition spec exists.
+    pub(crate) fn serve_plain_cache(
+        &self,
+        query_text: &str,
+        cache_context: &crate::cache::PlanCacheContext,
+        dml_memo_key: Option<super::DmlPlanMemoKey>,
+        schema_version: Option<u64>,
+    ) -> Option<Arc<PhysicalPlan>> {
+        let cached = self
+            .plan_cache
+            .get_with_context(query_text, cache_context.clone())?;
+        if self.plan_cache.serve_compatible(&cached.plan, schema_version).is_ok() {
+            if let Some(key) = dml_memo_key {
+                self.store_dml_plan(key, cached.plan.clone());
+            }
+            return Some(cached.plan.clone());
+        }
+        None
     }
 
     /// Deterministic hash of the live partitioning configuration used to

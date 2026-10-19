@@ -164,9 +164,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+        profile.stages.statistics_us = self
+            .last_statistics_collection_us
+            .load(std::sync::atomic::Ordering::Relaxed);
         profile.result_count = result.count();
         metrics.set_result_row_count(result.count());
         metrics.record_execute_time(execute_start.elapsed());
+        metrics.statistics_time_us = profile.stages.statistics_us;
 
         profile.total_duration_us = total_start.elapsed().as_micros() as u64;
         metrics.record_total_time(total_start.elapsed());

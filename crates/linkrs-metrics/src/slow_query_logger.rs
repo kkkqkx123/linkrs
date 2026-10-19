@@ -231,6 +231,7 @@ impl SlowQueryLogger {
             plan_ms: f64,
             optimize_ms: f64,
             execute_ms: f64,
+            statistics_ms: f64,
         }
 
         #[derive(Serialize)]
@@ -270,6 +271,7 @@ impl SlowQueryLogger {
                 plan_ms: profile.stages.plan_ms(),
                 optimize_ms: profile.stages.optimize_ms(),
                 execute_ms: profile.stages.execute_ms(),
+                statistics_ms: profile.stages.statistics_ms(),
             },
             result_count: profile.result_count,
             executor_stats: profile

@@ -23,6 +23,8 @@ pub struct QueryMetrics {
     pub optimize_time_us: u64,
     /// Execution time (in microseconds)
     pub execute_time_us: u64,
+    /// Statistics collection time (in microseconds)
+    pub statistics_time_us: u64,
     /// Total time (microseconds)
     pub total_time_us: u64,
     /// Number of planned nodes
@@ -41,6 +43,7 @@ impl Default for QueryMetrics {
             plan_time_us: 0,
             optimize_time_us: 0,
             execute_time_us: 0,
+            statistics_time_us: 0,
             total_time_us: 0,
             plan_node_count: 0,
             result_row_count: 0,
@@ -74,6 +77,10 @@ impl QueryMetrics {
         self.execute_time_us = duration.as_micros() as u64;
     }
 
+    pub fn record_statistics_time(&mut self, duration: Duration) {
+        self.statistics_time_us = duration.as_micros() as u64;
+    }
+
     pub fn record_total_time(&mut self, duration: Duration) {
         self.total_time_us = duration.as_micros() as u64;
     }
@@ -93,6 +100,7 @@ impl QueryMetrics {
         map.insert("plan_time_us".to_string(), self.plan_time_us);
         map.insert("optimize_time_us".to_string(), self.optimize_time_us);
         map.insert("execute_time_us".to_string(), self.execute_time_us);
+        map.insert("statistics_time_us".to_string(), self.statistics_time_us);
         map.insert("total_time_us".to_string(), self.total_time_us);
         map.insert("plan_node_count".to_string(), self.plan_node_count as u64);
         map.insert("result_row_count".to_string(), self.result_row_count as u64);

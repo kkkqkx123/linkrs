@@ -222,7 +222,10 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
                 start.elapsed().as_secs_f64() * 1000.0,
             );
             if request.statement_class == StatementClass::Ddl {
-                self.invalidate_after_ddl(request.query_context.space_name().as_deref());
+                self.invalidate_after_ddl(
+                    request.query_context.space_name().as_deref(),
+                    &request.stmt,
+                );
             }
             if stream_ddl {
                 return Ok(PreparedOutcome::Stream(
@@ -319,7 +322,11 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
         })
     }
 
-    pub(crate) fn invalidate_after_ddl(&self, space_name: Option<&str>) {
+    pub(crate) fn invalidate_after_ddl(
+        &self,
+        space_name: Option<&str>,
+        stmt: &crate::parser::ast::Stmt,
+    ) {
         self.schema_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // Index DDL retires the same unified dimensions: bump the index
@@ -334,7 +341,12 @@ impl<S: QueryStorage + 'static> crate::pipeline::QueryPipelineManager<S> {
             .stats_manager()
             .invalidate_space(space_name);
         self.optimizer_engine.invalidate_space_feedback(space_name);
-        if let Some(space_name) = space_name {
+        // CTE entries capture table snapshots; DDL is rare so a full clear
+        // is cheaper than tracking per-table lineage here.
+        self.optimizer_engine.cte_cache_manager().clear();
+        if super::classify::is_global_catalog_change(stmt) {
+            self.plan_cache.clear();
+        } else if let Some(space_name) = space_name {
             let removed = self.plan_cache.invalidate_space(space_name);
             if removed > 0 {
                 log::info!(

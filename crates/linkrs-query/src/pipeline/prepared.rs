@@ -16,8 +16,8 @@ use crate::parser::ast::Stmt;
 use crate::QueryContext;
 use crate::QueryRequestContext;
 pub use classify::{
-    classify_statement, dml_op_from_stmt, is_analyze, is_ddl, is_diagnostic, is_read_only_cacheable,
-    is_transaction, requires_write_storage, StatementClass,
+    classify_statement, dml_op_from_stmt, is_analyze, is_ddl, is_diagnostic, is_global_catalog_change,
+    is_read_only_cacheable, is_transaction, requires_write_storage, StatementClass,
 };
 pub use result::PreparedOutcome;
 
@@ -66,6 +66,10 @@ impl PreparedRequest {
         if !self.owns_operation_storage {
             return Ok(());
         }
+        debug_assert!(
+            self.operation_storage.is_some(),
+            "owns_operation_storage set without a bound storage"
+        );
         if let Some(storage) = &self.operation_storage {
             storage
                 .write()
@@ -77,6 +81,50 @@ impl PreparedRequest {
                 })?;
         }
         Ok(())
+    }
+}
+
+/// RAII guard for pipeline-owned operation storage.
+///
+/// Direct pipeline users that bypass `execute_prepared` (e.g. calling
+/// `prepare_request` + `execute_compiled_with_scope` manually) must still
+/// terminate the bound `dyn QueryStorage`. Hold this guard across execution:
+/// `commit()` finalizes with success, dropping without commit aborts. This
+/// mirrors `PreparedRequest::finalize_owned_operation` without requiring the
+/// caller to duplicate the finalize call on every return path.
+pub struct OwnedOperationGuard {
+    storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+    committed: bool,
+}
+
+impl OwnedOperationGuard {
+    pub fn new(storage: Option<Arc<RwLock<dyn QueryStorage>>>) -> Self {
+        Self {
+            storage,
+            committed: false,
+        }
+    }
+
+    pub fn commit(mut self) -> DBResult<()> {
+        self.committed = true;
+        if let Some(storage) = self.storage.take() {
+            storage.write().finalize_operation(true).map_err(|error| {
+                linkrs_core::error::DBError::from(linkrs_core::error::QueryError::execution(
+                    error.to_string(),
+                ))
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for OwnedOperationGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            if let Some(storage) = self.storage.take() {
+                let _ = storage.write().finalize_operation(false);
+            }
+        }
     }
 }
 

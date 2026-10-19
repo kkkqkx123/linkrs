@@ -74,6 +74,10 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub sequence_manager: Arc<linkrs_core::metadata::SequenceManager>,
     /// Serializes statistics collection to prevent concurrent re-collection.
     pub(crate) statistics_collect_lock: Arc<parking_lot::Mutex<()>>,
+    /// Microseconds spent in the last statistics collection pass.
+    pub(crate) last_statistics_collection_us: AtomicU64,
+    /// Times a non-forced collection was skipped due to lock contention.
+    pub(crate) statistics_collection_skips: AtomicU64,
     /// Sample cap for per-tag/per-edge-type degree estimation during collection.
     pub(crate) statistics_sample_limit: usize,
     /// Minimum data-epoch advance that triggers an automatic refresh.
@@ -197,6 +201,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             sequence_manager: Arc::new(linkrs_core::metadata::SequenceManager::new()),
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
+            last_statistics_collection_us: AtomicU64::new(0),
+            statistics_collection_skips: AtomicU64::new(0),
             statistics_sample_limit: Self::DEFAULT_STATISTICS_SAMPLE_LIMIT,
             statistics_min_epoch_delta: Self::DEFAULT_STATISTICS_MIN_EPOCH_DELTA,
             default_cost_profile_label: String::new(),
@@ -295,13 +301,34 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// `StatisticsManager`.
     ///
     /// `force` bypasses the version gate so an explicit ANALYZE always
-    /// refreshes the statistics. Collection is serialized internally.
+    /// refreshes the statistics. Collection is serialized internally; a
+    /// non-forced pass that loses the `try_lock` race skips collection and
+    /// returns a cached summary instead of blocking the query thread.
     pub fn collect_statistics(
         &self,
         space: &str,
         force: bool,
     ) -> Result<crate::optimizer::stats::CollectedSummary, String> {
-        let _guard = self.statistics_collect_lock.lock();
+        let start = std::time::Instant::now();
+        let _guard = if force {
+            self.statistics_collect_lock.lock()
+        } else {
+            match self.statistics_collect_lock.try_lock() {
+                Some(guard) => guard,
+                None => {
+                    self.statistics_collection_skips
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    log::debug!(
+                        "Statistics collection for space '{}' skipped: collector busy",
+                        space
+                    );
+                    return Ok(crate::optimizer::stats::CollectedSummary {
+                        cached: true,
+                        ..Default::default()
+                    });
+                }
+            }
+        };
         let stats_manager = self.optimizer_engine.stats_manager().clone();
         let schema_version = self
             .schema_generation
@@ -323,6 +350,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             schema_version,
             data_epoch,
             self.statistics_sample_limit,
+        );
+        self.last_statistics_collection_us.store(
+            start.elapsed().as_micros() as u64,
+            std::sync::atomic::Ordering::Relaxed,
         );
         match &result {
             Ok(summary) => {
@@ -472,6 +503,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             sequence_manager: Arc::new(linkrs_core::metadata::SequenceManager::new()),
             session_controller: parking_lot::RwLock::new(None),
             statistics_collect_lock: Arc::new(parking_lot::Mutex::new(())),
+            last_statistics_collection_us: AtomicU64::new(0),
+            statistics_collection_skips: AtomicU64::new(0),
             statistics_sample_limit: Self::DEFAULT_STATISTICS_SAMPLE_LIMIT,
             statistics_min_epoch_delta: Self::DEFAULT_STATISTICS_MIN_EPOCH_DELTA,
             default_cost_profile_label: String::new(),
@@ -561,8 +594,22 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(coordinator) = sync_manager.fulltext_coordinator() {
             self.fulltext_manager = Some(coordinator.fulltext_manager().clone());
         }
+        // Prefer the sync-manager-hosted vector coordinator so the query
+        // plan and the HTTP/gRPC vector APIs share one source of truth.
+        // A `with_vector_backend` coordinator installed earlier stays only
+        // as a fallback when the sync manager has none.
+        #[cfg(feature = "vector")]
+        if let Some(coordinator) = sync_manager.vector_coordinator() {
+            self.vector_coordinator = Some(coordinator.clone());
+        }
         self.sync_manager = Some(sync_manager);
         self
+    }
+
+    /// Vector coordinator currently backing query planning, if any.
+    #[cfg(feature = "vector")]
+    pub fn vector_coordinator(&self) -> Option<Arc<VectorSyncCoordinator>> {
+        self.vector_coordinator.clone()
     }
 
     /// Toggle DML shape plan caching (independent switch / rollback path).
@@ -593,6 +640,18 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
     pub fn dml_memo_compat_failure_count(&self) -> u64 {
         self.dml_memo_compat_failures
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Microseconds spent in the last statistics collection pass.
+    pub fn last_statistics_collection_us(&self) -> u64 {
+        self.last_statistics_collection_us
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Times a non-forced collection was skipped due to lock contention.
+    pub fn statistics_collection_skips(&self) -> u64 {
+        self.statistics_collection_skips
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
