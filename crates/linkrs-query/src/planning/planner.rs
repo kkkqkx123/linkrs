@@ -6,17 +6,10 @@
 //! This module has been completely restructured, and the old mechanism for matching SentenceKind strings has been removed.
 //! Now, use the direct enumeration mode to match the planner created from the Stmt.
 
-use std::sync::Arc;
-
 use crate::binder::BoundStatement;
-use crate::binder::Binder;
 use crate::parser::ast::Stmt;
 use crate::planning::context::PlanContext;
 use crate::planning::plan::SubPlan;
-use crate::QueryContext;
-
-// Re-exported for planner implementations that still reference it.
-pub use crate::binder::validation::ValidatedStatement;
 
 use crate::planning::fulltext_planner::FulltextSearchPlanner;
 use crate::planning::statements::ddl::maintain_planner::MaintainPlanner;
@@ -70,53 +63,14 @@ impl Default for PlannerConfig {
     }
 }
 
-/// Match function type
-pub type MatchFunc = fn(&Stmt) -> bool;
-
 ///  Planner Features
-///
-/// # Design Principles
-/// The `transform` method accepts an `Arc<QueryContext>` and a `&ValidatedStatement`.
-/// The `match_planner` method receives an `&Stmt` object, which is used for matching and making judgments.
 pub trait Planner: std::fmt::Debug {
-    /// Translate the verified statement into a sub-plan.
-    ///
-    /// Legacy compatibility path: new code must use `plan_bound` instead.
-    /// Kept only because composite planners still forward AST fragments
-    /// during the bound-pipeline migration.
-    ///
-    /// # Parameters
-    /// `validated`: A verified statement that contains ValidationInfo and Ast.
-    /// `qctx`: Query context
-
-
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let space_name = qctx.space_name();
-        let space_id = qctx.space_id().unwrap_or(0);
-        let binder = Binder::new().with_space(space_name, space_id);
-        let bound = binder
-            .bind(validated.ast.clone())
-            .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-        let ctx = PlanContext {
-            bound: &bound,
-            qctx,
-            metadata: None,
-        };
-        self.plan_bound(&ctx)
-    }
-
     /// Translate a bound statement directly into a plan sub-tree.
     ///
-    /// Preferred entry point for all new planning work.
+    /// Sole entry point for statement planning.
     /// The unified [`PlanContext`] bundles all inputs needed during
-    /// bound-statement planning (bound statement, query context, metadata,
-    /// validated statement). The default implementation returns
-    /// `UnsupportedOperation` so that planners which have not yet been
-    /// migrated to the bound pipeline continue to work unchanged.
+    /// bound-statement planning (bound statement, query context, metadata).
+    /// The default implementation returns `UnsupportedOperation`.
     fn plan_bound(&mut self, _ctx: &PlanContext<'_>) -> Result<SubPlan, PlannerError> {
         Err(PlannerError::UnsupportedOperation(
             "plan_bound not yet implemented for this planner".to_string(),
@@ -238,6 +192,19 @@ impl PlannerEnum {
                 Some(PlannerEnum::Assignment(AssignmentPlanner::new()))
             }
             BoundStatement::Other(stmt) => match stmt.as_ref() {
+                Stmt::Create(_)
+                | Stmt::CreateMacro(_)
+                | Stmt::DropMacro(_)
+                | Stmt::CreateType(_)
+                | Stmt::DropType(_)
+                | Stmt::AttachDatabase(_)
+                | Stmt::DetachDatabase(_)
+                | Stmt::PurgeExpired(_)
+                | Stmt::Checkpoint(_)
+                | Stmt::ExportDatabase(_)
+                | Stmt::ImportDatabase(_) => {
+                    Some(PlannerEnum::Maintain(MaintainPlanner::new()))
+                }
                 Stmt::CreateVectorIndex(_)
                 | Stmt::DropVectorIndex(_)
                 | Stmt::ShowVectorIndex(_)

@@ -16,8 +16,8 @@ use crate::parser::ast::Stmt;
 use crate::QueryContext;
 use crate::QueryRequestContext;
 pub use classify::{
-    build_validated_fallback, classify_statement, dml_op_from_stmt, is_analyze, is_ddl,
-    is_diagnostic, is_read_only_cacheable, is_transaction, requires_write_storage, StatementClass,
+    classify_statement, dml_op_from_stmt, is_analyze, is_ddl, is_diagnostic, is_read_only_cacheable,
+    is_transaction, requires_write_storage, StatementClass,
 };
 pub use result::PreparedOutcome;
 

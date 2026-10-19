@@ -48,7 +48,7 @@ pub use extensions::{
     BinderExtension, BinderExtensionContext, ExtensionRegistry, MapperExtension, ParserExtension,
     PlannerExtension,
 };
-pub use dml_events::{classify_dml, DmlOp, DmlStatementCallback, DmlStatementEvent};
+pub use dml_events::{DmlOp, DmlStatementCallback, DmlStatementEvent};
 pub use pipeline::prepared::{dml_op_from_stmt, StatementClass};
 pub use session_events::{SessionEvent, SessionEventCallback};
 // Re-export OptimizerEngine

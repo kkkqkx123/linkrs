@@ -21,7 +21,7 @@ use crate::planning::plan::core::nodes::search::vector::management::{
     ShowVectorIndexNode,
 };
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::QueryContext;
 
 /// Planner for vector index DDL statements
@@ -67,17 +67,7 @@ impl Planner for VectorDdlPlanner {
                         ));
                     }
                 };
-                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-                    stmt.clone(),
-                    Arc::new(
-                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                    ),
-                ));
-                let validated = crate::binder::validation::ValidatedStatement::new(
-                    ast,
-                    crate::binder::validation::ValidationInfo::new(),
-                );
-                return self.transform_bound(&validated, qctx, ctx.metadata);
+                return self.transform_bound(stmt, qctx, ctx.metadata);
             }
         };
 
@@ -142,11 +132,10 @@ impl VectorDdlPlanner {
     /// without plan-phase metadata.
     fn transform_bound(
         &self,
-        validated: &ValidatedStatement,
+        stmt: &Stmt,
         qctx: Arc<QueryContext>,
         metadata: Option<&MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let stmt = validated.stmt();
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
         let metadata = metadata.or(self.metadata_context.as_deref());
         match stmt {

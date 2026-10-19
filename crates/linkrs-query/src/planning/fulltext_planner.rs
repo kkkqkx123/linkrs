@@ -55,28 +55,12 @@ impl Planner for FulltextSearchPlanner {
         let create = match bound {
             crate::binder::BoundStatement::CreateFulltextIndex(c) => c,
             // DROP/ALTER/SHOW/DESCRIBE/SEARCH variants have no bound
-            // representation yet and still use the AST path.
+            // representation and are rejected here.
             _ => {
-                let stmt = match bound {
-                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
-                    _ => {
-                        return Err(PlannerError::PlanGenerationFailed(
-                            "FulltextSearchPlanner requires a bound AST statement for fallback"
-                                .to_string(),
-                        ));
-                    }
-                };
-                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-                    stmt.clone(),
-                    Arc::new(
-                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                    ),
-                ));
-                let validated = crate::binder::validation::ValidatedStatement::new(
-                    ast,
-                    crate::binder::validation::ValidationInfo::new(),
-                );
-                return self.transform(&validated, qctx);
+                return Err(PlannerError::UnsupportedOperation(format!(
+                    "FulltextSearchPlanner has no plan for bound statement: {}",
+                    bound.kind()
+                )));
             }
         };
 

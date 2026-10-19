@@ -113,9 +113,7 @@ impl Default for CopyPlanner {
 mod tests {
     use super::*;
     use crate::QueryContext;
-    use crate::binder::validation::ValidationInfo;
     use crate::parser::ast::{Ast, CopyStmt, CopyTarget as AstCopyTarget};
-    use crate::planning::planner::ValidatedStatement;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
     use linkrs_core::types::Span;
     use std::sync::Arc;
@@ -144,27 +142,33 @@ mod tests {
     }
 
     #[test]
-    fn test_copy_planner_transform_vertex() {
+    fn test_copy_planner_plans_vertex() {
         let mut planner = CopyPlanner::new();
         let ast = Arc::new(create_copy_stmt(AstCopyTarget::Vertex(
             "person".to_string(),
         )));
         let qctx = Arc::new(QueryContext::default());
-        let validation = ValidationInfo::new();
-        let validated = ValidatedStatement::new(ast, validation);
-        let plan = planner.transform(&validated, qctx).expect("copy plan");
+        let bound = crate::binder::Binder::new()
+            .with_space(qctx.space_name(), qctx.space_id().unwrap_or(0))
+            .bind(ast)
+            .expect("copy statement binds");
+        let plan_ctx = crate::planning::context::PlanContext::without_metadata(&bound, qctx);
+        let plan = planner.plan_bound(&plan_ctx).expect("copy plan");
         assert!(plan.root.is_some());
         assert!(plan.root.as_ref().unwrap().is_copy_from());
     }
 
     #[test]
-    fn test_copy_planner_transform_edge() {
+    fn test_copy_planner_plans_edge() {
         let mut planner = CopyPlanner::new();
         let ast = Arc::new(create_copy_stmt(AstCopyTarget::Edge("knows".to_string())));
         let qctx = Arc::new(QueryContext::default());
-        let validation = ValidationInfo::new();
-        let validated = ValidatedStatement::new(ast, validation);
-        let plan = planner.transform(&validated, qctx).expect("copy plan");
+        let bound = crate::binder::Binder::new()
+            .with_space(qctx.space_name(), qctx.space_id().unwrap_or(0))
+            .bind(ast)
+            .expect("copy statement binds");
+        let plan_ctx = crate::planning::context::PlanContext::without_metadata(&bound, qctx);
+        let plan = planner.plan_bound(&plan_ctx).expect("copy plan");
         assert!(plan.root.is_some());
     }
 }

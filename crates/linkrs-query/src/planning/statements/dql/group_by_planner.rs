@@ -11,7 +11,8 @@ use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNo
 use crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
+use crate::binder::ValidatedStatement;
 use crate::planning::statements::clauses::exists_planner::to_contextual;
 use crate::planning::statements::plan_combiner::wrap_logical_project;
 use crate::QueryContext;

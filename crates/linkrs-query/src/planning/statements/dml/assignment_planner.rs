@@ -5,7 +5,6 @@
 
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerEnum, PlannerError};
-use std::sync::Arc;
 
 /// Assignment Statement Planner
 /// Responsible for converting variable assignment statements into execution plans.
@@ -31,26 +30,10 @@ impl Planner for AssignmentPlanner {
         let assignment = match bound {
             crate::binder::BoundStatement::Assignment(a) => a,
             _ => {
-                let stmt = match bound {
-                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
-                    _ => {
-                        return Err(PlannerError::PlanGenerationFailed(
-                            "AssignmentPlanner requires a bound AST statement for fallback"
-                                .to_string(),
-                        ));
-                    }
-                };
-                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-                    stmt.clone(),
-                    Arc::new(
-                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                    ),
-                ));
-                let validated = crate::binder::validation::ValidatedStatement::new(
-                    ast,
-                    crate::binder::validation::ValidationInfo::new(),
-                );
-                return self.transform(&validated, qctx);
+                return Err(PlannerError::UnsupportedOperation(format!(
+                    "AssignmentPlanner has no plan for bound statement: {}",
+                    bound.kind()
+                )));
             }
         };
 

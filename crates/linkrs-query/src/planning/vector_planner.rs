@@ -16,7 +16,7 @@ use crate::planning::plan::core::nodes::search::vector::data_access::{
 };
 use crate::planning::plan::core::nodes::search::vector::VectorSearchParams;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
 use crate::QueryContext;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::expr::Expression;
@@ -63,17 +63,7 @@ impl Planner for VectorSearchPlanner {
                 ));
             }
         };
-        let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-            stmt.clone(),
-            Arc::new(
-                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-            ),
-        ));
-        let validated = crate::binder::validation::ValidatedStatement::new(
-            ast,
-            crate::binder::validation::ValidationInfo::new(),
-        );
-        self.transform_bound(&validated, qctx, ctx.metadata)
+        self.transform_bound(stmt, qctx, ctx.metadata)
     }
 
 
@@ -88,11 +78,10 @@ impl VectorSearchPlanner {
     /// without plan-phase metadata.
     fn transform_bound(
         &self,
-        validated: &ValidatedStatement,
+        stmt: &Stmt,
         qctx: Arc<QueryContext>,
         metadata: Option<&MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
-        let stmt = validated.stmt();
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
         let space_id = qctx.space_id().unwrap_or(0);
         let metadata = metadata.or(self.metadata_context.as_deref());

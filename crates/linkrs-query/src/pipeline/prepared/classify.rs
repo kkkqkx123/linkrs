@@ -1,20 +1,25 @@
-use std::sync::Arc;
-
 use crate::dml_events::DmlOp;
+use crate::parser::ast::stmt::CreateTarget;
 use crate::parser::ast::Stmt;
 
 /// Map a bound-equivalent parsed statement to its DML operation.
 ///
 /// Single source of truth for statement-level DML hooks: external hooks
-/// must consume this (via the prepare-stage [`StatementClass`] / `Stmt`)
-/// instead of the text heuristic [`crate::dml_events::classify_dml`], which
-/// is retained only as a compatibility shim for text-only call sites.
+/// must consume this (via the prepare-stage [`StatementClass`] / `Stmt`).
 /// Composite writes (`Pipe` / `SetOperation`) merge branch operations with
 /// `Delete > Insert > Update` priority to preserve the single-event shape;
-/// DDL/DCL/reads/diagnostics return `None`.
+/// data-form `CREATE` (node / edge / path patterns) counts as `Insert`
+/// while schema `CREATE` targets stay silent; DDL/DCL/reads/diagnostics
+/// return `None`.
 pub fn dml_op_from_stmt(stmt: &Stmt) -> Option<DmlOp> {
     match stmt {
         Stmt::Insert(_) | Stmt::Copy(_) | Stmt::Merge(_) => Some(DmlOp::Insert),
+        Stmt::Create(c) => match &c.target {
+            CreateTarget::Node { .. } | CreateTarget::Edge { .. } | CreateTarget::Path { .. } => {
+                Some(DmlOp::Insert)
+            }
+            _ => None,
+        },
         Stmt::Update(_) | Stmt::Set(_) | Stmt::Remove(_) => Some(DmlOp::Update),
         Stmt::Delete(_) => Some(DmlOp::Delete),
         Stmt::Match(m) => {
@@ -231,15 +236,6 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
     }
 }
 
-pub fn build_validated_fallback(
-    ast: &Arc<crate::parser::ast::stmt::Ast>,
-) -> crate::binder::validation::ValidatedStatement {
-    crate::binder::validation::ValidatedStatement::new(
-        ast.clone(),
-        crate::binder::validation::ValidationInfo::new(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +288,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dml_op_covers_bare_clauses_and_comment_prefixes() {
+        assert_eq!(
+            dml_op_from_stmt(&parse("  -- comment\nCREATE (n)")),
+            Some(DmlOp::Insert),
+            "data-form CREATE is a write"
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("/* block */ MERGE (n)")),
+            Some(DmlOp::Insert)
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("// slash\n-- dash\nSET n.x = 1")),
+            Some(DmlOp::Update)
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("  match (n) return n")),
+            None,
+            "pure reads stay silent"
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("OPTIONAL MATCH (n) RETURN n")),
+            None,
+            "pure reads stay silent"
+        );
+        assert_eq!(
+            dml_op_from_stmt(&parse("DELETE VERTEX person FROM \"v1\"")),
+            Some(DmlOp::Delete)
+        );
+    }
     #[test]
     fn dml_op_pipe_merges_branches_with_delete_priority() {
         let left = parse("INSERT VERTEX person(name) VALUES \"p1\": (\"a\")");

@@ -17,7 +17,8 @@ use crate::parser::ast::Stmt;
 use crate::parser::Parser;
 use crate::planning::join_order::JoinOrderStats;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
+use crate::binder::ValidatedStatement;
 use crate::planning::statements::clauses::{
     OrderByClausePlanner, PaginationPlanner, ReturnClausePlanner, WhereClausePlanner,
 };
@@ -146,7 +147,21 @@ impl Planner for MatchStatementPlanner {
         let parsed = parser
             .parse()
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-        let ast = parsed.ast;
+        // A piped query carries the whole statement in `qctx`; when planning
+        // one of its stages, unwrap the pipe and plan its first MATCH stage.
+        let mut stmt = parsed.ast.stmt().clone();
+        loop {
+            match stmt {
+                Stmt::Pipe(pipe) => stmt = *pipe.left.clone(),
+                Stmt::Explain(explain) => stmt = *explain.statement.clone(),
+                Stmt::Profile(profile) => stmt = *profile.statement.clone(),
+                _ => break,
+            }
+        }
+        let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
+            stmt,
+            Arc::new(ExpressionAnalysisContext::new()),
+        ));
         let validated = ValidatedStatement::new(ast, ValidationInfo::new());
         self.expr_context = Some(validated.ast.expr_context().clone());
 

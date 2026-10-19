@@ -276,19 +276,28 @@ mod tests {
 
     #[test]
     fn test_dml_classification_skips_comments() {
-        use linkrs_query::{classify_dml, DmlOp};
+        use linkrs_query::parser::Parser;
+        use linkrs_query::{dml_op_from_stmt, DmlOp};
+        fn classify(query: &str) -> Option<DmlOp> {
+            let mut parser = Parser::new(query);
+            let parsed = parser
+                .parse()
+                .unwrap_or_else(|e| panic!("parse failed for {query:?}: {e}"));
+            assert!(!parser.has_errors(), "parse errors for {query:?}");
+            dml_op_from_stmt(parsed.ast.stmt())
+        }
+        assert_eq!(classify("  -- comment\nCREATE (n)"), Some(DmlOp::Insert));
+        assert_eq!(classify("/* block */ MERGE (n)"), Some(DmlOp::Insert));
         assert_eq!(
-            classify_dml("  -- comment\nCREATE (n)"),
-            Some(DmlOp::Insert)
-        );
-        assert_eq!(classify_dml("/* block */ MERGE (n)"), Some(DmlOp::Insert));
-        assert_eq!(
-            classify_dml("# hash\n// slash\nSET n.x = 1"),
+            classify("// slash\n-- dash\nSET n.x = 1"),
             Some(DmlOp::Update)
         );
-        assert_eq!(classify_dml("  match (n) return n"), None);
-        assert_eq!(classify_dml("OPTIONAL MATCH (n) RETURN n"), None);
-        assert_eq!(classify_dml("DETACH DELETE n"), Some(DmlOp::Delete));
+        assert_eq!(classify("  match (n) return n"), None);
+        assert_eq!(classify("OPTIONAL MATCH (n) RETURN n"), None);
+        assert_eq!(
+            classify("DELETE VERTEX person FROM \"v1\""),
+            Some(DmlOp::Delete)
+        );
     }
 
     #[test]

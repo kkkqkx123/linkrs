@@ -48,7 +48,8 @@ pub trait ClausePlanner: std::fmt::Debug {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::binder::validation::ValidatedStatement;
+    use crate::binder::bound::BoundUse;
+    use crate::binder::BoundStatement;
     use crate::parser::ast::{Ast, Span};
     use crate::planning::plan::core::nodes::StartNode;
     use crate::planning::plan::core::PlanNodeEnum;
@@ -72,10 +73,9 @@ mod tests {
     }
 
     impl Planner for MockStatementPlanner {
-        fn transform(
+        fn plan_bound(
             &mut self,
-            _validated: &ValidatedStatement,
-            _qctx: Arc<QueryContext>,
+            _ctx: &crate::planning::context::PlanContext<'_>,
         ) -> Result<SubPlan, crate::planning::planner::PlannerError> {
             let start_node = StartNode::new();
             let start_node_enum = PlanNodeEnum::Start(start_node);
@@ -170,20 +170,17 @@ mod tests {
     }
 
     #[test]
-    fn test_statement_planner_transform() {
-        use crate::binder::validation::ValidationInfo;
-
+    fn test_statement_planner_plan_bound() {
         let mut planner = MockStatementPlanner::new("MATCH", vec![CypherClauseKind::Match]);
-        let ast = create_test_match_stmt();
         let qctx = create_test_qctx();
 
-        // Create a verified statement.
-        let validation_info = ValidationInfo::new();
-        let validated = ValidatedStatement::new(ast, validation_info);
-
-        let result = planner.transform(&validated, qctx);
+        let bound = BoundStatement::Use(BoundUse {
+            space: "test".to_string(),
+        });
+        let plan_ctx = crate::planning::context::PlanContext::without_metadata(&bound, qctx);
+        let result = planner.plan_bound(&plan_ctx);
         assert!(result.is_ok());
-        let sub_plan = result.expect("transform should succeed");
+        let sub_plan = result.expect("plan_bound should succeed");
         assert!(sub_plan.root.is_some());
         assert!(sub_plan.tail.is_some());
     }

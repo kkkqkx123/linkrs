@@ -243,21 +243,18 @@ impl<'a> Lexer<'a> {
         }
     }
     pub fn next_token(&mut self) -> Token {
-        self.skip_whitespace();
-
-        if let Some(&ch) = self.peek_char() {
-            if ch == '/' || ch == '-' {
-                if let Ok(()) = self.skip_comment() {
-                    if let Some(&ch) = self.peek_char() {
-                        if ch == '\n' || ch == '\0' {
-                            return Token::new(Tk::Eof, String::new(), self.line, self.column);
-                        }
+        loop {
+            self.skip_whitespace();
+            match self.peek_char() {
+                Some(&'/') | Some(&'-') => {
+                    if self.skip_comment().is_ok() {
+                        continue;
                     }
                 }
+                _ => {}
             }
+            break;
         }
-
-        self.skip_whitespace();
 
         let token = match self.peek_char() {
             Some(&'=') => {

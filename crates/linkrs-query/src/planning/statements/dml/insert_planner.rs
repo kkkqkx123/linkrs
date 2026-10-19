@@ -262,11 +262,10 @@ impl Default for InsertPlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::binder::validation::ValidationInfo;
     use crate::parser::ast::utils::ExprFactory;
     use crate::parser::ast::{Ast, Span, Stmt};
     use crate::parser::ast::{InsertStmt, InsertTarget, TagInsertSpec, VertexRow};
-    use crate::planning::planner::{Planner, ValidatedStatement};
+    use crate::planning::planner::Planner;
     use crate::QueryContext;
     use linkrs_core::types::expr::contextual::ContextualExpression;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -426,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transform_insert_vertices() {
+    fn test_plan_insert_vertices() {
         let mut planner = InsertPlanner::new();
         let target = InsertTarget::Vertices {
             tag: TagInsertSpec {
@@ -448,18 +447,19 @@ mod tests {
         let ast = create_test_stmt_with_insert(target);
         let qctx = create_test_qctx();
 
-        // Create a verified statement.
-        let validation_info = ValidationInfo::new();
-        let validated = ValidatedStatement::new(ast, validation_info);
-
-        let result = planner.transform(&validated, qctx);
+        let bound = crate::binder::Binder::new()
+            .with_space(qctx.space_name(), qctx.space_id().unwrap_or(0))
+            .bind(ast)
+            .expect("test statement binds");
+        let plan_ctx = crate::planning::context::PlanContext::without_metadata(&bound, qctx);
+        let result = planner.plan_bound(&plan_ctx);
         assert!(result.is_ok());
-        let sub_plan = result.expect("Failed to transform insert statement");
+        let sub_plan = result.expect("Failed to plan insert statement");
         assert!(sub_plan.root.is_some());
     }
 
     #[test]
-    fn test_transform_insert_edge() {
+    fn test_plan_insert_edge() {
         let mut planner = InsertPlanner::new();
         let target = InsertTarget::Edge {
             edge_name: "follow".to_string(),
@@ -474,18 +474,19 @@ mod tests {
         let ast = create_test_stmt_with_insert(target);
         let qctx = create_test_qctx();
 
-        // Create a verified statement.
-        let validation_info = ValidationInfo::new();
-        let validated = ValidatedStatement::new(ast, validation_info);
-
-        let result = planner.transform(&validated, qctx);
+        let bound = crate::binder::Binder::new()
+            .with_space(qctx.space_name(), qctx.space_id().unwrap_or(0))
+            .bind(ast)
+            .expect("test statement binds");
+        let plan_ctx = crate::planning::context::PlanContext::without_metadata(&bound, qctx);
+        let result = planner.plan_bound(&plan_ctx);
         assert!(result.is_ok());
-        let sub_plan = result.expect("Failed to transform insert statement");
+        let sub_plan = result.expect("Failed to plan insert statement");
         assert!(sub_plan.root.is_some());
     }
 
     #[test]
-    fn test_transform_without_insert_stmt() {
+    fn test_plan_rejects_non_insert_stmt() {
         let mut planner = InsertPlanner::new();
         let stmt = Stmt::Use(crate::parser::ast::UseStmt {
             span: create_test_span(),
@@ -495,11 +496,12 @@ mod tests {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let ast = Arc::new(Ast::new(stmt, ctx));
 
-        // Create a verified statement.
-        let validation_info = ValidationInfo::new();
-        let validated = ValidatedStatement::new(ast, validation_info);
-
-        let result = planner.transform(&validated, qctx);
+        let bound = crate::binder::Binder::new()
+            .with_space(qctx.space_name(), qctx.space_id().unwrap_or(0))
+            .bind(ast)
+            .expect("test statement binds");
+        let plan_ctx = crate::planning::context::PlanContext::without_metadata(&bound, qctx);
+        let result = planner.plan_bound(&plan_ctx);
         assert!(result.is_err());
     }
 

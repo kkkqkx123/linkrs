@@ -15,7 +15,7 @@ use linkrs_query::executor::base::ExecutionResult;
 use linkrs_query::parser::ast::stmt::AssignVariableStmt;
 use linkrs_query::parser::ast::stmt::Ast;
 use linkrs_query::parser::ast::Stmt;
-use linkrs_query::ParserResult;
+use linkrs_query::parser::ParserResult;
 use linkrs_storage::StorageClient;
 use linkrs_transaction::TransactionId;
 use std::collections::HashMap;

@@ -18,7 +18,7 @@ use linkrs_query::parser::ast::stmt::CreateStmt;
 use linkrs_query::parser::ast::stmt::CreateTarget;
 use linkrs_query::parser::ast::Stmt;
 use linkrs_query::parser::ParserResult;
-use linkrs_query::Parser;
+use linkrs_query::parser::Parser;
 use linkrs_storage::StorageClient;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     }
 
     /// Whether the statement opens with the `CREATE` keyword.
-    fn starts_with_create(query: &str) -> bool {
+    pub(crate) fn starts_with_create(query: &str) -> bool {
         query
             .trim_start()
             .split_whitespace()

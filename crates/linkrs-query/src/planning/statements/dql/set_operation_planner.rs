@@ -7,8 +7,6 @@
 //! This planner supports recursive planning of nested set operations.
 //! Each side of a set operation can be another set operation or a regular query.
 
-use std::sync::Arc;
-
 use crate::binder::BoundStatement;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{IntersectNode, MinusNode, UnionNode};
@@ -17,8 +15,7 @@ use crate::planning::plan::logical::logical_nodes::graph_ops::{
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
-use crate::QueryContext;
+use crate::planning::planner::{Planner, PlannerEnum, PlannerError};
 
 /// Set Operation Planner
 /// Responsible for converting set operation statements into execution plans.
@@ -41,13 +38,93 @@ impl SetOperationPlanner {
     fn side_context<'b>(
         ctx: &'b crate::planning::context::PlanContext<'b>,
         side: &'b BoundStatement,
+        query_text: &str,
     ) -> crate::planning::context::PlanContext<'b> {
+        let mut rctx = (*ctx.qctx.request_context_arc()).clone();
+        rctx.query = query_text.to_string();
+        let mut qctx = crate::QueryContext::new(std::sync::Arc::new(rctx));
+        if let Some(space) = ctx.qctx.space_info() {
+            qctx.set_space_info(space.clone());
+        }
         crate::planning::context::PlanContext {
             bound: side,
-            qctx: ctx.qctx.clone(),
+            qctx: std::sync::Arc::new(qctx),
             metadata: ctx.metadata,
         }
     }
+
+    fn side_query_texts(source: &str) -> (String, String) {
+        if let Some((left, right)) = Self::split_set_operation(source) {
+            return (left.trim().to_string(), right.trim().to_string());
+        }
+        (source.to_string(), source.to_string())
+    }
+
+    fn split_set_operation(source: &str) -> Option<(String, String)> {
+        // Find the top-level set-operation keyword, respecting parentheses
+        // and string literals so keywords inside patterns or strings do not
+        // split the query.
+        let chars: Vec<char> = source.chars().collect();
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut string_delim = '\'';
+        let mut i = 0usize;
+        while i < chars.len() {
+            let c = chars[i];
+            if in_string {
+                if c == string_delim {
+                    in_string = false;
+                }
+                i += 1;
+                continue;
+            }
+            match c {
+                '\'' | '"' | '`' => {
+                    in_string = true;
+                    string_delim = c;
+                    i += 1;
+                }
+                '(' => {
+                    depth += 1;
+                    i += 1;
+                }
+                ')' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                    i += 1;
+                }
+                _ => {
+                    if depth == 0 {
+                        for keyword in ["UNION ALL", "UNION", "INTERSECT", "MINUS"] {
+                            let kw: Vec<char> = keyword.chars().collect();
+                            if i + kw.len() <= chars.len()
+                                && chars[i..i + kw.len()]
+                                    .iter()
+                                    .collect::<String>()
+                                    .eq_ignore_ascii_case(keyword)
+                            {
+                                // Ensure keyword boundaries.
+                                let before_ok = i == 0
+                                    || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+                                let after_idx = i + kw.len();
+                                let after_ok = after_idx == chars.len()
+                                    || !(chars[after_idx].is_alphanumeric() || chars[after_idx] == '_');
+                                if before_ok && after_ok {
+                                    let left = chars[..i].iter().collect::<String>();
+                                    let right = chars[after_idx..].iter().collect::<String>();
+                                    return Some((left, right));
+                                }
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+        None
+    }
+
 
     fn validate_column_compatibility(
         &self,
@@ -184,17 +261,6 @@ impl SetOperationPlanner {
 }
 
 impl Planner for SetOperationPlanner {
-    fn transform(
-        &mut self,
-        _validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        Err(PlannerError::InvalidOperation(
-            "SetOperationPlanner::transform is not supported; use plan_bound with BoundStatement."
-                .to_string(),
-        ))
-    }
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -210,8 +276,9 @@ impl Planner for SetOperationPlanner {
             }
         };
 
-        let left_ctx = Self::side_context(ctx, &set_op.left);
-        let right_ctx = Self::side_context(ctx, &set_op.right);
+        let (left_text, right_text) = Self::side_query_texts(ctx.qctx.query());
+        let left_ctx = Self::side_context(ctx, &set_op.left, &left_text);
+        let right_ctx = Self::side_context(ctx, &set_op.right, &right_text);
         let left_plan = self.plan_bound_subquery(&left_ctx, 1)?;
         let right_plan = self.plan_bound_subquery(&right_ctx, 1)?;
 
@@ -255,8 +322,9 @@ impl SetOperationPlanner {
         ctx: &crate::planning::context::PlanContext<'_>,
         depth: usize,
     ) -> Result<SubPlan, PlannerError> {
-        let left_ctx = Self::side_context(ctx, &set_op.left);
-        let right_ctx = Self::side_context(ctx, &set_op.right);
+        let (left_text, right_text) = Self::side_query_texts(ctx.qctx.query());
+        let left_ctx = Self::side_context(ctx, &set_op.left, &left_text);
+        let right_ctx = Self::side_context(ctx, &set_op.right, &right_text);
         let left_plan = self.plan_bound_subquery(&left_ctx, depth)?;
         let right_plan = self.plan_bound_subquery(&right_ctx, depth)?;
 

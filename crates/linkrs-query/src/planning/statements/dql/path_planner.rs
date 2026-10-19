@@ -320,7 +320,6 @@ impl Default for PathPlanner {
 mod tests {
     use super::*;
     use crate::QueryContext;
-    use crate::binder::validation::{ValidatedStatement, ValidationInfo};
     use crate::parser::ast::stmt::Ast;
     use crate::parser::ast::{FindPathStmt, FromClause, OverClause, Span, Stmt};
     use linkrs_core::types::expr::contextual::ContextualExpression;
@@ -381,16 +380,22 @@ mod tests {
         }
     }
 
-    fn validated(stmt: Stmt) -> ValidatedStatement {
+    fn plan_stmt(stmt: Stmt) -> Result<SubPlan, PlannerError> {
+        let qctx = test_query_context();
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        ValidatedStatement::new(Arc::new(Ast::new(stmt, ctx)), ValidationInfo::new())
+        let ast = Arc::new(Ast::new(stmt, ctx));
+        let bound = crate::binder::Binder::new()
+            .with_space(qctx.space_name(), qctx.space_id().unwrap_or(0))
+            .bind(ast)
+            .expect("test statement binds");
+        let plan_ctx = crate::planning::context::PlanContext::without_metadata(&bound, qctx);
+        PathPlanner::new().plan_bound(&plan_ctx)
     }
 
     #[test]
     fn shortest_path_plan_carries_native_logical() {
         let stmt = Stmt::FindPath(find_path_stmt(true));
-        let plan = PathPlanner::new()
-            .transform(&validated(stmt), test_query_context())
+        let plan = plan_stmt(stmt)
             .expect("label-less FIND PATH plans without a vertex label");
         assert!(
             plan.logical_root.is_some(),
@@ -401,8 +406,7 @@ mod tests {
     #[test]
     fn all_paths_plan_carries_native_logical_with_direction() {
         let stmt = Stmt::FindPath(find_path_stmt(false));
-        let plan = PathPlanner::new()
-            .transform(&validated(stmt), test_query_context())
+        let plan = plan_stmt(stmt)
             .expect("label-less FIND PATH plans without a vertex label");
         assert!(
             plan.logical_root.is_some(),
@@ -413,8 +417,7 @@ mod tests {
     #[test]
     fn native_logical_converts_back_to_same_physical_shape() {
         let stmt = Stmt::FindPath(find_path_stmt(false));
-        let plan = PathPlanner::new()
-            .transform(&validated(stmt), test_query_context())
+        let plan = plan_stmt(stmt)
             .expect("label-less FIND PATH plans without a vertex label");
         assert!(
             plan.root.is_some() && plan.logical_root.is_some(),
@@ -431,8 +434,7 @@ mod tests {
             false,
             Some("cost"),
         ));
-        let plan = PathPlanner::new()
-            .transform(&validated(stmt), test_query_context())
+        let plan = plan_stmt(stmt)
             .expect("weighted shortest path plans");
         match plan.root.as_ref().expect("physical root") {
             PlanNodeEnum::ShortestPath(node) => {
@@ -451,8 +453,7 @@ mod tests {
     #[test]
     fn shortest_path_plan_defaults_weight_to_none() {
         let stmt = Stmt::FindPath(find_path_stmt(true));
-        let plan = PathPlanner::new()
-            .transform(&validated(stmt), test_query_context())
+        let plan = plan_stmt(stmt)
             .expect("plain shortest path plans");
         match plan.root.as_ref().expect("physical root") {
             PlanNodeEnum::ShortestPath(node) => {
@@ -477,8 +478,7 @@ mod tests {
             let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(
                 false, with_loop, with_trail, with_walk, None,
             ));
-            let plan = PathPlanner::new()
-                .transform(&validated(stmt), test_query_context())
+            let plan = plan_stmt(stmt)
                 .expect("all path plans");
             match plan.root.as_ref().expect("physical root") {
                 PlanNodeEnum::AllPaths(node) => {
@@ -507,8 +507,7 @@ mod tests {
         // Cycles can never shorten a path, so the shortest-path plan stays a
         // plain ShortestPath node regardless of the modifiers.
         let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(true, true, true, true, None));
-        let plan = PathPlanner::new()
-            .transform(&validated(stmt), test_query_context())
+        let plan = plan_stmt(stmt)
             .expect("modifiers do not break shortest path planning");
         assert!(
             matches!(plan.root.as_ref(), Some(PlanNodeEnum::ShortestPath(_))),

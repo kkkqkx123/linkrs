@@ -9,6 +9,7 @@
 
 use super::Session;
 use crate::api_core::error::{CoreError, CoreResult};
+use crate::api_core::query_api::QueryApi;
 use crate::api_core::types::{
     ExecutionMetadata, QueryRequestBuilder, QueryResult as CoreQueryResult, SpaceConfig,
 };
@@ -17,7 +18,6 @@ use linkrs_core::types::DataSet;
 use linkrs_core::Edge;
 use linkrs_core::Value;
 use linkrs_core::Vertex;
-use linkrs_query::classify_dml;
 use linkrs_query::dml_op_from_stmt;
 use linkrs_query::executor::base::ExecutionResult;
 use linkrs_query::executor::expression::functions::FunctionRegistry;
@@ -85,30 +85,16 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     }
 
     /// Classify `query` and emit a statement-level DML notification when it
-    /// is a write. No-op for read-only text and when nobody subscribes
-    /// (`HookBus::subscribe_dml`). Returns the classified operation so
-    /// callers sharing the classification (e.g. the C-API update hook) do
-    /// not scan the text twice.
+    /// is a write. No-op for read-only text, DDL, and unparseable text, and
+    /// when nobody subscribes (`HookBus::subscribe_dml`). Returns the
+    /// classified operation so callers sharing the classification (e.g. the
+    /// C-API update hook) do not parse the text twice.
     ///
     /// The prepared-statement classifier (`dml_op_from_stmt` over the parsed
-    /// `Stmt`) is authoritative; the text heuristic (`classify_dml`) is only
-    /// the fallback when parsing fails. This keeps hook classification
-    /// consistent with the execution-plan classification for composite
-    /// writes, piped statements, and schema DDL.
+    /// `Stmt`) is the single source of truth; unparseable text stays silent
+    /// because no operation can be determined for it.
     pub(crate) fn notify_dml(&self, query: &str, rows: u64) -> Option<DmlOp> {
-        if let Some(op) = self.classify_prepared(query) {
-            let space = self
-                .current_space()
-                .unwrap_or_else(|| "default".to_string());
-            self.notify_dml_op(op, &space, rows);
-            return Some(op);
-        }
-        // Parsed Stmt says read-only/DDL: stay silent even if the text shim
-        // would fire (e.g. `CREATE TAG`, quoted `DELETE` literals).
-        if self.parses_as_non_dml(query) {
-            return None;
-        }
-        let op = classify_dml(query)?;
+        let op = self.classify_prepared(query)?;
         let space = self
             .current_space()
             .unwrap_or_else(|| "default".to_string());
@@ -116,10 +102,8 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         Some(op)
     }
 
-    /// Authoritative classification from the parsed statement. Returns
-    /// `Some(op)` for DML, `None` for read-only/DDL or unparseable text
-    /// (caller falls back to the text shim only in the latter case via
-    /// [`Self::parses_as_non_dml`]).
+    /// Classification from the parsed statement. Returns `Some(op)` for
+    /// DML and `None` for read-only/DDL/diagnostics or unparseable text.
     fn classify_prepared(&self, query: &str) -> Option<DmlOp> {
         let mut parser = linkrs_query::parser::Parser::new(query);
         let parsed = parser.parse().ok()?;
@@ -127,16 +111,6 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             return None;
         }
         dml_op_from_stmt(parsed.ast.stmt())
-    }
-
-    /// Whether `query` parses successfully but is not DML. Distinguishes
-    /// "parsed as read-only" (stay silent) from "unparseable" (use shim).
-    fn parses_as_non_dml(&self, query: &str) -> bool {
-        let mut parser = linkrs_query::parser::Parser::new(query);
-        match parser.parse() {
-            Ok(parsed) => !parser.has_errors() && dml_op_from_stmt(parsed.ast.stmt()).is_none(),
-            Err(_) => false,
-        }
     }
 
     /// Emit one statement-level DML notification for an operation the
@@ -232,7 +206,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
-    fn ensure_not_interrupted(&self) -> CoreResult<()> {
+    pub(crate) fn ensure_not_interrupted(&self) -> CoreResult<()> {
         if self.is_interrupted() {
             return Err(CoreError::QueryExecutionFailed(
                 "query interrupted".to_string(),
@@ -255,9 +229,9 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     /// Reject mutating statements on read-only databases.
     ///
     /// The prepared-statement classification (`StatementClass` over the
-    /// parsed `Stmt`) is authoritative; the text shim (`classify_dml` plus
-    /// the mutating-opener list below) is only the fallback for unparseable
-    /// text.
+    /// parsed `Stmt`) is the single source of truth; unparseable text falls
+    /// through to the mutating-opener list below and fails at parse time
+    /// during execution when it is not a real write.
     pub(crate) fn ensure_writable(&self, query: &str) -> CoreResult<()> {
         if !self.db.read_only {
             return Ok(());
@@ -290,9 +264,6 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
                 _ => {}
             }
             return Ok(());
-        }
-        if classify_dml(query).is_some() {
-            return self.ensure_writable_op();
         }
         let keyword = leading_keyword(query);
         if keyword.eq_ignore_ascii_case("LOAD")
@@ -540,8 +511,8 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 }
 
 /// First whitespace-delimited keyword of a statement, used only for the
-/// read-only gate (comment stripping is intentionally minimal: statements
-/// are classified by `classify_dml` first, this covers the remaining
+/// read-only gate (comment stripping is intentionally minimal: parsed
+/// statements are classified first, this covers the remaining unparseable
 /// mutating openers).
 fn leading_keyword(query: &str) -> &str {
     let rest = query.trim_start();

@@ -10,7 +10,6 @@
 use crate::binder::BoundStatement;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
-use std::sync::Arc;
 
 mod maintenance;
 mod show;
@@ -49,27 +48,36 @@ impl Planner for MaintainPlanner {
             BoundStatement::Rollback(r) => system::plan_rollback(r.savepoint_name.as_ref()),
             BoundStatement::Savepoint(s) => system::plan_savepoint(&s.name),
             BoundStatement::ReleaseSavepoint(s) => system::plan_release_savepoint(&s.name),
+            BoundStatement::Other(stmt) => match stmt.as_ref() {
+                crate::parser::ast::Stmt::Create(create) => self
+                    .plan_create(&create.target, create.if_not_exists, &space)?
+                    .ok_or_else(|| {
+                        PlannerError::UnsupportedOperation(
+                            "MaintainPlanner has no plan for this CREATE target".to_string(),
+                        )
+                    })?,
+                crate::parser::ast::Stmt::CreateMacro(s) => self.plan_create_macro(s)?,
+                crate::parser::ast::Stmt::CreateType(s) => self.plan_create_type(s)?,
+                crate::parser::ast::Stmt::DropMacro(s) => self.plan_drop_macro(s),
+                crate::parser::ast::Stmt::DropType(s) => self.plan_drop_type(s),
+                crate::parser::ast::Stmt::AttachDatabase(s) => self.plan_attach_database(s),
+                crate::parser::ast::Stmt::DetachDatabase(s) => self.plan_detach_database(s),
+                crate::parser::ast::Stmt::PurgeExpired(s) => self.plan_purge_expired(s),
+                crate::parser::ast::Stmt::Checkpoint(_) => self.plan_checkpoint(),
+                crate::parser::ast::Stmt::ExportDatabase(s) => self.plan_export_database(s),
+                crate::parser::ast::Stmt::ImportDatabase(s) => self.plan_import_database(s),
+                _ => {
+                    return Err(PlannerError::UnsupportedOperation(format!(
+                        "MaintainPlanner has no plan for bound statement: {}",
+                        bound.kind()
+                    )));
+                }
+            },
             _ => {
-                let stmt = match bound {
-                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
-                    _ => {
-                        return Err(PlannerError::PlanGenerationFailed(
-                            "MaintainPlanner requires a bound AST statement for fallback"
-                                .to_string(),
-                        ));
-                    }
-                };
-                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-                    stmt.clone(),
-                    Arc::new(
-                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                    ),
-                ));
-                let validated = crate::binder::validation::ValidatedStatement::new(
-                    ast,
-                    crate::binder::validation::ValidationInfo::new(),
-                );
-                return self.transform(&validated, qctx);
+                return Err(PlannerError::UnsupportedOperation(format!(
+                    "MaintainPlanner has no plan for bound statement: {}",
+                    bound.kind()
+                )));
             }
         };
 

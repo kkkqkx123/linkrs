@@ -217,6 +217,15 @@ impl QueryManager {
         *self.query_registry.write() = None;
     }
 
+    /// Whether the executor's query registry is attached.
+    ///
+    /// Callers that terminate queries from outside the execution hot path
+    /// can check this before invoking `kill_query`, which requires the
+    /// registry to cancel the execution token.
+    pub fn is_registry_attached(&self) -> bool {
+        self.query_registry.read().is_some()
+    }
+
     /// Register a progress observer. The executor invokes it at its own row
     /// interval; unregistered by default, hence zero hot-path overhead.
     pub fn register_progress_callback(&self, callback: QueryProgressCallback) -> SubscriptionId {

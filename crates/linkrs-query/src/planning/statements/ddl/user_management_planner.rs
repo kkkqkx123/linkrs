@@ -6,7 +6,6 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::UserManag
 use crate::planning::plan::core::{ArgumentNode, PlanNodeEnum};
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
-use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct UserManagementPlanner;
 
@@ -56,26 +55,10 @@ impl Planner for UserManagementPlanner {
                 PlanNodeEnum::UserManage(UserManageNode::Drop(node))
             }
             _ => {
-                let stmt = match bound {
-                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
-                    _ => {
-                        return Err(PlannerError::PlanGenerationFailed(
-                            "UserManagementPlanner requires a bound AST statement for fallback"
-                                .to_string(),
-                        ));
-                    }
-                };
-                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-                    stmt.clone(),
-                    Arc::new(
-                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                    ),
-                ));
-                let validated = crate::binder::validation::ValidatedStatement::new(
-                    ast,
-                    crate::binder::validation::ValidationInfo::new(),
-                );
-                return self.transform(&validated, qctx.clone());
+                return Err(PlannerError::UnsupportedOperation(format!(
+                    "UserManagementPlanner has no plan for bound statement: {}",
+                    bound.kind()
+                )));
             }
         };
 

@@ -20,7 +20,8 @@ use crate::planning::plan::logical::logical_nodes::operation::{
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
-use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
+use crate::planning::planner::{Planner, PlannerError};
+use crate::binder::ValidatedStatement;
 use crate::planning::statements::projection_util;
 use crate::QueryContext;
 use linkrs_core::types::operators::BinaryOperator;

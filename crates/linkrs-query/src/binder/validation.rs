@@ -2,6 +2,9 @@
 //!
 //! These types were originally defined in the `validator` crate but are now
 //! produced by the Binder during the binding process (binding = validation).
+//!
+//! Frozen compatibility surface: new planning work consumes the bound
+//! statement directly and must not extend this wrapper.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,6 +18,9 @@ use linkrs_core::types::Span;
 ///
 /// Contains both the original AST and the validation information collected
 /// during binding.
+///
+/// Frozen for compatibility fallback only; planners consume the bound
+/// statement through the bound entry point.
 #[derive(Debug, Clone)]
 pub struct ValidatedStatement {
     pub ast: Arc<crate::parser::ast::stmt::Ast>,
