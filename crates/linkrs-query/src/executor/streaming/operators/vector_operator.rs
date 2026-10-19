@@ -39,9 +39,16 @@ fn make_manage_result(
 ///
 /// The `MATCH VECTOR` grammar has no LIMIT clause yet (see the parser AST),
 /// so a fixed candidate window is used; wire this to syntax once LIMIT is
-/// added to the statement form.
+/// added to the statement form. Planners and hybrid fusion recall depths
+/// must reference this single source instead of copying the value.
+///
+/// Hybrid retrieval is not wired into this operator: the unified fusion
+/// entry point is `crate::fusion::HybridFusionRequest`, which normalizes
+/// vector point IDs before fusing. Callers that need fulltext + vector
+/// fusion must go through that entry (or `fuse_fulltext_and_vector`)
+/// instead of reimplementing ID normalization here or at the call site.
 #[cfg(feature = "vector")]
-const DEFAULT_MATCH_TOP_K: usize = 100;
+pub(crate) const DEFAULT_MATCH_TOP_K: usize = 100;
 
 #[derive(Debug)]
 pub enum VectorOperatorKind {

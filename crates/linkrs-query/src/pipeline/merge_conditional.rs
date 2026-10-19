@@ -242,6 +242,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         space_name: &str,
         scope: crate::executor::streaming::transaction_scope::TransactionScope,
     ) -> DBResult<()> {
+        log::debug!(
+            "Merge branch bypasses plan cache: probe-dependent branch in space '{space_name}'"
+        );
         let sub_plan = SubPlan::from_logical_root(branch_root);
         let root = sub_plan.root().clone();
         let mut execution_plan = ExecutionPlan::new(root);

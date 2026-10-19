@@ -21,8 +21,11 @@ members = [
 ]
 
 [patch.crates-io]
-tantivy = { path = "crates/tantivy" }
-tantivy-tokenizer-api = { path = "crates/tantivy/tokenizer-api" }
+# The fork's only modified crate is the main one (configurable BM25 params,
+# see crates/tantivy/PATCHES.md); it publishes under the `kkkqkx-` prefix.
+# Unmodified sub-crates stay on their crates.io originals. The local fork is
+# consumed by patching the renamed package to the sibling checkout.
+kkkqkx-tantivy = { path = "crates/tantivy" }
 
 [workspace.package]
 version = "0.1.0"

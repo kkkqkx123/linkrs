@@ -209,14 +209,15 @@ impl SubPlan {
 
     /// Create a SubPlan from a native logical tree.
     ///
-    /// Converts the logical root to the physical root exactly once
-    /// (via `convert_logical_to_physical`) and retains the logical tree for
-    /// the compiler.
+    /// Builds the physical root through `PhysicalMapper::map` — the single
+    /// statement-level conversion entry — exactly once, and retains the
+    /// logical tree for the compiler.
     pub fn from_logical_root(
         logical_root: crate::planning::plan::logical::LogicalNodeEnum,
     ) -> Self {
-        let physical_root =
-            crate::planning::physical_planner::convert_logical_to_physical(logical_root.clone());
+        let physical_root = crate::planning::physical_mapper::PhysicalMapper::map(
+            logical_root.clone(),
+        );
         Self {
             root: Some(physical_root),
             tail: None,

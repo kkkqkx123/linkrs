@@ -19,6 +19,11 @@ use crate::planning::plan::PlanNodeEnum;
 /// The entry points are [`PhysicalMapper::map`] (logical tree to physical
 /// tree) and [`PhysicalMapper::merge_physical_hints`] (overlay of the
 /// cost-based physical choices onto a mapped tree).
+///
+/// Statement planners use `map` as the single construction entry so index
+/// hints and factorization positions are applied uniformly. The converter
+/// in `physical_planner` is the shared recursive implementation backing
+/// this entry, not a parallel statement-level path.
 pub struct PhysicalMapper;
 
 impl PhysicalMapper {

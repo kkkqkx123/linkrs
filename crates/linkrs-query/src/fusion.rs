@@ -10,7 +10,9 @@
 //! Parser status: no `SEARCH HYBRID` statement exists; fulltext and vector
 //! remain independent planning paths. Hybrid fusion enters the main chain
 //! only through [`HybridFusionRequest::execute`] (operator-level, validated
-//! contract below), not through parser syntax or app-layer helpers.
+//! contract below), not through parser syntax or app-layer helpers. The
+//! wired caller is the embedded `Session::hybrid_search` on `linkrs-api`,
+//! which runs both secondary-index branches and fuses them here.
 
 use linkrs_core::fusion::{normalize_vector_hits, rrf_fuse, weighted_fuse};
 use linkrs_core::types::search::SearchHit;
@@ -124,7 +126,8 @@ impl HybridFusionRequest {
     ///
     /// Main-chain entry: truncates each branch to `per_branch_limit`,
     /// normalizes vector IDs for `(tag, field)`, fuses under the strategy,
-    /// and truncates to `fused_limit`.
+    /// and truncates to `fused_limit`. Vector ID normalization lives only
+    /// here; retrieval operators must not duplicate it.
     pub fn execute(
         &self,
         fulltext: Vec<SearchHit>,

@@ -31,6 +31,10 @@ use super::subquery_graph::SubqueryGraph;
 
 /// Exact enumeration is used up to this level; larger levels use the
 /// approximate (left-deep with level-1 right side) strategy.
+///
+/// This counts query-graph DP levels for the MATCH planning pass, unlike the
+/// table-count threshold in `crate::optimizer::cost_based::join_order`,
+/// which applies later to the already planned join chain.
 pub const MAX_LEVEL_TO_PLAN_EXACTLY: usize = 7;
 
 /// Mutable DP state threaded through enumeration.

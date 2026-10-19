@@ -12,6 +12,11 @@
 //!    diagnostics and is never on the main path. Physical fallback merges
 //!    are explicitly noted, never silent.
 //!
+//! Statement planners must build physical roots through
+//! `physical_mapper::PhysicalMapper::map`. The converter in
+//! `physical_planner` is the shared recursive implementation used by the
+//! mapper and its physical submodules, not a statement-level entry point.
+//!
 //! Note: The heuristic rewrite module has been moved to `optimizer::heuristic`.
 //! Logical/physical enum consolidation is deferred by design: new operators
 //! add one-way conversion plus single-side visitors only.

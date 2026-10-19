@@ -4,7 +4,6 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, PlanNode, SingleInputNode,
 };
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
-use crate::QueryContext;
 
 mod access;
 mod algorithm;
@@ -25,31 +24,6 @@ use join::*;
 use operation::*;
 use search::*;
 use traversal::*;
-
-pub trait PhysicalPlanner: Send + Sync + std::fmt::Debug {
-    fn plan(&self, logical: LogicalNodeEnum, qctx: &QueryContext) -> PlanNodeEnum;
-}
-
-#[derive(Debug)]
-pub struct DefaultPhysicalPlanner;
-
-impl Default for DefaultPhysicalPlanner {
-    fn default() -> Self {
-        Self
-    }
-}
-
-impl DefaultPhysicalPlanner {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl PhysicalPlanner for DefaultPhysicalPlanner {
-    fn plan(&self, logical: LogicalNodeEnum, _qctx: &QueryContext) -> PlanNodeEnum {
-        convert_logical_to_physical(logical)
-    }
-}
 
 pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeEnum {
     match logical {

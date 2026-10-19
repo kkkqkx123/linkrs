@@ -131,6 +131,8 @@ pub(crate) mod extension;
 pub(crate) mod fulltext;
 pub(crate) mod state;
 pub(crate) mod transactions;
+#[cfg(all(feature = "fulltext", feature = "vector"))]
+pub(crate) mod hybrid;
 #[cfg(feature = "vector")]
 pub(crate) mod vector;
 

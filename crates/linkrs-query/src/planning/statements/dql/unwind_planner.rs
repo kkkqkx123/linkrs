@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::binder::BoundStatement;
 use crate::parser::ast::stmt::Stmt;
-use crate::planning::physical_planner::convert_logical_to_physical;
+use crate::planning::physical_mapper::PhysicalMapper;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::UnwindNode;
@@ -115,7 +115,7 @@ impl Planner for UnwindPlanner {
         };
 
         let logical_root = LogicalNodeEnum::Unwind(unwind_node);
-        let physical_root = convert_logical_to_physical(logical_root.clone());
+        let physical_root = PhysicalMapper::map(logical_root.clone());
         Ok(SubPlan {
             root: Some(physical_root),
             tail: None,

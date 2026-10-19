@@ -19,6 +19,13 @@ pub struct JoinOrderOptimizer {
     dp_threshold: usize,
 }
 
+/// Default table-count threshold for exact dynamic programming.
+///
+/// Tables at or below this size use exact DP; larger inputs use the greedy
+/// fallback. This counts tables, unlike the graph-level exact limit in
+/// `crate::planning::join_order::plan_join_order`, which counts DP levels.
+pub const DEFAULT_DP_THRESHOLD: usize = 8;
+
 /// Subproblem solution (used in dynamic programming)
 #[derive(Debug, Clone)]
 struct SubproblemSolution {
@@ -39,7 +46,7 @@ impl JoinOrderOptimizer {
     pub fn new(cost_calculator: Arc<CostCalculator>) -> Self {
         Self {
             cost_calculator,
-            dp_threshold: 8, // By default, dynamic programming is used for datasets with fewer than 8 tables.
+            dp_threshold: DEFAULT_DP_THRESHOLD,
         }
     }
 

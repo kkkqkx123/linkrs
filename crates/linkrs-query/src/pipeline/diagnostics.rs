@@ -68,21 +68,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         qctx: Arc<QueryContext>,
         transaction_scope: TransactionScope,
     ) -> DBResult<ExecutionResult> {
-        let inner_ast = &explain_stmt.statement;
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-            (**inner_ast).clone(),
-            expr_ctx,
-        ));
-        let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
-
-        let physical_plan = if let Some(b) = bound {
-            self.compile_from_bound(qctx.clone(), &b, &ast)?
-        } else {
-            return Err(DBError::from(QueryError::execution(
-                "EXPLAIN target statement could not be bound".to_string(),
-            )));
-        };
+        let physical_plan =
+            self.compile_diagnostic_target(qctx.clone(), &explain_stmt.statement)?;
 
         let exec_ctx = self.build_execution_context(&qctx);
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
@@ -122,21 +109,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         qctx: Arc<QueryContext>,
         transaction_scope: TransactionScope,
     ) -> DBResult<ExecutionResult> {
-        let inner_ast = &profile_stmt.statement;
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
-            (**inner_ast).clone(),
-            expr_ctx,
-        ));
-        let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
-
-        let physical_plan = if let Some(b) = bound {
-            self.compile_from_bound(qctx.clone(), &b, &ast)?
-        } else {
-            return Err(DBError::from(QueryError::execution(
-                "PROFILE target statement could not be bound".to_string(),
-            )));
-        };
+        let physical_plan =
+            self.compile_diagnostic_target(qctx.clone(), &profile_stmt.statement)?;
 
         let exec_ctx = self.build_execution_context(&qctx);
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);

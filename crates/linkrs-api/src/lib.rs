@@ -31,6 +31,13 @@ pub use linkrs_core::fusion::{
 };
 pub use linkrs_core::types::search::SearchHit;
 
+// Validated hybrid fusion contract: the single fusion entry used by
+// `Session::hybrid_search`; callers needing manual fusion must go through
+// it (or `fuse_fulltext_and_vector` on the query crate) rather than wiring
+// the raw core helpers by hand.
+#[cfg(all(feature = "fulltext", feature = "vector"))]
+pub use linkrs_query::{FusionStrategy, HybridFusionRequest};
+
 /// Mapping helpers between raw linkrs-config settings and simvec
 /// types; keeps the two crates decoupled from each other.
 #[cfg(feature = "vector")]
