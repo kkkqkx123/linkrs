@@ -38,16 +38,6 @@ impl PipePlanner {
 }
 
 impl Planner for PipePlanner {
-    fn transform(
-        &mut self,
-        _validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        Err(PlannerError::InvalidOperation(
-            "PipePlanner::transform is not supported; use plan_bound with BoundStatement and sub-context derivation."
-                .to_string(),
-        ))
-    }
 
     fn plan_bound(
         &mut self,
@@ -56,8 +46,6 @@ impl Planner for PipePlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let pipe = match bound {
             BoundStatement::Pipe(p) => p,
             _ => {
@@ -75,20 +63,7 @@ impl Planner for PipePlanner {
 
         let mut combined_plan: Option<SubPlan> = None;
 
-        // The shared `validated` describes the whole composite query, but
-        // each stage planner expects the AST fragment aligned with its own
-        // bound sub-statement. Derive one per stage up front (owned here so
-        // the sub-contexts below can borrow them).
-        let mut stage_validated: Vec<Option<ValidatedStatement>> =
-            Vec::with_capacity(pipe.statements.len());
         for stmt in &pipe.statements {
-            stage_validated.push(
-                ctx.derive_validated(stmt)
-                    .or_else(|| ctx.validated.cloned()),
-            );
-        }
-
-        for (stmt, validated) in pipe.statements.iter().zip(stage_validated.iter()) {
             let mut planner = PlannerEnum::from_bound_statement(stmt).ok_or_else(|| {
                 PlannerError::NoSuitablePlanner(format!(
                     "No suitable planner for pipe sub-statement: {}",
@@ -100,7 +75,6 @@ impl Planner for PipePlanner {
                 bound: stmt,
                 qctx: ctx.qctx.clone(),
                 metadata: ctx.metadata,
-                validated: validated.as_ref(),
             };
             let sub_plan = planner.plan_bound(&sub_ctx)?;
 
@@ -154,9 +128,6 @@ impl Planner for PipePlanner {
         })
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Pipe(_))
-    }
 }
 
 impl Default for PipePlanner {

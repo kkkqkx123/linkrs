@@ -32,134 +32,6 @@ impl YieldPlanner {
 }
 
 impl Planner for YieldPlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let yield_stmt = match validated.stmt() {
-            Stmt::Yield(yield_stmt) => yield_stmt,
-            _ => {
-                return Err(PlannerError::PlanGenerationFailed(
-                    "statement does not contain the YIELD".to_string(),
-                ));
-            }
-        };
-
-        let start_node = StartNode::new();
-        let mut current_node = PlanNodeEnum::Start(start_node.clone());
-        let mut current_logical: LogicalNodeEnum = logical_start_root();
-
-        let yield_columns: Vec<YieldColumn> = yield_stmt
-            .items
-            .iter()
-            .map(crate::planning::statements::projection_util::yield_item_to_yield_column)
-            .collect();
-
-        let project_node =
-            ProjectNode::new(current_node.clone(), yield_columns.clone()).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-            })?;
-        current_node = PlanNodeEnum::Project(project_node);
-        current_logical = wrap_logical_project(
-            current_logical,
-            yield_columns,
-            current_node.col_names().to_vec(),
-        );
-
-        if let Some(where_clause) = &yield_stmt.where_clause {
-            let filter_node =
-                FilterNode::new(current_node.clone(), where_clause.clone()).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create FilterNode: {}",
-                        e
-                    ))
-                })?;
-            current_node = PlanNodeEnum::Filter(filter_node);
-            current_logical = wrap_logical_filter(
-                current_logical,
-                where_clause.clone(),
-                current_node.col_names().to_vec(),
-            );
-        }
-
-        if yield_stmt.distinct {
-            let dedup_node = DedupNode::new(current_node.clone()).map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create DedupNode: {}", e))
-            })?;
-            current_node = PlanNodeEnum::Dedup(dedup_node);
-            current_logical =
-                wrap_logical_dedup(current_logical, current_node.col_names().to_vec());
-        }
-
-        if let Some(order_by) = &yield_stmt.order_by {
-            let sort_items: Vec<crate::planning::plan::core::nodes::SortItem> = order_by
-                .items
-                .iter()
-                .map(|item| {
-                    let direction = match item.direction {
-                        crate::parser::ast::stmt::OrderDirection::Asc => OrderDirection::Asc,
-                        crate::parser::ast::stmt::OrderDirection::Desc => OrderDirection::Desc,
-                    };
-                    let expression = item
-                        .expression
-                        .expression()
-                        .map(|e| e.inner().clone())
-                        .unwrap_or_else(|| {
-                            linkrs_core::Expression::Variable(
-                                item.expression.to_expression_string(),
-                            )
-                        });
-                    crate::planning::plan::core::nodes::SortItem::new(expression, direction)
-                })
-                .collect();
-            let sort_node =
-                SortNode::new(current_node.clone(), sort_items.clone()).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create SortNode: {}", e))
-                })?;
-            current_node = PlanNodeEnum::Sort(sort_node);
-            current_logical = wrap_logical_sort(
-                current_logical,
-                sort_items,
-                current_node.col_names().to_vec(),
-            );
-        }
-
-        if let Some(ref skip) = yield_stmt.skip {
-            let limit_node =
-                LimitNode::new(current_node.clone(), skip.count as i64, 0).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
-                })?;
-            current_node = PlanNodeEnum::Limit(limit_node);
-            current_logical = wrap_logical_limit(
-                current_logical,
-                skip.count as i64,
-                0,
-                current_node.col_names().to_vec(),
-            );
-        }
-
-        if let Some(ref limit) = yield_stmt.limit {
-            let limit_node =
-                LimitNode::new(current_node.clone(), 0, limit.count as i64).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!("Failed to create LimitNode: {}", e))
-                })?;
-            current_node = PlanNodeEnum::Limit(limit_node);
-            current_logical = wrap_logical_limit(
-                current_logical,
-                0,
-                limit.count as i64,
-                current_node.col_names().to_vec(),
-            );
-        }
-
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(PlanNodeEnum::Start(start_node)),
-            logical_root: Some(current_logical),
-        };
-        Ok(sub_plan)
-    }
 
     fn plan_bound(
         &mut self,
@@ -168,8 +40,6 @@ impl Planner for YieldPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let yield_stmt = match bound {
             BoundStatement::Yield(y) => y,
             _ => {
@@ -304,9 +174,6 @@ impl Planner for YieldPlanner {
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Yield(_))
-    }
 }
 
 impl Default for YieldPlanner {

@@ -43,216 +43,6 @@ impl SubgraphPlanner {
 }
 
 impl Planner for SubgraphPlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let _ = qctx;
-
-        let subgraph_stmt = match validated.stmt() {
-            Stmt::Subgraph(subgraph_stmt) => subgraph_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "SubgraphPlanner requires the Subgraph statement.".to_string(),
-                ));
-            }
-        };
-
-        log::debug!("Processing SUBGRAPH query planning");
-
-        let steps = &subgraph_stmt.steps;
-        let over = subgraph_stmt.over.as_ref();
-        let where_clause = subgraph_stmt.where_clause.clone();
-
-        let (m_steps, n_steps) = match steps {
-            Steps::Fixed(n) => (*n, *n),
-            Steps::Range { min, max } => (*min, *max),
-            Steps::Variable(_) => {
-                return Err(PlannerError::InvalidOperation(
-                    "SUBGRAPH does not support variable steps".to_string(),
-                ));
-            }
-        };
-
-        log::debug!("SUBGRAPH steps: {} to {}", m_steps, n_steps);
-
-        let pipe_var = subgraph_stmt
-            .from
-            .vertices
-            .first()
-            .and_then(|v| v.expression())
-            .and_then(|meta| expr_is_pipe_ref(meta.inner()));
-        let var_name = pipe_var.as_deref().unwrap_or("subgraph_args");
-        let arg_node = Argument::new(1, var_name);
-        let mut current_node: PlanNodeEnum = PlanNodeEnum::Argument(arg_node.clone());
-        let mut current_logical = logical_argument_root(var_name, vec![], None);
-
-        if m_steps == 0 {
-            log::debug!("SUBGRAPH with 0 steps - returning only start vertices");
-
-            let get_vertices_node = GetVerticesNode::new(1, "default", var_name);
-            current_logical = LogicalNodeEnum::GetVertices(LogicalGetVerticesNode {
-                id: next_node_id(),
-                deps: vec![current_logical],
-                space_id: get_vertices_node.space_id(),
-                space_name: get_vertices_node.space_name().to_string(),
-                tag: get_vertices_node.tag().map(|s| s.to_string()),
-                src_ref: get_vertices_node.src_ref().clone(),
-                src_vids: get_vertices_node.src_vids().to_string(),
-                tag_props: get_vertices_node.tag_props().to_vec(),
-                expression: None,
-                dedup: false,
-                limit: None,
-                projected_properties: vec![],
-                output_var: None,
-                col_names: get_vertices_node.col_names().to_vec(),
-                column_types: vec![],
-            });
-            current_node = PlanNodeEnum::GetVertices(get_vertices_node);
-
-            let filters: Vec<Expression> = where_clause
-                .into_iter()
-                .map(|expr| {
-                    expr.into_expression()
-                        .map_err(PlannerError::PlanGenerationFailed)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let (filtered, conditions) =
-                self.apply_filters(current_node, &filters, validated.expr_context())?;
-            current_node = filtered;
-            for condition in conditions {
-                current_logical = LogicalNodeEnum::Filter(LogicalFilterNode {
-                    id: next_node_id(),
-                    input: Some(Box::new(current_logical)),
-                    condition,
-                    output_var: None,
-                    col_names: current_node.col_names().to_vec(),
-                    column_types: vec![],
-                });
-            }
-
-            let project_node = match Project::new(current_node.clone(), vec![]) {
-                Ok(node) => {
-                    let project_enum = PlanNodeEnum::Project(node);
-                    current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
-                        id: next_node_id(),
-                        input: Some(Box::new(current_logical)),
-                        columns: vec![],
-                        subqueries: Vec::new(),
-                        has_folded_expressions: false,
-                        output_var: None,
-                        col_names: project_enum.col_names().to_vec(),
-                        column_types: vec![],
-                    });
-                    project_enum
-                }
-                Err(_) => current_node,
-            };
-            current_node = project_node;
-
-            let sub_plan = SubPlan {
-                root: Some(current_node),
-                tail: Some(PlanNodeEnum::Argument(arg_node)),
-                logical_root: Some(current_logical),
-            };
-            return Ok(sub_plan);
-        }
-
-        let edge_types = over.map(|o| o.edge_types.clone()).unwrap_or_default();
-        let direction_str = over
-            .map(|o| match o.direction {
-                EdgeDirection::Out => "out",
-                EdgeDirection::In => "in",
-                EdgeDirection::Both => "both",
-            })
-            .unwrap_or("out");
-
-        if m_steps > 0 {
-            current_node = self.create_expand_node(
-                current_node,
-                &edge_types,
-                direction_str,
-                m_steps as u32,
-                n_steps as u32,
-            )?;
-            current_logical = expand_mirror(
-                current_logical,
-                &edge_types,
-                direction_str,
-                n_steps as u32,
-                current_node.col_names().to_vec(),
-            );
-
-            if n_steps > m_steps {
-                for step in (m_steps + 1)..=n_steps {
-                    log::debug!("Adding expansion step {}", step);
-                    current_node = self.create_expand_node(
-                        current_node,
-                        &edge_types,
-                        direction_str,
-                        step as u32,
-                        n_steps as u32,
-                    )?;
-                    current_logical = expand_mirror(
-                        current_logical,
-                        &edge_types,
-                        direction_str,
-                        n_steps as u32,
-                        current_node.col_names().to_vec(),
-                    );
-                }
-            }
-        }
-
-        let filters: Vec<Expression> = where_clause
-            .into_iter()
-            .map(|expr| {
-                expr.into_expression()
-                    .map_err(PlannerError::PlanGenerationFailed)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let (filtered, conditions) =
-            self.apply_filters(current_node, &filters, validated.expr_context())?;
-        current_node = filtered;
-        for condition in conditions {
-            current_logical = LogicalNodeEnum::Filter(LogicalFilterNode {
-                id: next_node_id(),
-                input: Some(Box::new(current_logical)),
-                condition,
-                output_var: None,
-                col_names: current_node.col_names().to_vec(),
-                column_types: vec![],
-            });
-        }
-
-        let project_node = match Project::new(current_node.clone(), vec![]) {
-            Ok(node) => {
-                let project_enum = PlanNodeEnum::Project(node);
-                current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
-                    id: next_node_id(),
-                    input: Some(Box::new(current_logical)),
-                    columns: vec![],
-                    subqueries: Vec::new(),
-                    has_folded_expressions: false,
-                    output_var: None,
-                    col_names: project_enum.col_names().to_vec(),
-                    column_types: vec![],
-                });
-                project_enum
-            }
-            Err(_) => current_node,
-        };
-        current_node = project_node;
-
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(PlanNodeEnum::Argument(arg_node)),
-            logical_root: Some(current_logical),
-        };
-
-        Ok(sub_plan)
-    }
 
     fn plan_bound(
         &mut self,
@@ -261,8 +51,6 @@ impl Planner for SubgraphPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let subgraph = match bound {
             BoundStatement::Subgraph(s) => s,
             _ => {
@@ -327,9 +115,7 @@ impl Planner for SubgraphPlanner {
             });
             current_node = PlanNodeEnum::GetVertices(get_vertices_node);
 
-            let expr_ctx = validated
-                .map(|v| v.expr_context().clone())
-                .unwrap_or_else(|| Arc::new(ExpressionAnalysisContext::new()));
+            let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
             if let Some(ref where_clause) = subgraph.where_clause {
                 let condition = crate::binder::expr_converter::bound_expr_to_contextual(
                     &where_clause.condition,
@@ -416,9 +202,7 @@ impl Planner for SubgraphPlanner {
             }
         }
 
-        let expr_ctx = validated
-            .map(|v| v.expr_context().clone())
-            .unwrap_or_else(|| Arc::new(ExpressionAnalysisContext::new()));
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         if let Some(ref where_clause) = subgraph.where_clause {
             let condition = crate::binder::expr_converter::bound_expr_to_contextual(
                 &where_clause.condition,
@@ -468,9 +252,6 @@ impl Planner for SubgraphPlanner {
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Subgraph(_))
-    }
 }
 
 impl SubgraphPlanner {

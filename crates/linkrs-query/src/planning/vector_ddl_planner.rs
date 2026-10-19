@@ -58,13 +58,26 @@ impl Planner for VectorDdlPlanner {
             // index registry so index names resolve to their (space, tag,
             // field) location during planning.
             _ => {
-                let validated = ctx.validated.ok_or_else(|| {
-                    PlannerError::PlanGenerationFailed(
-                        "VectorDdlPlanner requires a validated statement for AST fallback"
-                            .to_string(),
-                    )
-                })?;
-                return self.transform_bound(validated, qctx, ctx.metadata);
+                let stmt = match bound {
+                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
+                    _ => {
+                        return Err(PlannerError::PlanGenerationFailed(
+                            "VectorDdlPlanner requires a bound AST statement for fallback"
+                                .to_string(),
+                        ));
+                    }
+                };
+                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
+                    stmt.clone(),
+                    Arc::new(
+                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                    ),
+                ));
+                let validated = crate::binder::validation::ValidatedStatement::new(
+                    ast,
+                    crate::binder::validation::ValidationInfo::new(),
+                );
+                return self.transform_bound(&validated, qctx, ctx.metadata);
             }
         };
 
@@ -117,23 +130,7 @@ impl Planner for VectorDdlPlanner {
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        self.transform_bound(validated, qctx, None)
-    }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(
-            stmt,
-            Stmt::CreateVectorIndex(_)
-                | Stmt::DropVectorIndex(_)
-                | Stmt::ShowVectorIndex(_)
-                | Stmt::DescribeVectorIndex(_)
-        )
-    }
 }
 
 impl VectorDdlPlanner {
@@ -289,27 +286,23 @@ mod tests {
             config: VectorIndexConfig::new(128, VectorDistance::Cosine),
             if_not_exists: false,
         });
-        assert!(planner.match_planner(&create_stmt));
 
         let drop_stmt = Stmt::DropVectorIndex(DropVectorIndex {
             span: Span::default(),
             index_name: "idx".to_string(),
             if_exists: false,
         });
-        assert!(planner.match_planner(&drop_stmt));
 
         let show_stmt = Stmt::ShowVectorIndex(ShowVectorIndex {
             span: Span::default(),
             pattern: None,
             from_schema: None,
         });
-        assert!(planner.match_planner(&show_stmt));
 
         let describe_stmt = Stmt::DescribeVectorIndex(DescribeVectorIndex {
             span: Span::default(),
             index_name: "idx".to_string(),
         });
-        assert!(planner.match_planner(&describe_stmt));
     }
 
     #[test]

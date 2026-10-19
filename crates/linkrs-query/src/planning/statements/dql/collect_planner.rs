@@ -69,70 +69,6 @@ impl CollectPlanner {
 }
 
 impl Planner for CollectPlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let collect_stmt = match validated.stmt() {
-            Stmt::Collect(collect_stmt) => collect_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "CollectPlanner requires the Collect statement.".to_string(),
-                ));
-            }
-        };
-
-        let start_node = StartNode::new();
-        let start_enum = PlanNodeEnum::Start(start_node);
-
-        let mut aggregate_functions = Vec::new();
-        let mut aggregation_args = Vec::new();
-        let mut agg_aliases = Vec::new();
-        for item in &collect_stmt.items {
-            let expression = item
-                .expression
-                .expression()
-                .map(|e| e.inner().clone())
-                .unwrap_or_else(|| {
-                    linkrs_core::types::Expression::Variable(item.expression.to_expression_string())
-                });
-            let field = match &expression {
-                linkrs_core::types::Expression::Function { name, args }
-                    if name.eq_ignore_ascii_case("list") && args.len() == 1 =>
-                {
-                    args[0].as_expr().to_expression_string()
-                }
-                other => other.to_expression_string(),
-            };
-            aggregate_functions.push(AggregateFunction::Collect);
-            aggregation_args.push(vec![linkrs_core::types::Expression::Variable(field)]);
-            agg_aliases.push(
-                item.alias
-                    .clone()
-                    .unwrap_or_else(|| "collected".to_string()),
-            );
-        }
-
-        let mut aggregate_node = AggregateNode::with_agg_aliases(
-            start_enum.clone(),
-            Vec::new(),
-            aggregate_functions,
-            agg_aliases,
-        )
-        .map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
-        })?;
-        aggregate_node.set_aggregation_args(aggregation_args);
-
-        let logical_root = Self::aggregate_mirror(&aggregate_node);
-        let sub_plan = SubPlan {
-            root: Some(PlanNodeEnum::Aggregate(aggregate_node)),
-            tail: Some(start_enum),
-            logical_root: Some(logical_root),
-        };
-        Ok(sub_plan)
-    }
 
     fn plan_bound(
         &mut self,
@@ -141,8 +77,6 @@ impl Planner for CollectPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let collect = match bound {
             BoundStatement::Collect(c) => c,
             _ => {
@@ -189,9 +123,6 @@ impl Planner for CollectPlanner {
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Collect(_))
-    }
 }
 
 impl Default for CollectPlanner {

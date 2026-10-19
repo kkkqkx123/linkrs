@@ -23,40 +23,6 @@ impl FilterPlanner {
 }
 
 impl Planner for FilterPlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let filter_stmt = match validated.stmt() {
-            Stmt::Filter(filter_stmt) => filter_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "FilterPlanner requires the Filter statement.".to_string(),
-                ));
-            }
-        };
-
-        let start_node = StartNode::new();
-        let start_enum = PlanNodeEnum::Start(start_node);
-
-        let filter_node = FilterNode::new(start_enum.clone(), filter_stmt.expression.clone())
-            .map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create FilterNode: {}", e))
-            })?;
-
-        let logical_root = wrap_logical_filter(
-            logical_start_root(),
-            filter_stmt.expression.clone(),
-            filter_node.col_names().to_vec(),
-        );
-        let sub_plan = SubPlan {
-            root: Some(PlanNodeEnum::Filter(filter_node)),
-            tail: Some(start_enum),
-            logical_root: Some(logical_root),
-        };
-        Ok(sub_plan)
-    }
 
     fn plan_bound(
         &mut self,
@@ -65,8 +31,6 @@ impl Planner for FilterPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let filter = match bound {
             BoundStatement::Filter(f) => f,
             _ => {
@@ -103,9 +67,6 @@ impl Planner for FilterPlanner {
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Filter(_))
-    }
 }
 
 impl Default for FilterPlanner {

@@ -41,16 +41,6 @@ impl ExplainPlanner {
 }
 
 impl Planner for ExplainPlanner {
-    fn transform(
-        &mut self,
-        _validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        Err(PlannerError::InvalidOperation(
-            "ExplainPlanner::transform is not supported; use plan_bound with BoundStatement and sub-context derivation."
-                .to_string(),
-        ))
-    }
 
     fn plan_bound(
         &mut self,
@@ -59,8 +49,6 @@ impl Planner for ExplainPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let (inner_bound, is_profile) = match bound {
             BoundStatement::Explain(e) => (e.statement.as_ref(), false),
             BoundStatement::Profile(p) => (p.statement.as_ref(), true),
@@ -79,12 +67,10 @@ impl Planner for ExplainPlanner {
                 ))
             })?;
 
-        let inner_validated = ctx.derive_validated(inner_bound);
         let inner_ctx = crate::planning::context::PlanContext {
             bound: inner_bound,
             qctx: qctx.clone(),
             metadata,
-            validated: inner_validated.as_ref().or(validated),
         };
         let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
 
@@ -97,13 +83,6 @@ impl Planner for ExplainPlanner {
         Ok(inner_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        if self.is_profile {
-            matches!(stmt, Stmt::Profile(_))
-        } else {
-            matches!(stmt, Stmt::Explain(_))
-        }
-    }
 }
 
 impl Default for ExplainPlanner {

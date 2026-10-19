@@ -70,8 +70,6 @@ impl Planner for UnwindPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let unwind_stmt = match bound {
             BoundStatement::Unwind(stmt) => stmt,
             _ => {
@@ -84,43 +82,9 @@ impl Planner for UnwindPlanner {
         // Unified entry for expression-level EXISTS / IN (mirrors
         // `transform`): the bound path must also reject subqueries in the
         // UNWIND list expression at planning time with the precise error.
-        if let Some(validated_stmt) = validated {
-            let (unwind_expression, _, unwind_return_columns) =
-                self.extract_unwind_info(validated_stmt.stmt())?;
-            let check_space_id = qctx.space_id().unwrap_or(1);
-            let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-            let outer_col_names: Vec<String> = Vec::new();
-            if let Some(expr_meta) = unwind_expression.expression() {
-                exists_planner::check_expression_subqueries(
-                    expr_meta.inner(),
-                    &qctx,
-                    check_space_id,
-                    &check_space_name,
-                    &outer_col_names,
-                )?;
-            }
-            if let Some(columns) = &unwind_return_columns {
-                for col in columns {
-                    if let Some(expr_meta) = col.expression.expression() {
-                        exists_planner::check_expression_subqueries(
-                            expr_meta.inner(),
-                            &qctx,
-                            check_space_id,
-                            &check_space_name,
-                            &outer_col_names,
-                        )?;
-                    }
-                }
-            }
-        }
-
-        let expr_ctx = validated
-            .map(|v| v.expr_context().clone())
-            .unwrap_or_else(|| {
-                Arc::new(
-                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                )
-            });
+        let expr_ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
         let list_expr = crate::binder::expr_converter::bound_expr_to_contextual(
             &unwind_stmt.expression,
             &expr_ctx,
@@ -159,91 +123,7 @@ impl Planner for UnwindPlanner {
         })
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let (expression, variable, return_columns) = self.extract_unwind_info(validated.stmt())?;
 
-        // Unified entry for expression-level EXISTS / IN: subqueries in the
-        // UNWIND list expression (or its RETURN projection) are rejected at
-        // planning time with a precise error.
-        let space_id = qctx.space_id().unwrap_or(1);
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let outer_col_names: Vec<String> = Vec::new();
-        if let Some(expr_meta) = expression.expression() {
-            exists_planner::check_expression_subqueries(
-                expr_meta.inner(),
-                &qctx,
-                space_id,
-                &space_name,
-                &outer_col_names,
-            )?;
-        }
-        if let Some(columns) = &return_columns {
-            for col in columns {
-                if let Some(expr_meta) = col.expression.expression() {
-                    exists_planner::check_expression_subqueries(
-                        expr_meta.inner(),
-                        &qctx,
-                        space_id,
-                        &space_name,
-                        &outer_col_names,
-                    )?;
-                }
-            }
-        }
-
-        let arg_node = ArgumentNode::new(next_node_id(), "unwind_input");
-
-        let unwind_node =
-            UnwindNode::new(arg_node.clone().into_enum(), &variable, expression.clone())?;
-
-        let mut current_node: PlanNodeEnum = unwind_node.into_enum();
-        let mut current_logical = logical_argument_root("unwind_input", vec![], None);
-        current_logical = LogicalNodeEnum::Unwind(LogicalUnwindNode {
-            id: next_node_id(),
-            input: Some(Box::new(current_logical)),
-            alias: variable.clone(),
-            list_expression: expression,
-            output_var: None,
-            col_names: current_node.col_names().to_vec(),
-            column_types: vec![],
-        });
-
-        if let Some(columns) = return_columns {
-            let project_node =
-                ProjectNode::new(current_node.clone(), columns.clone()).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create ProjectNode: {}",
-                        e
-                    ))
-                })?;
-            current_node = PlanNodeEnum::Project(project_node);
-            let column_types = projection_util::project_column_types(&columns);
-            current_logical = LogicalNodeEnum::Project(LogicalProjectNode {
-                id: next_node_id(),
-                input: Some(Box::new(current_logical)),
-                columns,
-                subqueries: Vec::new(),
-                has_folded_expressions: false,
-                output_var: None,
-                col_names: current_node.col_names().to_vec(),
-                column_types,
-            });
-        }
-
-        Ok(SubPlan {
-            root: Some(current_node),
-            tail: None,
-            logical_root: Some(current_logical),
-        })
-    }
-
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Unwind(_))
-    }
 }
 
 impl Default for UnwindPlanner {

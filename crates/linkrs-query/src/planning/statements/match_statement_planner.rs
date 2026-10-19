@@ -14,6 +14,7 @@ use crate::binder::validation::ValidationInfo;
 use crate::binder::BoundStatement;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::Stmt;
+use crate::parser::Parser;
 use crate::planning::join_order::JoinOrderStats;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError, ValidatedStatement};
@@ -113,35 +114,7 @@ impl MatchStatementPlanner {
 }
 
 impl Planner for MatchStatementPlanner {
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Match(_))
-    }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let space_id = qctx.space_id().unwrap_or(1);
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-
-        let validation_info = &validated.validation_info;
-
-        self.expr_context = Some(validated.ast.expr_context().clone());
-
-        for hint in &validation_info.optimization_hints {
-            log::debug!("Optimization Tip: {:?}", hint);
-        }
-
-        self.plan_match_pattern(
-            validated,
-            space_id,
-            &space_name,
-            validation_info,
-            &qctx,
-            None,
-        )
-    }
 
     fn plan_bound(
         &mut self,
@@ -150,8 +123,6 @@ impl Planner for MatchStatementPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let bound_delete = match bound {
             BoundStatement::Match(m) => m.delete_clause.clone(),
             _ => {
@@ -168,12 +139,15 @@ impl Planner for MatchStatementPlanner {
             self.metadata_context = Some(metadata_context.clone());
         }
 
-        let validated = validated.ok_or_else(|| {
-            PlannerError::PlanGenerationFailed(
-                "MatchStatementPlanner requires a validated statement for MATCH planning"
-                    .to_string(),
-            )
-        })?;
+        // Reconstruct a lightweight validated statement from the query text,
+        // since the bound pipeline no longer carries one. Expression context
+        // is fresh; validation info defaults to empty.
+        let mut parser = Parser::new(qctx.query());
+        let parsed = parser
+            .parse()
+            .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
+        let ast = parsed.ast;
+        let validated = ValidatedStatement::new(ast, ValidationInfo::new());
         self.expr_context = Some(validated.ast.expr_context().clone());
 
         let validation_info = &validated.validation_info;
@@ -183,7 +157,7 @@ impl Planner for MatchStatementPlanner {
         }
 
         self.plan_match_pattern(
-            validated,
+            &validated,
             space_id,
             &space_name,
             validation_info,

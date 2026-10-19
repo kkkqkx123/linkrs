@@ -26,8 +26,6 @@ impl Planner for UserManagementPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let arg_node = ArgumentNode::new(1, "user_management_args");
 
         let final_node = match bound {
@@ -61,138 +59,34 @@ impl Planner for UserManagementPlanner {
                 PlanNodeEnum::UserManage(UserManageNode::Drop(node))
             }
             _ => {
-                // Fallback to AST-based transform for non-migrated operations
-                // (ChangePassword, Grant, Revoke, ShowUsers, ShowRoles, DescribeUser)
-                let validated = validated.ok_or_else(|| {
-                    PlannerError::PlanGenerationFailed(
-                        "UserManagementPlanner requires a validated statement for AST fallback"
-                            .to_string(),
-                    )
-                })?;
-                return self.transform(validated, qctx.clone());
-            }
-        };
-
-        let sub_plan = SubPlan::new(Some(final_node), Some(PlanNodeEnum::Argument(arg_node)));
-        Ok(sub_plan)
-    }
-
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let arg_node = ArgumentNode::new(1, "user_management_args");
-
-        let final_node = match validated.stmt() {
-            Stmt::CreateUser(create_stmt) => {
-                let node = crate::planning::plan::core::nodes::CreateUserNode::new(
-                    1,
-                    create_stmt.username.clone(),
-                    create_stmt.password.clone(),
-                )
-                .with_if_not_exists(create_stmt.if_not_exists);
-                PlanNodeEnum::UserManage(UserManageNode::Create(node))
-            }
-            Stmt::AlterUser(alter_stmt) => {
-                let mut node = crate::planning::plan::core::nodes::AlterUserNode::new(
-                    2,
-                    alter_stmt.username.clone(),
-                )
-                .with_password_history_depth(qctx.password_history_depth());
-                if let Some(ref password) = alter_stmt.password {
-                    node = node.with_password(password.clone());
-                }
-                if let Some(locked) = alter_stmt.is_locked {
-                    node = node.with_locked(locked);
-                }
-                PlanNodeEnum::UserManage(UserManageNode::Alter(node))
-            }
-            Stmt::DropUser(drop_stmt) => {
-                let node = crate::planning::plan::core::nodes::DropUserNode::new(
-                    3,
-                    drop_stmt.username.clone(),
-                )
-                .with_if_exists(drop_stmt.if_exists);
-                PlanNodeEnum::UserManage(UserManageNode::Drop(node))
-            }
-            Stmt::ChangePassword(change_stmt) => {
-                let username = change_stmt
-                    .username
-                    .clone()
-                    .or_else(|| qctx.authenticated_user().map(|user| user.to_string()));
-                let password_info = linkrs_core::types::PasswordInfo {
-                    username,
-                    old_password: change_stmt.old_password.clone(),
-                    new_password: change_stmt.new_password.clone(),
-                    history_limit: qctx.password_history_depth(),
+                let stmt = match bound {
+                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
+                    _ => {
+                        return Err(PlannerError::PlanGenerationFailed(
+                            "UserManagementPlanner requires a bound AST statement for fallback"
+                                .to_string(),
+                        ));
+                    }
                 };
-
-                let node =
-                    crate::planning::plan::core::nodes::ChangePasswordNode::new(4, password_info);
-                PlanNodeEnum::UserManage(UserManageNode::ChangePassword(node))
-            }
-            Stmt::Grant(grant_stmt) => {
-                let node = crate::planning::plan::core::nodes::GrantRoleNode::new(
-                    5,
-                    grant_stmt.username.clone(),
-                    grant_stmt.space_name.clone(),
-                    format!("{:?}", grant_stmt.role).to_lowercase(),
+                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
+                    stmt.clone(),
+                    Arc::new(
+                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                    ),
+                ));
+                let validated = crate::binder::validation::ValidatedStatement::new(
+                    ast,
+                    crate::binder::validation::ValidationInfo::new(),
                 );
-                PlanNodeEnum::UserManage(UserManageNode::GrantRole(node))
-            }
-            Stmt::Revoke(revoke_stmt) => {
-                let node = crate::planning::plan::core::nodes::RevokeRoleNode::new(
-                    6,
-                    revoke_stmt.username.clone(),
-                    revoke_stmt.space_name.clone(),
-                    format!("{:?}", revoke_stmt.role).to_lowercase(),
-                );
-                PlanNodeEnum::UserManage(UserManageNode::RevokeRole(node))
-            }
-            Stmt::ShowUsers(_) => {
-                let node = crate::planning::plan::core::nodes::ShowUsersNode::new(7);
-                PlanNodeEnum::UserManage(UserManageNode::ShowUsers(node))
-            }
-            Stmt::ShowRoles(show_roles_stmt) => {
-                let space_name = show_roles_stmt.space_name.clone().unwrap_or_default();
-                let node = crate::planning::plan::core::nodes::ShowRolesNode::new(8, space_name);
-                PlanNodeEnum::UserManage(UserManageNode::ShowRoles(node))
-            }
-            Stmt::DescribeUser(desc_user_stmt) => {
-                let node = crate::planning::plan::core::nodes::DescribeUserNode::new(
-                    9,
-                    desc_user_stmt.username.clone(),
-                );
-                PlanNodeEnum::UserManage(UserManageNode::DescribeUser(node))
-            }
-            _ => {
-                return Err(PlannerError::PlanGenerationFailed(format!(
-                    "Unsupported user management operation: {:?}",
-                    validated.stmt()
-                )));
+                return self.transform(&validated, qctx.clone());
             }
         };
 
         let sub_plan = SubPlan::new(Some(final_node), Some(PlanNodeEnum::Argument(arg_node)));
-
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(
-            stmt,
-            Stmt::CreateUser(_)
-                | Stmt::AlterUser(_)
-                | Stmt::DropUser(_)
-                | Stmt::ChangePassword(_)
-                | Stmt::Grant(_)
-                | Stmt::Revoke(_)
-                | Stmt::ShowUsers(_)
-                | Stmt::ShowRoles(_)
-                | Stmt::DescribeUser(_)
-        )
-    }
+
 }
 
 impl Default for UserManagementPlanner {

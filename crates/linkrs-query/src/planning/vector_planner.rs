@@ -53,29 +53,30 @@ impl Planner for VectorSearchPlanner {
         // Vector DDL (`CREATE VECTOR INDEX`) has a bound representation but
         // is planned by VectorDdlPlanner; search statements use the AST path
         // with plan-phase metadata carrying the vector index registry.
+        let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let validated = ctx.validated.ok_or_else(|| {
-            PlannerError::PlanGenerationFailed(
-                "VectorSearchPlanner requires a validated statement for AST fallback".to_string(),
-            )
-        })?;
-        self.transform_bound(validated, qctx, ctx.metadata)
+        let stmt = match bound {
+            crate::binder::BoundStatement::Other(s) => s.as_ref(),
+            _ => {
+                return Err(PlannerError::PlanGenerationFailed(
+                    "VectorSearchPlanner requires a bound AST statement for fallback".to_string(),
+                ));
+            }
+        };
+        let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
+            stmt.clone(),
+            Arc::new(
+                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+            ),
+        ));
+        let validated = crate::binder::validation::ValidatedStatement::new(
+            ast,
+            crate::binder::validation::ValidationInfo::new(),
+        );
+        self.transform_bound(&validated, qctx, ctx.metadata)
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        self.transform_bound(validated, qctx, None)
-    }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(
-            stmt,
-            Stmt::SearchVector(_) | Stmt::LookupVector(_) | Stmt::MatchVector(_)
-        )
-    }
 }
 
 impl VectorSearchPlanner {
@@ -582,28 +583,6 @@ mod tests {
         assert!(planner.metadata_context.is_some());
     }
 
-    #[test]
-    fn test_match_planner() {
-        let planner = VectorSearchPlanner::new();
-
-        // DDL statements moved to VectorDdlPlanner and no longer match here.
-        let create_stmt = Stmt::CreateVectorIndex(CreateVectorIndex {
-            span: Span::default(),
-            index_name: "idx".to_string(),
-            schema_name: "tag".to_string(),
-            field_name: "vec".to_string(),
-            config: VectorIndexConfig::new(128, crate::parser::ast::vector::VectorDistance::Cosine),
-            if_not_exists: false,
-        });
-        assert!(!planner.match_planner(&create_stmt));
-
-        let drop_stmt = Stmt::DropVectorIndex(DropVectorIndex {
-            span: Span::default(),
-            index_name: "idx".to_string(),
-            if_exists: false,
-        });
-        assert!(!planner.match_planner(&drop_stmt));
-    }
 
     #[test]
     fn test_parse_output_fields() {

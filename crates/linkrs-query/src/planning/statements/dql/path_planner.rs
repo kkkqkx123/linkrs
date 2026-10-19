@@ -45,114 +45,6 @@ impl PathPlanner {
 }
 
 impl Planner for PathPlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let find_path_stmt = match validated.stmt() {
-            Stmt::FindPath(find_path_stmt) => find_path_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "PathPlanner requires the FindPath statement.".to_string(),
-                ));
-            }
-        };
-
-        let space_id = qctx.space_id().ok_or_else(|| {
-            PlannerError::InvalidOperation(
-                "No graph space selected, please execute USE <space> first".to_string(),
-            )
-        })?;
-
-        // FIND PATH syntax carries no vertex label: path vertices are
-        // materialized at execution from the edge type schema (or from tagged
-        // vertex values), so the plan leaves the vertex label empty instead
-        // of guessing one.
-        let start_node = StartNode::new();
-        let start_node_enum = PlanNodeEnum::Start(start_node);
-
-        let edge_types = self.get_edge_types_from_stmt(find_path_stmt);
-        let max_steps = self.get_max_steps_from_stmt(find_path_stmt);
-
-        let start_vertex_ids = self.extract_vertex_ids_from_exprs(&find_path_stmt.from.vertices);
-        let end_vertex_ids = self.extract_vertex_ids_from_expr(&find_path_stmt.to);
-
-        let (mut root_node, mut logical_root) = if self.is_shortest_path_stmt(find_path_stmt) {
-            // A cycle can never produce a shorter path, so WITH LOOP /
-            // WITH TRAIL / WITH WALK are no-ops on this branch; report the
-            // ignored modifiers instead of folding them into the plan.
-            if find_path_stmt.with_loop || find_path_stmt.with_trail || find_path_stmt.with_walk {
-                log::debug!(
-                    "FIND SHORTEST PATH ignores WITH LOOP/TRAIL/WALK: \
-                     revisiting a vertex or edge cannot yield a shorter path"
-                );
-            }
-            let root = self.build_shortest_path_plan(PathPlanParams {
-                left_input: start_node_enum.clone(),
-                space_id,
-                edge_types: edge_types.clone(),
-                max_steps,
-                start_vertex_ids: start_vertex_ids.clone(),
-                end_vertex_ids: end_vertex_ids.clone(),
-                weight_expression: find_path_stmt.weight_expression.clone(),
-            })?;
-            let logical = Self::shortest_path_logical(
-                space_id,
-                edge_types,
-                max_steps,
-                start_vertex_ids,
-                end_vertex_ids,
-                find_path_stmt.weight_expression.clone(),
-            );
-            (root, logical)
-        } else {
-            let root = self.build_all_paths_plan(
-                PathPlanParams {
-                    left_input: start_node_enum.clone(),
-                    space_id,
-                    edge_types: edge_types.clone(),
-                    max_steps,
-                    start_vertex_ids: start_vertex_ids.clone(),
-                    end_vertex_ids: end_vertex_ids.clone(),
-                    // Rejected at bind time; WEIGHT never reaches ALL PATH.
-                    weight_expression: None,
-                },
-                find_path_stmt,
-            )?;
-            let logical = Self::all_paths_logical(
-                space_id,
-                edge_types,
-                max_steps,
-                find_path_stmt,
-                start_vertex_ids,
-                end_vertex_ids,
-            );
-            (root, logical)
-        };
-
-        // Apply the WHERE clause on top of the path result.
-        if let Some(where_expr) = find_path_stmt.where_clause.clone() {
-            let filter_node =
-                FilterNode::new(root_node.clone(), where_expr.clone()).map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create FilterNode: {}",
-                        e
-                    ))
-                })?;
-            let col_names = filter_node.col_names().to_vec();
-            logical_root = wrap_logical_filter(logical_root, where_expr.clone(), col_names);
-            root_node = PlanNodeEnum::Filter(filter_node);
-        }
-
-        let sub_plan = SubPlan {
-            root: Some(root_node),
-            tail: Some(start_node_enum),
-            logical_root: Some(logical_root),
-        };
-
-        Ok(sub_plan)
-    }
 
     fn plan_bound(
         &mut self,
@@ -161,8 +53,6 @@ impl Planner for PathPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let find_path = match bound {
             BoundStatement::FindPath(fp) => fp,
             _ => {
@@ -319,9 +209,6 @@ impl Planner for PathPlanner {
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::FindPath(_))
-    }
 }
 
 /// Shared inputs for building a path plan.

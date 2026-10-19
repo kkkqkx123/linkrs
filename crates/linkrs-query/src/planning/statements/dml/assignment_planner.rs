@@ -42,18 +42,29 @@ impl Planner for AssignmentPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
         let assignment = match bound {
             crate::binder::BoundStatement::Assignment(a) => a,
-            // Legacy AST-only statements still use the AST path.
             _ => {
-                let validated = validated.ok_or_else(|| {
-                    PlannerError::PlanGenerationFailed(
-                        "AssignmentPlanner requires a validated statement for AST fallback"
-                            .to_string(),
-                    )
-                })?;
-                return self.transform(validated, qctx);
+                let stmt = match bound {
+                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
+                    _ => {
+                        return Err(PlannerError::PlanGenerationFailed(
+                            "AssignmentPlanner requires a bound AST statement for fallback"
+                                .to_string(),
+                        ));
+                    }
+                };
+                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
+                    stmt.clone(),
+                    Arc::new(
+                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                    ),
+                ));
+                let validated = crate::binder::validation::ValidatedStatement::new(
+                    ast,
+                    crate::binder::validation::ValidationInfo::new(),
+                );
+                return self.transform(&validated, qctx);
             }
         };
 
@@ -65,12 +76,10 @@ impl Planner for AssignmentPlanner {
                 ))
             })?;
 
-        let inner_validated = ctx.derive_validated(&assignment.statement);
         let inner_ctx = crate::planning::context::PlanContext {
             bound: &assignment.statement,
             qctx: qctx.clone(),
             metadata,
-            validated: inner_validated.as_ref().or(validated),
         };
         let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
 
@@ -82,20 +91,7 @@ impl Planner for AssignmentPlanner {
         Ok(inner_plan)
     }
 
-    fn transform(
-        &mut self,
-        _validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        Err(PlannerError::InvalidOperation(
-            "AssignmentPlanner::transform is not supported; use plan_bound with BoundStatement and sub-context derivation."
-                .to_string(),
-        ))
-    }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Assignment(_))
-    }
 }
 
 impl Default for AssignmentPlanner {

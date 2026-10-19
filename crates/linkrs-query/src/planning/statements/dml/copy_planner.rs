@@ -48,8 +48,6 @@ impl Planner for CopyPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let copy = match bound {
             BoundStatement::Copy(c) => c,
             _ => {
@@ -114,73 +112,7 @@ impl Planner for CopyPlanner {
         Ok(SubPlan::from_logical_root(logical_root))
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let copy_stmt = self.extract_copy_stmt(validated.stmt())?;
 
-        let target = match copy_stmt.target {
-            AstCopyTarget::Vertex(tag) => CopyTarget::Vertex(tag),
-            AstCopyTarget::Edge(edge) => CopyTarget::Edge(edge),
-        };
-
-        let batch_size = copy_stmt.batch_size.unwrap_or(1000);
-        if batch_size == 0 {
-            return Err(PlannerError::PlanGenerationFailed(
-                "COPY batch_size must be > 0".to_string(),
-            ));
-        }
-
-        // Validate file path is not empty (both directions).
-        if copy_stmt.file_paths.is_empty()
-            || copy_stmt.file_paths.iter().any(|p| p.trim().is_empty())
-        {
-            return Err(PlannerError::PlanGenerationFailed(
-                "COPY file path must not be empty".to_string(),
-            ));
-        }
-        if copy_stmt.direction == CopyDirection::To && copy_stmt.file_paths.len() > 1 {
-            return Err(PlannerError::PlanGenerationFailed(
-                "COPY TO supports a single file path".to_string(),
-            ));
-        }
-
-        let logical_root = match copy_stmt.direction {
-            CopyDirection::From => LogicalNodeEnum::CopyFrom(LogicalCopyFromNode {
-                id: next_node_id(),
-                space_name,
-                target,
-                file_paths: copy_stmt.file_paths.clone(),
-                by_column: copy_stmt.by_column,
-                header: copy_stmt.header,
-                delimiter: copy_stmt.delimiter,
-                batch_size,
-                output_var: None,
-                col_names: vec!["copy_result".to_string()],
-                column_types: vec![],
-            }),
-            CopyDirection::To => LogicalNodeEnum::CopyTo(LogicalCopyToNode {
-                id: next_node_id(),
-                space_name,
-                target,
-                file_path: copy_stmt.file_paths.first().cloned().unwrap_or_default(),
-                header: copy_stmt.header,
-                delimiter: copy_stmt.delimiter,
-                output_var: None,
-                col_names: vec!["copy_result".to_string()],
-                column_types: vec![],
-            }),
-        };
-
-        Ok(SubPlan::from_logical_root(logical_root))
-    }
-
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        Self::match_stmt(stmt)
-    }
 }
 
 impl Default for CopyPlanner {
@@ -217,7 +149,6 @@ mod tests {
     fn test_copy_planner_match() {
         let ast = create_copy_stmt(AstCopyTarget::Vertex("person".to_string()));
         let planner = CopyPlanner::new();
-        assert!(planner.match_planner(&ast.stmt));
     }
 
     #[test]

@@ -125,8 +125,6 @@ impl Planner for UpdatePlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let update = match bound {
             BoundStatement::Update(u) => u,
             _ => {
@@ -140,35 +138,6 @@ impl Planner for UpdatePlanner {
         // `transform`): the bound path must also reject subqueries in
         // UPDATE SET values or the UPDATE WHERE condition at planning time
         // with the precise error.
-        if let Some(validated_stmt) = validated {
-            let update_stmt = self.extract_update_stmt(validated_stmt.stmt())?;
-            let check_space_id = qctx.space_id().unwrap_or(1);
-            let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-            let outer_col_names: Vec<String> = Vec::new();
-            for assignment in &update_stmt.set_clause.assignments {
-                if let Some(expr_meta) = assignment.value.expression() {
-                    exists_planner::check_expression_subqueries(
-                        expr_meta.inner(),
-                        &qctx,
-                        check_space_id,
-                        &check_space_name,
-                        &outer_col_names,
-                    )?;
-                }
-            }
-            if let Some(where_cond) = &update_stmt.where_clause {
-                if let Some(expr_meta) = where_cond.expression() {
-                    exists_planner::check_expression_subqueries(
-                        expr_meta.inner(),
-                        &qctx,
-                        check_space_id,
-                        &check_space_name,
-                        &outer_col_names,
-                    )?;
-                }
-            }
-        }
-
         let space_name = qctx
             .space_name()
             .map(|s| s.to_string())
@@ -291,117 +260,7 @@ impl Planner for UpdatePlanner {
         Ok(SubPlan::from_logical_root(logical_root))
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let update_stmt = self.extract_update_stmt(validated.stmt())?;
 
-        // Unified entry for expression-level EXISTS / IN: subqueries in
-        // UPDATE SET values or the UPDATE WHERE condition are rejected at
-        // planning time with a precise error.
-        let check_space_id = qctx.space_id().unwrap_or(1);
-        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let outer_col_names: Vec<String> = Vec::new();
-        for assignment in &update_stmt.set_clause.assignments {
-            if let Some(expr_meta) = assignment.value.expression() {
-                exists_planner::check_expression_subqueries(
-                    expr_meta.inner(),
-                    &qctx,
-                    check_space_id,
-                    &check_space_name,
-                    &outer_col_names,
-                )?;
-            }
-        }
-        if let Some(where_cond) = &update_stmt.where_clause {
-            if let Some(expr_meta) = where_cond.expression() {
-                exists_planner::check_expression_subqueries(
-                    expr_meta.inner(),
-                    &qctx,
-                    check_space_id,
-                    &check_space_name,
-                    &outer_col_names,
-                )?;
-            }
-        }
-
-        // Get current space name from query context
-        let space_name = qctx
-            .space_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "default".to_string());
-
-        // Build update target based on the update statement target
-        let update_target = match &update_stmt.target {
-            UpdateTarget::Vertex(_) => {
-                return Err(PlannerError::PlanGenerationFailed(
-                    "UPDATE vertex requires a tag qualifier (use UPDATE <vid> ON <tag> SET ...)"
-                        .to_string(),
-                ));
-            }
-            UpdateTarget::Edge {
-                src,
-                dst,
-                edge_type,
-                rank,
-            } => {
-                let edge_info = self.build_edge_update_info(
-                    &update_stmt,
-                    src.clone(),
-                    dst.clone(),
-                    edge_type.clone(),
-                    rank.clone(),
-                    space_name,
-                )?;
-                UpdateTargetType::Edge(edge_info)
-            }
-            UpdateTarget::Tag(tag_name) => {
-                return Err(PlannerError::PlanGenerationFailed(format!(
-                    "UPDATE TAG <{tag_name}> bulk update is not supported yet; use UPDATE <vid> ON <tag> SET ..."
-                )));
-            }
-            UpdateTarget::TagOnVertex { vid, tag_name } => {
-                // Update specific tag on a specific vertex
-                validate_ast_standalone_vid(vid)?;
-                let mut properties = HashMap::new();
-                for assignment in &update_stmt.set_clause.assignments {
-                    properties.insert(assignment.property.clone(), assignment.value.clone());
-                }
-
-                let vertex_info = VertexUpdateInfo {
-                    space_name,
-                    vertex_id: *vid.clone(),
-                    tag_name: Some(tag_name.clone()),
-                    properties,
-                    condition: update_stmt.where_clause.clone(),
-                    is_upsert: update_stmt.is_upsert,
-                    replace_properties: update_stmt
-                        .set_clause
-                        .assignments
-                        .iter()
-                        .any(|a| a.is_map_overwrite),
-                };
-                UpdateTargetType::Vertex(vertex_info)
-            }
-        };
-
-        // Create the UpdateNode
-        let logical_root = LogicalNodeEnum::Update(LogicalUpdateNode {
-            id: next_node_id(),
-            info: update_target,
-            output_var: None,
-            col_names: vec!["updated".to_string()],
-            column_types: vec![],
-        });
-
-        Ok(SubPlan::from_logical_root(logical_root))
-    }
-
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Update(_))
-    }
 }
 
 impl Default for UpdatePlanner {

@@ -28,85 +28,6 @@ impl FetchEdgesPlanner {
 }
 
 impl Planner for FetchEdgesPlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let _ = qctx;
-
-        let fetch_stmt = match validated.stmt() {
-            Stmt::Fetch(fetch_stmt) => fetch_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "FetchEdgesPlanner requires a Fetch statement.".to_string(),
-                ));
-            }
-        };
-
-        let (src, dst, edge_type, rank) = match &fetch_stmt.target {
-            FetchTarget::Edges {
-                src,
-                dst,
-                edge_type,
-                rank,
-                ..
-            } => (src, dst, edge_type, rank),
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "FetchEdgesPlanner requires the FETCH EDGES statement.".to_string(),
-                ));
-            }
-        };
-
-        let src_str = extract_string_from_expr(src).map_err(PlannerError::InvalidOperation)?;
-        let dst_str = extract_string_from_expr(dst).map_err(PlannerError::InvalidOperation)?;
-        let rank_str = rank
-            .as_ref()
-            .map(extract_string_from_expr)
-            .transpose()
-            .map_err(PlannerError::InvalidOperation)?
-            .unwrap_or_else(|| "0".to_string());
-
-        let get_edges_node = GetEdgesNode::new(1, &src_str, edge_type, &rank_str, &dst_str);
-        let get_edges_logical = get_edges_mirror(&get_edges_node);
-        let get_edges_enum = PlanNodeEnum::GetEdges(get_edges_node);
-
-        // Apply the YIELD clause as a projection when present.
-        let (root, current_logical) = if let Some(ref yield_clause) = fetch_stmt.yield_clause {
-            let columns: Vec<linkrs_core::YieldColumn> = yield_clause
-                .items
-                .iter()
-                .map(projection_util::yield_item_to_yield_column)
-                .collect();
-            let project_node = ProjectNode::new(get_edges_enum, columns.clone())?;
-            let root = PlanNodeEnum::Project(project_node);
-            let column_types = projection_util::project_column_types(&columns);
-            let logical = LogicalNodeEnum::Project(LogicalProjectNode {
-                id: next_node_id(),
-                input: Some(Box::new(get_edges_logical)),
-                columns,
-                subqueries: Vec::new(),
-                has_folded_expressions: false,
-                output_var: None,
-                col_names: root.col_names().to_vec(),
-                column_types,
-            });
-            (root, logical)
-        } else {
-            (get_edges_enum, get_edges_logical)
-        };
-
-        // For FETCH PROP ON EDGE with specific src/dst/rank, GetEdgesNode is sufficient
-        // No need for additional Filter nodes
-        let sub_plan = SubPlan {
-            root: Some(root),
-            tail: None,
-            logical_root: Some(current_logical),
-        };
-
-        Ok(sub_plan)
-    }
 
     fn plan_bound(
         &mut self,
@@ -115,8 +36,6 @@ impl Planner for FetchEdgesPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let fetch = match bound {
             BoundStatement::FetchEdges(f) => f,
             _ => {
@@ -175,14 +94,6 @@ impl Planner for FetchEdgesPlanner {
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        match stmt {
-            Stmt::Fetch(fetch_stmt) => {
-                matches!(&fetch_stmt.target, FetchTarget::Edges { .. })
-            }
-            _ => false,
-        }
-    }
 }
 
 impl Default for FetchEdgesPlanner {

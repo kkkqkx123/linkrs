@@ -43,7 +43,10 @@ impl Default for FusionStrategy {
 /// - Strategy params: `Rrf{k}` requires `1 <= k <= 1000` (default 60);
 ///   `Weighted{alpha}` requires `0.0 <= alpha <= 1.0` (rejected, not
 ///   clamped, so misconfiguration surfaces instead of silently shifting).
-/// - Labels: fused rows carry `SearchHit{id, score}` only; requested
+/// - Fused rows carry `SearchHit{id, score}` plus merged `highlights`,
+///   `payload`, and `source`: the fulltext branch is the base carrier for
+///   highlights/source, and payload keys are unioned with fulltext values
+///   taking precedence over vector-only additions. Requested
 ///   `yield_fields` must be non-empty and resolvable on both indexes. Field
 ///   existence is enforced at planning; this layer only enforces
 ///   non-emptiness so an unconstrained fusion cannot enter the chain.

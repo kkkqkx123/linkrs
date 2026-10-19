@@ -62,13 +62,26 @@ impl Planner for FulltextSearchPlanner {
             // DROP/ALTER/SHOW/DESCRIBE/SEARCH variants have no bound
             // representation yet and still use the AST path.
             _ => {
-                let validated = ctx.validated.ok_or_else(|| {
-                    PlannerError::PlanGenerationFailed(
-                        "FulltextSearchPlanner requires a validated statement for AST fallback"
-                            .to_string(),
-                    )
-                })?;
-                return self.transform(validated, qctx);
+                let stmt = match bound {
+                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
+                    _ => {
+                        return Err(PlannerError::PlanGenerationFailed(
+                            "FulltextSearchPlanner requires a bound AST statement for fallback"
+                                .to_string(),
+                        ));
+                    }
+                };
+                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
+                    stmt.clone(),
+                    Arc::new(
+                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                    ),
+                ));
+                let validated = crate::binder::validation::ValidatedStatement::new(
+                    ast,
+                    crate::binder::validation::ValidationInfo::new(),
+                );
+                return self.transform(&validated, qctx);
             }
         };
 
@@ -114,27 +127,7 @@ impl Planner for FulltextSearchPlanner {
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        self.transform_impl(validated, qctx, self.metadata_context.as_deref())
-    }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(
-            stmt,
-            Stmt::CreateFulltextIndex(_)
-                | Stmt::DropFulltextIndex(_)
-                | Stmt::AlterFulltextIndex(_)
-                | Stmt::ShowFulltextIndex(_)
-                | Stmt::DescribeFulltextIndex(_)
-                | Stmt::Search(_)
-                | Stmt::LookupFulltext(_)
-                | Stmt::MatchFulltext(_)
-        )
-    }
 }
 
 impl FulltextSearchPlanner {
@@ -771,35 +764,6 @@ mod tests {
         assert!(planner.metadata_context.is_some());
     }
 
-    #[test]
-    fn test_match_planner() {
-        let planner = FulltextSearchPlanner::new();
-
-        let create_stmt = Stmt::CreateFulltextIndex(CreateFulltextIndex {
-            span: Span::default(),
-            index_name: "idx".to_string(),
-            schema_name: "tag".to_string(),
-            fields: vec![IndexFieldDef {
-                field_name: "content".to_string(),
-                analyzer: None,
-                boost: None,
-            }],
-            engine_type: FulltextEngineType::Bm25,
-            options: IndexOptions {
-                bm25_config: None,
-                common_options: std::collections::HashMap::new(),
-            },
-            if_not_exists: false,
-        });
-        assert!(planner.match_planner(&create_stmt));
-
-        let drop_stmt = Stmt::DropFulltextIndex(DropFulltextIndex {
-            span: Span::default(),
-            index_name: "idx".to_string(),
-            if_exists: false,
-        });
-        assert!(planner.match_planner(&drop_stmt));
-    }
 
     #[test]
     fn test_create_accepts_vertex_tag_and_edge_type() {

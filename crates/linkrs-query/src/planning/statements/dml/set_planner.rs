@@ -74,8 +74,6 @@ impl Planner for SetPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let set = match bound {
             BoundStatement::Set(s) => s,
             _ => {
@@ -88,24 +86,6 @@ impl Planner for SetPlanner {
         // Unified entry for expression-level EXISTS / IN (mirrors
         // `transform`): the bound path must also reject subqueries in SET
         // values at planning time with the precise error.
-        if let Some(validated_stmt) = validated {
-            let set_stmt = self.extract_set_stmt(validated_stmt.stmt())?;
-            let check_space_id = qctx.space_id().unwrap_or(1);
-            let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-            let outer_col_names: Vec<String> = Vec::new();
-            for assignment in &set_stmt.assignments {
-                if let Some(expr_meta) = assignment.value.expression() {
-                    exists_planner::check_expression_subqueries(
-                        expr_meta.inner(),
-                        &qctx,
-                        check_space_id,
-                        &check_space_name,
-                        &outer_col_names,
-                    )?;
-                }
-            }
-        }
-
         let space_name = qctx
             .space_name()
             .map(|s| s.to_string())
@@ -185,84 +165,7 @@ impl Planner for SetPlanner {
         ));
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let set_stmt = self.extract_set_stmt(validated.stmt())?;
 
-        // Unified entry for expression-level EXISTS / IN: subqueries in SET
-        // value expressions are rejected at planning time with a precise
-        // error.
-        let check_space_id = qctx.space_id().unwrap_or(1);
-        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let outer_col_names: Vec<String> = Vec::new();
-        for assignment in &set_stmt.assignments {
-            if let Some(expr_meta) = assignment.value.expression() {
-                exists_planner::check_expression_subqueries(
-                    expr_meta.inner(),
-                    &qctx,
-                    check_space_id,
-                    &check_space_name,
-                    &outer_col_names,
-                )?;
-            }
-        }
-
-        // Get current space name from query context
-        let space_name = qctx
-            .space_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "default".to_string());
-
-        // Check if this is a direct vertex property update (e.g., SET 1.age = 31)
-        // or a variable-based update (e.g., SET p.age = 26)
-        let mut vertex_updates: Vec<VertexUpdateInfo> = Vec::new();
-        let mut variable_assignments: Vec<(String, ContextualExpression)> = Vec::new();
-
-        for assignment in &set_stmt.assignments {
-            if let Some(ref target) = assignment.target {
-                // This is a direct property access like "1.age"
-                // Extract vertex ID from the target expression
-                if let Some(vertex_id_expr) = self.extract_vertex_id(target) {
-                    // Create properties map
-                    let mut properties = HashMap::new();
-                    properties.insert(assignment.property.clone(), assignment.value.clone());
-
-                    let vertex_update = VertexUpdateInfo {
-                        space_name: space_name.clone(),
-                        vertex_id: vertex_id_expr,
-                        tag_name: None, // Will be determined at execution time
-                        properties,
-                        condition: None,
-                        is_upsert: false,
-                        replace_properties: assignment.is_map_overwrite,
-                    };
-                    vertex_updates.push(vertex_update);
-                } else {
-                    // Fallback to variable assignment
-                    variable_assignments
-                        .push((assignment.property.clone(), assignment.value.clone()));
-                }
-            } else {
-                // This is a variable assignment like "p.age" where p is a variable
-                variable_assignments.push((assignment.property.clone(), assignment.value.clone()));
-            }
-        }
-
-        // Standalone SET has no upstream row stream and therefore no tag
-        // context. Every assignment form is rejected explicitly instead of
-        // being materialized as a storage-less Assign node.
-        return Err(PlannerError::PlanGenerationFailed(
-            "standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead"
-                .to_string(),
-        ));
-    }
-
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Set(_))
-    }
 }
 
 impl Default for SetPlanner {

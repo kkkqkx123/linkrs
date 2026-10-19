@@ -29,45 +29,6 @@ impl AssignVariablePlanner {
 }
 
 impl Planner for AssignVariablePlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let assign = match validated.stmt() {
-            Stmt::AssignVariable(assign) => assign,
-            _ => {
-                return Err(PlannerError::PlanGenerationFailed(
-                    "statement does not contain a LET assignment".to_string(),
-                ));
-            }
-        };
-
-        let start_node = StartNode::new();
-        let current_node = PlanNodeEnum::Start(start_node.clone());
-
-        let yield_column = YieldColumn {
-            expression: assign.expression.clone(),
-            alias: assign.name.clone(),
-        };
-        let project_node = ProjectNode::new(current_node.clone(), vec![yield_column.clone()])
-            .map_err(|e| {
-                PlannerError::PlanGenerationFailed(format!("Failed to create ProjectNode: {}", e))
-            })?;
-        let current_node = PlanNodeEnum::Project(project_node);
-        let logical_root = wrap_logical_project(
-            logical_start_root(),
-            vec![yield_column],
-            current_node.col_names().to_vec(),
-        );
-
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(PlanNodeEnum::Start(start_node)),
-            logical_root: Some(logical_root),
-        };
-        Ok(sub_plan)
-    }
 
     fn plan_bound(
         &mut self,
@@ -76,8 +37,6 @@ impl Planner for AssignVariablePlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let assign = match bound {
             BoundStatement::AssignVariable(a) => a,
             _ => {
@@ -120,9 +79,6 @@ impl Planner for AssignVariablePlanner {
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::AssignVariable(_))
-    }
 }
 
 impl Default for AssignVariablePlanner {

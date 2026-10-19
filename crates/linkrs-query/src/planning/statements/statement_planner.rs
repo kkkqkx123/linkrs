@@ -86,9 +86,6 @@ mod tests {
             })
         }
 
-        fn match_planner(&self, _stmt: &Stmt) -> bool {
-            true
-        }
     }
 
     impl StatementPlanner for MockStatementPlanner {
@@ -191,12 +188,6 @@ mod tests {
         assert!(sub_plan.tail.is_some());
     }
 
-    #[test]
-    fn test_statement_planner_match_planner() {
-        let planner = MockStatementPlanner::new("MATCH", vec![CypherClauseKind::Match]);
-        let ast = create_test_match_stmt();
-        assert!(planner.match_planner(&ast.stmt));
-    }
 
     #[test]
     fn test_clause_planner_clause_kind() {

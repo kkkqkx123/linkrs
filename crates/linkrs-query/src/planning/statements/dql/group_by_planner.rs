@@ -212,208 +212,6 @@ impl GroupByPlanner {
 }
 
 impl Planner for GroupByPlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let group_by_stmt = match validated.stmt() {
-            Stmt::GroupBy(group_by_stmt) => group_by_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "GroupByPlanner requires the GroupBy statement.".to_string(),
-                ));
-            }
-        };
-
-        // The group keys resolve against the input columns by name, e.g.
-        // GROUP BY city produces the key "city".
-        let num_group_items = group_by_stmt.group_items.len();
-        let group_keys: Vec<String> = group_by_stmt
-            .group_items
-            .iter()
-            .map(|item| item.to_expression_string())
-            .collect();
-
-        // Unified entry for expression-level EXISTS / IN. GROUP BY yield
-        // expressions run inside the blocking aggregate operator (no subquery
-        // executor yet), so they are refused at planning time with a precise
-        // error; HAVING subqueries are compiled here and attached to the
-        // HAVING Filter node.
-        let space_id = qctx.space_id().unwrap_or(1);
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let outer_col_names = group_keys.clone();
-        for item in &group_by_stmt.yield_clause.items {
-            if let Some(expr_meta) = item.expression.expression() {
-                exists_planner::check_expression_subqueries(
-                    expr_meta.inner(),
-                    &qctx,
-                    space_id,
-                    &space_name,
-                    &outer_col_names,
-                )?;
-            }
-        }
-        let mut having_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
-        let having_clause = group_by_stmt.having_clause.clone().map(|mut expr| {
-            let subqueries = exists_planner::plan_contextual_subqueries(
-                &mut expr,
-                &qctx,
-                space_id,
-                &space_name,
-                &outer_col_names,
-                &mut exists_planner::SubqueryIdAllocator::new(),
-            )?;
-            having_subqueries = subqueries;
-            Ok::<_, PlannerError>(expr)
-        });
-        let having_clause = match having_clause {
-            Some(Ok(expr)) => Some(expr),
-            Some(Err(error)) => return Err(error),
-            None => None,
-        };
-
-        // Extract the aggregate functions with distinct flags, filters, and args
-        let mut aggregation_functions = Vec::new();
-        let mut aggregation_args = Vec::new();
-        let mut aggregation_distinct = Vec::new();
-        let mut aggregation_filters = Vec::new();
-        for item in &group_by_stmt.yield_clause.items {
-            let funcs = self.extract_aggregate_functions(&item.expression);
-            for (func, distinct, filter) in funcs {
-                aggregation_functions.push(func);
-                aggregation_distinct.push(distinct);
-                aggregation_filters.push(filter);
-            }
-            // Also extract the args from the Expression::Aggregate nodes
-            if let Some(expr_meta) = item.expression.expression() {
-                Self::collect_aggregate_args_recursive(expr_meta.inner(), &mut aggregation_args);
-            }
-        }
-
-        // Build the input plan. A standalone GROUP BY aggregates over every
-        // vertex of the current space; when the GROUP BY is the right side of
-        // a pipe, PipePlanner replaces this adapter with the piped rows.
-        let (input_enum, input_tail, mut current_logical) = self.build_standalone_input(
-            Some(validated),
-            &group_keys,
-            &aggregation_functions,
-            &aggregation_args,
-            qctx,
-        )?;
-
-        // Generate grouping sets from GroupingType
-        let grouping_sets = match &group_by_stmt.grouping_type {
-            GroupingType::Standard => Vec::new(),
-            GroupingType::Rollup(_) => {
-                // ROLLUP(a, b, c) -> (a,b,c), (a,b), (a), ()
-                let mut sets: Vec<Vec<String>> = Vec::new();
-                for i in (0..=num_group_items).rev() {
-                    sets.push(group_keys[0..i].to_vec());
-                }
-                sets
-            }
-            GroupingType::Cube(_) => {
-                // CUBE(a, b) -> (a,b), (a), (b), ()
-                let mut sets: Vec<Vec<String>> = Vec::new();
-                for mask in 0..(1u32 << num_group_items) {
-                    let mut set = Vec::new();
-                    for (i, _) in group_keys.iter().enumerate().take(num_group_items) {
-                        if mask & (1 << i) != 0 {
-                            set.push(group_keys[i].clone());
-                        }
-                    }
-                    // Sort by original position for deterministic order: larger sets first
-                    if !set.is_empty() {
-                        sets.push(set);
-                    }
-                }
-                sets.push(Vec::new());
-                // Sort descending by number of keys
-                sets.sort_by_key(|b| std::cmp::Reverse(b.len()));
-                sets.dedup();
-                sets
-            }
-            GroupingType::GroupingSets(sets) => {
-                // GROUPING SETS preserves the user's explicit sets
-                // Convert the expressions to string keys using their indices in group_items
-                sets.iter()
-                    .map(|exprs| {
-                        exprs
-                            .iter()
-                            .filter_map(|e| {
-                                // Find the expression's index in the original group_items and use the corresponding key name
-                                let expr_str = e.expression().map(|m| m.inner().to_string());
-                                group_by_stmt
-                                    .group_items
-                                    .iter()
-                                    .position(|gi| {
-                                        gi.expression().map(|m| m.inner().to_string()) == expr_str
-                                    })
-                                    .map(|idx| format!("group_key_{}", idx))
-                            })
-                            .collect()
-                    })
-                    .filter(|set: &Vec<String>| !set.is_empty() || sets.is_empty())
-                    .collect()
-            }
-        };
-
-        // Create an aggregate node.
-        let mut aggregate_node = AggregateNode::new(
-            input_enum.clone(),
-            group_keys.clone(),
-            aggregation_functions,
-        )
-        .map_err(|e| {
-            PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
-        })?;
-        aggregate_node.set_aggregation_args(aggregation_args);
-        aggregate_node.set_aggregation_distinct(aggregation_distinct);
-        aggregate_node.set_aggregation_filters(aggregation_filters);
-        aggregate_node.set_grouping_sets(grouping_sets);
-
-        let mut final_node = PlanNodeEnum::Aggregate(aggregate_node);
-        if let PlanNodeEnum::Aggregate(ref aggregate) = final_node {
-            current_logical = aggregate_mirror(
-                aggregate,
-                current_logical,
-                group_keys
-                    .iter()
-                    .map(|key| {
-                        to_contextual(Expression::Variable(key.clone()), validated.expr_context())
-                    })
-                    .collect(),
-            );
-        }
-
-        // If there is a HAVING clause, add a FilterNode.
-        if let Some(having_expr) = having_clause {
-            let filter_node = FilterNode::new(final_node.clone(), having_expr.clone())
-                .map_err(|e| {
-                    PlannerError::PlanGenerationFailed(format!(
-                        "Failed to create FilterNode: {}",
-                        e
-                    ))
-                })?
-                .with_subqueries(having_subqueries);
-            final_node = PlanNodeEnum::Filter(filter_node);
-            current_logical = wrap_logical_filter(
-                current_logical,
-                having_expr,
-                final_node.col_names().to_vec(),
-            );
-        }
-
-        // Create a SubPlan
-        let sub_plan = SubPlan {
-            root: Some(final_node),
-            tail: Some(input_tail),
-            logical_root: Some(current_logical),
-        };
-
-        Ok(sub_plan)
-    }
 
     fn plan_bound(
         &mut self,
@@ -422,8 +220,6 @@ impl Planner for GroupByPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let group_by = match bound {
             BoundStatement::GroupBy(g) => g,
             _ => {
@@ -496,7 +292,7 @@ impl Planner for GroupByPlanner {
         // legacy transform path. When the GROUP BY is a pipe stage,
         // PipePlanner replaces this adapter with the piped rows.
         let (input_enum, input_tail, input_logical) = self.build_standalone_input(
-            validated,
+            None,
             &group_keys,
             &aggregation_functions,
             &aggregation_args,
@@ -532,9 +328,6 @@ impl Planner for GroupByPlanner {
         Ok(sub_plan)
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::GroupBy(_))
-    }
 }
 
 impl GroupByPlanner {

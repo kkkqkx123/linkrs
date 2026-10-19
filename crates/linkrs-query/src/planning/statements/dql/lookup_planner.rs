@@ -43,26 +43,6 @@ impl LookupPlanner {
 }
 
 impl Planner for LookupPlanner {
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let lookup_stmt = match validated.stmt() {
-            Stmt::Lookup(lookup_stmt) => lookup_stmt,
-            _ => {
-                return Err(PlannerError::InvalidOperation(
-                    "LookupPlanner requires the Lookup statement.".to_string(),
-                ));
-            }
-        };
-
-        let is_edge = matches!(
-            lookup_stmt.target,
-            crate::parser::ast::LookupTarget::Edge(_)
-        );
-        self.plan_lookup(validated, qctx, None, is_edge, 0)
-    }
 
     fn plan_bound(
         &mut self,
@@ -71,8 +51,6 @@ impl Planner for LookupPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let lookup = match bound {
             BoundStatement::Lookup(l) => l,
             _ => {
@@ -93,13 +71,9 @@ impl Planner for LookupPlanner {
         );
 
         // Convert bound where clause to ContextualExpression for index selection
-        let expr_ctx = validated
-            .map(|v| v.expr_context().clone())
-            .unwrap_or_else(|| {
-                Arc::new(
-                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                )
-            });
+        let expr_ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
         let where_ctx = lookup
             .where_clause
             .as_ref()
@@ -130,16 +104,13 @@ impl Planner for LookupPlanner {
         self.plan_lookup_bound(
             lookup,
             qctx,
-            validated,
+            None,
             selected_index.as_ref(),
             tag_id,
             where_ctx,
         )
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Lookup(_))
-    }
 }
 
 impl LookupPlanner {
@@ -422,13 +393,9 @@ impl LookupPlanner {
         lookup: &crate::binder::bound::BoundLookupStatement,
         validated: Option<&ValidatedStatement>,
     ) -> Result<Vec<linkrs_core::YieldColumn>, PlannerError> {
-        let expr_ctx = validated
-            .map(|v| v.expr_context().clone())
-            .unwrap_or_else(|| {
-                Arc::new(
-                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                )
-            });
+        let expr_ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
         let mut columns = Vec::new();
 
         if let Some(ref yield_clause) = lookup.yield_clause {

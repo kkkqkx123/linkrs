@@ -127,7 +127,6 @@ impl Planner for InsertPlanner {
 
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let validated = ctx.validated;
         let insert = match bound {
             crate::binder::BoundStatement::Insert(i) => i,
             _ => {
@@ -141,9 +140,7 @@ impl Planner for InsertPlanner {
         // Bound expressions are converted back into contextual expressions so
         // downstream plan nodes keep the same shape as the AST path. The
         // validated expression context is still required as the id registry.
-        let expr_ctx = validated
-            .map(|v| v.expr_context().clone())
-            .unwrap_or_else(|| Arc::new(ExpressionAnalysisContext::new()));
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let convert = |bound_expr: &BoundExpression| {
             crate::binder::expr_converter::bound_expr_to_contextual(bound_expr, &expr_ctx)
                 .map_err(PlannerError::PlanGenerationFailed)
@@ -250,129 +247,7 @@ impl Planner for InsertPlanner {
         Ok(SubPlan::from_logical_root(insert_node))
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        // Obtain the space name
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
 
-        // Use the verification information to optimize the planning process.
-        let validation_info = &validated.validation_info;
-
-        // Check the semantic information.
-        let referenced_tags = &validation_info.semantic_info.referenced_tags;
-        if !referenced_tags.is_empty() {
-            log::debug!("INSERT references the tag: {:?}", referenced_tags);
-        }
-
-        let referenced_edges = &validation_info.semantic_info.referenced_edges;
-        if !referenced_edges.is_empty() {
-            log::debug!("INSERT referenced edge type: {:?}", referenced_edges);
-        }
-
-        // Extract the INSERT statement
-        let insert_stmt = self.extract_insert_stmt(validated.stmt())?;
-
-        // Unified entry for expression-level EXISTS / IN: subqueries in
-        // INSERT value expressions are rejected at planning time with a
-        // precise error.
-        let check_space_id = qctx.space_id().unwrap_or(1);
-        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let outer_col_names: Vec<String> = Vec::new();
-        match &insert_stmt.target {
-            InsertTarget::Vertices { values, .. } => {
-                for row in values {
-                    for expr in std::iter::once(&row.vid).chain(row.values.iter()) {
-                        if let Some(expr_meta) = expr.expression() {
-                            exists_planner::check_expression_subqueries(
-                                expr_meta.inner(),
-                                &qctx,
-                                check_space_id,
-                                &check_space_name,
-                                &outer_col_names,
-                            )?;
-                        }
-                    }
-                }
-            }
-            InsertTarget::Edge { edges, .. } => {
-                for (src, dst, rank, prop_values) in edges {
-                    for expr in std::iter::once(src)
-                        .chain(std::iter::once(dst))
-                        .chain(rank.iter())
-                        .chain(prop_values.iter())
-                    {
-                        if let Some(expr_meta) = expr.expression() {
-                            exists_planner::check_expression_subqueries(
-                                expr_meta.inner(),
-                                &qctx,
-                                check_space_id,
-                                &check_space_name,
-                                &outer_col_names,
-                            )?;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Create the corresponding insertion nodes based on the type of the INSERT target.
-        let (insert_node, _inserted_count) = match &insert_stmt.target {
-            InsertTarget::Vertices { tag, values } => {
-                let count = values.len();
-                let info = self.build_vertex_insert_info(
-                    space_name,
-                    tag.clone(),
-                    values.clone(),
-                    insert_stmt.if_not_exists,
-                )?;
-                (
-                    LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
-                        id: next_node_id(),
-                        info,
-                        output_var: None,
-                        col_names: vec!["inserted".to_string()],
-                        column_types: vec![],
-                    }),
-                    count,
-                )
-            }
-            InsertTarget::Edge {
-                edge_name,
-                prop_names,
-                edges,
-            } => {
-                let count = edges.len();
-                let info = self.build_edge_insert_info(
-                    space_name,
-                    edge_name.clone(),
-                    prop_names.clone(),
-                    edges.clone(),
-                    insert_stmt.if_not_exists,
-                );
-                (
-                    LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
-                        id: next_node_id(),
-                        info,
-                        output_var: None,
-                        col_names: vec!["inserted".to_string()],
-                        column_types: vec![],
-                    }),
-                    count,
-                )
-            }
-        };
-
-        // InsertVertices/InsertEdges is the root node; the executor returns
-        // the count summary directly, so no projection node is needed.
-        Ok(SubPlan::from_logical_root(insert_node))
-    }
-
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        Self::match_stmt(stmt)
-    }
 }
 
 impl Default for InsertPlanner {
@@ -435,7 +310,6 @@ mod tests {
                 values: vec![lit(Value::string("Alice")), lit(Value::Int(30))],
             }],
         });
-        assert!(planner.match_planner(&ast.stmt));
     }
 
     #[test]
@@ -636,6 +510,5 @@ mod tests {
             },
             values: vec![],
         });
-        assert!(planner.match_planner(&ast.stmt));
     }
 }

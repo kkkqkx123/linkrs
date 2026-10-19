@@ -51,8 +51,6 @@ impl Planner for DeletePlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let delete = match bound {
             BoundStatement::Delete(d) => d,
             _ => {
@@ -151,17 +149,7 @@ impl Planner for DeletePlanner {
         Ok(SubPlan::from_logical_root(final_node))
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        self.transform_with_input(validated, qctx, None)
-    }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Delete(_))
-    }
 }
 
 impl DeletePlanner {

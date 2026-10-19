@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use crate::binder::BoundStatement;
+use crate::binder::Binder;
 use crate::parser::ast::Stmt;
 use crate::planning::context::PlanContext;
 use crate::planning::plan::SubPlan;
@@ -87,14 +88,26 @@ pub trait Planner: std::fmt::Debug {
     /// # Parameters
     /// `validated`: A verified statement that contains ValidationInfo and Ast.
     /// `qctx`: Query context
+
+
     fn transform(
         &mut self,
         validated: &ValidatedStatement,
         qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError>;
-
-    /// Check whether this planner can handle the given sentence.
-    fn match_planner(&self, stmt: &Stmt) -> bool;
+    ) -> Result<SubPlan, PlannerError> {
+        let space_name = qctx.space_name();
+        let space_id = qctx.space_id().unwrap_or(0);
+        let binder = Binder::new().with_space(space_name, space_id);
+        let bound = binder
+            .bind(validated.ast.clone())
+            .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
+        let ctx = PlanContext {
+            bound: &bound,
+            qctx,
+            metadata: None,
+        };
+        self.plan_bound(&ctx)
+    }
 
     /// Translate a bound statement directly into a plan sub-tree.
     ///

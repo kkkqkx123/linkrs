@@ -43,7 +43,6 @@ impl Planner for MaintainPlanner {
     ) -> Result<SubPlan, PlannerError> {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
-        let validated = ctx.validated;
         let space = qctx
             .space_name()
             .or_else(|| qctx.request_context().space_name.clone())
@@ -62,160 +61,33 @@ impl Planner for MaintainPlanner {
             BoundStatement::Savepoint(s) => system::plan_savepoint(&s.name),
             BoundStatement::ReleaseSavepoint(s) => system::plan_release_savepoint(&s.name),
             _ => {
-                let validated = validated.ok_or_else(|| {
-                    PlannerError::PlanGenerationFailed(
-                        "MaintainPlanner requires a validated statement for AST fallback"
-                            .to_string(),
-                    )
-                })?;
-                return self.transform(validated, qctx);
+                let stmt = match bound {
+                    crate::binder::BoundStatement::Other(s) => s.as_ref(),
+                    _ => {
+                        return Err(PlannerError::PlanGenerationFailed(
+                            "MaintainPlanner requires a bound AST statement for fallback"
+                                .to_string(),
+                        ));
+                    }
+                };
+                let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
+                    stmt.clone(),
+                    Arc::new(
+                        linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                    ),
+                ));
+                let validated = crate::binder::validation::ValidatedStatement::new(
+                    ast,
+                    crate::binder::validation::ValidationInfo::new(),
+                );
+                return self.transform(&validated, qctx);
             }
         };
 
         Ok(SubPlan::from_single_node(final_node))
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let stmt = validated.stmt();
-        let current_space = self.current_space(validated);
 
-        let final_node = match stmt {
-            Stmt::Show(show_stmt) => self.plan_show(&show_stmt.target, &current_space),
-
-            Stmt::ShowCreate(show_create_stmt) => {
-                self.plan_show_create(&show_create_stmt.target, &current_space)
-            }
-
-            Stmt::Create(create_stmt) => {
-                if let Some(node) = self.plan_create(
-                    &create_stmt.target,
-                    create_stmt.if_not_exists,
-                    &current_space,
-                )? {
-                    return Ok(SubPlan::from_single_node(node));
-                }
-                return Err(PlannerError::UnsupportedOperation(
-                    "Create target is not supported by MaintainPlanner".to_string(),
-                ));
-            }
-
-            Stmt::CreateMacro(create_macro_stmt) => {
-                let node = self.plan_create_macro(create_macro_stmt)?;
-                return Ok(SubPlan::from_single_node(node));
-            }
-
-            Stmt::DropMacro(drop_macro_stmt) => self.plan_drop_macro(drop_macro_stmt),
-
-            Stmt::CreateType(create_type_stmt) => {
-                let node = self.plan_create_type(create_type_stmt)?;
-                return Ok(SubPlan::from_single_node(node));
-            }
-
-            Stmt::DropType(drop_type_stmt) => self.plan_drop_type(drop_type_stmt),
-
-            Stmt::Alter(alter_stmt) => self.plan_alter(&alter_stmt.target, &current_space)?,
-
-            Stmt::ClearSpace(clear_stmt) => system::plan_clear_space(&clear_stmt.space_name),
-
-            Stmt::Desc(desc_stmt) => self.plan_desc(&desc_stmt.target, &current_space),
-
-            Stmt::ShowConfigs(show_configs_stmt) => system::plan_show_configs(show_configs_stmt),
-
-            Stmt::ShowQueries(_) => system::plan_show_queries(),
-
-            Stmt::ShowSessions(_) => system::plan_show_sessions(),
-
-            Stmt::KillQuery(_) => {
-                return Err(PlannerError::UnsupportedOperation(
-                    "KILL QUERY executes in the network service against live query tracking and is not plannable here; use the unary query endpoint with a query id from SHOW QUERIES".to_string(),
-                ));
-            }
-
-            Stmt::BeginTransaction(_) => system::plan_begin_transaction(),
-
-            Stmt::CommitTransaction(_) => system::plan_commit(),
-
-            Stmt::RollbackTransaction(rollback_stmt) => {
-                system::plan_rollback(rollback_stmt.savepoint_name.as_ref())
-            }
-
-            Stmt::Savepoint(savepoint_stmt) => system::plan_savepoint(&savepoint_stmt.name),
-
-            Stmt::ReleaseSavepoint(release_stmt) => {
-                system::plan_release_savepoint(&release_stmt.name)
-            }
-
-            Stmt::Drop(drop_stmt) => {
-                self.plan_drop(&drop_stmt.target, drop_stmt.if_exists, &current_space)?
-            }
-
-            Stmt::Migrate(_) => system::plan_migrate(),
-
-            Stmt::Checkpoint(_) => system::plan_checkpoint(),
-
-            Stmt::PurgeExpired(purge_stmt) => {
-                system::plan_purge_expired(&purge_stmt.space_name, purge_stmt.target.as_ref())
-            }
-
-            Stmt::ExportDatabase(export_stmt) => system::plan_export_database(export_stmt),
-
-            Stmt::ImportDatabase(import_stmt) => system::plan_import_database(import_stmt),
-
-            Stmt::AttachDatabase(attach_stmt) => system::plan_attach_database(attach_stmt),
-
-            Stmt::DetachDatabase(detach_stmt) => system::plan_detach_database(detach_stmt),
-
-            Stmt::LoadFrom(load_stmt) => {
-                return system::plan_load_from(load_stmt, validated, qctx);
-            }
-
-            Stmt::InQueryCall(call_stmt) => system::plan_in_query_call(call_stmt),
-
-            _ => {
-                return Err(PlannerError::UnsupportedOperation(format!(
-                    "Statement {:?} is not supported by MaintainPlanner",
-                    stmt
-                )));
-            }
-        };
-
-        let sub_plan = SubPlan::from_single_node(final_node);
-        Ok(sub_plan)
-    }
-
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(
-            stmt,
-            Stmt::Show(_)
-                | Stmt::ShowCreate(_)
-                | Stmt::Create(_)
-                | Stmt::Alter(_)
-                | Stmt::ClearSpace(_)
-                | Stmt::Desc(_)
-                | Stmt::Drop(_)
-                | Stmt::ShowConfigs(_)
-                | Stmt::ShowQueries(_)
-                | Stmt::ShowSessions(_)
-                | Stmt::BeginTransaction(_)
-                | Stmt::CommitTransaction(_)
-                | Stmt::RollbackTransaction(_)
-                | Stmt::Savepoint(_)
-                | Stmt::ReleaseSavepoint(_)
-                | Stmt::Migrate(_)
-                | Stmt::Checkpoint(_)
-                | Stmt::PurgeExpired(_)
-                | Stmt::ExportDatabase(_)
-                | Stmt::ImportDatabase(_)
-                | Stmt::AttachDatabase(_)
-                | Stmt::DetachDatabase(_)
-                | Stmt::LoadFrom(_)
-                | Stmt::InQueryCall(_)
-        )
-    }
 }
 
 impl Default for MaintainPlanner {

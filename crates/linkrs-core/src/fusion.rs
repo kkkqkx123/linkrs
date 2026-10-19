@@ -15,20 +15,22 @@ use std::collections::HashMap;
 /// to `limit` entries.
 pub fn rrf_fuse(lists: &[Vec<SearchHit>], k: u32, limit: usize) -> Vec<SearchHit> {
     let shift = k as f32;
-    let mut totals: HashMap<&str, (f32, &SearchHit)> = HashMap::new();
+    // Track every contributing hit per id so highlight/payload/source can be
+    // merged instead of silently dropping the non-base branch's data.
+    let mut totals: HashMap<String, (f32, Vec<&SearchHit>)> = HashMap::new();
     for list in lists {
         for (position, hit) in list.iter().enumerate() {
             let rank = position as f32 + 1.0;
-            let entry = totals.entry(hit.id.as_str()).or_insert((0.0, hit));
+            let entry = totals
+                .entry(hit.id.clone())
+                .or_insert_with(|| (0.0, Vec::new()));
             entry.0 += 1.0 / (shift + rank);
+            entry.1.push(hit);
         }
     }
     let mut fused: Vec<SearchHit> = totals
         .into_iter()
-        .map(|(_, (score, hit))| SearchHit {
-            score,
-            ..hit.clone()
-        })
+        .map(|(id, (score, hits))| merge_hits(&id, score, &hits))
         .collect();
     fused.sort_by(|a, b| b.score.total_cmp(&a.score));
     fused.truncate(limit);
@@ -49,25 +51,88 @@ pub fn weighted_fuse(
     let weight = alpha.clamp(0.0, 1.0);
     let vector_norm = normalize(vector);
     let fulltext_norm = normalize(fulltext);
-    let mut totals: HashMap<&str, (f32, &SearchHit)> = HashMap::new();
-    for (id, score) in &vector_norm {
-        let entry = totals.entry(id.as_str()).or_insert((0.0, fulltext.iter().find(|h| h.id == *id).unwrap_or_else(|| vector.iter().find(|h| h.id == *id).unwrap())));
-        entry.0 += weight * score;
+
+    // Collect the contributing hit references per id, preferring fulltext as
+    // the base carrier but retaining vector-only payload.
+    let mut by_id: HashMap<String, (Option<&SearchHit>, Option<&SearchHit>)> = HashMap::new();
+    for hit in vector {
+        by_id.entry(hit.id.clone()).or_default().0 = Some(hit);
     }
-    for (id, score) in &fulltext_norm {
-        let entry = totals.entry(id.as_str()).or_insert((0.0, fulltext.iter().find(|h| h.id == *id).unwrap_or_else(|| vector.iter().find(|h| h.id == *id).unwrap())));
-        entry.0 += (1.0 - weight) * score;
+    for hit in fulltext {
+        by_id.entry(hit.id.clone()).or_default().1 = Some(hit);
     }
-    let mut fused: Vec<SearchHit> = totals
+
+    let mut fused: Vec<SearchHit> = by_id
         .into_iter()
-        .map(|(_, (score, hit))| SearchHit {
-            score,
-            ..hit.clone()
+        .map(|(id, (v_hit, f_hit))| {
+            let vscore = vector_norm
+                .iter()
+                .find(|(hid, _)| hid == &id)
+                .map(|(_, s)| *s)
+                .unwrap_or(0.0);
+            let fscore = fulltext_norm
+                .iter()
+                .find(|(hid, _)| hid == &id)
+                .map(|(_, s)| *s)
+                .unwrap_or(0.0);
+            let score = weight * vscore + (1.0 - weight) * fscore;
+            let mut hits: Vec<&SearchHit> = Vec::new();
+            if let Some(h) = f_hit {
+                hits.push(h);
+            }
+            if let Some(h) = v_hit {
+                hits.push(h);
+            }
+            if hits.is_empty() {
+                // Should not happen: by_id only contains seen hits.
+                return SearchHit::new(id, score);
+            }
+            merge_hits(&id, score, &hits)
         })
         .collect();
     fused.sort_by(|a, b| b.score.total_cmp(&a.score));
     fused.truncate(limit);
     fused
+}
+
+/// Merge highlight/payload/source data from multiple contributing hits into
+/// one fused row.
+///
+/// The first hit in `hits` is the base carrier (fulltext first in the
+/// hybrid chain). Highlights, source, and any payload keys already present
+/// on the base are preserved; payload keys present only on later hits (e.g.
+/// vector-only fields) are added without overwriting existing values.
+fn merge_hits(id: &str, score: f32, hits: &[&SearchHit]) -> SearchHit {
+    let mut highlights = None;
+    let mut payload: Option<HashMap<String, crate::Value>> = None;
+    let mut source = None;
+    for hit in hits {
+        if highlights.is_none() {
+            highlights = hit.highlights.clone();
+        }
+        if source.is_none() {
+            source = hit.source.clone();
+        }
+        if let Some(hp) = &hit.payload {
+            match payload.as_mut() {
+                Some(p) => {
+                    for (k, v) in hp {
+                        p.entry(k.clone()).or_insert_with(|| v.clone());
+                    }
+                }
+                None => {
+                    payload = Some(hp.clone());
+                }
+            }
+        }
+    }
+    SearchHit {
+        id: id.to_string(),
+        score,
+        highlights,
+        payload,
+        source,
+    }
 }
 
 fn normalize(hits: &[SearchHit]) -> Vec<(String, f32)> {
@@ -177,4 +242,21 @@ mod tests {
         let escaped = normalize_vector_point_id("a%23b#Tag#bio", "Tag", "bio");
         assert_eq!(escaped, "a#b");
     }
+    #[test]
+    fn rrf_merges_payload_from_vector_into_fulltext_base() {
+        use std::collections::HashMap;
+        let mut vpayload = HashMap::new();
+        vpayload.insert("embedding".to_string(), crate::Value::Float(0.9));
+        let fulltext = vec![crate::types::search::SearchHit::new("doc-1", 3.0)
+            .with_highlights(vec!["snippet".to_string()])];
+        let vector = vec![crate::types::search::SearchHit::new("doc-1", 0.9)
+            .with_payload(vpayload)];
+        // normalize outside? fusion normalizes internally via query crate; core rrf uses ids as-is
+        let fused = rrf_fuse(&[fulltext, vector], 60, 10);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].id, "doc-1");
+        assert_eq!(fused[0].highlights.as_ref().unwrap(), &vec!["snippet".to_string()]);
+        assert!(fused[0].payload.as_ref().unwrap().contains_key("embedding"));
+    }
+
 }

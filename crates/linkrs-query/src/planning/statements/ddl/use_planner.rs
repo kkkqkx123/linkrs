@@ -34,8 +34,6 @@ impl Planner for UsePlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let space = match bound {
             BoundStatement::Use(u) => &u.space,
             _ => {
@@ -53,31 +51,7 @@ impl Planner for UsePlanner {
         Ok(sub_plan)
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        _qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let use_stmt = match validated.stmt() {
-            Stmt::Use(s) => s,
-            _ => {
-                return Err(PlannerError::PlanGenerationFailed(
-                    "statement does not contain the USE".to_string(),
-                ));
-            }
-        };
 
-        let arg_node = ArgumentNode::new(next_node_id(), "use_input");
-        let arg_node_enum = PlanNodeEnum::Argument(arg_node);
-        let switch_space_node = SwitchSpaceNode::new(next_node_id(), use_stmt.space.clone());
-        let final_node = PlanNodeEnum::SpaceManage(SpaceManageNode::Switch(switch_space_node));
-        let sub_plan = SubPlan::new(Some(final_node), Some(arg_node_enum));
-        Ok(sub_plan)
-    }
-
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Use(_))
-    }
 }
 
 impl Default for UsePlanner {

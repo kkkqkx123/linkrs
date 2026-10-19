@@ -124,17 +124,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     ))
                 })?;
 
-                // Build a lightweight ValidatedStatement for expression context (used
-                // by clause planners like MATCH that still need the AST expression
-                // analysis context for YIELD column construction).
-                let validated = super::prepared::build_validated_fallback(ast);
                 let metadata = self.build_metadata_context(&query_context, bound);
 
                 let ctx = crate::planning::context::PlanContext::new(
                     bound,
                     query_context.clone(),
                     metadata.as_ref(),
-                    Some(&validated),
                 );
                 planner_enum
                     .plan_bound(&ctx)

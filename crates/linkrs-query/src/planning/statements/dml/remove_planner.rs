@@ -42,8 +42,6 @@ impl Planner for RemovePlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         match bound {
             BoundStatement::Remove(_) => {}
             _ => {
@@ -60,24 +58,7 @@ impl Planner for RemovePlanner {
         ))
     }
 
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let _ = qctx;
-        let _ = self.extract_remove_stmt(validated.stmt())?;
 
-        // Standalone REMOVE has no storage write path yet: fail explicitly
-        // instead of producing a plan that only strips row columns.
-        Err(PlannerError::PlanGenerationFailed(
-            "REMOVE is not wired to storage yet".to_string(),
-        ))
-    }
-
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        matches!(stmt, Stmt::Remove(_))
-    }
 }
 
 impl Default for RemovePlanner {

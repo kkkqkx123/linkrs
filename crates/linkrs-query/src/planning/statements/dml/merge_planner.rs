@@ -527,8 +527,6 @@ impl Planner for MergePlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let validated = ctx.validated;
-        let _ = (&bound, &qctx, &metadata, &validated);
         let merge = match bound {
             BoundStatement::Merge(m) => m,
             _ => {
@@ -542,47 +540,7 @@ impl Planner for MergePlanner {
         // `transform`): the bound path must also reject subqueries in MERGE
         // pattern property values or ON MATCH / ON CREATE SET values at
         // planning time with the precise error.
-        let expr_ctx = validated
-            .map(|v| v.expr_context().clone())
-            .unwrap_or_else(|| Arc::new(ExpressionAnalysisContext::new()));
-        if let Some(validated_stmt) = validated {
-            let merge_stmt = self.extract_merge_stmt(validated_stmt.stmt())?;
-            let check_space_id = qctx.space_id().unwrap_or(1);
-            let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-            let outer_col_names: Vec<String> = Vec::new();
-            let pattern_props: Option<&ContextualExpression> = match &merge_stmt.pattern {
-                Pattern::Node(node_pattern) => node_pattern.properties.as_ref(),
-                Pattern::Edge(edge_pattern) => edge_pattern.properties.as_ref(),
-                _ => None,
-            };
-            if let Some(props_expr) = pattern_props {
-                if let Some(expr_meta) = props_expr.expression() {
-                    exists_planner::check_expression_subqueries(
-                        expr_meta.inner(),
-                        &qctx,
-                        check_space_id,
-                        &check_space_name,
-                        &outer_col_names,
-                    )?;
-                }
-            }
-            for set_clause in [&merge_stmt.on_match, &merge_stmt.on_create]
-                .into_iter()
-                .flatten()
-            {
-                for assignment in &set_clause.assignments {
-                    if let Some(expr_meta) = assignment.value.expression() {
-                        exists_planner::check_expression_subqueries(
-                            expr_meta.inner(),
-                            &qctx,
-                            check_space_id,
-                            &check_space_name,
-                            &outer_col_names,
-                        )?;
-                    }
-                }
-            }
-        }
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
 
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
 
@@ -647,162 +605,61 @@ impl Planner for MergePlanner {
                 let logical_root = LogicalNodeEnum::Select(select_node);
                 Ok(SubPlan::from_logical_root(logical_root))
             }
-            BoundMergePattern::Edge { .. } => {
-                // Edge MERGE still delegates to AST-based transform
-                let validated = validated.ok_or_else(|| {
-                    PlannerError::PlanGenerationFailed(
-                        "MergePlanner requires a validated statement for edge MERGE fallback"
-                            .to_string(),
-                    )
-                })?;
-                self.transform(validated, qctx)
-            }
-        }
-    }
-
-    fn transform(
-        &mut self,
-        validated: &ValidatedStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Result<SubPlan, PlannerError> {
-        let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-
-        let validation_info = &validated.validation_info;
-
-        let referenced_tags = &validation_info.semantic_info.referenced_tags;
-        if !referenced_tags.is_empty() {
-            log::debug!("MERGE quoted tags: {:?}", referenced_tags);
-        }
-
-        let referenced_edges = &validation_info.semantic_info.referenced_edges;
-        if !referenced_edges.is_empty() {
-            log::debug!("MERGE references edge type: {:?}", referenced_edges);
-        }
-
-        let referenced_properties = &validation_info.semantic_info.referenced_properties;
-        if !referenced_properties.is_empty() {
-            log::debug!("MERGE Referenced Properties: {:?}", referenced_properties);
-        }
-
-        let merge_stmt = self.extract_merge_stmt(validated.stmt())?;
-
-        // Unified entry for expression-level EXISTS / IN: subqueries in MERGE
-        // pattern property values or ON MATCH / ON CREATE SET values are
-        // rejected at planning time with a precise error.
-        let check_space_id = qctx.space_id().unwrap_or(1);
-        let check_space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
-        let outer_col_names: Vec<String> = Vec::new();
-        let pattern_props: Option<&ContextualExpression> = match &merge_stmt.pattern {
-            Pattern::Node(node_pattern) => node_pattern.properties.as_ref(),
-            Pattern::Edge(edge_pattern) => edge_pattern.properties.as_ref(),
-            _ => None,
-        };
-        if let Some(props_expr) = pattern_props {
-            if let Some(expr_meta) = props_expr.expression() {
-                exists_planner::check_expression_subqueries(
-                    expr_meta.inner(),
-                    &qctx,
-                    check_space_id,
-                    &check_space_name,
-                    &outer_col_names,
-                )?;
-            }
-        }
-        for set_clause in [&merge_stmt.on_match, &merge_stmt.on_create]
-            .into_iter()
-            .flatten()
-        {
-            for assignment in &set_clause.assignments {
-                if let Some(expr_meta) = assignment.value.expression() {
-                    exists_planner::check_expression_subqueries(
-                        expr_meta.inner(),
-                        &qctx,
-                        check_space_id,
-                        &check_space_name,
-                        &outer_col_names,
-                    )?;
+            BoundMergePattern::Edge { edge, .. } => {
+                if !merge.on_match.is_empty() || !merge.on_create.is_empty() {
+                    return Err(PlannerError::UnsupportedOperation(
+                        "MERGE edge pattern with ON MATCH / ON CREATE is not supported".to_string(),
+                    ));
                 }
+                let expr_ctx = Arc::new(
+                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                );
+                let edge_name = edge
+                    .edge_types
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| {
+                        PlannerError::PlanGenerationFailed(
+                            "MERGE edge pattern must have an edge type".to_string(),
+                        )
+                    })?;
+                let (prop_names, prop_values) = if let Some(props) = &edge.properties {
+                    let mut names = Vec::new();
+                    let mut values = Vec::new();
+                    for (key, bexpr) in props {
+                        names.push(key.clone());
+                        let ctx_expr = crate::binder::expr_converter::bound_expr_to_contextual(
+                            bexpr, &expr_ctx,
+                        )
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+                        values.push(ctx_expr);
+                    }
+                    (names, values)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+                let src_expr = self.create_vid_expression(&expr_ctx)?;
+                let dst_expr = self.create_vid_expression(&expr_ctx)?;
+                let edge_info = EdgeInsertInfo {
+                    space_name: space_name.clone(),
+                    edge_name,
+                    prop_names,
+                    edges: vec![(src_expr, dst_expr, None, prop_values)],
+                    if_not_exists: true,
+                };
+                let logical_root = LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
+                    id: next_node_id(),
+                    info: edge_info,
+                    output_var: None,
+                    col_names: vec!["inserted".to_string()],
+                    column_types: vec![],
+                });
+                return Ok(SubPlan::from_logical_root(logical_root));
             }
         }
-
-        let is_edge = self.is_edge_pattern(&merge_stmt.pattern);
-
-        if is_edge {
-            if merge_stmt.on_match.is_some() || merge_stmt.on_create.is_some() {
-                return Err(PlannerError::UnsupportedOperation(
-                    "MERGE edge pattern with ON MATCH / ON CREATE is not supported".to_string(),
-                ));
-            }
-            let edge_info = self.pattern_to_edge_info(
-                &merge_stmt.pattern,
-                space_name.clone(),
-                validated.expr_context(),
-            )?;
-
-            let logical_root = LogicalNodeEnum::InsertEdges(LogicalInsertEdgesNode {
-                id: next_node_id(),
-                info: edge_info,
-                output_var: None,
-                col_names: vec!["inserted".to_string()],
-                column_types: vec![],
-            });
-            return Ok(SubPlan::from_logical_root(logical_root));
-        }
-
-        let vertex_info = self.pattern_to_vertex_info(
-            &merge_stmt.pattern,
-            space_name.clone(),
-            validated.expr_context(),
-        )?;
-
-        let has_on_match = merge_stmt.on_match.is_some();
-        let has_on_create = merge_stmt.on_create.is_some();
-
-        if !has_on_match && !has_on_create {
-            let logical_root = LogicalNodeEnum::InsertVertices(LogicalInsertVerticesNode {
-                id: next_node_id(),
-                info: vertex_info,
-                output_var: None,
-                col_names: vec!["inserted".to_string()],
-                column_types: vec![],
-            });
-
-            return Ok(SubPlan::from_logical_root(logical_root));
-        }
-
-        let condition = self.create_exists_condition(validated.expr_context())?;
-        let mut select_node = LogicalSelectNode {
-            id: next_node_id(),
-            condition,
-            if_branch: None,
-            else_branch: None,
-            output_var: None,
-            col_names: vec![],
-            column_types: vec![],
-        };
-
-        if let Some(ref on_match) = merge_stmt.on_match {
-            let if_branch =
-                self.build_on_match_branch(on_match, space_name.clone(), validated.expr_context())?;
-            select_node.set_if_branch(if_branch);
-        }
-
-        let else_branch = self.build_on_create_branch(
-            vertex_info,
-            merge_stmt.on_create.as_ref(),
-            space_name,
-            validated.expr_context(),
-        )?;
-        select_node.set_else_branch(else_branch);
-
-        let logical_root = LogicalNodeEnum::Select(select_node);
-
-        Ok(SubPlan::from_logical_root(logical_root))
     }
 
-    fn match_planner(&self, stmt: &Stmt) -> bool {
-        Self::match_stmt(stmt)
-    }
+
 }
 
 impl Default for MergePlanner {
