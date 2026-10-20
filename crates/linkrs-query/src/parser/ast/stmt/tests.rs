@@ -1,5 +1,6 @@
 use super::*;
 use crate::parser::ast::vector::{VectorDistance, VectorIndexConfig, VectorMatchCondition};
+use linkrs_core::permission::RoleType;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 
 fn ctx_expr() -> ContextualExpression {

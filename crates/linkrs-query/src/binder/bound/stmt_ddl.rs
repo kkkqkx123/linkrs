@@ -4,6 +4,7 @@ use crate::parser::ast::{
     AlterTarget, DescTarget, DropTarget, ExplainFormat, ShowCreateTarget, ShowTarget,
 };
 
+use linkrs_core::permission::RoleType;
 use linkrs_core::types::semantic::{ColumnDef, ValueType};
 use linkrs_core::types::FulltextEngineType;
 
@@ -58,6 +59,50 @@ pub struct BoundAlterUser {
     pub username: String,
     pub password: Option<String>,
     pub is_locked: Option<bool>,
+}
+
+/// `CHANGE PASSWORD` with an optional target user.
+///
+/// A missing username means "the authenticated caller", which the planner
+/// resolves from the request context.
+#[derive(Debug, Clone)]
+pub struct BoundChangePassword {
+    pub username: Option<String>,
+    pub old_password: String,
+    pub new_password: String,
+}
+
+/// `GRANT <role> ON <space> TO <user>`.
+#[derive(Debug, Clone)]
+pub struct BoundGrant {
+    pub username: String,
+    pub space_name: String,
+    pub role: RoleType,
+}
+
+/// `REVOKE <role> ON <space> FROM <user>`.
+#[derive(Debug, Clone)]
+pub struct BoundRevoke {
+    pub username: String,
+    pub space_name: String,
+    pub role: RoleType,
+}
+
+/// `DESCRIBE USER <user>`.
+#[derive(Debug, Clone)]
+pub struct BoundDescribeUser {
+    pub username: String,
+}
+
+/// `SHOW USERS`.
+#[derive(Debug, Clone)]
+pub struct BoundShowUsers;
+
+/// `SHOW ROLES [IN <space>]`.
+#[derive(Debug, Clone)]
+pub struct BoundShowRoles {
+    /// Space filter; `None` lists the roles of every space.
+    pub space_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

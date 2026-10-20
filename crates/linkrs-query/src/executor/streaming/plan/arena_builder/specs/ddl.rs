@@ -481,12 +481,12 @@ fn user_manage_to_command(
         GrantRole(n) => UserManageCommand::GrantRole {
             username: n.username().to_string(),
             space_name: n.space_name().to_string(),
-            role: n.role().to_string(),
+            role: n.role(),
         },
         RevokeRole(n) => UserManageCommand::RevokeRole {
             username: n.username().to_string(),
             space_name: n.space_name().to_string(),
-            role: n.role().to_string(),
+            role: n.role(),
         },
         ShowUsers(_) => UserManageCommand::ShowUsers,
         ShowRoles(n) => UserManageCommand::ShowRoles {

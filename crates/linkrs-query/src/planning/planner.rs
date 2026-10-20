@@ -170,7 +170,13 @@ impl PlannerEnum {
             BoundStatement::ClearSpace(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
             BoundStatement::CreateUser(_)
             | BoundStatement::DropUser(_)
-            | BoundStatement::AlterUser(_) => {
+            | BoundStatement::AlterUser(_)
+            | BoundStatement::ChangePassword(_)
+            | BoundStatement::Grant(_)
+            | BoundStatement::Revoke(_)
+            | BoundStatement::DescribeUser(_)
+            | BoundStatement::ShowUsers(_)
+            | BoundStatement::ShowRoles(_) => {
                 Some(PlannerEnum::UserManagement(UserManagementPlanner::new()))
             }
             BoundStatement::CreateFulltextIndex(_) => {

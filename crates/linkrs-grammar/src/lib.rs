@@ -39,7 +39,9 @@ pub fn parse(source: &str) -> ParseOutcome {
     parser
         .set_language(&language())
         .expect("load linkrs grammar");
-    let tree = parser.parse(source, None).expect("parse source");
+    let tree = parser
+        .parse(source, None)
+        .unwrap_or_else(|| parser.parse("", None).expect("empty parse"));
     let has_error = has_error_or_missing(&tree);
     ParseOutcome { tree, has_error }
 }
@@ -94,7 +96,7 @@ pub fn tokens(source: &str) -> Vec<Token> {
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, outcome.tree.root_node(), source.as_bytes());
     while let Some(m) = matches.next() {
-        for capture in m.captures {
+        for capture in m.captures() {
             let node = capture.node;
             let class: &'static str =
                 match capture_names.get(capture.index as usize).map(String::as_str) {

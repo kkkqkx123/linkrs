@@ -2197,8 +2197,17 @@
               ]
             },
             {
-              "type": "SYMBOL",
-              "name": "arrow"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "arrow"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "arrow_right"
+                }
+              ]
             }
           ]
         },
@@ -2206,8 +2215,21 @@
           "type": "SEQ",
           "members": [
             {
-              "type": "SYMBOL",
-              "name": "back_arrow"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "back_arrow"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "hash_arrow"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "hash_arrow_right"
+                }
+              ]
             },
             {
               "type": "CHOICE",
@@ -3477,8 +3499,17 @@
               "name": "vid"
             },
             {
-              "type": "SYMBOL",
-              "name": "arrow"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "arrow"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "arrow_right"
+                }
+              ]
             },
             {
               "type": "SYMBOL",
@@ -3680,8 +3711,17 @@
               "name": "vid"
             },
             {
-              "type": "SYMBOL",
-              "name": "arrow"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "arrow"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "arrow_right"
+                }
+              ]
             },
             {
               "type": "SYMBOL",
@@ -3701,8 +3741,17 @@
                     "name": "vid"
                   },
                   {
-                    "type": "SYMBOL",
-                    "name": "arrow"
+                    "type": "CHOICE",
+                    "members": [
+                      {
+                        "type": "SYMBOL",
+                        "name": "arrow"
+                      },
+                      {
+                        "type": "SYMBOL",
+                        "name": "arrow_right"
+                      }
+                    ]
                   },
                   {
                     "type": "SYMBOL",

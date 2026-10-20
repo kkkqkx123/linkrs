@@ -1,3 +1,4 @@
+mod bind_dcl;
 mod bind_ddl;
 mod bind_dml;
 mod bind_expressions;
@@ -114,6 +115,12 @@ impl Binder {
             Stmt::CreateUser(s) => self.bind_create_user(s),
             Stmt::DropUser(s) => self.bind_drop_user(s),
             Stmt::AlterUser(s) => self.bind_alter_user(s),
+            Stmt::ChangePassword(s) => self.bind_change_password(s),
+            Stmt::Grant(s) => self.bind_grant(s),
+            Stmt::Revoke(s) => self.bind_revoke(s),
+            Stmt::DescribeUser(s) => self.bind_describe_user(s),
+            Stmt::ShowUsers(s) => self.bind_show_users(s),
+            Stmt::ShowRoles(s) => self.bind_show_roles(s),
             Stmt::CreateFulltextIndex(s) => self.bind_create_fulltext_index(s),
             Stmt::CreateVectorIndex(s) => self.bind_create_vector_index(s),
             Stmt::Checkpoint(_)

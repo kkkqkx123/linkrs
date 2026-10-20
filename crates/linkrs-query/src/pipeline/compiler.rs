@@ -870,15 +870,23 @@ fn referenced_schema_objects(
         }
         BoundStatement::Set(_)
         | BoundStatement::Remove(_) => (tags, edges, false),
+        // Access-control statements address users, roles and spaces; they
+        // never reference a tag or an edge type.
+        BoundStatement::CreateUser(_)
+        | BoundStatement::DropUser(_)
+        | BoundStatement::AlterUser(_)
+        | BoundStatement::ChangePassword(_)
+        | BoundStatement::Grant(_)
+        | BoundStatement::Revoke(_)
+        | BoundStatement::DescribeUser(_)
+        | BoundStatement::ShowUsers(_)
+        | BoundStatement::ShowRoles(_) => (tags, edges, false),
         BoundStatement::Drop(_)
         | BoundStatement::Alter(_)
         | BoundStatement::Show(_)
         | BoundStatement::ShowCreate(_)
         | BoundStatement::Desc(_)
         | BoundStatement::ClearSpace(_)
-        | BoundStatement::CreateUser(_)
-        | BoundStatement::DropUser(_)
-        | BoundStatement::AlterUser(_)
         | BoundStatement::CreateFulltextIndex(_)
         | BoundStatement::CreateVectorIndex(_)
         | BoundStatement::Explain(_)

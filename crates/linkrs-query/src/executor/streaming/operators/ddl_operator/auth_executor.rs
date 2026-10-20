@@ -159,8 +159,7 @@ pub(super) fn execute_user_manage(
             let space_id = s
                 .get_space_id(space_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            let role = role.parse::<RoleType>().map_err(QueryError::execution)?;
-            StorageAuthOps::grant_role(s, username, space_id as i64, role)
+            StorageAuthOps::grant_role(s, username, space_id as i64, *role)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
@@ -172,7 +171,6 @@ pub(super) fn execute_user_manage(
             let space_id = s
                 .get_space_id(space_name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
-            let role = role.parse::<RoleType>().map_err(QueryError::execution)?;
             let actual = s
                 .list_user_roles(username)
                 .into_iter()
@@ -185,7 +183,7 @@ pub(super) fn execute_user_manage(
                         username, space_name
                     )));
                 }
-                Some(assigned) if assigned != role => {
+                Some(assigned) if assigned != *role => {
                     return Err(QueryError::execution(format!(
                         "User {} holds role {} in space {}, cannot revoke {}",
                         username, assigned, space_name, role

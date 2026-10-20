@@ -434,6 +434,10 @@
           "named": true
         },
         {
+          "type": "arrow_right",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -593,11 +597,23 @@
           "named": true
         },
         {
+          "type": "arrow_right",
+          "named": true
+        },
+        {
           "type": "back_arrow",
           "named": true
         },
         {
           "type": "edge_detail",
+          "named": true
+        },
+        {
+          "type": "hash_arrow",
+          "named": true
+        },
+        {
+          "type": "hash_arrow_right",
           "named": true
         }
       ]
@@ -3069,6 +3085,10 @@
           "named": true
         },
         {
+          "type": "arrow_right",
+          "named": true
+        },
+        {
           "type": "expr_list",
           "named": true
         },
@@ -3312,6 +3332,10 @@
     "named": true
   },
   {
+    "type": "arrow_right",
+    "named": true
+  },
+  {
     "type": "back_arrow",
     "named": true
   },
@@ -3349,6 +3373,14 @@
   },
   {
     "type": "gt",
+    "named": true
+  },
+  {
+    "type": "hash_arrow",
+    "named": true
+  },
+  {
+    "type": "hash_arrow_right",
     "named": true
   },
   {

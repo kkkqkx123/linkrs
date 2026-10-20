@@ -100,8 +100,8 @@ function buildRules() {
 
     edge_pattern: ($) =>
       choice(
-        seq('-', optional($.edge_detail), $.arrow),
-        seq($.back_arrow, optional($.edge_detail), '-'),
+        seq('-', optional($.edge_detail), choice($.arrow, $.arrow_right)),
+        seq(choice($.back_arrow, $.hash_arrow, $.hash_arrow_right), optional($.edge_detail), '-'),
       ),
     edge_detail: ($) =>
       seq(
@@ -226,7 +226,7 @@ function buildRules() {
     value_entry: ($) =>
       choice(
         seq($.vid, ':', '(', optional($.expr_list), ')'),
-        seq($.vid, $.arrow, $.vid, ':', '(', optional($.expr_list), ')'),
+        seq($.vid, choice($.arrow, $.arrow_right), $.vid, ':', '(', optional($.expr_list), ')'),
       ),
 
     update_segment: ($) =>
@@ -246,7 +246,7 @@ function buildRules() {
     delete_segment: ($) =>
       choice(
         seq($.kw_delete, $.kw_vertex, $.identifier, $.kw_from, $.vid_list, optional($.where_segment)),
-        seq($.kw_delete, $.kw_edge, optional($.identifier), $.vid, $.arrow, $.vid, repeat(seq(',', $.vid, $.arrow, $.vid)), optional($.where_segment)),
+        seq($.kw_delete, $.kw_edge, optional($.identifier), $.vid, choice($.arrow, $.arrow_right), $.vid, repeat(seq(',', $.vid, choice($.arrow, $.arrow_right), $.vid)), optional($.where_segment)),
       ),
 
     upsert_segment: ($) =>

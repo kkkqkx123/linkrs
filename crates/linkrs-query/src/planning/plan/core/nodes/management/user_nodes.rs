@@ -3,6 +3,7 @@
 //! Provide definitions for the planning nodes related to user management.
 
 use crate::define_plan_node;
+use linkrs_core::permission::RoleType;
 use linkrs_core::types::PasswordInfo;
 
 define_plan_node! {
@@ -168,14 +169,14 @@ define_plan_node! {
     pub struct GrantRoleNode {
         username: String,
         space_name: String,
-        role: String,
+        role: RoleType,
     }
     manage_enum: UserManageNode::GrantRole as UserManage
     input: ZeroInputNode
 }
 
 impl GrantRoleNode {
-    pub fn new(id: i64, username: String, space_name: String, role: String) -> Self {
+    pub fn new(id: i64, username: String, space_name: String, role: RoleType) -> Self {
         Self {
             id,
             username,
@@ -195,8 +196,8 @@ impl GrantRoleNode {
         &self.space_name
     }
 
-    pub fn role(&self) -> &str {
-        &self.role
+    pub fn role(&self) -> RoleType {
+        self.role
     }
 }
 
@@ -204,14 +205,14 @@ define_plan_node! {
     pub struct RevokeRoleNode {
         username: String,
         space_name: String,
-        role: String,
+        role: RoleType,
     }
     manage_enum: UserManageNode::RevokeRole as UserManage
     input: ZeroInputNode
 }
 
 impl RevokeRoleNode {
-    pub fn new(id: i64, username: String, space_name: String, role: String) -> Self {
+    pub fn new(id: i64, username: String, space_name: String, role: RoleType) -> Self {
         Self {
             id,
             username,
@@ -231,8 +232,8 @@ impl RevokeRoleNode {
         &self.space_name
     }
 
-    pub fn role(&self) -> &str {
-        &self.role
+    pub fn role(&self) -> RoleType {
+        self.role
     }
 }
 

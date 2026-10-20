@@ -2,6 +2,7 @@
 
 use crate::parser::ast::stmt::PurgeTarget;
 use linkrs_core::metadata::MacroParamDef;
+use linkrs_core::permission::RoleType;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::user::PasswordInfo;
 use linkrs_core::types::PropertyDef;
@@ -257,12 +258,12 @@ pub enum UserManageCommand {
     GrantRole {
         username: String,
         space_name: String,
-        role: String,
+        role: RoleType,
     },
     RevokeRole {
         username: String,
         space_name: String,
-        role: String,
+        role: RoleType,
     },
     ShowUsers,
     ShowRoles {

@@ -1,6 +1,8 @@
 # 保留关键字列表
 
-本文档列出了 Linkrs 查询语言中所有保留关键字。保留关键字不能用作**属性名**、**标签名**、**边类型名**或**标识符**。
+本文档列出了 Linkrs 查询语言中所有保留关键字。词法器 `lookup_keyword` 把这些词映射为独立 `TokenKind`（`TRUE` / `FALSE` 映射为布尔字面量，`BALANCE` 映射为标识符）。裸写时它们进入关键字通道，而不是普通 `Identifier`。
+
+反引号包裹的名字（如 `` `CREATE` ``）始终产出 `Identifier`，不走关键字查找。解析器 `expect_identifier` 还会在名称位置接受一部分关键字，见文末注意事项。
 
 > 关键字表来源：词法器 `lookup_keyword`（`crates/linkrs-query/src/parser/lexing/lexer/token.rs`），与代码一一对应；
 > 上下文软关键字（`GRAPH`、`CHECKPOINT`、`PURGE`、`EXPIRED`）不在该映射内，见第 13 节末尾说明。
@@ -39,7 +41,7 @@
 | `SUBQUERY`              | `Subquery`              | 子查询       |
 
 > 注意：`TTL_DURATION` / `TTL_COL` 为保留关键字（词法器映射为 `TokenKind::TtlDuration` /
-> `TokenKind::TtlCol`，用于 `CREATE TAG` / `CREATE EDGE` 的 TTL 子句），不可作为普通标识符使用。
+> `TokenKind::TtlCol`，用于 `CREATE TAG` / `CREATE EDGE` 的 TTL 子句）。
 
 ## 2. DML / 数据操作
 
@@ -119,7 +121,7 @@
 | `SUBGRAPH`         | `Subgraph`         | 子图         |
 | `BIDIRECT`         | `Bidirect`         | 双向         |
 
-> 注意：`FIND_PATH` 不是保留关键字（词法器中无对应 TokenKind）。
+> 注意：`FIND_PATH` 不是保留关键字（词法器中无对应映射）。`TokenKind::FindPath` 存在于枚举中，词法器不会产出该 token。
 
 ## 5. 方向 / 拓扑
 
@@ -133,7 +135,7 @@
 | `DESTINATION` | `Destination` | 目标点   |
 | `INPUT`       | `Input`       | 输入引用 |
 
-> 注意：`OUTBOUND` / `INBOUND` 不是保留关键字（词法器中无对应 TokenKind）。
+> 注意：`OUTBOUND` / `INBOUND` 不是保留关键字（词法器中无对应映射）。`TokenKind::Outbound` / `TokenKind::Inbound` 存在于枚举中，词法器不会产出这些 token。
 
 ## 6. 数据类型
 
@@ -179,14 +181,18 @@
 | `IS EMPTY`     | `IsEmpty`    | 为空判断   |
 | `IS NOT EMPTY` | `IsNotEmpty` | 非空判断   |
 | `CONTAINS`     | `Contains`   | 包含       |
-| `STARTS WITH`  | `StartsWith` | 以…开头    |
-| `ENDS WITH`    | `EndsWith`   | 以…结尾    |
+| `STARTS`       | `StartsWith` | `STARTS [WITH]` 前缀匹配 |
+| `ENDS`         | `EndsWith`   | `ENDS [WITH]` 后缀匹配 |
 | `BETWEEN`      | `Between`    | 区间范围   |
 | `COUNT`        | `Count`      | 计数       |
 | `SUM`          | `Sum`        | 求和       |
 | `AVG`          | `Avg`        | 平均值     |
 | `MIN`          | `Min`        | 最小值     |
 | `MAX`          | `Max`        | 最大值     |
+
+> 词法器把 `STARTS` / `ENDS` 单独映射为 `StartsWith` / `EndsWith`；解析器再可选消费随后的 `WITH`（`WITH` 本身是第 3 节的保留关键字）。
+> `IS NULL` / `IS NOT NULL` / `IS EMPTY` / `IS NOT EMPTY` / `NOT IN` 由词法器无条件合并为单 token。
+> `EMPTY` 本身不在 `lookup_keyword` 中，只作为上述合并序列的一部分出现。
 
 ## 8. CASE 表达式
 
@@ -291,49 +297,60 @@
 | `SIGN`                 | `Sign`                 | 签名                        |
 | `SERVICE`              | `Service`              | 服务                        |
 | `NO`                   | `No`                   | 否定标识                    |
-| `WEIGHT`               | `Weight`               | **边权重 — 不可用作属性名** |
+| `WEIGHT`               | `Weight`               | 边权重（`FIND ... WEIGHT`） |
 | `ATOMIC_EDGE`          | `AtomicEdge`           | 原子边                      |
 | `SETLIST`              | `SetList`              | 设置列表                    |
 | `DIVIDE`               | `Divide`               | 切分操作                    |
 
-> 注意：`BALANCE` 在词法器中被映射为 `Tk::Identifier("balance")`，**不是**保留关键字，可作为普通标识符使用。
+> 注意：`BALANCE` 在词法器中被映射为 `Tk::Identifier("balance")`，可作为普通标识符使用。
 
 > 软关键字：`GRAPH`、`CHECKPOINT`、`PURGE`、`EXPIRED` 没有独立 TokenKind，
 > 以标识符形态参与词法、凭上下文关键字匹配生效，因此在无关位置仍可用作标识符。
 > 例外：`USE graph` 表示切换到名为 `graph` 的空间（`GRAPH` 仅在后跟另一标识符时
 > 作为 `USE GRAPH <name>` 别名前缀）；`SPACE`（单数）是保留关键字，不可直接用作
 > 裸标识符，而 `GRAPH` 可以。
+>
+> 解析器还会在特定语句位置把另一些标识符当上下文关键字消费，例如
+> `ATTACH`、`DATABASE`、`MIGRATE`、`LOAD`、`INSTALL`、`UNINSTALL`、`CALL`、
+> `EXPORT`、`IMPORT`、`FULLTEXT`、`MACRO`、`TYPE`、`EXTENSION`、`OPTIONS`、
+> `USING`、`JOIN`。它们同样不在 `lookup_keyword` 中。
 
 ## 14. 特殊引用
 
-以下符号模式也是保留的，不可用作标识符：
+以下符号由词法器直接产出专用 TokenKind：
 
 | 符号      | TokenKind   | 说明       |
 | --------- | ----------- | ---------- |
 | `$^`      | `SrcRef`    | 源点引用   |
 | `$$`      | `DstRef`    | 目标点引用 |
 | `$-`      | `InputRef`  | 输入引用   |
-| `$.id`    | `IdProp`    | ID 属性    |
-| `$.type`  | `TypeProp`  | 类型属性   |
-| `$-.src`  | `SrcIdProp` | 源点 ID    |
-| `$-.dst`  | `DstIdProp` | 目标点 ID  |
-| `$-.rank` | `RankProp`  | 边排序属性 |
 
-此外，下划线前缀的属性引用同样保留：
+以下划线开头的标识符同样被映射为专用 TokenKind，裸写时走专用通道：
 
 | 符号      | TokenKind   | 说明       |
 | --------- | ----------- | ---------- |
+| `_id`     | `IdProp`    | ID 属性    |
+| `_type`   | `TypeProp`  | 类型属性   |
 | `_src`    | `SrcIdProp` | 源点 ID    |
 | `_dst`    | `DstIdProp` | 目标点 ID  |
 | `_rank`   | `RankProp`  | 边排序属性 |
+
+> `$` 后跟标识符是会话变量（`TokenKind::Dollar` + 标识符），例如 `$foo`。
+> `$.id` / `$.type` / `$-.src` 这类写法由 `$` / `$-` 再加 `.` 与后续标识符组合而成，不是独立 token。
 
 ---
 
 ## 注意事项
 
 1. **大小写不敏感**：关键字匹配不区分大小写，`CREATE`、`create`、`Create` 均被视为关键字。
-2. **属性名冲突**：使用 `WEIGHT` 作为属性名会导致解析错误，因为该关键字被词法分析器映射为 `TokenKind::Weight`。应使用 `strength`、`score` 等替代名称。
-3. **数据类型关键字**：所有数据类型名（`INT`、`STRING`、`GEOGRAPHY` 等）均为保留关键字，不可用作标识符。
-4. **`TRUE` / `FALSE`**：被解析为 `BooleanLiteral` 字面量，同样不可用作标识符。
-5. **TTL 关键字**：`TTL_DURATION`、`TTL_COL` 为保留关键字（TTL 子句专用），不可作为标识符使用；
-   `BALANCE`、`FIND_PATH`、`OUTBOUND`、`INBOUND` 看似关键字但词法器未保留，可作为标识符使用。
+2. **反引号**：反引号包裹的名字始终是 `Identifier`，可用来写出与关键字同形的属性名、标签名或边类型名，例如 `` CREATE TAG `match`(`where` STRING) ``。
+3. **名称位置白名单**：`expect_identifier` 在属性名 / 标签名 / 宏名等位置接受下列关键字 token，裸写即可作为名字：
+   - 聚合：`COUNT`、`SUM`、`AVG`、`MIN`、`MAX`
+   - 图元素与角色：`TAG`、`TAGS`、`PATH`、`VERTEX`、`VERTICES`、`EDGES`、`VECTOR`、`WEIGHT`、`USER`、`ORDER`、`STATUS`、`CONTAINS`、`ADMIN`、`GOD`、`DBA`、`GUEST`、`SPACE`
+   - 配置与事务：`DATA`、`TRANSACTION`、`HOST`、`READ`、`ONLY`、`WRITE`
+   - 选项键：`FORMAT`、`HEADER`、`DELIMITER`
+   - 类型名：`BOOL`、`INT`、`INT8`、`INT16`、`INT32`、`INT64`、`FLOAT`、`DOUBLE`、`STRING`、`FIXED_STRING`、`TIMESTAMP`、`DATE`、`TIME`、`DATETIME`、`SERIAL`、`GEOGRAPHY`、`LIST`、`MAP`、`STRUCT`、`ARRAY`、`UUID`、`DURATION`
+   因此 `CREATE EDGE rated(weight INT)`、`CREATE MACRO double(x) AS x * 2` 均可解析。`WEIGHT` 在 `FIND ... WEIGHT <prop>` 中仍是关键字。
+4. **`TRUE` / `FALSE`**：被解析为 `BooleanLiteral` 字面量，同样走字面量通道。
+5. **TTL 关键字**：`TTL_DURATION`、`TTL_COL` 为保留关键字（TTL 子句专用）；
+   `BALANCE`、`FIND_PATH`、`OUTBOUND`、`INBOUND` 词法器未保留，可作为标识符使用。

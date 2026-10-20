@@ -6,6 +6,7 @@ description = "Tree-sitter grammar and structural view for the Linkrs query lang
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+links = "tree-sitter-linkrs"
 build = "build.rs"
 
 [dependencies]

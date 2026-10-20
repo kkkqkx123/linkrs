@@ -7,10 +7,10 @@
     "tree-sitter-cli": "0.27.1"
   },
   "scripts": {
-    "generate": "tree-sitter generate",
+    "generate": "npx tree-sitter generate",
     "verify": "node --check grammar.js && echo 'grammar.js syntax ok'"
   },
   "engines": {
     "node": ">=22.0.0"
-  }
+  },
 }

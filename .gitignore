@@ -9,10 +9,9 @@ tests/c_api/build
 .translator
 *.exe
 *.db
-Cargo.lock
 __pycache__
 *.pyc
 *.log
-tools/*/node_modules/
+**/node_modules/
 frontend/src/lib/types/schema.d.ts
 benches/results/

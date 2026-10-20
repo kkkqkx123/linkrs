@@ -7,6 +7,7 @@ use crate::parser::ast::types::Span;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
+use linkrs_core::permission::RoleType;
 
 /// User Management Parser
 pub struct UserParser;

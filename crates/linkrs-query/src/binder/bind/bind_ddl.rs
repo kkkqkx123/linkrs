@@ -101,38 +101,6 @@ impl Binder {
         }))
     }
 
-    pub(crate) fn bind_create_user(
-        &mut self,
-        stmt: &crate::parser::ast::CreateUserStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::CreateUser(BoundCreateUser {
-            username: stmt.username.clone(),
-            password: stmt.password.clone(),
-            if_not_exists: stmt.if_not_exists,
-        }))
-    }
-
-    pub(crate) fn bind_drop_user(
-        &mut self,
-        stmt: &crate::parser::ast::DropUserStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::DropUser(BoundDropUser {
-            username: stmt.username.clone(),
-            if_exists: stmt.if_exists,
-        }))
-    }
-
-    pub(crate) fn bind_alter_user(
-        &mut self,
-        stmt: &crate::parser::ast::AlterUserStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::AlterUser(BoundAlterUser {
-            username: stmt.username.clone(),
-            password: stmt.password.clone(),
-            is_locked: stmt.is_locked,
-        }))
-    }
-
     pub(crate) fn bind_create_fulltext_index(
         &mut self,
         stmt: &crate::parser::ast::fulltext::CreateFulltextIndex,

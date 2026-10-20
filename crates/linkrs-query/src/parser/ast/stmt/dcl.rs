@@ -1,3 +1,4 @@
+use linkrs_core::permission::RoleType;
 use linkrs_core::types::Span;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,42 +30,6 @@ pub struct ChangePasswordStmt {
     pub username: Option<String>,
     pub old_password: String,
     pub new_password: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoleType {
-    God,
-    Admin,
-    Dba,
-    User,
-    Guest,
-}
-
-impl RoleType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RoleType::God => "GOD",
-            RoleType::Admin => "ADMIN",
-            RoleType::Dba => "DBA",
-            RoleType::User => "USER",
-            RoleType::Guest => "GUEST",
-        }
-    }
-}
-
-impl std::str::FromStr for RoleType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "GOD" => Ok(RoleType::God),
-            "ADMIN" => Ok(RoleType::Admin),
-            "DBA" => Ok(RoleType::Dba),
-            "USER" => Ok(RoleType::User),
-            "GUEST" => Ok(RoleType::Guest),
-            _ => Err(format!("Unknown role type: {}", s)),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

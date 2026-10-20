@@ -144,6 +144,9 @@
   (shift_right)
   (arrow)
   (back_arrow)
+  (arrow_right)
+  (hash_arrow)
+  (hash_arrow_right)
 ] @operator
 
 (integer) @number
