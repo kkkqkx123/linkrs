@@ -15,6 +15,37 @@ pub(crate) fn parse_primary_expression(
 
     match token.kind {
         TokenKind::LParen => {
+            // Parenthesized scalar subquery forms:
+            //   (MATCH (v:tag) ... RETURN expr)
+            //   (SELECT col FROM tag [WHERE ...])
+            // These mirror the IN-subquery parenthesized syntax and produce a
+            // scalar subquery expression.
+            let next_kind = ctx.peek_token().kind.clone();
+            let is_scalar_subquery = matches!(next_kind, TokenKind::Match)
+                || matches!(next_kind, TokenKind::Identifier(ref name) if name.eq_ignore_ascii_case("SELECT"));
+            if is_scalar_subquery {
+                ctx.next_token(); // consume '('
+                let body = if matches!(ctx.current_token().kind, TokenKind::Match) {
+                    super::parse_subquery_body(ctx)?
+                } else {
+                    super::parse_sql_subquery_body(ctx)?
+                };
+                if body.return_expr.is_none() {
+                    return Err(ParseError::new(
+                        ParseErrorKind::SemanticError,
+                        "Scalar subquery requires a RETURN clause with a single expression"
+                            .to_string(),
+                        start_pos,
+                    ));
+                }
+                ctx.expect_token(TokenKind::RParen)?;
+                let span = ctx.merge_span(start_pos, ctx.current_position());
+                return Ok(ParseResult {
+                    expr: Expression::scalar_subquery(body),
+                    span,
+                });
+            }
+
             if let Some(inline) = try_parse_inline_pattern_predicate(ctx, start_pos)? {
                 return Ok(inline);
             }

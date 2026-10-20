@@ -599,3 +599,42 @@ variable.prop      -- 访问变量属性
 | 数学 | `abs()`, `round()`, `floor()`, `ceil()`, `sqrt()`, `pow()` |
 | 时间 | `now()`, `timestamp()`, `date()`, `datetime()` |
 | 图相关 | `id()`, `tags()`, `type()`, `src()`, `dst()`, `rank()` |
+
+### 10.5 子查询
+
+表达式中可使用子查询，常见形式如下：
+
+- 标量子查询（返回单值，空结果为 `NULL`）：
+  ```cypher
+  SUBQUERY { MATCH (m:employee) RETURN avg(m.salary) }
+  (MATCH (m:employee) RETURN avg(m.salary))
+  (SELECT salary FROM employee)
+  ```
+  可用于比较、投影等标量位置，例如：
+  ```cypher
+  MATCH (e:employee)
+  WHERE e.salary > (MATCH (m:employee) RETURN avg(m.salary))
+  RETURN e
+  ```
+
+- 存在性子查询：
+  ```cypher
+  EXISTS { MATCH (f:person)-[:knows]->(e) }
+  NOT EXISTS { MATCH (f:person)-[:knows]->(e) }
+  ```
+
+- 计数子查询：
+  ```cypher
+  COUNT { MATCH (f:person)-[:knows]->(e) }
+  ```
+
+- IN / NOT IN 子查询：
+  ```cypher
+  MATCH (n:person)
+  WHERE n.age IN { MATCH (p:person) WHERE p.name = 'Alice' RETURN p.age }
+  RETURN n
+
+  MATCH (n:person)
+  WHERE n.age IN (SELECT age FROM person WHERE name = 'Alice')
+  RETURN n
+  ```

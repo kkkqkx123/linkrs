@@ -274,14 +274,7 @@ mod subquery_unnesting {
             .assert_success();
     }
 
-    /// Scalar subqueries (`expr > (MATCH ... RETURN agg(...))`) are not yet
-    /// implemented end-to-end: the parser lacks the `(MATCH ...)` primary
-    /// form and the binder rejects EXISTS/IN subquery expressions
-    /// ("subquery binding not yet implemented"). Ignored until that feature
-    /// lands; the unnesting optimizer itself is exercised by programmatically
-    /// constructed apply plans in `cost_based/subquery_unnesting.rs`.
     #[test]
-    #[ignore = "scalar MATCH subqueries not implemented (parser/binder)"]
     fn test_subquery_with_aggregation() {
         TestScenario::new()
             .expect("Failed to create test scenario")
