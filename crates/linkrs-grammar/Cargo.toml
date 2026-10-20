@@ -10,8 +10,15 @@ links = "tree-sitter-linkrs"
 build = "build.rs"
 
 [dependencies]
-tree-sitter.workspace = true
-tree-sitter-language.workspace = true
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-language = { workspace = true, optional = true }
+
+[features]
+default = ["parser"]
+# The parser feature carries the tree-sitter runtime and the generated C
+# parser. Consumers that only read the lexical inventory link this crate
+# without the feature and never pay for the runtime.
+parser = ["dep:tree-sitter", "dep:tree-sitter-language"]
 
 [build-dependencies]
 cc.workspace = true

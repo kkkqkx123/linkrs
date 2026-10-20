@@ -24,8 +24,10 @@
 - CLI 接入完成：`linkrs-cli` 依赖 `linkrs-grammar`，关键字与函数补全消费清单，手抄清单与分类映射受生成物校验。
 - 前端接入完成：`tools/grammar-codegen` 生成 `frontend/src/lib/utils/generated/`，`gen:grammar` 脚本、`#` 与块注释漂移修正。
 - 对等测试落地：`linkrs-query/tests/corpus_parity.rs` 与允许清单（当前为空，只减不增）。
+- wasm 语法模块落地：前端构建时由 `frontend/vite/grammarWasm.ts` 从语法 crate 已提交的 `src/parser.c` 编译成 side module，输出到 `frontend/src/lib/assets/tree-sitter-linkrs.wasm`，该文件由 `.gitignore` 排除；新增 `crates/linkrs-grammar/scripts/generate.mjs`，`tree-sitter.json` 与 `abi-version` 把 ABI 目标显式写进仓库；`scripts/verify-grammar.sh` 增加语法产物的逐字节比对与 wasm 编译检查。
+- 前端 wasm 消费落地：`web-tree-sitter` 驱动 Monaco 语义高亮，wasm 以资源导入方式取用；语法 crate 拆分 `parser` feature，只读词法清单的消费者不再链接 tree-sitter 运行时。
 
-阶段二（门禁固化与结构能力）与阶段三（按需评估）尚未开始。
+阶段二（结构能力）与阶段三（其余按需评估项）尚未开始。
 
 ## 2. 实现期发现的关键约束
 
@@ -180,7 +182,7 @@ tree-sitter 不知道 Rust 词法器的合并行为，因此两类多词关键�
 
 ## 5. 阶段三（按需评估，不预设立项）
 
-- 浏览器内树解析：需先给出打包体积预算与编辑体验增益的量化对比，再决定是否 vendor wasm。
+- 浏览器内树解析：已实现。wasm 语法模块由 `crates/linkrs-grammar` 产出并入库，前端以资源导入消费，编辑器语义高亮由 `web-tree-sitter` 驱动。
 - 服务端语法诊断接口：仅当结构级诊断确实无法用现有 `ValidateQuery` 表达时才考虑，且走 `linkrs-wire` 既有 DTO 约定。
 - 格式化器与静态检查规则：依赖树稳定后再评估。
 

@@ -30,5 +30,8 @@ build/
 # Paraglide generated output
 src/lib/paraglide/
 
+# Grammar wasm module, compiled from the grammar crate before the build
+src/lib/assets/tree-sitter-linkrs.wasm
+
 # Inlang build cache
 project.inlang/cache/

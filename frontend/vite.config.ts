@@ -4,10 +4,15 @@ import adapter from '@sveltejs/adapter-static';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
+import { grammarWasmPlugin } from './vite/grammarWasm.ts';
 
 export default defineConfig({
 	plugins: [
-		sveltekit({ adapter: adapter({ fallback: 'index.html' }) }),
+		grammarWasmPlugin(),
+		sveltekit({
+			adapter: adapter({ fallback: 'index.html' }),
+			files: { assets: 'public' },
+		}),
 		paraglideVitePlugin({
 			project: './project.inlang',
 			outdir: './src/lib/paraglide',
@@ -33,6 +38,11 @@ export default defineConfig({
 		},
 	},
 	server: {
+		fs: {
+			// The grammar crate holds the wasm module and the highlight query
+			// that the editor imports, so the dev server has to read them.
+			allow: ['../crates/linkrs-grammar'],
+		},
 		port: 3011,
 		proxy: {
 			'/v1': {

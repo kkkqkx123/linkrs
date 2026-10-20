@@ -6,6 +6,8 @@ import {
 	GENERATED_SOFT_KEYWORDS,
 } from './generated/keywords.ts';
 
+import { registerTreeSitterHighlighting } from './treeSitterCypher.ts';
+
 export const CYPHER_LANGUAGE_ID = 'cypher';
 
 const RESERVED_WORDS = new Set([
@@ -205,6 +207,8 @@ export function registerCypherLanguage(monaco: typeof Monaco): void {
 	});
 
 	languageRegistered = true;
+
+	registerTreeSitterHighlighting(monaco, CYPHER_LANGUAGE_ID);
 }
 
 /**
