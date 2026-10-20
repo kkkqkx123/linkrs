@@ -52,7 +52,6 @@
   (kw_alter)
   (kw_show)
   (kw_describe)
-  (kw_desc)
   (kw_use)
   (kw_from)
   (kw_over)

@@ -1,6 +1,7 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js';
 import type { Tag, EdgeType } from '$types/schema';
 import { GENERATED_FUNCTIONS } from './generated/functions.ts';
+import { GENERATED_OPERATORS } from './generated/operators.ts';
 import {
 	GENERATED_KEYWORDS,
 	GENERATED_SOFT_KEYWORDS,
@@ -116,21 +117,7 @@ function createTokenizer(
 		ignoreCase: true,
 		keywords: [...GENERATED_KEYWORDS],
 		functions: [...FUNCTION_NAMES],
-		operators: [
-			'==',
-			'!=',
-			'<>',
-			'<=',
-			'>=',
-			'=',
-			'<',
-			'>',
-			'+',
-			'-',
-			'*',
-			'/',
-			'%',
-		],
+		operators: [...GENERATED_OPERATORS],
 		tokenizer: {
 			root: [
 				...buildSchemaRules(tags, 'tag'),

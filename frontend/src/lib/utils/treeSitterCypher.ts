@@ -28,6 +28,7 @@ let parser: Parser | null = null;
 let language: Language | null = null;
 let query: Query | null = null;
 
+let cachedModelId: string | null = null;
 let cachedVersionId = -1;
 let cachedTokens: Uint32Array = new Uint32Array();
 
@@ -55,27 +56,7 @@ async function ensureReady(): Promise<boolean> {
 }
 
 function captureTypeIndex(name: string): number {
-	const normalized = name.replace(/^@/, '');
-	switch (normalized) {
-		case 'comment':
-			return 0;
-		case 'keyword':
-			return 1;
-		case 'operator':
-			return 2;
-		case 'number':
-			return 3;
-		case 'string':
-			return 4;
-		case 'variable':
-			return 5;
-		case 'property':
-			return 6;
-		case 'function':
-			return 7;
-		default:
-			return -1;
-	}
+	return TOKEN_TYPES.indexOf(name.replace(/^@/, '') as (typeof TOKEN_TYPES)[number]);
 }
 
 interface SemanticToken {
@@ -89,7 +70,10 @@ function collectTokens(model: monaco.editor.ITextModel): SemanticToken[] {
 	if (!tree) return [];
 	try {
 		const captures = query!.captures(tree.rootNode);
-		const items: SemanticToken[] = [];
+		// Tree-sitter priority: a capture later in the query overrides an
+		// earlier one over the same range, so resolution follows capture order
+		// (keyed by start index) rather than positional order.
+		const byStart = new Map<number, SemanticToken>();
 		for (const capture of captures) {
 			const type = captureTypeIndex(capture.name);
 			if (type < 0) continue;
@@ -98,8 +82,13 @@ function collectTokens(model: monaco.editor.ITextModel): SemanticToken[] {
 			if (capture.name === 'variable' && IDENTIFIER_NODE_TYPES.has(node.type)) {
 				continue;
 			}
-			items.push({ start: node.startIndex, end: node.endIndex, type });
+			byStart.set(node.startIndex, {
+				start: node.startIndex,
+				end: node.endIndex,
+				type,
+			});
 		}
+		const items = [...byStart.values()];
 		items.sort((a, b) => a.start - b.start || a.end - b.end);
 
 		const filtered: SemanticToken[] = [];
@@ -161,13 +150,14 @@ export function registerTreeSitterHighlighting(
 					return { data: new Uint32Array() };
 				}
 				const versionId = model.getVersionId();
-				if (versionId === cachedVersionId) {
-					return { data: cachedTokens, resultId: String(versionId) };
+				if (model.id === cachedModelId && versionId === cachedVersionId) {
+					return { data: cachedTokens };
 				}
 				const data = encodeTokens(model, collectTokens(model));
+				cachedModelId = model.id;
 				cachedVersionId = versionId;
 				cachedTokens = data;
-				return { data, resultId: String(versionId) };
+				return { data };
 			},
 			releaseDocumentSemanticTokens: () => {},
 		},
