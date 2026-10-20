@@ -71,7 +71,7 @@ async fn local_vector_engine_startup_e2e() {
         .await
         .expect("search should succeed");
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].id, PointId::Num(1));
+    assert_eq!(results[0].doc_id, PointId::Num(1));
     assert!(results[0].score >= 0.9999);
 
     let got = vector_api
@@ -186,6 +186,6 @@ async fn local_vector_engine_restart_consistency_e2e() {
             .await
             .expect("search after restart should succeed");
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].id, PointId::Num(1));
+        assert_eq!(results[0].doc_id, PointId::Num(1));
     }
 }

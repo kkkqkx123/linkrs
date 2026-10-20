@@ -207,10 +207,9 @@ impl PlannerEnum {
                 | Stmt::DetachDatabase(_)
                 | Stmt::PurgeExpired(_)
                 | Stmt::Checkpoint(_)
+                | Stmt::KillQuery(_)
                 | Stmt::ExportDatabase(_)
-                | Stmt::ImportDatabase(_) => {
-                    Some(PlannerEnum::Maintain(MaintainPlanner::new()))
-                }
+                | Stmt::ImportDatabase(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
                 Stmt::CreateVectorIndex(_)
                 | Stmt::DropVectorIndex(_)
                 | Stmt::ShowVectorIndex(_)

@@ -64,6 +64,11 @@ impl Planner for MaintainPlanner {
                 crate::parser::ast::Stmt::DetachDatabase(s) => self.plan_detach_database(s),
                 crate::parser::ast::Stmt::PurgeExpired(s) => self.plan_purge_expired(s),
                 crate::parser::ast::Stmt::Checkpoint(_) => self.plan_checkpoint(),
+                crate::parser::ast::Stmt::KillQuery(_) => {
+                    return Err(PlannerError::UnsupportedOperation(
+                        "KILL QUERY executes in the network service against live query tracking and is not plannable here; use the unary query endpoint with a query id from SHOW QUERIES".to_string(),
+                    ));
+                }
                 crate::parser::ast::Stmt::ExportDatabase(s) => self.plan_export_database(s),
                 crate::parser::ast::Stmt::ImportDatabase(s) => self.plan_import_database(s),
                 _ => {

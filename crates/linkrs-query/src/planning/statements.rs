@@ -17,6 +17,7 @@ pub mod dml;
 pub mod dql;
 pub mod expression_helpers;
 pub mod index_scan_planner;
+pub mod join_keys;
 pub mod paths;
 pub mod pattern_planner;
 pub mod plan_combiner;

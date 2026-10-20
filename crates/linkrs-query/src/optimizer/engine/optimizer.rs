@@ -34,14 +34,6 @@ impl OptimizerEngine {
 
         current_plan = self.apply_remove_factorization(current_plan)?;
 
-        // Partitioning is decided early so the chosen spec is available to
-        // downstream stages (physical build, plan-cache fingerprint, EXPLAIN).
-        // The decision only attaches a partition spec and does not rewrite
-        // the operator tree, so it does not change cost-based decisions:
-        // cost-based rules operate on the operator tree and stats without
-        // reading the partition spec.
-        current_plan = self.apply_partitioning_selection(current_plan, space, layout);
-
         if self.enable_heuristic {
             log::debug!("Starting logical heuristic optimization");
             current_plan = self.apply_logical_heuristic(current_plan)?;
@@ -64,6 +56,13 @@ impl OptimizerEngine {
                 self.apply_physical_heuristic(current_plan, self.max_heuristic_iterations)?;
             log::debug!("Physical heuristic optimization completed successfully");
         }
+
+        // Partitioning is decided on the final operator tree: the partitioned
+        // execution paths require the de-materialized hop shape the physical
+        // heuristic produces, so an earlier decision would only ever see an
+        // unpartitionable plan. The spec still reaches the physical build and
+        // the plan-cache fingerprint, which both run after the optimizer.
+        current_plan = self.apply_partitioning_selection(current_plan, space, layout);
 
         // Row estimates are collected last so the per-node map keys match the
         // final plan ids: physical mapping and the physical heuristic rebuild

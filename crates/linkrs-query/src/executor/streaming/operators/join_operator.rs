@@ -124,9 +124,12 @@ pub enum JoinOperatorKind {
         all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
         right_consumed: bool,
+        /// Cursor into the cartesian product: the left row index and the
+        /// right row index inside it. The product is emitted in bounded
+        /// chunks, so the cursor marks where the next chunk continues.
+        cursor: (usize, usize),
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
-        output_done: bool,
     },
     SemiJoin {
         join_condition: Option<Expression>,
@@ -264,9 +267,9 @@ impl JoinOperator {
                 all_right_rows: Vec::new(),
                 left_consumed: false,
                 right_consumed: false,
+                cursor: (0, 0),
                 memory_tracker: crate::executor::base::MemoryTracker::new(memory_budget.clone()),
                 right_col_names: Vec::new(),
-                output_done: false,
             },
             super::spec::JoinSpec::SemiJoin {
                 join_condition,
@@ -461,15 +464,15 @@ impl JoinOperator {
                 all_right_rows,
                 left_consumed,
                 right_consumed,
+                cursor,
                 memory_tracker,
                 right_col_names,
-                output_done,
             } => cross_join::next_cross_join(
                 all_left_rows,
                 all_right_rows,
                 left_consumed,
                 right_consumed,
-                output_done,
+                cursor,
                 memory_tracker,
                 right_col_names,
                 left,
@@ -587,16 +590,16 @@ impl JoinOperator {
                 all_right_rows,
                 left_consumed,
                 right_consumed,
+                cursor,
                 right_col_names,
-                output_done,
                 ..
             } => {
                 all_left_rows.clear();
                 all_right_rows.clear();
                 *left_consumed = false;
                 *right_consumed = false;
+                *cursor = (0, 0);
                 right_col_names.clear();
-                *output_done = false;
             }
             JoinOperatorKind::SemiJoin {
                 right_rows,

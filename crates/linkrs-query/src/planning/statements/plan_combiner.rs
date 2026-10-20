@@ -12,11 +12,14 @@ use crate::planning::plan::logical::logical_nodes::operation::{
     LogicalDedupNode, LogicalFilterNode, LogicalLimitNode, LogicalProjectNode, LogicalSortNode,
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
+use crate::planning::plan::PlanNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::PlannerError;
+use crate::planning::statements::join_keys;
 use crate::planning::statements::projection_util;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::YieldColumn;
+use std::collections::HashSet;
 
 /// Wrap the attached logical mirror (if any) of `input` with `wrap`.
 ///
@@ -230,6 +233,90 @@ pub fn cross_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planne
 
     Ok(SubPlan {
         root: Some(join_node.into_enum()),
+        tail: left.tail.or(right.tail),
+        logical_root,
+    })
+}
+
+/// Combine two pattern sides that no relationship connects.
+///
+/// The WHERE clause may equate a column of one side with a column of the
+/// other. Such an equality is a join condition, so the combination becomes
+/// an equi-join on those keys instead of a cartesian product: the executor
+/// then hashes one side rather than materializing the whole product.
+pub fn join_plans(
+    left: SubPlan,
+    right: SubPlan,
+    where_clause: Option<&ContextualExpression>,
+) -> Result<SubPlan, PlannerError> {
+    let keys = match (left.root.as_ref(), right.root.as_ref()) {
+        (Some(left_root), Some(right_root)) => {
+            let left_vars: HashSet<String> = left_root.col_names().iter().cloned().collect();
+            let right_vars: HashSet<String> = right_root.col_names().iter().cloned().collect();
+            // Sides that share a variable are not independent, so no key
+            // pair can be attributed to one side only.
+            if left_vars.is_disjoint(&right_vars) {
+                join_keys::equi_join_keys(where_clause, &left_vars, &right_vars)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    match keys {
+        Some((build_keys, probe_keys)) => inner_join_plans(left, right, build_keys, probe_keys),
+        None => cross_join_plans(left, right),
+    }
+}
+
+/// Build an equi-join between two sub-plans.
+///
+/// The build keys are evaluated on the right side and the probe keys on the
+/// left side, matching the executor's default build side.
+fn inner_join_plans(
+    mut left: SubPlan,
+    mut right: SubPlan,
+    build_keys: Vec<ContextualExpression>,
+    probe_keys: Vec<ContextualExpression>,
+) -> Result<SubPlan, PlannerError> {
+    let Some(left_root) = left.root.take() else {
+        return Ok(right);
+    };
+    let Some(right_root) = right.root.take() else {
+        left.root = Some(left_root);
+        return Ok(left);
+    };
+
+    let join_node = PlanNodeEnum::InnerJoin(
+        crate::planning::plan::core::nodes::InnerJoinNode::new(
+            left_root,
+            right_root,
+            build_keys.clone(),
+            probe_keys.clone(),
+        )
+        .map_err(|e| PlannerError::JoinFailed(format!("Inner join node creation failed: {}", e)))?,
+    );
+
+    let logical_root = match (left.logical_root.take(), right.logical_root.take()) {
+        (Some(left_logical), Some(right_logical)) => Some(LogicalNodeEnum::InnerJoin(
+            crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode {
+                id: next_node_id(),
+                left: Box::new(left_logical),
+                right: Box::new(right_logical),
+                hash_keys: build_keys,
+                probe_keys,
+                recommended_algorithm: None,
+                output_var: None,
+                col_names: join_node.col_names().to_vec(),
+                column_types: vec![],
+            },
+        )),
+        _ => None,
+    };
+
+    Ok(SubPlan {
+        root: Some(join_node),
         tail: left.tail.or(right.tail),
         logical_root,
     })

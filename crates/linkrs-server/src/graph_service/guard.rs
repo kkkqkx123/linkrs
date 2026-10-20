@@ -393,13 +393,13 @@ impl<
                 username,
                 &grant.username,
                 &grant.space_name,
-                grant.role.as_str(),
+                &grant.role.to_string(),
             ),
             S::Revoke(revoke) => self.enforce_role_change(
                 username,
                 &revoke.username,
                 &revoke.space_name,
-                revoke.role.as_str(),
+                &revoke.role.to_string(),
             ),
             S::ChangePassword(change) => {
                 let target = change.username.as_deref().unwrap_or(username);

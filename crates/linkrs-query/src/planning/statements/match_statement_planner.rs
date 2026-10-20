@@ -273,7 +273,11 @@ impl MatchStatementPlanner {
                 if !joined_by_optimizer {
                     for pattern in match_stmt.patterns.iter().skip(1) {
                         let path_plan = pattern_planner::plan_path_pattern(pattern, &planning_ctx)?;
-                        plan = plan_combiner::cross_join_plans(plan, path_plan)?;
+                        plan = plan_combiner::join_plans(
+                            plan,
+                            path_plan,
+                            match_stmt.where_clause.as_ref(),
+                        )?;
                     }
                 }
 
