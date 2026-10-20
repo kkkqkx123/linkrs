@@ -212,9 +212,7 @@ pub(crate) fn parse_postfix_expression(
                 ),
                 span,
             };
-        } else if ctx.check_token(TokenKind::NotOp)
-            && ctx.current_token().lexeme == "!"
-        {
+        } else if ctx.check_token(TokenKind::NotOp) {
             ctx.next_token();
             let span = ctx.merge_span(expression.span.start, ctx.current_position());
             expression = ParseResult {
