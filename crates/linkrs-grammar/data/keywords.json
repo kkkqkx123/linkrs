@@ -951,7 +951,12 @@
     "INSTALL",
     "UNINSTALL",
     "MIGRATE",
-    "CALL"
+    "CALL",
+    "COLLECT",
+    "USING",
+    "JOIN",
+    "BINARY",
+    "MULTIWAY"
   ],
   "multiword_unconditional": [
     "IS NULL",

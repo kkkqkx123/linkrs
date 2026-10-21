@@ -15,6 +15,7 @@ use crate::parser::TokenKind;
 pub const SOFT_KEYWORDS: &[&str] = &[
     "GRAPH", "CHECKPOINT", "PURGE", "EXPIRED", "FULLTEXT", "EXTENSION", "MACRO", "TYPE",
     "ATTACH", "EXPORT", "IMPORT", "LOAD", "INSTALL", "UNINSTALL", "MIGRATE", "CALL",
+    "COLLECT", "USING", "JOIN", "BINARY", "MULTIWAY",
 ];
 
 /// Multi-word sequences the lexer merges into a single token unconditionally.

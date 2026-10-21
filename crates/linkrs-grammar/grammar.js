@@ -48,7 +48,21 @@ function buildRules() {
     // `source_file` stays first so it remains the start symbol.
     ...generated,
 
-    statement: ($) => seq($.segment, repeat(seq($.pipe, $.segment)), optional(';')),
+    statement: ($) =>
+      seq(
+        $.set_operation_statement,
+        optional(';'),
+        repeat(seq($.set_operation_statement, optional(';'))),
+      ),
+    set_operation_statement: ($) =>
+      seq($.pipe_statement, repeat(seq($.set_operator, $.pipe_statement))),
+    pipe_statement: ($) => seq($.segment, repeat(seq($.pipe, $.segment))),
+    set_operator: ($) =>
+      choice(
+        seq($.kw_union, optional($.kw_all)),
+        $.kw_intersect,
+        $.kw_minus,
+      ),
 
     segment: ($) =>
       choice(
@@ -65,6 +79,7 @@ function buildRules() {
         $.yield_segment,
         $.where_segment,
         $.order_by_segment,
+        $.collect_segment,
         $.group_by_segment,
         $.having_segment,
         $.skip_segment,
@@ -118,11 +133,20 @@ function buildRules() {
       choice(
         seq($.kw_match, $.kw_fulltext, $.tail),
         seq($.kw_match, $.kw_vector, $.tail),
-        seq($.kw_match, $.match_pattern),
+        seq($.kw_match, $.match_pattern, optional($.using_join)),
       ),
     optional_match_segment: ($) => seq($.kw_optional, $.kw_match, $.match_pattern),
 
     match_pattern: ($) => seq($.pattern_part, repeat(seq(',', $.pattern_part))),
+    using_join: ($) =>
+      seq(
+        $.kw_using,
+        $.kw_join,
+        choice($.kw_binary, $.kw_multiway),
+        '(',
+        $.identifier_list,
+        ')',
+      ),
     pattern_part: ($) =>
       seq($.node_pattern, repeat(seq($.edge_pattern, $.node_pattern))),
 
@@ -246,6 +270,13 @@ function buildRules() {
     order_item: ($) =>
       seq($._expr, optional(choice($.kw_asc, descWord($), $.kw_ascending, $.kw_descending))),
     group_by_segment: ($) => seq($.kw_group, $.kw_by, $.expr_list),
+    collect_segment: ($) => seq($.kw_collect, $.collect_items),
+    collect_items: ($) =>
+      seq(
+        $._expr,
+        optional(seq($.kw_as, $.identifier)),
+        repeat(seq(',', $._expr, optional(seq($.kw_as, $.identifier)))),
+      ),
     having_segment: ($) => seq($.kw_having, $._expr),
     skip_segment: ($) => seq($.kw_skip, $._expr),
     limit_segment: ($) => seq($.kw_limit, $._expr),
@@ -272,6 +303,14 @@ function buildRules() {
     update_segment: ($) =>
       choice(
         seq($.kw_update, $.kw_extension, optional($.tail)),
+        seq(
+          $.kw_update,
+          $.kw_configs,
+          optional(seq($.identifier, '.')),
+          $.identifier,
+          '=',
+          $._expr,
+        ),
         seq(
           $.kw_update,
           choice($.kw_vertex, $.kw_edge),
@@ -422,7 +461,9 @@ function buildRules() {
       ),
     show_object: ($) => choice(
       $.kw_tag, $.kw_tags, $.kw_edge, $.kw_edges, $.kw_space, $.kw_spaces,
-      $.kw_index, $.kw_indexes,
+      $.kw_index, $.kw_indexes, $.kw_configs, $.kw_queries, $.kw_sessions,
+      $.kw_users, $.kw_roles, $.kw_graphs, $.kw_macros, $.kw_functions,
+      $.kw_sequences,
     ),
     describe_segment: ($) =>
       choice(
@@ -440,11 +481,31 @@ function buildRules() {
     tail: ($) => prec(3, token(/[^\n]+\n?/)),
 
     // ---- simple statement segments -------------------------------------
-    begin_segment: ($) => seq($.kw_begin, optional($.tail)),
-    commit_segment: ($) => seq($.kw_commit, optional($.tail)),
-    rollback_segment: ($) => seq($.kw_rollback, optional($.tail)),
-    savepoint_segment: ($) => seq($.kw_savepoint, optional($.tail)),
-    release_segment: ($) => seq($.kw_release, optional($.tail)),
+    begin_segment: ($) =>
+      seq(
+        $.kw_begin,
+        optional($.kw_transaction),
+        optional($.read_mode),
+        optional($.tail),
+      ),
+    read_mode: ($) =>
+      choice(
+        seq($.kw_read, $.kw_only),
+        seq($.kw_read, $.kw_write),
+      ),
+    commit_segment: ($) =>
+      seq($.kw_commit, optional($.kw_transaction), optional($.tail)),
+    rollback_segment: ($) =>
+      seq(
+        $.kw_rollback,
+        optional($.kw_transaction),
+        optional($.rollback_target),
+        optional($.tail),
+      ),
+    rollback_target: ($) =>
+      seq($.kw_to, optional($.kw_savepoint), $.identifier),
+    savepoint_segment: ($) => seq($.kw_savepoint, $.identifier),
+    release_segment: ($) => seq($.kw_release, $.kw_savepoint, $.identifier),
     kill_segment: ($) => seq($.kw_kill, optional($.tail)),
     explain_segment: ($) => seq($.kw_explain, optional($.tail)),
     profile_segment: ($) => seq($.kw_profile, optional($.tail)),
@@ -566,6 +627,7 @@ function buildRules() {
           choice(
             seq('.', $.property_key),
             seq('[', optional($._expr), ']'),
+            seq($.double_colon, $.type_name),
             $.not_op,
           ),
         ),
@@ -671,6 +733,7 @@ function buildRules() {
     ampersand: ($) => '&',
     shift_left: ($) => '<<',
     shift_right: ($) => '>>',
+    double_colon: ($) => '::',
     arrow: ($) => '->',
     back_arrow: ($) => '<-',
     arrow_right: ($) => '->>',
@@ -710,6 +773,7 @@ module.exports = grammar({
     [$.update_segment],
     [$.column_constraint],
     [$.order_item],
+    [$.statement],
   ],
 
   rules: buildRules(),

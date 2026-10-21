@@ -19,6 +19,7 @@ git diff --exit-code -- crates/linkrs-grammar/outputs/
 
 python3 scripts/check-highlights.py
 python3 scripts/check-grammar-coverage.py
+python3 scripts/check-grammar-structure.py
 
 cargo test -q -p linkrs-grammar
 cargo test -q -p linkrs-query --test corpus_parity

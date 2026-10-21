@@ -44,7 +44,9 @@ hard_failures = []
 
 # Known exceptions: these are intentionally not generated as kw_ rules.
 SKIPPED_KEYWORDS = {"TRUE", "FALSE", "BALANCE"}
-NON_KEYWORD_COMPONENTS = {"EMPTY", "USING", "JOIN"}
+NON_KEYWORD_COMPONENTS = {"EMPTY"}
+# `?` is lexed as a placeholder token but no query production consumes it.
+PUNCTUATION_ALLOWLIST = {"?"}
 
 # 1. Every inventory keyword/soft keyword must exist as a generated kw_ rule.
 for group_name in ("keywords",):
@@ -88,21 +90,20 @@ for raw in dispatch_sequences:
             hard_failures.append(f"dispatch sequence component missing from grammar: {word}")
 
 # 4. Operator and punctuation symbols must be grammar tokens.
-grammar_tokens = set(re.findall(r'"([+\-*/%&|^<>=!~]+)"', grammar_js))
-for symbol, _kind in inventory.get("operators", []):
-    if symbol not in grammar_tokens and symbol not in {"=", "==" }:
-        # Operators are represented by named rules in grammar.js, so only report
-        # symbols that are completely absent from the grammar source.
-        if symbol not in grammar_js:
-            hard_failures.append(f"operator symbol absent from grammar source: {symbol}")
+grammar_literals = set(re.findall(r"'([^'\n]+)'", grammar_js))
+for entry in inventory.get("operators", []):
+    symbol = entry["symbol"]
+    if symbol not in grammar_literals:
+        hard_failures.append(f"operator symbol absent from grammar source: {symbol}")
 
-for symbol, _kind in inventory.get("punctuation", []):
-    if symbol not in grammar_js:
+for entry in inventory.get("punctuation", []):
+    symbol = entry["symbol"]
+    if symbol not in grammar_literals and symbol not in PUNCTUATION_ALLOWLIST:
         hard_failures.append(f"punctuation symbol absent from grammar source: {symbol}")
 
 # 5. Informational coverage matrix.
 grammar_segments = sorted(set(re.findall(r"[a-z_]+_segment", grammar_js)))
-stmt_variants = sorted(set(re.findall(r"^\s*([A-Za-z]+)\([A-Za-z]+Stmt\)", stmt_source, re.M)))
+stmt_variants = sorted(set(re.findall(r"^\s*([A-Za-z]+)\([A-Za-z]+\),", stmt_source, re.M)))
 print(f"expanded kw rules in grammar.json: {len(expanded_kw)}")
 print(f"inventory keywords: {len(inventory.get('keywords', []))}")
 print(f"soft keywords: {len(inventory.get('soft_keywords', []))}")

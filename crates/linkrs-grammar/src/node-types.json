@@ -193,6 +193,14 @@
           "named": true
         },
         {
+          "type": "kw_transaction",
+          "named": true
+        },
+        {
+          "type": "read_mode",
+          "named": true
+        },
+        {
           "type": "tail",
           "named": true
         }
@@ -370,6 +378,48 @@
     }
   },
   {
+    "type": "collect_items",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "kw_as",
+          "named": true
+        },
+        {
+          "type": "or_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "collect_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "collect_items",
+          "named": true
+        },
+        {
+          "type": "kw_collect",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "column_constraint",
     "named": true,
     "fields": {},
@@ -450,6 +500,10 @@
       "types": [
         {
           "type": "kw_commit",
+          "named": true
+        },
+        {
+          "type": "kw_transaction",
           "named": true
         },
         {
@@ -1642,6 +1696,11 @@
     "fields": {}
   },
   {
+    "type": "kw_all",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_allshortestpaths",
     "named": true,
     "fields": {}
@@ -1702,6 +1761,11 @@
     "fields": {}
   },
   {
+    "type": "kw_binary",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_bool",
     "named": true,
     "fields": {}
@@ -1737,7 +1801,17 @@
     "fields": {}
   },
   {
+    "type": "kw_collect",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_commit",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_configs",
     "named": true,
     "fields": {}
   },
@@ -1892,6 +1966,11 @@
     "fields": {}
   },
   {
+    "type": "kw_functions",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_get",
     "named": true,
     "fields": {}
@@ -1908,6 +1987,11 @@
   },
   {
     "type": "kw_graph",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_graphs",
     "named": true,
     "fields": {}
   },
@@ -1982,7 +2066,17 @@
     "fields": {}
   },
   {
+    "type": "kw_intersect",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_is",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_join",
     "named": true,
     "fields": {}
   },
@@ -2017,6 +2111,11 @@
     "fields": {}
   },
   {
+    "type": "kw_macros",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_match",
     "named": true,
     "fields": {}
@@ -2042,6 +2141,16 @@
     "fields": {}
   },
   {
+    "type": "kw_minus",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_multiway",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_not",
     "named": true,
     "fields": {}
@@ -2053,6 +2162,11 @@
   },
   {
     "type": "kw_on",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_only",
     "named": true,
     "fields": {}
   },
@@ -2097,6 +2211,16 @@
     "fields": {}
   },
   {
+    "type": "kw_queries",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_read",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_release",
     "named": true,
     "fields": {}
@@ -2122,6 +2246,11 @@
     "fields": {}
   },
   {
+    "type": "kw_roles",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_rollback",
     "named": true,
     "fields": {}
@@ -2138,6 +2267,16 @@
   },
   {
     "type": "kw_sequence",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_sequences",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_sessions",
     "named": true,
     "fields": {}
   },
@@ -2237,12 +2376,22 @@
     "fields": {}
   },
   {
+    "type": "kw_transaction",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_type",
     "named": true,
     "fields": {}
   },
   {
     "type": "kw_uninstall",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_union",
     "named": true,
     "fields": {}
   },
@@ -2273,6 +2422,16 @@
   },
   {
     "type": "kw_user",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_users",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_using",
     "named": true,
     "fields": {}
   },
@@ -2308,6 +2467,11 @@
   },
   {
     "type": "kw_with",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_write",
     "named": true,
     "fields": {}
   },
@@ -2541,6 +2705,10 @@
         },
         {
           "type": "tail",
+          "named": true
+        },
+        {
+          "type": "using_join",
           "named": true
         }
       ]
@@ -2967,6 +3135,25 @@
     }
   },
   {
+    "type": "pipe_statement",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "pipe",
+          "named": true
+        },
+        {
+          "type": "segment",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "postfix_expr",
     "named": true,
     "fields": {},
@@ -2974,6 +3161,10 @@
       "multiple": true,
       "required": true,
       "types": [
+        {
+          "type": "double_colon",
+          "named": true
+        },
         {
           "type": "not_op",
           "named": true
@@ -2988,6 +3179,10 @@
         },
         {
           "type": "property_key",
+          "named": true
+        },
+        {
+          "type": "type_name",
           "named": true
         }
       ]
@@ -3193,6 +3388,29 @@
     }
   },
   {
+    "type": "read_mode",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_only",
+          "named": true
+        },
+        {
+          "type": "kw_read",
+          "named": true
+        },
+        {
+          "type": "kw_write",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "release_segment",
     "named": true,
     "fields": {},
@@ -3201,11 +3419,15 @@
       "required": true,
       "types": [
         {
+          "type": "identifier",
+          "named": true
+        },
+        {
           "type": "kw_release",
           "named": true
         },
         {
-          "type": "tail",
+          "type": "kw_savepoint",
           "named": true
         }
       ]
@@ -3327,7 +3549,38 @@
           "named": true
         },
         {
+          "type": "kw_transaction",
+          "named": true
+        },
+        {
+          "type": "rollback_target",
+          "named": true
+        },
+        {
           "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "rollback_target",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "kw_savepoint",
+          "named": true
+        },
+        {
+          "type": "kw_to",
           "named": true
         }
       ]
@@ -3342,11 +3595,11 @@
       "required": true,
       "types": [
         {
-          "type": "kw_savepoint",
+          "type": "identifier",
           "named": true
         },
         {
-          "type": "tail",
+          "type": "kw_savepoint",
           "named": true
         }
       ]
@@ -3417,6 +3670,10 @@
         },
         {
           "type": "clear_space_segment",
+          "named": true
+        },
+        {
+          "type": "collect_segment",
           "named": true
         },
         {
@@ -3634,6 +3891,52 @@
     }
   },
   {
+    "type": "set_operation_statement",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "pipe_statement",
+          "named": true
+        },
+        {
+          "type": "set_operator",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "set_operator",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_all",
+          "named": true
+        },
+        {
+          "type": "kw_intersect",
+          "named": true
+        },
+        {
+          "type": "kw_minus",
+          "named": true
+        },
+        {
+          "type": "kw_union",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "set_pair",
     "named": true,
     "fields": {},
@@ -3680,6 +3983,10 @@
       "required": true,
       "types": [
         {
+          "type": "kw_configs",
+          "named": true
+        },
+        {
           "type": "kw_edge",
           "named": true
         },
@@ -3688,11 +3995,39 @@
           "named": true
         },
         {
+          "type": "kw_functions",
+          "named": true
+        },
+        {
+          "type": "kw_graphs",
+          "named": true
+        },
+        {
           "type": "kw_index",
           "named": true
         },
         {
           "type": "kw_indexes",
+          "named": true
+        },
+        {
+          "type": "kw_macros",
+          "named": true
+        },
+        {
+          "type": "kw_queries",
+          "named": true
+        },
+        {
+          "type": "kw_roles",
+          "named": true
+        },
+        {
+          "type": "kw_sequences",
+          "named": true
+        },
+        {
+          "type": "kw_sessions",
           "named": true
         },
         {
@@ -3709,6 +4044,10 @@
         },
         {
           "type": "kw_tags",
+          "named": true
+        },
+        {
+          "type": "kw_users",
           "named": true
         }
       ]
@@ -3821,11 +4160,7 @@
       "required": true,
       "types": [
         {
-          "type": "pipe",
-          "named": true
-        },
-        {
-          "type": "segment",
+          "type": "set_operation_statement",
           "named": true
         }
       ]
@@ -4001,6 +4336,10 @@
           "named": true
         },
         {
+          "type": "kw_configs",
+          "named": true
+        },
+        {
           "type": "kw_edge",
           "named": true
         },
@@ -4018,6 +4357,10 @@
         },
         {
           "type": "kw_vertex",
+          "named": true
+        },
+        {
+          "type": "or_expr",
           "named": true
         },
         {
@@ -4096,6 +4439,37 @@
         },
         {
           "type": "kw_use",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "using_join",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier_list",
+          "named": true
+        },
+        {
+          "type": "kw_binary",
+          "named": true
+        },
+        {
+          "type": "kw_join",
+          "named": true
+        },
+        {
+          "type": "kw_multiway",
+          "named": true
+        },
+        {
+          "type": "kw_using",
           "named": true
         }
       ]
@@ -4374,6 +4748,10 @@
   },
   {
     "type": "div",
+    "named": true
+  },
+  {
+    "type": "double_colon",
     "named": true
   },
   {

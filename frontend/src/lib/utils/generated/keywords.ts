@@ -252,4 +252,9 @@ export const GENERATED_SOFT_KEYWORDS: readonly string[] = [
 	'UNINSTALL',
 	'MIGRATE',
 	'CALL',
+	'COLLECT',
+	'USING',
+	'JOIN',
+	'BINARY',
+	'MULTIWAY',
 ];
