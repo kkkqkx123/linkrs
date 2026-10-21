@@ -61,6 +61,49 @@ fn corpus() -> Vec<&'static str> {
         "CALL foo()",
         "LET x = 1",
         "$x = MATCH (a) RETURN a",
+        "BEGIN TRANSACTION",
+        "COMMIT",
+        "ROLLBACK",
+        "SAVEPOINT sp1",
+        "RELEASE SAVEPOINT sp1",
+        "KILL QUERY 1",
+        "CLEAR SPACE",
+        "ATTACH DATABASE 'a'",
+        "EXPORT DATABASE 'a'",
+        "IMPORT DATABASE 'a'",
+        "LOAD EXTENSION 'a'",
+        "CHECKPOINT",
+        "PURGE EXPIRED",
+        "CREATE MACRO f(x) AS x",
+        "DROP MACRO f",
+        "CREATE TYPE uid AS INT",
+        "DROP TYPE uid",
+        "CREATE FULLTEXT INDEX idx ON tag(field)",
+        "DROP FULLTEXT INDEX idx",
+        "SHOW FULLTEXT INDEX",
+        "DESCRIBE FULLTEXT INDEX idx",
+        "CREATE VECTOR INDEX idx ON tag(field)",
+        "DROP VECTOR INDEX idx",
+        "SHOW VECTOR INDEX",
+        "DESCRIBE VECTOR INDEX idx",
+        "SEARCH 'term'",
+        "SEARCH VECTOR 'a'",
+        "MATCH FULLTEXT 'term'",
+        "SEARCH INDEX 'term'",
+        "LOOKUP ON TAG player YIELD id(vertex) AS vid",
+        "FETCH PROP ON player \"1\" YIELD vertex.name AS name",
+        "FIND SHORTEST PATH FROM \"1\" TO \"2\" OVER knows",
+        "GET SUBGRAPH 2 STEPS FROM \"1\" OVER knows",
+        "GO FROM \"1\" OVER knows YIELD id($$) AS vid",
+        "UNWIND [1, 2] AS x RETURN x",
+        "MATCH (a) WITH a AS b RETURN b",
+        "MATCH (a) RETURN CASE WHEN a.age > 18 THEN \"adult\" ELSE \"minor\" END AS c",
+        "MATCH (a) WHERE a.name IS EMPTY RETURN a",
+        "MATCH (a) WHERE a.age NOT IN [1, 2] RETURN a",
+        "MATCH (a) RETURN ~a.age AS x",
+        "MATCH (a) RETURN a.age! AS x",
+        "LET x = 1",
+        "$x = MATCH (a) RETURN a",
     ]
 }
 
@@ -112,7 +155,7 @@ fn handwritten_success_implies_tree_without_error() {
         }
         covered += 1;
     }
-    assert!(covered > 20, "corpus coverage too small: {covered}");
+    assert!(covered > 50, "corpus coverage too small: {covered}");
     assert!(
         skipped <= allowed.len(),
         "allowlist entries must correspond to corpus statements"

@@ -69,3 +69,27 @@ fn tokens_cover_all_operator_kinds() {
         last = t.start;
     }
 }
+
+#[test]
+fn fixtures_parse_cleanly() {
+    use std::fs;
+    use std::path::Path;
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixtures_dir = manifest.join("fixtures");
+    for entry in fs::read_dir(&fixtures_dir).expect("read fixtures") {
+        let path = entry.expect("entry").path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy();
+        if name.contains("error") {
+            continue;
+        }
+        let source = fs::read_to_string(&path).expect("read fixture");
+        let outcome = parse(&source);
+        assert!(
+            !outcome.has_error,
+            "fixture {name} must parse without ERROR/MISSING"
+        );
+    }
+}

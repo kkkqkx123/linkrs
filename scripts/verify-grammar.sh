@@ -14,6 +14,15 @@ git diff --exit-code -- crates/linkrs-grammar/data/keywords.json
 node tools/grammar-codegen/gen.mjs
 git diff --exit-code -- frontend/src/lib/utils/generated/
 
+cargo run -q -p linkrs-grammar --example highlight_fixtures
+git diff --exit-code -- crates/linkrs-grammar/outputs/
+
+python3 scripts/check-highlights.py
+python3 scripts/check-grammar-coverage.py
+
+cargo test -q -p linkrs-grammar
+cargo test -q -p linkrs-query --test corpus_parity
+
 # The parser is regenerated in a scratch directory, because the vendored
 # runtime headers track the tree-sitter runtime version and not the CLI.
 scratch=$(mktemp -d)

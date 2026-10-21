@@ -280,9 +280,7 @@ function buildRules() {
           $.kw_set,
           $.set_list,
           optional($.where_segment),
-          optional($.tail),
         ),
-        seq($.kw_update, optional($.tail)),
       ),
     set_list: ($) =>
       seq($.set_pair, repeat(seq(',', $.set_pair))),
@@ -291,8 +289,8 @@ function buildRules() {
     delete_segment: ($) =>
       choice(
         seq($.kw_detach, $.kw_delete, $.tail),
-        seq($.kw_delete, $.kw_vertex, $.identifier, $.kw_from, $.vid_list, optional($.where_segment), optional($.tail)),
-        seq($.kw_delete, $.kw_edge, optional($.identifier), $.vid, choice($.arrow, $.arrow_right), $.vid, repeat(seq(',', $.vid, choice($.arrow, $.arrow_right), $.vid)), optional($.where_segment), optional($.tail)),
+        seq($.kw_delete, $.kw_vertex, $.identifier, $.kw_from, $.vid_list, optional($.where_segment)),
+        seq($.kw_delete, $.kw_edge, optional($.identifier), $.vid, choice($.arrow, $.arrow_right), $.vid, repeat(seq(',', $.vid, choice($.arrow, $.arrow_right), $.vid)), optional($.where_segment)),
       ),
 
     upsert_segment: ($) =>
@@ -328,15 +326,15 @@ function buildRules() {
         seq($.kw_create, $.kw_sequence, $.tail),
         seq($.kw_create, $.kw_graph, $.tail),
         seq($.kw_create, '(', $.tail),
-        seq(
-          $.kw_create,
-          choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
-          optional($.if_not_exists),
-          $.identifier,
-          optional($.create_tail),
-          optional($.tail),
+        prec(2,
+          seq(
+            $.kw_create,
+            choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
+            optional($.if_not_exists),
+            $.identifier,
+            optional($.create_tail),
+          ),
         ),
-        seq($.kw_create, $.tail),
       ),
     if_not_exists: ($) => seq($.kw_if, $.kw_not, $.kw_exists),
     create_tail: ($) =>
@@ -381,9 +379,7 @@ function buildRules() {
           choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
           optional($.if_exists),
           $.identifier,
-          optional($.tail),
         ),
-        seq($.kw_drop, $.tail),
       ),
     if_exists: ($) => seq($.kw_if, $.kw_exists),
 
@@ -399,7 +395,6 @@ function buildRules() {
           $.identifier,
           $.kw_add,
           optional($.column_defs),
-          optional($.tail),
         ),
         seq(
           $.kw_alter,
@@ -407,27 +402,23 @@ function buildRules() {
           $.identifier,
           $.kw_change,
           optional($.column_defs),
-          optional($.tail),
         ),
         seq(
           $.kw_alter,
           choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
           $.identifier,
           $.kw_drop,
-          optional($.column_defs),
-          optional($.tail),
+          optional($.identifier),
         ),
-        seq($.kw_alter, $.tail),
       ),
 
     show_segment: ($) =>
       choice(
         seq($.kw_show, $.kw_create, $.show_object, optional($.identifier), optional($.tail)),
-        seq($.kw_show, $.show_object, optional($.identifier), optional($.tail)),
+        prec(2, seq($.kw_show, $.show_object, optional($.identifier), optional($.tail))),
         seq($.kw_show, $.kw_fulltext, $.tail),
         seq($.kw_show, $.kw_vector, $.tail),
         seq($.kw_show, $.identifier, optional($.tail)),
-        seq($.kw_show, $.tail),
       ),
     show_object: ($) => choice(
       $.kw_tag, $.kw_tags, $.kw_edge, $.kw_edges, $.kw_space, $.kw_spaces,
@@ -436,11 +427,9 @@ function buildRules() {
     describe_segment: ($) =>
       choice(
         seq(descWord($), $.show_object, $.identifier, optional($.tail)),
-        seq(descWord($), $.show_object, optional($.tail)),
         seq(descWord($), $.kw_fulltext, $.tail),
         seq(descWord($), $.kw_vector, $.tail),
         seq(descWord($), $.identifier, optional($.tail)),
-        seq(descWord($), $.tail),
       ),
     use_segment: ($) => seq($.kw_use, $.identifier),
 
@@ -448,7 +437,7 @@ function buildRules() {
     // A low-level catch-all for the remainder of a statement. It uses a
     // higher precedence than keyword rules so it can absorb arbitrary text
     // without forcing every keyword into the conflict set.
-    tail: ($) => prec(3, token(/[^|;\n]+/)),
+    tail: ($) => prec(3, token(/[^\n]+\n?/)),
 
     // ---- simple statement segments -------------------------------------
     begin_segment: ($) => seq($.kw_begin, optional($.tail)),
@@ -577,6 +566,7 @@ function buildRules() {
           choice(
             seq('.', $.property_key),
             seq('[', optional($._expr), ']'),
+            $.not_op,
           ),
         ),
       ),

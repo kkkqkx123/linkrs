@@ -2975,6 +2975,10 @@
       "required": true,
       "types": [
         {
+          "type": "not_op",
+          "named": true
+        },
+        {
           "type": "or_expr",
           "named": true
         },
