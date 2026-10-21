@@ -1,0 +1,15 @@
+-- Basic match and filtering
+MATCH (p:person)
+WHERE p.age >= 18 AND p.name IS NOT NULL
+RETURN p.person_id, p.name, p.age
+ORDER BY p.age DESC, p.name ASC
+SKIP 10
+LIMIT 20
+
+MATCH (p:person)
+WHERE p.name STARTS WITH "A" OR p.name ENDS WITH "z"
+RETURN DISTINCT p.name
+
+MATCH (p:person)
+WHERE p.age BETWEEN 20 AND 40
+RETURN count(p) AS total

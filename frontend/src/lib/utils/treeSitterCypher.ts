@@ -70,10 +70,14 @@ function collectTokens(model: monaco.editor.ITextModel): SemanticToken[] {
 	if (!tree) return [];
 	try {
 		const captures = query!.captures(tree.rootNode);
-		// Tree-sitter priority: a capture later in the query overrides an
-		// earlier one over the same range, so resolution follows capture order
-		// (keyed by start index) rather than positional order.
-		const byStart = new Map<number, SemanticToken>();
+		interface RawCapture {
+			start: number;
+			end: number;
+			type: number;
+			priority: number;
+		}
+		const raw: RawCapture[] = [];
+		let priority = 0;
 		for (const capture of captures) {
 			const type = captureTypeIndex(capture.name);
 			if (type < 0) continue;
@@ -82,23 +86,45 @@ function collectTokens(model: monaco.editor.ITextModel): SemanticToken[] {
 			if (capture.name === 'variable' && IDENTIFIER_NODE_TYPES.has(node.type)) {
 				continue;
 			}
-			byStart.set(node.startIndex, {
+			raw.push({
 				start: node.startIndex,
 				end: node.endIndex,
 				type,
+				priority: priority++,
 			});
 		}
-		const items = [...byStart.values()];
-		items.sort((a, b) => a.start - b.start || a.end - b.end);
+		if (raw.length === 0) return [];
 
-		const filtered: SemanticToken[] = [];
-		let lastEnd = -1;
-		for (const item of items) {
-			if (item.start < lastEnd) continue;
-			filtered.push(item);
-			lastEnd = item.end;
+		// Later captures override earlier ones over overlapping ranges. Mark
+		// each byte offset with the highest-priority capture, then compress the
+		// resulting runs back into token spans.
+		const length = tree.rootNode.endIndex;
+		const typeAt = new Int8Array(length).fill(-1);
+		const priorityAt = new Int32Array(length).fill(-1);
+		for (const capture of raw) {
+			for (let offset = capture.start; offset < capture.end; offset += 1) {
+				if (capture.priority >= priorityAt[offset]) {
+					priorityAt[offset] = capture.priority;
+					typeAt[offset] = capture.type;
+				}
+			}
 		}
-		return filtered;
+
+		const items: SemanticToken[] = [];
+		let offset = 0;
+		while (offset < length) {
+			if (typeAt[offset] < 0) {
+				offset += 1;
+				continue;
+			}
+			const type = typeAt[offset];
+			const start = offset;
+			while (offset < length && typeAt[offset] === type) {
+				offset += 1;
+			}
+			items.push({ start, end: offset, type });
+		}
+		return items;
 	} finally {
 		tree.delete();
 	}

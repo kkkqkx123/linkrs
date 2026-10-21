@@ -1,0 +1,10 @@
+-- Parameters, expressions and functions
+MATCH (p:person)
+WHERE p.age > $min_age AND p.score >= @threshold
+RETURN p.name,
+       p.age + 1 AS next_age,
+       CASE WHEN p.score >= 90 THEN "excellent" ELSE "ok" END AS grade,
+       toUpper(p.name) AS upper_name,
+       substring(p.name, 0, 3) AS prefix,
+       round(p.score, 2) AS rounded_score
+RETURN p.name, p.age % 2 AS parity, p.score ** 2 AS squared

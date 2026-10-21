@@ -1,0 +1,18 @@
+-- Data mutation statements
+INSERT VERTEX person(person_id, name, age, score) VALUES "p1":
+    ("p1", "Alice", 34, 98.5)
+
+INSERT VERTEX company(company_id, name) VALUES "c1":
+    ("c1", "Acme")
+
+INSERT EDGE works_at(position, since, salary) VALUES "p1"->"c1":
+    ("Engineer", "2020-01-01", 120000.0)
+
+UPDATE VERTEX person "p1" SET age = age + 1, score = 99.0
+
+DELETE VERTEX person FROM "p2"
+
+UPSERT VERTEX person(person_id, name, age) VALUES "p3":
+    ("p3", "Carol", 29)
+
+DELETE EDGE works_at "p1"->"c1"

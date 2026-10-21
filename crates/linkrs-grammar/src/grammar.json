@@ -12,7 +12,7 @@
     },
     "kw_create": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][rR][eE][aA][tT][eE]"
@@ -20,7 +20,7 @@
     },
     "kw_match": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[mM][aA][tT][cC][hH]"
@@ -28,7 +28,7 @@
     },
     "kw_return": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][tT][uU][rR][nN]"
@@ -36,7 +36,7 @@
     },
     "kw_where": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[wW][hH][eE][rR][eE]"
@@ -44,7 +44,7 @@
     },
     "kw_delete": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][eE][lL][eE][tT][eE]"
@@ -52,7 +52,7 @@
     },
     "kw_detach": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][eE][tT][aA][cC][hH]"
@@ -60,7 +60,7 @@
     },
     "kw_update": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][pP][dD][aA][tT][eE]"
@@ -68,7 +68,7 @@
     },
     "kw_insert": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][sS][eE][rR][tT]"
@@ -76,7 +76,7 @@
     },
     "kw_upsert": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][pP][sS][eE][rR][tT]"
@@ -84,7 +84,7 @@
     },
     "kw_values": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[vV][aA][lL][uU][eE][sS]"
@@ -92,7 +92,7 @@
     },
     "kw_from": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][rR][oO][mM]"
@@ -100,7 +100,7 @@
     },
     "kw_to": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][oO]"
@@ -108,7 +108,7 @@
     },
     "kw_as": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][sS]"
@@ -116,7 +116,7 @@
     },
     "kw_with": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[wW][iI][tT][hH]"
@@ -124,7 +124,7 @@
     },
     "kw_yield": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[yY][iI][eE][lL][dD]"
@@ -132,7 +132,7 @@
     },
     "kw_go": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][oO]"
@@ -140,7 +140,7 @@
     },
     "kw_over": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][vV][eE][rR]"
@@ -148,7 +148,7 @@
     },
     "kw_steps": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][tT][eE][pP][sS]"
@@ -156,7 +156,7 @@
     },
     "kw_step": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][tT][eE][pP]"
@@ -164,7 +164,7 @@
     },
     "kw_upto": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][pP][tT][oO]"
@@ -172,7 +172,7 @@
     },
     "kw_limit": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][iI][mM][iI][tT]"
@@ -180,7 +180,7 @@
     },
     "kw_asc": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][sS][cC]"
@@ -188,7 +188,7 @@
     },
     "kw_desc": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][eE][sS][cC]"
@@ -196,7 +196,7 @@
     },
     "kw_describe": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][eE][sS][cC][rR][iI][bB][eE]"
@@ -204,7 +204,7 @@
     },
     "kw_order": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][rR][dD][eE][rR]"
@@ -212,7 +212,7 @@
     },
     "kw_by": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[bB][yY]"
@@ -220,7 +220,7 @@
     },
     "kw_skip": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][kK][iI][pP]"
@@ -228,7 +228,7 @@
     },
     "kw_unwind": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][nN][wW][iI][nN][dD]"
@@ -236,7 +236,7 @@
     },
     "kw_optional": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][pP][tT][iI][oO][nN][aA][lL]"
@@ -244,7 +244,7 @@
     },
     "kw_distinct": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][iI][sS][tT][iI][nN][cC][tT]"
@@ -252,7 +252,7 @@
     },
     "kw_all": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][lL][lL]"
@@ -260,7 +260,7 @@
     },
     "kw_null": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[nN][uU][lL][lL]"
@@ -268,7 +268,7 @@
     },
     "kw_is": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][sS]"
@@ -276,7 +276,7 @@
     },
     "kw_not": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[nN][oO][tT]"
@@ -284,7 +284,7 @@
     },
     "kw_and": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][nN][dD]"
@@ -292,7 +292,7 @@
     },
     "kw_or": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][rR]"
@@ -300,7 +300,7 @@
     },
     "kw_xor": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[xX][oO][rR]"
@@ -308,7 +308,7 @@
     },
     "kw_contains": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][nN][tT][aA][iI][nN][sS]"
@@ -316,7 +316,7 @@
     },
     "kw_starts": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][tT][aA][rR][tT][sS]"
@@ -324,7 +324,7 @@
     },
     "kw_ends": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[eE][nN][dD][sS]"
@@ -332,7 +332,7 @@
     },
     "kw_case": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][aA][sS][eE]"
@@ -340,7 +340,7 @@
     },
     "kw_when": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[wW][hH][eE][nN]"
@@ -348,7 +348,7 @@
     },
     "kw_then": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][hH][eE][nN]"
@@ -356,7 +356,7 @@
     },
     "kw_else": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[eE][lL][sS][eE]"
@@ -364,7 +364,7 @@
     },
     "kw_end": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[eE][nN][dD]"
@@ -372,7 +372,7 @@
     },
     "kw_union": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][nN][iI][oO][nN]"
@@ -380,7 +380,7 @@
     },
     "kw_intersect": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][tT][eE][rR][sS][eE][cC][tT]"
@@ -388,7 +388,7 @@
     },
     "kw_minus": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[mM][iI][nN][uU][sS]"
@@ -396,7 +396,7 @@
     },
     "kw_group": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][rR][oO][uU][pP]"
@@ -404,7 +404,7 @@
     },
     "kw_having": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[hH][aA][vV][iI][nN][gG]"
@@ -412,7 +412,7 @@
     },
     "kw_filter": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][iI][lL][tT][eE][rR]"
@@ -420,7 +420,7 @@
     },
     "kw_rollup": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][oO][lL][lL][uU][pP]"
@@ -428,7 +428,7 @@
     },
     "kw_cube": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][uU][bB][eE]"
@@ -436,7 +436,7 @@
     },
     "kw_grouping": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][rR][oO][uU][pP][iI][nN][gG]"
@@ -444,7 +444,7 @@
     },
     "kw_sets": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][tT][sS]"
@@ -452,7 +452,7 @@
     },
     "kw_between": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[bB][eE][tT][wW][eE][eE][nN]"
@@ -460,7 +460,7 @@
     },
     "kw_admin": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][dD][mM][iI][nN]"
@@ -468,7 +468,7 @@
     },
     "kw_edge": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[eE][dD][gG][eE]"
@@ -476,7 +476,7 @@
     },
     "kw_edges": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[eE][dD][gG][eE][sS]"
@@ -484,7 +484,7 @@
     },
     "kw_vertex": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[vV][eE][rR][tT][eE][xX]"
@@ -492,7 +492,7 @@
     },
     "kw_vertices": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[vV][eE][rR][tT][iI][cC][eE][sS]"
@@ -500,7 +500,7 @@
     },
     "kw_tag": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][aA][gG]"
@@ -508,7 +508,7 @@
     },
     "kw_tags": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][aA][gG][sS]"
@@ -516,7 +516,7 @@
     },
     "kw_index": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][dD][eE][xX]"
@@ -524,7 +524,7 @@
     },
     "kw_indexes": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][dD][eE][xX][eE][sS]"
@@ -532,7 +532,7 @@
     },
     "kw_lookup": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][oO][oO][kK][uU][pP]"
@@ -540,7 +540,7 @@
     },
     "kw_find": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][iI][nN][dD]"
@@ -548,7 +548,7 @@
     },
     "kw_weight": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[wW][eE][iI][gG][hH][tT]"
@@ -556,7 +556,7 @@
     },
     "kw_path": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][aA][tT][hH]"
@@ -564,7 +564,7 @@
     },
     "kw_shortest": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][hH][oO][rR][tT][eE][sS][tT]"
@@ -572,7 +572,7 @@
     },
     "kw_allshortestpaths": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][lL][lL][sS][hH][oO][rR][tT][eE][sS][tT][pP][aA][tT][hH][sS]"
@@ -580,7 +580,7 @@
     },
     "kw_trail": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][rR][aA][iI][lL]"
@@ -588,7 +588,7 @@
     },
     "kw_walk": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[wW][aA][lL][kK]"
@@ -596,7 +596,7 @@
     },
     "kw_acyclic": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][cC][yY][cC][lL][iI][cC]"
@@ -604,7 +604,7 @@
     },
     "kw_weighted": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[wW][eE][iI][gG][hH][tT][eE][dD]"
@@ -612,7 +612,7 @@
     },
     "kw_loop": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][oO][oO][pP]"
@@ -620,7 +620,7 @@
     },
     "kw_cycle": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][yY][cC][lL][eE]"
@@ -628,7 +628,7 @@
     },
     "kw_subgraph": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][uU][bB][gG][rR][aA][pP][hH]"
@@ -636,7 +636,7 @@
     },
     "kw_both": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[bB][oO][tT][hH]"
@@ -644,7 +644,7 @@
     },
     "kw_out": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][uU][tT]"
@@ -652,7 +652,7 @@
     },
     "kw_in": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN]"
@@ -660,7 +660,7 @@
     },
     "kw_reversely": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][vV][eE][rR][sS][eE][lL][yY]"
@@ -668,7 +668,7 @@
     },
     "kw_recursive": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][cC][uU][rR][sS][iI][vV][eE]"
@@ -676,7 +676,7 @@
     },
     "kw_no": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[nN][oO]"
@@ -684,7 +684,7 @@
     },
     "kw_overwrite": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][vV][eE][rR][wW][rR][iI][tT][eE]"
@@ -692,7 +692,7 @@
     },
     "kw_show": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][hH][oO][wW]"
@@ -700,7 +700,7 @@
     },
     "kw_add": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][dD][dD]"
@@ -708,7 +708,7 @@
     },
     "kw_drop": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][rR][oO][pP]"
@@ -716,7 +716,7 @@
     },
     "kw_remove": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][mM][oO][vV][eE]"
@@ -724,7 +724,7 @@
     },
     "kw_alter": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][lL][tT][eE][rR]"
@@ -732,7 +732,7 @@
     },
     "kw_if": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][fF]"
@@ -740,7 +740,7 @@
     },
     "kw_exists": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[eE][xX][iI][sS][tT][sS]"
@@ -748,7 +748,7 @@
     },
     "kw_subquery": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][uU][bB][qQ][uU][eE][rR][yY]"
@@ -756,7 +756,7 @@
     },
     "kw_change": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][hH][aA][nN][gG][eE]"
@@ -764,7 +764,7 @@
     },
     "kw_createuser": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][rR][eE][aA][tT][eE][uU][sS][eE][rR]"
@@ -772,7 +772,7 @@
     },
     "kw_alteruser": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][lL][tT][eE][rR][uU][sS][eE][rR]"
@@ -780,7 +780,7 @@
     },
     "kw_dropuser": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][rR][oO][pP][uU][sS][eE][rR]"
@@ -788,7 +788,7 @@
     },
     "kw_changepassword": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][hH][aA][nN][gG][eE][pP][aA][sS][sS][wW][oO][rR][dD]"
@@ -796,7 +796,7 @@
     },
     "kw_grant": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][rR][aA][nN][tT]"
@@ -804,7 +804,7 @@
     },
     "kw_revoke": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][vV][oO][kK][eE]"
@@ -812,7 +812,7 @@
     },
     "kw_on": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][nN]"
@@ -820,7 +820,7 @@
     },
     "kw_of": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][fF]"
@@ -828,7 +828,7 @@
     },
     "kw_get": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][eE][tT]"
@@ -836,7 +836,7 @@
     },
     "kw_set": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][tT]"
@@ -844,7 +844,7 @@
     },
     "kw_host": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[hH][oO][sS][tT]"
@@ -852,7 +852,7 @@
     },
     "kw_hosts": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[hH][oO][sS][tT][sS]"
@@ -860,7 +860,7 @@
     },
     "kw_space": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][pP][aA][cC][eE]"
@@ -868,7 +868,7 @@
     },
     "kw_spaces": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][pP][aA][cC][eE][sS]"
@@ -876,7 +876,7 @@
     },
     "kw_sequence": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][qQ][uU][eE][nN][cC][eE]"
@@ -884,7 +884,7 @@
     },
     "kw_sequences": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][qQ][uU][eE][nN][cC][eE][sS]"
@@ -892,7 +892,7 @@
     },
     "kw_user": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][sS][eE][rR]"
@@ -900,7 +900,7 @@
     },
     "kw_users": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][sS][eE][rR][sS]"
@@ -908,7 +908,7 @@
     },
     "kw_password": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][aA][sS][sS][wW][oO][rR][dD]"
@@ -916,7 +916,7 @@
     },
     "kw_role": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][oO][lL][eE]"
@@ -924,7 +924,7 @@
     },
     "kw_roles": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][oO][lL][eE][sS]"
@@ -932,7 +932,7 @@
     },
     "kw_functions": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][uU][nN][cC][tT][iI][oO][nN][sS]"
@@ -940,7 +940,7 @@
     },
     "kw_graphs": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][rR][aA][pP][hH][sS]"
@@ -948,7 +948,7 @@
     },
     "kw_macros": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[mM][aA][cC][rR][oO][sS]"
@@ -956,7 +956,7 @@
     },
     "kw_locked": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][oO][cC][kK][eE][dD]"
@@ -964,7 +964,7 @@
     },
     "kw_god": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][oO][dD]"
@@ -972,7 +972,7 @@
     },
     "kw_dba": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][bB][aA]"
@@ -980,7 +980,7 @@
     },
     "kw_guest": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][uU][eE][sS][tT]"
@@ -988,7 +988,7 @@
     },
     "kw_comment": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][mM][mM][eE][nN][tT]"
@@ -996,7 +996,7 @@
     },
     "kw_charset": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][hH][aA][rR][sS][eE][tT]"
@@ -1004,7 +1004,7 @@
     },
     "kw_collate": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][lL][lL][aA][tT][eE]"
@@ -1012,7 +1012,7 @@
     },
     "kw_collation": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][lL][lL][aA][tT][iI][oO][nN]"
@@ -1020,7 +1020,7 @@
     },
     "kw_vid_type": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[vV][iI][dD]_[tT][yY][pP][eE]"
@@ -1028,7 +1028,7 @@
     },
     "kw_partition_num": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][aA][rR][tT][iI][tT][iI][oO][nN]_[nN][uU][mM]"
@@ -1036,7 +1036,7 @@
     },
     "kw_replica_factor": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][pP][lL][iI][cC][aA]_[fF][aA][cC][tT][oO][rR]"
@@ -1044,7 +1044,7 @@
     },
     "kw_rebuild": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][bB][uU][iI][lL][dD]"
@@ -1052,7 +1052,7 @@
     },
     "kw_bool": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[bB][oO][oO][lL]"
@@ -1060,7 +1060,7 @@
     },
     "kw_int": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][tT]"
@@ -1068,7 +1068,7 @@
     },
     "kw_int8": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][tT]8"
@@ -1076,7 +1076,7 @@
     },
     "kw_int16": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][tT]16"
@@ -1084,7 +1084,7 @@
     },
     "kw_int32": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][tT]32"
@@ -1092,7 +1092,7 @@
     },
     "kw_int64": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][tT]64"
@@ -1100,7 +1100,7 @@
     },
     "kw_float": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][lL][oO][aA][tT]"
@@ -1108,7 +1108,7 @@
     },
     "kw_double": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][oO][uU][bB][lL][eE]"
@@ -1116,7 +1116,7 @@
     },
     "kw_string": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][tT][rR][iI][nN][gG]"
@@ -1124,7 +1124,7 @@
     },
     "kw_fixed_string": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][iI][xX][eE][dD]_[sS][tT][rR][iI][nN][gG]"
@@ -1132,7 +1132,7 @@
     },
     "kw_timestamp": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][iI][mM][eE][sS][tT][aA][mM][pP]"
@@ -1140,7 +1140,7 @@
     },
     "kw_date": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][aA][tT][eE]"
@@ -1148,7 +1148,7 @@
     },
     "kw_time": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][iI][mM][eE]"
@@ -1156,7 +1156,7 @@
     },
     "kw_datetime": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][aA][tT][eE][tT][iI][mM][eE]"
@@ -1164,7 +1164,7 @@
     },
     "kw_serial": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][rR][iI][aA][lL]"
@@ -1172,7 +1172,7 @@
     },
     "kw_duration": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][uU][rR][aA][tT][iI][oO][nN]"
@@ -1180,7 +1180,7 @@
     },
     "kw_geography": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[gG][eE][oO][gG][rR][aA][pP][hH][yY]"
@@ -1188,7 +1188,7 @@
     },
     "kw_point": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][oO][iI][nN][tT]"
@@ -1196,7 +1196,7 @@
     },
     "kw_linestring": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][iI][nN][eE][sS][tT][rR][iI][nN][gG]"
@@ -1204,7 +1204,7 @@
     },
     "kw_polygon": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][oO][lL][yY][gG][oO][nN]"
@@ -1212,7 +1212,7 @@
     },
     "kw_list": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][iI][sS][tT]"
@@ -1220,7 +1220,7 @@
     },
     "kw_map": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[mM][aA][pP]"
@@ -1228,7 +1228,7 @@
     },
     "kw_struct": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][tT][rR][uU][cC][tT]"
@@ -1236,7 +1236,7 @@
     },
     "kw_array": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][rR][rR][aA][yY]"
@@ -1244,7 +1244,7 @@
     },
     "kw_download": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][oO][wW][nN][lL][oO][aA][dD]"
@@ -1252,7 +1252,7 @@
     },
     "kw_hdfs": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[hH][dD][fF][sS]"
@@ -1260,7 +1260,7 @@
     },
     "kw_uuid": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][uU][iI][dD]"
@@ -1268,7 +1268,7 @@
     },
     "kw_configs": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][nN][fF][iI][gG][sS]"
@@ -1276,7 +1276,7 @@
     },
     "kw_force": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][oO][rR][cC][eE]"
@@ -1284,7 +1284,7 @@
     },
     "kw_part": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][aA][rR][tT]"
@@ -1292,7 +1292,7 @@
     },
     "kw_parts": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][aA][rR][tT][sS]"
@@ -1300,7 +1300,7 @@
     },
     "kw_data": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][aA][tT][aA]"
@@ -1308,7 +1308,7 @@
     },
     "kw_leader": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][eE][aA][dD][eE][rR]"
@@ -1316,7 +1316,7 @@
     },
     "kw_jobs": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[jJ][oO][bB][sS]"
@@ -1324,7 +1324,7 @@
     },
     "kw_job": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[jJ][oO][bB]"
@@ -1332,7 +1332,7 @@
     },
     "kw_bidirect": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[bB][iI][dD][iI][rR][eE][cC][tT]"
@@ -1340,7 +1340,7 @@
     },
     "kw_stats": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][tT][aA][tT][sS]"
@@ -1348,7 +1348,7 @@
     },
     "kw_status": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][tT][aA][tT][uU][sS]"
@@ -1356,7 +1356,7 @@
     },
     "kw_recover": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][cC][oO][vV][eE][rR]"
@@ -1364,7 +1364,7 @@
     },
     "kw_explain": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[eE][xX][pP][lL][aA][iI][nN]"
@@ -1372,7 +1372,7 @@
     },
     "kw_profile": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][rR][oO][fF][iI][lL][eE]"
@@ -1380,7 +1380,7 @@
     },
     "kw_analyze": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][nN][aA][lL][yY][zZ][eE]"
@@ -1388,7 +1388,7 @@
     },
     "kw_format": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][oO][rR][mM][aA][tT]"
@@ -1396,7 +1396,7 @@
     },
     "kw_atomic_edge": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][tT][oO][mM][iI][cC]_[eE][dD][gG][eE]"
@@ -1404,7 +1404,7 @@
     },
     "kw_default": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][eE][fF][aA][uU][lL][tT]"
@@ -1412,7 +1412,7 @@
     },
     "kw_flush": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][lL][uU][sS][hH]"
@@ -1420,7 +1420,7 @@
     },
     "kw_compact": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][mM][pP][aA][cC][tT]"
@@ -1428,7 +1428,7 @@
     },
     "kw_submit": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][uU][bB][mM][iI][tT]"
@@ -1436,7 +1436,7 @@
     },
     "kw_ascending": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][sS][cC][eE][nN][dD][iI][nN][gG]"
@@ -1444,7 +1444,7 @@
     },
     "kw_descending": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][eE][sS][cC][eE][nN][dD][iI][nN][gG]"
@@ -1452,7 +1452,7 @@
     },
     "kw_fetch": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[fF][eE][tT][cC][hH]"
@@ -1460,7 +1460,7 @@
     },
     "kw_prop": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[pP][rR][oO][pP]"
@@ -1468,7 +1468,7 @@
     },
     "kw_stop": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][tT][oO][pP]"
@@ -1476,7 +1476,7 @@
     },
     "kw_revert": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][vV][eE][rR][tT]"
@@ -1484,7 +1484,7 @@
     },
     "kw_use": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[uU][sS][eE]"
@@ -1492,7 +1492,7 @@
     },
     "kw_begin": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[bB][eE][gG][iI][nN]"
@@ -1500,7 +1500,7 @@
     },
     "kw_commit": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][mM][mM][iI][tT]"
@@ -1508,7 +1508,7 @@
     },
     "kw_rollback": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][oO][lL][lL][bB][aA][cC][kK]"
@@ -1516,7 +1516,7 @@
     },
     "kw_savepoint": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][aA][vV][eE][pP][oO][iI][nN][tT]"
@@ -1524,7 +1524,7 @@
     },
     "kw_release": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][lL][eE][aA][sS][eE]"
@@ -1532,7 +1532,7 @@
     },
     "kw_transaction": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][rR][aA][nN][sS][aA][cC][tT][iI][oO][nN]"
@@ -1540,7 +1540,7 @@
     },
     "kw_let": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][eE][tT]"
@@ -1548,7 +1548,7 @@
     },
     "kw_read": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][aA][dD]"
@@ -1556,7 +1556,7 @@
     },
     "kw_only": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[oO][nN][lL][yY]"
@@ -1564,7 +1564,7 @@
     },
     "kw_write": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[wW][rR][iI][tT][eE]"
@@ -1572,7 +1572,7 @@
     },
     "kw_setlist": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][tT][lL][iI][sS][tT]"
@@ -1580,7 +1580,7 @@
     },
     "kw_clear": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][lL][eE][aA][rR]"
@@ -1588,7 +1588,7 @@
     },
     "kw_merge": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[mM][eE][rR][gG][eE]"
@@ -1596,7 +1596,7 @@
     },
     "kw_divide": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][iI][vV][iI][dD][eE]"
@@ -1604,7 +1604,7 @@
     },
     "kw_rename": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][eE][nN][aA][mM][eE]"
@@ -1612,7 +1612,7 @@
     },
     "kw_local": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[lL][oO][cC][aA][lL]"
@@ -1620,7 +1620,7 @@
     },
     "kw_sessions": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][sS][sS][iI][oO][nN][sS]"
@@ -1628,7 +1628,7 @@
     },
     "kw_session": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][sS][sS][iI][oO][nN]"
@@ -1636,7 +1636,7 @@
     },
     "kw_sample": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][aA][mM][pP][lL][eE]"
@@ -1644,7 +1644,7 @@
     },
     "kw_queries": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[qQ][uU][eE][rR][iI][eE][sS]"
@@ -1652,7 +1652,7 @@
     },
     "kw_query": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[qQ][uU][eE][rR][yY]"
@@ -1660,7 +1660,7 @@
     },
     "kw_kill": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[kK][iI][lL][lL]"
@@ -1668,7 +1668,7 @@
     },
     "kw_top": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][oO][pP]"
@@ -1676,7 +1676,7 @@
     },
     "kw_text": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][eE][xX][tT]"
@@ -1684,7 +1684,7 @@
     },
     "kw_search": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][aA][rR][cC][hH]"
@@ -1692,7 +1692,7 @@
     },
     "kw_vector": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[vV][eE][cC][tT][oO][rR]"
@@ -1700,7 +1700,7 @@
     },
     "kw_client": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][lL][iI][eE][nN][tT]"
@@ -1708,7 +1708,7 @@
     },
     "kw_clients": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][lL][iI][eE][nN][tT][sS]"
@@ -1716,7 +1716,7 @@
     },
     "kw_sign": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][iI][gG][nN]"
@@ -1724,7 +1724,7 @@
     },
     "kw_service": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][eE][rR][vV][iI][cC][eE]"
@@ -1732,7 +1732,7 @@
     },
     "kw_count": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][uU][nN][tT]"
@@ -1740,7 +1740,7 @@
     },
     "kw_sum": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][uU][mM]"
@@ -1748,7 +1748,7 @@
     },
     "kw_avg": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[aA][vV][gG]"
@@ -1756,7 +1756,7 @@
     },
     "kw_min": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[mM][iI][nN]"
@@ -1764,7 +1764,7 @@
     },
     "kw_max": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[mM][aA][xX]"
@@ -1772,7 +1772,7 @@
     },
     "kw_ttl_duration": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][tT][lL]_[dD][uU][rR][aA][tT][iI][oO][nN]"
@@ -1780,7 +1780,7 @@
     },
     "kw_ttl_col": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[tT][tT][lL]_[cC][oO][lL]"
@@ -1788,7 +1788,7 @@
     },
     "kw_source": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[sS][oO][uU][rR][cC][eE]"
@@ -1796,7 +1796,7 @@
     },
     "kw_destination": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][eE][sS][tT][iI][nN][aA][tT][iI][oO][nN]"
@@ -1804,7 +1804,7 @@
     },
     "kw_rank": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[rR][aA][nN][kK]"
@@ -1812,7 +1812,7 @@
     },
     "kw_input": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[iI][nN][pP][uU][tT]"
@@ -1820,7 +1820,7 @@
     },
     "kw_copy": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][oO][pP][yY]"
@@ -1828,7 +1828,7 @@
     },
     "kw_header": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[hH][eE][aA][dD][eE][rR]"
@@ -1836,7 +1836,7 @@
     },
     "kw_delimiter": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[dD][eE][lL][iI][mM][iI][tT][eE][rR]"
@@ -1844,10 +1844,138 @@
     },
     "kw_csv": {
       "type": "PREC",
-      "value": 1,
+      "value": 2,
       "content": {
         "type": "PATTERN",
         "value": "[cC][sS][vV]"
+      }
+    },
+    "kw_graph": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[gG][rR][aA][pP][hH]"
+      }
+    },
+    "kw_checkpoint": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[cC][hH][eE][cC][kK][pP][oO][iI][nN][tT]"
+      }
+    },
+    "kw_purge": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[pP][uU][rR][gG][eE]"
+      }
+    },
+    "kw_expired": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[eE][xX][pP][iI][rR][eE][dD]"
+      }
+    },
+    "kw_fulltext": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[fF][uU][lL][lL][tT][eE][xX][tT]"
+      }
+    },
+    "kw_extension": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[eE][xX][tT][eE][nN][sS][iI][oO][nN]"
+      }
+    },
+    "kw_macro": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[mM][aA][cC][rR][oO]"
+      }
+    },
+    "kw_type": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[tT][yY][pP][eE]"
+      }
+    },
+    "kw_attach": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[aA][tT][tT][aA][cC][hH]"
+      }
+    },
+    "kw_export": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[eE][xX][pP][oO][rR][tT]"
+      }
+    },
+    "kw_import": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[iI][mM][pP][oO][rR][tT]"
+      }
+    },
+    "kw_load": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[lL][oO][aA][dD]"
+      }
+    },
+    "kw_install": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[iI][nN][sS][tT][aA][lL][lL]"
+      }
+    },
+    "kw_uninstall": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[uU][nN][iI][nN][sS][tT][aA][lL][lL]"
+      }
+    },
+    "kw_migrate": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[mM][iI][gG][rR][aA][tT][eE]"
+      }
+    },
+    "kw_call": {
+      "type": "PREC",
+      "value": 2,
+      "content": {
+        "type": "PATTERN",
+        "value": "[cC][aA][lL][lL]"
       }
     },
     "statement": {
@@ -2001,19 +2129,178 @@
         {
           "type": "SYMBOL",
           "name": "use_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "begin_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "commit_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "rollback_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "savepoint_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "release_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "kill_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "explain_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "profile_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "analyze_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "clear_space_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "change_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "grant_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "revoke_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "let_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "call_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "set_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "remove_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "copy_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "attach_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "detach_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "export_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "import_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "load_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "install_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "uninstall_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "migrate_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "checkpoint_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "purge_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "search_segment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignment_segment"
         }
       ]
     },
     "match_segment": {
-      "type": "SEQ",
+      "type": "CHOICE",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "kw_match"
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_match"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_fulltext"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
         },
         {
-          "type": "SYMBOL",
-          "name": "match_pattern"
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_match"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_vector"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_match"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "match_pattern"
+            }
+          ]
         }
       ]
     },
@@ -2671,6 +2958,23 @@
             },
             {
               "type": "SYMBOL",
+              "name": "kw_vector"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_lookup"
+            },
+            {
+              "type": "SYMBOL",
               "name": "kw_on"
             },
             {
@@ -2701,6 +3005,18 @@
                   "type": "BLANK"
                 }
               ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
@@ -2730,6 +3046,18 @@
                   "type": "BLANK"
                 }
               ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
@@ -2755,6 +3083,18 @@
                   "type": "BLANK"
                 }
               ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
@@ -2771,6 +3111,18 @@
                 {
                   "type": "SYMBOL",
                   "name": "lookup_index"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
                 },
                 {
                   "type": "BLANK"
@@ -3544,58 +3896,121 @@
       ]
     },
     "update_segment": {
-      "type": "SEQ",
+      "type": "CHOICE",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "kw_update"
-        },
-        {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "SYMBOL",
-              "name": "kw_vertex"
+              "name": "kw_update"
             },
             {
               "type": "SYMBOL",
-              "name": "kw_edge"
+              "name": "kw_extension"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
         {
-          "type": "SYMBOL",
-          "name": "identifier"
-        },
-        {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "SYMBOL",
-              "name": "vid"
+              "name": "kw_update"
             },
             {
-              "type": "BLANK"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_vertex"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_edge"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "identifier"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "vid"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_set"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "set_list"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "where_segment"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
         {
-          "type": "SYMBOL",
-          "name": "kw_set"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "set_list"
-        },
-        {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "SYMBOL",
-              "name": "where_segment"
+              "name": "kw_update"
             },
             {
-              "type": "BLANK"
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         }
@@ -3651,6 +4066,23 @@
           "members": [
             {
               "type": "SYMBOL",
+              "name": "kw_detach"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_delete"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
               "name": "kw_delete"
             },
             {
@@ -3675,6 +4107,18 @@
                 {
                   "type": "SYMBOL",
                   "name": "where_segment"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
                 },
                 {
                   "type": "BLANK"
@@ -3766,6 +4210,18 @@
                 {
                   "type": "SYMBOL",
                   "name": "where_segment"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
                 },
                 {
                   "type": "BLANK"
@@ -3914,58 +4370,224 @@
       ]
     },
     "create_segment": {
-      "type": "SEQ",
+      "type": "CHOICE",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "kw_create"
-        },
-        {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "SYMBOL",
-              "name": "kw_tag"
+              "name": "kw_create"
             },
             {
               "type": "SYMBOL",
-              "name": "kw_edge"
+              "name": "kw_user"
             },
             {
               "type": "SYMBOL",
-              "name": "kw_index"
-            },
-            {
-              "type": "SYMBOL",
-              "name": "kw_space"
+              "name": "tail"
             }
           ]
         },
         {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "SYMBOL",
-              "name": "if_not_exists"
+              "name": "kw_create"
             },
             {
-              "type": "BLANK"
+              "type": "SYMBOL",
+              "name": "kw_fulltext"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
             }
           ]
         },
         {
-          "type": "SYMBOL",
-          "name": "identifier"
-        },
-        {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "SYMBOL",
-              "name": "create_tail"
+              "name": "kw_create"
             },
             {
-              "type": "BLANK"
+              "type": "SYMBOL",
+              "name": "kw_vector"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_create"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_macro"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_create"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_type"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_create"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_sequence"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_create"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_graph"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_create"
+            },
+            {
+              "type": "STRING",
+              "value": "("
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_create"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_tag"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_edge"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_index"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_space"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "if_not_exists"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "identifier"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "create_tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_create"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
             }
           ]
         }
@@ -4185,48 +4807,197 @@
       ]
     },
     "drop_segment": {
-      "type": "SEQ",
+      "type": "CHOICE",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "kw_drop"
-        },
-        {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "SYMBOL",
-              "name": "kw_tag"
+              "name": "kw_drop"
             },
             {
               "type": "SYMBOL",
-              "name": "kw_edge"
+              "name": "kw_user"
             },
             {
               "type": "SYMBOL",
-              "name": "kw_index"
-            },
-            {
-              "type": "SYMBOL",
-              "name": "kw_space"
+              "name": "tail"
             }
           ]
         },
         {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "SYMBOL",
-              "name": "if_exists"
+              "name": "kw_drop"
             },
             {
-              "type": "BLANK"
+              "type": "SYMBOL",
+              "name": "kw_fulltext"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
             }
           ]
         },
         {
-          "type": "SYMBOL",
-          "name": "identifier"
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_drop"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_vector"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_drop"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_macro"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_drop"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_type"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_drop"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_sequence"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_drop"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_graph"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_drop"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_tag"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_edge"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_index"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_space"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "if_exists"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "identifier"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_drop"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
         }
       ]
     },
@@ -4246,6 +5017,74 @@
     "alter_segment": {
       "type": "CHOICE",
       "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_alter"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_user"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_alter"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_fulltext"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_alter"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_vector"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_alter"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_space"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
         {
           "type": "SEQ",
           "members": [
@@ -4288,6 +5127,18 @@
                 {
                   "type": "SYMBOL",
                   "name": "column_defs"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
                 },
                 {
                   "type": "BLANK"
@@ -4343,6 +5194,18 @@
                   "type": "BLANK"
                 }
               ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
@@ -4393,6 +5256,31 @@
                   "type": "BLANK"
                 }
               ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_alter"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
             }
           ]
         }
@@ -4427,6 +5315,18 @@
                   "type": "BLANK"
                 }
               ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
@@ -4452,6 +5352,52 @@
                   "type": "BLANK"
                 }
               ]
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_show"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_fulltext"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_show"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_vector"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
             }
           ]
         },
@@ -4465,6 +5411,18 @@
             {
               "type": "SYMBOL",
               "name": "identifier"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
@@ -4474,6 +5432,10 @@
             {
               "type": "SYMBOL",
               "name": "kw_show"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
             }
           ]
         }
@@ -4542,6 +5504,18 @@
             {
               "type": "SYMBOL",
               "name": "identifier"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
@@ -4564,6 +5538,70 @@
             {
               "type": "SYMBOL",
               "name": "show_object"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_desc"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_describe"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_fulltext"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_desc"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "kw_describe"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_vector"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
             }
           ]
         },
@@ -4586,6 +5624,18 @@
             {
               "type": "SYMBOL",
               "name": "identifier"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
             }
           ]
         },
@@ -4604,6 +5654,10 @@
                   "name": "kw_describe"
                 }
               ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
             }
           ]
         }
@@ -4619,6 +5673,709 @@
         {
           "type": "SYMBOL",
           "name": "identifier"
+        }
+      ]
+    },
+    "tail": {
+      "type": "PREC",
+      "value": 3,
+      "content": {
+        "type": "TOKEN",
+        "content": {
+          "type": "PATTERN",
+          "value": "[^|;\\n]+"
+        }
+      }
+    },
+    "begin_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_begin"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "commit_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_commit"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "rollback_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_rollback"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "savepoint_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_savepoint"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "release_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_release"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "kill_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_kill"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "explain_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_explain"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "profile_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_profile"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "analyze_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_analyze"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "clear_space_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_clear"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "kw_space"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "change_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_change"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "grant_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_grant"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "revoke_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_revoke"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "let_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_let"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "call_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_call"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "set_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_set"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "remove_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_remove"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "copy_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_copy"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "attach_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_attach"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "detach_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_detach"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "export_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_export"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "import_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_import"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "load_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_load"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_extension"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "install_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_install"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_extension"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "uninstall_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_uninstall"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_extension"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "migrate_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_migrate"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "checkpoint_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_checkpoint"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "purge_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "kw_purge"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "search_segment": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_search"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "kw_vector"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tail"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "kw_search"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "tail"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "assignment_segment": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "$"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "identifier"
+        },
+        {
+          "type": "STRING",
+          "value": "="
+        },
+        {
+          "type": "SYMBOL",
+          "name": "tail"
         }
       ]
     },
@@ -5988,7 +7745,8 @@
   ],
   "conflicts": [
     [
-      "show_segment"
+      "delete_segment",
+      "detach_segment"
     ],
     [
       "delete_segment"
@@ -5997,10 +7755,19 @@
       "merge_segment"
     ],
     [
-      "order_item"
+      "merge_action"
+    ],
+    [
+      "show_segment"
     ],
     [
       "update_segment"
+    ],
+    [
+      "column_constraint"
+    ],
+    [
+      "order_item"
     ]
   ],
   "precedences": [],

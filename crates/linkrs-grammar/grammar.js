@@ -27,7 +27,11 @@ const SKIP = new Set(['TRUE', 'FALSE', 'BALANCE']);
 const generated = {};
 for (const kw of inv.keywords) {
   if (kw.spelling.includes(' ') || SKIP.has(kw.spelling)) continue;
-  generated['kw_' + slug(kw.spelling)] = () => prec(1, new RegExp(ci(kw.spelling)));
+  generated['kw_' + slug(kw.spelling)] = () => prec(2, new RegExp(ci(kw.spelling)));
+}
+for (const word of inv.soft_keywords || []) {
+  if (word.includes(' ') || SKIP.has(word)) continue;
+  generated['kw_' + slug(word)] = () => prec(2, new RegExp(ci(word)));
 }
 
 function descWord($) {
@@ -76,11 +80,46 @@ function buildRules() {
         $.show_segment,
         $.describe_segment,
         $.use_segment,
+        $.begin_segment,
+        $.commit_segment,
+        $.rollback_segment,
+        $.savepoint_segment,
+        $.release_segment,
+        $.kill_segment,
+        $.explain_segment,
+        $.profile_segment,
+        $.analyze_segment,
+        $.clear_space_segment,
+        $.change_segment,
+        $.grant_segment,
+        $.revoke_segment,
+        $.let_segment,
+        $.call_segment,
+        $.set_segment,
+        $.remove_segment,
+        $.copy_segment,
+        $.attach_segment,
+        $.detach_segment,
+        $.export_segment,
+        $.import_segment,
+        $.load_segment,
+        $.install_segment,
+        $.uninstall_segment,
+        $.migrate_segment,
+        $.checkpoint_segment,
+        $.purge_segment,
+        $.search_segment,
+        $.assignment_segment,
       ),
 
     // ---- patterns -------------------------------------------------------
 
-    match_segment: ($) => seq($.kw_match, $.match_pattern),
+    match_segment: ($) =>
+      choice(
+        seq($.kw_match, $.kw_fulltext, $.tail),
+        seq($.kw_match, $.kw_vector, $.tail),
+        seq($.kw_match, $.match_pattern),
+      ),
     optional_match_segment: ($) => seq($.kw_optional, $.kw_match, $.match_pattern),
 
     match_pattern: ($) => seq($.pattern_part, repeat(seq(',', $.pattern_part))),
@@ -146,10 +185,11 @@ function buildRules() {
 
     lookup_segment: ($) =>
       choice(
-        seq($.kw_lookup, $.kw_on, choice($.kw_tag, $.kw_edge), $.identifier, optional($.lookup_index)),
-        seq($.kw_lookup, $.kw_on, $.identifier, optional($.lookup_index)),
-        seq($.kw_lookup, $.identifier, optional($.lookup_index)),
-        seq($.kw_lookup, optional($.lookup_index)),
+        seq($.kw_lookup, $.kw_vector, $.tail),
+        seq($.kw_lookup, $.kw_on, choice($.kw_tag, $.kw_edge), $.identifier, optional($.lookup_index), optional($.tail)),
+        seq($.kw_lookup, $.kw_on, $.identifier, optional($.lookup_index), optional($.tail)),
+        seq($.kw_lookup, $.identifier, optional($.lookup_index), optional($.tail)),
+        seq($.kw_lookup, optional($.lookup_index), optional($.tail)),
       ),
     lookup_index: ($) => seq($.kw_index, optional($.identifier)),
 
@@ -230,14 +270,19 @@ function buildRules() {
       ),
 
     update_segment: ($) =>
-      seq(
-        $.kw_update,
-        choice($.kw_vertex, $.kw_edge),
-        $.identifier,
-        optional($.vid),
-        $.kw_set,
-        $.set_list,
-        optional($.where_segment),
+      choice(
+        seq($.kw_update, $.kw_extension, optional($.tail)),
+        seq(
+          $.kw_update,
+          choice($.kw_vertex, $.kw_edge),
+          $.identifier,
+          optional($.vid),
+          $.kw_set,
+          $.set_list,
+          optional($.where_segment),
+          optional($.tail),
+        ),
+        seq($.kw_update, optional($.tail)),
       ),
     set_list: ($) =>
       seq($.set_pair, repeat(seq(',', $.set_pair))),
@@ -245,8 +290,9 @@ function buildRules() {
 
     delete_segment: ($) =>
       choice(
-        seq($.kw_delete, $.kw_vertex, $.identifier, $.kw_from, $.vid_list, optional($.where_segment)),
-        seq($.kw_delete, $.kw_edge, optional($.identifier), $.vid, choice($.arrow, $.arrow_right), $.vid, repeat(seq(',', $.vid, choice($.arrow, $.arrow_right), $.vid)), optional($.where_segment)),
+        seq($.kw_detach, $.kw_delete, $.tail),
+        seq($.kw_delete, $.kw_vertex, $.identifier, $.kw_from, $.vid_list, optional($.where_segment), optional($.tail)),
+        seq($.kw_delete, $.kw_edge, optional($.identifier), $.vid, choice($.arrow, $.arrow_right), $.vid, repeat(seq(',', $.vid, choice($.arrow, $.arrow_right), $.vid)), optional($.where_segment), optional($.tail)),
       ),
 
     upsert_segment: ($) =>
@@ -273,12 +319,24 @@ function buildRules() {
     // ---- DDL ------------------------------------------------------------
 
     create_segment: ($) =>
-      seq(
-        $.kw_create,
-        choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
-        optional($.if_not_exists),
-        $.identifier,
-        optional($.create_tail),
+      choice(
+        seq($.kw_create, $.kw_user, $.tail),
+        seq($.kw_create, $.kw_fulltext, $.tail),
+        seq($.kw_create, $.kw_vector, $.tail),
+        seq($.kw_create, $.kw_macro, $.tail),
+        seq($.kw_create, $.kw_type, $.tail),
+        seq($.kw_create, $.kw_sequence, $.tail),
+        seq($.kw_create, $.kw_graph, $.tail),
+        seq($.kw_create, '(', $.tail),
+        seq(
+          $.kw_create,
+          choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
+          optional($.if_not_exists),
+          $.identifier,
+          optional($.create_tail),
+          optional($.tail),
+        ),
+        seq($.kw_create, $.tail),
       ),
     if_not_exists: ($) => seq($.kw_if, $.kw_not, $.kw_exists),
     create_tail: ($) =>
@@ -310,22 +368,38 @@ function buildRules() {
       ),
 
     drop_segment: ($) =>
-      seq(
-        $.kw_drop,
-        choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
-        optional($.if_exists),
-        $.identifier,
+      choice(
+        seq($.kw_drop, $.kw_user, $.tail),
+        seq($.kw_drop, $.kw_fulltext, $.tail),
+        seq($.kw_drop, $.kw_vector, $.tail),
+        seq($.kw_drop, $.kw_macro, $.tail),
+        seq($.kw_drop, $.kw_type, $.tail),
+        seq($.kw_drop, $.kw_sequence, $.tail),
+        seq($.kw_drop, $.kw_graph, $.tail),
+        seq(
+          $.kw_drop,
+          choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
+          optional($.if_exists),
+          $.identifier,
+          optional($.tail),
+        ),
+        seq($.kw_drop, $.tail),
       ),
     if_exists: ($) => seq($.kw_if, $.kw_exists),
 
     alter_segment: ($) =>
       choice(
+        seq($.kw_alter, $.kw_user, $.tail),
+        seq($.kw_alter, $.kw_fulltext, $.tail),
+        seq($.kw_alter, $.kw_vector, $.tail),
+        seq($.kw_alter, $.kw_space, $.tail),
         seq(
           $.kw_alter,
           choice($.kw_tag, $.kw_edge, $.kw_index, $.kw_space),
           $.identifier,
           $.kw_add,
           optional($.column_defs),
+          optional($.tail),
         ),
         seq(
           $.kw_alter,
@@ -333,6 +407,7 @@ function buildRules() {
           $.identifier,
           $.kw_change,
           optional($.column_defs),
+          optional($.tail),
         ),
         seq(
           $.kw_alter,
@@ -340,15 +415,19 @@ function buildRules() {
           $.identifier,
           $.kw_drop,
           optional($.column_defs),
+          optional($.tail),
         ),
+        seq($.kw_alter, $.tail),
       ),
 
     show_segment: ($) =>
       choice(
-        seq($.kw_show, $.kw_create, $.show_object, optional($.identifier)),
-        seq($.kw_show, $.show_object, optional($.identifier)),
-        seq($.kw_show, $.identifier),
-        seq($.kw_show),
+        seq($.kw_show, $.kw_create, $.show_object, optional($.identifier), optional($.tail)),
+        seq($.kw_show, $.show_object, optional($.identifier), optional($.tail)),
+        seq($.kw_show, $.kw_fulltext, $.tail),
+        seq($.kw_show, $.kw_vector, $.tail),
+        seq($.kw_show, $.identifier, optional($.tail)),
+        seq($.kw_show, $.tail),
       ),
     show_object: ($) => choice(
       $.kw_tag, $.kw_tags, $.kw_edge, $.kw_edges, $.kw_space, $.kw_spaces,
@@ -356,12 +435,56 @@ function buildRules() {
     ),
     describe_segment: ($) =>
       choice(
-        seq(descWord($), $.show_object, $.identifier),
-        seq(descWord($), $.show_object),
-        seq(descWord($), $.identifier),
-        seq(descWord($)),
+        seq(descWord($), $.show_object, $.identifier, optional($.tail)),
+        seq(descWord($), $.show_object, optional($.tail)),
+        seq(descWord($), $.kw_fulltext, $.tail),
+        seq(descWord($), $.kw_vector, $.tail),
+        seq(descWord($), $.identifier, optional($.tail)),
+        seq(descWord($), $.tail),
       ),
     use_segment: ($) => seq($.kw_use, $.identifier),
+
+    // ---- generic tail for not-yet-structured statements -----------------
+    // A low-level catch-all for the remainder of a statement. It uses a
+    // higher precedence than keyword rules so it can absorb arbitrary text
+    // without forcing every keyword into the conflict set.
+    tail: ($) => prec(3, token(/[^|;\n]+/)),
+
+    // ---- simple statement segments -------------------------------------
+    begin_segment: ($) => seq($.kw_begin, optional($.tail)),
+    commit_segment: ($) => seq($.kw_commit, optional($.tail)),
+    rollback_segment: ($) => seq($.kw_rollback, optional($.tail)),
+    savepoint_segment: ($) => seq($.kw_savepoint, optional($.tail)),
+    release_segment: ($) => seq($.kw_release, optional($.tail)),
+    kill_segment: ($) => seq($.kw_kill, optional($.tail)),
+    explain_segment: ($) => seq($.kw_explain, optional($.tail)),
+    profile_segment: ($) => seq($.kw_profile, optional($.tail)),
+    analyze_segment: ($) => seq($.kw_analyze, optional($.tail)),
+    clear_space_segment: ($) => seq($.kw_clear, $.kw_space, optional($.tail)),
+    change_segment: ($) => seq($.kw_change, optional($.tail)),
+    grant_segment: ($) => seq($.kw_grant, optional($.tail)),
+    revoke_segment: ($) => seq($.kw_revoke, optional($.tail)),
+    let_segment: ($) => seq($.kw_let, optional($.tail)),
+    call_segment: ($) => seq($.kw_call, optional($.tail)),
+    set_segment: ($) => seq($.kw_set, optional($.tail)),
+    remove_segment: ($) => seq($.kw_remove, optional($.tail)),
+    copy_segment: ($) => seq($.kw_copy, optional($.tail)),
+    attach_segment: ($) => seq($.kw_attach, optional($.tail)),
+    detach_segment: ($) => seq($.kw_detach, optional($.tail)),
+    export_segment: ($) => seq($.kw_export, optional($.tail)),
+    import_segment: ($) => seq($.kw_import, optional($.tail)),
+    load_segment: ($) => seq($.kw_load, optional($.kw_extension), optional($.tail)),
+    install_segment: ($) => seq($.kw_install, optional($.kw_extension), optional($.tail)),
+    uninstall_segment: ($) => seq($.kw_uninstall, optional($.kw_extension), optional($.tail)),
+    migrate_segment: ($) => seq($.kw_migrate, optional($.tail)),
+    checkpoint_segment: ($) => seq($.kw_checkpoint, optional($.tail)),
+    purge_segment: ($) => seq($.kw_purge, optional($.tail)),
+    search_segment: ($) =>
+      choice(
+        seq($.kw_search, $.kw_vector, $.tail),
+        seq($.kw_search, optional($.tail)),
+      ),
+    assignment_segment: ($) => seq('$', $.identifier, '=', $.tail),
 
     // ---- expressions ----------------------------------------------------
 
@@ -589,11 +712,14 @@ module.exports = grammar({
   // current segment or start the next one when the separator is omitted, so
   // the alternatives are intentionally explored in parallel here.
   conflicts: ($) => [
-    [$.show_segment],
+    [$.delete_segment, $.detach_segment],
     [$.delete_segment],
     [$.merge_segment],
-    [$.order_item],
+    [$.merge_action],
+    [$.show_segment],
     [$.update_segment],
+    [$.column_constraint],
+    [$.order_item],
   ],
 
   rules: buildRules(),

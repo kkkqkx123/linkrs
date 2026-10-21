@@ -1,0 +1,14 @@
+-- Deliberately malformed or incomplete statements
+MATCH (p:person
+WHERE p.age >
+RETURN p.name
+
+CREATE TAG broken_tag(
+    name: STRING
+    age: INT
+)
+
+MATCH (p:person)-[:friend*1..]->(q:person)
+RETURN p.name q.name
+
+INSERT VERTEX person(name) VALUES "p9": ("Alice"

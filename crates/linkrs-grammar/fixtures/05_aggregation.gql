@@ -1,0 +1,14 @@
+-- Aggregation and grouping
+MATCH (p:person)-[:works_at]->(c:company)
+RETURN c.name, count(p) AS employee_count, avg(p.age) AS avg_age, min(p.score) AS min_score, max(p.score) AS max_score, sum(p.score) AS total_score
+GROUP BY c.name
+HAVING count(p) > 5
+ORDER BY employee_count DESC
+
+MATCH (p:person)
+RETURN collect(p.name) AS names, size(collect(p.name)) AS name_count
+
+MATCH (p:person)
+WITH p.city AS city, count(p) AS cnt
+RETURN city, cnt
+ORDER BY cnt DESC

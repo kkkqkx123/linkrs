@@ -112,6 +112,12 @@ function createTokenizer(
 	const tags = schema.tags.map((t) => t.name);
 	const edges = schema.edgeTypes.map((e) => e.name);
 	const fields = collectFieldNames(schema);
+	const operatorPattern = new RegExp(
+		`(?:${[...GENERATED_OPERATORS]
+			.sort((a, b) => b.length - a.length)
+			.map(escapeRegex)
+			.join('|')})`,
+	);
 	return {
 		defaultToken: '',
 		ignoreCase: true,
@@ -120,15 +126,16 @@ function createTokenizer(
 		operators: [...GENERATED_OPERATORS],
 		tokenizer: {
 			root: [
-				...buildSchemaRules(tags, 'tag'),
-				...buildSchemaRules(edges, 'edge'),
-				...buildSchemaRules(fields, 'field'),
 				[/--.*$/, 'comment'],
 				[/\/\/.*$/, 'comment'],
 				[/\/\*.*$/, 'comment'],
 				[/'([^'\\]|\\.)*'/, 'string'],
 				[/"([^"\\]|\\.)*"/, 'string'],
 				[/`([^`\\]|\\.)*`/, 'identifier'],
+				...buildSchemaRules(tags, 'tag'),
+				...buildSchemaRules(edges, 'edge'),
+				...buildSchemaRules(fields, 'field'),
+				[operatorPattern, 'operator'],
 				[
 					/[a-zA-Z_]\w*/,
 					{

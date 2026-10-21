@@ -1,0 +1,13 @@
+-- Path, subgraph and optional match
+MATCH (a:person), (b:person)
+WHERE a <> b
+RETURN a.name, b.name
+
+MATCH (a:person)-[r:friend*1..3]->(b:person)
+RETURN a.name, b.name, length(r) AS hops
+
+OPTIONAL MATCH (p:person)-[:works_at]->(c:company)
+RETURN p.name, c.name
+
+UNWIND [1, 2, 3] AS x
+RETURN x * 2 AS doubled

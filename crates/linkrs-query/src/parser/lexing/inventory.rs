@@ -12,7 +12,10 @@ use crate::parser::TokenKind;
 
 /// Contextual (soft) keywords. They are not in `lookup_keyword`; the parser
 /// recognizes them as `Identifier` tokens via `check_keyword`.
-pub const SOFT_KEYWORDS: &[&str] = &["GRAPH", "CHECKPOINT", "PURGE", "EXPIRED"];
+pub const SOFT_KEYWORDS: &[&str] = &[
+    "GRAPH", "CHECKPOINT", "PURGE", "EXPIRED", "FULLTEXT", "EXTENSION", "MACRO", "TYPE",
+    "ATTACH", "EXPORT", "IMPORT", "LOAD", "INSTALL", "UNINSTALL", "MIGRATE", "CALL",
+];
 
 /// Multi-word sequences the lexer merges into a single token unconditionally.
 pub const MULTIWORD_UNCONDITIONAL: &[&str] = &[

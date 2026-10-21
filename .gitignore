@@ -15,3 +15,5 @@ __pycache__
 **/node_modules/
 frontend/src/lib/types/schema.d.ts
 benches/results/
+# Grammar highlight fixture outputs
+crates/linkrs-grammar/outputs/

@@ -1,0 +1,17 @@
+-- Tricky and confusing cases for highlighting
+-- Keywords used as identifiers or property names
+MATCH (match:person {name: "x", age: 1})
+RETURN match.name AS result_name, match.age AS age_value
+
+-- Backtick identifiers and unusual operators
+MATCH (a:person)
+WHERE a.name =~ "A.*"
+RETURN a.name, a.score << 2, a.score >> 1
+
+-- Comments and strings containing schema-like names
+MATCH (tag:person)
+RETURN "edge field tag", `quoted.identifier`, 31, 1.5e3, true, false, null
+
+-- Nested function calls and property access
+MATCH (p:person)
+RETURN length(p.name) + size(p.tags) AS metric, p.profile.address.city AS city

@@ -939,7 +939,19 @@
     "GRAPH",
     "CHECKPOINT",
     "PURGE",
-    "EXPIRED"
+    "EXPIRED",
+    "FULLTEXT",
+    "EXTENSION",
+    "MACRO",
+    "TYPE",
+    "ATTACH",
+    "EXPORT",
+    "IMPORT",
+    "LOAD",
+    "INSTALL",
+    "UNINSTALL",
+    "MIGRATE",
+    "CALL"
   ],
   "multiword_unconditional": [
     "IS NULL",

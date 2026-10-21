@@ -1,0 +1,15 @@
+-- Graph traversal
+MATCH (p:person)-[w:works_at]->(c:company)
+RETURN p.name, w.position, c.name
+
+MATCH (p1:person)-[:friend]->(p2:person)
+RETURN p1.name, p2.name
+
+MATCH (p:person)<-[:friend]-(f:person)
+RETURN p.name, f.name
+
+MATCH (a:person)-[r:friend*1..3]->(b:person)
+RETURN a.name, b.name
+
+MATCH (p:person)-[:works_at]->(c:company)<-[:works_at]-(peer:person)
+RETURN p.name, peer.name, c.name

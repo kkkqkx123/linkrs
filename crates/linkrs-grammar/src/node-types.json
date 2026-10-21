@@ -59,6 +59,10 @@
           "named": true
         },
         {
+          "type": "kw_fulltext",
+          "named": true
+        },
+        {
           "type": "kw_index",
           "named": true
         },
@@ -68,6 +72,37 @@
         },
         {
           "type": "kw_tag",
+          "named": true
+        },
+        {
+          "type": "kw_user",
+          "named": true
+        },
+        {
+          "type": "kw_vector",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "analyze_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_analyze",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -102,6 +137,63 @@
       "types": [
         {
           "type": "or_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "assignment_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "attach_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_attach",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "begin_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_begin",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -167,6 +259,25 @@
     "fields": {}
   },
   {
+    "type": "call_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_call",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "case_expr",
     "named": true,
     "fields": {},
@@ -192,6 +303,67 @@
         },
         {
           "type": "when_clause",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "change_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_change",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "checkpoint_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_checkpoint",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "clear_space_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_clear",
+          "named": true
+        },
+        {
+          "type": "kw_space",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -267,6 +439,25 @@
     "named": true,
     "extra": true,
     "fields": {}
+  },
+  {
+    "type": "commit_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_commit",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "comparison_expr",
@@ -352,6 +543,25 @@
     }
   },
   {
+    "type": "copy_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_copy",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "create_segment",
     "named": true,
     "fields": {},
@@ -380,7 +590,23 @@
           "named": true
         },
         {
+          "type": "kw_fulltext",
+          "named": true
+        },
+        {
+          "type": "kw_graph",
+          "named": true
+        },
+        {
           "type": "kw_index",
+          "named": true
+        },
+        {
+          "type": "kw_macro",
+          "named": true
+        },
+        {
+          "type": "kw_sequence",
           "named": true
         },
         {
@@ -389,6 +615,22 @@
         },
         {
           "type": "kw_tag",
+          "named": true
+        },
+        {
+          "type": "kw_type",
+          "named": true
+        },
+        {
+          "type": "kw_user",
+          "named": true
+        },
+        {
+          "type": "kw_vector",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -446,6 +688,10 @@
           "named": true
         },
         {
+          "type": "kw_detach",
+          "named": true
+        },
+        {
           "type": "kw_edge",
           "named": true
         },
@@ -455,6 +701,10 @@
         },
         {
           "type": "kw_vertex",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         },
         {
@@ -493,7 +743,38 @@
           "named": true
         },
         {
+          "type": "kw_fulltext",
+          "named": true
+        },
+        {
+          "type": "kw_vector",
+          "named": true
+        },
+        {
           "type": "show_object",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "detach_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_detach",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -524,7 +805,23 @@
           "named": true
         },
         {
+          "type": "kw_fulltext",
+          "named": true
+        },
+        {
+          "type": "kw_graph",
+          "named": true
+        },
+        {
           "type": "kw_index",
+          "named": true
+        },
+        {
+          "type": "kw_macro",
+          "named": true
+        },
+        {
+          "type": "kw_sequence",
           "named": true
         },
         {
@@ -533,6 +830,22 @@
         },
         {
           "type": "kw_tag",
+          "named": true
+        },
+        {
+          "type": "kw_type",
+          "named": true
+        },
+        {
+          "type": "kw_user",
+          "named": true
+        },
+        {
+          "type": "kw_vector",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -667,6 +980,44 @@
         },
         {
           "type": "kw_with",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "explain_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_explain",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "export_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_export",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -979,6 +1330,25 @@
     }
   },
   {
+    "type": "grant_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_grant",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "group_by_segment",
     "named": true,
     "fields": {},
@@ -1078,6 +1448,25 @@
     }
   },
   {
+    "type": "import_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_import",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "insert_segment",
     "named": true,
     "fields": {},
@@ -1111,6 +1500,29 @@
         },
         {
           "type": "value_entry",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "install_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_extension",
+          "named": true
+        },
+        {
+          "type": "kw_install",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -1201,6 +1613,25 @@
     }
   },
   {
+    "type": "kill_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_kill",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "kw_acyclic",
     "named": true,
     "fields": {}
@@ -1217,6 +1648,11 @@
   },
   {
     "type": "kw_alter",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_analyze",
     "named": true,
     "fields": {}
   },
@@ -1241,7 +1677,17 @@
     "fields": {}
   },
   {
+    "type": "kw_attach",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_avg",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_begin",
     "named": true,
     "fields": {}
   },
@@ -1266,6 +1712,11 @@
     "fields": {}
   },
   {
+    "type": "kw_call",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_case",
     "named": true,
     "fields": {}
@@ -1276,7 +1727,27 @@
     "fields": {}
   },
   {
+    "type": "kw_checkpoint",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_clear",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_commit",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_contains",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_copy",
     "named": true,
     "fields": {}
   },
@@ -1326,6 +1797,11 @@
     "fields": {}
   },
   {
+    "type": "kw_detach",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_distinct",
     "named": true,
     "fields": {}
@@ -1371,6 +1847,21 @@
     "fields": {}
   },
   {
+    "type": "kw_explain",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_export",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_extension",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_fetch",
     "named": true,
     "fields": {}
@@ -1396,12 +1887,27 @@
     "fields": {}
   },
   {
+    "type": "kw_fulltext",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_get",
     "named": true,
     "fields": {}
   },
   {
     "type": "kw_go",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_grant",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_graph",
     "named": true,
     "fields": {}
   },
@@ -1417,6 +1923,11 @@
   },
   {
     "type": "kw_if",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_import",
     "named": true,
     "fields": {}
   },
@@ -1437,6 +1948,11 @@
   },
   {
     "type": "kw_insert",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_install",
     "named": true,
     "fields": {}
   },
@@ -1471,12 +1987,32 @@
     "fields": {}
   },
   {
+    "type": "kw_kill",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_let",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_limit",
     "named": true,
     "fields": {}
   },
   {
+    "type": "kw_load",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_lookup",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_macro",
     "named": true,
     "fields": {}
   },
@@ -1492,6 +2028,11 @@
   },
   {
     "type": "kw_merge",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_migrate",
     "named": true,
     "fields": {}
   },
@@ -1541,7 +2082,27 @@
     "fields": {}
   },
   {
+    "type": "kw_profile",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_prop",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_purge",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_release",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_remove",
     "named": true,
     "fields": {}
   },
@@ -1552,6 +2113,31 @@
   },
   {
     "type": "kw_reversely",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_revoke",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_rollback",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_savepoint",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_search",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_sequence",
     "named": true,
     "fields": {}
   },
@@ -1651,6 +2237,16 @@
     "fields": {}
   },
   {
+    "type": "kw_type",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_uninstall",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "kw_unwind",
     "named": true,
     "fields": {}
@@ -1672,6 +2268,11 @@
   },
   {
     "type": "kw_use",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "kw_user",
     "named": true,
     "fields": {}
   },
@@ -1714,6 +2315,25 @@
     "type": "kw_yield",
     "named": true,
     "fields": {}
+  },
+  {
+    "type": "let_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_let",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "limit_segment",
@@ -1781,6 +2401,29 @@
     }
   },
   {
+    "type": "load_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_extension",
+          "named": true
+        },
+        {
+          "type": "kw_load",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "lookup_index",
     "named": true,
     "fields": {},
@@ -1828,7 +2471,15 @@
           "named": true
         },
         {
+          "type": "kw_vector",
+          "named": true
+        },
+        {
           "type": "lookup_index",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -1873,11 +2524,23 @@
       "required": true,
       "types": [
         {
+          "type": "kw_fulltext",
+          "named": true
+        },
+        {
           "type": "kw_match",
           "named": true
         },
         {
+          "type": "kw_vector",
+          "named": true
+        },
+        {
           "type": "match_pattern",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -1932,6 +2595,25 @@
         },
         {
           "type": "node_pattern",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "migrate_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_migrate",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -2382,6 +3064,25 @@
     }
   },
   {
+    "type": "profile_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_profile",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "prop_defs",
     "named": true,
     "fields": {},
@@ -2454,6 +3155,25 @@
     }
   },
   {
+    "type": "purge_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_purge",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "range",
     "named": true,
     "fields": {},
@@ -2463,6 +3183,44 @@
       "types": [
         {
           "type": "integer",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "release_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_release",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "remove_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_remove",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -2534,6 +3292,86 @@
     }
   },
   {
+    "type": "revoke_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_revoke",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "rollback_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_rollback",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "savepoint_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_savepoint",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "search_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_search",
+          "named": true
+        },
+        {
+          "type": "kw_vector",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "segment",
     "named": true,
     "fields": {},
@@ -2543,6 +3381,46 @@
       "types": [
         {
           "type": "alter_segment",
+          "named": true
+        },
+        {
+          "type": "analyze_segment",
+          "named": true
+        },
+        {
+          "type": "assignment_segment",
+          "named": true
+        },
+        {
+          "type": "attach_segment",
+          "named": true
+        },
+        {
+          "type": "begin_segment",
+          "named": true
+        },
+        {
+          "type": "call_segment",
+          "named": true
+        },
+        {
+          "type": "change_segment",
+          "named": true
+        },
+        {
+          "type": "checkpoint_segment",
+          "named": true
+        },
+        {
+          "type": "clear_space_segment",
+          "named": true
+        },
+        {
+          "type": "commit_segment",
+          "named": true
+        },
+        {
+          "type": "copy_segment",
           "named": true
         },
         {
@@ -2558,7 +3436,19 @@
           "named": true
         },
         {
+          "type": "detach_segment",
+          "named": true
+        },
+        {
           "type": "drop_segment",
+          "named": true
+        },
+        {
+          "type": "explain_segment",
+          "named": true
+        },
+        {
+          "type": "export_segment",
           "named": true
         },
         {
@@ -2578,6 +3468,10 @@
           "named": true
         },
         {
+          "type": "grant_segment",
+          "named": true
+        },
+        {
           "type": "group_by_segment",
           "named": true
         },
@@ -2586,11 +3480,31 @@
           "named": true
         },
         {
+          "type": "import_segment",
+          "named": true
+        },
+        {
           "type": "insert_segment",
           "named": true
         },
         {
+          "type": "install_segment",
+          "named": true
+        },
+        {
+          "type": "kill_segment",
+          "named": true
+        },
+        {
+          "type": "let_segment",
+          "named": true
+        },
+        {
           "type": "limit_segment",
+          "named": true
+        },
+        {
+          "type": "load_segment",
           "named": true
         },
         {
@@ -2606,6 +3520,10 @@
           "named": true
         },
         {
+          "type": "migrate_segment",
+          "named": true
+        },
+        {
           "type": "optional_match_segment",
           "named": true
         },
@@ -2614,7 +3532,43 @@
           "named": true
         },
         {
+          "type": "profile_segment",
+          "named": true
+        },
+        {
+          "type": "purge_segment",
+          "named": true
+        },
+        {
+          "type": "release_segment",
+          "named": true
+        },
+        {
+          "type": "remove_segment",
+          "named": true
+        },
+        {
           "type": "return_segment",
+          "named": true
+        },
+        {
+          "type": "revoke_segment",
+          "named": true
+        },
+        {
+          "type": "rollback_segment",
+          "named": true
+        },
+        {
+          "type": "savepoint_segment",
+          "named": true
+        },
+        {
+          "type": "search_segment",
+          "named": true
+        },
+        {
+          "type": "set_segment",
           "named": true
         },
         {
@@ -2623,6 +3577,10 @@
         },
         {
           "type": "skip_segment",
+          "named": true
+        },
+        {
+          "type": "uninstall_segment",
           "named": true
         },
         {
@@ -2691,6 +3649,25 @@
     }
   },
   {
+    "type": "set_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_set",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "show_object",
     "named": true,
     "fields": {},
@@ -2750,11 +3727,23 @@
           "named": true
         },
         {
+          "type": "kw_fulltext",
+          "named": true
+        },
+        {
           "type": "kw_show",
           "named": true
         },
         {
+          "type": "kw_vector",
+          "named": true
+        },
+        {
           "type": "show_object",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         }
       ]
@@ -2837,6 +3826,11 @@
         }
       ]
     }
+  },
+  {
+    "type": "tail",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "type_name",
@@ -2941,6 +3935,29 @@
     }
   },
   {
+    "type": "uninstall_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "kw_extension",
+          "named": true
+        },
+        {
+          "type": "kw_uninstall",
+          "named": true
+        },
+        {
+          "type": "tail",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "unwind_segment",
     "named": true,
     "fields": {},
@@ -2984,6 +4001,10 @@
           "named": true
         },
         {
+          "type": "kw_extension",
+          "named": true
+        },
+        {
           "type": "kw_set",
           "named": true
         },
@@ -2997,6 +4018,10 @@
         },
         {
           "type": "set_list",
+          "named": true
+        },
+        {
+          "type": "tail",
           "named": true
         },
         {

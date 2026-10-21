@@ -1,0 +1,30 @@
+-- Schema management statements
+CREATE SPACE demo
+USE demo
+
+CREATE TAG IF NOT EXISTS person(
+    person_id STRING NOT NULL,
+    name STRING,
+    age INT,
+    score FLOAT,
+    created_at TIMESTAMP
+)
+
+CREATE TAG IF NOT EXISTS company(
+    company_id STRING NOT NULL,
+    name STRING
+)
+
+CREATE EDGE IF NOT EXISTS works_at(
+    position STRING,
+    since DATE,
+    salary FLOAT
+)
+
+CREATE INDEX IF NOT EXISTS idx_person_name ON person(name)
+CREATE INDEX IF NOT EXISTS idx_person_age ON person(age)
+
+SHOW TAGS
+SHOW EDGES
+DESCRIBE TAG person
+DESCRIBE EDGE works_at
