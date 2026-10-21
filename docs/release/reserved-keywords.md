@@ -4,8 +4,9 @@
 
 反引号包裹的名字（如 `` `CREATE` ``）始终产出 `Identifier`，不走关键字查找。解析器 `expect_identifier` 还会在名称位置接受一部分关键字，见文末注意事项。
 
-> 关键字表来源：词法器 `lookup_keyword`（`crates/linkrs-query/src/parser/lexing/lexer/token.rs`），与代码一一对应；
-> 上下文软关键字（`GRAPH`、`CHECKPOINT`、`PURGE`、`EXPIRED`）不在该映射内，见第 13 节末尾说明。
+> 关键字表来源：`crates/linkrs-query/src/parser/lexing/spec.rs` 的 `keyword_table`（唯一词法规格），
+> 词法器 `lookup_keyword`、解析器 `check_keyword`、分类谓词与清单导出均由此派生，与代码一一对应；
+> 上下文关键字（含 21 个软关键字）不在该映射内，见第 13 节末尾说明。
 
 ---
 
@@ -213,6 +214,9 @@
 | `VECTOR` | `KeywordVector` | 向量搜索 |
 | `LOOKUP` | `Lookup`        | 查找索引 |
 
+> `ENGINE BM25` 中的 `BM25` 是上下文关键字（无独立 TokenKind，以标识符形态由 `check_keyword` 识别），
+> 登记于词法规格的上下文关键集中，不进入语法导出。
+
 ## 10. 图空间 / 分片 / 存储
 
 | 关键字           | TokenKind        | 说明         |
@@ -304,7 +308,9 @@
 
 > 注意：`BALANCE` 在词法器中被映射为 `Tk::Identifier("balance")`，可作为普通标识符使用。
 
-> 软关键字：`GRAPH`、`CHECKPOINT`、`PURGE`、`EXPIRED` 没有独立 TokenKind，
+> 软关键字（共 21 个）：`GRAPH`、`CHECKPOINT`、`PURGE`、`EXPIRED`、`FULLTEXT`、`EXTENSION`、`MACRO`、
+> `TYPE`、`ATTACH`、`EXPORT`、`IMPORT`、`LOAD`、`INSTALL`、`UNINSTALL`、`MIGRATE`、`CALL`、`COLLECT`、
+> `USING`、`JOIN`、`BINARY`、`MULTIWAY`。它们没有独立 TokenKind，
 > 以标识符形态参与词法、凭上下文关键字匹配生效，因此在无关位置仍可用作标识符。
 > 例外：`USE graph` 表示切换到名为 `graph` 的空间（`GRAPH` 仅在后跟另一标识符时
 > 作为 `USE GRAPH <name>` 别名前缀）；`SPACE`（单数）是保留关键字，不可直接用作

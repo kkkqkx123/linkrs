@@ -16,10 +16,9 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use linkrs_query::executor::expression::functions::FunctionRegistry;
-use linkrs_query::parser::lexing::SYMBOL_SPEC;
 use linkrs_query::parser::lexing::{
-    function_category, keyword_table, SymbolClass, MULTIWORD_CONDITIONAL, MULTIWORD_UNCONDITIONAL,
-    SOFT_KEYWORDS,
+    function_category, keyword_table, operator_symbols, punctuation_symbols, MULTIWORD_CONDITIONAL,
+    MULTIWORD_UNCONDITIONAL, SOFT_KEYWORDS,
 };
 
 const DEFAULT_OUT: &str = "crates/linkrs-grammar/data/keywords.json";
@@ -59,23 +58,21 @@ struct Inventory {
 }
 
 fn operators() -> Vec<Symbol> {
-    SYMBOL_SPEC
-        .iter()
-        .filter(|entry| entry.class == SymbolClass::Operator)
-        .map(|entry| Symbol {
-            symbol: entry.symbol,
-            kind: format!("{:?}", entry.kind),
+    operator_symbols()
+        .into_iter()
+        .map(|(symbol, kind)| Symbol {
+            symbol,
+            kind: format!("{:?}", kind),
         })
         .collect()
 }
 
 fn punctuation() -> Vec<Symbol> {
-    SYMBOL_SPEC
-        .iter()
-        .filter(|entry| entry.class == SymbolClass::Punctuation)
-        .map(|entry| Symbol {
-            symbol: entry.symbol,
-            kind: format!("{:?}", entry.kind),
+    punctuation_symbols()
+        .into_iter()
+        .map(|(symbol, kind)| Symbol {
+            symbol,
+            kind: format!("{:?}", kind),
         })
         .collect()
 }

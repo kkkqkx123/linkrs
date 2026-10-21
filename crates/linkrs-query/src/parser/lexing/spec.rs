@@ -1019,15 +1019,18 @@ pub fn keyword_table() -> &'static [KeywordEntry] {
     &TABLE
 }
 
-/// Contextual keywords: `Identifier` spellings the parser recognizes by
-/// position (statement, clause and subquery introducers). They are not
-/// reserved, so they stay out of the grammar export, but they are part of the
-/// parser vocabulary and therefore listed here instead of hiding inside
-/// `check_keyword` call sites and ad-hoc identifier matches.
+/// Contextual keywords: `Identifier` spellings the parser recognizes through
+/// `check_keyword` (statement, clause and subquery introducers, plus the
+/// `ENGINE BM25` value, which arrives as an `Identifier` and is matched with
+/// `check_keyword`). They are not reserved, so they stay out of the grammar
+/// export, but they are part of the parser vocabulary and therefore listed
+/// here instead of hiding inside `check_keyword` call sites.
 ///
-/// Out of scope by criterion: type-position aliases (`DECIMAL`) and option
-/// values (`true`/`false` in `COPY` options) are value policy, not clause
-/// vocabulary, and stay with their parsers.
+/// Out of scope by criterion: spellings matched through other channels are
+/// value or type policy, not `check_keyword` vocabulary, and stay with their
+/// parsers. That covers type-position aliases (`DECIMAL`, matched on the
+/// `Identifier` payload by the DDL type parser) and option values
+/// (`true`/`false` in `COPY` options, arriving as `BooleanLiteral` tokens).
 pub const CONTEXTUAL_KEYWORDS: &[&str] = &[
     "GRAPH",
     "CHECKPOINT",
@@ -1054,6 +1057,7 @@ pub const CONTEXTUAL_KEYWORDS: &[&str] = &[
     "ATTACHED",
     "BATCH",
     "BATCH_SIZE",
+    "BM25",
     "BOOST",
     "COLUMN",
     "DATABASE",
@@ -1635,7 +1639,14 @@ mod tests {
                 "soft keyword '{word}' must be part of the contextual list"
             );
         }
-        for word in ["SELECT", "PARTITION", "COLLECT", "BINARY", "MULTIWAY"] {
+        for word in [
+            "SELECT",
+            "PARTITION",
+            "COLLECT",
+            "BINARY",
+            "MULTIWAY",
+            "BM25",
+        ] {
             assert!(
                 CONTEXTUAL_KEYWORDS.contains(&word),
                 "ad-hoc recognition site keyword '{word}' must be listed as contextual"

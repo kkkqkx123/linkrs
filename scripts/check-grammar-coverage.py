@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Coverage matrix between the Rust lexical inventory, dispatch, and grammar."""
+"""Coverage matrix between the spec-derived lexical inventory and the grammar."""
 
 import json
 import re
@@ -10,13 +10,11 @@ root = Path(__file__).resolve().parents[1]
 inventory_path = root / "crates/linkrs-grammar/data/keywords.json"
 grammar_js_path = root / "crates/linkrs-grammar/grammar.js"
 grammar_json_path = root / "crates/linkrs-grammar/src/grammar.json"
-dispatch_path = root / "crates/linkrs-query/src/parser/parsing/stmt_parser/dispatch.rs"
 stmt_path = root / "crates/linkrs-query/src/parser/ast/stmt.rs"
 
 inventory = json.loads(inventory_path.read_text())
 grammar_js = grammar_js_path.read_text()
 grammar_json = json.loads(grammar_json_path.read_text())
-dispatch = dispatch_path.read_text()
 stmt_source = stmt_path.read_text()
 
 expanded_kw = set()
@@ -75,19 +73,14 @@ for seq_name in ("multiword_unconditional", "multiword_conditional"):
             if name not in expanded_kw:
                 hard_failures.append(f"multiword component missing from grammar: {sequence} -> {word}")
 
-# 3. Dispatch check_keyword literals must exist in the grammar.
-dispatch_single = set(re.findall(r'check_keyword\("([A-Z_]+)"\)', dispatch))
-dispatch_sequences = re.findall(r'check_keyword_sequence\(&\[(.*?)\]\)', dispatch)
-for literal in sorted(dispatch_single):
-    name = "kw_" + literal.lower()
-    if name not in expanded_kw:
-        hard_failures.append(f"dispatch keyword missing from grammar: {literal}")
-
-for raw in dispatch_sequences:
-    for word in re.findall(r'"([A-Z_]+)"', raw):
-        name = "kw_" + word.lower()
-        if name not in expanded_kw:
-            hard_failures.append(f"dispatch sequence component missing from grammar: {word}")
+# 3. Statement-dispatch introducers are intentionally not scanned out of the
+# parser source here. The grammar contracts only with the spec-derived
+# inventory: reserved words plus the frozen SOFT_KEYWORDS subset, both
+# asserted above. Contextual words lex as identifiers and must stay out of
+# the grammar, so requiring one kw_ rule per check_keyword call site would
+# force every new contextual word into the grammar. The other direction is
+# pinned by Rust tests: every check_keyword spelling is either reserved or
+# listed in CONTEXTUAL_KEYWORDS.
 
 # 4. Operator and punctuation symbols must be grammar tokens.
 grammar_literals = set(re.findall(r"'([^'\n]+)'", grammar_js))
@@ -109,8 +102,6 @@ print(f"inventory keywords: {len(inventory.get('keywords', []))}")
 print(f"soft keywords: {len(inventory.get('soft_keywords', []))}")
 print(f"grammar segments: {len(grammar_segments)}")
 print(f"stmt variants: {len(stmt_variants)}")
-print(f"dispatch single keywords: {len(dispatch_single)}")
-print(f"dispatch sequences: {len(dispatch_sequences)}")
 
 if hard_failures:
     print("grammar coverage failures:")

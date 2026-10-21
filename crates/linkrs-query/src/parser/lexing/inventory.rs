@@ -36,6 +36,10 @@ mod tests {
     use crate::parser::lexing::spec::lookup_keyword_spelling;
     use crate::parser::TokenKind;
 
+    /// One-direction smoke check: every table row resolves through the lexer.
+    /// Completeness holds by construction (the lexer reads the same spec
+    /// table) and is pinned by the round-trip tests in `spec.rs`; this test
+    /// only guards against wiring drift.
     #[test]
     fn keyword_table_matches_lexer() {
         let lexer = Lexer::new("");
@@ -100,6 +104,10 @@ mod tests {
         }
     }
 
+    /// One-direction smoke check: every symbol spec row lexes to its recorded
+    /// kind. Partition completeness is pinned by
+    /// `operator_punctuation_partition_covers_symbol_spec` in `spec.rs`; this
+    /// test only guards scanner output against drift.
     #[test]
     fn symbol_tables_match_lexer() {
         for entry in SYMBOL_SPEC {
