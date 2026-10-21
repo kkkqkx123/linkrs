@@ -1620,12 +1620,12 @@ mod tests {
         let mut seen = HashSet::new();
         for word in CONTEXTUAL_KEYWORDS {
             assert!(
-                seen.insert(*word),
-                "duplicate contextual keyword '{word}'"
+                seen.insert(word.spelling),
+                "duplicate contextual keyword '{}'", word.spelling
             );
             assert!(
-                !reserved.contains(word),
-                "'{word}' is reserved and must not be listed as contextual"
+                !reserved.contains(&word.spelling),
+                "'{}' is reserved and must not be listed as contextual", word.spelling
             );
         }
         for word in SOFT_KEYWORDS.iter() {
