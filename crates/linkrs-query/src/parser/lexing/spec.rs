@@ -14,9 +14,11 @@
 //!   regenerated `keywords.json` stays byte-identical.
 //! - `KeywordCategory`: derived from the entry kind, never written per row.
 //! - `CONTEXTUAL_KEYWORDS`: identifier spellings the parser recognizes by
-//!   position (`check_keyword` on `Identifier`). They are not reserved and
-//!   therefore stay out of the grammar export; they are listed here so the
-//!   full parser vocabulary is enumerable in one place.
+//!   position (`check_keyword` on `Identifier`). They are not reserved;
+//!   each entry carries the `soft` flag marking membership in the frozen
+//!   grammar-compatible subset (`SOFT_KEYWORDS`, derived from the flags).
+//!   They are listed here so the full parser vocabulary is enumerable in
+//!   one place.
 //! - `SYMBOL_SPEC`: every operator/punctuation spelling with its token kind
 //!   and presentation class. The scanner still matches characters directly
 //!   (lookahead is control flow, not a vocabulary list); `check_symbol_token`
@@ -1031,92 +1033,85 @@ pub fn keyword_table() -> &'static [KeywordEntry] {
 /// parsers. That covers type-position aliases (`DECIMAL`, matched on the
 /// `Identifier` payload by the DDL type parser) and option values
 /// (`true`/`false` in `COPY` options, arriving as `BooleanLiteral` tokens).
-pub const CONTEXTUAL_KEYWORDS: &[&str] = &[
-    "GRAPH",
-    "CHECKPOINT",
-    "PURGE",
-    "EXPIRED",
-    "FULLTEXT",
-    "EXTENSION",
-    "MACRO",
-    "TYPE",
-    "ATTACH",
-    "EXPORT",
-    "IMPORT",
-    "LOAD",
-    "INSTALL",
-    "UNINSTALL",
-    "MIGRATE",
-    "CALL",
-    "COLLECT",
-    "USING",
-    "JOIN",
-    "BINARY",
-    "MULTIWAY",
-    "ANALYZER",
-    "ATTACHED",
-    "BATCH",
-    "BATCH_SIZE",
-    "BM25",
-    "BOOST",
-    "COLUMN",
-    "DATABASE",
-    "DATABASE_TYPE",
-    "DATABASES",
-    "DBTYPE",
-    "ENGINE",
-    "EXECUTE",
-    "EXTENSIONS",
-    "FIELD",
-    "FOR",
-    "FULLTEXT_MATCH",
-    "GLOB",
-    "HEADERS",
-    "INCREMENT",
-    "LIKE",
-    "MAXVALUE",
-    "MINVALUE",
-    "NOCYCLE",
-    "OFFSET",
-    "OPTIMIZE",
-    "OPTIONS",
-    "PARTITION",
-    "PLAN",
-    "SELECT",
-    "SIZE",
-    "START",
-    "THRESHOLD",
-    "VERSION",
-    "matched_fields",
-    "score",
+pub struct ContextualKeyword {
+    pub spelling: &'static str,
+    /// Whether the spelling belongs to the grammar-compatible soft-keyword
+    /// subset exported as `soft_keywords` in the inventory JSON. The subset is
+    /// frozen: flipping this flag changes the grammar-side export.
+    pub soft: bool,
+}
+
+pub const CONTEXTUAL_KEYWORDS: &[ContextualKeyword] = &[
+    ContextualKeyword { spelling: "GRAPH", soft: true },
+    ContextualKeyword { spelling: "CHECKPOINT", soft: true },
+    ContextualKeyword { spelling: "PURGE", soft: true },
+    ContextualKeyword { spelling: "EXPIRED", soft: true },
+    ContextualKeyword { spelling: "FULLTEXT", soft: true },
+    ContextualKeyword { spelling: "EXTENSION", soft: true },
+    ContextualKeyword { spelling: "MACRO", soft: true },
+    ContextualKeyword { spelling: "TYPE", soft: true },
+    ContextualKeyword { spelling: "ATTACH", soft: true },
+    ContextualKeyword { spelling: "EXPORT", soft: true },
+    ContextualKeyword { spelling: "IMPORT", soft: true },
+    ContextualKeyword { spelling: "LOAD", soft: true },
+    ContextualKeyword { spelling: "INSTALL", soft: true },
+    ContextualKeyword { spelling: "UNINSTALL", soft: true },
+    ContextualKeyword { spelling: "MIGRATE", soft: true },
+    ContextualKeyword { spelling: "CALL", soft: true },
+    ContextualKeyword { spelling: "COLLECT", soft: true },
+    ContextualKeyword { spelling: "USING", soft: true },
+    ContextualKeyword { spelling: "JOIN", soft: true },
+    ContextualKeyword { spelling: "BINARY", soft: true },
+    ContextualKeyword { spelling: "MULTIWAY", soft: true },
+    ContextualKeyword { spelling: "ANALYZER", soft: false },
+    ContextualKeyword { spelling: "ATTACHED", soft: false },
+    ContextualKeyword { spelling: "BATCH", soft: false },
+    ContextualKeyword { spelling: "BATCH_SIZE", soft: false },
+    ContextualKeyword { spelling: "BM25", soft: false },
+    ContextualKeyword { spelling: "BOOST", soft: false },
+    ContextualKeyword { spelling: "COLUMN", soft: false },
+    ContextualKeyword { spelling: "DATABASE", soft: false },
+    ContextualKeyword { spelling: "DATABASE_TYPE", soft: false },
+    ContextualKeyword { spelling: "DATABASES", soft: false },
+    ContextualKeyword { spelling: "DBTYPE", soft: false },
+    ContextualKeyword { spelling: "ENGINE", soft: false },
+    ContextualKeyword { spelling: "EXECUTE", soft: false },
+    ContextualKeyword { spelling: "EXTENSIONS", soft: false },
+    ContextualKeyword { spelling: "FIELD", soft: false },
+    ContextualKeyword { spelling: "FOR", soft: false },
+    ContextualKeyword { spelling: "FULLTEXT_MATCH", soft: false },
+    ContextualKeyword { spelling: "GLOB", soft: false },
+    ContextualKeyword { spelling: "HEADERS", soft: false },
+    ContextualKeyword { spelling: "INCREMENT", soft: false },
+    ContextualKeyword { spelling: "LIKE", soft: false },
+    ContextualKeyword { spelling: "MAXVALUE", soft: false },
+    ContextualKeyword { spelling: "MINVALUE", soft: false },
+    ContextualKeyword { spelling: "NOCYCLE", soft: false },
+    ContextualKeyword { spelling: "OFFSET", soft: false },
+    ContextualKeyword { spelling: "OPTIMIZE", soft: false },
+    ContextualKeyword { spelling: "OPTIONS", soft: false },
+    ContextualKeyword { spelling: "PARTITION", soft: false },
+    ContextualKeyword { spelling: "PLAN", soft: false },
+    ContextualKeyword { spelling: "SELECT", soft: false },
+    ContextualKeyword { spelling: "SIZE", soft: false },
+    ContextualKeyword { spelling: "START", soft: false },
+    ContextualKeyword { spelling: "THRESHOLD", soft: false },
+    ContextualKeyword { spelling: "VERSION", soft: false },
+    ContextualKeyword { spelling: "matched_fields", soft: false },
+    ContextualKeyword { spelling: "score", soft: false },
 ];
 
-/// Soft keywords exported for completion and highlighting. This is the
-/// grammar-compatible subset of `CONTEXTUAL_KEYWORDS`, kept stable so the
-/// tree-sitter grammar and the frontend do not gain new reserved rules.
-pub const SOFT_KEYWORDS: &[&str] = &[
-    "GRAPH",
-    "CHECKPOINT",
-    "PURGE",
-    "EXPIRED",
-    "FULLTEXT",
-    "EXTENSION",
-    "MACRO",
-    "TYPE",
-    "ATTACH",
-    "EXPORT",
-    "IMPORT",
-    "LOAD",
-    "INSTALL",
-    "UNINSTALL",
-    "MIGRATE",
-    "CALL",
-    "COLLECT",
-    "USING",
-    "JOIN",
-    "BINARY",
-    "MULTIWAY",
-];
+/// Soft keywords exported for completion and highlighting. Derived from the
+/// `soft` flag on [`CONTEXTUAL_KEYWORDS`], so the subset relation holds by
+/// construction. The exported content is frozen so the tree-sitter grammar
+/// and the frontend do not gain new reserved rules.
+pub static SOFT_KEYWORDS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    CONTEXTUAL_KEYWORDS
+        .iter()
+        .filter(|entry| entry.soft)
+        .map(|entry| entry.spelling)
+        .collect()
+});
 
 /// Multi-word sequences the lexer merges into a single token unconditionally.
 pub const MULTIWORD_UNCONDITIONAL: &[&str] = &[
@@ -1633,12 +1628,17 @@ mod tests {
                 "'{word}' is reserved and must not be listed as contextual"
             );
         }
-        for word in SOFT_KEYWORDS {
+        for word in SOFT_KEYWORDS.iter() {
             assert!(
-                CONTEXTUAL_KEYWORDS.contains(word),
+                CONTEXTUAL_KEYWORDS.iter().any(|entry| entry.spelling == *word),
                 "soft keyword '{word}' must be part of the contextual list"
             );
         }
+        assert_eq!(
+            SOFT_KEYWORDS.len(),
+            21,
+            "the soft-keyword subset is frozen; flipping a `soft` flag changes the grammar export"
+        );
         for word in [
             "SELECT",
             "PARTITION",
@@ -1648,8 +1648,21 @@ mod tests {
             "BM25",
         ] {
             assert!(
-                CONTEXTUAL_KEYWORDS.contains(&word),
+                CONTEXTUAL_KEYWORDS.iter().any(|entry| entry.spelling == word),
                 "ad-hoc recognition site keyword '{word}' must be listed as contextual"
+            );
+        }
+    }
+
+    /// Exclusion guards for the contextual list: spellings matched through
+    /// other channels are value or type policy, not `check_keyword`
+    /// vocabulary, and must stay out of the list.
+    #[test]
+    fn contextual_list_excludes_type_aliases_and_option_values() {
+        for word in ["DECIMAL", "true", "false", "BOOLEAN", "INT"] {
+            assert!(
+                !CONTEXTUAL_KEYWORDS.iter().any(|entry| entry.spelling == word),
+                "'{word}' is a type alias or option value, not a clause introducer"
             );
         }
     }

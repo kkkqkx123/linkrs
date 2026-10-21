@@ -73,7 +73,7 @@ mod tests {
     #[test]
     fn soft_keywords_are_not_reserved() {
         let lexer = Lexer::new("");
-        for word in SOFT_KEYWORDS {
+        for word in SOFT_KEYWORDS.iter() {
             assert!(
                 matches!(lexer.lookup_keyword(word), TokenKind::Identifier(_)),
                 "'{}' must stay a soft keyword",
@@ -96,7 +96,7 @@ mod tests {
                 entry.spelling
             );
         }
-        for word in SOFT_KEYWORDS {
+        for word in SOFT_KEYWORDS.iter() {
             assert!(
                 doc.contains(word),
                 "reserved keywords doc missing soft keyword '{word}'"

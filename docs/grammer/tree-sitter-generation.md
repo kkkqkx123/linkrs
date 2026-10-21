@@ -10,7 +10,7 @@ Linkrs 的 tree-sitter 集成被隔离在单一叶子 crate `crates/linkrs-gramm
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Phase A: 一次性生成（开发者机器，需要 Node + tree-sitter CLI）        │
 │                                                                     │
-│  Rust Lexer ──export──> keywords.json ──require──> grammar.js       │
+│  lexing/spec.rs ──export──> keywords.json ──require──> grammar.js    │
 │                                              │                      │
 │                                              ▼                      │
 │                                    tree-sitter generate              │
@@ -48,18 +48,18 @@ Linkrs 的 tree-sitter 集成被隔离在单一叶子 crate `crates/linkrs-gramm
 
 | 路径 | 职责 |
 |------|------|
-| `crates/linkrs-grammar/grammar.js` | **手写语法定义**（600 行）。Linkrs 方言语法树的唯一真相源。加载时 `require` `data/keywords.json` 以程序化生成关键字规则。定义 `name: 'linkrs'`、extras、word 规则、5 组声明的冲突、完整规则集。 |
+| `crates/linkrs-grammar/grammar.js` | **手写语法定义**（780 行）。Linkrs 方言语法树的唯一真相源。加载时 `require` `data/keywords.json` 以程序化生成关键字规则（保留字 `kw_*` 规则与 `soft_keywords` 软关键字规则各一组）。定义 `name: 'linkrs'`、extras、word 规则、5 组声明的冲突、完整规则集。 |
 | `crates/linkrs-grammar/tree-sitter.json` | **CLI 语法清单。** 声明语法名、作用域、文件类型与高亮查询位置，并提供生成器所需的元数据。缺少该文件时 CLI 会把 ABI 降级到 14，因此它必须入库。`metadata.version` 固定为 `0.0.0`，使重新生成得到与已提交 `parser.c` 完全一致的结果。 |
 | `crates/linkrs-grammar/abi-version` | **语言 ABI 声明。** 内容为 `15`。生成脚本据此传 `--abi`，`build.rs` 据此断言 `parser.c` 与 wasm 指纹，两侧共用同一个来源。 |
-| `crates/linkrs-grammar/src/parser.c` | **生成的 C 解析器**（~45k 行）。由 `tree-sitter-cli` 一次性产出。包含 `tree_sitter_linkrs()` 入口，`LANGUAGE_VERSION 15`。由 `build.rs` 通过 `cc` 编译。 |
+| `crates/linkrs-grammar/src/parser.c` | **生成的 C 解析器**（~93k 行）。由 `tree-sitter-cli` 一次性产出。包含 `tree_sitter_linkrs()` 入口，`LANGUAGE_VERSION 15`。由 `build.rs` 通过 `cc` 编译。 |
 | `crates/linkrs-grammar/src/node-types.json` | **生成的节点类型元数据**。供工具/编辑器内省节点。必须与 `parser.c` 一起提交。 |
 | `crates/linkrs-grammar/src/grammar.json` | **生成的语法 JSON**（`grammar.js` 的展开、解析后形式）。记录 `"name": "linkrs"`——由 `build.rs` 验证。 |
 | `crates/linkrs-grammar/src/tree_sitter/parser.h` | Tree-sitter 运行时头文件（vendored）。属于**运行时版本**，不由生成脚本刷新。 |
 | `crates/linkrs-grammar/src/tree_sitter/alloc.h` | Tree-sitter 运行时头文件（vendored）。属于**运行时版本**，不由生成脚本刷新。 |
 | `crates/linkrs-grammar/src/tree_sitter/array.h` | Tree-sitter 运行时头文件（vendored）。属于**运行时版本**，不由生成脚本刷新。 |
 | `crates/linkrs-grammar/src/lib.rs` | **Rust 绑定层**。暴露 `language()`、`parse()`、`tokens()`、`inventory_json()`。声明 `extern "C" { fn tree_sitter_linkrs() -> *const (); }` 并通过 `tree_sitter_language::LanguageFn::from_raw` 包装为 `tree_sitter::Language`。通过 `include_str!` 嵌入 `highlights.scm` 和 `keywords.json`。除 `inventory_json()` 外全部由 `parser` feature 门控。 |
-| `crates/linkrs-grammar/data/keywords.json` | **词法清单快照**（已提交）。~233 个保留字、280 个函数、运算符、标点、多词序列。由 `linkrs-query` 生成（见下文）。`grammar.js` 在生成时读取此文件以产出 `kw_*` 规则。 |
-| `crates/linkrs-grammar/queries/highlights.scm` | **高亮查询**（176 行）。基于 capture 的分类（`@keyword`、`@operator`、`@number`、`@string`、`@variable`、`@property`、`@function`、`@comment`）。运行时由 `lib.rs` 加载，由冒烟测试验证。 |
+| `crates/linkrs-grammar/data/keywords.json` | **词法清单快照**（已提交）。233 个关键字条目（保留字 + `BALANCE`/`TRUE`/`FALSE` payload 拼写）、21 个软关键字、25 个运算符、20 个标点、280 个函数、多词序列。由 `linkrs-query` 从词法规格 `lexing/spec.rs` 生成（见下文）。`grammar.js` 在生成时读取此文件以产出 `kw_*` 与软关键字规则。 |
+| `crates/linkrs-grammar/queries/highlights.scm` | **高亮查询**（231 行）。基于 capture 的分类（`@keyword`、`@operator`、`@number`、`@string`、`@variable`、`@property`、`@function`、`@comment`）。运行时由 `lib.rs` 加载，由冒烟测试验证。 |
 
 ### 2.2 构建脚本与生成脚本
 
@@ -71,8 +71,8 @@ Linkrs 的 tree-sitter 集成被隔离在单一叶子 crate `crates/linkrs-gramm
 | `crates/linkrs-grammar/Cargo.toml` | 声明 `build = "build.rs"`。`tree-sitter` + `tree-sitter-language` 为可选依赖，由默认开启的 `parser` feature 携带；build-dep `cc`（workspace）。 |
 | `frontend/vite/grammarWasm.ts` | **前端 wasm 构建插件。** 在 `buildStart` 阶段调用 `tree-sitter build --wasm`，把 side module 写入 `frontend/src/lib/assets/tree-sitter-linkrs.wasm`。CLI 优先取语法 crate 中固定的版本，其次取 PATH 上的版本。产物缺失时构建直接失败，不会退化成运行时的静默 404。 |
 | `frontend/.gitignore` | 排除 `src/lib/assets/tree-sitter-linkrs.wasm`：它是构建产物，与 `node_modules`、`.svelte-kit` 同级。 |
-| `scripts/verify-grammar.sh` | **同步验证脚本。** 重新导出词法清单并断言 `keywords.json` 无漂移；重新生成前端 TS 表并断言无漂移；在临时目录重新生成 `parser.c`/`grammar.json`/`node-types.json` 并逐字节比对；编译一次 wasm 并确认它导出语法入口，确保工具链可用。 |
-| `tools/grammar-codegen/gen.mjs` | **前端 TypeScript 代码生成。** 读取 `data/keywords.json`，写入 `frontend/src/lib/utils/generated/keywords.ts` 和 `functions.ts`（Monarch 兼容数组）。 |
+| `scripts/verify-grammar.sh` | **同步验证脚本。** 重新导出词法清单并断言 `keywords.json` 无漂移；重新生成前端 TS 表并断言无漂移；重放高亮 fixture 并断言 `outputs/` 无漂移；运行 `check-highlights.py`、`check-grammar-coverage.py`、`check-grammar-structure.py` 三个一致性脚本；运行语法 crate 冒烟测试与 `linkrs-query` 语料对等测试；在临时目录重新生成 `parser.c`/`grammar.json`/`node-types.json` 并逐字节比对；编译一次 wasm 并确认它导出语法入口。 |
+| `tools/grammar-codegen/gen.mjs` | **前端 TypeScript 代码生成。** 读取 `data/keywords.json`，写入 `frontend/src/lib/utils/generated/keywords.ts`、`operators.ts` 和 `functions.ts`（Monarch 兼容数组）。 |
 | `tools/grammar-codegen/package.json` | 上述脚本的 Node 包；脚本 `"gen": "node gen.mjs"`。 |
 | `frontend/package.json` | 暴露 `"gen:grammar": "npm run gen --prefix ../tools/grammar-codegen"`；运行时依赖 `web-tree-sitter`。 |
 | `frontend/src/lib/utils/treeSitterCypher.ts` | **前端高亮适配层。** 以 `?url` 导入 wasm、以 `?raw` 导入高亮查询，注册 Monaco 语义 token provider。 |
@@ -81,8 +81,8 @@ Linkrs 的 tree-sitter 集成被隔离在单一叶子 crate `crates/linkrs-gramm
 
 | 路径 | 引用 |
 |------|------|
-| `Cargo.toml`（根） | Workspace 依赖：`tree-sitter = "0.27.1"`、`tree-sitter-language = "0.1.9"`、`cc = "1.2"`、`sha2 = "1.0"`。Workspace 成员 `crates/linkrs-grammar`。 |
-| `crates/linkrs-grammar/Cargo.toml` | `tree-sitter`/`tree-sitter-language` 为可选依赖，由 `parser` feature 携带；build-dep `cc` + `sha2`（workspace）。 |
+| `Cargo.toml`（根） | Workspace 依赖：`tree-sitter = "0.27.1"`、`tree-sitter-language = "0.1.9"`、`cc = "1.2"`、`sha2 = "0.10"`。Workspace 成员 `crates/linkrs-grammar`。 |
+| `crates/linkrs-grammar/Cargo.toml` | `tree-sitter`/`tree-sitter-language` 为可选依赖，由 `parser` feature 携带；build-dep `cc`（workspace）。 |
 | `crates/linkrs-grammar/package.json` | `tree-sitter-cli 0.27.1`（dev-dep，仅生成用）。 |
 | `crates/linkrs-cli/Cargo.toml` | `linkrs-grammar` 以 `default-features = false` 依赖，只读取词法清单，不链接 tree-sitter 运行时。 |
 | `crates/linkrs-query/Cargo.toml` | `linkrs-grammar` 仅作为 dev-dependency，用于语料对等测试。 |
@@ -99,7 +99,8 @@ Linkrs 的 tree-sitter 集成被隔离在单一叶子 crate `crates/linkrs-gramm
 │                                                                 │
 │   cargo run -p linkrs-query --example export_keyword_inventory   │
 │                                                                 │
-│   读取 Rust lexer 的 lookup_keyword + 函数注册表                  │
+│   读取词法规格 lexing/spec.rs（关键字表、符号表、软关键字、       │
+│   多词序列）+ 函数注册表                                         │
 │   序列化到 crates/linkrs-grammar/data/keywords.json              │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -112,6 +113,7 @@ Linkrs 的 tree-sitter 集成被隔离在单一叶子 crate `crates/linkrs-gramm
 │   对每个 keyword，程序化生成 kw_* 正则规则：                       │
 │   - 大小写不敏感：通过逐字母字符类 [aA][bB]... 实现               │
 │   - 多词关键字（含空格）通过 seq(...) 处理                        │
+│   - soft_keywords 生成软关键字规则（供补全/高亮，非保留规则）      │
 │   - TRUE/FALSE/BALANCE 被跳过（非独立关键字 token）               │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -123,7 +125,7 @@ Linkrs 的 tree-sitter 集成被隔离在单一叶子 crate `crates/linkrs-gramm
 │                                                                 │
 │   在临时目录执行 tree-sitter generate --abi $(cat abi-version)   │
 │   展开 grammar.js → 三个已提交产物：                              │
-│   - src/parser.c          (~45k 行 C 代码)                       │
+│   - src/parser.c          (~93k 行 C 代码)                       │
 │   - src/node-types.json   (节点类型元数据)                        │
 │   - src/grammar.json      (展开后的语法 JSON)                     │
 │                                                                 │
@@ -144,7 +146,7 @@ Linkrs 的 tree-sitter 集成被隔离在单一叶子 crate `crates/linkrs-gramm
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**关键点：** `linkrs-query` 是词法的真相源，而非反过来。关键字变更起源于 Rust lexer，语法从它重新生成。
+**关键点：** `linkrs-query` 的词法规格（`lexing/spec.rs`）是词法的真相源，而非反过来。关键字变更起源于规格表，语法从它重新生成。
 
 ### 3.2 Phase B — 构建/部署（离线）
 
@@ -215,14 +217,19 @@ wasm 由 `frontend/vite/grammarWasm.ts` 在 `buildStart` 阶段编译，源码�
 
 ```
 crates/linkrs-grammar/
-├── build.rs              # cc 编译 + 产物同步验证 + wasm 指纹验证
-├── Cargo.toml            # deps: tree-sitter, tree-sitter-language（可选，parser feature）; build-dep: cc, sha2
-├── package.json          # 固定 tree-sitter-cli 0.27.1; generate/build:wasm/verify 脚本
+├── build.rs              # cc 编译 + 产物同步验证
+├── Cargo.toml            # deps: tree-sitter, tree-sitter-language（可选，parser feature）; build-dep: cc
+├── package.json          # 固定 tree-sitter-cli 0.27.1; generate/verify 脚本
 ├── grammar.js            # 手写语法（require data/keywords.json）
 ├── tree-sitter.json      # CLI 语法清单（生成器必需，决定 ABI 不降级）
 ├── abi-version           # 语言 ABI 声明（15）
 ├── data/
-│   └── keywords.json     # 已提交词法清单（由 linkrs-query 生成）
+│   └── keywords.json     # 已提交词法清单（由 linkrs-query 从词法规格导出）
+├── examples/
+│   ├── highlight.rs      # 单条查询的高亮输出调试工具
+│   └── highlight_fixtures.rs  # 重放语料 fixture 到 outputs/（verify 脚本比对用）
+├── outputs/
+│   └── *.txt             # 高亮 fixture 期望输出（已提交，防漂移）
 ├── queries/
 │   └── highlights.scm    # 高亮查询（基于 capture）
 ├── scripts/
@@ -266,13 +273,20 @@ git diff --exit-code -- crates/linkrs-grammar/data/keywords.json
 node tools/grammar-codegen/gen.mjs
 git diff --exit-code -- frontend/src/lib/utils/generated/
 
-# 3. 在临时目录重新生成语法产物，逐字节比对
-# 4. 编译一次 wasm 并确认它导出语法入口
+# 3. 重放高亮 fixture，断言 outputs/ 无漂移；运行一致性脚本与测试
+cargo run -q -p linkrs-grammar --example highlight_fixtures
+git diff --exit-code -- crates/linkrs-grammar/outputs/
+python3 scripts/check-highlights.py
+python3 scripts/check-grammar-coverage.py
+python3 scripts/check-grammar-structure.py
+cargo test -q -p linkrs-grammar
+cargo test -q -p linkrs-query --test corpus_parity
 
-echo "grammar artifacts in sync"
+# 4. 在临时目录重新生成语法产物，逐字节比对
+# 5. 编译一次 wasm 并确认它导出语法入口
 ```
 
-脚本全程不修改工作区：语法产物在临时目录生成，因此门禁只报告差异而不留下脏文件。
+脚本全程不修改工作区：语法产物在临时目录生成（fixture 重放除外，其期望输出本就入库，无漂移时 diff 为空），门禁只报告差异而不留下脏文件。
 
 ## 6. 版本更新记录
 
@@ -326,7 +340,7 @@ echo "grammar artifacts in sync"
 |------|------|
 | 生成产物提交到仓库 | 部署环境无需 tree-sitter CLI 或网络 |
 | 固定 CLI 版本 0.27.1 | 确保生成产物可复现 |
-| 词法清单由 Rust lexer 导出 | 单一真相源，避免关键字定义漂移 |
+| 词法清单由 Rust 词法规格导出 | 单一真相源，避免关键字定义漂移 |
 | 语法 crate 不依赖其他 linkrs crate | 隔离性，C 编译开销仅落在工具侧 |
 | `parser` feature 隔离运行时 | 只读清单的消费者不链接 tree-sitter 运行时 |
 | 5 组声明式冲突 | 处理 SHOW/DELETE/MERGE/ORDER BY/UPDATE 的裸前导关键字歧义 |

@@ -359,6 +359,17 @@ impl<'a> ParseContext<'a> {
         }
     }
 
+    /// [`check_keyword`] against the lookahead token (without consuming it).
+    /// One-token lookahead predicates route through here so their keyword
+    /// comparison shares the same derivation as the current-token check.
+    pub fn check_keyword_ahead(&mut self, keyword: &str) -> bool {
+        let kind = self.peek_token().kind.clone();
+        match &kind {
+            TokenKind::Identifier(current) => current.eq_ignore_ascii_case(keyword),
+            _ => false,
+        }
+    }
+
     /// Check if the next tokens match the given sequence (non-consuming)
     pub fn check_keyword_sequence(&mut self, keywords: &[&str]) -> bool {
         if keywords.is_empty() {
@@ -489,5 +500,20 @@ mod tests {
         assert!(check_first("ANALYZER", "ANALYZER"));
         assert!(!check_first("ANALYZER", "ENGINE"));
         assert!(!check_first("MATCH", "RETURN"));
+    }
+
+    fn check_ahead(input: &str, keyword: &str) -> bool {
+        let mut ctx = ParseContext::new(input);
+        // Park the cursor on the first token so the probe inspects the second.
+        ctx.next_token();
+        ctx.check_keyword_ahead(keyword)
+    }
+
+    #[test]
+    fn check_keyword_ahead_matches_identifier_payload() {
+        assert!(check_ahead("( SELECT", "SELECT"));
+        assert!(check_ahead("( select", "SELECT"));
+        assert!(!check_ahead("( SELECT", "MATCH"));
+        assert!(!check_ahead("( 42", "SELECT"));
     }
 }

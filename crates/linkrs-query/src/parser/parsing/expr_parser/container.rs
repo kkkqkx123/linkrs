@@ -20,9 +20,8 @@ pub(crate) fn parse_primary_expression(
             //   (SELECT col FROM tag [WHERE ...])
             // These mirror the IN-subquery parenthesized syntax and produce a
             // scalar subquery expression.
-            let next_kind = ctx.peek_token().kind.clone();
-            let is_scalar_subquery = matches!(next_kind, TokenKind::Match)
-                || crate::parser::lexing::spec::is_identifier_spelling(&next_kind, "SELECT");
+            let is_scalar_subquery = matches!(ctx.peek_token().kind, TokenKind::Match)
+                || ctx.check_keyword_ahead("SELECT");
             if is_scalar_subquery {
                 ctx.next_token(); // consume '('
                 let body = if matches!(ctx.current_token().kind, TokenKind::Match) {
