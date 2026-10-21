@@ -87,15 +87,12 @@ mod tests {
         use crate::planning::plan::PlanNodeEnum;
         let mut scan = ScanVerticesNode::new(1, "space");
         scan.set_tag(&crate::cte::mangle_cte_name("r"));
-        let limit =
-            LimitNode::new(PlanNodeEnum::ScanVertices(scan), 0, 10).expect("limit builds");
+        let limit = LimitNode::new(PlanNodeEnum::ScanVertices(scan), 0, 10).expect("limit builds");
         let node = PlanNodeEnum::Limit(limit);
         let rule = PushLimitDownScanVerticesRule::new();
         let mut ctx = crate::optimizer::heuristic::context::RewriteContext::new();
         assert!(
-            rule.apply(&mut ctx, &node)
-                .expect("rewrite")
-                .is_none(),
+            rule.apply(&mut ctx, &node).expect("rewrite").is_none(),
             "CTE working-table scans must not fold Limit into scan.limit"
         );
     }

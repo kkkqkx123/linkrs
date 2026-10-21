@@ -26,7 +26,6 @@ impl ExplainPlanner {
 }
 
 impl Planner for ExplainPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -61,7 +60,6 @@ impl Planner for ExplainPlanner {
 
         Ok(inner_plan)
     }
-
 }
 
 impl Default for ExplainPlanner {

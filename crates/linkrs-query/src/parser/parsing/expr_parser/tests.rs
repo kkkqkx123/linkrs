@@ -1,6 +1,6 @@
 use super::*;
-use linkrs_core::Value;
 use linkrs_core::types::operators::{BinaryOperator, UnaryOperator};
+use linkrs_core::Value;
 
 use crate::parser::parsing::Parser;
 

@@ -347,88 +347,15 @@ impl<'a> ParseContext<'a> {
 
     pub fn check_keyword(&mut self, keyword: &str) -> bool {
         match &self.current_token.kind {
-            TokenKind::Identifier(kw) => kw.eq_ignore_ascii_case(keyword),
-            TokenKind::Index => keyword.eq_ignore_ascii_case("INDEX"),
-            TokenKind::On => keyword.eq_ignore_ascii_case("ON"),
-            TokenKind::Drop => keyword.eq_ignore_ascii_case("DROP"),
-            TokenKind::Create => keyword.eq_ignore_ascii_case("CREATE"),
-            TokenKind::Alter => keyword.eq_ignore_ascii_case("ALTER"),
-            TokenKind::Show => keyword.eq_ignore_ascii_case("SHOW"),
-            TokenKind::Desc => {
-                keyword.eq_ignore_ascii_case("DESC") || keyword.eq_ignore_ascii_case("DESCRIBE")
+            TokenKind::Identifier(current) => current.eq_ignore_ascii_case(keyword),
+            TokenKind::BooleanLiteral(_) => false,
+            other => {
+                crate::parser::lexing::spec::unit_spellings_for(other).is_some_and(|spellings| {
+                    spellings
+                        .iter()
+                        .any(|spelling| spelling.eq_ignore_ascii_case(keyword))
+                })
             }
-            TokenKind::Search => keyword.eq_ignore_ascii_case("SEARCH"),
-            TokenKind::Lookup => keyword.eq_ignore_ascii_case("LOOKUP"),
-            TokenKind::Match => keyword.eq_ignore_ascii_case("MATCH"),
-            TokenKind::KeywordVector => keyword.eq_ignore_ascii_case("VECTOR"),
-            TokenKind::If => keyword.eq_ignore_ascii_case("IF"),
-            TokenKind::Not => keyword.eq_ignore_ascii_case("NOT"),
-            TokenKind::Exists => keyword.eq_ignore_ascii_case("EXISTS"),
-            TokenKind::User => keyword.eq_ignore_ascii_case("USER"),
-            TokenKind::Tag => keyword.eq_ignore_ascii_case("TAG"),
-            TokenKind::Edge => keyword.eq_ignore_ascii_case("EDGE"),
-            TokenKind::Space => keyword.eq_ignore_ascii_case("SPACE"),
-            TokenKind::Insert => keyword.eq_ignore_ascii_case("INSERT"),
-            TokenKind::Delete => keyword.eq_ignore_ascii_case("DELETE"),
-            TokenKind::Detach => keyword.eq_ignore_ascii_case("DETACH"),
-            TokenKind::Update => keyword.eq_ignore_ascii_case("UPDATE"),
-            TokenKind::Return => keyword.eq_ignore_ascii_case("RETURN"),
-            TokenKind::Where => keyword.eq_ignore_ascii_case("WHERE"),
-            TokenKind::Set => keyword.eq_ignore_ascii_case("SET"),
-            TokenKind::Remove => keyword.eq_ignore_ascii_case("REMOVE"),
-            TokenKind::Add => keyword.eq_ignore_ascii_case("ADD"),
-            TokenKind::With => keyword.eq_ignore_ascii_case("WITH"),
-            TokenKind::Yield => keyword.eq_ignore_ascii_case("YIELD"),
-            TokenKind::Go => keyword.eq_ignore_ascii_case("GO"),
-            TokenKind::Over => keyword.eq_ignore_ascii_case("OVER"),
-            TokenKind::Step => {
-                keyword.eq_ignore_ascii_case("STEP") || keyword.eq_ignore_ascii_case("STEPS")
-            }
-            TokenKind::Upto => keyword.eq_ignore_ascii_case("UPTO"),
-            TokenKind::Limit => keyword.eq_ignore_ascii_case("LIMIT"),
-            TokenKind::Asc => keyword.eq_ignore_ascii_case("ASC"),
-            TokenKind::Order => keyword.eq_ignore_ascii_case("ORDER"),
-            TokenKind::By => keyword.eq_ignore_ascii_case("BY"),
-            TokenKind::Skip => keyword.eq_ignore_ascii_case("SKIP"),
-            TokenKind::Unwind => keyword.eq_ignore_ascii_case("UNWIND"),
-            TokenKind::Optional => keyword.eq_ignore_ascii_case("OPTIONAL"),
-            TokenKind::Distinct => keyword.eq_ignore_ascii_case("DISTINCT"),
-            TokenKind::All => keyword.eq_ignore_ascii_case("ALL"),
-            TokenKind::Null => keyword.eq_ignore_ascii_case("NULL"),
-            TokenKind::Is => keyword.eq_ignore_ascii_case("IS"),
-            TokenKind::And => keyword.eq_ignore_ascii_case("AND"),
-            TokenKind::Or => keyword.eq_ignore_ascii_case("OR"),
-            TokenKind::Xor => keyword.eq_ignore_ascii_case("XOR"),
-            TokenKind::Contains => keyword.eq_ignore_ascii_case("CONTAINS"),
-            TokenKind::StartsWith => keyword.eq_ignore_ascii_case("STARTS"),
-            TokenKind::EndsWith => keyword.eq_ignore_ascii_case("ENDS"),
-            TokenKind::Case => keyword.eq_ignore_ascii_case("CASE"),
-            TokenKind::When => keyword.eq_ignore_ascii_case("WHEN"),
-            TokenKind::Then => keyword.eq_ignore_ascii_case("THEN"),
-            TokenKind::Else => keyword.eq_ignore_ascii_case("ELSE"),
-            TokenKind::End => keyword.eq_ignore_ascii_case("END"),
-            TokenKind::Union => keyword.eq_ignore_ascii_case("UNION"),
-            TokenKind::Intersect => keyword.eq_ignore_ascii_case("INTERSECT"),
-            TokenKind::SetMinus => keyword.eq_ignore_ascii_case("MINUS"),
-            TokenKind::Group => keyword.eq_ignore_ascii_case("GROUP"),
-            TokenKind::Having => keyword.eq_ignore_ascii_case("HAVING"),
-            TokenKind::Between => keyword.eq_ignore_ascii_case("BETWEEN"),
-            TokenKind::Comment => keyword.eq_ignore_ascii_case("COMMENT"),
-            TokenKind::Admin => keyword.eq_ignore_ascii_case("ADMIN"),
-            TokenKind::Edges => keyword.eq_ignore_ascii_case("EDGES"),
-            TokenKind::Vertex => keyword.eq_ignore_ascii_case("VERTEX"),
-            TokenKind::Vertices => keyword.eq_ignore_ascii_case("VERTICES"),
-            TokenKind::Tags => keyword.eq_ignore_ascii_case("TAGS"),
-            TokenKind::Indexes => keyword.eq_ignore_ascii_case("INDEXES"),
-            TokenKind::Find => keyword.eq_ignore_ascii_case("FIND"),
-            TokenKind::Path => keyword.eq_ignore_ascii_case("PATH"),
-            TokenKind::From => keyword.eq_ignore_ascii_case("FROM"),
-            TokenKind::To => keyword.eq_ignore_ascii_case("TO"),
-            TokenKind::As => keyword.eq_ignore_ascii_case("AS"),
-            TokenKind::Upsert => keyword.eq_ignore_ascii_case("UPSERT"),
-            TokenKind::In => keyword.eq_ignore_ascii_case("IN"),
-            TokenKind::Rollback => keyword.eq_ignore_ascii_case("ROLLBACK"),
-            _ => false,
         }
     }
 
@@ -495,23 +422,9 @@ impl<'a> ParseContext<'a> {
     }
 
     pub fn consume_token(&mut self, token: &str) -> Result<(), ParseError> {
-        match token {
-            "(" => self.expect_token(TokenKind::LParen),
-            ")" => self.expect_token(TokenKind::RParen),
-            "," => self.expect_token(TokenKind::Comma),
-            ";" => self.expect_token(TokenKind::Semicolon),
-            ":" => self.expect_token(TokenKind::Colon),
-            "+" => self.expect_token(TokenKind::Plus),
-            "-" => self.expect_token(TokenKind::Minus),
-            "*" => self.expect_token(TokenKind::Star),
-            "/" => self.expect_token(TokenKind::Div),
-            "=" => self.expect_token(TokenKind::Eq),
-            "!=" => self.expect_token(TokenKind::Ne),
-            "<" => self.expect_token(TokenKind::Lt),
-            "<=" => self.expect_token(TokenKind::Le),
-            ">" => self.expect_token(TokenKind::Gt),
-            ">=" => self.expect_token(TokenKind::Ge),
-            _ => {
+        match crate::parser::lexing::spec::symbol_kind(token) {
+            Some(kind) => self.expect_token(kind),
+            None => {
                 let pos = self.current_position();
                 Err(ParseError::new(
                     ParseErrorKind::UnexpectedToken,
@@ -523,23 +436,9 @@ impl<'a> ParseContext<'a> {
     }
 
     pub fn consume_optional_token(&mut self, token: &str) -> bool {
-        match token {
-            "(" => self.match_token(TokenKind::LParen),
-            ")" => self.match_token(TokenKind::RParen),
-            "," => self.match_token(TokenKind::Comma),
-            ";" => self.match_token(TokenKind::Semicolon),
-            ":" => self.match_token(TokenKind::Colon),
-            "+" => self.match_token(TokenKind::Plus),
-            "-" => self.match_token(TokenKind::Minus),
-            "*" => self.match_token(TokenKind::Star),
-            "/" => self.match_token(TokenKind::Div),
-            "=" => self.match_token(TokenKind::Eq),
-            "!=" => self.match_token(TokenKind::Ne),
-            "<" => self.match_token(TokenKind::Lt),
-            "<=" => self.match_token(TokenKind::Le),
-            ">" => self.match_token(TokenKind::Gt),
-            ">=" => self.match_token(TokenKind::Ge),
-            _ => false,
+        match crate::parser::lexing::spec::symbol_kind(token) {
+            Some(kind) => self.match_token(kind),
+            None => false,
         }
     }
 
@@ -555,5 +454,40 @@ impl<'a> ParseContext<'a> {
 
     pub fn try_consume_quoted_string(&mut self) -> Option<String> {
         self.try_consume_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ParseContext;
+
+    fn check_first(input: &str, keyword: &str) -> bool {
+        let mut ctx = ParseContext::new(input);
+        ctx.check_keyword(keyword)
+    }
+
+    #[test]
+    fn derived_check_keyword_matches_spec() {
+        assert!(check_first("REBUILD", "REBUILD"));
+        assert!(check_first("rebuild", "REBUILD"));
+        assert!(check_first("HEADER", "HEADER"));
+        assert!(check_first("DELIMITER", "DELIMITER"));
+        assert!(check_first("CSV", "CSV"));
+        assert!(check_first("NO", "NO"));
+        assert!(check_first("STEP", "STEPS"));
+        assert!(check_first("STEPS", "STEP"));
+        assert!(check_first("DESCRIBE", "DESC"));
+        assert!(check_first("DESC", "DESCRIBE"));
+    }
+
+    #[test]
+    fn derived_check_keyword_keeps_payload_rules() {
+        assert!(!check_first("TRUE", "TRUE"));
+        assert!(!check_first("FALSE", "FALSE"));
+        assert!(check_first("BALANCE", "BALANCE"));
+        assert!(!check_first("BALANCE", "OTHER"));
+        assert!(check_first("ANALYZER", "ANALYZER"));
+        assert!(!check_first("ANALYZER", "ENGINE"));
+        assert!(!check_first("MATCH", "RETURN"));
     }
 }

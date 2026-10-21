@@ -4,9 +4,7 @@
 use crate::binder::BoundStatement;
 use crate::planning::plan::core::common::TagProp;
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::{
-    ArgumentNode, GetVerticesNode, PlanNodeEnum,
-};
+use crate::planning::plan::core::nodes::{ArgumentNode, GetVerticesNode, PlanNodeEnum};
 use crate::planning::plan::logical::logical_nodes::access::LogicalGetVerticesNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
@@ -27,7 +25,6 @@ impl FetchVerticesPlanner {
 }
 
 impl Planner for FetchVerticesPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -110,7 +107,6 @@ impl Planner for FetchVerticesPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl Default for FetchVerticesPlanner {

@@ -29,10 +29,9 @@ pub fn dml_op_from_stmt(stmt: &Stmt) -> Option<DmlOp> {
                 None
             }
         }
-        Stmt::Pipe(pipe) => merge_dml_ops(
-            dml_op_from_stmt(&pipe.left),
-            dml_op_from_stmt(&pipe.right),
-        ),
+        Stmt::Pipe(pipe) => {
+            merge_dml_ops(dml_op_from_stmt(&pipe.left), dml_op_from_stmt(&pipe.right))
+        }
         Stmt::SetOperation(set_op) => merge_dml_ops(
             dml_op_from_stmt(&set_op.left),
             dml_op_from_stmt(&set_op.right),

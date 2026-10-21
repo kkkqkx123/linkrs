@@ -41,9 +41,9 @@ use crate::planning::statements::dql::unwind_planner::UnwindPlanner;
 use crate::planning::statements::dql::with_planner::WithPlanner;
 use crate::planning::statements::dql::yield_planner::YieldPlanner;
 use crate::planning::statements::match_statement_planner::MatchStatementPlanner;
+use crate::planning::vector_ddl_planner::VectorDdlPlanner;
 #[cfg(feature = "vector")]
 use crate::planning::vector_planner::VectorSearchPlanner;
-use crate::planning::vector_ddl_planner::VectorDdlPlanner;
 
 ///  Planner Configuration
 #[derive(Debug, Clone)]
@@ -444,9 +444,7 @@ mod tests {
     #[cfg(feature = "vector")]
     #[test]
     fn test_vector_search_routing() {
-        use crate::parser::ast::vector::{
-            SearchVectorStatement, VectorQueryExpr, VectorQueryType,
-        };
+        use crate::parser::ast::vector::{SearchVectorStatement, VectorQueryExpr, VectorQueryType};
         use linkrs_core::types::Span;
 
         let stmt = Stmt::SearchVector(SearchVectorStatement {

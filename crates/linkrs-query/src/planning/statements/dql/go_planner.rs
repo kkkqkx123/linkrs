@@ -36,7 +36,6 @@ impl GoPlanner {
 }
 
 impl Planner for GoPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -160,8 +159,7 @@ impl Planner for GoPlanner {
             });
         }
 
-        let project_columns =
-            self.build_yield_columns_from_bound(go_stmt, &expr_ctx)?;
+        let project_columns = self.build_yield_columns_from_bound(go_stmt, &expr_ctx)?;
         let column_types = projection_util::project_column_types(&project_columns);
         logical_root = LogicalNodeEnum::Project(LogicalProjectNode {
             id: next_node_id(),
@@ -195,7 +193,6 @@ impl Planner for GoPlanner {
 
         Ok(SubPlan::from_logical_root(logical_root))
     }
-
 }
 
 impl GoPlanner {

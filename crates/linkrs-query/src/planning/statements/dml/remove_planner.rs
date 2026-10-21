@@ -42,8 +42,6 @@ impl Planner for RemovePlanner {
             "REMOVE is not wired to storage yet".to_string(),
         ))
     }
-
-
 }
 
 impl Default for RemovePlanner {

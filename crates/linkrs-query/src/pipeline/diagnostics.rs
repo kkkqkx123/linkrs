@@ -53,7 +53,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &physical_plan,
             );
 
-        let output = crate::executor::explain::format::render_plan(&plan_desc, explain_stmt.format.clone());
+        let output =
+            crate::executor::explain::format::render_plan(&plan_desc, explain_stmt.format.clone());
 
         let data_set = linkrs_core::DataSet::from_rows(
             vec![vec![linkrs_core::Value::string(output)]],
@@ -94,7 +95,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             );
         Self::overlay_execution_profile(&instance, &mut plan_desc, exec_ctx.max_workers);
 
-        let output = crate::executor::explain::format::render_plan(&plan_desc, explain_stmt.format.clone());
+        let output =
+            crate::executor::explain::format::render_plan(&plan_desc, explain_stmt.format.clone());
 
         let data_set = linkrs_core::DataSet::from_rows(
             vec![vec![linkrs_core::Value::string(output)]],
@@ -138,8 +140,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // DataSet below is the sole PROFILE assembly and reuses the shared
         // spill/parallel/deps helpers so formatting stays single-sourced.
         if profile_stmt.format == crate::parser::ast::stmt::ExplainFormat::Dot {
-            let output =
-                crate::executor::explain::format::render_plan(&plan_desc, profile_stmt.format.clone());
+            let output = crate::executor::explain::format::render_plan(
+                &plan_desc,
+                profile_stmt.format.clone(),
+            );
             let data_set = linkrs_core::DataSet::from_rows(
                 vec![vec![linkrs_core::Value::string(output)]],
                 vec!["plan".to_string()],
@@ -157,15 +161,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             ids.push(Value::BigInt(node_desc.id));
             names.push(Value::string_from_owned(node_desc.name.clone()));
 
-            let deps = crate::executor::explain::format::format_deps(
-                node_desc.dependencies.as_ref(),
-            )
-            .replace(',', ", ");
-            dependencies.push(Value::string(if deps == "-" {
-                ""
-            } else {
-                &deps
-            }));
+            let deps =
+                crate::executor::explain::format::format_deps(node_desc.dependencies.as_ref())
+                    .replace(',', ", ");
+            dependencies.push(Value::string(if deps == "-" { "" } else { &deps }));
 
             let profile_str = if let Some(ref profiles) = node_desc.profiles {
                 profiles

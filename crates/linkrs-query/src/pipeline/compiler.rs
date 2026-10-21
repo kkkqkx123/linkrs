@@ -193,9 +193,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             return Ok(plan);
         }
 
-        if let Some(plan) =
-            self.serve_plain_cache(query_text, &cache_context, dml_memo_key.clone(), schema_version)
-        {
+        if let Some(plan) = self.serve_plain_cache(
+            query_text,
+            &cache_context,
+            dml_memo_key.clone(),
+            schema_version,
+        ) {
             return Ok(plan);
         }
 
@@ -284,7 +287,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> Option<Arc<PhysicalPlan>> {
         let key = key?;
         let plan = self.find_dml_plan(key)?;
-        if self.plan_cache.serve_compatible(&plan, schema_version).is_ok() {
+        if self
+            .plan_cache
+            .serve_compatible(&plan, schema_version)
+            .is_ok()
+        {
             self.last_dml_plan_hits
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Some(plan);
@@ -310,7 +317,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let cached = self
             .plan_cache
             .get_with_context(query_text, cache_context.clone())?;
-        if self.plan_cache.serve_compatible(&cached.plan, schema_version).is_ok() {
+        if self
+            .plan_cache
+            .serve_compatible(&cached.plan, schema_version)
+            .is_ok()
+        {
             if let Some(key) = dml_memo_key {
                 self.store_dml_plan(key, cached.plan.clone());
             }
@@ -681,8 +692,8 @@ fn referenced_schema_objects(
     bound: &crate::binder::BoundStatement,
 ) -> (Vec<String>, Vec<String>, bool) {
     use crate::binder::bound::{
-        BoundDeleteTarget, BoundInsertTarget, BoundLookupTarget, BoundMergePattern,
-        BoundStatement, BoundUpdateTarget,
+        BoundDeleteTarget, BoundInsertTarget, BoundLookupTarget, BoundMergePattern, BoundStatement,
+        BoundUpdateTarget,
     };
 
     fn push_unique(target: &mut Vec<String>, name: &str) {
@@ -868,8 +879,7 @@ fn referenced_schema_objects(
             }
             (tags, edges, false)
         }
-        BoundStatement::Set(_)
-        | BoundStatement::Remove(_) => (tags, edges, false),
+        BoundStatement::Set(_) | BoundStatement::Remove(_) => (tags, edges, false),
         // Access-control statements address users, roles and spaces; they
         // never reference a tag or an edge type.
         BoundStatement::CreateUser(_)

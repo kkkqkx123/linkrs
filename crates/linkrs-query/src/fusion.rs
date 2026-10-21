@@ -103,9 +103,7 @@ impl HybridFusionRequest {
         match self.strategy {
             FusionStrategy::Rrf { k } => {
                 if !(1..=1000).contains(&k) {
-                    return Err(format!(
-                        "hybrid fusion Rrf k must be in 1..=1000, got {k}"
-                    ));
+                    return Err(format!("hybrid fusion Rrf k must be in 1..=1000, got {k}"));
                 }
             }
             FusionStrategy::Weighted { alpha } => {
@@ -180,10 +178,7 @@ mod tests {
         // `#` in the vertex display form is percent-encoded (`%23`), so the
         // two lists only recognize one hit after normalization.
         let fulltext = vec![SearchHit::new("vertex-1#Person", 3.0)];
-        let vector = vec![SearchHit::new(
-            "vertex-1%23Person#Person#embedding",
-            0.9,
-        )];
+        let vector = vec![SearchHit::new("vertex-1%23Person#Person#embedding", 0.9)];
         let fused = fuse_fulltext_and_vector(
             fulltext,
             vector,

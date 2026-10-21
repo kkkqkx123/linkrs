@@ -252,11 +252,7 @@ pub(crate) fn parse_pattern_string(ctx: &mut ParseContext<'_>) -> Result<String,
                     pattern.push(']');
                     pattern.push(' ');
                 }
-                TokenKind::Minus
-                | TokenKind::Arrow
-                | TokenKind::BackArrow
-                | TokenKind::LeftArrow
-                | TokenKind::RightArrow => {
+                TokenKind::Minus | TokenKind::Arrow | TokenKind::BackArrow => {
                     if in_node {
                         pattern.push_str(") ");
                         in_node = false;
@@ -276,14 +272,4 @@ pub(crate) fn parse_pattern_string(ctx: &mut ParseContext<'_>) -> Result<String,
     }
 
     Ok(pattern.trim().to_string())
-}
-
-pub(crate) fn match_identifier_token(ctx: &mut ParseContext<'_>, expected: &str) -> bool {
-    if let TokenKind::Identifier(s) = &ctx.current_token().kind {
-        if s.eq_ignore_ascii_case(expected) {
-            ctx.next_token();
-            return true;
-        }
-    }
-    false
 }

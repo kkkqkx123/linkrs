@@ -9,6 +9,7 @@
 //! Use IndexSelector to automatically select the optimal index.
 
 use crate::binder::BoundStatement;
+use crate::binder::ValidatedStatement;
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::access::{IndexLimit, ScanType};
@@ -21,7 +22,6 @@ use crate::planning::plan::logical::logical_nodes::operation::{
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
-use crate::binder::ValidatedStatement;
 use crate::planning::statements::projection_util;
 use crate::QueryContext;
 use linkrs_core::types::operators::BinaryOperator;
@@ -43,7 +43,6 @@ impl LookupPlanner {
 }
 
 impl Planner for LookupPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -110,7 +109,6 @@ impl Planner for LookupPlanner {
             where_ctx,
         )
     }
-
 }
 
 impl LookupPlanner {
@@ -289,8 +287,7 @@ impl LookupPlanner {
         if let Some(ref yield_clause) = lookup.yield_clause {
             for item in &yield_clause.items {
                 let column = crate::binder::expr_converter::bound_projection_to_yield_column(
-                    item,
-                    &expr_ctx,
+                    item, &expr_ctx,
                 )
                 .map_err(PlannerError::PlanGenerationFailed)?;
                 columns.push(column);

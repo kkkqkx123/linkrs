@@ -22,7 +22,7 @@ pub(crate) fn parse_primary_expression(
             // scalar subquery expression.
             let next_kind = ctx.peek_token().kind.clone();
             let is_scalar_subquery = matches!(next_kind, TokenKind::Match)
-                || matches!(next_kind, TokenKind::Identifier(ref name) if name.eq_ignore_ascii_case("SELECT"));
+                || crate::parser::lexing::spec::is_identifier_spelling(&next_kind, "SELECT");
             if is_scalar_subquery {
                 ctx.next_token(); // consume '('
                 let body = if matches!(ctx.current_token().kind, TokenKind::Match) {

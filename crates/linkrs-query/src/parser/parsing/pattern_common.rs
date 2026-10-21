@@ -16,7 +16,7 @@ use linkrs_core::EdgeDirection;
 /// `None` means the closing token is not a valid hop terminator and the
 /// caller must report a syntax error.
 pub fn resolve_edge_direction(incoming: bool, closing: &TokenKind) -> Option<EdgeDirection> {
-    let outgoing_close = matches!(closing, TokenKind::Arrow | TokenKind::RightArrow);
+    let outgoing_close = matches!(closing, TokenKind::Arrow);
     let undirected_close = matches!(closing, TokenKind::Minus);
     match (incoming, outgoing_close, undirected_close) {
         (false, true, _) => Some(EdgeDirection::Out),

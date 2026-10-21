@@ -134,8 +134,6 @@ impl Planner for DeletePlanner {
 
         Ok(SubPlan::from_logical_root(final_node))
     }
-
-
 }
 
 impl Default for DeletePlanner {

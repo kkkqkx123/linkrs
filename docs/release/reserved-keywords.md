@@ -121,7 +121,7 @@
 | `SUBGRAPH`         | `Subgraph`         | 子图         |
 | `BIDIRECT`         | `Bidirect`         | 双向         |
 
-> 注意：`FIND_PATH` 不是保留关键字（词法器中无对应映射）。`TokenKind::FindPath` 存在于枚举中，词法器不会产出该 token。
+> 注意：`FIND_PATH` 不是保留关键字，词法器中无对应映射。
 
 ## 5. 方向 / 拓扑
 
@@ -135,7 +135,7 @@
 | `DESTINATION` | `Destination` | 目标点   |
 | `INPUT`       | `Input`       | 输入引用 |
 
-> 注意：`OUTBOUND` / `INBOUND` 不是保留关键字（词法器中无对应映射）。`TokenKind::Outbound` / `TokenKind::Inbound` 存在于枚举中，词法器不会产出这些 token。
+> 注意：`OUTBOUND` / `INBOUND` 不是保留关键字，词法器中无对应映射。
 
 ## 6. 数据类型
 
@@ -312,8 +312,9 @@
 >
 > 解析器还会在特定语句位置把另一些标识符当上下文关键字消费，例如
 > `ATTACH`、`DATABASE`、`MIGRATE`、`LOAD`、`INSTALL`、`UNINSTALL`、`CALL`、
-> `EXPORT`、`IMPORT`、`FULLTEXT`、`MACRO`、`TYPE`、`EXTENSION`、`OPTIONS`、
-> `USING`、`JOIN`。它们同样不在 `lookup_keyword` 中。
+> `COLLECT`、`EXPORT`、`IMPORT`、`FULLTEXT`、`MACRO`、`TYPE`、`EXTENSION`、`OPTIONS`、
+> `USING`、`JOIN`、`BINARY`、`MULTIWAY`，以及窗口函数的 `PARTITION` 与 SQL 兼容子查询的
+> `SELECT`。它们同样不在 `lookup_keyword` 中。
 
 ## 14. 特殊引用
 

@@ -139,8 +139,7 @@ impl DmlParser {
 
         let start_span = ctx.current_span();
 
-        let incoming =
-            ctx.match_token(TokenKind::BackArrow) || ctx.match_token(TokenKind::LeftArrow);
+        let incoming = ctx.match_token(TokenKind::BackArrow);
         ctx.expect_token(TokenKind::Minus)?;
 
         ctx.expect_token(TokenKind::LBracket)?;

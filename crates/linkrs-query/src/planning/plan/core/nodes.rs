@@ -57,7 +57,9 @@ pub use search::{
     DropFulltextIndexNode, FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
     ShowFulltextIndexNode,
 };
-pub use search::{CreateVectorIndexNode, DescribeVectorIndexNode, DropVectorIndexNode, ShowVectorIndexNode};
+pub use search::{
+    CreateVectorIndexNode, DescribeVectorIndexNode, DropVectorIndexNode, ShowVectorIndexNode,
+};
 #[cfg(feature = "vector")]
 pub use search::{VectorLookupNode, VectorMatchNode, VectorSearchNode};
 pub use traversal::{

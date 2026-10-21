@@ -364,9 +364,7 @@ fn parse_show_vector_index(ctx: &mut ParseContext) -> Result<Stmt, crate::parser
 }
 
 /// Parse DESCRIBE VECTOR INDEX statement
-fn parse_describe_vector_index(
-    ctx: &mut ParseContext,
-) -> Result<Stmt, crate::parser::ParseError> {
+fn parse_describe_vector_index(ctx: &mut ParseContext) -> Result<Stmt, crate::parser::ParseError> {
     ctx.consume_keyword("DESCRIBE")?;
     ctx.consume_keyword("VECTOR")?;
     ctx.consume_keyword("INDEX")?;
@@ -722,7 +720,9 @@ mod tests {
         }
 
         let mut parser = Parser::new("SHOW VECTOR INDEX LIKE 'idx_%' FROM shop");
-        let result = parser.parse().expect("SHOW VECTOR INDEX with filter should parse");
+        let result = parser
+            .parse()
+            .expect("SHOW VECTOR INDEX with filter should parse");
         match result.ast.stmt() {
             Stmt::ShowVectorIndex(show) => {
                 assert_eq!(show.pattern.as_deref(), Some("idx_%"));
@@ -735,9 +735,7 @@ mod tests {
     #[test]
     fn test_parse_describe_vector_index_statement() {
         let mut parser = Parser::new("DESCRIBE VECTOR INDEX idx_product_embedding");
-        let result = parser
-            .parse()
-            .expect("DESCRIBE VECTOR INDEX should parse");
+        let result = parser.parse().expect("DESCRIBE VECTOR INDEX should parse");
         match result.ast.stmt() {
             Stmt::DescribeVectorIndex(describe) => {
                 assert_eq!(describe.index_name, "idx_product_embedding");

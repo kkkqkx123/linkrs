@@ -192,8 +192,6 @@ impl Planner for UpdatePlanner {
         });
         Ok(SubPlan::from_logical_root(logical_root))
     }
-
-
 }
 
 impl Default for UpdatePlanner {

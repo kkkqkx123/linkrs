@@ -1137,4 +1137,23 @@ mod tests {
         .expect("MERGE with ON MATCH / ON CREATE should parse");
         assert_eq!(stmt.kind(), "MERGE");
     }
+
+    #[test]
+    fn test_alter_fulltext_index_rebuild_parses() {
+        let stmt = parse_statement("ALTER FULLTEXT INDEX my_index REBUILD")
+            .expect("ALTER FULLTEXT INDEX ... REBUILD should parse");
+        if let Stmt::AlterFulltextIndex(alter) = stmt {
+            assert_eq!(alter.index_name, "my_index");
+            assert!(
+                alter
+                    .actions
+                    .iter()
+                    .any(|action| matches!(action, AlterIndexAction::Rebuild)),
+                "expected a Rebuild action, got {:?}",
+                alter.actions
+            );
+        } else {
+            panic!("expected AlterFulltextIndex statement, got {:?}", stmt);
+        }
+    }
 }

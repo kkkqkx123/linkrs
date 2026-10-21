@@ -105,8 +105,6 @@ impl Planner for FulltextSearchPlanner {
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
-
-
 }
 
 impl FulltextSearchPlanner {
@@ -367,7 +365,6 @@ mod tests {
         let planner = FulltextSearchPlanner::with_metadata_context(metadata_context);
         assert!(planner.metadata_context.is_some());
     }
-
 
     #[test]
     fn test_create_accepts_vertex_tag_and_edge_type() {

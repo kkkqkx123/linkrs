@@ -29,7 +29,6 @@ impl YieldPlanner {
 }
 
 impl Planner for YieldPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -168,7 +167,6 @@ impl Planner for YieldPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl Default for YieldPlanner {

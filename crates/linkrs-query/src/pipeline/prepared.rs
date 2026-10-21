@@ -16,8 +16,9 @@ use crate::parser::ast::Stmt;
 use crate::QueryContext;
 use crate::QueryRequestContext;
 pub use classify::{
-    classify_statement, dml_op_from_stmt, is_analyze, is_ddl, is_diagnostic, is_global_catalog_change,
-    is_read_only_cacheable, is_transaction, requires_write_storage, StatementClass,
+    classify_statement, dml_op_from_stmt, is_analyze, is_ddl, is_diagnostic,
+    is_global_catalog_change, is_read_only_cacheable, is_transaction, requires_write_storage,
+    StatementClass,
 };
 pub use result::PreparedOutcome;
 

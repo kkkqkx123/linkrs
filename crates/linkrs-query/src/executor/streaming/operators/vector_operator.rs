@@ -585,7 +585,10 @@ impl VectorOperator {
                         #[cfg(not(feature = "vector"))]
                         {
                             let _ = index_name;
-                            Err(QueryError::feature_disabled("vector", "DESCRIBE VECTOR INDEX"))
+                            Err(QueryError::feature_disabled(
+                                "vector",
+                                "DESCRIBE VECTOR INDEX",
+                            ))
                         }
                     }
                 }

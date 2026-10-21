@@ -53,8 +53,6 @@ impl Planner for AssignmentPlanner {
 
         Ok(inner_plan)
     }
-
-
 }
 
 impl Default for AssignmentPlanner {

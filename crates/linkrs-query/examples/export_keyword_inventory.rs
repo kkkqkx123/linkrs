@@ -16,9 +16,10 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use linkrs_query::executor::expression::functions::FunctionRegistry;
+use linkrs_query::parser::lexing::SYMBOL_SPEC;
 use linkrs_query::parser::lexing::{
-    MULTIWORD_CONDITIONAL, MULTIWORD_UNCONDITIONAL, OPERATOR_SYMBOLS, PUNCTUATION_SYMBOLS,
-    SOFT_KEYWORDS, function_category, keyword_table,
+    function_category, keyword_table, SymbolClass, MULTIWORD_CONDITIONAL, MULTIWORD_UNCONDITIONAL,
+    SOFT_KEYWORDS,
 };
 
 const DEFAULT_OUT: &str = "crates/linkrs-grammar/data/keywords.json";
@@ -41,7 +42,7 @@ struct Function {
 #[derive(Serialize)]
 struct Symbol {
     symbol: &'static str,
-    kind: &'static str,
+    kind: String,
 }
 
 #[derive(Serialize)]
@@ -58,16 +59,24 @@ struct Inventory {
 }
 
 fn operators() -> Vec<Symbol> {
-    OPERATOR_SYMBOLS
+    SYMBOL_SPEC
         .iter()
-        .map(|(symbol, kind)| Symbol { symbol, kind })
+        .filter(|entry| entry.class == SymbolClass::Operator)
+        .map(|entry| Symbol {
+            symbol: entry.symbol,
+            kind: format!("{:?}", entry.kind),
+        })
         .collect()
 }
 
 fn punctuation() -> Vec<Symbol> {
-    PUNCTUATION_SYMBOLS
+    SYMBOL_SPEC
         .iter()
-        .map(|(symbol, kind)| Symbol { symbol, kind })
+        .filter(|entry| entry.class == SymbolClass::Punctuation)
+        .map(|entry| Symbol {
+            symbol: entry.symbol,
+            kind: format!("{:?}", entry.kind),
+        })
         .collect()
 }
 

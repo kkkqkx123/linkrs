@@ -98,8 +98,6 @@ impl Planner for CopyPlanner {
 
         Ok(SubPlan::from_logical_root(logical_root))
     }
-
-
 }
 
 impl Default for CopyPlanner {
@@ -112,8 +110,8 @@ impl Default for CopyPlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::QueryContext;
     use crate::parser::ast::{Ast, CopyStmt, CopyTarget as AstCopyTarget};
+    use crate::QueryContext;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
     use linkrs_core::types::Span;
     use std::sync::Arc;

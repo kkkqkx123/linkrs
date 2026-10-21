@@ -113,7 +113,8 @@ impl SetOperationPlanner {
                                     || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
                                 let after_idx = i + kw.len();
                                 let after_ok = after_idx == chars.len()
-                                    || !(chars[after_idx].is_alphanumeric() || chars[after_idx] == '_');
+                                    || !(chars[after_idx].is_alphanumeric()
+                                        || chars[after_idx] == '_');
                                 if before_ok && after_ok {
                                     let left = chars[..i].iter().collect::<String>();
                                     let right = chars[after_idx..].iter().collect::<String>();
@@ -128,7 +129,6 @@ impl SetOperationPlanner {
         }
         None
     }
-
 
     fn validate_column_compatibility(
         &self,
@@ -288,7 +288,6 @@ impl Planner for SetOperationPlanner {
 
         self.combine(left_plan, right_plan, set_op.operation)
     }
-
 }
 
 impl SetOperationPlanner {

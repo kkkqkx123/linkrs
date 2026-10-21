@@ -520,13 +520,14 @@ impl MaintainPlanner {
         &self,
         stmt: &crate::parser::ast::AttachDatabaseStmt,
     ) -> PlanNodeEnum {
-        let node = crate::planning::plan::core::nodes::management::space_nodes::AttachDatabaseNode::new(
-            next_node_id(),
-            stmt.path.clone(),
-            stmt.alias.clone(),
-            stmt.db_type.clone(),
-            stmt.options.clone(),
-        );
+        let node =
+            crate::planning::plan::core::nodes::management::space_nodes::AttachDatabaseNode::new(
+                next_node_id(),
+                stmt.path.clone(),
+                stmt.alias.clone(),
+                stmt.db_type.clone(),
+                stmt.options.clone(),
+            );
         PlanNodeEnum::SpaceManage(
             crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode::AttachDatabase(
                 node,
@@ -538,10 +539,11 @@ impl MaintainPlanner {
         &self,
         stmt: &crate::parser::ast::DetachDatabaseStmt,
     ) -> PlanNodeEnum {
-        let node = crate::planning::plan::core::nodes::management::space_nodes::DetachDatabaseNode::new(
-            next_node_id(),
-            stmt.alias.clone(),
-        );
+        let node =
+            crate::planning::plan::core::nodes::management::space_nodes::DetachDatabaseNode::new(
+                next_node_id(),
+                stmt.alias.clone(),
+            );
         PlanNodeEnum::SpaceManage(
             crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode::DetachDatabase(
                 node,
@@ -553,11 +555,12 @@ impl MaintainPlanner {
         &self,
         stmt: &crate::parser::ast::PurgeExpiredStmt,
     ) -> PlanNodeEnum {
-        let node = crate::planning::plan::core::nodes::management::space_nodes::PurgeExpiredNode::new(
-            next_node_id(),
-            stmt.space_name.clone(),
-            stmt.target.clone(),
-        );
+        let node =
+            crate::planning::plan::core::nodes::management::space_nodes::PurgeExpiredNode::new(
+                next_node_id(),
+                stmt.space_name.clone(),
+                stmt.target.clone(),
+            );
         PlanNodeEnum::SpaceManage(
             crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode::PurgeExpired(
                 node,
@@ -580,11 +583,12 @@ impl MaintainPlanner {
         &self,
         stmt: &crate::parser::ast::ExportDatabaseStmt,
     ) -> PlanNodeEnum {
-        let node = crate::planning::plan::core::nodes::management::space_nodes::ExportDatabaseNode::new(
-            next_node_id(),
-            stmt.path.clone(),
-            stmt.options.clone(),
-        );
+        let node =
+            crate::planning::plan::core::nodes::management::space_nodes::ExportDatabaseNode::new(
+                next_node_id(),
+                stmt.path.clone(),
+                stmt.options.clone(),
+            );
         PlanNodeEnum::SpaceManage(
             crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode::ExportDatabase(
                 node,
@@ -596,10 +600,11 @@ impl MaintainPlanner {
         &self,
         stmt: &crate::parser::ast::ImportDatabaseStmt,
     ) -> PlanNodeEnum {
-        let node = crate::planning::plan::core::nodes::management::space_nodes::ImportDatabaseNode::new(
-            next_node_id(),
-            stmt.path.clone(),
-        );
+        let node =
+            crate::planning::plan::core::nodes::management::space_nodes::ImportDatabaseNode::new(
+                next_node_id(),
+                stmt.path.clone(),
+            );
         PlanNodeEnum::SpaceManage(
             crate::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode::ImportDatabase(
                 node,

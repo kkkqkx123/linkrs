@@ -367,8 +367,7 @@ impl OptimizerEngine {
         macro_rules! rewrite_single {
             ($n:expr) => {{
                 let mut cloned = $n.clone();
-                let new_input =
-                    Self::apply_unnesting_heuristic_fallback(cloned.input(), notes);
+                let new_input = Self::apply_unnesting_heuristic_fallback(cloned.input(), notes);
                 cloned.set_input(new_input);
                 cloned
             }};
@@ -376,8 +375,7 @@ impl OptimizerEngine {
         macro_rules! rewrite_binary {
             ($n:expr) => {{
                 let mut cloned = $n.clone();
-                let new_left =
-                    Self::apply_unnesting_heuristic_fallback(cloned.left_input(), notes);
+                let new_left = Self::apply_unnesting_heuristic_fallback(cloned.left_input(), notes);
                 let new_right =
                     Self::apply_unnesting_heuristic_fallback(cloned.right_input(), notes);
                 cloned.set_left_input(new_left);

@@ -254,13 +254,10 @@ pub enum TokenKind {
     IsNotNull,
     IsEmpty,
     IsNotEmpty,
-    Outbound,
-    Inbound,
     Source,
     Destination,
     Rank,
     Input,
-    FindPath,
     Weight,
     Loop,
     Walk,
@@ -305,7 +302,6 @@ pub enum TokenKind {
     DoubleColon,
     Semicolon,
     QMark,
-    Question,
     Pipe,
     DoublePipe,
     Ampersand,
@@ -313,8 +309,6 @@ pub enum TokenKind {
     ShiftRight,
     Arrow,
     BackArrow,
-    RightArrow,
-    LeftArrow,
     At,
     Dollar,
     IdProp,
@@ -351,125 +345,4 @@ pub trait TokenKindExt {
     fn is_operator(&self) -> bool;
     fn is_delimiter(&self) -> bool;
     fn is_identifier(&self) -> bool;
-}
-
-impl TokenKindExt for TokenKind {
-    fn is_keyword(&self) -> bool {
-        matches!(
-            self,
-            TokenKind::Create
-                | TokenKind::Match
-                | TokenKind::Return
-                | TokenKind::Where
-                | TokenKind::Delete
-                | TokenKind::Update
-                | TokenKind::Insert
-                | TokenKind::Upsert
-                | TokenKind::From
-                | TokenKind::To
-                | TokenKind::As
-                | TokenKind::With
-                | TokenKind::Yield
-                | TokenKind::Go
-                | TokenKind::Over
-                | TokenKind::Step
-                | TokenKind::Upto
-                | TokenKind::Limit
-                | TokenKind::Asc
-                | TokenKind::Desc
-                | TokenKind::Order
-                | TokenKind::By
-                | TokenKind::Skip
-                | TokenKind::Unwind
-                | TokenKind::Optional
-                | TokenKind::Distinct
-                | TokenKind::All
-                | TokenKind::Null
-                | TokenKind::Is
-                | TokenKind::Not
-                | TokenKind::And
-                | TokenKind::Or
-                | TokenKind::Xor
-                | TokenKind::Contains
-                | TokenKind::StartsWith
-                | TokenKind::EndsWith
-                | TokenKind::Case
-                | TokenKind::When
-                | TokenKind::Then
-                | TokenKind::Else
-                | TokenKind::End
-                | TokenKind::Union
-                | TokenKind::Intersect
-                | TokenKind::Group
-                | TokenKind::Between
-        )
-    }
-
-    fn is_literal(&self) -> bool {
-        matches!(
-            self,
-            TokenKind::StringLiteral(_)
-                | TokenKind::IntegerLiteral(_)
-                | TokenKind::FloatLiteral(_)
-                | TokenKind::BooleanLiteral(_)
-        )
-    }
-
-    fn is_operator(&self) -> bool {
-        matches!(
-            self,
-            TokenKind::Plus
-                | TokenKind::Minus
-                | TokenKind::Star
-                | TokenKind::Div
-                | TokenKind::Mod
-                | TokenKind::Exp
-                | TokenKind::Eq
-                | TokenKind::Assign
-                | TokenKind::Ne
-                | TokenKind::Lt
-                | TokenKind::Le
-                | TokenKind::Gt
-                | TokenKind::Ge
-                | TokenKind::Regex
-                | TokenKind::NotOp
-                | TokenKind::Tilde
-                | TokenKind::Arrow
-                | TokenKind::ArrowRight
-                | TokenKind::HashArrow
-                | TokenKind::HashArrowRight
-                | TokenKind::DoublePipe
-                | TokenKind::Ampersand
-                | TokenKind::ShiftLeft
-                | TokenKind::ShiftRight
-        )
-    }
-
-    fn is_delimiter(&self) -> bool {
-        matches!(
-            self,
-            TokenKind::LParen
-                | TokenKind::RParen
-                | TokenKind::LBracket
-                | TokenKind::RBracket
-                | TokenKind::LBrace
-                | TokenKind::RBrace
-                | TokenKind::Comma
-                | TokenKind::Dot
-                | TokenKind::DotDot
-                | TokenKind::Colon
-                | TokenKind::Semicolon
-                | TokenKind::QMark
-                | TokenKind::Question
-                | TokenKind::Pipe
-                | TokenKind::Arrow
-                | TokenKind::BackArrow
-                | TokenKind::At
-                | TokenKind::Dollar
-        )
-    }
-
-    fn is_identifier(&self) -> bool {
-        matches!(self, TokenKind::Identifier(_))
-    }
 }

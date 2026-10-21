@@ -6,9 +6,9 @@
 //! All three must build the engine configuration identically, so the
 //! mapping lives here once and every entry point calls into it.
 
-use crate::parser::ast::vector::{CompressionRatioKind, QuantizationKind};
 #[cfg(feature = "vector")]
 use crate::parser::ast::vector::VectorDistance;
+use crate::parser::ast::vector::{CompressionRatioKind, QuantizationKind};
 
 /// Map a GQL distance token to the engine metric.
 #[cfg(feature = "vector")]

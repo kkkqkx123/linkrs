@@ -29,7 +29,6 @@ impl ReturnPlanner {
 }
 
 impl Planner for ReturnPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -177,7 +176,6 @@ impl Planner for ReturnPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl Default for ReturnPlanner {

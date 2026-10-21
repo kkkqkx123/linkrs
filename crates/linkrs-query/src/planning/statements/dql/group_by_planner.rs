@@ -3,16 +3,14 @@
 //! Query planning for statements that involve the GROUP BY clause
 
 use crate::binder::BoundStatement;
+use crate::binder::ValidatedStatement;
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::{
-    AggregateNode, ProjectNode, ScanVerticesNode,
-};
+use crate::planning::plan::core::nodes::{AggregateNode, ProjectNode, ScanVerticesNode};
 use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
 use crate::planning::plan::logical::logical_nodes::operation::LogicalAggregateNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerError};
-use crate::binder::ValidatedStatement;
 use crate::planning::statements::clauses::exists_planner::to_contextual;
 use crate::planning::statements::plan_combiner::wrap_logical_project;
 use crate::QueryContext;
@@ -35,7 +33,6 @@ impl GroupByPlanner {
 }
 
 impl Planner for GroupByPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -149,7 +146,6 @@ impl Planner for GroupByPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl GroupByPlanner {
@@ -170,12 +166,9 @@ impl GroupByPlanner {
         aggregation_args: &[Vec<Expression>],
         qctx: Arc<QueryContext>,
     ) -> Result<(PlanNodeEnum, PlanNodeEnum, LogicalNodeEnum), PlannerError> {
-        let validated_space = validated
-            .and_then(|v| v.validation_info.semantic_info.space_name.clone());
-        let space_name = qctx
-            .space_name()
-            .or(validated_space)
-            .unwrap_or_default();
+        let validated_space =
+            validated.and_then(|v| v.validation_info.semantic_info.space_name.clone());
+        let space_name = qctx.space_name().or(validated_space).unwrap_or_default();
 
         // Collect the property names referenced by the group keys and the
         // aggregate function fields.
@@ -197,11 +190,13 @@ impl GroupByPlanner {
         let scan_enum = PlanNodeEnum::ScanVertices(scan_node);
 
         // Project the needed vertex properties into flat columns.
-        let expr_ctx = validated.map(|v| v.expr_context().clone()).unwrap_or_else(|| {
-            Arc::new(
-                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-            )
-        });
+        let expr_ctx = validated
+            .map(|v| v.expr_context().clone())
+            .unwrap_or_else(|| {
+                Arc::new(
+                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+                )
+            });
         let mut yield_columns = Vec::new();
         for property in &properties {
             let expression = Expression::Property {

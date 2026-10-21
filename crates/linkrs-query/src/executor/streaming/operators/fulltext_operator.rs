@@ -617,19 +617,17 @@ impl FulltextOperator {
                     if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
                         let search_results = match ryw_config {
-                            Some(cfg) => {
-                                crate::executor::streaming::helpers::runtime_bridge::wait(
-                                    "Fulltext search",
-                                    coordinator.search_with_consistency(
-                                        *space_id,
-                                        tag_name,
-                                        field_name,
-                                        structured_query,
-                                        search_limit,
-                                        *cfg,
-                                    ),
-                                )?
-                            }
+                            Some(cfg) => crate::executor::streaming::helpers::runtime_bridge::wait(
+                                "Fulltext search",
+                                coordinator.search_with_consistency(
+                                    *space_id,
+                                    tag_name,
+                                    field_name,
+                                    structured_query,
+                                    search_limit,
+                                    *cfg,
+                                ),
+                            )?,
                             None => crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext search",
                                 coordinator.search_structured(
@@ -691,19 +689,17 @@ impl FulltextOperator {
                     if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
                         let search_results = match ryw_config {
-                            Some(cfg) => {
-                                crate::executor::streaming::helpers::runtime_bridge::wait(
-                                    "Fulltext lookup",
-                                    coordinator.search_with_consistency(
-                                        *space_id,
-                                        tag_name,
-                                        field_name,
-                                        structured_query,
-                                        search_limit,
-                                        *cfg,
-                                    ),
-                                )?
-                            }
+                            Some(cfg) => crate::executor::streaming::helpers::runtime_bridge::wait(
+                                "Fulltext lookup",
+                                coordinator.search_with_consistency(
+                                    *space_id,
+                                    tag_name,
+                                    field_name,
+                                    structured_query,
+                                    search_limit,
+                                    *cfg,
+                                ),
+                            )?,
                             None => crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext lookup",
                                 coordinator.search_structured(
@@ -767,19 +763,17 @@ impl FulltextOperator {
                     if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
                         let search_results = match ryw_config {
-                            Some(cfg) => {
-                                crate::executor::streaming::helpers::runtime_bridge::wait(
-                                    "Fulltext match",
-                                    coordinator.search_with_consistency(
-                                        *space_id,
-                                        tag_name,
-                                        field_name,
-                                        structured_query,
-                                        search_limit,
-                                        *cfg,
-                                    ),
-                                )?
-                            }
+                            Some(cfg) => crate::executor::streaming::helpers::runtime_bridge::wait(
+                                "Fulltext match",
+                                coordinator.search_with_consistency(
+                                    *space_id,
+                                    tag_name,
+                                    field_name,
+                                    structured_query,
+                                    search_limit,
+                                    *cfg,
+                                ),
+                            )?,
                             None => crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext match",
                                 coordinator.search_structured(

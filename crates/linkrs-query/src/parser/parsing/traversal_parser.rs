@@ -99,9 +99,7 @@ impl TraversalParser {
         if ctx.match_token(TokenKind::LParen) {
             let node = self.parse_node_pattern(ctx, start_span)?;
 
-            if ctx.check_token(TokenKind::LeftArrow)
-                || ctx.check_token(TokenKind::RightArrow)
-                || ctx.check_token(TokenKind::Minus)
+            if ctx.check_token(TokenKind::Minus)
                 || ctx.check_token(TokenKind::Arrow)
                 || ctx.check_token(TokenKind::BackArrow)
             {
@@ -180,9 +178,7 @@ impl TraversalParser {
         let start_span = start_node.span;
         let mut elements = vec![PathElement::Node(start_node)];
 
-        while ctx.check_token(TokenKind::LeftArrow)
-            || ctx.check_token(TokenKind::RightArrow)
-            || ctx.check_token(TokenKind::Minus)
+        while ctx.check_token(TokenKind::Minus)
             || ctx.check_token(TokenKind::Arrow)
             || ctx.check_token(TokenKind::BackArrow)
         {
@@ -210,8 +206,7 @@ impl TraversalParser {
     /// Analyzing the border mode
     fn parse_edge_pattern(&mut self, ctx: &mut ParseContext) -> Result<EdgePattern, ParseError> {
         let start_span = ctx.current_span();
-        let incoming =
-            ctx.match_token(TokenKind::BackArrow) || ctx.match_token(TokenKind::LeftArrow);
+        let incoming = ctx.match_token(TokenKind::BackArrow);
 
         ctx.expect_token(TokenKind::Minus)?;
 

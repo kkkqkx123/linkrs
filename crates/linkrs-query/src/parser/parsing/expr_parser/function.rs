@@ -1,4 +1,3 @@
-use super::subquery::match_identifier_token;
 use super::{parse_expression, ParseResult};
 use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::parsing::parse_context::ParseContext;
@@ -135,7 +134,8 @@ pub(crate) fn parse_function_call(
             let mut order_by = Vec::new();
             let mut order_desc = Vec::new();
 
-            if match_identifier_token(ctx, "PARTITION") {
+            if ctx.check_keyword("PARTITION") {
+                ctx.next_token();
                 ctx.expect_token(TokenKind::By)?;
                 partition_by.push(parse_expression(ctx)?.expr);
                 while ctx.match_token(TokenKind::Comma) {

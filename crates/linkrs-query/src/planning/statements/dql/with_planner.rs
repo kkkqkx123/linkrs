@@ -30,7 +30,6 @@ impl WithPlanner {
 }
 
 impl Planner for WithPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -151,7 +150,6 @@ impl Planner for WithPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl WithPlanner {
@@ -209,11 +207,8 @@ impl WithPlanner {
         // PlanContext::new leaves ast empty on purpose: the CTE branch is a
         // sub-statement with its own text, while ctx.ast parses the whole
         // WITH statement, so it must not leak into the branch planner.
-        let sub_ctx = crate::planning::context::PlanContext::new(
-            bound_stmt,
-            ctx.qctx.clone(),
-            ctx.metadata,
-        );
+        let sub_ctx =
+            crate::planning::context::PlanContext::new(bound_stmt, ctx.qctx.clone(), ctx.metadata);
         planner.plan_bound(&sub_ctx)
     }
 

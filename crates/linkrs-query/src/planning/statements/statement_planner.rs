@@ -85,7 +85,6 @@ mod tests {
                 logical_root: None,
             })
         }
-
     }
 
     impl StatementPlanner for MockStatementPlanner {
@@ -184,7 +183,6 @@ mod tests {
         assert!(sub_plan.root.is_some());
         assert!(sub_plan.tail.is_some());
     }
-
 
     #[test]
     fn test_clause_planner_clause_kind() {

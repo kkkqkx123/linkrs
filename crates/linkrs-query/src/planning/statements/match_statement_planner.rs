@@ -12,13 +12,13 @@
 use crate::binder::validation::CypherClauseKind;
 use crate::binder::validation::ValidationInfo;
 use crate::binder::BoundStatement;
+use crate::binder::ValidatedStatement;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::Stmt;
 use crate::parser::Parser;
 use crate::planning::join_order::JoinOrderStats;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
-use crate::binder::ValidatedStatement;
 use crate::planning::statements::clauses::{
     OrderByClausePlanner, PaginationPlanner, ReturnClausePlanner, WhereClausePlanner,
 };
@@ -115,8 +115,6 @@ impl MatchStatementPlanner {
 }
 
 impl Planner for MatchStatementPlanner {
-
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,

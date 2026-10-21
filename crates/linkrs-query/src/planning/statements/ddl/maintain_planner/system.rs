@@ -35,4 +35,3 @@ pub(super) fn plan_savepoint(name: &str) -> PlanNodeEnum {
 pub(super) fn plan_release_savepoint(name: &str) -> PlanNodeEnum {
     PlanNodeEnum::ReleaseSavepoint(ReleaseSavepointNode::new(next_node_id(), name.to_string()))
 }
-

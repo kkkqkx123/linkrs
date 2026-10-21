@@ -88,8 +88,6 @@ impl Planner for MaintainPlanner {
 
         Ok(SubPlan::from_single_node(final_node))
     }
-
-
 }
 
 impl Default for MaintainPlanner {

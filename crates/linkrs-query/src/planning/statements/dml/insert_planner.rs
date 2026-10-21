@@ -2,9 +2,9 @@
 //!
 //! Query planning for INSERT VERTEX and INSERT EDGE statements
 
-use crate::parser::ast::{Stmt, VertexRow};
 #[cfg(test)]
 use crate::parser::ast::InsertStmt;
+use crate::parser::ast::{Stmt, VertexRow};
 use crate::planning::plan::core::{
     node_id_generator::next_node_id,
     nodes::{EdgeInsertInfo, TagInsertSpec, VertexInsertInfo},
@@ -248,8 +248,6 @@ impl Planner for InsertPlanner {
 
         Ok(SubPlan::from_logical_root(insert_node))
     }
-
-
 }
 
 impl Default for InsertPlanner {

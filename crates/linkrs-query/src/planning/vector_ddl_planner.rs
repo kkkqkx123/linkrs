@@ -119,8 +119,6 @@ impl Planner for VectorDdlPlanner {
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
-
-
 }
 
 impl VectorDdlPlanner {

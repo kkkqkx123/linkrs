@@ -40,7 +40,6 @@ impl SubgraphPlanner {
 }
 
 impl Planner for SubgraphPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -246,7 +245,6 @@ impl Planner for SubgraphPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl SubgraphPlanner {

@@ -139,10 +139,7 @@ pub(crate) struct DmlPlanMemoKey {
 }
 
 impl DmlPlanMemoKey {
-    pub fn from_context(
-        normalized_text: String,
-        context: crate::cache::PlanCacheContext,
-    ) -> Self {
+    pub fn from_context(normalized_text: String, context: crate::cache::PlanCacheContext) -> Self {
         Self {
             inner: crate::cache::PlanCacheKey::fingerprint_less_from_context(
                 &normalized_text,

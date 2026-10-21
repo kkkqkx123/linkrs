@@ -92,10 +92,7 @@ fn parse_pipe_stage(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
     if ctx.current_token().kind == TokenKind::Group {
         return group_by::parse_group_by_statement(ctx);
     }
-    if matches!(
-        ctx.current_token().kind,
-        TokenKind::Identifier(ref word) if word.eq_ignore_ascii_case("COLLECT")
-    ) {
+    if ctx.check_keyword("COLLECT") {
         let start_span = ctx.current_span();
         ctx.next_token();
         let mut items = Vec::new();

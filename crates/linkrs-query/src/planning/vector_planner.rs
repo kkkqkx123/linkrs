@@ -65,8 +65,6 @@ impl Planner for VectorSearchPlanner {
         };
         self.transform_bound(stmt, qctx, ctx.metadata)
     }
-
-
 }
 
 impl VectorSearchPlanner {
@@ -571,7 +569,6 @@ mod tests {
         let planner = VectorSearchPlanner::with_metadata_context(metadata_context);
         assert!(planner.metadata_context.is_some());
     }
-
 
     #[test]
     fn test_parse_output_fields() {

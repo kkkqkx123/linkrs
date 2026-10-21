@@ -150,7 +150,7 @@ fn leaves_non_conjunctive_exists_untouched() {
     let inner = Expression::Exists {
         body: Box::new(linkrs_core::types::expr::SubqueryBody {
             patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+            parsed_patterns: Vec::new(),
             where_clause: None,
             return_expr: None,
             id: 0,
@@ -244,7 +244,7 @@ fn plans_correlated_exists_as_mark_join() {
     let spec = ExistsSpec {
         body: SubqueryBody {
             patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+            parsed_patterns: Vec::new(),
             where_clause: Some(Box::new(Expression::binary(
                 prop("p", "age"),
                 BinaryOperator::GreaterThan,
@@ -326,7 +326,7 @@ fn plans_correlated_scalar_aggregate_as_group_join() {
     // the probe key).
     let body = SubqueryBody {
         patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+        parsed_patterns: Vec::new(),
         where_clause: Some(Box::new(eq(prop("p", "city"), prop("t", "city")))),
         return_expr: Some(Box::new(Expression::Aggregate {
             func: linkrs_core::types::operators::AggregateFunction::Max,
@@ -387,7 +387,7 @@ fn non_equi_scalar_aggregate_keeps_correlated_apply_fallback() {
     // attempt is restored and the per-row CorrelatedApply fallback kept.
     let body = SubqueryBody {
         patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+        parsed_patterns: Vec::new(),
         where_clause: Some(Box::new(Expression::binary(
             prop("p", "age"),
             BinaryOperator::GreaterThan,
@@ -436,7 +436,7 @@ fn filtered_aggregate_return_skips_group_join() {
     // the RETURN expression keeps its plain projection.
     let body = SubqueryBody {
         patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+        parsed_patterns: Vec::new(),
         where_clause: None,
         return_expr: Some(Box::new(Expression::Aggregate {
             func: linkrs_core::types::operators::AggregateFunction::Count,
@@ -479,7 +479,7 @@ fn plans_complex_correlated_exists_as_correlated_apply() {
     let spec = ExistsSpec {
         body: SubqueryBody {
             patterns: vec!["(p:person)".to_string(), "(q:person)".to_string()],
-                parsed_patterns: Vec::new(),
+            parsed_patterns: Vec::new(),
             where_clause: Some(Box::new(Expression::binary(
                 prop("p", "age"),
                 BinaryOperator::GreaterThan,
@@ -549,7 +549,7 @@ fn nested_correlated_exists_wraps_inner_mark_join() {
     // simple single-table shape, so it becomes a Mark-Join (SemiJoin).
     let inner_body = SubqueryBody {
         patterns: vec!["(q:person)".to_string()],
-                parsed_patterns: Vec::new(),
+        parsed_patterns: Vec::new(),
         where_clause: Some(Box::new(Expression::binary(
             prop("q", "age"),
             BinaryOperator::GreaterThan,
@@ -561,7 +561,7 @@ fn nested_correlated_exists_wraps_inner_mark_join() {
     let outer_spec = ExistsSpec {
         body: SubqueryBody {
             patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+            parsed_patterns: Vec::new(),
             where_clause: Some(Box::new(Expression::Exists {
                 body: Box::new(inner_body),
             })),
@@ -605,7 +605,7 @@ fn in_with_correlated_where_keeps_synthesized_equality_in_mark_join_condition() 
     let spec = ExistsSpec {
         body: SubqueryBody {
             patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+            parsed_patterns: Vec::new(),
             where_clause: Some(Box::new(Expression::binary(
                 prop("p", "age"),
                 BinaryOperator::GreaterThan,
@@ -670,7 +670,7 @@ fn body() -> linkrs_core::types::expr::SubqueryBody {
     linkrs_core::types::expr::SubqueryBody {
         id: 0,
         patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+        parsed_patterns: Vec::new(),
         where_clause: None,
         return_expr: None,
     }
@@ -882,7 +882,7 @@ fn does_not_descend_into_subquery_bodies() {
     let inner = linkrs_core::types::expr::SubqueryBody {
         id: 0,
         patterns: vec!["(p:person)".to_string()],
-                parsed_patterns: Vec::new(),
+        parsed_patterns: Vec::new(),
         where_clause: Some(Box::new(Expression::binary(
             Expression::variable("p"),
             BinaryOperator::Or,

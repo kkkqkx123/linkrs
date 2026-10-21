@@ -358,16 +358,8 @@ impl ZeroInputNode for DescribeVectorIndexNode {}
 impl MemoryEstimatable for ShowVectorIndexNode {
     fn estimate_memory(&self) -> usize {
         std::mem::size_of::<Self>()
-            + self
-                .pattern
-                .as_ref()
-                .map(|s| s.capacity())
-                .unwrap_or(0)
-            + self
-                .from_schema
-                .as_ref()
-                .map(|s| s.capacity())
-                .unwrap_or(0)
+            + self.pattern.as_ref().map(|s| s.capacity()).unwrap_or(0)
+            + self.from_schema.as_ref().map(|s| s.capacity()).unwrap_or(0)
     }
 }
 

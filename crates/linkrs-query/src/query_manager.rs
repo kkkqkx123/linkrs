@@ -315,10 +315,7 @@ impl QueryManager {
     /// profile filtering (`threshold_ms * 1000`). Single conversion point so
     /// millisecond/microsecond units cannot diverge.
     pub fn slow_query_threshold_us(&self) -> u64 {
-        self.slow_query_threshold_ms
-            .load(Ordering::SeqCst)
-            .max(0) as u64
-            * 1000
+        self.slow_query_threshold_ms.load(Ordering::SeqCst).max(0) as u64 * 1000
     }
 
     fn emit_session_event(&self, event: SessionEvent) {

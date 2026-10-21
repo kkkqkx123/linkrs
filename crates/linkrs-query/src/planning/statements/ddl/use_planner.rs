@@ -45,8 +45,6 @@ impl Planner for UsePlanner {
         let sub_plan = SubPlan::new(Some(final_node), Some(arg_node_enum));
         Ok(sub_plan)
     }
-
-
 }
 
 impl Default for UsePlanner {

@@ -83,8 +83,6 @@ impl Planner for UnwindPlanner {
             logical_root: Some(logical_root),
         })
     }
-
-
 }
 
 impl Default for UnwindPlanner {

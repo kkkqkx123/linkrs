@@ -43,7 +43,6 @@ impl PathPlanner {
 }
 
 impl Planner for PathPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -205,7 +204,6 @@ impl Planner for PathPlanner {
 
         Ok(sub_plan)
     }
-
 }
 
 /// Shared inputs for building a path plan.
@@ -319,9 +317,9 @@ impl Default for PathPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::QueryContext;
     use crate::parser::ast::stmt::Ast;
     use crate::parser::ast::{FindPathStmt, FromClause, OverClause, Span, Stmt};
+    use crate::QueryContext;
     use linkrs_core::types::expr::contextual::ContextualExpression;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
     use linkrs_core::types::expr::{Expression, ExpressionMeta};
@@ -395,8 +393,7 @@ mod tests {
     #[test]
     fn shortest_path_plan_carries_native_logical() {
         let stmt = Stmt::FindPath(find_path_stmt(true));
-        let plan = plan_stmt(stmt)
-            .expect("label-less FIND PATH plans without a vertex label");
+        let plan = plan_stmt(stmt).expect("label-less FIND PATH plans without a vertex label");
         assert!(
             plan.logical_root.is_some(),
             "shortest path plan must carry its native logical root"
@@ -406,8 +403,7 @@ mod tests {
     #[test]
     fn all_paths_plan_carries_native_logical_with_direction() {
         let stmt = Stmt::FindPath(find_path_stmt(false));
-        let plan = plan_stmt(stmt)
-            .expect("label-less FIND PATH plans without a vertex label");
+        let plan = plan_stmt(stmt).expect("label-less FIND PATH plans without a vertex label");
         assert!(
             plan.logical_root.is_some(),
             "all-paths plan must carry its native logical root"
@@ -417,8 +413,7 @@ mod tests {
     #[test]
     fn native_logical_converts_back_to_same_physical_shape() {
         let stmt = Stmt::FindPath(find_path_stmt(false));
-        let plan = plan_stmt(stmt)
-            .expect("label-less FIND PATH plans without a vertex label");
+        let plan = plan_stmt(stmt).expect("label-less FIND PATH plans without a vertex label");
         assert!(
             plan.root.is_some() && plan.logical_root.is_some(),
             "plan must carry both physical and logical shapes"
@@ -434,8 +429,7 @@ mod tests {
             false,
             Some("cost"),
         ));
-        let plan = plan_stmt(stmt)
-            .expect("weighted shortest path plans");
+        let plan = plan_stmt(stmt).expect("weighted shortest path plans");
         match plan.root.as_ref().expect("physical root") {
             PlanNodeEnum::ShortestPath(node) => {
                 assert_eq!(node.weight_expression().as_deref(), Some("cost"));
@@ -453,8 +447,7 @@ mod tests {
     #[test]
     fn shortest_path_plan_defaults_weight_to_none() {
         let stmt = Stmt::FindPath(find_path_stmt(true));
-        let plan = plan_stmt(stmt)
-            .expect("plain shortest path plans");
+        let plan = plan_stmt(stmt).expect("plain shortest path plans");
         match plan.root.as_ref().expect("physical root") {
             PlanNodeEnum::ShortestPath(node) => {
                 assert!(node.weight_expression().is_none());
@@ -478,8 +471,7 @@ mod tests {
             let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(
                 false, with_loop, with_trail, with_walk, None,
             ));
-            let plan = plan_stmt(stmt)
-                .expect("all path plans");
+            let plan = plan_stmt(stmt).expect("all path plans");
             match plan.root.as_ref().expect("physical root") {
                 PlanNodeEnum::AllPaths(node) => {
                     assert_eq!(
@@ -507,8 +499,7 @@ mod tests {
         // Cycles can never shorten a path, so the shortest-path plan stays a
         // plain ShortestPath node regardless of the modifiers.
         let stmt = Stmt::FindPath(find_path_stmt_with_modifiers(true, true, true, true, None));
-        let plan = plan_stmt(stmt)
-            .expect("modifiers do not break shortest path planning");
+        let plan = plan_stmt(stmt).expect("modifiers do not break shortest path planning");
         assert!(
             matches!(plan.root.as_ref(), Some(PlanNodeEnum::ShortestPath(_))),
             "expected ShortestPath root, got {:?}",

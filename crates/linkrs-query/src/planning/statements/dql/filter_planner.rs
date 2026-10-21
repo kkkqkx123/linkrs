@@ -21,7 +21,6 @@ impl FilterPlanner {
 }
 
 impl Planner for FilterPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -62,7 +61,6 @@ impl Planner for FilterPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl Default for FilterPlanner {

@@ -353,15 +353,11 @@ impl Planner for MergePlanner {
                 let expr_ctx = Arc::new(
                     linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
                 );
-                let edge_name = edge
-                    .edge_types
-                    .first()
-                    .cloned()
-                    .ok_or_else(|| {
-                        PlannerError::PlanGenerationFailed(
-                            "MERGE edge pattern must have an edge type".to_string(),
-                        )
-                    })?;
+                let edge_name = edge.edge_types.first().cloned().ok_or_else(|| {
+                    PlannerError::PlanGenerationFailed(
+                        "MERGE edge pattern must have an edge type".to_string(),
+                    )
+                })?;
                 let (prop_names, prop_values) = if let Some(props) = &edge.properties {
                     let mut names = Vec::new();
                     let mut values = Vec::new();
@@ -397,8 +393,6 @@ impl Planner for MergePlanner {
             }
         }
     }
-
-
 }
 
 impl Default for MergePlanner {

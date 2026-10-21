@@ -66,7 +66,6 @@ impl CollectPlanner {
 }
 
 impl Planner for CollectPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -117,7 +116,6 @@ impl Planner for CollectPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl Default for CollectPlanner {

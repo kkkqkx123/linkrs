@@ -119,14 +119,11 @@ fn corpus() -> Vec<&'static str> {
 }
 
 fn allowlist() -> HashSet<String> {
-    let text =
-        include_str!("corpus_parity_allowlist.txt");
+    let text = include_str!("corpus_parity_allowlist.txt");
     text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| {
-            line.split('#').next().unwrap_or("").trim().to_string()
-        })
+        .map(|line| line.split('#').next().unwrap_or("").trim().to_string())
         .filter(|stmt| !stmt.is_empty())
         .collect()
 }
@@ -152,15 +149,38 @@ fn handwritten_success_implies_tree_without_error() {
             "parity failure for {stmt:?}: tree contains ERROR/MISSING"
         );
         let toks = linkrs_grammar::tokens(stmt);
-        assert!(!toks.is_empty(), "parity failure for {stmt:?}: empty token list");
+        assert!(
+            !toks.is_empty(),
+            "parity failure for {stmt:?}: empty token list"
+        );
         let mut last = 0;
         for t in &toks {
-            assert!(t.start < t.end, "parity failure for {stmt:?}: empty span {t:?}");
-            assert!(t.end <= stmt.len(), "parity failure for {stmt:?}: span {t:?} out of bounds");
-            assert!(t.start >= last, "parity failure for {stmt:?}: spans out of order {t:?}");
+            assert!(
+                t.start < t.end,
+                "parity failure for {stmt:?}: empty span {t:?}"
+            );
+            assert!(
+                t.end <= stmt.len(),
+                "parity failure for {stmt:?}: span {t:?} out of bounds"
+            );
+            assert!(
+                t.start >= last,
+                "parity failure for {stmt:?}: spans out of order {t:?}"
+            );
             last = t.start;
             assert!(
-                ["keyword", "variable", "property", "function", "number", "string", "operator", "comment", "punctuation"].contains(&t.class),
+                [
+                    "keyword",
+                    "variable",
+                    "property",
+                    "function",
+                    "number",
+                    "string",
+                    "operator",
+                    "comment",
+                    "punctuation"
+                ]
+                .contains(&t.class),
                 "parity failure for {stmt:?}: unknown class {t:?}"
             );
         }

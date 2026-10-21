@@ -46,10 +46,7 @@ impl<'a> PlanContext<'a> {
     }
 
     /// Create a PlanContext with metadata injected later.
-    pub fn without_metadata(
-        bound: &'a BoundStatement,
-        qctx: Arc<QueryContext>,
-    ) -> Self {
+    pub fn without_metadata(bound: &'a BoundStatement, qctx: Arc<QueryContext>) -> Self {
         Self {
             bound,
             qctx,

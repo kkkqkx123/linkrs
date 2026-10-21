@@ -133,10 +133,7 @@ pub(crate) fn parse_postfix_expression(
                 body
             } else {
                 ctx.expect_token(TokenKind::LParen)?;
-                if !matches!(
-                    ctx.current_token().kind,
-                    TokenKind::Identifier(ref s) if s.eq_ignore_ascii_case("SELECT")
-                ) {
+                if !ctx.check_keyword("SELECT") {
                     return Err(ParseError::new(
                         ParseErrorKind::SyntaxError,
                         "Expected SELECT after IN (".to_string(),
@@ -335,14 +332,11 @@ pub(crate) fn is_pattern_predicate_follower(ctx: &ParseContext<'_>) -> bool {
             | TokenKind::LParen
             | TokenKind::Arrow
             | TokenKind::BackArrow
-            | TokenKind::RightArrow
-            | TokenKind::LeftArrow
             | TokenKind::ArrowRight
             | TokenKind::HashArrow
             | TokenKind::HashArrowRight
             | TokenKind::At
             | TokenKind::QMark
-            | TokenKind::Question
             | TokenKind::In
             | TokenKind::NotIn
             | TokenKind::Is

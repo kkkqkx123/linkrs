@@ -9,8 +9,8 @@ use crate::planning::plan::core::{
     node_id_generator::next_node_id,
     nodes::base::plan_node_traits::{MultipleInputNode, SingleInputNode},
 };
-use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
+use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::planning::planner::{Planner, PlannerEnum, PlannerError};
 
@@ -26,7 +26,6 @@ impl PipePlanner {
 }
 
 impl Planner for PipePlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -109,7 +108,6 @@ impl Planner for PipePlanner {
             PlannerError::PlanGenerationFailed("Pipe statement produced no plan".to_string())
         })
     }
-
 }
 
 impl Default for PipePlanner {

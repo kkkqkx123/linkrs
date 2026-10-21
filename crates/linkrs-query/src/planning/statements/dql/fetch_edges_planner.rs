@@ -23,7 +23,6 @@ impl FetchEdgesPlanner {
 }
 
 impl Planner for FetchEdgesPlanner {
-
     fn plan_bound(
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
@@ -86,7 +85,6 @@ impl Planner for FetchEdgesPlanner {
         };
         Ok(sub_plan)
     }
-
 }
 
 impl Default for FetchEdgesPlanner {
