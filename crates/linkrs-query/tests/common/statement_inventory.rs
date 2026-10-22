@@ -357,7 +357,7 @@ pub const INVENTORY: &[InventoryEntry] = &[
         kind: "SET",
         category: "DML",
         expectation: Expectation::Rejected {
-            guidance: &["cannot resolve a tag qualifier"],
+            guidance: &["standalone SET is not supported", "UPDATE"],
         },
         feature: None,
         without_feature: None,
@@ -370,7 +370,7 @@ pub const INVENTORY: &[InventoryEntry] = &[
         kind: "REMOVE",
         category: "DML",
         expectation: Expectation::Rejected {
-            guidance: &["not wired to storage"],
+            guidance: &["standalone REMOVE is not supported", "DELETE"],
         },
         feature: None,
         without_feature: None,
@@ -905,9 +905,7 @@ pub const INVENTORY: &[InventoryEntry] = &[
         dml_setup: &[],
         kind: "CHECKPOINT",
         category: "ADMIN",
-        expectation: Expectation::Rejected {
-            guidance: &["read-only"],
-        },
+        expectation: Expectation::Executable { columns: None, min_rows: 1 },
         feature: None,
         without_feature: None,
     },

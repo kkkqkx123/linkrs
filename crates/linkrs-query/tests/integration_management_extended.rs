@@ -776,7 +776,56 @@ fn test_pipe_with_unwind() {
             | RETURN n
         "#,
         )
-        .assert_success();
+        .assert_success()
+        .assert_result_columns(&["n"])
+        .assert_result_count(2)
+        .assert_result_contains(vec![linkrs_core::Value::string("Bob")])
+        .assert_result_contains(vec![linkrs_core::Value::string("Charlie")]);
+}
+
+#[test]
+fn test_pipe_collect_list_content_and_empty_input() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE KNOWS(since DATE) FROM Person TO Person")
+        .assert_success()
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .assert_success()
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2020-01-01'), 1 -> 3:('2021-01-01')")
+        .assert_success()
+        .query(
+            r#"
+            GO FROM 1 OVER KNOWS
+            | YIELD target.name AS name
+            | COLLECT LIST(name) AS names
+        "#,
+        )
+        .assert_success()
+        .assert_result_columns(&["names"])
+        .assert_result_count(1);
+
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space_empty_collect")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .assert_success()
+        .exec_ddl("CREATE EDGE KNOWS(since DATE) FROM Person TO Person")
+        .assert_success()
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
+        .assert_success()
+        .query(
+            r#"
+            GO FROM 1 OVER KNOWS
+            | YIELD target.name AS name
+            | COLLECT LIST(name) AS names
+        "#,
+        )
+        .assert_success()
+        .assert_result_columns(&["names"])
+        .assert_result_count(1);
 }
 
 #[test]

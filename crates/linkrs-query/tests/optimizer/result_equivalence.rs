@@ -78,15 +78,20 @@ fn test_optimizer_result_equivalence_with_content() {
     let mut pipeline_off = QueryPipelineManager::with_optimizer(storage.clone(), stats2, opt_off)
         .with_schema_manager(schema_manager);
 
-    // Test: MATCH query results should be identical with or without optimization
-    // Note: ORDER BY queries are excluded due to a known bug where the optimizer
-    // incorrectly eliminates or corrupts Sort nodes.
+    // Test: MATCH query results should be identical with or without optimization.
+    // ORDER BY queries compare exact row order: the optimizer must preserve
+    // Sort semantics, so ordered results are compared positionally while
+    // unordered results are compared as sets.
     // Note: String property comparison in WHERE may not work with vertex property expressions.
     let queries = vec![
         "MATCH (i:Item) RETURN i.name, i.price",
         "MATCH (i:Item) WHERE i.price > 15.0 RETURN i.name",
         "MATCH (i:Item) RETURN COUNT(i) AS total",
         "MATCH (i:Item) RETURN SUM(i.price) AS total_price",
+    ];
+    let ordered_queries = vec![
+        "MATCH (i:Item) RETURN i.name, i.price ORDER BY i.price ASC",
+        "MATCH (i:Item) RETURN i.name ORDER BY i.name DESC LIMIT 2",
     ];
 
     for query in &queries {
@@ -162,6 +167,41 @@ fn test_optimizer_result_equivalence_with_content() {
                     ExecutionResult::Success | ExecutionResult::Empty
                 ));
             }
+        }
+    }
+
+    for query in &ordered_queries {
+        let result_on = pipeline_on.execute_query_with_space(query, Some(space_info.clone()));
+        let result_off = pipeline_off.execute_query_with_space(query, Some(space_info.clone()));
+        assert!(
+            result_on.is_ok(),
+            "Optimized ordered query should succeed: {}",
+            query
+        );
+        assert!(
+            result_off.is_ok(),
+            "Non-optimized ordered query should succeed: {}",
+            query
+        );
+        let result_on = result_on.unwrap();
+        let result_off = result_off.unwrap();
+        match (&result_on, &result_off) {
+            (
+                ExecutionResult::DataSet { data: ds_on, .. },
+                ExecutionResult::DataSet { data: ds_off, .. },
+            ) => {
+                assert_eq!(
+                    ds_on.col_names, ds_off.col_names,
+                    "Column names differ for ordered query: {}",
+                    query
+                );
+                assert_eq!(
+                    ds_on.rows, ds_off.rows,
+                    "Ordered rows must match exactly for query: {}",
+                    query
+                );
+            }
+            _ => panic!("ordered query must return a dataset: {}", query),
         }
     }
 }

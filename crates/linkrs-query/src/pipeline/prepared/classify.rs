@@ -165,6 +165,7 @@ pub fn is_ddl(stmt: &Stmt) -> bool {
             | Stmt::Drop(_)
             | Stmt::Alter(_)
             | Stmt::ClearSpace(_)
+            | Stmt::Checkpoint(_)
             | Stmt::CreateFulltextIndex(_)
             | Stmt::DropFulltextIndex(_)
             | Stmt::AlterFulltextIndex(_)

@@ -2,7 +2,7 @@
 //!
 //! Test coverage:
 //! - Standalone SET with a direct vertex target is rejected explicitly
-//! - Standalone REMOVE is rejected explicitly (no storage write path)
+//! - Standalone REMOVE is rejected explicitly with a user-facing alternative
 
 use super::common;
 
@@ -20,7 +20,7 @@ fn test_standalone_set_vertex_rejected() {
     assert!(
         scenario
             .error()
-            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+            .is_some_and(|e| e.contains("standalone SET is not supported")),
         "standalone SET should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -37,7 +37,7 @@ fn test_standalone_set_multi_assignment_rejected() {
     assert!(
         scenario
             .error()
-            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+            .is_some_and(|e| e.contains("standalone SET is not supported")),
         "standalone multi-assignment SET should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -56,7 +56,7 @@ fn test_standalone_remove_rejected() {
     assert!(
         scenario
             .error()
-            .is_some_and(|e| e.contains("not wired to storage")),
+            .is_some_and(|e| e.contains("standalone REMOVE is not supported")),
         "standalone REMOVE should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -73,7 +73,7 @@ fn test_standalone_set_variable_target_rejected() {
     assert!(
         scenario
             .error()
-            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+            .is_some_and(|e| e.contains("standalone SET is not supported")),
         "standalone SET on a variable target should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -90,7 +90,7 @@ fn test_standalone_set_bare_property_rejected() {
     assert!(
         scenario
             .error()
-            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+            .is_some_and(|e| e.contains("standalone SET is not supported")),
         "standalone SET on a bare property should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -107,7 +107,7 @@ fn test_standalone_set_map_overwrite_rejected() {
     assert!(
         scenario
             .error()
-            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+            .is_some_and(|e| e.contains("standalone SET is not supported")),
         "standalone SET with a whole-map target should fail explicitly, got: {:?}",
         scenario.error()
     );
@@ -124,7 +124,7 @@ fn test_standalone_set_mixed_map_and_property_rejected() {
     assert!(
         scenario
             .error()
-            .is_some_and(|e| e.contains("cannot resolve a tag qualifier")),
+            .is_some_and(|e| e.contains("standalone SET is not supported")),
         "standalone SET mixing map overwrite and property assignment should fail explicitly, got: {:?}",
         scenario.error()
     );

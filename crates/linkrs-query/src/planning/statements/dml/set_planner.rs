@@ -136,8 +136,7 @@ impl Planner for SetPlanner {
         }
 
         return Err(PlannerError::PlanGenerationFailed(
-            "standalone SET cannot resolve a tag qualifier; use UPDATE ... ON <tag> SET instead"
-                .to_string(),
+            "standalone SET is not supported; use UPDATE <id> ON <tag> SET ... instead".to_string(),
         ));
     }
 }

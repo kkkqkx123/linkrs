@@ -2,8 +2,9 @@
 //!
 //! Query planning for handling the REMOVE statement
 //!
-//! REMOVE has no storage write path yet, so both planning entries fail
-//! explicitly instead of producing a plan that only strips row columns.
+//! Standalone REMOVE is rejected with a user-facing explanation that names
+//! the supported alternative, instead of producing a plan that only strips
+//! row columns.
 
 use crate::binder::BoundStatement;
 use crate::planning::plan::SubPlan;
@@ -36,10 +37,11 @@ impl Planner for RemovePlanner {
             }
         };
 
-        // Standalone REMOVE has no storage write path yet: fail explicitly
-        // instead of producing a plan that only strips row columns.
+        // Standalone REMOVE has no storage write path: fail with a user-facing
+        // explanation that names the supported alternative.
         Err(PlannerError::PlanGenerationFailed(
-            "REMOVE is not wired to storage yet".to_string(),
+            "standalone REMOVE is not supported; use DELETE to remove vertices and edges instead"
+                .to_string(),
         ))
     }
 }

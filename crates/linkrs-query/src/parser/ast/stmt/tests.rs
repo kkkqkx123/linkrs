@@ -1,5 +1,7 @@
 use super::*;
-use crate::parser::ast::vector::{VectorDistance, VectorIndexConfig, VectorMatchCondition};
+use crate::parser::ast::vector::{
+    DescribeVectorIndex, ShowVectorIndex, VectorDistance, VectorIndexConfig, VectorMatchCondition,
+};
 use linkrs_core::permission::RoleType;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 
@@ -409,6 +411,21 @@ fn test_stmt_category_exhaustive() {
             Ddl,
         ),
         (
+            Stmt::ShowVectorIndex(ShowVectorIndex {
+                span,
+                pattern: None,
+                from_schema: None,
+            }),
+            Ddl,
+        ),
+        (
+            Stmt::DescribeVectorIndex(DescribeVectorIndex {
+                span,
+                index_name: "idx".to_string(),
+            }),
+            Ddl,
+        ),
+        (
             Stmt::CreateUser(CreateUserStmt {
                 span,
                 username: "u".to_string(),
@@ -753,8 +770,25 @@ fn test_stmt_category_exhaustive() {
             }),
             Admin,
         ),
+        (
+            Stmt::AttachDatabase(AttachDatabaseStmt {
+                span,
+                path: "/tmp/db".to_string(),
+                alias: "a".to_string(),
+                db_type: None,
+                options: vec![],
+            }),
+            Admin,
+        ),
+        (
+            Stmt::DetachDatabase(DetachDatabaseStmt {
+                span,
+                alias: "a".to_string(),
+            }),
+            Admin,
+        ),
     ];
-    assert_eq!(cases.len(), 80, "Stmt has 80 variants; update this test");
+    assert_eq!(cases.len(), 83, "Stmt has 83 variants; update this test");
     for (stmt, expected) in cases {
         assert_eq!(
             stmt.category(),

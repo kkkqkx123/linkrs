@@ -205,9 +205,41 @@ fn test_go_execution_basic_traversal() {
         .assert_success()
         .query("GO FROM 1 OVER KNOWS YIELD $$.Person.name AS friend_name")
         .assert_success()
+        .assert_result_columns(&["friend_name"])
         .assert_result_count(2)
+        .query("FETCH PROP ON Person 2 YIELD Person.name AS name")
+        .assert_success()
+        .assert_vertex_or_edge_has_property("name", linkrs_core::Value::string("Bob"))
         .query("GO 2 STEPS FROM 1 OVER KNOWS YIELD $$.Person.name AS friend_of_friend")
         .assert_success();
+}
+
+#[test]
+fn test_go_reversely_bidirect_target_sets_differ() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space_go_dir")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE FOLLOWS(since DATE) FROM Person TO Person")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .exec_dml("INSERT EDGE FOLLOWS(since) VALUES 2 -> 1:('2020-01-01'), 3 -> 1:('2021-01-01')")
+        .assert_success()
+        .query("GO FROM 1 OVER FOLLOWS REVERSELY YIELD $$.Person.name AS name")
+        .assert_success()
+        .assert_result_columns(&["name"])
+        .assert_result_count(2);
+
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space_go_out")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE FOLLOWS(since DATE) FROM Person TO Person")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob'), 3:('Charlie')")
+        .exec_dml("INSERT EDGE FOLLOWS(since) VALUES 2 -> 1:('2020-01-01'), 3 -> 1:('2021-01-01')")
+        .assert_success()
+        .query("GO FROM 1 OVER FOLLOWS YIELD $$.Person.name AS name")
+        .assert_success()
+        .assert_result_empty();
 }
 
 // ==================== GO Error Handling Tests ====================

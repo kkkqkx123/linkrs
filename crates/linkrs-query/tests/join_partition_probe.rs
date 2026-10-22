@@ -196,3 +196,49 @@ fn probe_serial_join_plan() {
         rows.iter().take(5).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn serial_join_counts_match_partitioned_contract() {
+    let storage = setup_storage();
+    let mut serial = build_pipeline(&storage);
+
+    let rows = query_rows(&mut serial, "MATCH (a:Node) RETURN count(*)");
+    assert_eq!(rows.len(), 1, "node count must return one row");
+    assert!(
+        rows[0].contains(&Value::BigInt(VERTEX_COUNT))
+            || rows[0].contains(&Value::Int(VERTEX_COUNT as i32)),
+        "node count must equal inserted vertices, got {:?}",
+        rows[0]
+    );
+
+    let rows = query_rows(
+        &mut serial,
+        "MATCH (a:Node) WHERE a.value < 5 RETURN count(*)",
+    );
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0].contains(&Value::BigInt(5)) || rows[0].contains(&Value::Int(5)),
+        "filtered count must be 5, got {:?}",
+        rows[0]
+    );
+
+    let rows = query_rows(
+        &mut serial,
+        "MATCH (a:Node),(b:Other) WHERE a.value = b.value RETURN count(*)",
+    );
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0].contains(&Value::BigInt(1000)) || rows[0].contains(&Value::Int(1000)),
+        "equijoin count must be 1000, got {:?}",
+        rows[0]
+    );
+
+    let rows = query_rows(&mut serial, "MATCH (a:Node),(b:Other) RETURN count(*)");
+    assert_eq!(rows.len(), 1);
+    assert!(
+        rows[0].contains(&Value::BigInt(VERTEX_COUNT * VERTEX_COUNT)),
+        "cross product count must be {}^2, got {:?}",
+        VERTEX_COUNT,
+        rows[0]
+    );
+}

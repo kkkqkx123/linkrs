@@ -286,3 +286,43 @@ fn test_grant_multiple_users_same_space() {
             .assert_success();
     }
 }
+
+#[test]
+fn test_grant_takes_effect_in_catalog_and_revoke_clears_it() {
+    use linkrs_core::Value;
+    new_scenario()
+        .exec_dcl("CREATE USER alice WITH PASSWORD 'pass'")
+        .assert_success()
+        .exec_dcl("CREATE SPACE grant_space")
+        .assert_success()
+        .exec_dcl("GRANT ADMIN ON grant_space TO alice")
+        .assert_success()
+        .exec_dcl("DESCRIBE USER alice")
+        .assert_success()
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::string("grant_space"),
+            Value::string("ADMIN"),
+        ])
+        .exec_dcl("SHOW ROLES IN grant_space")
+        .assert_success()
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::string("grant_space"),
+            Value::string("ADMIN"),
+        ])
+        .exec_dcl("REVOKE ADMIN ON grant_space FROM alice")
+        .assert_success()
+        .exec_dcl("DESCRIBE USER alice")
+        .assert_success()
+        .assert_result_contains(vec![
+            Value::string("alice"),
+            Value::string(String::new()),
+            Value::string(String::new()),
+        ])
+        .exec_dcl("SHOW ROLES IN grant_space")
+        .assert_success()
+        .assert_result_empty()
+        .exec_dcl("DROP USER alice")
+        .assert_success();
+}

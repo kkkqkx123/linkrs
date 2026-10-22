@@ -126,6 +126,10 @@ fn test_insert_edge_if_not_exists_execution() {
 
 #[test]
 fn test_insert_edge_with_multiple_properties() {
+    use std::collections::HashMap;
+    let mut expected = HashMap::new();
+    expected.insert("weight", linkrs_core::Value::Double(0.8));
+    expected.insert("note", linkrs_core::Value::string("close friend"));
     TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
@@ -134,7 +138,8 @@ fn test_insert_edge_with_multiple_properties() {
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
         .exec_dml("INSERT EDGE KNOWS(since, weight, note) VALUES 1 -> 2:('2024-01-01', 0.8, 'close friend')")
         .assert_success()
-        .assert_edge_exists(1, 2, "KNOWS");
+        .assert_edge_exists(1, 2, "KNOWS")
+        .assert_edge_props(1, 2, "KNOWS", expected);
 }
 
 // ==================== Edge Rank Tests ====================
@@ -152,7 +157,26 @@ fn test_insert_edge_with_rank() {
         .assert_success()
         .exec_dml("INSERT EDGE KNOWS(since, strength) VALUES 1 -> 3 @1:('2021-01-01', 0.9)")
         .assert_success()
-        .assert_edge_count("KNOWS", 2);
+        .assert_edge_count("KNOWS", 2)
+        .assert_edge_exists(1, 2, "KNOWS")
+        .assert_edge_not_exists(2, 1, "KNOWS");
+}
+
+#[test]
+fn test_insert_edge_direction_semantics() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space_dir")
+        .exec_ddl("CREATE TAG Person(id INT, name STRING)")
+        .exec_ddl("CREATE EDGE KNOWS(since DATE) FROM Person TO Person")
+        .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice'), 2:('Bob')")
+        .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 2:('2024-01-01')")
+        .assert_success()
+        .assert_edge_exists(1, 2, "KNOWS")
+        .assert_edge_not_exists(2, 1, "KNOWS")
+        .query("GO FROM 2 OVER KNOWS")
+        .assert_success()
+        .assert_result_empty();
 }
 
 // ==================== Error Handling Tests ====================
@@ -191,7 +215,8 @@ fn test_insert_edge_self_loop() {
         .exec_dml("INSERT VERTEX Person(name) VALUES 1:('Alice')")
         .exec_dml("INSERT EDGE KNOWS(since) VALUES 1 -> 1:('2024-01-01')")
         .assert_success()
-        .assert_edge_exists(1, 1, "KNOWS");
+        .assert_edge_exists(1, 1, "KNOWS")
+        .assert_edge_count("KNOWS", 1);
 }
 
 // ==================== Edge NULL Values Tests ====================

@@ -1,15 +1,16 @@
 //! Query-layer vector statement end-to-end tests.
 //!
-//! Covers the four end-to-end case groups against the built-in local vector
+//! Covers the end-to-end case groups against the built-in local vector
 //! engine, driven entirely through SQL statements plus the VectorApi insertion
 //! hook:
 //! 1. DDL → DML → query round-trip with top-k score assertions.
 //! 2. WHERE filtering + LIMIT pushed down to the engine.
 //! 3. Delete visibility: results converge after `delete_vector`.
 //! 4. DROP INDEX error semantics (incl. `IF EXISTS`).
+//! 5. Index catalog: SHOW VECTOR INDEX and DESCRIBE VECTOR INDEX output.
+//! 6. MATCH VECTOR execution through the same search path.
 //!
-//! Additionally exercises LOOKUP VECTOR / MATCH VECTOR execution through the
-//! same search path.
+//! LOOKUP VECTOR is exercised alongside SEARCH VECTOR.
 
 #![cfg(feature = "vector")]
 
@@ -276,4 +277,70 @@ async fn vector_lookup_uses_search_path() {
         .expect("LOOKUP VECTOR should succeed");
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0][0], linkrs::core::Value::string("1"));
+}
+
+/// SHOW VECTOR INDEX lists the catalog entry with stable columns.
+#[tokio::test]
+async fn vector_show_index_lists_catalog_entry() {
+    let env = setup_env().await;
+
+    let rows = env
+        .exec("SHOW VECTOR INDEX")
+        .await
+        .expect("SHOW VECTOR INDEX should succeed");
+    assert!(!rows.is_empty(), "catalog must list idx_item_vec");
+    let flat: Vec<String> = rows
+        .iter()
+        .flat_map(|row| row.iter().map(|v| format!("{v:?}")))
+        .collect();
+    assert!(
+        flat.iter().any(|cell| cell.contains("idx_item_vec")),
+        "catalog must contain idx_item_vec, got {flat:?}"
+    );
+}
+
+/// DESCRIBE VECTOR INDEX reports the indexed field and rejects unknowns.
+#[tokio::test]
+async fn vector_describe_index_reports_field() {
+    let env = setup_env().await;
+
+    let rows = env
+        .exec("DESCRIBE VECTOR INDEX idx_item_vec")
+        .await
+        .expect("DESCRIBE VECTOR INDEX should succeed");
+    assert_eq!(rows.len(), 1);
+    let flat: Vec<String> = rows[0].iter().map(|v| format!("{v:?}")).collect();
+    assert!(
+        flat.iter().any(|cell| cell.contains("idx_item_vec")),
+        "describe must name the index, got {flat:?}"
+    );
+
+    let rows = env
+        .exec("DESCRIBE VECTOR INDEX idx_missing")
+        .await
+        .expect("describe of a missing index reports not-found");
+    let flat: Vec<String> = rows
+        .iter()
+        .flat_map(|row| row.iter().map(|v| format!("{v:?}")))
+        .collect();
+    assert!(
+        flat.iter()
+            .any(|cell| cell.contains("not-found") || cell.contains("idx_missing")),
+        "missing index must be reported, got {flat:?}"
+    );
+}
+
+/// MATCH VECTOR executes through the vector search path.
+#[tokio::test]
+async fn vector_match_executes_through_search_path() {
+    let env = setup_env().await;
+
+    let rows = env
+        .exec("MATCH VECTOR \"(n:item)\" WHERE vec vector=[1.0, 0.0, 0.0] THRESHOLD 0.5")
+        .await
+        .expect("MATCH VECTOR should succeed");
+    assert!(
+        !rows.is_empty(),
+        "MATCH VECTOR should return at least one hit for the exact vector"
+    );
 }

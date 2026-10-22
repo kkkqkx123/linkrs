@@ -67,7 +67,7 @@ fn test_find_path_with_steps_parser() {
 
 #[test]
 fn test_find_shortest_path_execution() {
-    TestScenario::new()
+    let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
@@ -77,7 +77,9 @@ fn test_find_shortest_path_execution() {
         .assert_success()
         .query("FIND SHORTEST PATH FROM 1 TO 4 OVER KNOWS")
         .assert_success()
+        .assert_result_columns(&["path"])
         .assert_result_count(1);
+    assert_eq!(result_paths(&scenario), vec![vec![1, 2, 3, 4]]);
 }
 
 #[test]
@@ -231,7 +233,8 @@ fn test_find_path_with_yield_execution() {
         .assert_success()
         .query("FIND SHORTEST PATH FROM 1 TO 2 OVER KNOWS YIELD path")
         .assert_success()
-        .assert_result_count(1);
+        .assert_result_count(1)
+        .assert_result_columns(&["path"]);
 }
 
 // ==================== FIND PATH Same Vertex Tests ====================
@@ -309,7 +312,7 @@ fn test_find_path_with_steps_limit() {
 
 #[test]
 fn test_find_path_result_column_name() {
-    TestScenario::new()
+    let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
@@ -319,12 +322,14 @@ fn test_find_path_result_column_name() {
         .assert_success()
         .query("FIND SHORTEST PATH FROM 1 TO 2 OVER KNOWS")
         .assert_success()
+        .assert_result_columns(&["path"])
         .assert_result_count(1);
+    assert_eq!(result_paths(&scenario), vec![vec![1, 2]]);
 }
 
 #[test]
 fn test_find_shortest_path_single_hop() {
-    TestScenario::new()
+    let scenario = TestScenario::new()
         .expect("Failed to create test scenario")
         .setup_space("test_space")
         .exec_ddl("CREATE TAG Person(id INT, name STRING)")
@@ -334,7 +339,9 @@ fn test_find_shortest_path_single_hop() {
         .assert_success()
         .query("FIND SHORTEST PATH FROM 1 TO 2 OVER KNOWS")
         .assert_success()
+        .assert_result_columns(&["path"])
         .assert_result_count(1);
+    assert_eq!(result_paths(&scenario), vec![vec![1, 2]]);
 }
 
 #[test]
