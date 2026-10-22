@@ -7,8 +7,8 @@
 
 use super::Session;
 use crate::api_core::{CoreError, CoreResult};
-use linkrs_query::executor::expression::functions::registry::DynamicUdfInfo;
 use linkrs_query::executor::expression::functions::registry::global_registry;
+use linkrs_query::executor::expression::functions::registry::DynamicUdfInfo;
 use linkrs_query::executor::expression::functions::CustomFunction;
 use linkrs_query::parser::ast::stmt::ExtensionAction;
 use linkrs_query::parser::ast::stmt::ExtensionStmt;

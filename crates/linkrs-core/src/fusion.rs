@@ -249,14 +249,16 @@ mod tests {
         vpayload.insert("embedding".to_string(), crate::Value::Float(0.9));
         let fulltext = vec![crate::types::search::SearchHit::new("doc-1", 3.0)
             .with_highlights(vec!["snippet".to_string()])];
-        let vector = vec![crate::types::search::SearchHit::new("doc-1", 0.9)
-            .with_payload(vpayload)];
+        let vector =
+            vec![crate::types::search::SearchHit::new("doc-1", 0.9).with_payload(vpayload)];
         // normalize outside? fusion normalizes internally via query crate; core rrf uses ids as-is
         let fused = rrf_fuse(&[fulltext, vector], 60, 10);
         assert_eq!(fused.len(), 1);
         assert_eq!(fused[0].id, "doc-1");
-        assert_eq!(fused[0].highlights.as_ref().unwrap(), &vec!["snippet".to_string()]);
+        assert_eq!(
+            fused[0].highlights.as_ref().unwrap(),
+            &vec!["snippet".to_string()]
+        );
         assert!(fused[0].payload.as_ref().unwrap().contains_key("embedding"));
     }
-
 }

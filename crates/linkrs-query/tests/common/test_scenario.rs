@@ -323,10 +323,9 @@ impl TestScenario {
     /// Assert that the last operation failed with a message containing
     /// `needle`.
     pub fn assert_error_contains(self, needle: &str) -> Self {
-        let error = self
-            .last_error
-            .as_deref()
-            .unwrap_or_else(|| panic!("Expected error containing `{needle}`, but operation succeeded"));
+        let error = self.last_error.as_deref().unwrap_or_else(|| {
+            panic!("Expected error containing `{needle}`, but operation succeeded")
+        });
         assert!(
             error.contains(needle),
             "Expected error containing `{needle}`, got: {error}"

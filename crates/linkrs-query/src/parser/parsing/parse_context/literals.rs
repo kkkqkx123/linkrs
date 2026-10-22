@@ -461,13 +461,11 @@ fn token_matches_keyword(kind: &TokenKind, keyword: &str) -> bool {
     match kind {
         TokenKind::Identifier(current) => current.eq_ignore_ascii_case(keyword),
         TokenKind::BooleanLiteral(_) => false,
-        other => {
-            crate::parser::lexing::spec::unit_spellings_for(other).is_some_and(|spellings| {
-                spellings
-                    .iter()
-                    .any(|spelling| spelling.eq_ignore_ascii_case(keyword))
-            })
-        }
+        other => crate::parser::lexing::spec::unit_spellings_for(other).is_some_and(|spellings| {
+            spellings
+                .iter()
+                .any(|spelling| spelling.eq_ignore_ascii_case(keyword))
+        }),
     }
 }
 

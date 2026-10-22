@@ -73,9 +73,7 @@ pub fn is_command_like(text: &str) -> bool {
 /// Returns `Err` with the first specific parse error for malformed
 /// command-like statements. Hosts dispatch on the returned AST variant;
 /// there is no separate command kind to fall out of sync with it.
-pub fn parse_session_command(
-    text: &str,
-) -> Result<Option<ParserResult>, CommandParseError> {
+pub fn parse_session_command(text: &str) -> Result<Option<ParserResult>, CommandParseError> {
     if !is_command_like(text) {
         return Ok(None);
     }
@@ -125,10 +123,7 @@ mod tests {
             parsed("BEGIN READ ONLY"),
             Some(Stmt::BeginTransaction(_))
         ));
-        assert!(matches!(
-            parsed("COMMIT"),
-            Some(Stmt::CommitTransaction(_))
-        ));
+        assert!(matches!(parsed("COMMIT"), Some(Stmt::CommitTransaction(_))));
         assert!(matches!(
             parsed("ROLLBACK"),
             Some(Stmt::RollbackTransaction(_))

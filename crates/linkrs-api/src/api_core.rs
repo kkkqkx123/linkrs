@@ -26,16 +26,14 @@ pub use bulk_insert::{
 };
 pub use cost_profile::{cost_config_for_profile, resolve_space_cost_configs};
 pub use error::{CoreError, CoreResult, ExtendedErrorCode};
+#[cfg(feature = "fulltext")]
+pub use fulltext_api::FulltextApi;
 pub use query_api::QueryApi;
 pub use schema_api::SchemaApi;
-pub use session_command::{
-    is_command_like, parse_session_command, CommandParseError,
-};
+pub use session_command::{is_command_like, parse_session_command, CommandParseError};
 pub use sync_api::SyncApi;
 pub use transaction_api::TransactionApi;
 pub use types::*;
-#[cfg(feature = "fulltext")]
-pub use fulltext_api::FulltextApi;
 #[cfg(feature = "vector")]
 pub use vector_api::{VectorApi, VectorSearchResult};
 

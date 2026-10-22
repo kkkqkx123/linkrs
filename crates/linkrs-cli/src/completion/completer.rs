@@ -318,11 +318,7 @@ impl LinkrsCompleter {
         let mut completions: Vec<StringCandidate> = self
             .functions
             .iter()
-            .filter(|f| {
-                f.name
-                    .to_lowercase()
-                    .starts_with(&last_word.to_lowercase())
-            })
+            .filter(|f| f.name.to_lowercase().starts_with(&last_word.to_lowercase()))
             .map(|f| StringCandidate {
                 display: format!("{}(", f.name),
                 replacement: format!("{}(", f.name)[last_word.len()..].to_string(),

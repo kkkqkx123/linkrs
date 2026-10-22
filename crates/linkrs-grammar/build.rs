@@ -33,8 +33,8 @@ fn assert_contains(path: &Path, needle: &str) {
 
 /// The language ABI every generated artifact must agree on.
 fn expected_abi_version() -> u32 {
-    let content = std::fs::read_to_string("abi-version")
-        .unwrap_or_else(|_| panic!("read abi-version"));
+    let content =
+        std::fs::read_to_string("abi-version").unwrap_or_else(|_| panic!("read abi-version"));
     content
         .trim()
         .parse()

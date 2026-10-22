@@ -619,9 +619,6 @@ mod tests {
                 .any(|f| matches!(f.category, FunctionCategory::Builtin)),
             "unknown categories must fall back to builtin"
         );
-        assert!(matches!(
-            parse_category("bogus"),
-            FunctionCategory::Builtin
-        ));
+        assert!(matches!(parse_category("bogus"), FunctionCategory::Builtin));
     }
 }

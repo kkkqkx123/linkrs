@@ -65,8 +65,8 @@ use crate::planning::plan::core::nodes::search::vector::data_access::{
 use crate::planning::plan::core::nodes::access::IndexScanNode;
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    InQueryCallNode, LoadFromNode, ShowAttachedDatabasesNode, ShowConfigsNode,
-    ShowExtensionsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
+    InQueryCallNode, LoadFromNode, ShowAttachedDatabasesNode, ShowConfigsNode, ShowExtensionsNode,
+    ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,

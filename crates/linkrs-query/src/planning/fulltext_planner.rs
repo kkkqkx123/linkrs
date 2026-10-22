@@ -65,7 +65,8 @@ impl Planner for FulltextSearchPlanner {
         {
             let _ = ctx;
             return Err(PlannerError::UnsupportedOperation(
-                "fulltext feature is not enabled: rebuild linkrs with --features fulltext".to_string(),
+                "fulltext feature is not enabled: rebuild linkrs with --features fulltext"
+                    .to_string(),
             ));
         }
 
@@ -78,17 +79,18 @@ impl Planner for FulltextSearchPlanner {
             let space_id = ctx.qctx.space_id().unwrap_or(0);
 
             return match ctx.bound {
-                crate::binder::BoundStatement::CreateFulltextIndex(create) => self.transform_create(
-                    &create.index_name,
-                    &create.schema_name,
-                    &create.fields,
-                    create.engine_type,
-                    &create.options,
-                    create.if_not_exists,
-                    &space_name,
-                    space_id,
-                    ctx.metadata,
-                ),
+                crate::binder::BoundStatement::CreateFulltextIndex(create) => self
+                    .transform_create(
+                        &create.index_name,
+                        &create.schema_name,
+                        &create.fields,
+                        create.engine_type,
+                        &create.options,
+                        create.if_not_exists,
+                        &space_name,
+                        space_id,
+                        ctx.metadata,
+                    ),
                 crate::binder::BoundStatement::Other(stmt) => {
                     self.transform_bound(stmt, &space_name, space_id, ctx.metadata)
                 }
@@ -98,7 +100,6 @@ impl Planner for FulltextSearchPlanner {
                 ))),
             };
         }
-
     }
 }
 
@@ -282,7 +283,11 @@ impl FulltextSearchPlanner {
             search.limit.as_ref().map(|limit| limit.count),
             search.skip.as_ref().map(|skip| skip.count),
         )
-        .with_metadata(index.space_id, index.tag_name.clone(), index.field_name.clone());
+        .with_metadata(
+            index.space_id,
+            index.tag_name.clone(),
+            index.field_name.clone(),
+        );
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
@@ -316,7 +321,11 @@ impl FulltextSearchPlanner {
             lookup.yield_clause.clone(),
             lookup.limit,
         )
-        .with_metadata(index.space_id, index.tag_name.clone(), index.field_name.clone());
+        .with_metadata(
+            index.space_id,
+            index.tag_name.clone(),
+            index.field_name.clone(),
+        );
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
@@ -353,7 +362,11 @@ impl FulltextSearchPlanner {
             condition.clone(),
             matched.yield_clause.clone(),
         )
-        .with_metadata(index.space_id, index.tag_name.clone(), index.field_name.clone());
+        .with_metadata(
+            index.space_id,
+            index.tag_name.clone(),
+            index.field_name.clone(),
+        );
 
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
@@ -571,7 +584,10 @@ mod tests {
         };
         assert!(create("Article").is_ok());
         assert!(create("WROTE").is_ok());
-        assert!(matches!(create("Missing"), Err(PlannerError::TagNotFound(_))));
+        assert!(matches!(
+            create("Missing"),
+            Err(PlannerError::TagNotFound(_))
+        ));
     }
 
     #[test]

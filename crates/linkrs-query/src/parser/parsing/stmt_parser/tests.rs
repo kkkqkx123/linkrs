@@ -1137,8 +1137,7 @@ fn test_parse_load_from() {
 
 #[test]
 fn test_parse_load_from_with_options() {
-    let mut ctx =
-        create_parser_context("LOAD FROM 'data.csv' (header='true', delimiter=',')");
+    let mut ctx = create_parser_context("LOAD FROM 'data.csv' (header='true', delimiter=',')");
     let result = StmtParser::parse_statement(&mut ctx);
     assert!(
         result.is_ok(),
@@ -1213,7 +1212,9 @@ fn test_parse_load_with_header_types_is_rejected() {
     let result = StmtParser::parse_statement(&mut ctx);
     let error = result.expect_err("header type declarations must be rejected");
     assert!(
-        error.message.contains("type declarations are not supported"),
+        error
+            .message
+            .contains("type declarations are not supported"),
         "unexpected error: {}",
         error.message
     );
@@ -1278,7 +1279,9 @@ fn test_parse_call_yield_expression_is_rejected() {
     let result = StmtParser::parse_statement(&mut ctx);
     let error = result.expect_err("YIELD expression must be rejected");
     assert!(
-        error.message.contains("CALL YIELD accepts column names only"),
+        error
+            .message
+            .contains("CALL YIELD accepts column names only"),
         "unexpected error: {}",
         error.message
     );

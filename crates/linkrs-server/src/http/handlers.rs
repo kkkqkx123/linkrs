@@ -4,6 +4,8 @@ pub mod batch;
 pub mod config;
 pub mod cursor;
 pub mod export;
+#[cfg(feature = "fulltext")]
+pub mod fulltext;
 pub mod function;
 pub mod health;
 pub mod import;
@@ -18,8 +20,6 @@ pub mod stream;
 pub mod sync;
 pub mod transaction;
 pub mod users;
-#[cfg(feature = "fulltext")]
-pub mod fulltext;
 #[cfg(feature = "vector")]
 pub mod vector;
 
@@ -31,6 +31,8 @@ pub use batch::{
 pub use config::{get, get_key, reset_key, update, update_key};
 pub use cursor::{close_cursor, fetch_cursor, open_cursor};
 pub use export::{export_data, ExportQuery};
+#[cfg(feature = "fulltext")]
+pub use fulltext::search as fulltext_search;
 pub use function::{info as function_info, list, register, unregister};
 pub use health::check;
 pub use import::{import_file, import_status, ImportResponse, ImportStatusResponse};
@@ -44,8 +46,6 @@ pub use statistics::{database, queries, search as search_stats, session, system}
 pub use stream::execute_stream;
 pub use sync::status;
 pub use transaction::{begin, commit, rollback};
-#[cfg(feature = "fulltext")]
-pub use fulltext::search as fulltext_search;
 #[cfg(feature = "vector")]
 pub use vector::{
     count, create_index, drop_index, get_index_info, get_vector, list_indexes, search,

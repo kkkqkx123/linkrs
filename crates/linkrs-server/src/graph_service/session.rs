@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use linkrs_api::api_core::SyncApi;
 #[cfg(feature = "fulltext")]
 use linkrs_api::api_core::FulltextApi;
+use linkrs_api::api_core::SyncApi;
 #[cfg(feature = "vector")]
 use linkrs_api::api_core::VectorApi;
 use linkrs_metrics::{MetricType, StatsManager};

@@ -206,7 +206,10 @@ impl UnaryOperator {
 
     pub fn precedence(&self) -> u8 {
         match self {
-            UnaryOperator::Plus | UnaryOperator::Minus | UnaryOperator::Not | UnaryOperator::BitNot => 9,
+            UnaryOperator::Plus
+            | UnaryOperator::Minus
+            | UnaryOperator::Not
+            | UnaryOperator::BitNot => 9,
             UnaryOperator::IsNull
             | UnaryOperator::IsNotNull
             | UnaryOperator::IsEmpty

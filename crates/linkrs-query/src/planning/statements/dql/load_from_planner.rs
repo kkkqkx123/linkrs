@@ -45,12 +45,8 @@ impl Planner for LoadFromPlanner {
         };
 
         let (source_kind, source_value, func_name, func_args_json) = match &load.source {
-            crate::parser::ast::ScanSource::File(path) => {
-                ("file", path.clone(), None, None)
-            }
-            crate::parser::ast::ScanSource::Glob(pattern) => {
-                ("glob", pattern.clone(), None, None)
-            }
+            crate::parser::ast::ScanSource::File(path) => ("file", path.clone(), None, None),
+            crate::parser::ast::ScanSource::Glob(pattern) => ("glob", pattern.clone(), None, None),
             crate::parser::ast::ScanSource::TableFunc { name, args } => (
                 "table_func",
                 String::new(),

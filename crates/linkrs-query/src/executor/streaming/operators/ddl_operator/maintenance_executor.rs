@@ -720,9 +720,9 @@ pub(super) fn execute_in_query_call(
             let registry = crate::executor::expression::functions::registry::global_registry();
             let registry = registry.read();
             let args = parse_call_args(args_json);
-            let value = registry.execute(func_name, &args).map_err(|e| {
-                QueryError::execution(format!("CALL {} failed: {}", func_name, e))
-            })?;
+            let value = registry
+                .execute(func_name, &args)
+                .map_err(|e| QueryError::execution(format!("CALL {} failed: {}", func_name, e)))?;
             Ok(Some(super::make_single_row(schema, vec![value])))
         }
     }

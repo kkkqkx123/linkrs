@@ -40,7 +40,8 @@ pub struct VectorSearchResult {
 
 impl linkrs_core::types::search::IntoSearchHit for VectorSearchResult {
     fn into_search_hit(self) -> linkrs_core::types::search::SearchHit {
-        let mut hit = linkrs_core::types::search::SearchHit::new(self.doc_id.to_string(), self.score);
+        let mut hit =
+            linkrs_core::types::search::SearchHit::new(self.doc_id.to_string(), self.score);
         if let Some(p) = self.payload {
             let map: std::collections::HashMap<String, linkrs_core::Value> = p
                 .into_iter()
@@ -54,7 +55,8 @@ impl linkrs_core::types::search::IntoSearchHit for VectorSearchResult {
 
 impl linkrs_core::types::search::AsSearchHit for VectorSearchResult {
     fn as_search_hit(&self) -> linkrs_core::types::search::SearchHit {
-        let mut hit = linkrs_core::types::search::SearchHit::new(self.doc_id.to_string(), self.score);
+        let mut hit =
+            linkrs_core::types::search::SearchHit::new(self.doc_id.to_string(), self.score);
         if let Some(ref p) = self.payload {
             let map: std::collections::HashMap<String, linkrs_core::Value> = p
                 .iter()

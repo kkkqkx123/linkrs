@@ -32,7 +32,10 @@ fn main() {
         output.push_str(&outcome.has_error.to_string());
         output.push_str("\n\ntokens (start..end: class):\n");
         for token in tokens(&source) {
-            output.push_str(&format!("{}..{}: {}\n", token.start, token.end, token.class));
+            output.push_str(&format!(
+                "{}..{}: {}\n",
+                token.start, token.end, token.class
+            ));
         }
 
         let output_path = outputs_dir

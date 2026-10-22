@@ -267,7 +267,8 @@ impl<
                     // vector endpoints cannot list indexes, so it is left
                     // unconfigured and those endpoints report unavailability
                     // instead of silently serving empty results.
-                    let vector_api = storage.get_sync_manager().and_then(|sync_manager| {                        sync_manager
+                    let vector_api = storage.get_sync_manager().and_then(|sync_manager| {
+                        sync_manager
                             .vector_coordinator()
                             .cloned()
                             .map(|coordinator| {

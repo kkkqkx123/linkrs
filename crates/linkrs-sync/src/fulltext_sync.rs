@@ -720,10 +720,7 @@ impl FulltextSyncCoordinator {
         _ryw_config: linkrs_core::types::ReadYourWritesConfig,
     ) -> Result<Vec<linkrs_fulltext::SearchResult>, FulltextCoordinatorError> {
         self.commit_all().await.map_err(|e| {
-            FulltextCoordinatorError::SearchError(format!(
-                "Read-your-writes commit failed: {}",
-                e
-            ))
+            FulltextCoordinatorError::SearchError(format!("Read-your-writes commit failed: {}", e))
         })?;
 
         self.search_structured(space_id, tag_name, field_name, query, limit)

@@ -8,8 +8,8 @@
 use crate::binder::BoundStatement;
 use crate::parser::ast::{InQueryCallStmt, Stmt, YieldClause};
 use crate::planning::plan::core::node_id_generator::next_node_id;
-use crate::planning::plan::core::nodes::management::InQueryCallNode;
 use crate::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+use crate::planning::plan::core::nodes::management::InQueryCallNode;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
 use crate::planning::statements::dql::argument_literals::literal_arguments_json;

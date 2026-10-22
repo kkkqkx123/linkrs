@@ -1042,63 +1042,234 @@ pub struct ContextualKeyword {
 }
 
 pub const CONTEXTUAL_KEYWORDS: &[ContextualKeyword] = &[
-    ContextualKeyword { spelling: "GRAPH", soft: true },
-    ContextualKeyword { spelling: "CHECKPOINT", soft: true },
-    ContextualKeyword { spelling: "PURGE", soft: true },
-    ContextualKeyword { spelling: "EXPIRED", soft: true },
-    ContextualKeyword { spelling: "FULLTEXT", soft: true },
-    ContextualKeyword { spelling: "EXTENSION", soft: true },
-    ContextualKeyword { spelling: "MACRO", soft: true },
-    ContextualKeyword { spelling: "TYPE", soft: true },
-    ContextualKeyword { spelling: "ATTACH", soft: true },
-    ContextualKeyword { spelling: "EXPORT", soft: true },
-    ContextualKeyword { spelling: "IMPORT", soft: true },
-    ContextualKeyword { spelling: "LOAD", soft: true },
-    ContextualKeyword { spelling: "INSTALL", soft: true },
-    ContextualKeyword { spelling: "UNINSTALL", soft: true },
-    ContextualKeyword { spelling: "MIGRATE", soft: true },
-    ContextualKeyword { spelling: "CALL", soft: true },
-    ContextualKeyword { spelling: "COLLECT", soft: true },
-    ContextualKeyword { spelling: "USING", soft: true },
-    ContextualKeyword { spelling: "JOIN", soft: true },
-    ContextualKeyword { spelling: "BINARY", soft: true },
-    ContextualKeyword { spelling: "MULTIWAY", soft: true },
-    ContextualKeyword { spelling: "ANALYZER", soft: false },
-    ContextualKeyword { spelling: "ATTACHED", soft: false },
-    ContextualKeyword { spelling: "BATCH", soft: false },
-    ContextualKeyword { spelling: "BATCH_SIZE", soft: false },
-    ContextualKeyword { spelling: "BM25", soft: false },
-    ContextualKeyword { spelling: "BOOST", soft: false },
-    ContextualKeyword { spelling: "COLUMN", soft: false },
-    ContextualKeyword { spelling: "DATABASE", soft: false },
-    ContextualKeyword { spelling: "DATABASE_TYPE", soft: false },
-    ContextualKeyword { spelling: "DATABASES", soft: false },
-    ContextualKeyword { spelling: "DBTYPE", soft: false },
-    ContextualKeyword { spelling: "ENGINE", soft: false },
-    ContextualKeyword { spelling: "EXECUTE", soft: false },
-    ContextualKeyword { spelling: "EXTENSIONS", soft: false },
-    ContextualKeyword { spelling: "FIELD", soft: false },
-    ContextualKeyword { spelling: "FOR", soft: false },
-    ContextualKeyword { spelling: "FULLTEXT_MATCH", soft: false },
-    ContextualKeyword { spelling: "GLOB", soft: false },
-    ContextualKeyword { spelling: "HEADERS", soft: false },
-    ContextualKeyword { spelling: "INCREMENT", soft: false },
-    ContextualKeyword { spelling: "LIKE", soft: false },
-    ContextualKeyword { spelling: "MAXVALUE", soft: false },
-    ContextualKeyword { spelling: "MINVALUE", soft: false },
-    ContextualKeyword { spelling: "NOCYCLE", soft: false },
-    ContextualKeyword { spelling: "OFFSET", soft: false },
-    ContextualKeyword { spelling: "OPTIMIZE", soft: false },
-    ContextualKeyword { spelling: "OPTIONS", soft: false },
-    ContextualKeyword { spelling: "PARTITION", soft: false },
-    ContextualKeyword { spelling: "PLAN", soft: false },
-    ContextualKeyword { spelling: "SELECT", soft: false },
-    ContextualKeyword { spelling: "SIZE", soft: false },
-    ContextualKeyword { spelling: "START", soft: false },
-    ContextualKeyword { spelling: "THRESHOLD", soft: false },
-    ContextualKeyword { spelling: "VERSION", soft: false },
-    ContextualKeyword { spelling: "matched_fields", soft: false },
-    ContextualKeyword { spelling: "score", soft: false },
+    ContextualKeyword {
+        spelling: "GRAPH",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "CHECKPOINT",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "PURGE",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "EXPIRED",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "FULLTEXT",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "EXTENSION",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "MACRO",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "TYPE",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "ATTACH",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "EXPORT",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "IMPORT",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "LOAD",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "INSTALL",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "UNINSTALL",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "MIGRATE",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "CALL",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "COLLECT",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "USING",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "JOIN",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "BINARY",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "MULTIWAY",
+        soft: true,
+    },
+    ContextualKeyword {
+        spelling: "ANALYZER",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "ATTACHED",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "BATCH",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "BATCH_SIZE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "BM25",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "BOOST",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "COLUMN",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "DATABASE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "DATABASE_TYPE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "DATABASES",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "DBTYPE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "ENGINE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "EXECUTE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "EXTENSIONS",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "FIELD",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "FOR",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "FULLTEXT_MATCH",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "GLOB",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "HEADERS",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "INCREMENT",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "LIKE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "MAXVALUE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "MINVALUE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "NOCYCLE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "OFFSET",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "OPTIMIZE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "OPTIONS",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "PARTITION",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "PLAN",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "SELECT",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "SIZE",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "START",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "THRESHOLD",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "VERSION",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "matched_fields",
+        soft: false,
+    },
+    ContextualKeyword {
+        spelling: "score",
+        soft: false,
+    },
 ];
 
 /// Soft keywords exported for completion and highlighting. Derived from the
@@ -1621,16 +1792,20 @@ mod tests {
         for word in CONTEXTUAL_KEYWORDS {
             assert!(
                 seen.insert(word.spelling),
-                "duplicate contextual keyword '{}'", word.spelling
+                "duplicate contextual keyword '{}'",
+                word.spelling
             );
             assert!(
                 !reserved.contains(&word.spelling),
-                "'{}' is reserved and must not be listed as contextual", word.spelling
+                "'{}' is reserved and must not be listed as contextual",
+                word.spelling
             );
         }
         for word in SOFT_KEYWORDS.iter() {
             assert!(
-                CONTEXTUAL_KEYWORDS.iter().any(|entry| entry.spelling == *word),
+                CONTEXTUAL_KEYWORDS
+                    .iter()
+                    .any(|entry| entry.spelling == *word),
                 "soft keyword '{word}' must be part of the contextual list"
             );
         }
@@ -1648,7 +1823,9 @@ mod tests {
             "BM25",
         ] {
             assert!(
-                CONTEXTUAL_KEYWORDS.iter().any(|entry| entry.spelling == word),
+                CONTEXTUAL_KEYWORDS
+                    .iter()
+                    .any(|entry| entry.spelling == word),
                 "ad-hoc recognition site keyword '{word}' must be listed as contextual"
             );
         }
@@ -1661,7 +1838,9 @@ mod tests {
     fn contextual_list_excludes_type_aliases_and_option_values() {
         for word in ["DECIMAL", "true", "false", "BOOLEAN", "INT"] {
             assert!(
-                !CONTEXTUAL_KEYWORDS.iter().any(|entry| entry.spelling == word),
+                !CONTEXTUAL_KEYWORDS
+                    .iter()
+                    .any(|entry| entry.spelling == word),
                 "'{word}' is a type alias or option value, not a clause introducer"
             );
         }

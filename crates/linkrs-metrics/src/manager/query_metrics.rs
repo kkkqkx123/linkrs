@@ -48,7 +48,10 @@ impl StatsManager {
             (MetricType::QueryPlanTimeUs, metrics.plan_time_us),
             (MetricType::QueryOptimizeTimeUs, metrics.optimize_time_us),
             (MetricType::QueryExecuteTimeUs, metrics.execute_time_us),
-            (MetricType::QueryStatisticsTimeUs, metrics.statistics_time_us),
+            (
+                MetricType::QueryStatisticsTimeUs,
+                metrics.statistics_time_us,
+            ),
             (MetricType::QueryTotalTimeUs, metrics.total_time_us),
             (
                 MetricType::QueryPlanNodeCount,

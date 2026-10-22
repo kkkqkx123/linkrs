@@ -3,7 +3,6 @@ use crate::parser::ast::types::{LimitClause, SampleClause, SkipClause};
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::{EdgeDirection, OrderDirection, Span};
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchStmt {
     pub span: Span,

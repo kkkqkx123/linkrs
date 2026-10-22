@@ -82,7 +82,11 @@ fn parse_call_yield_clause(ctx: &mut ParseContext) -> Result<YieldClause, ParseE
     let trailing = &ctx.current_token().kind;
     let continues_statement = matches!(
         trailing,
-        TokenKind::Eof | TokenKind::Semicolon | TokenKind::Pipe | TokenKind::With | TokenKind::Return
+        TokenKind::Eof
+            | TokenKind::Semicolon
+            | TokenKind::Pipe
+            | TokenKind::With
+            | TokenKind::Return
     );
     if !continues_statement {
         return Err(ParseError::new(

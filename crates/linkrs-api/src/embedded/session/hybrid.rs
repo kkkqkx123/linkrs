@@ -42,9 +42,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             .into_iter()
             .map(|r| {
                 let id = r.doc_id.string_value().ok_or_else(|| {
-                    CoreError::InvalidParameter(
-                        "fulltext doc_id is not a string value".to_string(),
-                    )
+                    CoreError::InvalidParameter("fulltext doc_id is not a string value".to_string())
                 })?;
                 let mut hit = SearchHit::new(id, r.score);
                 hit.highlights = r.highlights;
