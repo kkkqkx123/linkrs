@@ -7,12 +7,6 @@ use linkrs_core::types::expr::Expression;
 use linkrs_core::types::user::PasswordInfo;
 use linkrs_core::types::PropertyDef;
 
-/// Migrate action kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MigrateAction {
-    MigrateSpace,
-}
-
 /// Space DDL command payload.
 #[derive(Debug, Clone)]
 pub enum SpaceManageCommand {
@@ -354,24 +348,6 @@ pub enum DdlSpec {
     Analyze {
         space_name: String,
     },
-    Migrate {
-        space_name: String,
-        action: MigrateAction,
-        migration_data: Option<String>,
-    },
-    MigratePlan {
-        space_name: String,
-        label: String,
-        is_edge: bool,
-        from_version: u64,
-        to_version: u64,
-    },
-    MigrateRun {
-        plan_json: String,
-    },
-    MigrateRollback {
-        plan_json: String,
-    },
     SequenceManage {
         command: SequenceManageCommand,
     },
@@ -523,10 +499,6 @@ impl DdlSpec {
             | Self::LoadFrom { .. }
             | Self::InQueryCall { .. }
             | Self::Analyze { .. } => false,
-            Self::Migrate { .. }
-            | Self::MigratePlan { .. }
-            | Self::MigrateRun { .. }
-            | Self::MigrateRollback { .. } => true,
             Self::SequenceManage { command } => command.is_write(),
             Self::MacroManage { command } => command.is_write(),
             Self::TypeManage { command } => command.is_write(),

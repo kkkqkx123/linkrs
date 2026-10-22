@@ -107,7 +107,6 @@ SEGMENT_MAP = {
 }
 
 RULE_ALLOWLIST = {
-    "Query": "internal multi-statement container",
     "Pipe": "pipe_statement",
     "SetOperation": "set_operation_statement",
 }

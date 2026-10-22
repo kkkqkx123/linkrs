@@ -66,6 +66,7 @@ impl FoldConstantsRule {
                 // Purity comes from the function registry; unregistered
                 // functions are conservatively treated as non-pure.
                 global_registry_ref()
+                    .read()
                     .get_builtin(name.as_str())
                     .is_some_and(|f| f.is_pure())
                     && args.iter().all(|a| Self::is_pure(a.as_expr()))

@@ -42,7 +42,7 @@ impl Planner for MaintainPlanner {
             BoundStatement::Drop(s) => self.plan_drop(&s.target, s.if_exists, &space)?,
             BoundStatement::Alter(s) => self.plan_alter(&s.target, &space)?,
             BoundStatement::Desc(s) => self.plan_desc(&s.target, &space),
-            BoundStatement::ClearSpace(s) => system::plan_clear_space(&s.space_name),
+            BoundStatement::ClearSpace(s) => system::plan_clear_space(s.space_name.as_deref(), &space)?,
             BoundStatement::BeginTransaction(_) => system::plan_begin_transaction(),
             BoundStatement::Commit(_) => system::plan_commit(),
             BoundStatement::Rollback(r) => system::plan_rollback(r.savepoint_name.as_ref()),
@@ -71,6 +71,16 @@ impl Planner for MaintainPlanner {
                 }
                 crate::parser::ast::Stmt::ExportDatabase(s) => self.plan_export_database(s),
                 crate::parser::ast::Stmt::ImportDatabase(s) => self.plan_import_database(s),
+                crate::parser::ast::Stmt::Extension(_) => {
+                    return Err(PlannerError::UnsupportedOperation(
+                        "Extension lifecycle is managed outside SQL: use the embedded Session API or the HTTP /v1/functions endpoint to load, install, uninstall or update extensions".to_string(),
+                    ));
+                }
+                crate::parser::ast::Stmt::Migrate(_) => {
+                    return Err(PlannerError::UnsupportedOperation(
+                        "MIGRATE is not available through SQL; use HTTP /v1/migration/plan, /v1/migration/execute and /v1/migration/rollback, or the corresponding MigratePlan, MigrateExecute and MigrateRollback gRPC methods".to_string(),
+                    ));
+                }
                 _ => {
                     return Err(PlannerError::UnsupportedOperation(format!(
                         "MaintainPlanner has no plan for bound statement: {}",

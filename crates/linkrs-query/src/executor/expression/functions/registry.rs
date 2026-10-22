@@ -21,6 +21,8 @@ use linkrs_core::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use parking_lot::RwLock;
+
 use udf::LoadedExtension;
 
 /// Registry entry carrying the function and its static return type.
@@ -157,20 +159,23 @@ impl FunctionRegistry {
     }
 }
 
-/// Global function registry instance
-pub fn global_registry() -> Arc<FunctionRegistry> {
-    use std::sync::OnceLock;
-    static REGISTRY: OnceLock<Arc<FunctionRegistry>> = OnceLock::new();
-    REGISTRY
-        .get_or_init(|| Arc::new(FunctionRegistry::new()))
-        .clone()
+/// Process-wide function registry.
+///
+/// Extensions are process resources: loading a dynamic library makes its
+/// symbols available to every session. A single registry therefore backs
+/// both query execution and extension management, so `SHOW EXTENSIONS`
+/// observes exactly what was loaded.
+pub fn global_registry() -> Arc<RwLock<FunctionRegistry>> {
+    Arc::clone(registry_cell())
 }
 
-/// Obtain a static reference to the global function registry.
-///
-/// Used in scenarios where it is necessary to retrieve a function reference (such as in ExpressionContext::get_function).
-pub fn global_registry_ref() -> &'static FunctionRegistry {
+/// Obtain a static reference to the process-wide function registry.
+pub fn global_registry_ref() -> &'static RwLock<FunctionRegistry> {
+    registry_cell().as_ref()
+}
+
+fn registry_cell() -> &'static Arc<RwLock<FunctionRegistry>> {
     use std::sync::OnceLock;
-    static REGISTRY: OnceLock<FunctionRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(FunctionRegistry::new)
+    static REGISTRY: OnceLock<Arc<RwLock<FunctionRegistry>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Arc::new(RwLock::new(FunctionRegistry::new())))
 }

@@ -307,7 +307,7 @@ impl<'a> ExpressionBinder<'a> {
             _ => {}
         }
 
-        let registry = crate::executor::expression::functions::global_registry_ref();
+        let registry = crate::executor::expression::functions::global_registry_ref().read();
         if let Some(return_type) = registry.get_return_type(name) {
             if *return_type != DataType::Unknown {
                 return return_type.clone();

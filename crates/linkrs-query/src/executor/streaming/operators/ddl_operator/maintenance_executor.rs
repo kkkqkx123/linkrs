@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
-use crate::executor::streaming::operators::spec::MigrateAction;
 use linkrs_core::error::QueryError;
 use linkrs_core::Value;
 
@@ -157,6 +156,7 @@ pub(super) fn execute_show_functions(
     *emitted = true;
 
     let registry = crate::executor::expression::functions::registry::global_registry();
+    let registry = registry.read();
     let names = registry.function_names();
     let schema = super::make_single_col_schema("functions", "string");
     let rows: Vec<Vec<Value>> = names
@@ -321,6 +321,7 @@ pub(super) fn execute_show_extensions(
         },
     ]));
     let registry = crate::executor::expression::functions::registry::global_registry();
+    let registry = registry.read();
     let rows = registry
         .list_dynamic_udfs()
         .into_iter()
@@ -367,12 +368,14 @@ pub(super) fn execute_load_from(
         let name = func_name.clone().unwrap_or_default();
         let args_json_str = func_args_json.clone().unwrap_or_else(|| "[]".to_string());
 
-        let arg_strings: Vec<String> = serde_json::from_str(&args_json_str).map_err(|e| {
-            QueryError::execution(format!("LOAD FROM table function args parse error: {e}"))
-        })?;
-        let func_args: Vec<Value> = arg_strings.into_iter().map(Value::string).collect();
+        let arg_values: Vec<serde_json::Value> =
+            serde_json::from_str(&args_json_str).map_err(|e| {
+                QueryError::execution(format!("LOAD FROM table function args parse error: {e}"))
+            })?;
+        let func_args: Vec<Value> = arg_values.iter().map(json_to_value).collect();
 
         let registry = crate::executor::expression::functions::registry::global_registry();
+        let registry = registry.read();
 
         if !registry.contains_table_function(&name) {
             return Err(QueryError::execution(format!(
@@ -445,7 +448,7 @@ pub(super) fn execute_load_from(
             .unwrap_or(b',');
 
         let mut all_rows: Vec<Vec<Value>> = Vec::new();
-        let mut schema: Option<Arc<Schema>> = None;
+        let mut schema_names: Option<Vec<String>> = None;
 
         for file_path in &matched_paths {
             let file = std::fs::File::open(file_path).map_err(|e| {
@@ -461,8 +464,8 @@ pub(super) fn execute_load_from(
                 .flexible(true)
                 .from_reader(std::io::BufReader::new(file));
 
-            if schema.is_none() {
-                let schema_names: Vec<String> = if !headers.is_empty() {
+            if schema_names.is_none() {
+                let names: Vec<String> = if !headers.is_empty() {
                     headers.clone()
                 } else if header {
                     reader
@@ -473,30 +476,10 @@ pub(super) fn execute_load_from(
                         .iter()
                         .map(|s| s.to_string())
                         .collect()
-                } else if !col_names.is_empty() {
+                } else {
                     col_names.clone()
-                } else {
-                    Vec::new()
                 };
-
-                let schema_cols: Vec<ColumnInfo> = if schema_names.is_empty() {
-                    col_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect()
-                } else {
-                    schema_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect()
-                };
-                schema = Some(Arc::new(Schema::new(schema_cols)));
+                schema_names = Some(names);
             }
 
             for result in reader.records() {
@@ -515,7 +498,11 @@ pub(super) fn execute_load_from(
             }
         }
 
-        let schema = schema.unwrap_or_else(|| Arc::new(Schema::new(vec![])));
+        let schema_names = match schema_names {
+            Some(names) if !names.is_empty() => names,
+            _ => column_names_from_width(all_rows.first().map(Vec::len).unwrap_or(0)),
+        };
+        let schema = Arc::new(Schema::new(columns_for(&schema_names)));
         return Ok(Some(DataChunk::new(all_rows, schema)));
     }
 
@@ -547,7 +534,7 @@ pub(super) fn execute_load_from(
         .flexible(true)
         .from_reader(std::io::BufReader::new(file));
 
-    let schema_names: Vec<String> = if !headers.is_empty() {
+    let declared_names: Vec<String> = if !headers.is_empty() {
         headers.clone()
     } else if header {
         reader
@@ -556,30 +543,9 @@ pub(super) fn execute_load_from(
             .iter()
             .map(|s| s.to_string())
             .collect()
-    } else if !col_names.is_empty() {
+    } else {
         col_names.clone()
-    } else {
-        Vec::new()
     };
-
-    let schema_cols: Vec<ColumnInfo> = if schema_names.is_empty() {
-        col_names
-            .iter()
-            .map(|n| ColumnInfo {
-                name: n.clone(),
-                data_type: "string".to_string(),
-            })
-            .collect()
-    } else {
-        schema_names
-            .iter()
-            .map(|n| ColumnInfo {
-                name: n.clone(),
-                data_type: "string".to_string(),
-            })
-            .collect()
-    };
-    let schema = Arc::new(Schema::new(schema_cols));
 
     let mut rows: Vec<Vec<Value>> = Vec::new();
     for result in reader.records() {
@@ -596,7 +562,29 @@ pub(super) fn execute_load_from(
         rows.push(row);
     }
 
+    let schema_names = if declared_names.is_empty() {
+        column_names_from_width(rows.first().map(Vec::len).unwrap_or(0))
+    } else {
+        declared_names
+    };
+    let schema = Arc::new(Schema::new(columns_for(&schema_names)));
     Ok(Some(DataChunk::new(rows, schema)))
+}
+
+/// Column names for a header-less source: `col0..colN` matching the first
+/// data row, so the schema never ends up narrower than the rows.
+fn column_names_from_width(width: usize) -> Vec<String> {
+    (0..width).map(|index| format!("col{index}")).collect()
+}
+
+fn columns_for(names: &[String]) -> Vec<ColumnInfo> {
+    names
+        .iter()
+        .map(|name| ColumnInfo {
+            name: name.clone(),
+            data_type: "string".to_string(),
+        })
+        .collect()
 }
 
 pub(super) fn execute_in_query_call(
@@ -627,6 +615,15 @@ pub(super) fn execute_in_query_call(
     } else {
         vec!["result".to_string()]
     };
+    // Every call result is a single column; a wider YIELD would silently
+    // drop columns.
+    if names.len() != 1 {
+        return Err(QueryError::execution(format!(
+            "CALL {} returns a single column, but YIELD lists {}",
+            func_name,
+            names.len()
+        )));
+    }
     let schema = Arc::new(Schema::new(
         names
             .iter()
@@ -697,10 +694,10 @@ pub(super) fn execute_in_query_call(
                 .into_iter()
                 .map(|t| vec![Value::string(t.tag_name)])
                 .collect();
-            let tag_schema = super::make_single_col_schema("label", "string");
+            let tag_schema = super::make_single_col_schema(&names[0], "string");
             Ok(Some(DataChunk::new(rows, tag_schema)))
         }
-        "list_relationship_types" | "list.relationship_types" => {
+        "list_relationship_types" => {
             let reader = match storage {
                 Some(lock) => lock.read(),
                 None => {
@@ -716,16 +713,17 @@ pub(super) fn execute_in_query_call(
                 .into_iter()
                 .map(|e| vec![Value::string(e.edge_type_name)])
                 .collect();
-            let edge_schema = super::make_single_col_schema("relationship_type", "string");
+            let edge_schema = super::make_single_col_schema(&names[0], "string");
             Ok(Some(DataChunk::new(rows, edge_schema)))
         }
         _ => {
             let registry = crate::executor::expression::functions::registry::global_registry();
+            let registry = registry.read();
             let args = parse_call_args(args_json);
-            match registry.execute(func_name, &args) {
-                Ok(value) => Ok(Some(super::make_single_row(schema, vec![value]))),
-                Err(_) => Ok(Some(DataChunk::new(Vec::new(), schema))),
-            }
+            let value = registry.execute(func_name, &args).map_err(|e| {
+                QueryError::execution(format!("CALL {} failed: {}", func_name, e))
+            })?;
+            Ok(Some(super::make_single_row(schema, vec![value])))
         }
     }
 }
@@ -796,50 +794,6 @@ pub(super) fn execute_analyze(
     result
 }
 
-pub(super) fn execute_migrate(
-    op: &mut super::DdlOperator,
-) -> Result<Option<DataChunk>, QueryError> {
-    let super::DdlOperatorKind::Migrate {
-        storage,
-        space_name,
-        action,
-        migration_data: _,
-        emitted,
-    } = &mut op.kind
-    else {
-        return Ok(None);
-    };
-    if *emitted {
-        return Ok(None);
-    }
-    *emitted = true;
-    let result = match action {
-        MigrateAction::MigrateSpace => {
-            if let Some(lock) = storage {
-                let writer = lock.write();
-                let res = writer
-                    .save_to_disk()
-                    .map_err(|e| QueryError::execution(format!("Migrate failed: {}", e)));
-                match res {
-                    Ok(_) => Ok(Some(super::make_manage_result(
-                        "migrate",
-                        Some(space_name),
-                        "saved",
-                    ))),
-                    Err(e) => Err(e),
-                }
-            } else {
-                Ok(Some(super::make_manage_result(
-                    "migrate",
-                    Some(space_name),
-                    "no-storage",
-                )))
-            }
-        }
-    };
-    result
-}
-
 fn parse_call_args(args_json: &str) -> Vec<Value> {
     let parsed: Vec<serde_json::Value> = serde_json::from_str(args_json).unwrap_or_default();
     parsed.into_iter().map(|v| json_to_value(&v)).collect()
@@ -858,21 +812,9 @@ fn json_to_value(v: &serde_json::Value) -> Value {
                 Value::string(n.to_string())
             }
         }
-        serde_json::Value::String(s) => {
-            if let Ok(i) = s.parse::<i64>() {
-                Value::BigInt(i)
-            } else if let Ok(f) = s.parse::<f64>() {
-                Value::Double(f)
-            } else if s.eq_ignore_ascii_case("true") {
-                Value::Bool(true)
-            } else if s.eq_ignore_ascii_case("false") {
-                Value::Bool(false)
-            } else if s.eq_ignore_ascii_case("null") {
-                Value::Null(linkrs_core::NullType::Null)
-            } else {
-                Value::string(s.clone())
-            }
-        }
+        // Strings stay strings: argument values are typed at plan time, so
+        // re-parsing them here would turn `'123'` into 123.
+        serde_json::Value::String(s) => Value::string(s.clone()),
         serde_json::Value::Array(arr) => {
             let values: Vec<Value> = arr.iter().map(json_to_value).collect();
             Value::list(linkrs_core::value::list::List::from(values))

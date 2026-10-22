@@ -123,6 +123,7 @@ impl ExpressionEvaluator {
                     // `get_function` and would otherwise always report a
                     // missing context.
                     if let Some(seq) = global_registry_ref()
+                        .read()
                         .get_builtin(name)
                         .and_then(|f| match f {
                             crate::executor::expression::functions::BuiltinFunction::Sequence(
@@ -138,9 +139,11 @@ impl ExpressionEvaluator {
                     }
                     // Check if graph storage is available
                     if let Some(storage) = context.get_graph_storage() {
-                        global_registry().execute_with_storage(name, &arg_values, &storage)
+                        global_registry()
+                            .read()
+                            .execute_with_storage(name, &arg_values, &storage)
                     } else {
-                        global_registry().execute(name, &arg_values)
+                        global_registry().read().execute(name, &arg_values)
                     }
                 }
             }

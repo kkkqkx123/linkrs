@@ -228,6 +228,7 @@ impl CompiledExpr {
                 // env access at function nodes, so keep them on the scalar
                 // interpreter path with the exact per-row semantics.
                 if global_registry_ref()
+                    .read()
                     .get_builtin(name.as_str())
                     .is_some_and(|f| {
                         matches!(
@@ -247,6 +248,7 @@ impl CompiledExpr {
                 // for runtime resolution (identical error semantics).
                 if args.iter().all(|a| matches!(a, CompiledExpr::Const(_)))
                     && global_registry_ref()
+                        .read()
                         .get_builtin(name.as_str())
                         .is_some_and(|f| f.is_pure())
                 {
@@ -257,15 +259,16 @@ impl CompiledExpr {
                             _ => unreachable!("guarded by all-Const check"),
                         })
                         .collect();
-                    if let Ok(v) = global_registry().execute(name, &values) {
+                    if let Ok(v) = global_registry().read().execute(name, &values) {
                         return CompiledExpr::Const(v);
                     }
                 }
-                let func = global_registry_ref()
+                let registry = global_registry_ref().read();
+                let func = registry
                     .get_builtin(name.as_str())
                     .map(|f| OwnedFunctionRef::Builtin(f.clone()))
                     .or_else(|| {
-                        global_registry_ref()
+                        registry
                             .get_custom(name.as_str())
                             .map(|f| OwnedFunctionRef::Custom(f.clone()))
                     });
@@ -452,7 +455,7 @@ impl CompiledExpr {
                 }
                 match func {
                     Some(f) => f.execute(&arg_values),
-                    None => global_registry().execute(name, &arg_values),
+                    None => global_registry().read().execute(name, &arg_values),
                 }
             }
 

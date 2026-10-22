@@ -41,7 +41,6 @@ fn test_stmt_category_exhaustive() {
         query_data: "[0.1, 0.2, 0.3]".to_string(),
     };
     let cases: Vec<(Stmt, StmtCategory)> = vec![
-        (Stmt::Query(QueryStmt::new(vec![], span)), Query),
         (
             Stmt::Pipe(PipeStmt {
                 span,
@@ -535,7 +534,7 @@ fn test_stmt_category_exhaustive() {
         (
             Stmt::ClearSpace(ClearSpaceStmt {
                 span,
-                space_name: "s".to_string(),
+                space_name: Some("s".to_string()),
             }),
             Admin,
         ),
@@ -679,7 +678,6 @@ fn test_stmt_category_exhaustive() {
                 headers: vec![],
                 source: ScanSource::File("data.csv".to_string()),
                 options: vec![],
-                return_clause: None,
             }),
             Dql,
         ),

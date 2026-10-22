@@ -276,11 +276,6 @@ impl ExprFactory {
 pub struct StmtFactory;
 
 impl StmtFactory {
-    /// Create a query statement.
-    pub fn query(statements: Vec<Stmt>, span: Span) -> Stmt {
-        Stmt::Query(QueryStmt::new(statements, span))
-    }
-
     /// Create the CREATE node statement.
     pub fn create_node(
         variable: Option<String>,

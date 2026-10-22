@@ -5,7 +5,7 @@
 //! `create_as`, then drives the shared `QueryApi` for ordinary statements.
 
 use super::Session;
-use crate::api_core::session_command::classify_session_command;
+use crate::api_core::session_command::parse_session_command;
 use crate::api_core::types::QueryResult as CoreQueryResult;
 use crate::api_core::{CoreError, CoreResult};
 use crate::embedded::result::QueryResult;
@@ -120,9 +120,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     /// identically. Returns the parsed statement when it is one of the
     /// transaction / session commands.
     fn parse_command(query: &str) -> CoreResult<Option<ParserResult>> {
-        classify_session_command(query)
-            .map(|classified| classified.map(|(parsed, _)| parsed))
-            .map_err(CoreError::from)
+        parse_session_command(query).map_err(CoreError::from)
     }
 
     /// Execute a parameterized query

@@ -51,10 +51,10 @@ impl<
     /// Unified classification entry: parse the statement and return it when
     /// it is one of the transaction / session commands. The keyword gate,
     /// parse, and AST match are shared with the embedded session through
-    /// [`linkrs_api::api_core::classify_session_command`].
+    /// [`linkrs_api::api_core::parse_session_command`].
     pub(crate) fn parse_command(stmt: &str) -> Result<Option<ParserResult>, GraphServiceError> {
-        match linkrs_api::api_core::classify_session_command(stmt) {
-            Ok(classified) => Ok(classified.map(|(parsed, _)| parsed)),
+        match linkrs_api::api_core::parse_session_command(stmt) {
+            Ok(parsed) => Ok(parsed),
             Err(error) => {
                 let position = error.position.or_else(|| {
                     error

@@ -3,25 +3,6 @@ use crate::parser::ast::types::{LimitClause, SampleClause, SkipClause};
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::{EdgeDirection, OrderDirection, Span};
 
-use super::Stmt;
-
-#[derive(Debug, Clone)]
-pub struct QueryStmt {
-    pub span: Span,
-    pub statements: Vec<Stmt>,
-}
-
-impl QueryStmt {
-    pub fn new(statements: Vec<Stmt>, span: Span) -> Self {
-        Self { span, statements }
-    }
-}
-
-impl PartialEq for QueryStmt {
-    fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.statements.len() == other.statements.len()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchStmt {
@@ -243,20 +224,20 @@ pub struct YieldStmt {
     pub sample: Option<SampleClause>,
 }
 
-/// `LOAD FROM <source> [OPTIONS (...)] [RETURN ...]` reading clause.
+/// `LOAD FROM <source> [WITH HEADERS (...)] [OPTIONS (...)]` reading clause.
+///
+/// Loaded rows are always strings, so headers carry names only.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadFromStmt {
     pub span: Span,
     pub headers: Vec<LoadHeaderColumn>,
     pub source: ScanSource,
     pub options: Vec<LoadOption>,
-    pub return_clause: Option<ReturnClause>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadHeaderColumn {
     pub name: String,
-    pub data_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -267,7 +248,6 @@ pub enum ScanSource {
         name: String,
         args: Vec<ContextualExpression>,
     },
-    Query(Box<Stmt>),
 }
 
 impl PartialEq for ScanSource {
@@ -279,7 +259,6 @@ impl PartialEq for ScanSource {
                 ScanSource::TableFunc { name: a, args: aa },
                 ScanSource::TableFunc { name: b, args: ab },
             ) => a == b && aa == ab,
-            (ScanSource::Query(a), ScanSource::Query(b)) => format!("{a:?}") == format!("{b:?}"),
             _ => false,
         }
     }

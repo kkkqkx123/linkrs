@@ -2,9 +2,10 @@
 
 use crate::parser::ast::stmt::*;
 use crate::parser::core::error::{ParseError, ParseErrorKind};
-use crate::parser::parsing::clause_parser::ClauseParser;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
+use linkrs_core::types::expr::contextual::ContextualExpression;
+use linkrs_core::types::expr::Expression as CoreExpression;
 
 /// Parse `CALL <func>(<args>) [YIELD ...]`.
 pub(super) fn parse_in_query_call_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
@@ -26,7 +27,7 @@ pub(super) fn parse_in_query_call_statement(ctx: &mut ParseContext) -> Result<St
     ctx.expect_token(TokenKind::RParen)?;
 
     let yield_clause = if ctx.match_token(TokenKind::Yield) {
-        Some(ClauseParser::new().parse_yield_clause(ctx)?)
+        Some(parse_call_yield_clause(ctx)?)
     } else {
         None
     };
@@ -38,6 +39,70 @@ pub(super) fn parse_in_query_call_statement(ctx: &mut ParseContext) -> Result<St
         args,
         yield_clause,
     }))
+}
+
+/// Parse `YIELD col [AS alias], ...` for `CALL`.
+///
+/// The call operator produces columns by name, so the projection is a plain
+/// column list. Expressions and `WHERE` / `ORDER BY` / `LIMIT` / `SKIP` /
+/// `SAMPLE` cannot be executed there and are rejected instead of parsed and
+/// dropped.
+fn parse_call_yield_clause(ctx: &mut ParseContext) -> Result<YieldClause, ParseError> {
+    let start_span = ctx.current_span();
+    if ctx.check_token(TokenKind::Distinct) {
+        return Err(ParseError::new(
+            ParseErrorKind::SyntaxError,
+            "CALL YIELD does not support DISTINCT".to_string(),
+            ctx.current_position(),
+        ));
+    }
+
+    let mut items = Vec::new();
+    loop {
+        let name = ctx.expect_identifier()?;
+        let alias = if ctx.match_token(TokenKind::As) {
+            Some(ctx.expect_identifier()?)
+        } else {
+            None
+        };
+
+        let expression = CoreExpression::variable(&name);
+        let meta = linkrs_core::types::expr::ExpressionMeta::new(expression);
+        let id = ctx.expression_context().register_expression(meta);
+        let expression = ContextualExpression::new(id, ctx.expression_context_clone());
+        items.push(YieldItem { expression, alias });
+
+        if !ctx.match_token(TokenKind::Comma) {
+            break;
+        }
+    }
+
+    // A pipe, WITH or RETURN continues the statement; anything else here
+    // would have been a YIELD expression or filter clause.
+    let trailing = &ctx.current_token().kind;
+    let continues_statement = matches!(
+        trailing,
+        TokenKind::Eof | TokenKind::Semicolon | TokenKind::Pipe | TokenKind::With | TokenKind::Return
+    );
+    if !continues_statement {
+        return Err(ParseError::new(
+            ParseErrorKind::SyntaxError,
+            "CALL YIELD accepts column names only; expressions, WHERE, ORDER BY, LIMIT, SKIP and SAMPLE are not supported"
+                .to_string(),
+            ctx.current_position(),
+        ));
+    }
+
+    Ok(YieldClause {
+        span: ctx.span_since(start_span.start),
+        distinct: false,
+        items,
+        where_clause: None,
+        order_by: None,
+        limit: None,
+        skip: None,
+        sample: None,
+    })
 }
 
 /// Parse `EXPORT DATABASE '<path>' [WITH OPTIONS (key=value, ...)]`.

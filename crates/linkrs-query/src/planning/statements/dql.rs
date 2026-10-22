@@ -39,7 +39,9 @@
 //! The `composite_index_analyzer` module provides optimal index selection for LOOKUP queries
 //! with multiple conditions, supporting prefix matching and range scans.
 
+pub mod argument_literals;
 pub mod assign_variable_planner;
+pub mod call_planner;
 pub mod collect_planner;
 pub mod composite_index_analyzer;
 pub mod explain_planner;
@@ -48,6 +50,7 @@ pub mod fetch_vertices_planner;
 pub mod filter_planner;
 pub mod go_planner;
 pub mod group_by_planner;
+pub mod load_from_planner;
 pub mod lookup_planner;
 pub mod path_planner;
 pub mod pipe_planner;

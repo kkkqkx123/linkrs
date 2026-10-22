@@ -259,7 +259,7 @@ impl crate::executor::expression::evaluator::traits::ExpressionContext for Execu
     }
 
     fn get_function(&self, name: &str) -> Option<OwnedFunctionRef> {
-        let registry = global_registry_ref();
+        let registry = global_registry_ref().read();
         registry
             .get_builtin(name)
             .map(|f| OwnedFunctionRef::Builtin(f.clone()))

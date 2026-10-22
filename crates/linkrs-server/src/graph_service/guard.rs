@@ -39,9 +39,9 @@ impl<
     /// grouped by [`StmtCategory`](crate::query::parser::ast::StmtCategory):
     /// DML writes (INSERT/UPDATE/UPSERT/MERGE/SET/REMOVE, plus CHECKPOINT and
     /// COPY FROM) require Write, DELETE requires Delete; DDL schema objects
-    /// (TAG/EDGE/INDEX/SEQUENCE, ALTER, full-text/vector indexes, CLEAR SPACE,
+    /// (TAG/EDGE/INDEX/SEQUENCE, ALTER, full-text/vector indexes,
     /// PURGE EXPIRED, migrations and database attach/detach) require Schema
-    /// while CREATE/DROP SPACE require Admin; DQL and search reads require
+    /// while CREATE/DROP/CLEAR SPACE require Admin; DQL and search reads require
     /// Read; server configuration (SHOW/UPDATE CONFIGS, KILL QUERY, SHOW
     /// SESSIONS, extensions) requires Admin while SHOW QUERIES stays Read. The HTTP probe handlers in
     /// `crate::http::handlers::authz` mirror this table through
@@ -52,21 +52,6 @@ impl<
     ) -> Option<Permission> {
         use crate::query::parser::ast::Stmt as S;
         match stmt {
-            S::Query(query) => {
-                let mut current: Option<Permission> = None;
-                for inner in &query.statements {
-                    match Self::permission_for_stmt(inner) {
-                        None => return None,
-                        Some(next) => {
-                            current = Some(match current {
-                                None => next,
-                                Some(prev) => Self::stronger_permission(prev, next),
-                            });
-                        }
-                    }
-                }
-                current.or(Some(Permission::Read))
-            }
             S::Pipe(pipe) => {
                 let left = Self::permission_for_stmt(&pipe.left);
                 let right = Self::permission_for_stmt(&pipe.right);
@@ -187,13 +172,16 @@ impl<
             | S::DropMacro(_)
             | S::CreateType(_)
             | S::DropType(_)
-            | S::ClearSpace(_)
             | S::PurgeExpired(_)
             | S::Migrate(_)
             | S::ImportDatabase(_)
             | S::AttachDatabase(_)
             | S::DetachDatabase(_)
             | S::Analyze(_) => Some(Permission::Schema),
+            // CLEAR SPACE drops every tag, edge type and row of a space while
+            // keeping the space itself; it is as destructive as DROP SPACE and
+            // therefore requires the same privilege level.
+            S::ClearSpace(_) => Some(Permission::Admin),
             S::ShowConfigs(_)
             | S::UpdateConfigs(_)
             | S::KillQuery(_)
@@ -325,12 +313,6 @@ impl<
             | S::RollbackTransaction(_)
             | S::Savepoint(_)
             | S::ReleaseSavepoint(_) => Ok(()),
-            S::Query(query) => {
-                for inner in &query.statements {
-                    self.enforce_stmt_permission(username, inner, space_id)?;
-                }
-                Ok(())
-            }
             S::Pipe(pipe) => {
                 self.enforce_stmt_permission(username, &pipe.left, space_id)?;
                 self.enforce_stmt_permission(username, &pipe.right, space_id)

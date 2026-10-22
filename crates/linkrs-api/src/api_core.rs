@@ -29,7 +29,7 @@ pub use error::{CoreError, CoreResult, ExtendedErrorCode};
 pub use query_api::QueryApi;
 pub use schema_api::SchemaApi;
 pub use session_command::{
-    classify_session_command, is_command_like, CommandParseError, SessionCommand,
+    is_command_like, parse_session_command, CommandParseError,
 };
 pub use sync_api::SyncApi;
 pub use transaction_api::TransactionApi;

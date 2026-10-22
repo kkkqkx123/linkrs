@@ -24,6 +24,7 @@ use crate::planning::statements::dml::remove_planner::RemovePlanner;
 use crate::planning::statements::dml::set_planner::SetPlanner;
 use crate::planning::statements::dml::update_planner::UpdatePlanner;
 use crate::planning::statements::dql::assign_variable_planner::AssignVariablePlanner;
+use crate::planning::statements::dql::call_planner::InQueryCallPlanner;
 use crate::planning::statements::dql::collect_planner::CollectPlanner;
 use crate::planning::statements::dql::explain_planner::ExplainPlanner;
 use crate::planning::statements::dql::fetch_edges_planner::FetchEdgesPlanner;
@@ -31,6 +32,7 @@ use crate::planning::statements::dql::fetch_vertices_planner::FetchVerticesPlann
 use crate::planning::statements::dql::filter_planner::FilterPlanner;
 use crate::planning::statements::dql::go_planner::GoPlanner;
 use crate::planning::statements::dql::group_by_planner::GroupByPlanner;
+use crate::planning::statements::dql::load_from_planner::LoadFromPlanner;
 use crate::planning::statements::dql::lookup_planner::LookupPlanner;
 use crate::planning::statements::dql::path_planner::PathPlanner;
 use crate::planning::statements::dql::pipe_planner::PipePlanner;
@@ -120,6 +122,8 @@ pub enum PlannerEnum {
     Pipe(PipePlanner),
     Explain(ExplainPlanner),
     FulltextSearch(FulltextSearchPlanner),
+    LoadFrom(LoadFromPlanner),
+    InQueryCall(InQueryCallPlanner),
     VectorDdl(VectorDdlPlanner),
     #[cfg(feature = "vector")]
     VectorSearch(VectorSearchPlanner),
@@ -209,12 +213,28 @@ impl PlannerEnum {
                 | Stmt::Checkpoint(_)
                 | Stmt::KillQuery(_)
                 | Stmt::ExportDatabase(_)
-                | Stmt::ImportDatabase(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
+                | Stmt::ImportDatabase(_)
+                | Stmt::Extension(_)
+                | Stmt::Migrate(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
                 Stmt::CreateVectorIndex(_)
                 | Stmt::DropVectorIndex(_)
                 | Stmt::ShowVectorIndex(_)
                 | Stmt::DescribeVectorIndex(_) => {
                     Some(PlannerEnum::VectorDdl(VectorDdlPlanner::new()))
+                }
+                Stmt::LoadFrom(_) => Some(PlannerEnum::LoadFrom(LoadFromPlanner::new())),
+                Stmt::InQueryCall(_) => {
+                    Some(PlannerEnum::InQueryCall(InQueryCallPlanner::new()))
+                }
+                Stmt::CreateFulltextIndex(_)
+                | Stmt::DropFulltextIndex(_)
+                | Stmt::AlterFulltextIndex(_)
+                | Stmt::ShowFulltextIndex(_)
+                | Stmt::DescribeFulltextIndex(_)
+                | Stmt::Search(_)
+                | Stmt::LookupFulltext(_)
+                | Stmt::MatchFulltext(_) => {
+                    Some(PlannerEnum::FulltextSearch(FulltextSearchPlanner::new()))
                 }
                 #[cfg(feature = "vector")]
                 Stmt::SearchVector(_) | Stmt::LookupVector(_) | Stmt::MatchVector(_) => {
@@ -258,6 +278,8 @@ impl PlannerEnum {
             PlannerEnum::Pipe(_) => "PipePlanner",
             PlannerEnum::Explain(_) => "ExplainPlanner",
             PlannerEnum::FulltextSearch(_) => "FulltextSearchPlanner",
+            PlannerEnum::LoadFrom(_) => "LoadFromPlanner",
+            PlannerEnum::InQueryCall(_) => "InQueryCallPlanner",
             PlannerEnum::VectorDdl(_) => "VectorDdlPlanner",
             #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(_) => "VectorSearchPlanner",
@@ -300,6 +322,8 @@ impl PlannerEnum {
             PlannerEnum::Pipe(planner) => planner.plan_bound(ctx),
             PlannerEnum::Explain(planner) => planner.plan_bound(ctx),
             PlannerEnum::FulltextSearch(planner) => planner.plan_bound(ctx),
+            PlannerEnum::LoadFrom(planner) => planner.plan_bound(ctx),
+            PlannerEnum::InQueryCall(planner) => planner.plan_bound(ctx),
             PlannerEnum::VectorDdl(planner) => planner.plan_bound(ctx),
             #[cfg(feature = "vector")]
             PlannerEnum::VectorSearch(planner) => planner.plan_bound(ctx),

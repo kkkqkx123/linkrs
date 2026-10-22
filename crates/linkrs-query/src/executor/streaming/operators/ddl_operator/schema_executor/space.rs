@@ -66,11 +66,92 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 if dropped { "dropped" } else { "not_exists" },
             )))
         }
-        SpaceManageCommand::Clear { space_name } => super::super::exec_ddl(storage, |s| {
-            StorageSchemaOps::clear_space(s, space_name.as_str())
-                .map_err(|e| QueryError::execution(e.to_string()))?;
-            Ok(())
-        }),
+        SpaceManageCommand::Clear { space_name } => {
+            let name = space_name.as_str();
+            let Some(lock) = storage else {
+                return Err(QueryError::execution(
+                    "CLEAR SPACE cannot execute: no storage available".to_string(),
+                ));
+            };
+            // The clear drops every tag, edge type and row of the space, so
+            // the counts are read before the wipe and reported afterwards.
+            let (cleared_tags, cleared_edge_types, deleted_vertices, deleted_edges) = {
+                let reader = lock.read();
+                if !reader.space_exists(name) {
+                    return Err(QueryError::execution(format!(
+                        "Space '{}' does not exist",
+                        name
+                    )));
+                }
+                let tags = reader
+                    .list_tags(name)
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                let edge_types = reader
+                    .list_edge_types(name)
+                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                let mut deleted_vertices = 0u64;
+                for tag in &tags {
+                    deleted_vertices += reader
+                        .count_vertices_by_tag(name, &tag.tag_name)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                }
+                let mut deleted_edges = 0u64;
+                for edge_type in &edge_types {
+                    deleted_edges += reader
+                        .count_edges_by_type(name, &edge_type.edge_type_name)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                }
+                (
+                    tags.len(),
+                    edge_types.len(),
+                    deleted_vertices,
+                    deleted_edges,
+                )
+            };
+            let cleared = {
+                let mut writer = lock.write();
+                StorageSchemaOps::clear_space(&mut *writer, name)
+                    .map_err(|e| QueryError::execution(e.to_string()))?
+            };
+            if !cleared {
+                return Err(QueryError::execution(format!(
+                    "Space '{}' does not exist",
+                    name
+                )));
+            }
+            let schema = Arc::new(Schema::new(vec![
+                ColumnInfo {
+                    name: "space_name".to_string(),
+                    data_type: "string".to_string(),
+                },
+                ColumnInfo {
+                    name: "cleared_tags".to_string(),
+                    data_type: "bigint".to_string(),
+                },
+                ColumnInfo {
+                    name: "cleared_edge_types".to_string(),
+                    data_type: "bigint".to_string(),
+                },
+                ColumnInfo {
+                    name: "deleted_vertices".to_string(),
+                    data_type: "bigint".to_string(),
+                },
+                ColumnInfo {
+                    name: "deleted_edges".to_string(),
+                    data_type: "bigint".to_string(),
+                },
+            ]));
+            Ok(Some(super::super::make_single_row(
+                schema,
+                vec![
+                    Value::string(name.to_string()),
+                    Value::BigInt(cleared_tags as i64),
+                    Value::BigInt(cleared_edge_types as i64),
+                    Value::BigInt(deleted_vertices as i64),
+                    Value::BigInt(deleted_edges as i64),
+                ],
+            )))
+        }
         SpaceManageCommand::Desc { space_name } => {
             let reader = super::super::get_reader(storage)?;
             let name = space_name.as_str();

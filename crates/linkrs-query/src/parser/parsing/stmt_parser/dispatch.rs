@@ -104,6 +104,7 @@ pub(super) fn parse_token_statement(ctx: &mut ParseContext) -> Result<Stmt, Pars
             DdlParser::new().parse_desc_statement(ctx)
         }
         TokenKind::Alter => DdlParser::new().parse_alter_statement(ctx),
+        TokenKind::Clear => admin::parse_clear_space_statement(ctx),
 
         // User management statements
         TokenKind::CreateUser => UserParser::new().parse_create_user_statement(ctx),

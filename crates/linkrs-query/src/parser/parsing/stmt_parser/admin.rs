@@ -6,8 +6,6 @@ use crate::parser::core::error::{ParseError, ParseErrorKind};
 use crate::parser::core::token::TokenKindExt;
 use crate::parser::parsing::parse_context::ParseContext;
 use crate::parser::TokenKind;
-use linkrs_core::types::expr::contextual::ContextualExpression;
-use linkrs_core::types::expr::Expression as CoreExpression;
 
 pub(super) fn parse_migrate_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
     let start_span = ctx.current_span();
@@ -112,10 +110,12 @@ pub(super) fn parse_purge_expired_statement(ctx: &mut ParseContext) -> Result<St
     }))
 }
 
-/// Parse `LOAD [WITH HEADERS (...)] FROM <source> [OPTIONS (...)] [RETURN ...]`.
+/// Parse `LOAD [WITH HEADERS (...)] FROM <source> [OPTIONS (...)]`.
 ///
-/// Sources are tried in order: GLOB keyword form, parenthesized query,
-/// identifier-plus-paren table function, string literal file path.
+/// Sources are tried in order: GLOB keyword form, identifier-plus-paren
+/// table function, string literal file path. A parenthesized query source
+/// and a `RETURN` clause are rejected explicitly: neither can be executed by
+/// the leaf-node load operator.
 pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
     let start_span = ctx.current_span();
     ctx.consume_keyword("LOAD")?;
@@ -127,25 +127,18 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
         let mut cols = Vec::new();
         loop {
             let name = ctx.expect_identifier()?;
-            let (is_end, is_ident, lexeme) = {
-                let token = ctx.current_token();
-                (
-                    matches!(token.kind, TokenKind::Comma | TokenKind::RParen),
-                    matches!(token.kind, TokenKind::Identifier(_)),
-                    token.lexeme.clone(),
-                )
-            };
-            let data_type = if is_end {
-                None
-            } else if is_ident {
-                Some(ctx.expect_identifier()?)
-            } else if lexeme.is_empty() {
-                None
-            } else {
-                ctx.next_token();
-                Some(lexeme)
-            };
-            cols.push(LoadHeaderColumn { name, data_type });
+            if !matches!(
+                ctx.current_token().kind,
+                TokenKind::Comma | TokenKind::RParen
+            ) {
+                return Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    "LOAD WITH HEADERS accepts column names only; type declarations are not supported"
+                        .to_string(),
+                    ctx.current_position(),
+                ));
+            }
+            cols.push(LoadHeaderColumn { name });
             if !ctx.match_token(TokenKind::Comma) {
                 break;
             }
@@ -172,10 +165,12 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
         ctx.expect_token(TokenKind::RParen)?;
         ScanSource::Glob(pattern)
     } else if ctx.check_token(TokenKind::LParen) {
-        ctx.expect_token(TokenKind::LParen)?;
-        let inner = super::StmtParser::parse_statement(ctx)?;
-        ctx.expect_token(TokenKind::RParen)?;
-        ScanSource::Query(Box::new(inner))
+        return Err(ParseError::new(
+            ParseErrorKind::SyntaxError,
+            "LOAD FROM (query) is not supported; load from a file, GLOB(...) or a table function"
+                .to_string(),
+            ctx.current_position(),
+        ));
     } else if ctx.current_token().kind.is_identifier() {
         let name = ctx.expect_identifier()?;
         if ctx.check_token(TokenKind::LParen) {
@@ -195,8 +190,7 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
         } else {
             return Err(ParseError::new(
                 ParseErrorKind::SyntaxError,
-                "LOAD FROM expects a file path, GLOB(...), table function call, or (query)"
-                    .to_string(),
+                "LOAD FROM expects a file path, GLOB(...) or a table function call".to_string(),
                 ctx.current_position(),
             ));
         }
@@ -226,46 +220,14 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
         vec![]
     };
 
-    let return_clause = if ctx.check_keyword("RETURN") || ctx.check_token(TokenKind::Return) {
-        ctx.expect_token(TokenKind::Return)?;
-        let distinct = ctx.match_token(TokenKind::Distinct);
-        let mut items = Vec::new();
-        if ctx.match_token(TokenKind::Star) {
-            let expr = CoreExpression::variable("*");
-            let expr_meta = linkrs_core::types::expr::ExpressionMeta::new(expr);
-            let id = ctx.expression_context().register_expression(expr_meta);
-            let ctx_expr = ContextualExpression::new(id, ctx.expression_context_clone());
-            items.push(ReturnItem::Expression {
-                expression: ctx_expr,
-                alias: None,
-            });
-        } else {
-            loop {
-                let expression = super::misc::parse_expression(ctx)?;
-                let alias = if ctx.match_token(TokenKind::As) {
-                    Some(ctx.expect_identifier()?)
-                } else {
-                    None
-                };
-                items.push(ReturnItem::Expression { expression, alias });
-                if !ctx.match_token(TokenKind::Comma) {
-                    break;
-                }
-            }
-        }
-        Some(ReturnClause {
-            span: ctx.current_span(),
-            items,
-            distinct,
-            order_by: None,
-            limit: None,
-            skip: None,
-            sample: None,
-            having_clause: None,
-        })
-    } else {
-        None
-    };
+    if ctx.check_keyword("RETURN") || ctx.check_token(TokenKind::Return) {
+        return Err(ParseError::new(
+            ParseErrorKind::SyntaxError,
+            "LOAD FROM does not support RETURN; load the rows and query them in a separate statement"
+                .to_string(),
+            ctx.current_position(),
+        ));
+    }
 
     let span = ctx.span_since(start_span.start);
     Ok(Stmt::LoadFrom(LoadFromStmt {
@@ -273,8 +235,27 @@ pub(super) fn parse_load_from_statement(ctx: &mut ParseContext) -> Result<Stmt, 
         headers,
         source,
         options,
-        return_clause,
     }))
+}
+
+/// Parse `CLEAR SPACE [<name>]`.
+///
+/// The space name is optional: without it the statement clears the current
+/// space. The name is mandatory in every other destructive form, so the
+/// current-space form is only reachable while a space is selected.
+pub(super) fn parse_clear_space_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    let start_span = ctx.current_span();
+    ctx.expect_token(TokenKind::Clear)?;
+    ctx.consume_keyword("SPACE")?;
+
+    let space_name = if ctx.is_identifier_token() {
+        Some(ctx.expect_identifier()?)
+    } else {
+        None
+    };
+
+    let span = ctx.span_since(start_span.start);
+    Ok(Stmt::ClearSpace(ClearSpaceStmt { span, space_name }))
 }
 
 /// Parse extension management statements:

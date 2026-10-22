@@ -6,7 +6,6 @@ use crate::auth::PasswordAuthenticator;
 use crate::batch::BatchManager;
 use crate::config::Config;
 use crate::graph_service::GraphService;
-use crate::query::executor::expression::functions::FunctionRegistry;
 use crate::session::GraphSessionManager;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
@@ -42,7 +41,6 @@ pub struct HttpServer<
     /// Config file the running config was loaded from, if any. Updates are
     /// written back here; `None` means memory-only updates.
     config_path: Option<std::path::PathBuf>,
-    function_registry: Arc<RwLock<FunctionRegistry>>,
     rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry,
 }
 
@@ -77,7 +75,6 @@ impl<
             storage: storage.clone(),
             config: Arc::new(RwLock::new(config.clone())),
             config_path,
-            function_registry: Arc::new(RwLock::new(FunctionRegistry::new())),
             rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry::default(),
         }
     }
@@ -167,9 +164,11 @@ impl<
         }
     }
 
-    /// Get function registry
-    pub fn get_function_registry(&self) -> Arc<RwLock<FunctionRegistry>> {
-        self.function_registry.clone()
+    /// Get the process-wide function registry shared with the query engine.
+    pub fn get_function_registry(
+        &self,
+    ) -> Arc<RwLock<linkrs_query::executor::expression::functions::FunctionRegistry>> {
+        linkrs_query::executor::expression::functions::registry::global_registry()
     }
 
     /// Async index rebuild task registry.

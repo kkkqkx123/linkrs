@@ -1118,7 +1118,7 @@ fn test_parse_show_extensions() {
 
 #[test]
 fn test_parse_load_from() {
-    let mut ctx = create_parser_context("LOAD FROM 'data.csv' RETURN *");
+    let mut ctx = create_parser_context("LOAD FROM 'data.csv'");
     let result = StmtParser::parse_statement(&mut ctx);
     assert!(
         result.is_ok(),
@@ -1126,7 +1126,10 @@ fn test_parse_load_from() {
         result.err()
     );
     if let Ok(Stmt::LoadFrom(stmt)) = result {
-        assert!(stmt.return_clause.is_some());
+        assert!(matches!(
+            stmt.source,
+            crate::parser::ast::stmt::ScanSource::File(_)
+        ));
     } else {
         panic!("Expected LoadFrom statement");
     }
@@ -1135,7 +1138,7 @@ fn test_parse_load_from() {
 #[test]
 fn test_parse_load_from_with_options() {
     let mut ctx =
-        create_parser_context("LOAD FROM 'data.csv' (header='true', delimiter=',') RETURN *");
+        create_parser_context("LOAD FROM 'data.csv' (header='true', delimiter=',')");
     let result = StmtParser::parse_statement(&mut ctx);
     assert!(
         result.is_ok(),
@@ -1146,7 +1149,7 @@ fn test_parse_load_from_with_options() {
 
 #[test]
 fn test_parse_load_from_glob() {
-    let mut ctx = create_parser_context("LOAD FROM GLOB('data/*.csv') RETURN *");
+    let mut ctx = create_parser_context("LOAD FROM GLOB('data/*.csv')");
     let result = StmtParser::parse_statement(&mut ctx);
     assert!(
         result.is_ok(),
@@ -1157,7 +1160,7 @@ fn test_parse_load_from_glob() {
 
 #[test]
 fn test_parse_load_from_table_func() {
-    let mut ctx = create_parser_context("LOAD FROM read_csv('data.csv') RETURN *");
+    let mut ctx = create_parser_context("LOAD FROM read_csv('data.csv')");
     let result = StmtParser::parse_statement(&mut ctx);
     assert!(
         result.is_ok(),
@@ -1175,28 +1178,20 @@ fn test_parse_load_from_table_func() {
 }
 
 #[test]
-fn test_parse_load_from_query_source() {
-    let mut ctx = create_parser_context("LOAD FROM (MATCH (n) RETURN n) RETURN *");
+fn test_parse_load_from_query_source_is_rejected() {
+    let mut ctx = create_parser_context("LOAD FROM (MATCH (n) RETURN n)");
     let result = StmtParser::parse_statement(&mut ctx);
+    let error = result.expect_err("LOAD FROM (query) must be rejected");
     assert!(
-        result.is_ok(),
-        "LOAD FROM query source parse failure: {:?}",
-        result.err()
+        error.message.contains("LOAD FROM (query) is not supported"),
+        "unexpected error: {}",
+        error.message
     );
-    if let Ok(Stmt::LoadFrom(stmt)) = result {
-        assert!(matches!(
-            stmt.source,
-            crate::parser::ast::stmt::ScanSource::Query(_)
-        ));
-    } else {
-        panic!("Expected LoadFrom statement");
-    }
 }
 
 #[test]
 fn test_parse_load_with_headers() {
-    let mut ctx =
-        create_parser_context("LOAD WITH HEADERS (id INT64, name STRING) FROM 'data.csv'");
+    let mut ctx = create_parser_context("LOAD WITH HEADERS (id, name) FROM 'data.csv'");
     let result = StmtParser::parse_statement(&mut ctx);
     assert!(
         result.is_ok(),
@@ -1212,15 +1207,27 @@ fn test_parse_load_with_headers() {
 }
 
 #[test]
-fn test_parse_load_with_headers_query_source() {
-    let mut ctx = create_parser_context(
-        "LOAD WITH HEADERS (id, name) FROM (MATCH (n) RETURN n.id AS id, n.name AS name)",
-    );
+fn test_parse_load_with_header_types_is_rejected() {
+    let mut ctx =
+        create_parser_context("LOAD WITH HEADERS (id INT64, name STRING) FROM 'data.csv'");
     let result = StmtParser::parse_statement(&mut ctx);
+    let error = result.expect_err("header type declarations must be rejected");
     assert!(
-        result.is_ok(),
-        "LOAD WITH HEADERS query source parse failure: {:?}",
-        result.err()
+        error.message.contains("type declarations are not supported"),
+        "unexpected error: {}",
+        error.message
+    );
+}
+
+#[test]
+fn test_parse_load_with_return_is_rejected() {
+    let mut ctx = create_parser_context("LOAD FROM 'data.csv' RETURN *");
+    let result = StmtParser::parse_statement(&mut ctx);
+    let error = result.expect_err("LOAD FROM RETURN must be rejected");
+    assert!(
+        error.message.contains("LOAD FROM does not support RETURN"),
+        "unexpected error: {}",
+        error.message
     );
 }
 
@@ -1253,9 +1260,45 @@ fn test_parse_call_with_args_yield() {
     if let Ok(Stmt::InQueryCall(stmt)) = result {
         assert_eq!(stmt.func_name, "list_touch");
         assert_eq!(stmt.args.len(), 2);
-        assert!(stmt.yield_clause.is_some());
+        let yield_clause = stmt.yield_clause.expect("YIELD clause");
+        assert_eq!(yield_clause.items.len(), 1);
+        assert_eq!(yield_clause.items[0].alias.as_deref(), Some("x"));
+        assert_eq!(
+            yield_clause.items[0].expression.as_variable().as_deref(),
+            Some("result")
+        );
     } else {
         panic!("Expected InQueryCall statement");
+    }
+}
+
+#[test]
+fn test_parse_call_yield_expression_is_rejected() {
+    let mut ctx = create_parser_context("CALL foo() YIELD id(vertex)");
+    let result = StmtParser::parse_statement(&mut ctx);
+    let error = result.expect_err("YIELD expression must be rejected");
+    assert!(
+        error.message.contains("CALL YIELD accepts column names only"),
+        "unexpected error: {}",
+        error.message
+    );
+}
+
+#[test]
+fn test_parse_call_yield_clauses_are_rejected() {
+    for query in [
+        "CALL foo() YIELD result WHERE result > 1",
+        "CALL foo() YIELD result ORDER BY result",
+        "CALL foo() YIELD result LIMIT 1",
+        "CALL foo() YIELD result SKIP 1",
+        "CALL foo() YIELD DISTINCT result",
+    ] {
+        let mut ctx = create_parser_context(query);
+        let result = StmtParser::parse_statement(&mut ctx);
+        assert!(
+            result.is_err(),
+            "expected rejection for: {query}, got: {result:?}"
+        );
     }
 }
 

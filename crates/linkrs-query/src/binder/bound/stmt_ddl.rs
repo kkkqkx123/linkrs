@@ -36,9 +36,13 @@ pub struct BoundDesc {
     pub target: DescTarget,
 }
 
+/// `CLEAR SPACE` bound form.
+///
+/// `space_name` is `None` when the statement omitted the space, which the
+/// planner resolves to the current space.
 #[derive(Debug, Clone)]
 pub struct BoundClearSpace {
-    pub space_name: String,
+    pub space_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

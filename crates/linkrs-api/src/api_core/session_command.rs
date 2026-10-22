@@ -10,20 +10,6 @@ use crate::api_core::error::{CoreError, ExtendedErrorCode};
 use linkrs_query::parser::ast::Stmt;
 use linkrs_query::parser::{Parser, ParserResult};
 
-/// Command classes intercepted by the API layer before the query pipeline
-/// sees the statement text. Undefined combinations never reach a host:
-/// classification guarantees the AST variant matches the returned kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionCommand {
-    Begin,
-    Commit,
-    Rollback,
-    Savepoint,
-    ReleaseSavepoint,
-    AssignVariable,
-    Extension,
-}
-
 /// First parse error of a command-like statement, carrying the location
 /// so each transport can report it in its own error shape.
 #[derive(Debug, Clone)]
@@ -79,29 +65,30 @@ pub fn is_command_like(text: &str) -> bool {
         || upper.starts_with("UNINSTALL EXTENSION")
 }
 
-/// Parse the statement and classify it when it is one of the
-/// transaction / session commands.
+/// Parse the statement when it is one of the transaction / session
+/// commands intercepted by the API layer.
 ///
 /// Returns `Ok(None)` for regular statements (and for command-like text
 /// that parses into another statement kind, which the pipeline reports).
 /// Returns `Err` with the first specific parse error for malformed
-/// command-like statements.
-pub fn classify_session_command(
+/// command-like statements. Hosts dispatch on the returned AST variant;
+/// there is no separate command kind to fall out of sync with it.
+pub fn parse_session_command(
     text: &str,
-) -> Result<Option<(ParserResult, SessionCommand)>, CommandParseError> {
+) -> Result<Option<ParserResult>, CommandParseError> {
     if !is_command_like(text) {
         return Ok(None);
     }
     let mut parser = Parser::new(text);
     match parser.parse() {
         Ok(result) if !parser.has_errors() => match result.ast.stmt() {
-            Stmt::BeginTransaction(_) => Ok(Some((result, SessionCommand::Begin))),
-            Stmt::CommitTransaction(_) => Ok(Some((result, SessionCommand::Commit))),
-            Stmt::RollbackTransaction(_) => Ok(Some((result, SessionCommand::Rollback))),
-            Stmt::Savepoint(_) => Ok(Some((result, SessionCommand::Savepoint))),
-            Stmt::ReleaseSavepoint(_) => Ok(Some((result, SessionCommand::ReleaseSavepoint))),
-            Stmt::AssignVariable(_) => Ok(Some((result, SessionCommand::AssignVariable))),
-            Stmt::Extension(_) => Ok(Some((result, SessionCommand::Extension))),
+            Stmt::BeginTransaction(_)
+            | Stmt::CommitTransaction(_)
+            | Stmt::RollbackTransaction(_)
+            | Stmt::Savepoint(_)
+            | Stmt::ReleaseSavepoint(_)
+            | Stmt::AssignVariable(_)
+            | Stmt::Extension(_) => Ok(Some(result)),
             _ => Ok(None),
         },
         Ok(_) => Ok(None),
@@ -120,60 +107,73 @@ pub fn classify_session_command(
 mod tests {
     use super::*;
 
-    fn kind_of(text: &str) -> Option<SessionCommand> {
-        classify_session_command(text)
+    fn parsed(text: &str) -> Option<Stmt> {
+        parse_session_command(text)
             .ok()
             .flatten()
-            .map(|(_, k)| k)
+            .map(|result| result.ast.stmt().clone())
     }
 
     #[test]
-    fn classifies_every_transaction_and_session_command() {
-        assert_eq!(kind_of("BEGIN"), Some(SessionCommand::Begin));
-        assert_eq!(kind_of("BEGIN TRANSACTION"), Some(SessionCommand::Begin));
-        assert_eq!(kind_of("BEGIN READ ONLY"), Some(SessionCommand::Begin));
-        assert_eq!(kind_of("COMMIT"), Some(SessionCommand::Commit));
-        assert_eq!(kind_of("ROLLBACK"), Some(SessionCommand::Rollback));
-        assert_eq!(kind_of("ROLLBACK TO sp1"), Some(SessionCommand::Rollback));
-        assert_eq!(kind_of("SAVEPOINT sp1"), Some(SessionCommand::Savepoint));
-        assert_eq!(
-            kind_of("RELEASE SAVEPOINT sp1"),
-            Some(SessionCommand::ReleaseSavepoint)
-        );
-        assert_eq!(kind_of("LET $x = 1"), Some(SessionCommand::AssignVariable));
-        assert_eq!(
-            kind_of("LOAD EXTENSION '/tmp/a.so'"),
-            Some(SessionCommand::Extension)
-        );
-        assert_eq!(
-            kind_of("INSTALL EXTENSION my_udf FROM '/tmp/a.so'"),
-            Some(SessionCommand::Extension)
-        );
-        assert_eq!(
-            kind_of("UNINSTALL EXTENSION my_udf"),
-            Some(SessionCommand::Extension)
-        );
-        assert_eq!(
-            kind_of("UPDATE EXTENSION my_udf"),
-            Some(SessionCommand::Extension)
-        );
+    fn parses_every_transaction_and_session_command() {
+        assert!(matches!(parsed("BEGIN"), Some(Stmt::BeginTransaction(_))));
+        assert!(matches!(
+            parsed("BEGIN TRANSACTION"),
+            Some(Stmt::BeginTransaction(_))
+        ));
+        assert!(matches!(
+            parsed("BEGIN READ ONLY"),
+            Some(Stmt::BeginTransaction(_))
+        ));
+        assert!(matches!(
+            parsed("COMMIT"),
+            Some(Stmt::CommitTransaction(_))
+        ));
+        assert!(matches!(
+            parsed("ROLLBACK"),
+            Some(Stmt::RollbackTransaction(_))
+        ));
+        assert!(matches!(
+            parsed("ROLLBACK TO sp1"),
+            Some(Stmt::RollbackTransaction(_))
+        ));
+        assert!(matches!(parsed("SAVEPOINT sp1"), Some(Stmt::Savepoint(_))));
+        assert!(matches!(
+            parsed("RELEASE SAVEPOINT sp1"),
+            Some(Stmt::ReleaseSavepoint(_))
+        ));
+        assert!(matches!(
+            parsed("LET $x = 1"),
+            Some(Stmt::AssignVariable(_))
+        ));
+        for query in [
+            "LOAD EXTENSION '/tmp/a.so'",
+            "INSTALL EXTENSION my_udf FROM '/tmp/a.so'",
+            "UNINSTALL EXTENSION my_udf",
+            "UPDATE EXTENSION my_udf",
+        ] {
+            assert!(
+                matches!(parsed(query), Some(Stmt::Extension(_))),
+                "{query} must parse as an EXTENSION statement"
+            );
+        }
     }
 
     #[test]
     fn regular_statements_and_non_commands_pass_through() {
-        assert_eq!(kind_of("MATCH (n) RETURN n"), None);
-        assert_eq!(kind_of("BEGINNING OF TEXT"), None);
-        assert_eq!(kind_of(""), None);
+        assert!(parsed("MATCH (n) RETURN n").is_none());
+        assert!(parsed("BEGINNING OF TEXT").is_none());
+        assert!(parsed("").is_none());
         // Command keyword that parses into another statement kind.
-        assert_eq!(kind_of("COMMIT; MATCH (n) RETURN n"), None);
+        assert!(parsed("COMMIT; MATCH (n) RETURN n").is_none());
     }
 
     #[test]
     fn malformed_command_reports_first_error_with_position() {
-        let error = classify_session_command("BEGIN").expect("bare BEGIN parses");
-        assert_eq!(error.map(|(_, kind)| kind), Some(SessionCommand::Begin));
+        let error = parse_session_command("BEGIN").expect("bare BEGIN parses");
+        assert!(error.is_some());
 
-        let error = classify_session_command("SAVEPOINT").expect_err("savepoint needs a name");
+        let error = parse_session_command("SAVEPOINT").expect_err("savepoint needs a name");
         assert!(!error.message.is_empty());
         assert!(error.offset.is_some() || error.position.is_some());
     }

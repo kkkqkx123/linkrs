@@ -52,7 +52,7 @@ impl Ast {
 /// Coarse classification of a statement, used for routing/permission/statistics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StmtCategory {
-    /// Subquery / compound statement wrappers (QUERY / PIPE / SET OPERATION / ASSIGNMENT).
+    /// Subquery / compound statement wrappers (PIPE / SET OPERATION / ASSIGNMENT).
     Query,
     /// Read & analytic statements (MATCH / GO / LOOKUP / FIND PATH / ... / RETURN / YIELD / LET).
     Dql,
@@ -87,7 +87,6 @@ impl StmtCategory {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Query(QueryStmt),
     Create(CreateStmt),
     Match(MatchStmt),
     Delete(DeleteStmt),
@@ -174,7 +173,6 @@ pub enum Stmt {
 }
 
 crate::define_stmt_helpers! {
-    Query => Query,
     Create => Ddl,
     Match => Dql,
     Delete => Dml,
@@ -262,7 +260,6 @@ crate::define_stmt_helpers! {
 impl Stmt {
     pub fn kind(&self) -> &'static str {
         match self {
-            Stmt::Query(_) => "QUERY",
             Stmt::Create(_) => "CREATE",
             Stmt::Match(_) => "MATCH",
             Stmt::Delete(_) => "DELETE",

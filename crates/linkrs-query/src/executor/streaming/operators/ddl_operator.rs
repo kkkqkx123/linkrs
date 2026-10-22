@@ -6,9 +6,8 @@ use crate::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::executor::streaming::executor::StreamingExecutor;
 use crate::executor::streaming::operators::source_operator::OperatorConfig;
 use crate::executor::streaming::operators::spec::{
-    EdgeManageCommand, IndexManageCommand, MacroManageCommand, MigrateAction,
-    SequenceManageCommand, SpaceManageCommand, TagManageCommand, TypeManageCommand,
-    UserManageCommand,
+    EdgeManageCommand, IndexManageCommand, MacroManageCommand, SequenceManageCommand,
+    SpaceManageCommand, TagManageCommand, TypeManageCommand, UserManageCommand,
 };
 use crate::executor::streaming::runtime::ExecutionRuntime;
 use crate::executor::streaming::slot::{SlotInfo, SlotLayout};
@@ -54,7 +53,6 @@ fn manage_result_layout() -> Arc<SlotLayout> {
 
 mod auth_executor;
 mod maintenance_executor;
-mod migration_executor;
 mod schema_executor;
 
 fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChunk {
@@ -243,32 +241,6 @@ pub enum DdlOperatorKind {
         target_name: Option<String>,
         emitted: bool,
     },
-    Migrate {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        space_name: String,
-        action: MigrateAction,
-        migration_data: Option<String>,
-        emitted: bool,
-    },
-    MigratePlan {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        space_name: String,
-        label: String,
-        is_edge: bool,
-        from_version: u64,
-        to_version: u64,
-        emitted: bool,
-    },
-    MigrateRun {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        plan_json: String,
-        emitted: bool,
-    },
-    MigrateRollback {
-        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
-        plan_json: String,
-        emitted: bool,
-    },
     SequenceManage {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         command: SequenceManageCommand,
@@ -444,44 +416,6 @@ impl DdlOperator {
                 target_name: None,
                 emitted: false,
             },
-            super::spec::DdlSpec::Migrate {
-                space_name,
-                action,
-                migration_data,
-            } => DdlOperatorKind::Migrate {
-                storage,
-                space_name: space_name.clone(),
-                action: *action,
-                migration_data: migration_data.clone(),
-                emitted: false,
-            },
-            super::spec::DdlSpec::MigratePlan {
-                space_name,
-                label,
-                is_edge,
-                from_version,
-                to_version,
-            } => DdlOperatorKind::MigratePlan {
-                storage: storage.clone(),
-                space_name: space_name.clone(),
-                label: label.clone(),
-                is_edge: *is_edge,
-                from_version: *from_version,
-                to_version: *to_version,
-                emitted: false,
-            },
-            super::spec::DdlSpec::MigrateRun { plan_json } => DdlOperatorKind::MigrateRun {
-                storage: storage.clone(),
-                plan_json: plan_json.clone(),
-                emitted: false,
-            },
-            super::spec::DdlSpec::MigrateRollback { plan_json } => {
-                DdlOperatorKind::MigrateRollback {
-                    storage: storage.clone(),
-                    plan_json: plan_json.clone(),
-                    emitted: false,
-                }
-            }
             super::spec::DdlSpec::SequenceManage { command } => DdlOperatorKind::SequenceManage {
                 storage,
                 command: command.clone(),
@@ -561,12 +495,6 @@ impl DdlOperator {
                 maintenance_executor::execute_in_query_call(self)
             }
             DdlOperatorKind::Analyze { .. } => maintenance_executor::execute_analyze(self),
-            DdlOperatorKind::Migrate { .. } => maintenance_executor::execute_migrate(self),
-            DdlOperatorKind::MigratePlan { .. } => migration_executor::execute_migrate_plan(self),
-            DdlOperatorKind::MigrateRun { .. } => migration_executor::execute_migrate_run(self),
-            DdlOperatorKind::MigrateRollback { .. } => {
-                migration_executor::execute_migrate_rollback(self)
-            }
             DdlOperatorKind::SequenceManage { .. } => self.execute_sequence_manage(),
             DdlOperatorKind::MacroManage { .. } => self.execute_macro_manage(),
             DdlOperatorKind::TypeManage { .. } => self.execute_type_manage(),

@@ -65,8 +65,8 @@ use crate::planning::plan::core::nodes::search::vector::data_access::{
 use crate::planning::plan::core::nodes::access::IndexScanNode;
 use crate::planning::plan::core::nodes::management::stats_nodes::ShowStatsNode;
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowAttachedDatabasesNode, ShowConfigsNode, ShowExtensionsNode, ShowMacrosNode,
-    ShowQueriesNode, ShowSessionsNode,
+    InQueryCallNode, LoadFromNode, ShowAttachedDatabasesNode, ShowConfigsNode,
+    ShowExtensionsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::search::fulltext::data_access::{
     FulltextLookupNode, FulltextSearchNode, MatchFulltextNode,
@@ -275,6 +275,8 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
         visit_show_configs => ShowConfigsNode, ShowConfigs,
         visit_show_queries => ShowQueriesNode, ShowQueries,
         visit_show_sessions => ShowSessionsNode, ShowSessions,
+        visit_load_from => LoadFromNode, LoadFrom,
+        visit_in_query_call => InQueryCallNode, InQueryCall,
     );
 
     // Macro / Type / SHOW catalog nodes (leaf management nodes)

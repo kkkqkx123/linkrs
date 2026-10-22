@@ -536,6 +536,7 @@ mod tests {
     #[test]
     fn test_is_pure_impure_functions_never_fold() {
         let registry = global_registry();
+        let registry = registry.read();
         for name in [
             "rand",
             "rand32",
@@ -559,6 +560,7 @@ mod tests {
     #[test]
     fn test_is_pure_representative_pure_functions() {
         let registry = global_registry();
+        let registry = registry.read();
         for name in [
             "abs",
             "sqrt",
@@ -594,6 +596,7 @@ mod tests {
     #[test]
     fn test_is_pure_classification_is_explicit_for_all_registered() {
         let registry = global_registry();
+        let registry = registry.read();
         for name in registry.function_names() {
             let f = registry
                 .get_builtin(name)
@@ -643,6 +646,7 @@ mod tests {
     #[test]
     fn test_central_arity_fixed_functions() {
         let registry = global_registry();
+        let registry = registry.read();
         // Correct calls still succeed.
         assert!(registry.execute("length", &[Value::string("hi")]).is_ok());
         assert!(registry
@@ -723,6 +727,7 @@ mod tests {
     #[test]
     fn test_central_arity_error_format() {
         let registry = global_registry();
+        let registry = registry.read();
         let err = registry.execute("length", &[]).unwrap_err();
         assert_eq!(err.error_type, ExpressionErrorType::InvalidArgumentCount);
         assert_eq!(
@@ -742,6 +747,7 @@ mod tests {
     #[test]
     fn test_central_arity_variadic_boundaries() {
         let registry = global_registry();
+        let registry = registry.read();
         // Zero-argument calls that handlers accept.
         assert!(registry.execute("concat", &[]).is_ok());
         assert!(registry.execute("coalesce", &[]).is_ok());

@@ -13,7 +13,6 @@ use crate::embedded::hooks::HookBus;
 use crate::session_variables::SessionVariables;
 use linkrs_core::SessionStatistics;
 use linkrs_metrics::StatsManager;
-use linkrs_query::executor::expression::functions::FunctionRegistry;
 use linkrs_storage::StorageClient;
 use linkrs_sync::SyncManager;
 use linkrs_transaction::TransactionId;
@@ -60,8 +59,6 @@ pub struct Session<S: StorageClient + Clone + Send + Sync + 'static> {
     current_transaction: Arc<RwLock<Option<TransactionId>>>,
     /// Session-level change statistics
     statistics: SessionStatistics,
-    /// Session-level function registry
-    function_registry: Arc<RwLock<FunctionRegistry>>,
     /// Session-scoped user variables (`$name`) with transaction overlay.
     session_variables: Arc<crate::session_variables::SessionVariables>,
     /// Cooperative interrupt flag: set by `interrupt()` or the C-API
@@ -105,7 +102,6 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             auto_commit: true,
             current_transaction: Arc::new(RwLock::new(None)),
             statistics: SessionStatistics::new(),
-            function_registry: Arc::new(RwLock::new(FunctionRegistry::new())),
             session_variables: Arc::new(SessionVariables::new()),
             interrupted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }

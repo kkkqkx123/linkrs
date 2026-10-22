@@ -29,11 +29,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget> Session<S> {
-    /// Obtain a reference to the function registry.
-    pub fn function_registry(&self) -> Arc<RwLock<FunctionRegistry>> {
-        Arc::clone(&self.function_registry)
-    }
-
     /// Get the number of rows affected by the last operation.
     pub fn changes(&self) -> u64 {
         self.statistics.last_changes()

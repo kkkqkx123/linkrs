@@ -171,7 +171,7 @@ impl CompositeValidator {
             ))));
         }
 
-        let registry = crate::executor::expression::functions::global_registry_ref();
+        let registry = crate::executor::expression::functions::global_registry_ref().read();
         if let Some(func) = registry.get_builtin(name) {
             let expected = func.arity();
             let variadic = func.is_variadic();

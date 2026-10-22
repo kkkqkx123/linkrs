@@ -179,10 +179,14 @@ pub enum AlterTarget {
     },
 }
 
+/// `CLEAR SPACE [<name>]` — drop every tag, edge type and data row of a
+/// space while keeping the space itself.
+///
+/// A missing name targets the current space.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClearSpaceStmt {
     pub span: Span,
-    pub space_name: String,
+    pub space_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
