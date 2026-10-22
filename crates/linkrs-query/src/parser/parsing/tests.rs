@@ -1156,4 +1156,24 @@ mod tests {
             panic!("expected AlterFulltextIndex statement, got {:?}", stmt);
         }
     }
+
+    #[test]
+    fn test_incoming_edge_forms_parse() {
+        // The `<-` token already carries the dash, so the hop must not
+        // expect a second one before the edge body.
+        for query in [
+            "MATCH (a)<-[:FOLLOWS]-(b) RETURN a",
+            "MATCH (a)<--(b) RETURN a",
+            "CREATE (a)<-[:FOLLOWS]-(b)",
+        ] {
+            let stmt = parse_statement(query)
+                .unwrap_or_else(|error| panic!("{query} should parse: {error}"));
+            let expected = if query.starts_with("CREATE") {
+                "CREATE"
+            } else {
+                "MATCH"
+            };
+            assert_eq!(stmt.kind(), expected);
+        }
+    }
 }

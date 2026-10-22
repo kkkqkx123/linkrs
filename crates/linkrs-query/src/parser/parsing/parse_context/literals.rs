@@ -346,17 +346,7 @@ impl<'a> ParseContext<'a> {
     }
 
     pub fn check_keyword(&mut self, keyword: &str) -> bool {
-        match &self.current_token.kind {
-            TokenKind::Identifier(current) => current.eq_ignore_ascii_case(keyword),
-            TokenKind::BooleanLiteral(_) => false,
-            other => {
-                crate::parser::lexing::spec::unit_spellings_for(other).is_some_and(|spellings| {
-                    spellings
-                        .iter()
-                        .any(|spelling| spelling.eq_ignore_ascii_case(keyword))
-                })
-            }
-        }
+        token_matches_keyword(&self.current_token.kind, keyword)
     }
 
     /// [`check_keyword`] against the lookahead token (without consuming it).
@@ -364,10 +354,7 @@ impl<'a> ParseContext<'a> {
     /// comparison shares the same derivation as the current-token check.
     pub fn check_keyword_ahead(&mut self, keyword: &str) -> bool {
         let kind = self.peek_token().kind.clone();
-        match &kind {
-            TokenKind::Identifier(current) => current.eq_ignore_ascii_case(keyword),
-            _ => false,
-        }
+        token_matches_keyword(&kind, keyword)
     }
 
     /// Check if the next tokens match the given sequence (non-consuming)
@@ -468,6 +455,22 @@ impl<'a> ParseContext<'a> {
     }
 }
 
+/// Whether a token spells the given keyword: identifiers compare their
+/// payload, reserved keyword tokens compare their registered spellings.
+fn token_matches_keyword(kind: &TokenKind, keyword: &str) -> bool {
+    match kind {
+        TokenKind::Identifier(current) => current.eq_ignore_ascii_case(keyword),
+        TokenKind::BooleanLiteral(_) => false,
+        other => {
+            crate::parser::lexing::spec::unit_spellings_for(other).is_some_and(|spellings| {
+                spellings
+                    .iter()
+                    .any(|spelling| spelling.eq_ignore_ascii_case(keyword))
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ParseContext;
@@ -504,8 +507,8 @@ mod tests {
 
     fn check_ahead(input: &str, keyword: &str) -> bool {
         let mut ctx = ParseContext::new(input);
-        // Park the cursor on the first token so the probe inspects the second.
-        ctx.next_token();
+        // The cursor already rests on the first token, so the probe inspects
+        // the second one.
         ctx.check_keyword_ahead(keyword)
     }
 

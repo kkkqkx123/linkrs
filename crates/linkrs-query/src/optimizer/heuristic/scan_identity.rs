@@ -318,7 +318,15 @@ fn audit_ancestor(anc: &PlanNodeEnum, var: &str, projected: &HashSet<&str>, is_r
             audit_join_keys(join.hash_keys(), join.probe_keys(), var, projected)
         }
         PlanNodeEnum::SemiJoin(join) => {
+            // A Mark-Join carries its residual non-equi condition beside the
+            // keys; the condition reads the join's own variables, so it must
+            // be audited like the keys.
             audit_join_keys(join.hash_keys(), join.probe_keys(), var, projected)
+                && join
+                    .join_condition()
+                    .and_then(|condition| condition.get_expression())
+                    .map(|expr| entity_use_safe(&expr, var, projected))
+                    .unwrap_or(true)
         }
         PlanNodeEnum::ExpandAll(expand) => {
             let filter_safe = expand
@@ -557,6 +565,20 @@ mod tests {
         walk(root, &mut found);
         assert_eq!(found.len(), 1, "test plans hold exactly one scan");
         found[0]
+    }
+
+    fn scan_flags(root: &PlanNodeEnum) -> Vec<bool> {
+        let mut found = Vec::new();
+        fn walk(node: &PlanNodeEnum, out: &mut Vec<bool>) {
+            if let PlanNodeEnum::ScanVertices(scan) = node {
+                out.push(scan.identity_only());
+            }
+            for child in node.children() {
+                walk(child, out);
+            }
+        }
+        walk(root, &mut found);
+        found
     }
 
     fn skip_flag(root: &PlanNodeEnum) -> bool {
@@ -832,5 +854,46 @@ mod tests {
         assert!(changed, "identity still applies to the scan");
         assert!(scan_flag(&annotated));
         assert!(!skip_flag(&annotated), "distinct keeps rows");
+    }
+
+    /// Mark-Join plan with a residual non-equi condition over both sides.
+    fn mark_join(left_props: &[&str], right_props: &[&str]) -> PlanNodeEnum {
+        use crate::planning::plan::core::nodes::join::join_node::SemiJoinNode;
+        let condition = ctx_expr(Expression::Binary {
+            left: Box::new(prop_expr("p", "age")),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(prop_expr("t", "age")),
+        });
+        let join = SemiJoinNode::new_with_condition(
+            flat_scan("t", left_props),
+            flat_scan("p", right_props),
+            vec![],
+            vec![],
+            condition,
+            false,
+        )
+        .expect("semi join builds");
+        PlanNodeEnum::SemiJoin(join)
+    }
+
+    #[test]
+    fn mark_join_condition_blocks_identity() {
+        // The residual condition reads `p.age` from the right side; without
+        // a flat slot the evaluator falls back to the boxed vertex, so the
+        // identity annotation must not drop it.
+        let plan = mark_join(&[], &[]);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(!changed, "the residual condition needs the boxed vertices");
+        assert!(scan_flags(&annotated).iter().all(|flag| !flag));
+    }
+
+    #[test]
+    fn flat_mark_join_condition_keeps_identity() {
+        // Both sides project the property, so the flat slots serve the
+        // residual condition and the identity annotation stays valid.
+        let plan = mark_join(&["age"], &["age"]);
+        let (annotated, changed) = annotate_scan_identity(&plan);
+        assert!(changed, "flat-served condition keeps identity");
+        assert!(scan_flags(&annotated).iter().all(|flag| *flag));
     }
 }

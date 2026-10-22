@@ -57,6 +57,21 @@ impl Planner for UnwindPlanner {
             ))
         })?;
 
+        if let Some(expr_meta) = list_expr.expression() {
+            let space_id = ctx.qctx.space_id().unwrap_or(1);
+            let space_name = ctx
+                .qctx
+                .space_name()
+                .unwrap_or_else(|| "default".to_string());
+            crate::planning::statements::clauses::exists_planner::check_expression_subqueries(
+                expr_meta.inner(),
+                &ctx.qctx,
+                space_id,
+                &space_name,
+                &[],
+            )?;
+        }
+
         let arg_node = LogicalArgumentNode {
             id: next_node_id(),
             var: "unwind_input".to_string(),

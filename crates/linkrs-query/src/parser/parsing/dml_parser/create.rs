@@ -139,8 +139,14 @@ impl DmlParser {
 
         let start_span = ctx.current_span();
 
-        let incoming = ctx.match_token(TokenKind::BackArrow);
-        ctx.expect_token(TokenKind::Minus)?;
+        // The hop opens with `<-` (incoming; the dash is part of the token)
+        // or with a bare `-` (outgoing or undirected).
+        let incoming = if ctx.match_token(TokenKind::BackArrow) {
+            true
+        } else {
+            ctx.expect_token(TokenKind::Minus)?;
+            false
+        };
 
         ctx.expect_token(TokenKind::LBracket)?;
 

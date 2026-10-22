@@ -241,7 +241,10 @@ mod graph_service {
     /// Test authentication and query execution
     #[tokio::test]
     async fn test_graph_service_query_execution() {
-        let config = Config::default();
+        let mut config = Config::default();
+        // The bootstrap password seeds the default administrator; it is
+        // resolved at startup in production and empty in a default config.
+        config.server.auth.bootstrap_password = "root".to_string();
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
         let storage = Arc::new(SyncWrapper::new(

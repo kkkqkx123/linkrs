@@ -206,9 +206,14 @@ impl TraversalParser {
     /// Analyzing the border mode
     fn parse_edge_pattern(&mut self, ctx: &mut ParseContext) -> Result<EdgePattern, ParseError> {
         let start_span = ctx.current_span();
-        let incoming = ctx.match_token(TokenKind::BackArrow);
-
-        ctx.expect_token(TokenKind::Minus)?;
+        // The hop opens with `<-` (incoming; the dash is part of the token)
+        // or with a bare `-` (outgoing or undirected).
+        let incoming = if ctx.match_token(TokenKind::BackArrow) {
+            true
+        } else {
+            ctx.expect_token(TokenKind::Minus)?;
+            false
+        };
 
         let mut variable = None;
         let mut edge_types = Vec::new();

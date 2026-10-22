@@ -121,7 +121,12 @@ fn test_create_cypher_edge_bidirectional() {
     let query = "CREATE (a)-[:COLLEAGUE]-(b)";
     let mut parser = Parser::new(query);
 
-    let _result = parser.parse();
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "Cypher CREATE bidirectional edge parse should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -129,7 +134,14 @@ fn test_create_cypher_edge_left_to_right() {
     let query = "CREATE (a)<-[:FOLLOWS]-(b)";
     let mut parser = Parser::new(query);
 
-    let _result = parser.parse();
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "Cypher CREATE reverse edge parse should succeed: {:?}",
+        result.err()
+    );
+    let stmt = result.expect("Cypher CREATE reverse edge parse should succeed");
+    assert_eq!(stmt.ast.stmt.kind(), "CREATE");
 }
 
 #[test]

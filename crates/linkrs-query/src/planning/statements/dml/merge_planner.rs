@@ -283,6 +283,20 @@ impl Planner for MergePlanner {
 
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
 
+        let space_id = qctx.space_id().unwrap_or(1);
+        let reject_subquery = |expr: &ContextualExpression| -> Result<(), PlannerError> {
+            if let Some(expr_meta) = expr.expression() {
+                crate::planning::statements::clauses::exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    space_id,
+                    &space_name,
+                    &[],
+                )?;
+            }
+            Ok(())
+        };
+
         match &merge.pattern {
             BoundMergePattern::Node(vertex) => {
                 let has_on_match = !merge.on_match.is_empty();
@@ -311,6 +325,9 @@ impl Planner for MergePlanner {
                         space_name.clone(),
                         &expr_ctx,
                     )?;
+                    for value in update_info.properties.values() {
+                        reject_subquery(value)?;
+                    }
                     select_node.set_if_branch(LogicalNodeEnum::Update(LogicalUpdateNode {
                         id: next_node_id(),
                         info: UpdateTargetType::Vertex(update_info),
@@ -331,6 +348,9 @@ impl Planner for MergePlanner {
                         space_name.clone(),
                         &expr_ctx,
                     )?;
+                    for value in update_info.properties.values() {
+                        reject_subquery(value)?;
+                    }
                     current_node = LogicalNodeEnum::Update(LogicalUpdateNode {
                         id: next_node_id(),
                         info: UpdateTargetType::Vertex(update_info),
@@ -367,6 +387,7 @@ impl Planner for MergePlanner {
                             bexpr, &expr_ctx,
                         )
                         .map_err(PlannerError::PlanGenerationFailed)?;
+                        reject_subquery(&ctx_expr)?;
                         values.push(ctx_expr);
                     }
                     (names, values)

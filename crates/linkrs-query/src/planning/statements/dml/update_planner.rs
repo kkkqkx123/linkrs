@@ -13,6 +13,7 @@ use crate::planning::plan::logical::logical_nodes::dml::LogicalUpdateNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
+use linkrs_core::types::expr::contextual::ContextualExpression;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -80,6 +81,20 @@ impl Planner for UpdatePlanner {
             linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
 
+        let space_id = qctx.space_id().unwrap_or(1);
+        let reject_subquery = |expr: &ContextualExpression| -> Result<(), PlannerError> {
+            if let Some(expr_meta) = expr.expression() {
+                crate::planning::statements::clauses::exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    space_id,
+                    &space_name,
+                    &[],
+                )?;
+            }
+            Ok(())
+        };
+
         let update_target = match &update.target {
             crate::binder::bound::BoundUpdateTarget::Vertex(_) => {
                 return Err(PlannerError::PlanGenerationFailed(
@@ -115,6 +130,7 @@ impl Planner for UpdatePlanner {
                         &expr_ctx,
                     )
                     .map_err(PlannerError::PlanGenerationFailed)?;
+                    reject_subquery(&value)?;
                     properties.insert(assignment.property.clone(), value);
                 }
 
@@ -126,6 +142,9 @@ impl Planner for UpdatePlanner {
                             .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .transpose()?;
+                if let Some(condition) = condition.as_ref() {
+                    reject_subquery(condition)?;
+                }
 
                 let edge_info = EdgeUpdateInfo {
                     space_name,
@@ -158,6 +177,7 @@ impl Planner for UpdatePlanner {
                         &expr_ctx,
                     )
                     .map_err(PlannerError::PlanGenerationFailed)?;
+                    reject_subquery(&value)?;
                     properties.insert(assignment.property.clone(), value);
                 }
 
@@ -169,6 +189,9 @@ impl Planner for UpdatePlanner {
                             .map_err(PlannerError::PlanGenerationFailed)
                     })
                     .transpose()?;
+                if let Some(condition) = condition.as_ref() {
+                    reject_subquery(condition)?;
+                }
 
                 let vertex_info = VertexUpdateInfo {
                     space_name,

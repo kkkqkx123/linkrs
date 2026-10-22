@@ -54,6 +54,20 @@ impl Planner for SetPlanner {
             linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
         );
 
+        let space_id = qctx.space_id().unwrap_or(1);
+        let reject_subquery = |expr: &ContextualExpression| -> Result<(), PlannerError> {
+            if let Some(expr_meta) = expr.expression() {
+                crate::planning::statements::clauses::exists_planner::check_expression_subqueries(
+                    expr_meta.inner(),
+                    &qctx,
+                    space_id,
+                    &space_name,
+                    &[],
+                )?;
+            }
+            Ok(())
+        };
+
         let mut vertex_updates: Vec<VertexUpdateInfo> = Vec::new();
         let mut variable_assignments: Vec<(String, ContextualExpression)> = Vec::new();
 
@@ -85,6 +99,7 @@ impl Planner for SetPlanner {
                             &expr_ctx,
                         )
                         .map_err(PlannerError::PlanGenerationFailed)?;
+                        reject_subquery(&value)?;
 
                         let mut properties = HashMap::new();
                         properties.insert(assignment.property.clone(), value);
@@ -106,6 +121,7 @@ impl Planner for SetPlanner {
                         &expr_ctx,
                     )
                     .map_err(PlannerError::PlanGenerationFailed)?;
+                    reject_subquery(&value)?;
                     variable_assignments.push((assignment.property.clone(), value));
                 }
             } else {
@@ -114,6 +130,7 @@ impl Planner for SetPlanner {
                     &expr_ctx,
                 )
                 .map_err(PlannerError::PlanGenerationFailed)?;
+                reject_subquery(&value)?;
                 variable_assignments.push((assignment.property.clone(), value));
             }
         }
