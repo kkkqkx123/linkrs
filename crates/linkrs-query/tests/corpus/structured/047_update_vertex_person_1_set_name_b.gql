@@ -1,0 +1,1 @@
+UPDATE VERTEX person "1" SET name = "b"

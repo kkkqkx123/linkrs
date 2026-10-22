@@ -134,6 +134,18 @@ impl VectorDdlPlanner {
         qctx: Arc<QueryContext>,
         metadata: Option<&MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
+        // Vector search is opt-in. DDL stays available in every build, but
+        // search statements must name the missing feature instead of falling
+        // through to a generic planning failure.
+        #[cfg(not(feature = "vector"))]
+        if matches!(
+            stmt,
+            Stmt::SearchVector(_) | Stmt::LookupVector(_) | Stmt::MatchVector(_)
+        ) {
+            return Err(PlannerError::UnsupportedOperation(
+                "vector feature is not enabled: rebuild linkrs with --features vector".to_string(),
+            ));
+        }
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
         let metadata = metadata.or(self.metadata_context.as_deref());
         match stmt {

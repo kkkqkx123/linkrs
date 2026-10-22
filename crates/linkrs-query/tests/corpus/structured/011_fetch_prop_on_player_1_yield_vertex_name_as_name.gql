@@ -1,0 +1,1 @@
+FETCH PROP ON player "1" YIELD vertex.name AS name

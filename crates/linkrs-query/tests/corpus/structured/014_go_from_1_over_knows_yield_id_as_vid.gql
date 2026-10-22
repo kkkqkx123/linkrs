@@ -1,0 +1,1 @@
+GO FROM "1" OVER knows YIELD id($$) AS vid

@@ -71,6 +71,16 @@ fn tokens_cover_all_operator_kinds() {
 }
 
 #[test]
+fn has_tail_separates_structured_from_fallback() {
+    assert!(!linkrs_grammar::has_tail("MATCH (a) RETURN a"));
+    assert!(!linkrs_grammar::has_tail(
+        "MATCH (a)-[e:knows]->(b) RETURN a, b"
+    ));
+    assert!(linkrs_grammar::has_tail("KILL QUERY 1"));
+    assert!(linkrs_grammar::has_tail("BEGIN TRANSACTION READ ONLY"));
+}
+
+#[test]
 fn fixtures_parse_cleanly() {
     use std::fs;
     use std::path::Path;

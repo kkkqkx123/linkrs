@@ -1,8 +1,9 @@
 //! UDF / extension management for an embedded session.
 //!
-//! These methods only touch the session-level `FunctionRegistry`; they never
-//! reach the query planner. `execute_extension` emits an admin message through
-//! the shared `single_message_result` helper owned by `state`.
+//! These methods operate on the process-wide function registry shared with the
+//! query engine; they never reach the query planner. `execute_extension`
+//! emits an admin message through the shared `single_message_result` helper
+//! owned by `state`.
 
 use super::Session;
 use crate::api_core::{CoreError, CoreResult};

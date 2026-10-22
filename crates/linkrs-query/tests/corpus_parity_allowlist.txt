@@ -1,4 +1,0 @@
-# Parity allowlist: statements the handwritten parser accepts but the
-# tree-sitter subset grammar does not cover yet. One reason per line.
-# This list must only shrink over time.
-

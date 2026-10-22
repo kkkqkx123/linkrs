@@ -1,0 +1,1 @@
+MATCH (a) WHERE a.name =~ "A.*" RETURN a

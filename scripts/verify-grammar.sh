@@ -14,8 +14,22 @@ git diff --exit-code -- crates/linkrs-grammar/data/keywords.json
 node tools/grammar-codegen/gen.mjs
 git diff --exit-code -- frontend/src/lib/utils/generated/
 
+# `outputs/` is intentionally gitignored, so drift cannot be detected via
+# git. Snapshot the directory before regenerating and compare afterwards: a
+# regeneration that changes any output fails the gate. A missing directory on
+# a fresh checkout skips the comparison (the example still must succeed).
+outputs_dir="crates/linkrs-grammar/outputs"
+if [ -d "$outputs_dir" ]; then
+    before=$(find "$outputs_dir" -type f -print0 | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum)
+fi
 cargo run -q -p linkrs-grammar --example highlight_fixtures
-git diff --exit-code -- crates/linkrs-grammar/outputs/
+if [ -d "$outputs_dir" ] && [ -n "${before:-}" ]; then
+    after=$(find "$outputs_dir" -type f -print0 | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum)
+    if [ "$before" != "$after" ]; then
+        echo "grammar highlight outputs changed during regeneration" >&2
+        exit 1
+    fi
+fi
 
 python3 scripts/check-highlights.py
 python3 scripts/check-grammar-coverage.py

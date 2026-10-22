@@ -6,8 +6,8 @@ use crate::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
 };
 use crate::planning::plan::core::nodes::management::system_nodes::{
-    ShowAttachedDatabasesNode, ShowExtensionsNode, ShowFunctionsNode, ShowGraphsNode,
-    ShowMacrosNode,
+    ShowAttachedDatabasesNode, ShowConfigsNode, ShowExtensionsNode, ShowFunctionsNode,
+    ShowGraphsNode, ShowMacrosNode, ShowQueriesNode, ShowSessionsNode,
 };
 use crate::planning::plan::core::nodes::{
     ShowCreateEdgeNode, ShowCreateIndexNode, ShowCreateSpaceNode, ShowCreateTagNode, ShowEdgesNode,
@@ -67,6 +67,21 @@ impl MaintainPlanner {
                 PlanNodeEnum::ShowExtensions(node)
             }
         }
+    }
+
+    pub(super) fn plan_show_sessions(&self) -> PlanNodeEnum {
+        PlanNodeEnum::ShowSessions(ShowSessionsNode::new(next_node_id()))
+    }
+
+    pub(super) fn plan_show_queries(&self) -> PlanNodeEnum {
+        PlanNodeEnum::ShowQueries(ShowQueriesNode::new(next_node_id()))
+    }
+
+    pub(super) fn plan_show_configs(
+        &self,
+        stmt: &crate::parser::ast::stmt::ShowConfigsStmt,
+    ) -> PlanNodeEnum {
+        PlanNodeEnum::ShowConfigs(ShowConfigsNode::new(next_node_id(), stmt.module.clone()))
     }
 
     pub(super) fn plan_show_create(

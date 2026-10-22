@@ -57,32 +57,48 @@ impl Planner for FulltextSearchPlanner {
         &mut self,
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
-        let space_name = ctx
-            .qctx
-            .space_name()
-            .unwrap_or_else(|| "default".to_string());
-        let space_id = ctx.qctx.space_id().unwrap_or(0);
-
-        match ctx.bound {
-            crate::binder::BoundStatement::CreateFulltextIndex(create) => self.transform_create(
-                &create.index_name,
-                &create.schema_name,
-                &create.fields,
-                create.engine_type,
-                &create.options,
-                create.if_not_exists,
-                &space_name,
-                space_id,
-                ctx.metadata,
-            ),
-            crate::binder::BoundStatement::Other(stmt) => {
-                self.transform_bound(stmt, &space_name, space_id, ctx.metadata)
-            }
-            _ => Err(PlannerError::UnsupportedOperation(format!(
-                "FulltextSearchPlanner has no plan for bound statement: {}",
-                ctx.bound.kind()
-            ))),
+        // The full-text stack is opt-in. When the feature is disabled the
+        // planner refuses every full-text statement with a readable message
+        // instead of leaking "No planner for bound statement" or failing later
+        // inside the operator.
+        #[cfg(not(feature = "fulltext"))]
+        {
+            let _ = ctx;
+            return Err(PlannerError::UnsupportedOperation(
+                "fulltext feature is not enabled: rebuild linkrs with --features fulltext".to_string(),
+            ));
         }
+
+        #[cfg(feature = "fulltext")]
+        {
+            let space_name = ctx
+                .qctx
+                .space_name()
+                .unwrap_or_else(|| "default".to_string());
+            let space_id = ctx.qctx.space_id().unwrap_or(0);
+
+            return match ctx.bound {
+                crate::binder::BoundStatement::CreateFulltextIndex(create) => self.transform_create(
+                    &create.index_name,
+                    &create.schema_name,
+                    &create.fields,
+                    create.engine_type,
+                    &create.options,
+                    create.if_not_exists,
+                    &space_name,
+                    space_id,
+                    ctx.metadata,
+                ),
+                crate::binder::BoundStatement::Other(stmt) => {
+                    self.transform_bound(stmt, &space_name, space_id, ctx.metadata)
+                }
+                _ => Err(PlannerError::UnsupportedOperation(format!(
+                    "FulltextSearchPlanner has no plan for bound statement: {}",
+                    ctx.bound.kind()
+                ))),
+            };
+        }
+
     }
 }
 

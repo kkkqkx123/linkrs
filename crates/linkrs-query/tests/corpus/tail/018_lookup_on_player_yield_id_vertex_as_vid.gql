@@ -1,0 +1,1 @@
+LOOKUP ON player YIELD id(vertex) AS vid

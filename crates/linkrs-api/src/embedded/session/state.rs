@@ -20,7 +20,6 @@ use linkrs_core::Value;
 use linkrs_core::Vertex;
 use linkrs_query::dml_op_from_stmt;
 use linkrs_query::executor::base::ExecutionResult;
-use linkrs_query::executor::expression::functions::FunctionRegistry;
 use linkrs_query::DmlOp;
 use linkrs_storage::StorageClient;
 use parking_lot::RwLock;

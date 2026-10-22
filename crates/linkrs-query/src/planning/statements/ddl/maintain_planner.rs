@@ -42,7 +42,9 @@ impl Planner for MaintainPlanner {
             BoundStatement::Drop(s) => self.plan_drop(&s.target, s.if_exists, &space)?,
             BoundStatement::Alter(s) => self.plan_alter(&s.target, &space)?,
             BoundStatement::Desc(s) => self.plan_desc(&s.target, &space),
-            BoundStatement::ClearSpace(s) => system::plan_clear_space(s.space_name.as_deref(), &space)?,
+            BoundStatement::ClearSpace(s) => {
+                system::plan_clear_space(s.space_name.as_deref(), &space)?
+            }
             BoundStatement::BeginTransaction(_) => system::plan_begin_transaction(),
             BoundStatement::Commit(_) => system::plan_commit(),
             BoundStatement::Rollback(r) => system::plan_rollback(r.savepoint_name.as_ref()),
@@ -80,6 +82,22 @@ impl Planner for MaintainPlanner {
                     return Err(PlannerError::UnsupportedOperation(
                         "MIGRATE is not available through SQL; use HTTP /v1/migration/plan, /v1/migration/execute and /v1/migration/rollback, or the corresponding MigratePlan, MigrateExecute and MigrateRollback gRPC methods".to_string(),
                     ));
+                }
+                crate::parser::ast::Stmt::ShowSessions(_) => self.plan_show_sessions(),
+                crate::parser::ast::Stmt::ShowQueries(_) => self.plan_show_queries(),
+                crate::parser::ast::Stmt::ShowConfigs(s) => self.plan_show_configs(s),
+                crate::parser::ast::Stmt::Analyze(s) => {
+                    return Err(PlannerError::UnsupportedOperation(format!(
+                        "ANALYZE has no plannable form in this execution path: run ANALYZE SPACE {} through the prepared query endpoint",
+                        s.space.as_deref().unwrap_or("<name>"),
+                    )));
+                }
+                crate::parser::ast::Stmt::UpdateConfigs(s) => {
+                    return Err(PlannerError::UnsupportedOperation(format!(
+                        "UPDATE CONFIGS {}.{} is applied as a config intent by the prepared pipeline, not as a plannable statement",
+                        s.module.as_deref().unwrap_or("<module>"),
+                        s.config_name,
+                    )));
                 }
                 _ => {
                     return Err(PlannerError::UnsupportedOperation(format!(

@@ -1,0 +1,1 @@
+MATCH (a)-[e:knows]->(b) RETURN a, b

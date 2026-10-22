@@ -1,194 +1,159 @@
-use std::collections::HashSet;
+//! Corpus parity gate: the handwritten parser and the tree-sitter subset
+//! grammar must agree on every corpus statement.
+//!
+//! The corpus lives in `tests/corpus/` as one statement per `.gql` file so
+//! the semantic runner can reuse it:
+//! - `structured/` holds statements the grammar covers structurally. Their
+//!   trees must contain no `tail` fallback node.
+//! - `tail/` holds statements the handwritten parser accepts but the subset
+//!   grammar only covers through its generic `tail` rule. Their trees must
+//!   contain a `tail` node, pinning the exact subset boundary.
+//!
+//! Counts are exact: every file must parse with the handwritten parser (no
+//! silent skips), so shrinking the corpus or regressing the grammar fails
+//! loudly instead of weakening the gate.
+
+use std::path::{Path, PathBuf};
 
 use linkrs_query::parser::Parser;
 
-fn corpus() -> Vec<&'static str> {
-    vec![
-        "MATCH (a) RETURN a",
-        "MATCH (a:person) WHERE a.age > 18 RETURN a",
-        "MATCH (a)-[e:knows]->(b) RETURN a, b",
-        "OPTIONAL MATCH (a) RETURN a",
-        "GO FROM \"1\" OVER knows YIELD id($$) AS vid",
-        "LOOKUP ON TAG player YIELD id(vertex) AS vid",
-        "LOOKUP ON player YIELD id(vertex) AS vid",
-        "FETCH PROP ON player \"1\" YIELD vertex.name AS name",
-        "FIND SHORTEST PATH FROM \"1\" TO \"2\" OVER knows",
-        "GET SUBGRAPH 2 STEPS FROM \"1\" OVER knows",
-        "MATCH (a) RETURN a AS x ORDER BY x SKIP 1 LIMIT 10",
-        "MATCH (a) WHERE a.name IS NULL RETURN a",
-        "MATCH (a) WHERE a.name IS NOT NULL RETURN a",
-        "MATCH (a) WHERE a.age NOT IN [1, 2] RETURN a",
-        "MATCH (a) WHERE a.name STARTS WITH \"J\" RETURN a",
-        "MATCH (a) WHERE a.name IS EMPTY RETURN a",
-        "MATCH (a) WHERE a.age BETWEEN 1 AND 10 RETURN a",
-        "MATCH (a) RETURN CASE WHEN a.age > 18 THEN \"adult\" ELSE \"minor\" END AS c",
-        "MATCH (a) RETURN count(a) AS c",
-        "UNWIND [1, 2] AS x RETURN x",
-        "MATCH (a) WITH a AS b RETURN b",
-        "CREATE TAG person (name STRING, age INT)",
-        "DROP TAG person",
-        "DESCRIBE TAG person",
-        "DESC TAG person",
-        "SHOW TAGS",
-        "SHOW CREATE TAG person",
-        "USE myspace",
-        "INSERT VERTEX person(name) VALUES \"1\":(\"a\")",
-        "UPDATE VERTEX person \"1\" SET name = \"b\"",
-        "DELETE VERTEX person FROM \"1\"",
-        "MATCH (a) RETURN ~a.age AS x",
-        "MATCH (a) RETURN a.age! AS x",
-        "MATCH (a) WHERE a.name =~ \"A.*\" RETURN a",
-        "BEGIN TRANSACTION READ ONLY",
-        "COMMIT",
-        "CREATE USER alice WITH PASSWORD 'p'",
-        "CREATE FULLTEXT INDEX idx ON tag(field)",
-        "CREATE VECTOR INDEX idx ON tag(field)",
-        "CREATE MACRO f(x) AS x",
-        "CREATE TYPE uid AS INT",
-        "CREATE GRAPH g",
-        "KILL QUERY 1",
-        "CLEAR SPACE",
-        "SET x = 1",
-        "ATTACH DATABASE 'a'",
-        "EXPORT DATABASE 'a'",
-        "LOAD EXTENSION 'a'",
-        "MIGRATE PLAN",
-        "CHECKPOINT",
-        "PURGE EXPIRED",
-        "SEARCH VECTOR 'a'",
-        "MATCH FULLTEXT 'term'",
-        "SEARCH 'term'",
-        "CALL foo()",
-        "LET x = 1",
-        "$x = MATCH (a) RETURN a",
-        "BEGIN TRANSACTION",
-        "COMMIT",
-        "ROLLBACK",
-        "SAVEPOINT sp1",
-        "RELEASE SAVEPOINT sp1",
-        "BEGIN TRANSACTION READ ONLY",
-        "COMMIT TRANSACTION",
-        "ROLLBACK TRANSACTION TO SAVEPOINT sp1",
-        "KILL QUERY 1",
-        "CLEAR SPACE",
-        "ATTACH DATABASE 'a'",
-        "EXPORT DATABASE 'a'",
-        "IMPORT DATABASE 'a'",
-        "LOAD EXTENSION 'a'",
-        "CHECKPOINT",
-        "PURGE EXPIRED",
-        "CREATE MACRO f(x) AS x",
-        "DROP MACRO f",
-        "CREATE TYPE uid AS INT",
-        "DROP TYPE uid",
-        "CREATE FULLTEXT INDEX idx ON tag(field)",
-        "DROP FULLTEXT INDEX idx",
-        "SHOW FULLTEXT INDEX",
-        "DESCRIBE FULLTEXT INDEX idx",
-        "CREATE VECTOR INDEX idx ON tag(field)",
-        "DROP VECTOR INDEX idx",
-        "SHOW VECTOR INDEX",
-        "DESCRIBE VECTOR INDEX idx",
-        "SEARCH 'term'",
-        "SEARCH VECTOR 'a'",
-        "MATCH FULLTEXT 'term'",
-        "SEARCH INDEX 'term'",
-        "LOOKUP ON TAG player YIELD id(vertex) AS vid",
-        "FETCH PROP ON player \"1\" YIELD vertex.name AS name",
-        "FIND SHORTEST PATH FROM \"1\" TO \"2\" OVER knows",
-        "GET SUBGRAPH 2 STEPS FROM \"1\" OVER knows",
-        "GO FROM \"1\" OVER knows YIELD id($$) AS vid",
-        "UNWIND [1, 2] AS x RETURN x",
-        "MATCH (a) WITH a AS b RETURN b",
-        "MATCH (a) RETURN CASE WHEN a.age > 18 THEN \"adult\" ELSE \"minor\" END AS c",
-        "MATCH (a) WHERE a.name IS EMPTY RETURN a",
-        "MATCH (a) WHERE a.age NOT IN [1, 2] RETURN a",
-        "MATCH (a) RETURN ~a.age AS x",
-        "MATCH (a) RETURN a.age! AS x",
-        "MATCH (a) | COLLECT a AS x",
-        "MATCH (a)-[e1]->(b), (a)-[e2]->(c) USING JOIN BINARY(e1, e2) RETURN a",
-        "MATCH (a)-[e1]->(b), (a)-[e2]->(c) USING JOIN MULTIWAY(e1, e2) RETURN a",
-        "MATCH (a) RETURN a.b::VECTOR",
-        "MATCH (a) RETURN a UNION MATCH (b) RETURN b",
-        "MATCH (a) RETURN a UNION ALL MATCH (b) RETURN b",
-        "MATCH (a) RETURN a INTERSECT MATCH (b) RETURN b",
-        "MATCH (a) RETURN a MINUS MATCH (b) RETURN b",
-        "LET x = 1",
-        "$x = MATCH (a) RETURN a",
-    ]
+/// Exact corpus sizes. Update together with the `tests/corpus/` files when
+/// the grammar subset boundary moves deliberately.
+const STRUCTURED_COUNT: usize = 47;
+const TAIL_COUNT: usize = 25;
+
+fn corpus_files(dir: &str) -> Vec<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/corpus")
+        .join(dir);
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&root)
+        .unwrap_or_else(|e| panic!("read corpus dir {}: {e}", root.display()))
+        .map(|entry| entry.expect("corpus entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "gql"))
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "corpus dir {} must contain .gql files",
+        root.display()
+    );
+    files
 }
 
-fn allowlist() -> HashSet<String> {
-    let text = include_str!("corpus_parity_allowlist.txt");
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| line.split('#').next().unwrap_or("").trim().to_string())
-        .filter(|stmt| !stmt.is_empty())
-        .collect()
+fn load_statement(path: &Path) -> String {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let stmt = text.trim().to_string();
+    assert!(
+        !stmt.is_empty(),
+        "corpus file {} must hold one statement",
+        path.display()
+    );
+    assert!(
+        !stmt.contains('\n'),
+        "corpus file {} must hold exactly one statement",
+        path.display()
+    );
+    stmt
+}
+
+fn assert_token_cover(stmt: &str) {
+    let toks = linkrs_grammar::tokens(stmt);
+    assert!(
+        !toks.is_empty(),
+        "parity failure for {stmt:?}: empty token list"
+    );
+    let mut last = 0;
+    for t in &toks {
+        assert!(
+            t.start < t.end,
+            "parity failure for {stmt:?}: empty span {t:?}"
+        );
+        assert!(
+            t.end <= stmt.len(),
+            "parity failure for {stmt:?}: span {t:?} out of bounds"
+        );
+        assert!(
+            t.start >= last,
+            "parity failure for {stmt:?}: spans out of order {t:?}"
+        );
+        last = t.start;
+        assert!(
+            [
+                "keyword",
+                "variable",
+                "property",
+                "function",
+                "number",
+                "string",
+                "operator",
+                "comment",
+                "punctuation"
+            ]
+            .contains(&t.class),
+            "parity failure for {stmt:?}: unknown class {t:?}"
+        );
+    }
 }
 
 #[test]
-fn handwritten_success_implies_tree_without_error() {
-    let allowed = allowlist();
-    let mut covered = 0usize;
-    let mut skipped = 0usize;
-    for stmt in corpus() {
-        let mut parser = Parser::new(stmt);
+fn structured_corpus_has_no_tail() {
+    let files = corpus_files("structured");
+    assert_eq!(
+        files.len(),
+        STRUCTURED_COUNT,
+        "structured corpus size drift: update STRUCTURED_COUNT with the corpus files"
+    );
+    for path in &files {
+        let stmt = load_statement(path);
+        let mut parser = Parser::new(&stmt);
         let parsed = parser.parse();
-        if parsed.is_err() {
-            continue;
-        }
-        if allowed.contains(stmt) {
-            skipped += 1;
-            continue;
-        }
-        let outcome = linkrs_grammar::parse(stmt);
+        assert!(
+            parsed.is_ok(),
+            "structured corpus {} must parse: {:?}",
+            path.display(),
+            parsed.err()
+        );
+        let outcome = linkrs_grammar::parse(&stmt);
         assert!(
             !outcome.has_error,
             "parity failure for {stmt:?}: tree contains ERROR/MISSING"
         );
-        let toks = linkrs_grammar::tokens(stmt);
         assert!(
-            !toks.is_empty(),
-            "parity failure for {stmt:?}: empty token list"
+            !linkrs_grammar::has_tail(&stmt),
+            "parity failure for {stmt:?}: structured statement grew a tail node"
         );
-        let mut last = 0;
-        for t in &toks {
-            assert!(
-                t.start < t.end,
-                "parity failure for {stmt:?}: empty span {t:?}"
-            );
-            assert!(
-                t.end <= stmt.len(),
-                "parity failure for {stmt:?}: span {t:?} out of bounds"
-            );
-            assert!(
-                t.start >= last,
-                "parity failure for {stmt:?}: spans out of order {t:?}"
-            );
-            last = t.start;
-            assert!(
-                [
-                    "keyword",
-                    "variable",
-                    "property",
-                    "function",
-                    "number",
-                    "string",
-                    "operator",
-                    "comment",
-                    "punctuation"
-                ]
-                .contains(&t.class),
-                "parity failure for {stmt:?}: unknown class {t:?}"
-            );
-        }
-        covered += 1;
+        assert_token_cover(&stmt);
     }
-    assert!(covered > 50, "corpus coverage too small: {covered}");
-    assert!(
-        skipped <= allowed.len(),
-        "allowlist entries must correspond to corpus statements"
+}
+
+#[test]
+fn tail_corpus_requires_tail() {
+    let files = corpus_files("tail");
+    assert_eq!(
+        files.len(),
+        TAIL_COUNT,
+        "tail corpus size drift: update TAIL_COUNT with the corpus files"
     );
+    for path in &files {
+        let stmt = load_statement(path);
+        let mut parser = Parser::new(&stmt);
+        let parsed = parser.parse();
+        assert!(
+            parsed.is_ok(),
+            "tail corpus {} must parse: {:?}",
+            path.display(),
+            parsed.err()
+        );
+        let outcome = linkrs_grammar::parse(&stmt);
+        assert!(
+            !outcome.has_error,
+            "parity failure for {stmt:?}: tree contains ERROR/MISSING"
+        );
+        assert!(
+            linkrs_grammar::has_tail(&stmt),
+            "parity failure for {stmt:?}: tail-covered statement lost its tail node"
+        );
+        assert_token_cover(&stmt);
+    }
 }

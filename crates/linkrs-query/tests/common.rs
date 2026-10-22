@@ -10,6 +10,8 @@ pub mod assertions;
 pub mod data_fixtures;
 #[path = "common/query_helpers.rs"]
 pub mod query_helpers;
+#[path = "common/statement_inventory.rs"]
+pub mod statement_inventory;
 #[path = "common/storage_helpers.rs"]
 pub mod storage_helpers;
 #[path = "common/test_scenario.rs"]

@@ -1,0 +1,1 @@
+MATCH (a:person) WHERE a.age > 18 RETURN a

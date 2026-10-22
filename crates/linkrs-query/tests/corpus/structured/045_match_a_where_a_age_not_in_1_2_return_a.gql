@@ -1,0 +1,1 @@
+MATCH (a) WHERE a.age NOT IN [1, 2] RETURN a

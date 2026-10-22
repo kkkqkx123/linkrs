@@ -1,0 +1,1 @@
+MATCH (a) RETURN CASE WHEN a.age > 18 THEN "adult" ELSE "minor" END AS c

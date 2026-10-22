@@ -223,9 +223,7 @@ impl PlannerEnum {
                     Some(PlannerEnum::VectorDdl(VectorDdlPlanner::new()))
                 }
                 Stmt::LoadFrom(_) => Some(PlannerEnum::LoadFrom(LoadFromPlanner::new())),
-                Stmt::InQueryCall(_) => {
-                    Some(PlannerEnum::InQueryCall(InQueryCallPlanner::new()))
-                }
+                Stmt::InQueryCall(_) => Some(PlannerEnum::InQueryCall(InQueryCallPlanner::new())),
                 Stmt::CreateFulltextIndex(_)
                 | Stmt::DropFulltextIndex(_)
                 | Stmt::AlterFulltextIndex(_)
@@ -240,6 +238,15 @@ impl PlannerEnum {
                 Stmt::SearchVector(_) | Stmt::LookupVector(_) | Stmt::MatchVector(_) => {
                     Some(PlannerEnum::VectorSearch(VectorSearchPlanner::new()))
                 }
+                #[cfg(not(feature = "vector"))]
+                Stmt::SearchVector(_) | Stmt::LookupVector(_) | Stmt::MatchVector(_) => {
+                    Some(PlannerEnum::VectorDdl(VectorDdlPlanner::new()))
+                }
+                Stmt::ShowSessions(_)
+                | Stmt::ShowQueries(_)
+                | Stmt::ShowConfigs(_)
+                | Stmt::Analyze(_)
+                | Stmt::UpdateConfigs(_) => Some(PlannerEnum::Maintain(MaintainPlanner::new())),
                 _ => None,
             },
         }
