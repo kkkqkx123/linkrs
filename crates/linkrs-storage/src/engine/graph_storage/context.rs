@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -111,6 +111,14 @@ struct GraphStorageRuntime {
     /// vertex/index GC loops). See [`crate::thread_pool`].
     thread_pool: Arc<crate::thread_pool::StorageThreadPool>,
     background_freeze_running: Arc<AtomicBool>,
+    /// Last background-maintenance completion time, for write-path throttle
+    /// checks. Limits how often the per-edge insert hot path may re-trigger
+    /// maintenance once the mutable-CSR budget is crossed; updated when a
+    /// spawned maintenance task finishes.
+    last_background_maintenance_completion: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Exponential backoff counter for consecutive no-progress maintenance
+    /// runs; reset to zero whenever a run makes progress.
+    background_freeze_backoff: Arc<AtomicU32>,
     /// Last automatic vertex compaction time, for cooldown checks
     last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
     /// Last index-GC pass time, for throttling opportunistic GC.
@@ -153,6 +161,8 @@ impl GraphStorageRuntime {
                 },
             )),
             background_freeze_running: Arc::new(AtomicBool::new(false)),
+            last_background_maintenance_completion: Arc::new(Mutex::new(None)),
+            background_freeze_backoff: Arc::new(AtomicU32::new(0)),
             last_auto_compact: Arc::new(Mutex::new(None)),
             last_index_gc: Arc::new(Mutex::new(None)),
         }
@@ -179,6 +189,8 @@ impl GraphStorageRuntime {
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
+            last_background_maintenance_completion: self.last_background_maintenance_completion.clone(),
+            background_freeze_backoff: self.background_freeze_backoff.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_index_gc: self.last_index_gc.clone(),
         }
@@ -204,6 +216,8 @@ impl GraphStorageRuntime {
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
+            last_background_maintenance_completion: self.last_background_maintenance_completion.clone(),
+            background_freeze_backoff: self.background_freeze_backoff.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_index_gc: self.last_index_gc.clone(),
         }
@@ -217,6 +231,8 @@ impl GraphStorageRuntime {
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
+            last_background_maintenance_completion: self.last_background_maintenance_completion.clone(),
+            background_freeze_backoff: self.background_freeze_backoff.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             last_index_gc: self.last_index_gc.clone(),
         }

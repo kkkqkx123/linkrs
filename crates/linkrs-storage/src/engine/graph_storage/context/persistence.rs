@@ -58,7 +58,7 @@ impl GraphStorageContext {
         use std::fs;
 
         match self.trigger_background_maintenance() {
-            Ok(()) => {
+            Ok(_) => {
                 if let Some(stats) = self.get_freeze_stats() {
                     if stats.freeze_count > 0 {
                         log::info!(
@@ -192,7 +192,7 @@ impl GraphStorageContext {
         use std::fs;
 
         match self.trigger_background_maintenance() {
-            Ok(()) => {
+            Ok(_) => {
                 if let Some(stats) = self.get_freeze_stats() {
                     if stats.freeze_count > 0 {
                         log::info!(

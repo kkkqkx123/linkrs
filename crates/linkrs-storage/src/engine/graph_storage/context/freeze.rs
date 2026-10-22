@@ -3,8 +3,22 @@ use linkrs_core::types::{AutoCompactConfig, CompactConfig};
 use linkrs_core::StorageResult;
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use super::GraphStorageContext;
+
+/// Ensures the background-maintenance running flag is cleared even when the
+/// spawned task panics, so a panic cannot permanently disable maintenance.
+struct BackgroundMaintenanceRunningGuard {
+    running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for BackgroundMaintenanceRunningGuard {
+    fn drop(&mut self) {
+        self.running
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
 
 impl GraphStorageContext {
     /// Pure decision predicate for automatic vertex compaction: enabled,
@@ -40,14 +54,57 @@ impl GraphStorageContext {
             return;
         }
 
+        // Throttle re-scheduling from the write path. Once the mutable-CSR
+        // budget is crossed, `needs_background_maintenance()` stays true and the
+        // per-edge insert hot path calls this on *every* edge. Without a
+        // cooldown each completed run re-arms immediately and the foreground
+        // writer blocks on the very partition-table lock the background freeze
+        // is holding — a feedback loop that inflates a ~10µs insert to
+        // milliseconds. A single run already makes progress; only re-arm after
+        // `background_freeze_min_interval`, measured from the previous run's
+        // completion. Consecutive no-progress runs back off exponentially.
+        let min_interval = self.persistent.config.resources.background_freeze_min_interval;
+        let mut reschedule = true;
+        if min_interval > Duration::ZERO {
+            let now = Instant::now();
+            let backoff = self.runtime.background_freeze_backoff.load(std::sync::atomic::Ordering::Relaxed);
+            let multiplier = 1u32 << backoff.min(6);
+            let effective = min_interval.saturating_mul(multiplier);
+            let last = self.runtime.last_background_maintenance_completion.lock();
+            if let Some(prev) = *last {
+                if now.duration_since(prev) < effective {
+                    reschedule = false;
+                }
+            }
+            // Do not stamp the completion time here; it is stamped when the
+            // spawned task finishes so the cooldown measures the gap between
+            // runs rather than between schedule attempts.
+        }
+        if !reschedule {
+            // Released above; let a later, post-cooldown insert re-attempt.
+            self.runtime
+                .background_freeze_running
+                .store(false, std::sync::atomic::Ordering::Release);
+            return;
+        }
+
         let context = self.clone();
         let running = self.runtime.background_freeze_running.clone();
+        let completion = self.runtime.last_background_maintenance_completion.clone();
+        let backoff = self.runtime.background_freeze_backoff.clone();
         let timeout = self.persistent.config.resources.operation_timeout;
         self.runtime.thread_pool.spawn(move || {
             let started = std::time::Instant::now();
-            if let Err(error) = context.trigger_background_maintenance() {
-                log::warn!("Background maintenance failed: {}", error);
-            }
+        let _running_guard = BackgroundMaintenanceRunningGuard {
+            running: running.clone(),
+        };
+            let progressed = match context.trigger_background_maintenance() {
+                Ok(progress) => progress,
+                Err(error) => {
+                    log::warn!("Background maintenance failed: {}", error);
+                    false
+                }
+            };
             if started.elapsed() > timeout {
                 log::warn!(
                     "Background maintenance exceeded operation timeout: {:?} > {:?}",
@@ -55,6 +112,13 @@ impl GraphStorageContext {
                     timeout
                 );
             }
+            if progressed {
+                backoff.store(0, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                let cur = backoff.load(std::sync::atomic::Ordering::Relaxed);
+                backoff.store(cur.saturating_add(1).min(6), std::sync::atomic::Ordering::Relaxed);
+            }
+            *completion.lock() = Some(std::time::Instant::now());
             running.store(false, std::sync::atomic::Ordering::Release);
         });
     }
@@ -63,14 +127,18 @@ impl GraphStorageContext {
     /// followed by single-segment edge compaction, then per-table automatic
     /// maintenance (tombstone GC, property compaction).
     /// Captures watermarks once and shares across all sub-passes.
-    pub(crate) fn trigger_background_maintenance(&self) -> StorageResult<()> {
+    pub(crate) fn trigger_background_maintenance(&self) -> StorageResult<bool> {
         let gc = self.gc_coordinator();
         let wm = gc.capture_watermarks();
-        if let Err(e) = self.maybe_auto_compact_vertices_with_watermarks(&wm) {
-            log::warn!("Automatic vertex compaction failed: {}", e);
-        }
-        self.trigger_background_freeze_with_watermarks(&wm)?;
-        self.trigger_auto_edge_maintenance_with_watermarks(&wm)
+        let vertex_progress = self
+            .maybe_auto_compact_vertices_with_watermarks(&wm)
+            .unwrap_or_else(|e| {
+                log::warn!("Automatic vertex compaction failed: {}", e);
+                false
+            });
+        let freeze_progress = self.trigger_background_freeze_with_watermarks(&wm)?;
+        self.trigger_auto_edge_maintenance_with_watermarks(&wm)?;
+        Ok(vertex_progress || freeze_progress)
     }
 
     fn trigger_auto_edge_maintenance_with_watermarks(
@@ -99,10 +167,10 @@ impl GraphStorageContext {
     fn maybe_auto_compact_vertices_with_watermarks(
         &self,
         wm: &linkrs_transaction::MvccWatermarks,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<bool> {
         let cfg = &self.persistent.config.auto_compact;
         if !cfg.enable_vertex_compaction {
-            return Ok(());
+            return Ok(false);
         }
 
         let now = std::time::Instant::now();
@@ -110,7 +178,7 @@ impl GraphStorageContext {
             let last = self.runtime.last_auto_compact.lock();
             if let Some(prev) = *last {
                 if now.duration_since(prev).as_secs() < cfg.min_interval_secs {
-                    return Ok(());
+                    return Ok(false);
                 }
             }
         }
@@ -130,7 +198,7 @@ impl GraphStorageContext {
         };
 
         if !Self::should_auto_compact(live, allocated, cfg) {
-            return Ok(());
+            return Ok(false);
         }
 
         let margin = self.persistent.config.gc_safety_margin;
@@ -143,7 +211,7 @@ impl GraphStorageContext {
             allocated.saturating_sub(live),
             live
         );
-        Ok(())
+        Ok(removed > 0)
     }
 
     pub(crate) fn get_freeze_stats(&self) -> Option<FreezeStats> {
@@ -157,12 +225,13 @@ impl GraphStorageContext {
         let gc = self.gc_coordinator();
         let wm = gc.capture_watermarks();
         self.trigger_background_freeze_with_watermarks(&wm)
+            .map(|_| ())
     }
 
     fn trigger_background_freeze_with_watermarks(
         &self,
         wm: &linkrs_transaction::MvccWatermarks,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<bool> {
         // Reserve ratio 0.5 doubles the compacted capacity (matches the
         // original 2.0 growth intent; 2.0 clamps to 1.0 inside
         // `with_fixed_ratio` and would divide by zero in the CSR rebuild).
@@ -291,7 +360,7 @@ impl GraphStorageContext {
             }
         }
 
-        Ok(())
+        Ok(any_frozen)
     }
 }
 

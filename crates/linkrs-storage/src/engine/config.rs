@@ -85,6 +85,16 @@ pub struct ResourceConfig {
     pub index_eviction_high_ratio: f64,
     /// Eviction low-water target: evict down to this ratio of capacity.
     pub index_eviction_low_ratio: f64,
+    /// Minimum interval between two background-freeze schedules triggered from
+    /// the write path. Once the mutable-CSR budget is crossed,
+    /// `needs_background_maintenance()` stays true and the per-edge insert hot
+    /// path calls `schedule_background_maintenance()` on *every* edge. Without
+    /// a cooldown each completed run re-arms immediately and the foreground
+    /// writer blocks on the very partition-table lock the background freeze is
+    /// holding — a feedback loop that inflates a ~10µs insert to milliseconds.
+    /// A single run already makes progress; this interval limits how often the
+    /// write path may re-trigger it. Zero disables the throttle.
+    pub background_freeze_min_interval: Duration,
 }
 
 impl Default for ResourceConfig {
@@ -110,6 +120,7 @@ impl Default for ResourceConfig {
             index_eviction_enabled: true,
             index_eviction_high_ratio: 0.85,
             index_eviction_low_ratio: 0.65,
+            background_freeze_min_interval: Duration::from_millis(250),
         }
     }
 }

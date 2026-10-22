@@ -338,7 +338,7 @@ impl GraphStorage {
     /// `PropertyGraphConfig::auto_compact`) followed by delta freeze.
     /// Mainly for tests and explicit operator invocation.
     pub fn trigger_background_maintenance(&self) -> StorageResult<()> {
-        self.ctx.trigger_background_maintenance()
+        self.ctx.trigger_background_maintenance().map(|_| ())
     }
 
     /// Remove old published checkpoints while retaining the newest recovery points.
