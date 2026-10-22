@@ -485,7 +485,7 @@ mod tests {
             .revoke_role("alice", 7)
             .expect("revoke should succeed"));
         assert!(storage.get_user_roles("alice").is_empty());
-        assert!(storage.list_all_roles().get("alice").is_none());
+        assert!(!storage.list_all_roles().contains_key("alice"));
     }
 
     #[test]

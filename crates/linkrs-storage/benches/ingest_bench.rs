@@ -32,7 +32,7 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -150,9 +150,9 @@ impl StallWatchdog {
     }
 }
 
-fn dir_size(dir: &PathBuf) -> u64 {
+fn dir_size(dir: &Path) -> u64 {
     let mut total = 0u64;
-    let mut stack = vec![dir.clone()];
+    let mut stack = vec![dir.to_path_buf()];
     while let Some(path) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&path) else {
             continue;

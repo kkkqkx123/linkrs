@@ -17,7 +17,6 @@ use linkrs_query::parser::ast::stmt::Ast;
 use linkrs_query::parser::ast::Stmt;
 use linkrs_query::parser::ParserResult;
 use linkrs_storage::StorageClient;
-use linkrs_transaction::TransactionId;
 use std::collections::HashMap;
 use std::sync::Arc;
 

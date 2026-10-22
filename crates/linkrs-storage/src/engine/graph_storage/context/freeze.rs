@@ -3,22 +3,8 @@ use linkrs_core::types::{AutoCompactConfig, CompactConfig};
 use linkrs_core::StorageResult;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use super::GraphStorageContext;
-
-/// Ensures the background-maintenance running flag is cleared even when the
-/// spawned task panics, so a panic cannot permanently disable maintenance.
-struct BackgroundMaintenanceRunningGuard {
-    running: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl Drop for BackgroundMaintenanceRunningGuard {
-    fn drop(&mut self) {
-        self.running
-            .store(false, std::sync::atomic::Ordering::Release);
-    }
-}
 
 impl GraphStorageContext {
     /// Pure decision predicate for automatic vertex compaction: enabled,
@@ -44,16 +30,12 @@ impl GraphStorageContext {
 
     /// Schedule the background maintenance task on the shared thread pool:
     /// automatic vertex compaction (if ID holes exceed thresholds) followed
-    /// by delta freeze. No-op while a previous maintenance run is in flight.
+    /// by delta freeze. Goes through the unified maintenance scheduler:
+    /// single-flight, completion-time cooldown refreshed from
+    /// `background_freeze_min_interval`, exponential no-progress backoff,
+    /// panic-safe execution, and timeout observation. No-op while a previous
+    /// maintenance run is in flight or the cooldown has not elapsed.
     pub(crate) fn schedule_background_maintenance(&self) {
-        if self
-            .runtime
-            .background_freeze_running
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
-        {
-            return;
-        }
-
         // Throttle re-scheduling from the write path. Once the mutable-CSR
         // budget is crossed, `needs_background_maintenance()` stays true and the
         // per-edge insert hot path calls this on *every* edge. Without a
@@ -63,41 +45,16 @@ impl GraphStorageContext {
         // milliseconds. A single run already makes progress; only re-arm after
         // `background_freeze_min_interval`, measured from the previous run's
         // completion. Consecutive no-progress runs back off exponentially.
-        let min_interval = self.persistent.config.resources.background_freeze_min_interval;
-        let mut reschedule = true;
-        if min_interval > Duration::ZERO {
-            let now = Instant::now();
-            let backoff = self.runtime.background_freeze_backoff.load(std::sync::atomic::Ordering::Relaxed);
-            let multiplier = 1u32 << backoff.min(6);
-            let effective = min_interval.saturating_mul(multiplier);
-            let last = self.runtime.last_background_maintenance_completion.lock();
-            if let Some(prev) = *last {
-                if now.duration_since(prev) < effective {
-                    reschedule = false;
-                }
-            }
-            // Do not stamp the completion time here; it is stamped when the
-            // spawned task finishes so the cooldown measures the gap between
-            // runs rather than between schedule attempts.
-        }
-        if !reschedule {
-            // Released above; let a later, post-cooldown insert re-attempt.
-            self.runtime
-                .background_freeze_running
-                .store(false, std::sync::atomic::Ordering::Release);
-            return;
-        }
-
+        let task = self.runtime.background_maintenance_task.clone();
+        task.set_min_cooldown(
+            self.persistent
+                .config
+                .resources
+                .background_freeze_min_interval,
+        );
+        task.set_timeout(self.persistent.config.resources.operation_timeout);
         let context = self.clone();
-        let running = self.runtime.background_freeze_running.clone();
-        let completion = self.runtime.last_background_maintenance_completion.clone();
-        let backoff = self.runtime.background_freeze_backoff.clone();
-        let timeout = self.persistent.config.resources.operation_timeout;
-        self.runtime.thread_pool.spawn(move || {
-            let started = std::time::Instant::now();
-        let _running_guard = BackgroundMaintenanceRunningGuard {
-            running: running.clone(),
-        };
+        let scheduled = task.try_spawn(move || {
             let progressed = match context.trigger_background_maintenance() {
                 Ok(progress) => progress,
                 Err(error) => {
@@ -105,22 +62,17 @@ impl GraphStorageContext {
                     false
                 }
             };
-            if started.elapsed() > timeout {
-                log::warn!(
-                    "Background maintenance exceeded operation timeout: {:?} > {:?}",
-                    started.elapsed(),
-                    timeout
-                );
-            }
             if progressed {
-                backoff.store(0, std::sync::atomic::Ordering::Relaxed);
-            } else {
-                let cur = backoff.load(std::sync::atomic::Ordering::Relaxed);
-                backoff.store(cur.saturating_add(1).min(6), std::sync::atomic::Ordering::Relaxed);
+                log::debug!("Background maintenance made progress");
             }
-            *completion.lock() = Some(std::time::Instant::now());
-            running.store(false, std::sync::atomic::Ordering::Release);
+            progressed
         });
+        if !scheduled && log::log_enabled!(log::Level::Debug) {
+            log::debug!(
+                "Background maintenance throttled: {}",
+                task.diagnostics().summary(),
+            );
+        }
     }
 
     /// Run background maintenance synchronously: automatic vertex compaction

@@ -195,7 +195,7 @@ pub async fn get_schema_changes<
             .map(|change| {
                 let mut details_map: std::collections::HashMap<&str, String> =
                     std::collections::HashMap::new();
-                details_map.insert("description".into(), change.details.description());
+                details_map.insert("description", change.details.description());
                 serde_json::json!({
                     "change_type": format!("{:?}", change.details),
                     "description": change.details.description(),
@@ -279,7 +279,7 @@ pub async fn detect_breaking_changes<
             .map(|change| {
                 let mut details_map: std::collections::HashMap<&str, String> =
                     std::collections::HashMap::new();
-                details_map.insert("description".into(), change.details.description());
+                details_map.insert("description", change.details.description());
                 serde_json::json!({
                     "change_type": format!("{:?}", change.details),
                     "description": change.details.description(),

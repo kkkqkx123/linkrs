@@ -413,8 +413,8 @@ fn test_purge_expired_edge_physical_delete() {
         .assert_success()
         .assert_result_columns(&["space_name", "schema_name", "schema_type", "removed_rows"])
         .assert_result_contains(vec![
-            Value::string("TempRel".to_string()),
-            Value::string("EDGE".to_string()),
+            Value::string("TempRel"),
+            Value::string("EDGE"),
             Value::BigInt(1),
         ]);
 }

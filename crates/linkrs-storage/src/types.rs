@@ -5,6 +5,13 @@ use linkrs_core::DataType;
 use linkrs_core::Value;
 use std::sync::Arc;
 
+/// A single (property name, property value) pair as stored on a vertex or edge
+/// row. Shared by the staging, persistence and vertex-table write paths.
+pub type PropertyRow = (Arc<str>, Value);
+
+/// An owned list of property rows for one entity.
+pub type PropertyRowList = Vec<PropertyRow>;
+
 /// Property ID - a compact identifier for properties within a schema.
 /// Replaces string-based property lookups with numeric indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

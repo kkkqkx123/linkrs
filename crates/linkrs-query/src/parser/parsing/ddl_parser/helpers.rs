@@ -273,7 +273,7 @@ impl DdlParser {
                             .strip_prefix("FIXED_STRING")
                             .or_else(|| upper.strip_prefix("FIXEDSTRING"));
                         match rest {
-                            Some(trailing) if trailing.is_empty() => {
+                            Some("") => {
                                 ctx.next_token();
                                 if ctx.current_token().kind == TokenKind::LParen {
                                     ctx.next_token();

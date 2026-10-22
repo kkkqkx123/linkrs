@@ -466,6 +466,7 @@ impl Ord for WeightedPathItem {
 /// `read_edge_weight` (shared with the MATCH `*WEIGHTED` runtime). Ties on
 /// cost resolve to the fewer-hop path; ties on both resolve to whichever
 /// the heap finalizes first, keeping the result deterministic.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn weighted_shortest_path(
     storage: &dyn QueryStorage,
     start_vertex: &Vertex,

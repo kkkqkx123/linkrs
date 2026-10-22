@@ -38,7 +38,7 @@ pub fn create_benchmark_group<'a>(
     let mut group = c.benchmark_group(name);
     if quick_mode() {
         group.measurement_time(Duration::from_millis(800));
-        group.sample_size(sample_size.min(10).max(2));
+        group.sample_size(sample_size.clamp(2, 10));
         group.warm_up_time(Duration::from_millis(200));
     } else {
         group.measurement_time(Duration::from_secs(10));

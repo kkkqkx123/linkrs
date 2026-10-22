@@ -3,9 +3,7 @@
 //! Available environment variables: LINKRS_V (number of vertices, default 1000), LINKRS_EPV (edges per vertex, default 100).
 //! Purpose: reproduce and locate the background-maintenance lock-contention stall that occurs during edge insertion when crossing the variable CSR memory threshold.
 
-use linkrs_core::types::{
-    EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId,
-};
+use linkrs_core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use linkrs_core::vertex_edge_path::Tag;
 use linkrs_core::{DataType, Edge, Value, Vertex};
 use linkrs_storage::{GraphStorage, StorageSchemaOps, StorageWriter};
@@ -15,9 +13,7 @@ use std::time::Instant;
 fn setup(vertex_count: u64, edges_per_vertex: usize) -> (GraphStorage, Vec<Edge>) {
     let mut storage = GraphStorage::new().expect("init");
     let mut space = SpaceInfo::new("bench".into()).with_vid_type(DataType::BigInt);
-    storage
-        .create_space(&mut space)
-        .expect("space");
+    storage.create_space(&mut space).expect("space");
     storage
         .create_tag(
             "bench",
@@ -86,10 +82,14 @@ fn main() {
         let c0 = Instant::now();
         storage.insert_edge("bench", e).unwrap();
         let cdt = c0.elapsed().as_secs_f64() * 1e6;
-        if cdt > win_max { win_max = cdt; }
-        if cdt > 1000.0 { win_over1ms += 1; }
+        if cdt > win_max {
+            win_max = cdt;
+        }
+        if cdt > 1000.0 {
+            win_over1ms += 1;
+        }
         inserted += 1;
-        if inserted % window_size == 0 {
+        if inserted.is_multiple_of(window_size) {
             let dt = t0.elapsed();
             let density = inserted as f64 / vertex_count as f64;
             println!(

@@ -2,7 +2,7 @@
 //! and undo semantics, and bulk import invariants.
 
 use super::*;
-use crate::types::StoragePropertyDef;
+use crate::types::{PropertyRow, PropertyRowList, StoragePropertyDef};
 use crate::vertex::VertexSchema;
 use linkrs_core::DataType;
 
@@ -172,7 +172,7 @@ fn scoped_batch_same_key_duplicate_fails_without_extra_allocation() {
     let ts: Timestamp = 100;
     let mut scope = WriteScope::new(ts);
     let holder = props("dup");
-    let rows: Vec<(&str, &[(Arc<str>, Value)])> =
+    let rows: Vec<(&str, &[PropertyRow])> =
         vec![("dup", holder.as_slice()), ("dup", holder.as_slice())];
     let results = table.insert_batch_str_with_scope(&rows, ts, &mut scope);
     assert_eq!(results.len(), 2);
@@ -198,7 +198,7 @@ fn scoped_batch_over_limit_rejected_before_global_mutation() {
             .expect("prefill within capacity");
     }
     let holder = props("overflow");
-    let rows: Vec<(&str, &[(Arc<str>, Value)])> = vec![("overflow", holder.as_slice())];
+    let rows: Vec<(&str, &[PropertyRow])> = vec![("overflow", holder.as_slice())];
     let results = table.insert_batch_str_with_scope(&rows, ts, &mut scope);
     assert!(results[0].is_err());
     assert_eq!(table.approximate_total_count(), 0);
@@ -210,8 +210,7 @@ fn scoped_batch_i64_same_key_duplicate_applies_once() {
     let ts: Timestamp = 100;
     let mut scope = WriteScope::new(ts);
     let holder = props("42");
-    let rows: Vec<(i64, &[(Arc<str>, Value)])> =
-        vec![(42, holder.as_slice()), (42, holder.as_slice())];
+    let rows: Vec<(i64, &[PropertyRow])> = vec![(42, holder.as_slice()), (42, holder.as_slice())];
     let results = table.insert_batch_i64_with_scope(&rows, ts, &mut scope);
     assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
     let applied = table
@@ -325,8 +324,8 @@ fn bulk_import_empty_sorted_matches_batched_rows() {
     let table = ShardedVertexTable::with_config(7, "scoped".into(), test_schema(), 4);
     let ts: Timestamp = 100;
     let names: Vec<String> = (0..10).map(|i| format!("s_{:02}", i)).collect();
-    let holders: Vec<Vec<(Arc<str>, Value)>> = names.iter().map(|n| props(n)).collect();
-    let rows: Vec<(&str, &[(Arc<str>, Value)])> = names
+    let holders: Vec<PropertyRowList> = names.iter().map(|n| props(n)).collect();
+    let rows: Vec<(&str, &[PropertyRow])> = names
         .iter()
         .zip(holders.iter())
         .map(|(n, p)| (n.as_str(), p.as_slice()))
@@ -346,16 +345,15 @@ fn bulk_import_rejects_nonempty_and_false_sorted_declaration() {
     let table = ShardedVertexTable::with_config(7, "scoped".into(), test_schema(), 4);
     let ts: Timestamp = 100;
     let holder = props("b");
-    let rows: Vec<(&str, &[(Arc<str>, Value)])> = vec![("b", holder.as_slice())];
+    let rows: Vec<(&str, &[PropertyRow])> = vec![("b", holder.as_slice())];
     assert!(table.bulk_import_str(&rows, ts, true).is_ok());
     let holder_b = props("c");
-    let rows_b: Vec<(&str, &[(Arc<str>, Value)])> = vec![("c", holder_b.as_slice())];
+    let rows_b: Vec<(&str, &[PropertyRow])> = vec![("c", holder_b.as_slice())];
     assert!(table.bulk_import_str(&rows_b, ts, false).is_err());
     let unsorted_table = ShardedVertexTable::with_config(7, "scoped".into(), test_schema(), 4);
     let ha = props("z");
     let hb = props("a");
-    let unsorted: Vec<(&str, &[(Arc<str>, Value)])> =
-        vec![("z", ha.as_slice()), ("a", hb.as_slice())];
+    let unsorted: Vec<(&str, &[PropertyRow])> = vec![("z", ha.as_slice()), ("a", hb.as_slice())];
     assert!(unsorted_table.bulk_import_str(&unsorted, ts, true).is_err());
     assert_eq!(unsorted_table.approximate_total_count(), 0);
 }

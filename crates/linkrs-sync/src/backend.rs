@@ -927,48 +927,43 @@ impl BackendDeliveryPolicy {
 ///
 /// `linkrs-config` carries no engine implementation, so the conversion from
 /// its TOML-shaped [`linkrs_config::QdrantConfig`] to the client's
-/// `VectorClientConfig` lives here, at the only layer that depends on both.
+/// `VectorClientConfig` lives here, at the layer that depends on both
+/// crates. It is a free function rather than a `From` impl because both
+/// types are foreign here.
 #[cfg(feature = "vector-qdrant")]
-impl From<&linkrs_config::QdrantConfig> for vector_client::VectorClientConfig {
-    fn from(config: &linkrs_config::QdrantConfig) -> Self {
-        Self {
-            enabled: config.enabled,
-            engine: vector_client::EngineType::Qdrant,
-            connection: vector_client::ConnectionConfig {
-                host: config.connection.host.clone(),
-                port: config.connection.port,
-                use_tls: config.connection.use_tls,
-                api_key: config.connection.api_key.clone(),
-                connect_timeout_secs: config.connection.connect_timeout_secs,
-                http_port: config.connection.http_port,
-                transport: match config.connection.transport {
-                    linkrs_config::QdrantTransport::Grpc => vector_client::QdrantTransport::Grpc,
-                    linkrs_config::QdrantTransport::Http => vector_client::QdrantTransport::Http,
-                },
+pub fn qdrant_client_config(
+    config: &linkrs_config::QdrantConfig,
+) -> vector_client::VectorClientConfig {
+    vector_client::VectorClientConfig {
+        enabled: config.enabled,
+        engine: vector_client::EngineType::Qdrant,
+        connection: vector_client::ConnectionConfig {
+            host: config.connection.host.clone(),
+            port: config.connection.port,
+            use_tls: config.connection.use_tls,
+            api_key: config.connection.api_key.clone(),
+            connect_timeout_secs: config.connection.connect_timeout_secs,
+            http_port: config.connection.http_port,
+            transport: match config.connection.transport {
+                linkrs_config::QdrantTransport::Grpc => vector_client::QdrantTransport::Grpc,
+                linkrs_config::QdrantTransport::Http => vector_client::QdrantTransport::Http,
             },
-            timeout: vector_client::TimeoutConfig::new(
-                config.timeout.request_timeout_secs,
-                config.timeout.search_timeout_secs,
-                config.timeout.upsert_timeout_secs,
-            ),
-            embedding: {
-                #[cfg(feature = "embedding")]
-                {
-                    config.embedding.clone()
-                }
-                #[cfg(not(feature = "embedding"))]
-                {
-                    None
-                }
-            },
-        }
-    }
-}
-
-#[cfg(feature = "vector-qdrant")]
-impl From<linkrs_config::QdrantConfig> for vector_client::VectorClientConfig {
-    fn from(config: linkrs_config::QdrantConfig) -> Self {
-        Self::from(&config)
+        },
+        timeout: vector_client::TimeoutConfig::new(
+            config.timeout.request_timeout_secs,
+            config.timeout.search_timeout_secs,
+            config.timeout.upsert_timeout_secs,
+        ),
+        embedding: {
+            #[cfg(feature = "embedding")]
+            {
+                config.embedding.clone()
+            }
+            #[cfg(not(feature = "embedding"))]
+            {
+                None
+            }
+        },
     }
 }
 
@@ -1083,7 +1078,7 @@ impl VectorBackend {
         match config.engine {
             linkrs_config::VectorEngineKind::Local => Self::from_config(config),
             linkrs_config::VectorEngineKind::Qdrant => {
-                let client_config = config.qdrant.clone().into();
+                let client_config = qdrant_client_config(&config.qdrant);
                 let manager = Arc::new(
                     VectorManager::new(client_config)
                         .await

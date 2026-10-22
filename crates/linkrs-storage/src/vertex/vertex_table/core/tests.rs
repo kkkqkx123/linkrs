@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::StoragePropertyDef;
+use crate::types::{PropertyRowList, StoragePropertyDef};
 use crate::vertex::IdKey;
 use linkrs_core::error::storage::StorageErrorKind;
 use linkrs_core::types::Timestamp;
@@ -333,7 +333,7 @@ fn test_batch_insert() {
     let schema = create_test_schema();
     let table = new_table(0, "person", schema);
 
-    let vertices: Vec<(String, Vec<(Arc<str>, Value)>)> = vec![
+    let vertices: Vec<(String, PropertyRowList)> = vec![
         (
             "v1".into(),
             vec![

@@ -550,11 +550,8 @@ impl VectorSearchPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ast::vector::{
-        CreateVectorIndex, DropVectorIndex, VectorIndexConfig, VectorYieldClause, VectorYieldItem,
-    };
+    use crate::parser::ast::vector::{VectorYieldClause, VectorYieldItem};
     use linkrs_core::types::expr::{create_contextual_expression, Expression};
-    use linkrs_core::types::span::Span;
     use linkrs_core::value::Value;
 
     #[test]

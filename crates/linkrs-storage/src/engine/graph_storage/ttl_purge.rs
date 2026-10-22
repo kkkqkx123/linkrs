@@ -44,11 +44,21 @@ impl TtlPurgeScheduler {
             ctx: Arc::new(ctx.clone_for_ttl_purge()),
         };
         let running = Arc::new(AtomicBool::new(false));
+        // Warn-only bound for one sweep; a sweep slower than its own
+        // interval is worth reporting but never cancelled.
+        let timeout = interval.max(Duration::from_secs(30));
         let handle = self.thread_pool.spawn_periodic(
             running,
             interval,
             Duration::from_millis(10),
-            move || purge_all_spaces(&storage),
+            move || {
+                // Panic-safe sweep: a failing pass is skipped and the loop
+                // keeps running instead of dying silently on the pool.
+                crate::maintenance_scheduler::execute_guarded("ttl-purge", timeout, || {
+                    purge_all_spaces(&storage);
+                    true
+                });
+            },
         );
         self.handle = Some(handle);
     }

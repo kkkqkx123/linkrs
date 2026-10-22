@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
+use crate::types::{PropertyRow, PropertyRowList};
 use linkrs_core::error::storage::StorageErrorKind;
 use linkrs_core::metadata::IndexMetadataManager;
 use linkrs_core::types::{LabelId, TagInfo, Timestamp, VertexId};
@@ -58,7 +58,7 @@ pub(super) struct StagedVertexRow {
     pub(super) key: IdKey,
     pub(super) vertex_id: Value,
     pub(super) tag_name: String,
-    pub(super) props: Vec<(Arc<str>, Value)>,
+    pub(super) props: PropertyRowList,
     pub(super) redo_entry: TransactionWalEntry,
 }
 
@@ -79,7 +79,7 @@ fn stage_vertex_row(
         .get(tag.name.as_str())
         .ok_or_else(|| StorageError::not_found(format!("Tag {} not found", tag.name)))?;
     let label_id = tag_info.tag_id;
-    let props: Vec<(Arc<str>, Value)> = tag
+    let props: PropertyRowList = tag
         .properties
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -344,7 +344,7 @@ fn batch_insert_vertices_body(
             }
         }
         if !str_order.is_empty() {
-            let rows: Vec<(&str, &[(Arc<str>, Value)])> = str_order
+            let rows: Vec<(&str, &[PropertyRow])> = str_order
                 .iter()
                 .map(|&pos| {
                     let IdKey::Text(ref s) = staged[pos].key else {
@@ -361,7 +361,7 @@ fn batch_insert_vertices_body(
             }
         }
         if !i64_order.is_empty() {
-            let rows: Vec<(i64, &[(Arc<str>, Value)])> = i64_order
+            let rows: Vec<(i64, &[PropertyRow])> = i64_order
                 .iter()
                 .map(|&pos| {
                     let IdKey::Int(n) = staged[pos].key else {
@@ -593,7 +593,7 @@ fn batch_insert_vertices_offline_chunked(
         chunk_no += 1;
         // Throttled progress for long bulk batches: silent without a logger,
         // one line per 25 chunks so a stalled batch leaves a last-good mark.
-        if chunk_no % 25 == 0 || chunk_no == total_chunks {
+        if chunk_no.is_multiple_of(25) || chunk_no == total_chunks {
             log::info!(
                 "offline batch progress: {}/{} chunks ({} rows) in {:?}",
                 chunk_no,
@@ -756,7 +756,7 @@ fn batch_insert_vertices_online_chunked(
                 }
             }
             if !str_order.is_empty() {
-                let rows: Vec<(&str, &[(Arc<str>, Value)])> = str_order
+                let rows: Vec<(&str, &[PropertyRow])> = str_order
                     .iter()
                     .map(|&pos| {
                         let IdKey::Text(ref s) = staged[pos].key else {
@@ -773,7 +773,7 @@ fn batch_insert_vertices_online_chunked(
                 }
             }
             if !i64_order.is_empty() {
-                let rows: Vec<(i64, &[(Arc<str>, Value)])> = i64_order
+                let rows: Vec<(i64, &[PropertyRow])> = i64_order
                     .iter()
                     .map(|&pos| {
                         let IdKey::Int(n) = staged[pos].key else {

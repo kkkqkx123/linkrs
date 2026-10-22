@@ -800,9 +800,9 @@ fn test_purge_expired_vertex_physical_delete() {
         .assert_success()
         .assert_result_columns(&["space_name", "schema_name", "schema_type", "removed_rows"])
         .assert_result_contains(vec![
-            Value::string("ttl_space".to_string()),
-            Value::string("UserSession".to_string()),
-            Value::string("TAG".to_string()),
+            Value::string("ttl_space"),
+            Value::string("UserSession"),
+            Value::string("TAG"),
             Value::BigInt(1),
         ])
         .exec_ddl("PURGE EXPIRED TAG UserSession IN ttl_space")
@@ -825,8 +825,8 @@ fn test_purge_expired_all_schemas_without_target() {
         .assert_success()
         .assert_result_columns(&["space_name", "schema_name", "schema_type", "removed_rows"])
         .assert_result_contains(vec![
-            Value::string("UserSession".to_string()),
-            Value::string("TAG".to_string()),
+            Value::string("UserSession"),
+            Value::string("TAG"),
             Value::BigInt(1),
         ]);
 }
@@ -845,8 +845,8 @@ fn test_purge_expired_without_ttl_reports_zero() {
         .exec_ddl("PURGE EXPIRED TAG Keep IN ttl_space")
         .assert_success()
         .assert_result_contains(vec![
-            Value::string("Keep".to_string()),
-            Value::string("TAG".to_string()),
+            Value::string("Keep"),
+            Value::string("TAG"),
             Value::BigInt(0),
         ]);
 }

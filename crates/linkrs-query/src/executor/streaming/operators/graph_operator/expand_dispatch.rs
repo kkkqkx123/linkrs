@@ -92,17 +92,14 @@ pub(super) fn closed_loop_dst_tag(
 /// Convert the planner edge demand into a storage projection. `None` means the
 /// whole edge (all properties), `Some([])` means topology only.
 pub(super) fn edge_projection(
-    edge_required: Option<&Vec<String>>,
+    edge_required: Option<&[String]>,
 ) -> Option<Vec<std::sync::Arc<str>>> {
-    match edge_required {
-        None => None,
-        Some(props) => Some(
-            props
-                .iter()
-                .map(|s| std::sync::Arc::from(s.as_str()))
-                .collect(),
-        ),
-    }
+    edge_required.map(|props| {
+        props
+            .iter()
+            .map(|s| std::sync::Arc::from(s.as_str()))
+            .collect()
+    })
 }
 
 /// Whether the hop demands a flat bypass name already present in the input
@@ -276,7 +273,7 @@ pub(super) fn expand_on_chunk(
         if !bare_ids.is_empty() {
             let fetched = reader.get_vertices_batch(space_name, &seed_tag, &bare_ids)?;
             let mut missing: Vec<usize> = Vec::new();
-            for (pos, vertex) in bare_pos.iter().zip(fetched.into_iter()) {
+            for (pos, vertex) in bare_pos.iter().zip(fetched) {
                 match vertex {
                     Some(v) => {
                         seed_vertices[*pos] = Some(v.clone());
@@ -296,8 +293,8 @@ pub(super) fn expand_on_chunk(
                 let mut kept_vertices = Vec::with_capacity(seed_vertices.len() - drop.len());
                 for (idx, ((vid, row), vertex)) in seed_vids
                     .into_iter()
-                    .zip(seed_rows.into_iter())
-                    .zip(seed_vertices.into_iter())
+                    .zip(seed_rows)
+                    .zip(seed_vertices)
                     .enumerate()
                 {
                     if !drop.contains(&idx) {

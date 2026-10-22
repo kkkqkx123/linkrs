@@ -22,7 +22,6 @@ use linkrs_query::dml_op_from_stmt;
 use linkrs_query::executor::base::ExecutionResult;
 use linkrs_query::DmlOp;
 use linkrs_storage::StorageClient;
-use parking_lot::RwLock;
 use parking_lot::RwLockWriteGuard;
 use std::collections::HashMap;
 use std::sync::Arc;

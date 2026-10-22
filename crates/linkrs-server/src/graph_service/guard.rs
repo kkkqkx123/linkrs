@@ -23,11 +23,11 @@ impl<
     /// both agree on the set: configuration intents resolve on the
     /// materialized path only.
     pub(crate) fn is_config_statement(stmt: &str) -> bool {
-        match Self::parse_stmt(stmt) {
+        matches!(
+            Self::parse_stmt(stmt),
             Some(crate::query::parser::ast::Stmt::ShowConfigs(_))
-            | Some(crate::query::parser::ast::Stmt::UpdateConfigs(_)) => true,
-            _ => false,
-        }
+                | Some(crate::query::parser::ast::Stmt::UpdateConfigs(_))
+        )
     }
 
     /// Permission required by a parsed statement for the space gate.

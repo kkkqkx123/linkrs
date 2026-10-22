@@ -203,7 +203,7 @@ pub(super) fn expand_single_step_columnar(
     if seed_vids.is_empty() {
         return Ok(ColumnarOutcome::Empty);
     }
-    let projection = edge_projection(ctx.edge_required_props.clone().as_ref().map(|v| v));
+    let projection = edge_projection(ctx.edge_required_props.as_deref());
     let projection_ref = projection.as_deref();
     let edge_empty = matches!(ctx.edge_required_props.as_ref(), Some(v) if v.is_empty());
     let dst_empty = matches!(ctx.dst_required_props.as_ref(), Some(v) if v.is_empty());

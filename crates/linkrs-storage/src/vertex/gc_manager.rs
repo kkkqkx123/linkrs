@@ -11,6 +11,9 @@ use std::time::Duration;
 use crate::cache::SharedRecordCache;
 use crate::engine::data_store::GraphDataStore;
 use crate::engine::storage_events::GcEventSink;
+use crate::maintenance_scheduler::{
+    MaintenanceDiagnostics, MaintenanceTask, MaintenanceTaskConfig,
+};
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 use linkrs_core::types::Timestamp;
 use linkrs_transaction::VersionManager;
@@ -81,6 +84,10 @@ pub struct VertexGcManager {
     running: Arc<AtomicBool>,
     stats: Arc<AtomicU64>,
     total_removed: Arc<AtomicU64>,
+    /// Unified scheduling state for background passes: single-flight,
+    /// completion-time cooldown, exponential no-progress backoff,
+    /// panic-safe execution.
+    maintenance: Arc<MaintenanceTask>,
     /// Passes that reclaimed nothing because the watermark was pinned
     /// (`safe_ts == 0`) or a stuck snapshot held the cutoff. A rising
     /// count beside growing version chains points at the snapshot holder,
@@ -113,6 +120,14 @@ impl VertexGcManager {
         config: VertexGcConfig,
         pool: Arc<StorageThreadPool>,
     ) -> Self {
+        let maintenance = Arc::new(MaintenanceTask::new(
+            pool.clone(),
+            MaintenanceTaskConfig::new(
+                "vertex-gc",
+                Duration::from_millis(config.min_interval_between_gc_ms),
+                Duration::from_secs(30),
+            ),
+        ));
         Self {
             data_store,
             version_manager,
@@ -121,6 +136,7 @@ impl VertexGcManager {
             running: Arc::new(AtomicBool::new(false)),
             stats: Arc::new(AtomicU64::new(0)),
             total_removed: Arc::new(AtomicU64::new(0)),
+            maintenance,
             blocked_passes: Arc::new(AtomicU64::new(0)),
             cache_invalidations: Arc::new(AtomicU64::new(0)),
             pressure_mitigations: Arc::new(AtomicU64::new(0)),
@@ -347,6 +363,9 @@ impl VertexGcManager {
     ///
     /// Returns a [`BackgroundTaskHandle`] for the periodic task. The task
     /// runs until `stop()` is called (or [`BackgroundTaskHandle::stop`]).
+    /// Every pass goes through the unified scheduler: completion-time
+    /// cooldown, exponential no-progress backoff, panic-safe execution, and
+    /// timeout observation. Throttled passes are skipped, not counted.
     pub fn start_background_gc(&self) -> BackgroundTaskHandle {
         let manager = self.clone();
         let running = self.running.clone();
@@ -357,16 +376,13 @@ impl VertexGcManager {
             .spawn_periodic(running, interval, min_interval, move || {
                 tracing::info!("Vertex GC background task started");
 
-                let start = std::time::Instant::now();
-
-                let removed = manager.run_gc_pass();
-                if removed > 0 {
-                    tracing::debug!(entries_removed = removed, "Vertex GC pass completed");
+                let executed = manager.maintenance.tick(|| manager.run_gc_pass() > 0);
+                if let Some(removed_progress) = executed {
+                    if removed_progress {
+                        tracing::debug!("Vertex GC pass completed");
+                    }
+                    manager.stats.fetch_add(1, Ordering::Release);
                 }
-
-                manager.stats.fetch_add(1, Ordering::Release);
-
-                let _elapsed = start.elapsed();
             })
     }
 
@@ -378,6 +394,11 @@ impl VertexGcManager {
     /// Check if the background GC is running
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
+    }
+
+    /// Point-in-time scheduling diagnostics for observability.
+    pub fn maintenance_diagnostics(&self) -> MaintenanceDiagnostics {
+        self.maintenance.diagnostics()
     }
 
     /// Total entries removed since creation
@@ -398,10 +419,9 @@ impl VertexGcManager {
 }
 
 impl Clone for VertexGcManager {
-    /// Clones share every counter: the background task runs on a clone
-    /// (`start_background_gc`), so snapshotting counters here would leave
-    /// the originating handle's `pass_count` and `total_removed`
-    /// permanently stale.
+    /// Clones share every counter and the scheduling state: the background
+    /// task runs on a clone, so snapshotting counters here would leave the
+    /// originating handle permanently stale.
     fn clone(&self) -> Self {
         Self {
             data_store: self.data_store.clone(),
@@ -411,6 +431,7 @@ impl Clone for VertexGcManager {
             running: self.running.clone(),
             stats: self.stats.clone(),
             total_removed: self.total_removed.clone(),
+            maintenance: self.maintenance.clone(),
             blocked_passes: self.blocked_passes.clone(),
             cache_invalidations: self.cache_invalidations.clone(),
             pressure_mitigations: self.pressure_mitigations.clone(),

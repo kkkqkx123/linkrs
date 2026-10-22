@@ -336,7 +336,10 @@ impl Default for QdrantTimeoutConfig {
 ///
 /// TOML surface matches the client crate's config so existing `[vector.qdrant]`
 /// sections keep parsing; mapping into the client happens at the consumer.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+///
+/// Equality is intentionally not derived: the per-engine embedding endpoint
+/// comes from another crate whose config type carries no equality semantics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QdrantConfig {
     pub enabled: bool,

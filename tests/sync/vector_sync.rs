@@ -124,9 +124,9 @@ async fn index_location_naming_and_logical_isolation() {
 
 #[tokio::test]
 async fn point_data_carries_user_payload() {
-    let mut payload: HashMap<String, Value> = HashMap::new();
-    payload.insert("category".to_string(), Value::string("electronics"));
-    payload.insert("price".to_string(), Value::string("99.99"));
+    let mut payload: HashMap<Arc<str>, Value> = HashMap::new();
+    payload.insert(Arc::from("category"), Value::string("electronics"));
+    payload.insert(Arc::from("price"), Value::string("99.99"));
 
     let point = VectorPointData {
         id: "point_1".to_string(),

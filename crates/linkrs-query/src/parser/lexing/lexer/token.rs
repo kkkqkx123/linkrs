@@ -14,13 +14,8 @@ impl<'a> Lexer<'a> {
     pub fn next_token(&mut self) -> Token {
         loop {
             self.skip_whitespace();
-            match self.peek_char() {
-                Some(&'/') | Some(&'-') => {
-                    if self.skip_comment().is_ok() {
-                        continue;
-                    }
-                }
-                _ => {}
+            if matches!(self.peek_char(), Some(&'/') | Some(&'-')) && self.skip_comment().is_ok() {
+                continue;
             }
             break;
         }

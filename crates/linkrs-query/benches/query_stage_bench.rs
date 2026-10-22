@@ -6,7 +6,7 @@
 //! - parse:   `Parser::parse` directly (public, no context needed).
 //! - bind:    `Binder::bind` directly (public, needs schema manager + space).
 //! - e2e:    the stream entry, which receives the space explicitly and
-//!            reports parse_us / execute_us from inside the pipeline.
+//!   reports parse_us / execute_us from inside the pipeline.
 //! - execute: e2e_total - parse - bind.
 //! - plan+optimize: derived as e2e_total - parse - execute.
 //!

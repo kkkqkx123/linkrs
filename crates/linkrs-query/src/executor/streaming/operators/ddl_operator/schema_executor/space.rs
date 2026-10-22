@@ -144,7 +144,7 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
             Ok(Some(super::super::make_single_row(
                 schema,
                 vec![
-                    Value::string(name.to_string()),
+                    Value::string(name),
                     Value::BigInt(cleared_tags as i64),
                     Value::BigInt(cleared_edge_types as i64),
                     Value::BigInt(deleted_vertices as i64),
@@ -376,7 +376,7 @@ pub(in crate::executor::streaming::operators) fn execute_space_manage(
                 .into_iter()
                 .map(|entry| {
                     vec![
-                        Value::string(name.to_string()),
+                        Value::string(name),
                         Value::string(entry.schema_name),
                         Value::string(if entry.is_edge { "EDGE" } else { "TAG" }),
                         Value::BigInt(entry.removed as i64),

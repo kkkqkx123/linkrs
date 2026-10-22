@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use linkrs_core::types::{CommitLsn, CompactConfig, LabelId, Timestamp};
-use linkrs_core::{StorageError, StorageResult, Value};
+use linkrs_core::{StorageError, StorageResult};
 
+use crate::types::{PropertyRow, PropertyRowList};
 use crate::vertex::ShardedVertexTable;
 use crate::StoragePersistenceOps;
 
@@ -385,7 +386,7 @@ impl GraphStorage {
     pub fn offline_bulk_import_vertices_str(
         &self,
         label: LabelId,
-        rows: &[(String, Vec<(Arc<str>, Value)>)],
+        rows: &[(String, PropertyRowList)],
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
@@ -394,7 +395,7 @@ impl GraphStorage {
                 StorageError::label_not_found(format!("vertex label {} not found", label))
             })
         })?;
-        let borrowed: Vec<(&str, &[(Arc<str>, Value)])> = rows
+        let borrowed: Vec<(&str, &[PropertyRow])> = rows
             .iter()
             .map(|(id, props)| (id.as_str(), props.as_slice()))
             .collect();
@@ -406,7 +407,7 @@ impl GraphStorage {
     pub fn offline_bulk_import_vertices_i64(
         &self,
         label: LabelId,
-        rows: &[(i64, Vec<(Arc<str>, Value)>)],
+        rows: &[(i64, PropertyRowList)],
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
@@ -415,7 +416,7 @@ impl GraphStorage {
                 StorageError::label_not_found(format!("vertex label {} not found", label))
             })
         })?;
-        let borrowed: Vec<(i64, &[(Arc<str>, Value)])> = rows
+        let borrowed: Vec<(i64, &[PropertyRow])> = rows
             .iter()
             .map(|(id, props)| (*id, props.as_slice()))
             .collect();

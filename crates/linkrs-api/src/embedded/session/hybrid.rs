@@ -52,11 +52,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 
         let vector_hits = vector_results
             .into_iter()
-            .map(|r| {
-                let mut hit = SearchHit::new(r.doc_id, r.score);
-                hit.payload = r.payload;
-                hit
-            })
+            .map(linkrs_core::types::search::IntoSearchHit::into_search_hit)
             .collect();
 
         request

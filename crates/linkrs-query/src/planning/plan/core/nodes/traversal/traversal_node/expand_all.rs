@@ -146,11 +146,11 @@ pub struct ExpandAllNode {
     /// Columnar expand annotation: edge property demand (`None` means the
     /// whole edge value is needed, `Some(vec)` lists the demanded property
     /// names with empty meaning topology only). Annotated by `ExpandPushdown`.
-    edge_required_props: Option<Box<Vec<String>>>,
+    edge_required_props: Option<Vec<String>>,
     /// Columnar expand annotation: destination property demand, same encoding
     /// as the edge demand. Empty when the destination is only counted or only
     /// feeds the next hop seed.
-    dst_required_props: Option<Box<Vec<String>>>,
+    dst_required_props: Option<Vec<String>>,
     /// Columnar expand annotation: every involved edge type declares endpoint
     /// labels compatible with the plan `dst_tag`, so neighbor labels are fully
     /// determined by schema without per-edge checks.
@@ -358,20 +358,20 @@ impl ExpandAllNode {
         self.lightweight_source = lightweight_source;
     }
 
-    pub fn edge_required_props(&self) -> Option<&Vec<String>> {
+    pub fn edge_required_props(&self) -> Option<&[String]> {
         self.edge_required_props.as_deref()
     }
 
     pub fn set_edge_required_props(&mut self, props: Option<Vec<String>>) {
-        self.edge_required_props = props.map(Box::new);
+        self.edge_required_props = props;
     }
 
-    pub fn dst_required_props(&self) -> Option<&Vec<String>> {
+    pub fn dst_required_props(&self) -> Option<&[String]> {
         self.dst_required_props.as_deref()
     }
 
     pub fn set_dst_required_props(&mut self, props: Option<Vec<String>>) {
-        self.dst_required_props = props.map(Box::new);
+        self.dst_required_props = props;
     }
 
     pub fn closed_loop(&self) -> bool {

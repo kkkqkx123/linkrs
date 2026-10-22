@@ -48,6 +48,7 @@ impl YieldClausePlanner {
     /// 1. Constructing the projection node (YIELD column)
     /// 2. If there are WHERE conditions, add a Filter node.
     /// 3. If there are LIMIT/SKIP settings, add pagination nodes.
+    #[allow(clippy::too_many_arguments)]
     pub fn plan_yield_clause(
         &self,
         yield_columns: &[YieldColumn],

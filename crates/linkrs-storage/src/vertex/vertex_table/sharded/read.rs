@@ -7,6 +7,9 @@ use linkrs_core::types::{DataType, Timestamp, VertexId};
 use linkrs_core::StorageResult;
 use std::sync::Arc;
 
+/// One decoded column of a columnar scan: column name plus its typed values.
+type ColumnRow = (std::sync::Arc<str>, ColumnValues);
+
 /// Decode an ID-index key into the external vertex ID.
 ///
 /// Keys are length-checked at insert, so a decode failure surfaces as a
@@ -316,11 +319,7 @@ impl ShardedVertexTable {
         global_ids: &[u32],
         guard: &VisibilityGuard<'_>,
         names: &[std::sync::Arc<str>],
-    ) -> (
-        Vec<u32>,
-        Vec<VertexId>,
-        Vec<(std::sync::Arc<str>, ColumnValues)>,
-    ) {
+    ) -> (Vec<u32>, Vec<VertexId>, Vec<ColumnRow>) {
         if let Err(error) = self.verify_shard_schema_uniform() {
             log::error!(
                 "scan_columns proceeding under shard schema divergence: {}",

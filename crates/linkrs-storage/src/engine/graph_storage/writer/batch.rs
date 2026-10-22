@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use crate::engine::{
     BatchEdgeDelete, BatchEdgeInsert, DeleteEdgesBatchParams, InsertEdgesBatchParams,
 };
 use crate::index::types::EdgeIdentity;
+use crate::types::PropertyRowList;
 use linkrs_core::types::{EdgeIdentifier, Index, LabelId, TagInfo, Timestamp, VertexId};
 use linkrs_core::wal::redo::{DeleteEdgeRedo, InsertEdgeRedo};
 use linkrs_core::wal::types::WalOpType;
@@ -242,10 +242,10 @@ fn insert_one_type_batch(
             ))
         })?;
 
-    let mut prepared: Vec<(Vec<(Arc<str>, Value)>, usize)> = Vec::with_capacity(positions.len());
+    let mut prepared: Vec<(PropertyRowList, usize)> = Vec::with_capacity(positions.len());
     for &index in positions {
         let edge = &edges[index];
-        let props: Vec<(Arc<str>, Value)> = edge
+        let props: PropertyRowList = edge
             .props
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))

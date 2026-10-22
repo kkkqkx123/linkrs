@@ -702,7 +702,7 @@ impl<
             vec![vec![
                 Value::BigInt(target_session_id),
                 Value::BigInt(query_id),
-                Value::string("killed".to_string()),
+                Value::string("killed"),
             ]],
             vec![
                 "session_id".to_string(),

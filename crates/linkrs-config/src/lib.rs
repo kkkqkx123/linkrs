@@ -55,9 +55,6 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "rerank")]
-use llm_rerank::{RerankConfig, RerankFusionStrategy};
-
 /// Common configuration aggregator
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct CommonConfig {

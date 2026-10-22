@@ -195,7 +195,7 @@ pub(super) fn handle_all(
                 }
                 let count = expand_frontier::expand_count_only(
                     chunk,
-                    &*reader,
+                    reader,
                     src_vids.clone(),
                     &mut ExpandCtx {
                         space_name,
@@ -254,13 +254,13 @@ pub(super) fn handle_all(
                     )
                     && closed_loop
                     && expand_dispatch::is_closed_loop_storage(
-                        &*reader, space_name, edge_types, direction, dst_tag,
+                        reader, space_name, edge_types, direction, dst_tag,
                     );
                 if var_eligible {
                     match expand_frontier::expand_variable_frontier(
                         &chunk,
                         Arc::clone(&op.output_layout),
-                        &*reader,
+                        reader,
                         src_vids.clone(),
                         &limits,
                         &mut ctx,
@@ -270,7 +270,7 @@ pub(super) fn handle_all(
                         ColumnarOutcome::Declined => expand_frontier::expand_variable_row_union(
                             chunk,
                             Arc::clone(&op.output_layout),
-                            &*reader,
+                            reader,
                             src_vids.clone(),
                             &limits,
                             &mut ctx,
@@ -280,7 +280,7 @@ pub(super) fn handle_all(
                     expand_frontier::expand_variable_row_union(
                         chunk,
                         Arc::clone(&op.output_layout),
-                        &*reader,
+                        reader,
                         src_vids.clone(),
                         &limits,
                         &mut ctx,
@@ -295,13 +295,13 @@ pub(super) fn handle_all(
                     )
                     && closed_loop
                     && expand_dispatch::is_closed_loop_storage(
-                        &*reader, space_name, edge_types, direction, dst_tag,
+                        reader, space_name, edge_types, direction, dst_tag,
                     );
                 if multi_eligible {
                     match expand_frontier::expand_multi_hop_frontier(
                         &chunk,
                         Arc::clone(&op.output_layout),
-                        &*reader,
+                        reader,
                         src_vids.clone(),
                         step_limit,
                         &mut ctx,
@@ -311,7 +311,7 @@ pub(super) fn handle_all(
                         ColumnarOutcome::Declined => expand_dispatch::expand_on_chunk(
                             chunk,
                             Arc::clone(&op.output_layout),
-                            &*reader,
+                            reader,
                             src_vids.clone(),
                             step_limit,
                             &mut ctx,
@@ -321,7 +321,7 @@ pub(super) fn handle_all(
                     expand_dispatch::expand_on_chunk(
                         chunk,
                         Arc::clone(&op.output_layout),
-                        &*reader,
+                        reader,
                         src_vids.clone(),
                         step_limit,
                         &mut ctx,
@@ -331,13 +331,13 @@ pub(super) fn handle_all(
                 if !emit_raw_ids
                     && closed_loop
                     && expand_dispatch::is_closed_loop_storage(
-                        &*reader, space_name, edge_types, direction, dst_tag,
+                        reader, space_name, edge_types, direction, dst_tag,
                     )
                 {
                     match expand_columnar::expand_single_step_columnar(
                         &chunk,
                         Arc::clone(&op.output_layout),
-                        &*reader,
+                        reader,
                         src_vids.clone(),
                         &mut ctx,
                     )? {
@@ -346,7 +346,7 @@ pub(super) fn handle_all(
                         ColumnarOutcome::Declined => expand_row_path::expand_single_step(
                             chunk,
                             Arc::clone(&op.output_layout),
-                            &*reader,
+                            reader,
                             src_vids.clone(),
                             &mut ctx,
                         )?,
@@ -355,7 +355,7 @@ pub(super) fn handle_all(
                     expand_row_path::expand_single_step(
                         chunk,
                         Arc::clone(&op.output_layout),
-                        &*reader,
+                        reader,
                         src_vids.clone(),
                         &mut ctx,
                     )?
@@ -364,7 +364,7 @@ pub(super) fn handle_all(
                 expand_dispatch::expand_on_chunk(
                     chunk,
                     Arc::clone(&op.output_layout),
-                    &*reader,
+                    reader,
                     src_vids.clone(),
                     step_limit,
                     &mut ctx,

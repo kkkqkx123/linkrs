@@ -8,7 +8,6 @@ use crate::api_core::{CoreError, CoreResult};
 use linkrs_fulltext::query::FulltextQuery;
 use linkrs_fulltext::SearchResult;
 use linkrs_storage::StorageClient;
-use std::sync::Arc;
 
 #[cfg(feature = "fulltext")]
 impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget> Session<S> {

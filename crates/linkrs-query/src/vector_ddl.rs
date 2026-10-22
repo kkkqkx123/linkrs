@@ -55,6 +55,7 @@ pub fn compression_from_str(raw: &str) -> Option<CompressionRatioKind> {
 /// and the HTTP / gRPC index endpoints all route through it so the
 /// transports cannot drift from the statement pipeline.
 #[cfg(feature = "vector")]
+#[allow(clippy::too_many_arguments)]
 pub fn build_collection_config(
     vector_size: usize,
     distance: simvec::DistanceMetric,

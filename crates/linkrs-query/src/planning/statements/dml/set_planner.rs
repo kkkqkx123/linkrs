@@ -135,9 +135,9 @@ impl Planner for SetPlanner {
             }
         }
 
-        return Err(PlannerError::PlanGenerationFailed(
+        Err(PlannerError::PlanGenerationFailed(
             "standalone SET is not supported; use UPDATE <id> ON <tag> SET ... instead".to_string(),
-        ));
+        ))
     }
 }
 

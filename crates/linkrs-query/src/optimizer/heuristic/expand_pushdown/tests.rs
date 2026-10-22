@@ -226,12 +226,12 @@ fn prop_needs_empty_when_only_counted() {
     let hop = hop_by_dst(&hops, "b");
     assert_eq!(
         hop.edge_required_props(),
-        Some(&vec![]),
+        Some(&vec![][..]),
         "counted edge needs no properties"
     );
     assert_eq!(
         hop.dst_required_props(),
-        Some(&vec![]),
+        Some(&vec![][..]),
         "uncounted destination needs no properties"
     );
 }
@@ -249,7 +249,7 @@ fn prop_needs_collects_edge_and_dst_props() {
     let hop = hop_by_dst(&hops, "b");
     assert_eq!(
         hop.edge_required_props(),
-        Some(&vec!["weight".to_string()]),
+        Some(&vec!["weight".to_string()][..]),
         "edge property demand must be collected"
     );
     let proj2 = project_prop_col(
@@ -262,7 +262,7 @@ fn prop_needs_collects_edge_and_dst_props() {
     let hops2 = expand_alls(&annotated2);
     assert_eq!(
         hop_by_dst(&hops2, "b").dst_required_props(),
-        Some(&vec!["name".to_string()]),
+        Some(&vec!["name".to_string()][..]),
         "destination property demand must be collected"
     );
 }
@@ -370,7 +370,7 @@ fn skip_rows_with_dst_property_passthrough() {
     let hop = hop_by_dst(&hops, "b");
     assert_eq!(
         hop.dst_required_props(),
-        Some(&vec!["name".to_string()]),
+        Some(&vec!["name".to_string()][..]),
         "destination property demand must be collected"
     );
     assert!(
@@ -392,7 +392,7 @@ fn skip_rows_with_edge_property_passthrough() {
     let hop = hop_by_dst(&hops, "b");
     assert_eq!(
         hop.edge_required_props(),
-        Some(&vec!["weight".to_string()]),
+        Some(&vec!["weight".to_string()][..]),
         "edge property demand must be collected"
     );
     assert!(
@@ -442,7 +442,7 @@ fn skip_rows_blocked_for_count_with_property_arg() {
     let hops = expand_alls(&annotated);
     assert_eq!(
         hop_by_dst(&hops, "b").dst_required_props(),
-        Some(&vec!["name".to_string()]),
+        Some(&vec!["name".to_string()][..]),
         "count argument property must be audited"
     );
     assert!(

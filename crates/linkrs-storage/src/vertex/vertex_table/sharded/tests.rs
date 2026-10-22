@@ -6,7 +6,7 @@ use super::*;
 use linkrs_core::types::MAX_TIMESTAMP;
 
 const TEST_TS: Timestamp = MAX_TIMESTAMP - 1;
-use crate::types::StoragePropertyDef;
+use crate::types::{PropertyRow, PropertyRowList, StoragePropertyDef};
 use linkrs_core::types::Timestamp;
 use linkrs_core::{DataType, Value};
 use std::sync::Arc;
@@ -704,11 +704,11 @@ fn test_insert_batch_str_groups_shards_and_aligns_results() {
     let table = ShardedVertexTable::with_config(1, "t".into(), test_schema(), 8);
     let ts = TEST_TS;
     let names: Vec<String> = (0..100).map(|i| format!("b_{}", i)).collect();
-    let props: Vec<Vec<(Arc<str>, Value)>> = names
+    let props: Vec<PropertyRowList> = names
         .iter()
         .map(|n| vec![("name".into(), Value::from(n.as_str()))])
         .collect();
-    let rows: Vec<(&str, &[(Arc<str>, Value)])> = names
+    let rows: Vec<(&str, &[PropertyRow])> = names
         .iter()
         .zip(props.iter())
         .map(|(n, p)| (n.as_str(), p.as_slice()))
@@ -732,8 +732,7 @@ fn test_insert_batch_reports_per_row_errors() {
     insert_with_name(&table, "dup", ts);
     let pa = vec![("name".into(), Value::from("dup"))];
     let pb = vec![("name".into(), Value::from("fresh"))];
-    let rows: Vec<(&str, &[(Arc<str>, Value)])> =
-        vec![("fresh", pb.as_slice()), ("dup", pa.as_slice())];
+    let rows: Vec<(&str, &[PropertyRow])> = vec![("fresh", pb.as_slice()), ("dup", pa.as_slice())];
     let results = table.insert_batch_str(&rows, ts);
     assert_eq!(results.len(), 2);
     assert!(results[0].is_ok());

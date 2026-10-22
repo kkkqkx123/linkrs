@@ -8,6 +8,7 @@ use crate::edge::Nbr;
 use crate::engine::data_store::EdgeTableKey;
 use crate::engine::graph_storage::context::GraphStorageContext;
 use crate::engine::graph_storage::ops::endpoint_label_id;
+use crate::types::PropertyRowList;
 use crate::vertex::vertex_table::sharded::routing::ShardLayout;
 use crate::vertex::ShardedVertexTable;
 use linkrs_core::types::{LabelId, Timestamp, VertexId};
@@ -1184,7 +1185,7 @@ struct EdgeBuildArgs<'a> {
     td: &'a TableDef,
     src_vid: &'a VertexId,
     nbr: Nbr,
-    props: Vec<(Arc<str>, Value)>,
+    props: PropertyRowList,
 }
 
 struct EdgeCandidate {
@@ -1251,7 +1252,7 @@ fn try_decode_edge_properties(
     edge_id: linkrs_core::types::EdgeId,
     ts: Timestamp,
     fetch: Option<&[Arc<str>]>,
-) -> Option<StorageResult<Vec<(Arc<str>, Value)>>> {
+) -> Option<StorageResult<PropertyRowList>> {
     if !store.is_visible(edge_id, ts) {
         return None;
     }
@@ -1269,7 +1270,7 @@ fn try_decode_edge_properties(
 }
 
 /// Drop predicate-only columns so emitted rows carry projected properties.
-fn trim_to_projection(props: &mut Vec<(Arc<str>, Value)>, projection: &Option<Vec<Arc<str>>>) {
+fn trim_to_projection(props: &mut PropertyRowList, projection: &Option<Vec<Arc<str>>>) {
     if let Some(names) = projection {
         props.retain(|(k, _)| names.iter().any(|name| name == k));
     }

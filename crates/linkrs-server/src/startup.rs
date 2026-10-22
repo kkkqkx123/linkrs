@@ -166,7 +166,9 @@ pub async fn start_service_with_config_path(
             }
             #[cfg(feature = "vector-qdrant")]
             linkrs_config::VectorEngineKind::Qdrant => {
-                match VectorManager::new(config.vector_config().qdrant.clone().into()).await {
+                let client_config =
+                    linkrs_sync::backend::qdrant_client_config(&config.vector_config().qdrant);
+                match VectorManager::new(client_config).await {
                     Ok(vm) => {
                         info!("VectorManager initialized");
                         (Some(VectorBackend::qdrant(Arc::new(vm))), None)

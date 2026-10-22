@@ -1,6 +1,7 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::{Mutex, RwLock};
 
@@ -9,6 +10,7 @@ use crate::engine::config::PropertyGraphConfig;
 use crate::engine::data_store::GraphDataStore;
 use crate::engine::paths::StoragePaths;
 use crate::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
+use crate::maintenance_scheduler::{MaintenanceTask, MaintenanceTaskConfig};
 use crate::vertex::gc_manager::VertexGcManager;
 use crate::StorageOperationContext;
 use linkrs_core::types::Timestamp;
@@ -110,19 +112,12 @@ struct GraphStorageRuntime {
     /// Shared rayon-backed pool for background maintenance work (freeze,
     /// vertex/index GC loops). See [`crate::thread_pool`].
     thread_pool: Arc<crate::thread_pool::StorageThreadPool>,
-    background_freeze_running: Arc<AtomicBool>,
-    /// Last background-maintenance completion time, for write-path throttle
-    /// checks. Limits how often the per-edge insert hot path may re-trigger
-    /// maintenance once the mutable-CSR budget is crossed; updated when a
-    /// spawned maintenance task finishes.
-    last_background_maintenance_completion: Arc<Mutex<Option<std::time::Instant>>>,
-    /// Exponential backoff counter for consecutive no-progress maintenance
-    /// runs; reset to zero whenever a run makes progress.
-    background_freeze_backoff: Arc<AtomicU32>,
+    /// Unified scheduling state for CSR background maintenance: single-flight,
+    /// completion-time cooldown, exponential no-progress backoff, panic-safe
+    /// execution. Shared across context clones.
+    background_maintenance_task: Arc<MaintenanceTask>,
     /// Last automatic vertex compaction time, for cooldown checks
     last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
-    /// Last index-GC pass time, for throttling opportunistic GC.
-    last_index_gc: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 struct WriteTimestampLease {
@@ -149,22 +144,30 @@ impl WriteTimestampLease {
 
 impl GraphStorageRuntime {
     fn new() -> Self {
+        let thread_pool = Arc::new(crate::thread_pool::StorageThreadPool::new().unwrap_or_else(
+            |e| {
+                log::error!("Failed to build storage thread pool: {}", e);
+                crate::thread_pool::StorageThreadPool::default()
+            },
+        ));
+        // Defaults mirror `ResourceConfig::default()`; every schedule call
+        // refreshes cooldown and timeout from the live configuration.
+        let background_maintenance_task = Arc::new(MaintenanceTask::new(
+            thread_pool.clone(),
+            MaintenanceTaskConfig::new(
+                "background-maintenance",
+                Duration::from_millis(250),
+                Duration::from_secs(30),
+            ),
+        ));
         Self {
             index_gc_manager: None,
             vertex_gc_manager: None,
             background_freeze_manager: None,
             deferred_wal_ops: DeferredWalOps::new(),
-            thread_pool: Arc::new(crate::thread_pool::StorageThreadPool::new().unwrap_or_else(
-                |e| {
-                    log::error!("Failed to build storage thread pool: {}", e);
-                    crate::thread_pool::StorageThreadPool::default()
-                },
-            )),
-            background_freeze_running: Arc::new(AtomicBool::new(false)),
-            last_background_maintenance_completion: Arc::new(Mutex::new(None)),
-            background_freeze_backoff: Arc::new(AtomicU32::new(0)),
+            thread_pool,
+            background_maintenance_task,
             last_auto_compact: Arc::new(Mutex::new(None)),
-            last_index_gc: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -188,11 +191,8 @@ impl GraphStorageRuntime {
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
-            background_freeze_running: self.background_freeze_running.clone(),
-            last_background_maintenance_completion: self.last_background_maintenance_completion.clone(),
-            background_freeze_backoff: self.background_freeze_backoff.clone(),
+            background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
-            last_index_gc: self.last_index_gc.clone(),
         }
     }
 
@@ -215,11 +215,8 @@ impl GraphStorageRuntime {
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
-            background_freeze_running: self.background_freeze_running.clone(),
-            last_background_maintenance_completion: self.last_background_maintenance_completion.clone(),
-            background_freeze_backoff: self.background_freeze_backoff.clone(),
+            background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
-            last_index_gc: self.last_index_gc.clone(),
         }
     }
 
@@ -230,11 +227,8 @@ impl GraphStorageRuntime {
             background_freeze_manager: Some(manager),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
-            background_freeze_running: self.background_freeze_running.clone(),
-            last_background_maintenance_completion: self.last_background_maintenance_completion.clone(),
-            background_freeze_backoff: self.background_freeze_backoff.clone(),
+            background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
-            last_index_gc: self.last_index_gc.clone(),
         }
     }
 
@@ -257,27 +251,11 @@ impl GraphStorageRuntime {
             .unwrap_or(false)
     }
 
-    fn maybe_run_index_gc(&self) {
+    fn maybe_run_index_gc(&self) -> bool {
         let Some(gc) = self.index_gc_manager.as_ref() else {
-            return;
+            return false;
         };
-        {
-            let mut last = self.last_index_gc.lock();
-            if last
-                .as_ref()
-                .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(2))
-            {
-                return;
-            }
-            *last = Some(std::time::Instant::now());
-        }
-        let stats = gc.run_gc_pass();
-        if !stats.is_empty() {
-            log::debug!(
-                "Opportunistic index GC removed {} entries",
-                stats.total_removed()
-            );
-        }
+        gc.schedule_opportunistic_gc()
     }
 
     fn start_vertex_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {

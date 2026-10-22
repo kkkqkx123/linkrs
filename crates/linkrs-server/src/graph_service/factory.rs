@@ -381,6 +381,7 @@ impl<
 
     /// Shared helper: build a QueryApi with optional SchemaManager, reusing the
     /// server-level optimizer engine so `[parallel]` settings take effect.
+    #[allow(clippy::too_many_arguments)]
     fn build_query_api(
         storage: &Arc<S>,
         stats_manager: &Arc<StatsManager>,

@@ -29,11 +29,11 @@ impl DdlParser {
                 if_exists = true;
             }
             let space_name = ctx.expect_dcl_name()?;
-            return Ok(Stmt::Drop(DropStmt {
+            Ok(Stmt::Drop(DropStmt {
                 span: start_span,
                 target: DropTarget::Space(space_name),
                 if_exists,
-            }));
+            }))
         } else if ctx.match_token(TokenKind::Tag) {
             if ctx.check_token(TokenKind::Index) {
                 ctx.next_token();
@@ -48,14 +48,14 @@ impl DdlParser {
                 } else {
                     None
                 };
-                return Ok(Stmt::Drop(DropStmt {
+                Ok(Stmt::Drop(DropStmt {
                     span: start_span,
                     target: DropTarget::TagIndex {
                         space_name: space_name.unwrap_or_default(),
                         index_name,
                     },
                     if_exists,
-                }));
+                }))
             } else {
                 let mut if_exists = false;
                 if ctx.match_token(TokenKind::If) {
@@ -66,11 +66,11 @@ impl DdlParser {
                 while ctx.match_token(TokenKind::Comma) {
                     tag_names.push(ctx.expect_identifier()?);
                 }
-                return Ok(Stmt::Drop(DropStmt {
+                Ok(Stmt::Drop(DropStmt {
                     span: start_span,
                     target: DropTarget::Tags(tag_names),
                     if_exists,
-                }));
+                }))
             }
         } else if ctx.check_token(TokenKind::Edge) {
             ctx.next_token();
@@ -87,14 +87,14 @@ impl DdlParser {
                 } else {
                     None
                 };
-                return Ok(Stmt::Drop(DropStmt {
+                Ok(Stmt::Drop(DropStmt {
                     span: start_span,
                     target: DropTarget::EdgeIndex {
                         space_name: space_name.unwrap_or_default(),
                         index_name,
                     },
                     if_exists,
-                }));
+                }))
             } else {
                 let mut if_exists = false;
                 if ctx.match_token(TokenKind::If) {
@@ -105,11 +105,11 @@ impl DdlParser {
                 while ctx.match_token(TokenKind::Comma) {
                     edge_names.push(ctx.expect_identifier()?);
                 }
-                return Ok(Stmt::Drop(DropStmt {
+                Ok(Stmt::Drop(DropStmt {
                     span: start_span,
                     target: DropTarget::Edges(edge_names),
                     if_exists,
-                }));
+                }))
             }
         } else if ctx.match_token(TokenKind::Index) {
             let mut if_exists = false;
@@ -123,14 +123,14 @@ impl DdlParser {
             } else {
                 None
             };
-            return Ok(Stmt::Drop(DropStmt {
+            Ok(Stmt::Drop(DropStmt {
                 span: start_span,
                 target: DropTarget::TagIndex {
                     space_name: space_name.unwrap_or_default(),
                     index_name,
                 },
                 if_exists,
-            }));
+            }))
         } else if ctx.match_token(TokenKind::User) {
             let mut if_exists = false;
             if ctx.match_token(TokenKind::If) {
@@ -142,11 +142,11 @@ impl DdlParser {
             let end_span = ctx.current_span();
             let span = ctx.merge_span(start_span.start, end_span.end);
 
-            return Ok(Stmt::DropUser(DropUserStmt {
+            Ok(Stmt::DropUser(DropUserStmt {
                 span,
                 username,
                 if_exists,
-            }));
+            }))
         } else if ctx.match_token(TokenKind::Sequence) {
             let mut if_exists = false;
             if ctx.match_token(TokenKind::If) {
@@ -156,11 +156,11 @@ impl DdlParser {
             let seq_name = ctx.expect_identifier()?;
             let end_span = ctx.current_span();
             let span = ctx.merge_span(start_span.start, end_span.end);
-            return Ok(Stmt::Drop(DropStmt {
+            Ok(Stmt::Drop(DropStmt {
                 span,
                 target: DropTarget::Sequence(seq_name),
                 if_exists,
-            }));
+            }))
         } else if ctx.check_keyword("MACRO") {
             ctx.consume_keyword("MACRO")?;
             let mut if_exists = false;
@@ -171,11 +171,11 @@ impl DdlParser {
             let name = ctx.expect_identifier()?;
             let end_span = ctx.current_span();
             let span = ctx.merge_span(start_span.start, end_span.end);
-            return Ok(Stmt::DropMacro(DropMacroStmt {
+            Ok(Stmt::DropMacro(DropMacroStmt {
                 span,
                 name,
                 if_exists,
-            }));
+            }))
         } else if ctx.check_keyword("TYPE") {
             ctx.consume_keyword("TYPE")?;
             let mut if_exists = false;
@@ -186,18 +186,18 @@ impl DdlParser {
             let name = ctx.expect_identifier()?;
             let end_span = ctx.current_span();
             let span = ctx.merge_span(start_span.start, end_span.end);
-            return Ok(Stmt::DropType(DropTypeStmt {
+            Ok(Stmt::DropType(DropTypeStmt {
                 span,
                 name,
                 if_exists,
-            }));
+            }))
         } else {
-            return Err(ParseError::new(
+            Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
                 "Expected SPACE, GRAPH, TAG, EDGE, INDEX, SEQUENCE, MACRO, TYPE, or USER"
                     .to_string(),
                 ctx.current_position(),
-            ));
+            ))
         }
     }
 }

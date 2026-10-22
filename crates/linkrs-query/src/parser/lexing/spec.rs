@@ -1682,7 +1682,7 @@ pub fn is_identifier_spelling(kind: &TokenKind, word: &str) -> bool {
 pub fn check_symbol_token(kind: &TokenKind, lexeme: &str) -> bool {
     match SPEC_INDEX.symbol_lexemes.get(&discriminant(kind)) {
         None => true,
-        Some(lexemes) => lexemes.iter().any(|symbol| *symbol == lexeme),
+        Some(lexemes) => lexemes.contains(&lexeme),
     }
 }
 

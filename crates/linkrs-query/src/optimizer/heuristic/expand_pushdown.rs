@@ -93,7 +93,7 @@ fn annotate_expand_all(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
     let mut candidates: Vec<(ExpandAllNode, Vec<&PlanNodeEnum>)> = Vec::new();
     collect_expand_alls(root, &mut Vec::new(), &mut candidates);
 
-    let mut needs_map: HashMap<i64, (Option<Vec<String>>, Option<Vec<String>>)> = HashMap::new();
+    let mut needs_map: HashMap<i64, decision::PropDemand> = HashMap::new();
     for (expand, ancestors) in &candidates {
         let (edge_props, dst_props) = expand_prop_needs(expand, ancestors);
         needs_map.insert(expand.id(), (edge_props, dst_props));
@@ -116,8 +116,8 @@ fn annotate_expand_all(root: &PlanNodeEnum) -> (PlanNodeEnum, bool) {
         let changed = id_only != expand.id_only()
             || count_only != expand.count_only()
             || lightweight_source != expand.lightweight_source()
-            || edge_props.as_ref() != expand.edge_required_props()
-            || dst_props.as_ref() != expand.dst_required_props()
+            || edge_props.as_deref() != expand.edge_required_props()
+            || dst_props.as_deref() != expand.dst_required_props()
             || closed_loop != expand.closed_loop()
             || skip_rows != expand.skip_rows();
         if changed {

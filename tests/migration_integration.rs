@@ -220,39 +220,3 @@ fn test_parse_migrate_edge() {
         other => panic!("expected Migrate, got {:?}", other.kind()),
     }
 }
-
-#[test]
-fn test_ddl_migrate_plan_operator() {
-    use linkrs::query::executor::streaming::operators::ddl_operator::DdlOperator;
-    use linkrs::query::executor::streaming::operators::spec::DdlSpec;
-    use linkrs::query::executor::streaming::slot::SlotLayout;
-    use std::sync::Arc;
-    let spec = DdlSpec::MigratePlan {
-        space_name: "test_space".to_string(),
-        label: "person".to_string(),
-        is_edge: false,
-        from_version: 1,
-        to_version: 2,
-    };
-    let storage = Arc::new(parking_lot::RwLock::new(MockStorage::new().unwrap()))
-        as std::sync::Arc<parking_lot::RwLock<dyn linkrs::storage::QueryStorage>>;
-    let layout = Arc::new(SlotLayout::new(vec![]));
-    let op = DdlOperator::from_spec(&spec, Some(storage), layout);
-    match op.kind {
-        linkrs::query::executor::streaming::operators::ddl_operator::DdlOperatorKind::MigratePlan {
-            space_name,
-            label,
-            is_edge,
-            from_version,
-            to_version,
-            ..
-        } => {
-            assert_eq!(space_name, "test_space");
-            assert_eq!(label, "person");
-            assert!(!is_edge);
-            assert_eq!(from_version, 1);
-            assert_eq!(to_version, 2);
-        }
-        _ => panic!("expected MigratePlan"),
-    }
-}

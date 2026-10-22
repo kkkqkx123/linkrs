@@ -474,7 +474,7 @@ impl VectorSyncCoordinator {
     /// coordinator is already mounted in the sync manager.
     #[cfg(any(feature = "embedding", feature = "rerank"))]
     pub fn set_stats_manager(&self, stats_manager: Arc<linkrs_metrics::StatsManager>) {
-        *self.stats_manager.write() = Some(stats_manager);
+        *self.stats_manager.write() = Some(stats_manager.clone());
         // Engine-level ops (search, create/drop, batch writes) report through
         // the backend's metrics decorator.
         self.backend().set_stats_manager(stats_manager);

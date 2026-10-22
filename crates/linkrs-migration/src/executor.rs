@@ -666,13 +666,12 @@ where
                 skip_chain_check: true,
             },
         )
-        .map(|report| {
+        .inspect(|report| {
             if report.success {
                 notify(&MigrationEvent::RolledBack {
                     report: report.clone(),
                 });
             }
-            report
         }),
         None => {
             let backup_dir = options

@@ -9,7 +9,8 @@
 use super::Session;
 use crate::api_core::error::CoreError;
 use crate::api_core::types::{SavepointId, TransactionHandle};
-use crate::api_core::{CoreResult, QueryResult};
+use crate::api_core::CoreResult;
+use crate::embedded::result::QueryResult;
 use crate::embedded::transaction::Transaction;
 use crate::embedded::transaction::TransactionConfig;
 use linkrs_core::Value;
@@ -17,7 +18,6 @@ use linkrs_query::parser::ast::stmt::Ast;
 use linkrs_query::parser::ast::Stmt;
 use linkrs_storage::StorageClient;
 use linkrs_transaction::TransactionId;
-use linkrs_transaction::TransactionManager;
 use linkrs_transaction::TransactionOptions;
 use std::collections::HashMap;
 use std::sync::Arc;

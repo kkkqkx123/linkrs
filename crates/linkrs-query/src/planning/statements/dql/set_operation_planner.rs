@@ -93,9 +93,7 @@ impl SetOperationPlanner {
                     i += 1;
                 }
                 ')' => {
-                    if depth > 0 {
-                        depth -= 1;
-                    }
+                    depth = depth.saturating_sub(1);
                     i += 1;
                 }
                 _ => {

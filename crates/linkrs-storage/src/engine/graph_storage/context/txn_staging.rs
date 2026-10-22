@@ -28,6 +28,7 @@ use linkrs_core::error::storage::StorageErrorKind;
 use linkrs_core::types::{LabelId, Timestamp, TransactionId};
 use linkrs_core::{StorageError, StorageResult, Value};
 
+use crate::types::{PropertyRow, PropertyRowList};
 use crate::vertex::{IdKey, ShardedVertexTable, WriteScope};
 
 /// Upper bound for staged rows held by one transaction.
@@ -39,8 +40,8 @@ use crate::vertex::{IdKey, ShardedVertexTable, WriteScope};
 pub const MAX_TXN_STAGING_KEYS: usize = 1 << 20;
 
 type StagedKey = (LabelId, IdKey);
-type StagedInsertRow = (u32, Vec<(std::sync::Arc<str>, Value)>);
-type StagedUpdateRow = Vec<(std::sync::Arc<str>, Value)>;
+type StagedInsertRow = (u32, PropertyRowList);
+type StagedUpdateRow = PropertyRowList;
 
 /// Cross-statement vertex write staging owned by one transaction.
 ///
@@ -72,13 +73,13 @@ pub(crate) enum StagedIndexOp {
         space_id: u64,
         vid: Value,
         tag: String,
-        properties: Vec<(Arc<str>, Value)>,
+        properties: PropertyRowList,
     },
     Update {
         space_id: u64,
         vid: Value,
         tag: String,
-        properties: Vec<(Arc<str>, Value)>,
+        properties: PropertyRowList,
     },
     Delete {
         space_id: u64,
@@ -115,11 +116,11 @@ impl TxnStagingMark {
 enum UndoOp {
     Inserts {
         pair: (LabelId, IdKey),
-        prev: Option<(u32, Vec<(std::sync::Arc<str>, Value)>)>,
+        prev: Option<(u32, PropertyRowList)>,
     },
     Updates {
         pair: (LabelId, IdKey),
-        prev: Option<Vec<(std::sync::Arc<str>, Value)>>,
+        prev: Option<PropertyRowList>,
     },
     Deletes {
         pair: (LabelId, IdKey),
@@ -248,7 +249,7 @@ impl TxnStaging {
         label: LabelId,
         key: IdKey,
         reserved: u32,
-        properties: Vec<(std::sync::Arc<str>, Value)>,
+        properties: PropertyRowList,
     ) -> StorageResult<Option<u32>> {
         let pair = (label, key.clone());
         if self.counts_as_new(label, &key) {
@@ -283,7 +284,7 @@ impl TxnStaging {
         &mut self,
         label: LabelId,
         key: IdKey,
-        columns: Vec<(std::sync::Arc<str>, Value)>,
+        columns: PropertyRowList,
     ) -> StorageResult<()> {
         let pair = (label, key.clone());
         if self.inserts.contains_key(&pair) {
@@ -440,7 +441,7 @@ impl TxnStaging {
         &self,
         label: LabelId,
         key: &IdKey,
-    ) -> Option<(u32, &[(std::sync::Arc<str>, Value)])> {
+    ) -> Option<(u32, &[PropertyRow])> {
         self.inserts
             .get(&(label, key.clone()))
             .map(|(id, props)| (*id, props.as_slice()))
@@ -459,11 +460,7 @@ impl TxnStaging {
             .map(|(id, _)| std::mem::replace(id, new_id))
     }
 
-    pub(crate) fn pending_update(
-        &self,
-        label: LabelId,
-        key: &IdKey,
-    ) -> Option<&[(std::sync::Arc<str>, Value)]> {
+    pub(crate) fn pending_update(&self, label: LabelId, key: &IdKey) -> Option<&[PropertyRow]> {
         self.updates.get(&(label, key.clone())).map(Vec::as_slice)
     }
 
@@ -482,7 +479,7 @@ impl TxnStaging {
     pub(crate) fn insert_rows(
         &self,
         label: LabelId,
-    ) -> impl Iterator<Item = (&IdKey, u32, &[(std::sync::Arc<str>, Value)])> {
+    ) -> impl Iterator<Item = (&IdKey, u32, &[PropertyRow])> {
         self.inserts
             .iter()
             .filter(move |pair| pair.0 .0 == label)
@@ -493,7 +490,7 @@ impl TxnStaging {
     pub(crate) fn update_rows(
         &self,
         label: LabelId,
-    ) -> impl Iterator<Item = (&IdKey, &[(std::sync::Arc<str>, Value)])> {
+    ) -> impl Iterator<Item = (&IdKey, &[PropertyRow])> {
         self.updates
             .iter()
             .filter(move |pair| pair.0 .0 == label)
@@ -886,7 +883,7 @@ impl super::GraphStorageContext {
         &self,
         label: LabelId,
         key: &IdKey,
-        columns: Vec<(Arc<str>, Value)>,
+        columns: PropertyRowList,
         ts: Timestamp,
     ) -> StorageResult<()> {
         let table = self.staging_vertex_table(label)?;
@@ -1278,7 +1275,7 @@ mod tests {
         IdKey::Int(id)
     }
 
-    fn props(name: &str) -> Vec<(std::sync::Arc<str>, Value)> {
+    fn props(name: &str) -> PropertyRowList {
         vec![("name".into(), Value::from(name))]
     }
 

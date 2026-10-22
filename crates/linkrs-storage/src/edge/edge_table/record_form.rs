@@ -31,9 +31,9 @@ use super::core::EdgeStore;
 use crate::edge::bundled_csr::{decode_scalar, encode_scalar};
 use crate::edge::property_schema::PropertySchema;
 use crate::edge::{CsrShardSet, CsrWithProperties, MutableCsrTrait, RecordForm};
+use crate::types::PropertyRowList;
 use linkrs_core::types::{EdgeId, Timestamp};
-use linkrs_core::{StorageError, StorageResult, Value};
-use std::sync::Arc;
+use linkrs_core::{StorageError, StorageResult};
 
 /// Outcome of one offline record-form migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +67,7 @@ struct LiveEdge {
     rank: i64,
     edge_id: EdgeId,
     create_ts: Timestamp,
-    props: Vec<(Arc<str>, Value)>,
+    props: PropertyRowList,
 }
 
 /// Fresh shards, properties and owner map built without touching live state.
@@ -518,7 +518,7 @@ impl EdgeStore {
         edge_id: EdgeId,
         current: RecordForm,
         target: RecordForm,
-    ) -> StorageResult<Vec<(Arc<str>, Value)>> {
+    ) -> StorageResult<PropertyRowList> {
         let props = match current {
             RecordForm::Pure => Vec::new(),
             RecordForm::Columnar => self
@@ -592,6 +592,7 @@ mod tests {
     use crate::edge::{EdgeSchema, EdgeStrategy, RecordFormPreference};
     use crate::types::StoragePropertyDef;
     use linkrs_core::types::DataType;
+    use linkrs_core::Value;
 
     fn weight_schema() -> EdgeSchema {
         EdgeSchema {
@@ -753,7 +754,7 @@ mod tests {
         assert!(null_edge.properties.is_empty());
 
         // Row scans decode both directions from the value columns.
-        let mut out: Vec<(u32, Vec<(Arc<str>, Value)>)> = table
+        let mut out: Vec<(u32, PropertyRowList)> = table
             .out_edges(0, 200)
             .into_iter()
             .map(|e| (e.dst_vid.as_int64().unwrap_or(-1) as u32, e.properties))

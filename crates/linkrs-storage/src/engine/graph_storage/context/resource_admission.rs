@@ -93,6 +93,17 @@ impl GraphStorageContext {
             let _passes = gc.pass_count();
             let _mitigations = gc.pressure_mitigations();
         }
+        // Keep index GC and unified maintenance scheduling state exercised.
+        if let Some(ref gc) = self.runtime.index_gc_manager {
+            let _total = gc.total_removed();
+            let _passes = gc.pass_count();
+        }
+        if log::log_enabled!(log::Level::Debug) {
+            log::debug!(
+                "Background maintenance overview: {}",
+                self.maintenance_overview().summary()
+            );
+        }
         snapshot
     }
 

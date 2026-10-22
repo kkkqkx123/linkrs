@@ -29,6 +29,9 @@ fn flat_bypass_names(
     names
 }
 
+/// Per-hop property demand: `(edge property demand, destination property demand)`.
+pub(super) type PropDemand = (Option<Vec<String>>, Option<Vec<String>>);
+
 /// Whether the hop's demanded bypass names already exist in its input prefix.
 /// Inputs come from descendant hops below the current one: a shared flat name
 /// means the current hop rebinds a variable whose old bypass column is still
@@ -39,7 +42,7 @@ pub(super) fn has_input_bypass_conflict(
     edge_props: &Option<Vec<String>>,
     dst_props: &Option<Vec<String>>,
     candidates: &[(ExpandAllNode, Vec<&PlanNodeEnum>)],
-    needs_map: &HashMap<i64, (Option<Vec<String>>, Option<Vec<String>>)>,
+    needs_map: &HashMap<i64, PropDemand>,
 ) -> bool {
     let current: std::collections::HashSet<String> =
         flat_bypass_names(expand.col_names(), edge_props, dst_props)

@@ -7,7 +7,7 @@
 
 use super::Session;
 use crate::api_core::{CoreError, CoreResult};
-use linkrs_query::executor::expression::functions::registry::global_registry;
+use linkrs_query::executor::expression::functions::registry::global_registry_ref;
 use linkrs_query::executor::expression::functions::registry::DynamicUdfInfo;
 use linkrs_query::executor::expression::functions::CustomFunction;
 use linkrs_query::parser::ast::stmt::ExtensionAction;
@@ -18,7 +18,7 @@ use std::path::Path;
 impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget> Session<S> {
     /// Register a custom function
     pub fn register_custom_function(&self, function: CustomFunction) -> CoreResult<()> {
-        let mut registry = global_registry().write();
+        let mut registry = global_registry_ref().write();
         registry.register_custom_full(function);
         Ok(())
     }
@@ -27,7 +27,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     ///
     /// Returns the registered function name.
     pub fn load_extension(&self, path: &Path) -> CoreResult<String> {
-        let mut registry = global_registry().write();
+        let mut registry = global_registry_ref().write();
         registry
             .load_dynamic_udf(path)
             .map_err(|e| CoreError::InvalidParameter(e.to_string()))
@@ -35,7 +35,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 
     /// Unload a previously loaded dynamic UDF by function name.
     pub fn unload_extension(&self, name: &str) -> CoreResult<()> {
-        let mut registry = global_registry().write();
+        let mut registry = global_registry_ref().write();
         registry
             .unload_dynamic_udf(name)
             .map_err(|e| CoreError::InvalidParameter(e.to_string()))
@@ -46,7 +46,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     /// Returns `true` when the library was reloaded, `false` when the file
     /// is unchanged and reloading was skipped.
     pub fn reload_extension(&self, name: &str) -> CoreResult<bool> {
-        let mut registry = global_registry().write();
+        let mut registry = global_registry_ref().write();
         registry
             .reload_dynamic_udf(name)
             .map_err(|e| CoreError::InvalidParameter(e.to_string()))
@@ -57,7 +57,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
     /// Local file paths load directly; `http(s)://` sources return a
     /// repository-unsupported error until a repository module is added.
     pub fn install_extension(&self, source: &str) -> CoreResult<String> {
-        let mut registry = global_registry().write();
+        let mut registry = global_registry_ref().write();
         registry
             .install_dynamic_udf(source)
             .map_err(|e| CoreError::InvalidParameter(e.to_string()))
@@ -65,7 +65,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 
     /// List all loaded dynamic UDFs ordered by name.
     pub fn list_extensions(&self) -> Vec<DynamicUdfInfo> {
-        global_registry().read().list_dynamic_udfs()
+        global_registry_ref().read().list_dynamic_udfs()
     }
 
     /// Execute an extension management statement

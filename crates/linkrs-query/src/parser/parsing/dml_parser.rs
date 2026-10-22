@@ -62,7 +62,11 @@ impl DmlParser {
     fn collect_conjuncts(expr: CoreExpression, out: &mut Vec<CoreExpression>) {
         use linkrs_core::types::operators::BinaryOperator;
         match expr {
-            CoreExpression::Binary { left, op, right } if matches!(op, BinaryOperator::And) => {
+            CoreExpression::Binary {
+                left,
+                op: BinaryOperator::And,
+                right,
+            } => {
                 Self::collect_conjuncts(*left, out);
                 Self::collect_conjuncts(*right, out);
             }
@@ -77,7 +81,11 @@ impl DmlParser {
     ) -> Option<linkrs_core::Value> {
         use linkrs_core::types::operators::BinaryOperator;
         match conjunct {
-            CoreExpression::Binary { left, op, right } if matches!(op, BinaryOperator::Equal) => {
+            CoreExpression::Binary {
+                left,
+                op: BinaryOperator::Equal,
+                right,
+            } => {
                 if let CoreExpression::Function { name, args } = left.as_ref() {
                     if name == "id" && args.len() == 1 {
                         if let CoreExpression::Variable(v) = args[0].as_expr() {

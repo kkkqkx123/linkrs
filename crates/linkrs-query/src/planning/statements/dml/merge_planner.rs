@@ -410,7 +410,7 @@ impl Planner for MergePlanner {
                     col_names: vec!["inserted".to_string()],
                     column_types: vec![],
                 });
-                return Ok(SubPlan::from_logical_root(logical_root));
+                Ok(SubPlan::from_logical_root(logical_root))
             }
         }
     }

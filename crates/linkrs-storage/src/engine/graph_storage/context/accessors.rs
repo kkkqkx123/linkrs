@@ -127,7 +127,17 @@ impl GraphStorageContext {
     }
 
     pub(crate) fn maybe_run_index_gc(&self) {
-        self.runtime.maybe_run_index_gc();
+        // Write-path trigger only schedules: the pass itself runs on the
+        // shared pool through the unified scheduler (single-flight,
+        // completion-time cooldown, backoff), never inline on the write path.
+        if self.runtime.maybe_run_index_gc() {
+            log::debug!("Opportunistic index GC scheduled on shared pool");
+        } else if let Some(diagnostics) = self.index_gc_maintenance_diagnostics() {
+            log::debug!(
+                "Opportunistic index GC throttled: {}",
+                diagnostics.summary(),
+            );
+        }
     }
 
     pub fn stop_index_gc(&self) {
@@ -175,6 +185,64 @@ impl GraphStorageContext {
             .lock()
             .as_ref()
             .is_some_and(|scheduler| scheduler.is_running())
+    }
+
+    /// Unified scheduling diagnostics for the CSR background maintenance
+    /// task: running flag, backoff step, completion age, run counts, and
+    /// last-pass progress.
+    pub fn background_maintenance_diagnostics(
+        &self,
+    ) -> crate::maintenance_scheduler::MaintenanceDiagnostics {
+        self.runtime.background_maintenance_task.diagnostics()
+    }
+
+    /// Unified scheduling diagnostics for the opportunistic/background index
+    /// GC task, or `None` when no index GC manager is configured.
+    pub fn index_gc_maintenance_diagnostics(
+        &self,
+    ) -> Option<crate::maintenance_scheduler::MaintenanceDiagnostics> {
+        self.runtime
+            .index_gc_manager
+            .as_ref()
+            .map(|gc| gc.maintenance_diagnostics())
+    }
+
+    /// Unified scheduling diagnostics for the vertex GC task, or `None`
+    /// when no vertex GC manager is configured.
+    pub fn vertex_gc_maintenance_diagnostics(
+        &self,
+    ) -> Option<crate::maintenance_scheduler::MaintenanceDiagnostics> {
+        self.runtime
+            .vertex_gc_manager
+            .as_ref()
+            .map(|gc| gc.maintenance_diagnostics())
+    }
+
+    /// One observability snapshot across every independent background task.
+    /// Tasks keep their own triggers and intervals; only the scheduling
+    /// state (running, backoff, completion age, progress) is unified here.
+    pub fn maintenance_overview(&self) -> crate::maintenance_scheduler::MaintenanceOverview {
+        let mut tasks = vec![self.background_maintenance_diagnostics()];
+        if let Some(diagnostics) = self.index_gc_maintenance_diagnostics() {
+            tasks.push(diagnostics);
+        }
+        if let Some(diagnostics) = self.vertex_gc_maintenance_diagnostics() {
+            tasks.push(diagnostics);
+        }
+        let (checkpoint_running, checkpoint_pending) = self
+            .checkpoint_scheduler
+            .lock()
+            .as_ref()
+            .map(|scheduler| (scheduler.is_running(), scheduler.pending()))
+            .unwrap_or((false, false));
+        crate::maintenance_scheduler::MaintenanceOverview {
+            tasks,
+            checkpoint_running,
+            checkpoint_pending,
+            ttl_purge_running: self.is_ttl_purge_running(),
+            index_gc_loop_running: self.is_index_gc_running(),
+            vertex_gc_loop_running: self.is_vertex_gc_running(),
+        }
     }
 
     /// Clone this context for the background purge sweep, which must not own

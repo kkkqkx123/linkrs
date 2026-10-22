@@ -12,6 +12,7 @@
 //!   + validated + metadata; sub-contexts derive via `with_bound`).
 //! - Execution scope: `executor::base::ExecutionContext` (per-execution).
 //! - Metadata scope: `metadata::MetadataContext` (pre-resolved schema).
+//!
 //! All contexts are read-only after construction except their documented
 //! mutation points. Do not add new context types; new fields go on the
 //! owning context above with an ownership note.

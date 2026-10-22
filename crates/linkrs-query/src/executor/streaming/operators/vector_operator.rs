@@ -516,9 +516,9 @@ impl VectorOperator {
                                     .collect();
                                 Ok(Some(DataChunk::new(rows, schema)))
                             } else {
-                                return Err(QueryError::execution(
+                                Err(QueryError::execution(
                                     "SHOW VECTOR INDEXES cannot execute: no vector coordinator is configured",
-                                ));
+                                ))
                             }
                         }
                         #[cfg(not(feature = "vector"))]
@@ -577,9 +577,9 @@ impl VectorOperator {
                                     ))),
                                 }
                             } else {
-                                return Err(QueryError::execution(
+                                Err(QueryError::execution(
                                     "DESCRIBE VECTOR INDEX cannot execute: no vector coordinator is configured",
-                                ));
+                                ))
                             }
                         }
                         #[cfg(not(feature = "vector"))]

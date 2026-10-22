@@ -64,10 +64,10 @@ impl Planner for FulltextSearchPlanner {
         #[cfg(not(feature = "fulltext"))]
         {
             let _ = ctx;
-            return Err(PlannerError::UnsupportedOperation(
+            Err(PlannerError::UnsupportedOperation(
                 "fulltext feature is not enabled: rebuild linkrs with --features fulltext"
                     .to_string(),
-            ));
+            ))
         }
 
         #[cfg(feature = "fulltext")]
@@ -110,12 +110,14 @@ impl FulltextSearchPlanner {
     /// but not the sync driver plus primary-storage scan needed for online
     /// rebuild. Use the async HTTP rebuild instead; the old clear-only
     /// behavior destroyed indexed data, so it must not run silently.
+    #[cfg_attr(not(feature = "fulltext"), allow(dead_code))]
     pub(crate) const FULLTEXT_REBUILD_UNAVAILABLE: &str = "ALTER FULLTEXT INDEX REBUILD is not executed inline: trigger the async online rebuild via POST /v1/fulltext/indexes/rebuild and poll GET /v1/fulltext/rebuilds/{id}";
 
     /// Dispatch AST-level full-text statements with plan-phase metadata.
     ///
     /// `metadata_context` on the planner is the fallback for callers without
     /// plan-phase metadata.
+    #[cfg_attr(not(feature = "fulltext"), allow(dead_code))]
     fn transform_bound(
         &self,
         stmt: &Stmt,

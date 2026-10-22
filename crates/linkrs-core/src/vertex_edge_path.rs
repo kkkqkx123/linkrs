@@ -667,7 +667,7 @@ impl Path {
                 edge: Box::new(edge),
             });
         }
-        self.src = Box::new(vertices[vertices.len() - 1].clone());
+        *self.src = vertices[vertices.len() - 1].clone();
         self.steps = reversed_steps;
     }
 

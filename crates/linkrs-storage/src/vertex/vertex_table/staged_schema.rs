@@ -230,7 +230,7 @@ impl VertexTable {
                     .schema
                     .properties
                     .iter()
-                    .position(|prop| &*prop.name == name)
+                    .position(|prop| *prop.name == name)
                     .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
                 if index == self.schema.primary_key_index {
                     return Err(StorageError::not_supported(
@@ -260,7 +260,7 @@ impl VertexTable {
                     .schema
                     .properties
                     .iter()
-                    .any(|prop| &*prop.name == new_name)
+                    .any(|prop| *prop.name == new_name)
                 {
                     return Err(StorageError::column_already_exists(new_name.clone()));
                 }
@@ -268,7 +268,7 @@ impl VertexTable {
                     .schema
                     .properties
                     .iter()
-                    .position(|prop| &*prop.name == old_name)
+                    .position(|prop| *prop.name == old_name)
                     .ok_or_else(|| StorageError::column_not_found(old_name.clone()))?;
                 self.record_schema_change(ChangeDetails::PropertyRenamed {
                     old_name: old_name.clone(),

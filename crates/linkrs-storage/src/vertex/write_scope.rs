@@ -33,6 +33,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::types::PropertyRowList;
 use linkrs_core::error::storage::StorageErrorKind;
 use linkrs_core::types::{LabelId, Timestamp};
 use linkrs_core::{StorageError, StorageResult, Value};
@@ -180,7 +181,7 @@ impl WriteScope {
         &mut self,
         label: LabelId,
         global_id: u32,
-        properties: Vec<(Arc<str>, Value)>,
+        properties: PropertyRowList,
     ) -> StorageResult<()> {
         for (name, _) in &properties {
             if let Some(deleted) = self.property_deletes.get(&(label, global_id)) {
@@ -274,10 +275,7 @@ impl WriteScope {
     }
 
     /// Take every staged update of one label for the commit apply.
-    pub fn take_updates_for_label(
-        &mut self,
-        label: LabelId,
-    ) -> Vec<(u32, Vec<(std::sync::Arc<str>, Value)>)> {
+    pub fn take_updates_for_label(&mut self, label: LabelId) -> Vec<(u32, PropertyRowList)> {
         let keys: Vec<(LabelId, u32)> = self
             .updates
             .keys()

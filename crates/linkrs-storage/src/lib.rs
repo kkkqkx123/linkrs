@@ -12,6 +12,7 @@ pub mod memory_watermark;
 pub mod mvcc_visibility;
 pub mod stats;
 pub use linkrs_core::types::SnapshotHandle;
+pub(crate) mod maintenance_scheduler;
 pub mod migration_history;
 pub(crate) mod schema;
 pub mod stats_reader;

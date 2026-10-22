@@ -42,7 +42,8 @@ impl GraphStorageContext {
                 log::warn!("Failed to clean up stale spill files: {}", e);
             }
             crate::vertex::column::chunk_residency::cleanup_stale_spill_dirs();
-            let ctx = Self {
+
+            Self {
                 persistent,
                 runtime: GraphStorageRuntime::new(),
                 operation_context: None,
@@ -54,8 +55,7 @@ impl GraphStorageContext {
                 checkpoint_scheduler: Arc::new(Mutex::new(None)),
                 ttl_purge_scheduler: Arc::new(Mutex::new(None)),
             }
-            .with_default_index_gc();
-            ctx
+            .with_default_index_gc()
         })
     }
 
@@ -73,6 +73,12 @@ impl GraphStorageContext {
             config,
         );
         self.runtime = runtime;
+        // Keep the opportunistic overrun report aligned with the storage
+        // operation timeout instead of the manager default.
+        if let Some(gc) = self.runtime.index_gc_manager.as_ref() {
+            gc.maintenance_task()
+                .set_timeout(self.persistent.config.resources.operation_timeout);
+        }
         self.forward_gc_events_to_persistence();
         self
     }

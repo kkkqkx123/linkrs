@@ -10,7 +10,12 @@ use linkrs_metrics::{CheckpointTriggerReason, StatsManager};
 use crate::engine::persistence_coordinator::{
     CheckpointStats, PersistenceCoordinator, PersistenceStateGuard,
 };
+use crate::maintenance_scheduler::execute_guarded;
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
+
+/// Overrun reporting bound for one checkpoint execution. Warn-only: the
+/// checkpoint is never cancelled, mirroring the maintenance-task timeout.
+const CHECKPOINT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRequest {
@@ -114,6 +119,11 @@ impl CheckpointScheduler {
             poll_interval,
             Duration::from_millis(10),
             move || {
+                // Panic-safe poll pass: a failing pass is skipped and the
+                // loop keeps running instead of dying silently on the pool.
+                // Timeout is warn-only; the checkpoint itself runs on a
+                // nested task so the poll pass stays short.
+                execute_guarded("checkpoint-poll", CHECKPOINT_EXECUTION_TIMEOUT, || {
                 // Passive polling: check if checkpoint is needed
                 let should = {
                     let coord = coordinator.read();
@@ -162,8 +172,20 @@ impl CheckpointScheduler {
                             // Spawn checkpoint on the shared pool so the periodic
                             // poll loop is never blocked by a long-running checkpoint.
                             pool.spawn(move || {
-                                match exec(guard, reason) {
-                                    Ok(cs) => {
+                                let started = std::time::Instant::now();
+                                let outcome = std::panic::catch_unwind(
+                                    std::panic::AssertUnwindSafe(|| exec(guard, reason)),
+                                );
+                                if started.elapsed() > CHECKPOINT_EXECUTION_TIMEOUT {
+                                    log::warn!(
+                                        "Checkpoint execution exceeded timeout: {:?} > {:?} (reason={:?})",
+                                        started.elapsed(),
+                                        CHECKPOINT_EXECUTION_TIMEOUT,
+                                        reason,
+                                    );
+                                }
+                                match outcome {
+                                    Ok(Ok(cs)) => {
                                         if let Some(s) = stats_clone.lock().as_ref().cloned() {
                                             s.record_checkpoint_success(
                                                 cs.duration,
@@ -177,7 +199,7 @@ impl CheckpointScheduler {
                                             reason
                                         );
                                     }
-                                    Err(e) => {
+                                    Ok(Err(e)) => {
                                         if let Some(s) = stats_clone.lock().as_ref().cloned() {
                                             s.record_checkpoint_failure();
                                         }
@@ -187,7 +209,19 @@ impl CheckpointScheduler {
                                             e
                                         );
                                     }
+                                    Err(_) => {
+                                        if let Some(s) = stats_clone.lock().as_ref().cloned() {
+                                            s.record_checkpoint_failure();
+                                        }
+                                        log::warn!(
+                                            "Async checkpoint panicked (reason={:?}); counted as failure",
+                                            reason,
+                                        );
+                                    }
                                 }
+                                // Always released, even after a panic: `stop`
+                                // drains this count and must not hang on a
+                                // dead checkpoint task.
                                 let (lock, cv) = &*active_task;
                                 let mut count = lock.lock();
                                 *count = count.saturating_sub(1);
@@ -203,6 +237,8 @@ impl CheckpointScheduler {
                         }
                     }
                 }
+                    true
+                });
             },
         );
         self.handle = Some(handle);

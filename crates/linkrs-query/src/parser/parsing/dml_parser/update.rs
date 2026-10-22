@@ -303,7 +303,7 @@ impl DmlParser {
             let is_upsert = ctx.is_upsert_mode();
             // UPSERT EDGE always uses the short shape.
             // For UPDATE, distinguish by syntax, not by whether the endpoint is a literal.
-            if is_upsert || ctx.check_token(TokenKind::Of) == false {
+            if is_upsert || !ctx.check_token(TokenKind::Of) {
                 // UPDATE/UPSERT EDGE short shape: src -> dst [@rank] OF edge_type.
                 // We already hold `src` if the caller parsed nothing; parse it here.
                 let src = if ctx.check_token(TokenKind::Arrow) {

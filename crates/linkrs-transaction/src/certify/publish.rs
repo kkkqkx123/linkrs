@@ -134,7 +134,7 @@ impl Certifier {
         let mut committed = self.committed_write_sets.lock();
         if committed
             .get(&commit_timestamp)
-            .is_some_and(|sets| sets.iter().any(|ws| *ws == *write_set))
+            .is_some_and(|sets| sets.contains(write_set))
         {
             self.ssi_tracker.unregister_reads(txn_id);
             return;

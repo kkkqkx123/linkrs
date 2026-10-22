@@ -18,8 +18,8 @@ pub(super) fn apply_decisions(
             if expand.id_only() != decision.id_only
                 || expand.count_only() != decision.count_only
                 || expand.lightweight_source() != decision.lightweight_source
-                || expand.edge_required_props() != decision.edge_props.as_ref()
-                || expand.dst_required_props() != decision.dst_props.as_ref()
+                || expand.edge_required_props() != decision.edge_props.as_deref()
+                || expand.dst_required_props() != decision.dst_props.as_deref()
                 || expand.closed_loop() != decision.closed_loop
                 || expand.skip_rows() != decision.skip_rows
             {

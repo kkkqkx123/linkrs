@@ -8,7 +8,6 @@ use crate::api_core::VectorSearchResult;
 use crate::api_core::{CoreError, CoreResult};
 use linkrs_storage::StorageClient;
 use linkrs_sync::vector_sync::SearchOptions;
-use std::sync::Arc;
 
 #[cfg(feature = "vector")]
 impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarget> Session<S> {

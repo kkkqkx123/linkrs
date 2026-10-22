@@ -323,7 +323,7 @@ fn get_vertices_batch_impl(
                         .ok()
                 });
             if let Some(records) = records {
-                for (pos, record) in batch_positions.into_iter().zip(records.into_iter()) {
+                for (pos, record) in batch_positions.into_iter().zip(records) {
                     if let Some(record) = record {
                         let props: HashMap<std::sync::Arc<str>, Value> =
                             record.properties.iter().cloned().collect();

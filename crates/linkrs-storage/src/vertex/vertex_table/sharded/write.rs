@@ -1,10 +1,11 @@
 use super::ShardedVertexTable;
+use crate::types::{PropertyRow, PropertyRowList};
 use crate::vertex::{IdKey, PkLookup, WriteScope};
 use linkrs_core::types::Timestamp;
 use linkrs_core::{StorageError, StorageResult, Value};
 use std::sync::Arc;
 
-type ShardStagedInsert = (IdKey, u32, Vec<(Arc<str>, Value)>);
+type ShardStagedInsert = (IdKey, u32, PropertyRowList);
 
 /// Every mutation a tracked commit installed, addressed by global id so a
 /// later durability failure can compensate the whole set.
@@ -48,7 +49,7 @@ impl ShardedVertexTable {
     pub fn insert(
         &self,
         external_id: &str,
-        properties: &[(Arc<str>, Value)],
+        properties: &[PropertyRow],
         ts: Timestamp,
     ) -> StorageResult<u32> {
         let idx = self.shard_index_by_str(external_id);
@@ -65,7 +66,7 @@ impl ShardedVertexTable {
     pub fn insert_by_i64(
         &self,
         external_id: i64,
-        properties: &[(Arc<str>, Value)],
+        properties: &[PropertyRow],
         ts: Timestamp,
     ) -> StorageResult<u32> {
         let idx = self.shard_index_by_i64(external_id);
@@ -124,7 +125,7 @@ impl ShardedVertexTable {
     /// prefix so the table stays empty.
     pub fn bulk_import_str(
         &self,
-        rows: &[(&str, &[(Arc<str>, Value)])],
+        rows: &[(&str, &[PropertyRow])],
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
@@ -178,7 +179,7 @@ impl ShardedVertexTable {
     /// [`Self::bulk_import_str`]: Self::bulk_import_str
     pub fn bulk_import_i64(
         &self,
-        rows: &[(i64, &[(Arc<str>, Value)])],
+        rows: &[(i64, &[PropertyRow])],
         ts: Timestamp,
         sorted: bool,
     ) -> StorageResult<usize> {
@@ -236,7 +237,7 @@ impl ShardedVertexTable {
     /// [`insert`]: Self::insert
     pub fn insert_batch_str(
         &self,
-        rows: &[(&str, &[(Arc<str>, Value)])],
+        rows: &[(&str, &[PropertyRow])],
         ts: Timestamp,
     ) -> Vec<StorageResult<u32>> {
         let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.layout.num_shards];
@@ -272,7 +273,7 @@ impl ShardedVertexTable {
     /// [`insert_batch_str`]: Self::insert_batch_str
     pub fn insert_batch_i64(
         &self,
-        rows: &[(i64, &[(Arc<str>, Value)])],
+        rows: &[(i64, &[PropertyRow])],
         ts: Timestamp,
     ) -> Vec<StorageResult<u32>> {
         let mut by_shard: Vec<Vec<usize>> = vec![Vec::new(); self.layout.num_shards];
@@ -307,7 +308,7 @@ impl ShardedVertexTable {
     /// is the schema authority, so any shard answers identically.
     pub fn prepare_vertex_update(
         &self,
-        columns: &[(Arc<str>, Value)],
+        columns: &[PropertyRow],
     ) -> StorageResult<Vec<(std::sync::Arc<str>, Value)>> {
         let table = self.shards[0].read();
         columns
@@ -391,7 +392,7 @@ impl ShardedVertexTable {
     pub fn insert_by_i64_with_scope(
         &self,
         external_id: i64,
-        properties: &[(Arc<str>, Value)],
+        properties: &[PropertyRow],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> StorageResult<()> {
@@ -415,7 +416,7 @@ impl ShardedVertexTable {
     /// fail per row. The commit hook applies the staged rows.
     pub fn insert_batch_str_with_scope(
         &self,
-        rows: &[(&str, &[(Arc<str>, Value)])],
+        rows: &[(&str, &[PropertyRow])],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> Vec<StorageResult<()>> {
@@ -443,7 +444,7 @@ impl ShardedVertexTable {
     /// [`Self::insert_batch_str_with_scope`]: Self::insert_batch_str_with_scope
     pub fn insert_batch_i64_with_scope(
         &self,
-        rows: &[(i64, &[(Arc<str>, Value)])],
+        rows: &[(i64, &[PropertyRow])],
         ts: Timestamp,
         scope: &mut WriteScope,
     ) -> Vec<StorageResult<()>> {

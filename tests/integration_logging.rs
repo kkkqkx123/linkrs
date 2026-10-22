@@ -54,6 +54,8 @@ fn test_log_config_serialization() {
                 basename: "test_linkrs".to_string(),
                 max_file_size_mb: 50,
                 max_files: 3,
+                stdout: false,
+                json_format: false,
             },
             storage: linkrs::config::StorageConfig::default(),
             optimizer: linkrs::config::OptimizerConfig::default(),

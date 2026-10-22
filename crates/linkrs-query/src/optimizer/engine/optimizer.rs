@@ -350,16 +350,14 @@ impl OptimizerEngine {
                 .expression_summary
                 .is_fully_deterministic;
             if shape_ok && no_agg && deterministic {
-                match SubqueryUnnestingOptimizer::build_semi_join_from_pattern_apply(apply.clone())
+                if let Ok(joined) =
+                    SubqueryUnnestingOptimizer::build_semi_join_from_pattern_apply(apply.clone())
                 {
-                    Ok(joined) => {
-                        notes.push(
-                            "unnest: heuristic fallback for cost-kept simple bounded subquery"
-                                .to_string(),
-                        );
-                        return Self::apply_unnesting_heuristic_fallback(&joined, notes);
-                    }
-                    Err(_) => {}
+                    notes.push(
+                        "unnest: heuristic fallback for cost-kept simple bounded subquery"
+                            .to_string(),
+                    );
+                    return Self::apply_unnesting_heuristic_fallback(&joined, notes);
                 }
             }
         }

@@ -39,6 +39,9 @@
 //! ```
 
 use crate::engine::storage_events::GcEventSink;
+use crate::maintenance_scheduler::{
+    MaintenanceDiagnostics, MaintenanceTask, MaintenanceTaskConfig,
+};
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 use linkrs_core::types::Timestamp;
 use linkrs_transaction::VersionManager;
@@ -132,10 +135,14 @@ pub struct IndexGcManager {
     version_manager: Arc<VersionManager>,
     config: IndexGcConfig,
     pool: Arc<StorageThreadPool>,
-    last_gc_ts: AtomicU64,
+    last_gc_ts: Arc<AtomicU64>,
     running: Arc<AtomicBool>,
-    stats: AtomicU64,
-    total_removed: AtomicU64,
+    stats: Arc<AtomicU64>,
+    total_removed: Arc<AtomicU64>,
+    /// Unified scheduling state shared by the background loop and the
+    /// opportunistic write-path trigger: single-flight, completion-time
+    /// cooldown, exponential no-progress backoff, panic-safe execution.
+    maintenance: Arc<MaintenanceTask>,
     gc_event_sink: Arc<RwLock<Option<GcEventSink>>>,
 }
 
@@ -147,15 +154,24 @@ impl IndexGcManager {
         config: IndexGcConfig,
         pool: Arc<StorageThreadPool>,
     ) -> Self {
+        let maintenance = Arc::new(MaintenanceTask::new(
+            pool.clone(),
+            MaintenanceTaskConfig::new(
+                "index-gc",
+                Duration::from_millis(config.min_interval_between_gc_ms),
+                Duration::from_secs(30),
+            ),
+        ));
         Self {
             index_manager,
             version_manager,
             config,
             pool,
-            last_gc_ts: AtomicU64::new(0),
+            last_gc_ts: Arc::new(AtomicU64::new(0)),
             running: Arc::new(AtomicBool::new(false)),
-            stats: AtomicU64::new(0),
-            total_removed: AtomicU64::new(0),
+            stats: Arc::new(AtomicU64::new(0)),
+            total_removed: Arc::new(AtomicU64::new(0)),
+            maintenance,
             gc_event_sink: Arc::new(RwLock::new(None)),
         }
     }
@@ -309,6 +325,9 @@ impl IndexGcManager {
     ///
     /// Returns a [`BackgroundTaskHandle`] for the periodic task. The task
     /// runs until `stop()` is called (or [`BackgroundTaskHandle::stop`]).
+    /// Every pass goes through the unified scheduler: completion-time
+    /// cooldown, exponential no-progress backoff, panic-safe execution, and
+    /// timeout observation. Throttled passes are skipped, not counted.
     pub fn start_background_gc(&self) -> BackgroundTaskHandle {
         let manager = self.clone();
         let running = self.running.clone();
@@ -319,27 +338,60 @@ impl IndexGcManager {
             .spawn_periodic(running, interval, min_interval, move || {
                 tracing::info!("Index GC background task started");
 
-                let start = std::time::Instant::now();
-
-                if manager.needs_aggressive_gc() {
-                    let removed = manager.run_aggressive_gc();
-                    if removed > 0 {
-                        tracing::debug!(entries_removed = removed, "Aggressive GC completed");
+                let executed = manager.maintenance.tick(|| {
+                    if manager.needs_aggressive_gc() {
+                        let removed = manager.run_aggressive_gc();
+                        if removed > 0 {
+                            tracing::debug!(entries_removed = removed, "Aggressive GC completed");
+                        }
+                        removed > 0
+                    } else {
+                        let stats = manager.run_gc_pass();
+                        if !stats.is_empty() {
+                            tracing::debug!(
+                                vertex_removed = stats.vertex_entries_removed,
+                                "GC pass completed"
+                            );
+                        }
+                        !stats.is_empty()
                     }
-                } else {
-                    let stats = manager.run_gc_pass();
-                    if !stats.is_empty() {
-                        tracing::debug!(
-                            vertex_removed = stats.vertex_entries_removed,
-                            "GC pass completed"
-                        );
-                    }
+                });
+                if executed.is_some() {
+                    manager.stats.fetch_add(1, Ordering::Release);
                 }
-
-                manager.stats.fetch_add(1, Ordering::Release);
-
-                let _elapsed = start.elapsed();
             })
+    }
+
+    /// Opportunistic write-path trigger: schedule one GC pass on the shared
+    /// thread pool instead of running it synchronously. Returns `false`
+    /// without spawning when a pass is already in flight or the
+    /// completion-time cooldown (with backoff) has not elapsed.
+    pub fn schedule_opportunistic_gc(&self) -> bool {
+        let manager = self.clone();
+        self.maintenance
+            .try_spawn(move || !manager.run_gc_pass().is_empty())
+    }
+
+    /// Unified scheduling state for this GC task: running flag, backoff
+    /// step, completion age, run counts, and last-pass progress.
+    pub fn maintenance_task(&self) -> &Arc<MaintenanceTask> {
+        &self.maintenance
+    }
+
+    /// Point-in-time scheduling diagnostics for observability.
+    pub fn maintenance_diagnostics(&self) -> MaintenanceDiagnostics {
+        self.maintenance.diagnostics()
+    }
+
+    /// Total entries removed across all passes (shared with the background
+    /// clone so the originating handle stays current).
+    pub fn total_removed(&self) -> u64 {
+        self.total_removed.load(Ordering::Acquire)
+    }
+
+    /// Number of executed GC passes (throttled passes are not counted).
+    pub fn pass_count(&self) -> u64 {
+        self.stats.load(Ordering::Acquire)
     }
 
     /// Stop the background GC thread
@@ -354,16 +406,20 @@ impl IndexGcManager {
 }
 
 impl Clone for IndexGcManager {
+    /// Clones share every counter and the scheduling state: the background
+    /// task runs on a clone, so snapshotting counters here would leave the
+    /// originating handle permanently stale.
     fn clone(&self) -> Self {
         Self {
             index_manager: self.index_manager.clone(),
             version_manager: self.version_manager.clone(),
             config: self.config.clone(),
             pool: self.pool.clone(),
-            last_gc_ts: AtomicU64::new(self.last_gc_ts.load(Ordering::Acquire)),
+            last_gc_ts: self.last_gc_ts.clone(),
             running: self.running.clone(),
-            stats: AtomicU64::new(self.stats.load(Ordering::Acquire)),
-            total_removed: AtomicU64::new(self.total_removed.load(Ordering::Acquire)),
+            stats: self.stats.clone(),
+            total_removed: self.total_removed.clone(),
+            maintenance: self.maintenance.clone(),
             gc_event_sink: self.gc_event_sink.clone(),
         }
     }
