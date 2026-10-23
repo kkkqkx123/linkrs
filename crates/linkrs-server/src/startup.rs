@@ -115,9 +115,11 @@ pub async fn start_service_with_config_path(
     }
     persistence_config.async_checkpoint_executor_threads =
         config.storage.checkpoint_executor_threads.max(1);
+    persistence_config.checkpoint_on_close = config.storage.checkpoint_on_close;
     let mut graph_storage =
         GraphStorage::open_with_persistence_config(storage_path, persistence_config)?;
     graph_storage = graph_storage.set_stats_manager(stats_manager.clone());
+    let close_storage = graph_storage.clone();
     let version_manager = graph_storage.version_manager();
     let inner_storage = Arc::new(MetricsStorage::new(graph_storage));
     info!(
@@ -581,6 +583,7 @@ pub async fn start_service_with_config_path(
 
     info!("Shutting down Linkrs service...");
     graph_service.shutdown();
+    close_storage.close();
     Ok(())
 }
 
@@ -797,6 +800,9 @@ fn property_graph_config_from_config(
         index_eviction_high_ratio: storage.index_eviction_high_ratio,
         index_eviction_low_ratio: storage.index_eviction_low_ratio,
         background_gc_auto_start_enabled: storage.background_gc_auto_start_enabled,
+        background_idle_maintenance_interval: Duration::from_secs(
+            storage.background_idle_maintenance_secs,
+        ),
         ..config.resources
     };
     config
@@ -844,4 +850,94 @@ pub async fn execute_query(query_str: &str) -> DBResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_idle_maintenance_mapping_defaults_to_30s() {
+        let storage = crate::config::StorageConfig::default();
+        assert_eq!(storage.background_idle_maintenance_secs, 30);
+        assert!(!storage.checkpoint_on_close);
+        let mapped = property_graph_config_from_config(&storage);
+        assert_eq!(
+            mapped.resources.background_idle_maintenance_interval,
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn test_idle_maintenance_mapping_zero_disables() {
+        let storage = crate::config::StorageConfig {
+            background_idle_maintenance_secs: 0,
+            ..crate::config::StorageConfig::default()
+        };
+        let mapped = property_graph_config_from_config(&storage);
+        assert!(mapped
+            .resources
+            .background_idle_maintenance_interval
+            .is_zero());
+    }
+
+    #[test]
+    fn test_idle_maintenance_mapping_custom_value() {
+        let storage = crate::config::StorageConfig {
+            background_idle_maintenance_secs: 60,
+            ..crate::config::StorageConfig::default()
+        };
+        let mapped = property_graph_config_from_config(&storage);
+        assert_eq!(
+            mapped.resources.background_idle_maintenance_interval,
+            Duration::from_secs(60)
+        );
+    }
+
+    fn open_service_storage(
+        dir: &std::path::Path,
+        storage_config: &crate::config::StorageConfig,
+    ) -> GraphStorage {
+        let mut persistence_config = PersistenceConfig::for_work_dir(dir)
+            .with_property_graph_config(property_graph_config_from_config(storage_config));
+        persistence_config.checkpoint_on_close = storage_config.checkpoint_on_close;
+        GraphStorage::open_with_persistence_config(dir.to_path_buf(), persistence_config)
+            .expect("service storage open must succeed")
+    }
+
+    #[test]
+    fn test_service_close_writes_checkpoint_when_enabled() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let storage_config = crate::config::StorageConfig {
+            checkpoint_on_close: true,
+            background_idle_maintenance_secs: 0,
+            ..crate::config::StorageConfig::default()
+        };
+        let storage = open_service_storage(temp.path(), &storage_config);
+        let close_storage = storage.clone();
+        close_storage.close();
+        close_storage.close();
+        assert!(
+            temp.path().join("checkpoint").join("checkpoint_1").is_dir(),
+            "close with the flag must persist one final checkpoint"
+        );
+    }
+
+    #[test]
+    fn test_service_close_skips_checkpoint_when_disabled() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let storage_config = crate::config::StorageConfig {
+            background_idle_maintenance_secs: 0,
+            ..crate::config::StorageConfig::default()
+        };
+        assert!(!storage_config.checkpoint_on_close);
+        let storage = open_service_storage(temp.path(), &storage_config);
+        let close_storage = storage.clone();
+        close_storage.close();
+        assert!(
+            !temp.path().join("checkpoint").join("checkpoint_1").exists(),
+            "close without the flag must not write a checkpoint"
+        );
+    }
 }

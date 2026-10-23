@@ -152,6 +152,16 @@ pub struct StorageConfig {
     #[serde(default = "default_false")]
     pub background_gc_auto_start_enabled: bool,
 
+    /// Idle fallback cadence for CSR background maintenance in seconds.
+    /// Zero disables the loop entirely. Defaults to 30.
+    #[serde(default = "default_background_idle_maintenance_secs")]
+    pub background_idle_maintenance_secs: u64,
+
+    /// Create one final checkpoint when the storage is closed explicitly.
+    /// Off by default so close stays fast.
+    #[serde(default = "default_false")]
+    pub checkpoint_on_close: bool,
+
     /// Maximum maintenance operation duration in seconds.
     #[serde(default = "default_operation_timeout_secs")]
     pub operation_timeout_secs: u64,
@@ -322,6 +332,10 @@ fn default_checkpoint_executor_threads() -> usize {
     1
 }
 
+fn default_background_idle_maintenance_secs() -> u64 {
+    30
+}
+
 fn default_sync_mode() -> SyncMode {
     SyncMode::Full
 }
@@ -351,6 +365,8 @@ impl Default for StorageConfig {
             index_gc_background_enabled: default_false(),
             vertex_gc_background_enabled: default_false(),
             background_gc_auto_start_enabled: default_false(),
+            background_idle_maintenance_secs: default_background_idle_maintenance_secs(),
+            checkpoint_on_close: default_false(),
             operation_timeout_secs: default_operation_timeout_secs(),
             dirty_flush_operations: default_dirty_flush_operations(),
             dirty_flush_bytes: default_dirty_flush_bytes(),
@@ -529,6 +545,8 @@ mod tests {
         assert!(!config.index_gc_background_enabled);
         assert!(!config.vertex_gc_background_enabled);
         assert!(!config.background_gc_auto_start_enabled);
+        assert_eq!(config.background_idle_maintenance_secs, 30);
+        assert!(!config.checkpoint_on_close);
         assert_eq!(config.checkpoint_executor_threads, 1);
     }
 

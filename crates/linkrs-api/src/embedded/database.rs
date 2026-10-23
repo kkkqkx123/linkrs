@@ -15,7 +15,7 @@ use linkrs_fulltext::FulltextIndexManager;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::SyncFailurePolicy;
 use linkrs_metrics::StatsManager;
-use linkrs_storage::{GraphStorage, StorageClient};
+use linkrs_storage::{GraphStorage, PersistenceConfig, StorageClient};
 #[cfg(feature = "vector")]
 use linkrs_sync::backend::VectorBackend;
 #[cfg(feature = "fulltext")]
@@ -301,8 +301,12 @@ impl GraphDatabase<GraphStorage> {
                 .ok_or_else(|| CoreError::StorageError("Database path is empty".to_string()))?;
             let enable_wal = config.enable_wal;
             let sync_policy = Some(config.sync_mode.to_sync_policy());
+            let mut persistence_config = PersistenceConfig::for_work_dir(path);
+            persistence_config.enable_wal = enable_wal;
+            persistence_config.sync_policy = sync_policy;
+            persistence_config.checkpoint_on_close = config.checkpoint_on_close;
             let storage =
-                GraphStorage::open_with_persistence(path.to_path_buf(), enable_wal, sync_policy)
+                GraphStorage::open_with_persistence_config(path.to_path_buf(), persistence_config)
                     .map_err(|e| {
                         CoreError::StorageError(format!("Failed to initialize storage: {}", e))
                     })?;
@@ -401,6 +405,16 @@ impl GraphDatabase<GraphStorage> {
         });
 
         Ok(Self { inner, config })
+    }
+
+    /// Idempotent close: quiesce background loops and, when
+    /// `checkpoint_on_close` is configured, persist one final checkpoint.
+    ///
+    /// Forwards to the storage close with a read lock; close failures are
+    /// logged inside storage and never surface. After close, operations fail
+    /// with the storage-not-open error.
+    pub fn close(&self) {
+        self.inner.storage.read().close();
     }
 }
 
@@ -585,6 +599,50 @@ mod tests {
 
         let config = DatabaseConfig::file("/tmp/test.db");
         assert!(!config.is_memory());
+    }
+
+    #[test]
+    fn test_close_with_checkpoint_on_close_writes_baseline() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let db_path = directory.path().join("close.db");
+        let db = GraphDatabase::open_with_config(
+            DatabaseConfig::file(&db_path).with_checkpoint_on_close(true),
+        )
+        .unwrap();
+        let mut session = db.session().unwrap();
+        db.create_space("close_space", SpaceConfig::default())
+            .unwrap();
+        session.use_space("close_space").unwrap();
+        session
+            .execute("CREATE TAG close_probe(name string)")
+            .unwrap();
+        db.close();
+        db.close();
+        assert!(
+            db_path.join("checkpoint").join("checkpoint_1").is_dir(),
+            "close with the flag must persist one final checkpoint"
+        );
+        assert!(
+            db.session()
+                .unwrap()
+                .execute("CREATE TAG after_close(name string)")
+                .is_err(),
+            "operations after close must fail with storage-not-open"
+        );
+    }
+
+    #[test]
+    fn test_close_without_checkpoint_on_close_skips_checkpoint() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let db_path = directory.path().join("close.db");
+        let db = GraphDatabase::open_with_config(DatabaseConfig::file(&db_path)).unwrap();
+        assert!(!db.config().checkpoint_on_close);
+        db.close();
+        db.close();
+        assert!(
+            !db_path.join("checkpoint").join("checkpoint_1").exists(),
+            "close without the flag must not write a checkpoint"
+        );
     }
 
     #[test]

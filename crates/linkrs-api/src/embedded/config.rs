@@ -44,6 +44,8 @@ pub struct DatabaseConfig {
     pub read_only: bool,
     /// Should it be created if it does not exist?
     pub create_if_missing: bool,
+    /// Create one final checkpoint on explicit close. Off by default.
+    pub checkpoint_on_close: bool,
     /// Vector subsystem configuration.
     pub vector: VectorConfig,
 }
@@ -96,6 +98,7 @@ impl DatabaseConfig {
             sync_mode: SyncMode::Normal,
             read_only: false,
             create_if_missing: true,
+            checkpoint_on_close: false,
             vector: VectorConfig::default(),
         }
     }
@@ -110,6 +113,7 @@ impl DatabaseConfig {
             sync_mode: SyncMode::Normal,
             read_only: false,
             create_if_missing: true,
+            checkpoint_on_close: false,
             vector: VectorConfig::default(),
         }
     }
@@ -152,6 +156,12 @@ impl DatabaseConfig {
     /// Should a setting be created if it does not exist?
     pub fn with_create_if_missing(mut self, create: bool) -> Self {
         self.create_if_missing = create;
+        self
+    }
+
+    /// Create one final checkpoint on explicit close.
+    pub fn with_checkpoint_on_close(mut self, enabled: bool) -> Self {
+        self.checkpoint_on_close = enabled;
         self
     }
 
@@ -206,6 +216,7 @@ mod tests {
         assert!(config.is_memory());
         assert_eq!(config.cache_size_mb, 64);
         assert_eq!(config.default_timeout, Duration::from_secs(30));
+        assert!(!config.checkpoint_on_close);
     }
 
     #[test]
