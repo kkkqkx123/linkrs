@@ -20,6 +20,7 @@ members = [
     "crates/linkrs-cli",
     "crates/linkrs-client",
     "crates/linkrs-migration-cli",
+    "crates/linkrs-gpui",
 ]
 
 [patch.crates-io]
