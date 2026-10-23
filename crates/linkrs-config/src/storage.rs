@@ -132,6 +132,26 @@ pub struct StorageConfig {
     #[serde(default = "default_ttl_purge_interval")]
     pub ttl_purge_interval_secs: u64,
 
+    /// Enable the periodic index GC background loop. Off by default:
+    /// tombstone reclamation then runs only through the opportunistic
+    /// write-path trigger. Read-heavy deployments with few writes should
+    /// enable this so generation retirement stays bounded without write
+    /// traffic.
+    #[serde(default = "default_false")]
+    pub index_gc_background_enabled: bool,
+
+    /// Enable the periodic vertex GC background loop. Off by default:
+    /// deleted-vertex reclamation then never runs on its own. Enable this
+    /// when deletes run without steady write pressure to drive the loop.
+    #[serde(default = "default_false")]
+    pub vertex_gc_background_enabled: bool,
+
+    /// Explicit gate for self-starting GC loops on sustained pressure.
+    /// Off by default so small deployments stay quiet. Pressure warnings
+    /// fire regardless of this gate.
+    #[serde(default = "default_false")]
+    pub background_gc_auto_start_enabled: bool,
+
     /// Maximum maintenance operation duration in seconds.
     #[serde(default = "default_operation_timeout_secs")]
     pub operation_timeout_secs: u64,
@@ -183,6 +203,11 @@ pub struct StorageConfig {
     /// Eviction low-water target: evict down to this ratio of capacity.
     #[serde(default = "default_index_eviction_low_ratio")]
     pub index_eviction_low_ratio: f64,
+
+    /// Dedicated checkpoint execution threads. One driver plus this lane
+    /// stays decoupled from the shared compute pool. Defaults to one.
+    #[serde(default = "default_checkpoint_executor_threads")]
+    pub checkpoint_executor_threads: usize,
 }
 
 fn default_compression_level() -> u32 {
@@ -293,6 +318,10 @@ fn default_index_eviction_low_ratio() -> f64 {
     0.65
 }
 
+fn default_checkpoint_executor_threads() -> usize {
+    1
+}
+
 fn default_sync_mode() -> SyncMode {
     SyncMode::Full
 }
@@ -319,6 +348,9 @@ impl Default for StorageConfig {
             index_gc_batch: default_index_gc_batch(),
             ttl_purge_enabled: default_false(),
             ttl_purge_interval_secs: default_ttl_purge_interval(),
+            index_gc_background_enabled: default_false(),
+            vertex_gc_background_enabled: default_false(),
+            background_gc_auto_start_enabled: default_false(),
             operation_timeout_secs: default_operation_timeout_secs(),
             dirty_flush_operations: default_dirty_flush_operations(),
             dirty_flush_bytes: default_dirty_flush_bytes(),
@@ -332,6 +364,7 @@ impl Default for StorageConfig {
             index_eviction_enabled: true,
             index_eviction_high_ratio: default_index_eviction_high_ratio(),
             index_eviction_low_ratio: default_index_eviction_low_ratio(),
+            checkpoint_executor_threads: default_checkpoint_executor_threads(),
         }
     }
 }
@@ -379,6 +412,9 @@ impl StorageConfig {
             || self.index_eviction_low_ratio >= self.index_eviction_high_ratio
         {
             return Err("index eviction ratios must satisfy 0 < low < high <= 1".to_string());
+        }
+        if self.checkpoint_executor_threads == 0 {
+            return Err("checkpoint_executor_threads must be greater than 0".to_string());
         }
         Ok(())
     }
@@ -485,9 +521,15 @@ mod tests {
         assert_eq!(config.sync_mode, SyncMode::Full);
         assert!(config.auto_statistics);
         // The TTL purge sweep is opt-in: disabled with a positive interval,
-        // so a zero interval is the only other way it stays off.
+        // so a zero interval is the only other way it stays off. GC
+        // background loops are opt-in too: the default is opportunistic-only
+        // (index GC on the write path, vertex GC idle).
         assert!(!config.ttl_purge_enabled);
         assert_eq!(config.ttl_purge_interval_secs, 3600);
+        assert!(!config.index_gc_background_enabled);
+        assert!(!config.vertex_gc_background_enabled);
+        assert!(!config.background_gc_auto_start_enabled);
+        assert_eq!(config.checkpoint_executor_threads, 1);
     }
 
     #[test]

@@ -131,6 +131,22 @@ pub struct MemoryUsage {
     pub peak_bytes: u64,
 }
 
+/// Unified memory pressure level derived from one aggregate snapshot.
+/// Reuses the instance soft/hard ratios; no additional thresholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryPressureLevel {
+    #[default]
+    Normal,
+    Elevated,
+    Critical,
+}
+
+impl MemoryPressureLevel {
+    pub fn is_elevated(self) -> bool {
+        matches!(self, Self::Elevated | Self::Critical)
+    }
+}
+
 /// Point-in-time resource information suitable for logs and metrics exports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceSnapshot {
@@ -145,6 +161,21 @@ pub struct ResourceSnapshot {
     pub tombstone_count: usize,
     pub tombstone_memory_bytes: u64,
     pub vertex_shard_count: usize,
+    /// Unified pressure level for this snapshot.
+    pub pressure_level: MemoryPressureLevel,
+    /// Per-evictor freed bytes since process start, kept distinguishable so
+    /// one pressured round attributes work without double counting.
+    /// `spill` tracks cache-shrink work done through the spiller,
+    /// `cache` tracks expired-trim work, `index` tracks cold-chunk eviction,
+    /// `compaction` tracks generation retirement/compaction work.
+    pub spill_relief_bytes: u64,
+    pub spill_relief_triggers: u64,
+    pub index_relief_bytes: u64,
+    pub index_relief_triggers: u64,
+    pub cache_relief_bytes: u64,
+    pub cache_relief_triggers: u64,
+    pub compaction_relief_bytes: u64,
+    pub compaction_relief_triggers: u64,
 }
 
 impl ResourceSnapshot {
@@ -159,6 +190,30 @@ impl ResourceSnapshot {
     pub fn hard_limit_exceeded(self) -> bool {
         self.total_current_bytes >= self.budget.hard_limit_bytes
     }
+
+    /// Monotonic pressure mapping: totals only move the level upward through
+    /// soft then hard, reusing the existing budget ratios.
+    pub fn pressure_level(self) -> MemoryPressureLevel {
+        self.pressure_level
+    }
+}
+
+/// Relief step identity for the fixed priority chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReliefStep {
+    ExpiredTrim,
+    IndexEvict,
+    CacheShrink,
+    Compaction,
+}
+
+impl ReliefStep {
+    pub const ALL: [Self; 4] = [
+        Self::ExpiredTrim,
+        Self::IndexEvict,
+        Self::CacheShrink,
+        Self::Compaction,
+    ];
 }
 
 /// Thread-safe accounting shared by storage components.
@@ -170,6 +225,14 @@ pub struct MemoryAccounting {
     total_peak: AtomicU64,
     soft_limit_events: AtomicU64,
     hard_limit_rejections: AtomicU64,
+    spill_relief_bytes: AtomicU64,
+    spill_relief_triggers: AtomicU64,
+    index_relief_bytes: AtomicU64,
+    index_relief_triggers: AtomicU64,
+    cache_relief_bytes: AtomicU64,
+    cache_relief_triggers: AtomicU64,
+    compaction_relief_bytes: AtomicU64,
+    compaction_relief_triggers: AtomicU64,
 }
 
 impl std::fmt::Debug for MemoryAccounting {
@@ -190,6 +253,14 @@ impl MemoryAccounting {
             total_peak: AtomicU64::new(0),
             soft_limit_events: AtomicU64::new(0),
             hard_limit_rejections: AtomicU64::new(0),
+            spill_relief_bytes: AtomicU64::new(0),
+            spill_relief_triggers: AtomicU64::new(0),
+            index_relief_bytes: AtomicU64::new(0),
+            index_relief_triggers: AtomicU64::new(0),
+            cache_relief_bytes: AtomicU64::new(0),
+            cache_relief_triggers: AtomicU64::new(0),
+            compaction_relief_bytes: AtomicU64::new(0),
+            compaction_relief_triggers: AtomicU64::new(0),
         }
     }
 
@@ -297,10 +368,16 @@ impl MemoryAccounting {
     }
 
     /// Release memory from a category. Called by MemoryReservation::Drop
-    /// and by the spiller after evicting segments.
+    /// and by eviction listeners. Saturating so a stale double report can
+    /// never wrap the counters; totals track the minimum of both sides.
     pub(crate) fn release(&self, category: MemoryCategory, bytes: u64) {
-        self.current[category as usize].fetch_sub(bytes, Ordering::Relaxed);
-        self.total_current.fetch_sub(bytes, Ordering::Relaxed);
+        let cat_current = self.current[category as usize].load(Ordering::Relaxed);
+        let total_current = self.total_current.load(Ordering::Relaxed);
+        let decrement = bytes.min(cat_current).min(total_current);
+        if decrement > 0 {
+            self.current[category as usize].fetch_sub(decrement, Ordering::Relaxed);
+            self.total_current.fetch_sub(decrement, Ordering::Relaxed);
+        }
     }
 
     /// Release memory from a category (public wrapper for eviction callbacks).
@@ -311,14 +388,67 @@ impl MemoryAccounting {
         self.release(category, bytes);
     }
 
+    /// Record freed bytes for one relief-chain step. Contributions stay
+    /// distinguishable per evictor in the snapshot.
+    pub fn record_relief(&self, step: ReliefStep, freed_bytes: u64) {
+        if freed_bytes == 0 {
+            return;
+        }
+        match step {
+            ReliefStep::ExpiredTrim => {
+                self.cache_relief_bytes
+                    .fetch_add(freed_bytes, Ordering::Relaxed);
+                self.cache_relief_triggers.fetch_add(1, Ordering::Relaxed);
+            }
+            ReliefStep::CacheShrink => {
+                // Cache shrink runs through the spiller; the spiller already
+                // records under the spill identity, so this path is only for
+                // direct cache work outside the spiller.
+                self.cache_relief_bytes
+                    .fetch_add(freed_bytes, Ordering::Relaxed);
+                self.cache_relief_triggers.fetch_add(1, Ordering::Relaxed);
+            }
+            ReliefStep::IndexEvict => {
+                self.index_relief_bytes
+                    .fetch_add(freed_bytes, Ordering::Relaxed);
+                self.index_relief_triggers.fetch_add(1, Ordering::Relaxed);
+            }
+            ReliefStep::Compaction => {
+                self.compaction_relief_bytes
+                    .fetch_add(freed_bytes, Ordering::Relaxed);
+                self.compaction_relief_triggers
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Record spiller freed bytes under its own identity so spill, index,
+    /// cache, and compaction contributions never alias in the snapshot.
+    pub fn record_spill_relief(&self, freed_bytes: u64) {
+        if freed_bytes == 0 {
+            return;
+        }
+        self.spill_relief_bytes
+            .fetch_add(freed_bytes, Ordering::Relaxed);
+        self.spill_relief_triggers.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> ResourceSnapshot {
+        let total_current_bytes = self.total_current.load(Ordering::Relaxed);
+        let pressure_level = if total_current_bytes >= self.budget.hard_limit_bytes {
+            MemoryPressureLevel::Critical
+        } else if total_current_bytes >= self.budget.soft_limit_bytes {
+            MemoryPressureLevel::Elevated
+        } else {
+            MemoryPressureLevel::Normal
+        };
         ResourceSnapshot {
             budget: self.budget,
             categories: std::array::from_fn(|index| MemoryUsage {
                 current_bytes: self.current[index].load(Ordering::Relaxed),
                 peak_bytes: self.peaks[index].load(Ordering::Relaxed),
             }),
-            total_current_bytes: self.total_current.load(Ordering::Relaxed),
+            total_current_bytes,
             total_peak_bytes: self.total_peak.load(Ordering::Relaxed),
             soft_limit_events: self.soft_limit_events.load(Ordering::Relaxed),
             hard_limit_rejections: self.hard_limit_rejections.load(Ordering::Relaxed),
@@ -327,6 +457,15 @@ impl MemoryAccounting {
             tombstone_count: 0,
             tombstone_memory_bytes: 0,
             vertex_shard_count: 0,
+            pressure_level,
+            spill_relief_bytes: self.spill_relief_bytes.load(Ordering::Relaxed),
+            spill_relief_triggers: self.spill_relief_triggers.load(Ordering::Relaxed),
+            index_relief_bytes: self.index_relief_bytes.load(Ordering::Relaxed),
+            index_relief_triggers: self.index_relief_triggers.load(Ordering::Relaxed),
+            cache_relief_bytes: self.cache_relief_bytes.load(Ordering::Relaxed),
+            cache_relief_triggers: self.cache_relief_triggers.load(Ordering::Relaxed),
+            compaction_relief_bytes: self.compaction_relief_bytes.load(Ordering::Relaxed),
+            compaction_relief_triggers: self.compaction_relief_triggers.load(Ordering::Relaxed),
         }
     }
 
@@ -409,5 +548,58 @@ mod tests {
         let accounting = Arc::new(MemoryAccounting::new(budget));
         assert!(accounting.try_reserve(MemoryCategory::Index, 21).is_err());
         assert!(accounting.try_reserve(MemoryCategory::Data, 20).is_ok());
+    }
+
+    #[test]
+    fn pressure_level_moves_monotonically_with_usage() {
+        let budget = MemoryBudget::new(100, 20, 0.8, 0.95).expect("valid budget");
+        let accounting = Arc::new(MemoryAccounting::new(budget));
+        assert_eq!(
+            accounting.snapshot().pressure_level,
+            MemoryPressureLevel::Normal
+        );
+        let _guard = accounting
+            .try_reserve(MemoryCategory::Background, 85)
+            .expect("below hard");
+        assert_eq!(
+            accounting.snapshot().pressure_level,
+            MemoryPressureLevel::Elevated
+        );
+        let _guard2 = accounting
+            .try_reserve(MemoryCategory::Background, 10)
+            .expect("at hard");
+        assert_eq!(
+            accounting.snapshot().pressure_level,
+            MemoryPressureLevel::Critical
+        );
+    }
+
+    #[test]
+    fn relief_stays_attributed_to_originating_step() {
+        let budget = MemoryBudget::new(1000, 200, 0.8, 0.95).expect("valid budget");
+        let accounting = Arc::new(MemoryAccounting::new(budget));
+        accounting.record_relief(ReliefStep::CacheShrink, 40);
+        accounting.record_relief(ReliefStep::IndexEvict, 25);
+        accounting.record_spill_relief(15);
+        accounting.record_relief(ReliefStep::Compaction, 7);
+        let snapshot = accounting.snapshot();
+        assert_eq!(snapshot.cache_relief_bytes, 40);
+        assert_eq!(snapshot.cache_relief_triggers, 1);
+        assert_eq!(snapshot.index_relief_bytes, 25);
+        assert_eq!(snapshot.index_relief_triggers, 1);
+        assert_eq!(snapshot.spill_relief_bytes, 15);
+        assert_eq!(snapshot.spill_relief_triggers, 1);
+        assert_eq!(snapshot.compaction_relief_bytes, 7);
+        assert_eq!(snapshot.compaction_relief_triggers, 1);
+    }
+
+    #[test]
+    fn release_never_wraps_below_zero() {
+        let budget = MemoryBudget::new(100, 20, 0.8, 0.95).expect("valid budget");
+        let accounting = Arc::new(MemoryAccounting::new(budget));
+        accounting.release(MemoryCategory::Cache, 50);
+        let snapshot = accounting.snapshot();
+        assert_eq!(snapshot.categories[MemoryCategory::Cache as usize].current_bytes, 0);
+        assert_eq!(snapshot.total_current_bytes, 0);
     }
 }

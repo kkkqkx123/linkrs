@@ -10,6 +10,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::maintenance_scheduler::{
+    MaintenanceDiagnostics, MaintenanceTask, MaintenanceTaskConfig,
+};
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 
 use super::context::GraphStorageContext;
@@ -19,13 +22,19 @@ use super::GraphStorage;
 pub(crate) struct TtlPurgeScheduler {
     thread_pool: Arc<StorageThreadPool>,
     handle: Option<BackgroundTaskHandle>,
+    maintenance: Arc<MaintenanceTask>,
 }
 
 impl TtlPurgeScheduler {
     pub(crate) fn new(thread_pool: Arc<StorageThreadPool>) -> Self {
+        let maintenance = Arc::new(MaintenanceTask::new(
+            thread_pool.clone(),
+            MaintenanceTaskConfig::new("ttl-purge", Duration::ZERO, Duration::from_secs(30)),
+        ));
         Self {
             thread_pool,
             handle: None,
+            maintenance,
         }
     }
 
@@ -47,17 +56,19 @@ impl TtlPurgeScheduler {
         // Warn-only bound for one sweep; a sweep slower than its own
         // interval is worth reporting but never cancelled.
         let timeout = interval.max(Duration::from_secs(30));
+        // Completion cooldown at half the sweep interval (floored): steady
+        // progress still runs every wake, while consecutive idle sweeps back
+        // off exponentially through the shared scheduler.
+        let cooldown = interval.checked_div(2).unwrap_or(Duration::ZERO);
+        self.maintenance.set_min_cooldown(cooldown);
+        self.maintenance.set_timeout(timeout);
+        let maintenance = self.maintenance.clone();
         let handle = self.thread_pool.spawn_periodic(
             running,
             interval,
             Duration::from_millis(10),
             move || {
-                // Panic-safe sweep: a failing pass is skipped and the loop
-                // keeps running instead of dying silently on the pool.
-                crate::maintenance_scheduler::execute_guarded("ttl-purge", timeout, || {
-                    purge_all_spaces(&storage);
-                    true
-                });
+                maintenance.tick(|| purge_all_spaces(&storage) > 0);
             },
         );
         self.handle = Some(handle);
@@ -73,6 +84,10 @@ impl TtlPurgeScheduler {
     pub(crate) fn is_running(&self) -> bool {
         self.handle.as_ref().is_some_and(|h| h.is_running())
     }
+
+    pub(crate) fn maintenance_diagnostics(&self) -> MaintenanceDiagnostics {
+        self.maintenance.diagnostics()
+    }
 }
 
 impl Drop for TtlPurgeScheduler {
@@ -82,13 +97,14 @@ impl Drop for TtlPurgeScheduler {
 }
 
 /// One sweep across every space. A failing space is reported and skipped so
-/// the remaining spaces still get reclaimed.
-fn purge_all_spaces(storage: &GraphStorage) {
+/// the remaining spaces still get reclaimed. Returns the total removed rows
+/// so the scheduling layer can track progress and back off when idle.
+fn purge_all_spaces(storage: &GraphStorage) -> u64 {
     let spaces = match storage.ctx.schema_manager().list_spaces() {
         Ok(spaces) => spaces,
         Err(error) => {
             log::warn!("TTL background purge failed to list spaces: {}", error);
-            return;
+            return 0;
         }
     };
     let mut removed_total: u64 = 0;
@@ -128,6 +144,7 @@ fn purge_all_spaces(storage: &GraphStorage) {
     if let Some(stats) = storage.ctx.stats_manager() {
         stats.record_ttl_purge(1, removed_total);
     }
+    removed_total
 }
 
 #[cfg(test)]
@@ -180,6 +197,16 @@ mod tests {
 
         ctx.start_ttl_purge(Duration::from_millis(20));
         assert!(ctx.is_ttl_purge_running());
+        for _ in 0..100 {
+            let runs = ctx
+                .ttl_purge_maintenance_diagnostics()
+                .map(|diagnostics| diagnostics.total_runs)
+                .unwrap_or(0);
+            if runs >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let mut visible = Vec::new();
         for _ in 0..100 {
             visible = storage
@@ -190,6 +217,16 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+        let diagnostics = ctx
+            .ttl_purge_maintenance_diagnostics()
+            .expect("ttl diagnostics");
+        assert_eq!(diagnostics.name, "ttl-purge");
+        assert!(diagnostics.total_runs >= 1);
+        assert!(ctx
+            .maintenance_overview()
+            .tasks
+            .iter()
+            .any(|task| task.name == "ttl-purge"));
         ctx.stop_ttl_purge();
         assert!(!ctx.is_ttl_purge_running());
 

@@ -17,7 +17,7 @@ use vector_client::VectorManager;
 use crate::config::Config;
 use crate::storage::{
     GraphStorage, MetricsStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig,
-    StorageCommitOps, StorageTtlPurgeOps, SyncWrapper,
+    StorageCommitOps, StorageGcOps, StorageTtlPurgeOps, SyncWrapper,
 };
 use crate::{GraphService, HttpServer};
 use linkrs_core::error::DBResult;
@@ -113,6 +113,8 @@ pub async fn start_service_with_config_path(
         persistence_config.auto_checkpoint_interval =
             Duration::from_secs(config.storage.checkpoint_interval_secs);
     }
+    persistence_config.async_checkpoint_executor_threads =
+        config.storage.checkpoint_executor_threads.max(1);
     let mut graph_storage =
         GraphStorage::open_with_persistence_config(storage_path, persistence_config)?;
     graph_storage = graph_storage.set_stats_manager(stats_manager.clone());
@@ -408,6 +410,30 @@ pub async fn start_service_with_config_path(
             "Background TTL purge enabled (interval {}s)",
             config.storage.ttl_purge_interval_secs
         );
+    } else {
+        info!("Background TTL purge disabled (explicit PURGE EXPIRED only)");
+    }
+
+    // Opt-in periodic GC loops. Off by default (opportunistic-only): index
+    // GC still runs on the write path, vertex GC stays idle. Read-heavy
+    // deployments should enable these; the loop handles are retained inside
+    // the GC managers so shutdown joins them.
+    if config.storage.index_gc_background_enabled {
+        storage.start_index_gc();
+        info!("Background index GC loop enabled (plus opportunistic write-path GC)");
+    } else {
+        info!("Background index GC loop disabled (opportunistic write-path GC only)");
+    }
+    if config.storage.vertex_gc_background_enabled {
+        storage.start_vertex_gc();
+        info!("Background vertex GC loop enabled");
+    } else {
+        info!("Background vertex GC loop disabled (no periodic vertex reclamation)");
+    }
+    if config.storage.background_gc_auto_start_enabled {
+        info!("Background GC auto-start enabled (pressure-triggered, manual stop suppresses)");
+    } else {
+        info!("Background GC auto-start disabled (pressure warnings only)");
     }
 
     // Create a transaction manager
@@ -770,6 +796,7 @@ fn property_graph_config_from_config(
         index_eviction_enabled: storage.index_eviction_enabled,
         index_eviction_high_ratio: storage.index_eviction_high_ratio,
         index_eviction_low_ratio: storage.index_eviction_low_ratio,
+        background_gc_auto_start_enabled: storage.background_gc_auto_start_enabled,
         ..config.resources
     };
     config

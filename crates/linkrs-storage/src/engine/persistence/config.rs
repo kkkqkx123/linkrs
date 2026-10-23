@@ -27,6 +27,10 @@ pub struct PersistenceConfig {
     pub async_checkpoint_enabled: bool,
     /// Interval for background checkpoint polling.
     pub async_checkpoint_poll_interval: Duration,
+    /// Dedicated checkpoint execution threads. The poll loop runs on its own
+    /// driver thread and hands executions to this single-thread channel so
+    /// long checkpoints never occupy shared compute-pool workers.
+    pub async_checkpoint_executor_threads: usize,
     /// Per-thread WAL buffer size for async flush (default 256KB).
     pub wal_buffer_size: usize,
     /// Background WAL flush interval in milliseconds (default 10ms).
@@ -53,6 +57,7 @@ impl Default for PersistenceConfig {
             property_graph_config: PropertyGraphConfig::default(),
             async_checkpoint_enabled: true,
             async_checkpoint_poll_interval: Duration::from_secs(1),
+            async_checkpoint_executor_threads: 1,
             wal_buffer_size: 256 * 1024,
             wal_flush_interval_ms: 10,
             wal_enable_async_flush: true,

@@ -341,6 +341,12 @@ impl GraphStorage {
         self.ctx.trigger_background_maintenance().map(|_| ())
     }
 
+    /// Wait until the in-flight background maintenance pass, if any,
+    /// finishes. Returns whether idle was reached within `timeout`.
+    pub fn wait_for_background_maintenance(&self, timeout: std::time::Duration) -> bool {
+        self.ctx.wait_for_background_maintenance(timeout)
+    }
+
     /// Remove old published checkpoints while retaining the newest recovery points.
     pub fn cleanup_old_checkpoints(&self, max_checkpoints: usize) -> StorageResult<usize> {
         let persistence = self
@@ -693,6 +699,18 @@ impl StorageGcOps for GraphStorage {
     fn stop_index_gc(&self) {
         self.ctx.stop_index_gc();
     }
+
+    fn is_vertex_gc_running(&self) -> bool {
+        self.ctx.is_vertex_gc_running()
+    }
+
+    fn start_vertex_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {
+        self.ctx.start_vertex_gc()
+    }
+
+    fn stop_vertex_gc(&self) {
+        self.ctx.stop_vertex_gc();
+    }
 }
 
 impl StorageTtlPurgeOps for GraphStorage {
@@ -709,18 +727,23 @@ impl StorageTtlPurgeOps for GraphStorage {
     }
 }
 
-/// Direct vertex GC controls (outside StorageGcOps trait).
+/// Direct storage controls.
 impl GraphStorage {
-    pub fn is_vertex_gc_running(&self) -> bool {
-        self.ctx.is_vertex_gc_running()
+    /// Explicit gate for self-starting GC loops on sustained pressure.
+    pub fn set_background_auto_start(&self, enabled: bool) {
+        self.ctx.set_background_auto_start(enabled);
     }
 
-    pub fn start_vertex_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {
-        self.ctx.start_vertex_gc()
+    pub fn is_background_auto_start_enabled(&self) -> bool {
+        self.ctx.is_background_auto_start_enabled()
     }
 
-    pub fn stop_vertex_gc(&self) {
-        self.ctx.stop_vertex_gc();
+    pub fn is_index_gc_auto_started(&self) -> bool {
+        self.ctx.is_index_gc_auto_started()
+    }
+
+    pub fn is_vertex_gc_auto_started(&self) -> bool {
+        self.ctx.is_vertex_gc_auto_started()
     }
 
     /// Register a schema-change observer (single shared registry:

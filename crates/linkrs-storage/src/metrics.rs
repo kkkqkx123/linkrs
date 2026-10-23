@@ -613,10 +613,13 @@ impl<S: StorageClient> StorageGcOps for MetricsStorage<S> {
     forward_methods!(inner;
         fn is_index_gc_running(&self) -> bool;
         fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle>;
+        fn is_vertex_gc_running(&self) -> bool;
+        fn start_vertex_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle>;
     );
 
     forward_methods!(inner;
         fn stop_index_gc(&self);
+        fn stop_vertex_gc(&self);
     );
 }
 

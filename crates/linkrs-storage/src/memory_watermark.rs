@@ -11,6 +11,11 @@
 //! Degradation contract: under `High`/`Critical` pressure consumers must
 //! give up non-essential speedups (columnar chunk caches, batch fast paths)
 //! and stay on the plain row path. Hot data is never evicted here.
+//!
+//! Scope: this is a query-side admission signal for building new
+//! acceleration structures. Storage-side eviction must use the instance
+//! [`crate::engine::resource_budget::MemoryPressureLevel`] derived from the
+//! aggregate snapshot, never this process watermark.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;

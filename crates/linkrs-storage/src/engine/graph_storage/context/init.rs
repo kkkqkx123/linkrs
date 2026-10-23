@@ -45,7 +45,7 @@ impl GraphStorageContext {
             }
             crate::vertex::column::chunk_residency::cleanup_stale_spill_dirs();
 
-            Self {
+            let ctx = Self {
                 persistent,
                 runtime: GraphStorageRuntime::new(),
                 operation_context: None,
@@ -59,7 +59,9 @@ impl GraphStorageContext {
             }
             .with_default_index_gc()
             .with_default_background_freeze()
-            .with_default_vertex_gc()
+            .with_default_vertex_gc();
+            ctx.apply_background_gate_from_config();
+            ctx
         })
     }
 
@@ -183,11 +185,13 @@ impl GraphStorageContext {
         let Some(persistence) = persistence_opt else {
             return;
         };
-        let (enabled, poll_interval) = {
+        let (enabled, poll_interval, execution_threads, execution_timeout) = {
             let cfg = &persistence.read().config;
             (
                 cfg.async_checkpoint_enabled,
                 cfg.async_checkpoint_poll_interval,
+                cfg.async_checkpoint_executor_threads,
+                cfg.property_graph_config.resources.operation_timeout,
             )
         };
         if !enabled {
@@ -223,14 +227,17 @@ impl GraphStorageContext {
                 })
             })
         });
-        let mut scheduler = crate::engine::persistence_coordinator::CheckpointScheduler::new(
-            persistence,
-            self.runtime.thread_pool.clone(),
-            self.persistent.stats_manager.clone(),
-            poll_interval,
-            enabled,
-            executor,
-        );
+        let mut scheduler =
+            crate::engine::persistence_coordinator::CheckpointScheduler::new_with_execution(
+                persistence,
+                self.runtime.thread_pool.clone(),
+                self.persistent.stats_manager.clone(),
+                poll_interval,
+                enabled,
+                executor,
+                execution_timeout,
+                execution_threads,
+            );
         scheduler.start();
         *guard = Some(scheduler);
     }

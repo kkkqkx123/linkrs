@@ -17,7 +17,7 @@ use crate::maintenance_scheduler::{
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 use linkrs_core::types::Timestamp;
 use linkrs_transaction::VersionManager;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 /// GC manager configuration
 #[derive(Debug, Clone)]
@@ -88,6 +88,10 @@ pub struct VertexGcManager {
     /// completion-time cooldown, exponential no-progress backoff,
     /// panic-safe execution.
     maintenance: Arc<MaintenanceTask>,
+    /// Retained periodic-loop handle so [`Self::stop`] can join the loop
+    /// even when the caller dropped the handle returned by
+    /// [`Self::start_background_gc`]. Shared across clones.
+    gc_loop: Arc<Mutex<Option<BackgroundTaskHandle>>>,
     /// Passes that reclaimed nothing because the watermark was pinned
     /// (`safe_ts == 0`) or a stuck snapshot held the cutoff. A rising
     /// count beside growing version chains points at the snapshot holder,
@@ -137,6 +141,7 @@ impl VertexGcManager {
             stats: Arc::new(AtomicU64::new(0)),
             total_removed: Arc::new(AtomicU64::new(0)),
             maintenance,
+            gc_loop: Arc::new(Mutex::new(None)),
             blocked_passes: Arc::new(AtomicU64::new(0)),
             cache_invalidations: Arc::new(AtomicU64::new(0)),
             pressure_mitigations: Arc::new(AtomicU64::new(0)),
@@ -338,20 +343,11 @@ impl VertexGcManager {
             );
         }
 
-        // Watermark-triggered chunk eviction on the same background pass:
-        // under High/Critical process pressure, release cold encoded column
-        // chunks oldest-first so memory converges with the working set.
-        // Runs without shard locks held at entry; each shard evicts under
-        // its own write lock with a recheck inside.
-        match crate::memory_watermark::pressure() {
-            crate::memory_watermark::Pressure::Low => {}
-            crate::memory_watermark::Pressure::High => {
-                Self::evict_cold_chunks(&self.data_store, 64 * 1024 * 1024);
-            }
-            crate::memory_watermark::Pressure::Critical => {
-                Self::evict_cold_chunks(&self.data_store, u64::MAX);
-            }
-        }
+        // Process-wide watermark no longer drives storage eviction: it is a
+        // query-side admission signal for new acceleration structures. Storage
+        // relieves pressure through the instance-budget relief chain in
+        // `resource_admission`, so this pass only mitigates pinned
+        // version-chain growth above.
 
         self.total_removed
             .fetch_add(total_removed as u64, Ordering::Release);
@@ -361,20 +357,32 @@ impl VertexGcManager {
 
     /// Start the background GC task on the shared thread pool.
     ///
-    /// Returns a [`BackgroundTaskHandle`] for the periodic task. The task
-    /// runs until `stop()` is called (or [`BackgroundTaskHandle::stop`]).
-    /// Every pass goes through the unified scheduler: completion-time
-    /// cooldown, exponential no-progress backoff, panic-safe execution, and
-    /// timeout observation. Throttled passes are skipped, not counted.
+    /// Idempotent: a second call while the loop is scheduled returns the
+    /// retained handle instead of spawning a duplicate loop. The returned
+    /// handle may be dropped; the loop is retained internally and joined by
+    /// [`Self::stop`]. Every pass goes through the unified scheduler:
+    /// completion-time cooldown, exponential no-progress backoff,
+    /// panic-safe execution, and timeout observation. Throttled passes are
+    /// skipped, not counted.
     pub fn start_background_gc(&self) -> BackgroundTaskHandle {
+        {
+            let guard = self.gc_loop.lock();
+            if let Some(handle) = guard.as_ref() {
+                if handle.is_running() {
+                    return handle.clone();
+                }
+            }
+        }
         let manager = self.clone();
         let running = self.running.clone();
         let interval = Duration::from_millis(self.config.interval_ms);
         let min_interval = Duration::from_millis(self.config.min_interval_between_gc_ms);
 
-        self.pool
+        tracing::info!("Vertex GC background loop started");
+        let handle = self
+            .pool
             .spawn_periodic(running, interval, min_interval, move || {
-                tracing::info!("Vertex GC background task started");
+                tracing::debug!("Vertex GC pass started");
 
                 let executed = manager.maintenance.tick(|| manager.run_gc_pass() > 0);
                 if let Some(removed_progress) = executed {
@@ -383,12 +391,25 @@ impl VertexGcManager {
                     }
                     manager.stats.fetch_add(1, Ordering::Release);
                 }
-            })
+            });
+        *self.gc_loop.lock() = Some(handle.clone());
+        handle
     }
 
-    /// Stop the background GC thread
+    /// Stop the background GC loop and block until its thread exits.
+    ///
+    /// The loop handle is retained internally, so this joins even when the
+    /// caller dropped the handle returned by [`Self::start_background_gc`].
+    /// No `Drop` join: the manager is shared across clones (`Arc`), and a
+    /// per-clone `Drop` would stall unrelated owners. Callers that need
+    /// deterministic shutdown call `stop()` explicitly.
     pub fn stop(&self) {
         self.running.store(false, Ordering::Release);
+        let handle = self.gc_loop.lock().take();
+        if let Some(handle) = handle {
+            handle.stop();
+            handle.join();
+        }
     }
 
     /// Check if the background GC is running
@@ -404,6 +425,16 @@ impl VertexGcManager {
     /// Total entries removed since creation
     pub fn total_removed(&self) -> u64 {
         self.total_removed.load(Ordering::Acquire)
+    }
+
+    /// Passes that reclaimed nothing because the watermark was pinned.
+    pub fn blocked_passes(&self) -> u64 {
+        self.blocked_passes.load(Ordering::Acquire)
+    }
+
+    /// Record-cache invalidations issued by GC passes.
+    pub fn cache_invalidations(&self) -> u64 {
+        self.cache_invalidations.load(Ordering::Acquire)
     }
 
     /// Number of GC passes completed
@@ -432,6 +463,7 @@ impl Clone for VertexGcManager {
             stats: self.stats.clone(),
             total_removed: self.total_removed.clone(),
             maintenance: self.maintenance.clone(),
+            gc_loop: self.gc_loop.clone(),
             blocked_passes: self.blocked_passes.clone(),
             cache_invalidations: self.cache_invalidations.clone(),
             pressure_mitigations: self.pressure_mitigations.clone(),
@@ -511,5 +543,29 @@ mod tests {
             .total_removed
             .fetch_add(7, std::sync::atomic::Ordering::Release);
         assert_eq!(gc.total_removed(), 7);
+    }
+
+    #[test]
+    fn background_loop_start_is_idempotent_and_stop_joins() {
+        let config = VertexGcConfig {
+            interval_ms: 20,
+            min_interval_between_gc_ms: 5,
+            ..VertexGcConfig::default()
+        };
+        let gc = VertexGcManager::new(
+            Arc::new(GraphDataStore::new()),
+            Arc::new(VersionManager::new()),
+            config,
+            Arc::new(StorageThreadPool::new().unwrap()),
+        );
+        let first = gc.start_background_gc();
+        assert!(gc.is_running());
+        let second = gc.start_background_gc();
+        assert!(second.is_running());
+        drop(first);
+        drop(second);
+        std::thread::sleep(Duration::from_millis(50));
+        gc.stop();
+        assert!(!gc.is_running());
     }
 }

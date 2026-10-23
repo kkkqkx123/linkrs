@@ -123,7 +123,14 @@ impl GraphStorageContext {
     }
 
     pub fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {
-        self.runtime.start_index_gc()
+        let handle = self.runtime.start_index_gc();
+        if handle.is_some() {
+            use std::sync::atomic::Ordering;
+            self.runtime
+                .index_gc_auto_started
+                .store(false, Ordering::Release);
+        }
+        handle
     }
 
     pub(crate) fn maybe_run_index_gc(&self) {
@@ -142,6 +149,16 @@ impl GraphStorageContext {
 
     pub fn stop_index_gc(&self) {
         self.runtime.stop_index_gc();
+        use std::sync::atomic::Ordering;
+        self.runtime
+            .index_gc_user_stopped
+            .store(true, Ordering::Release);
+        self.runtime
+            .index_gc_auto_started
+            .store(false, Ordering::Release);
+        self.runtime
+            .background_pressure_streak
+            .store(0, Ordering::Release);
     }
 
     pub fn is_index_gc_running(&self) -> bool {
@@ -149,15 +166,227 @@ impl GraphStorageContext {
     }
 
     pub fn start_vertex_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {
-        self.runtime.start_vertex_gc()
+        let handle = self.runtime.start_vertex_gc();
+        if handle.is_some() {
+            use std::sync::atomic::Ordering;
+            self.runtime
+                .vertex_gc_auto_started
+                .store(false, Ordering::Release);
+        }
+        handle
     }
 
     pub fn stop_vertex_gc(&self) {
         self.runtime.stop_vertex_gc();
+        use std::sync::atomic::Ordering;
+        self.runtime
+            .vertex_gc_user_stopped
+            .store(true, Ordering::Release);
+        self.runtime
+            .vertex_gc_auto_started
+            .store(false, Ordering::Release);
+        self.runtime
+            .background_pressure_streak
+            .store(0, Ordering::Release);
     }
 
     pub fn is_vertex_gc_running(&self) -> bool {
         self.runtime.is_vertex_gc_running()
+    }
+
+    /// Explicit gate for self-starting GC loops on sustained pressure.
+    /// Off by default; embedded users set it via storage config, server
+    /// users via server config. Enabling clears manual-stop suppression.
+    pub fn set_background_auto_start(&self, enabled: bool) {
+        use std::sync::atomic::Ordering;
+        self.runtime
+            .background_auto_start
+            .store(enabled, Ordering::Release);
+        if enabled {
+            self.runtime
+                .index_gc_user_stopped
+                .store(false, Ordering::Release);
+            self.runtime
+                .vertex_gc_user_stopped
+                .store(false, Ordering::Release);
+        } else {
+            self.runtime
+                .background_pressure_streak
+                .store(0, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn apply_background_gate_from_config(&self) {
+        let enabled = self
+            .persistent
+            .config
+            .resources
+            .background_gc_auto_start_enabled;
+        use std::sync::atomic::Ordering;
+        self.runtime
+            .background_auto_start
+            .store(enabled, Ordering::Release);
+    }
+
+    pub fn is_background_auto_start_enabled(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.runtime.background_auto_start.load(Ordering::Acquire)
+    }
+
+    /// Whether the index GC loop was started automatically by pressure.
+    pub fn is_index_gc_auto_started(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.runtime.index_gc_auto_started.load(Ordering::Acquire)
+    }
+
+    /// Whether the vertex GC loop was started automatically by pressure.
+    pub fn is_vertex_gc_auto_started(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.runtime.vertex_gc_auto_started.load(Ordering::Acquire)
+    }
+
+    /// Observe reclamation pressure for one snapshot. Warns when pressure
+    /// persists while the corresponding loop stays idle; records the streak
+    /// for the optional auto-start gate. Zero behavior change when idle.
+    pub(crate) fn observe_background_pressure(
+        &self,
+        snapshot: &crate::engine::resource_budget::ResourceSnapshot,
+    ) {
+        use std::sync::atomic::Ordering;
+        let index_pressure = snapshot.tombstone_count
+            >= self.persistent.config.resources.max_tombstones / 4.max(1);
+        let vertex_blocked = self
+            .runtime
+            .vertex_gc_manager
+            .as_ref()
+            .map(|gc| gc.blocked_passes())
+            .unwrap_or(0);
+        let vertex_pressure = vertex_blocked > 0;
+        let index_idle = !self.is_index_gc_running();
+        let vertex_idle = !self.is_vertex_gc_running();
+        let pressured = (index_pressure && index_idle) || (vertex_pressure && vertex_idle);
+        if pressured {
+            let streak = self
+                .runtime
+                .background_pressure_streak
+                .fetch_add(1, Ordering::AcqRel)
+                .saturating_add(1);
+            if streak >= 2 {
+                log::warn!(
+                    "background reclamation pressure sustained (tombstones={} blocked_vertex_passes={} index_running={} vertex_running={} streak={}) while loop idle; enable the loop or raise thresholds",
+                    snapshot.tombstone_count,
+                    vertex_blocked,
+                    !index_idle,
+                    !vertex_idle,
+                    streak,
+                );
+            }
+            self.maybe_auto_start_background_loops(index_pressure, vertex_pressure);
+        } else {
+            self.runtime
+                .background_pressure_streak
+                .store(0, Ordering::Release);
+        }
+    }
+
+    /// Auto-start idle loops after sustained pressure when the explicit gate
+    /// is on. Manual stops suppress future auto-starts until re-enabled.
+    fn maybe_auto_start_background_loops(&self, index_pressure: bool, vertex_pressure: bool) {
+        use std::sync::atomic::Ordering;
+        if !self.is_background_auto_start_enabled() {
+            return;
+        }
+        const AUTO_START_STREAK: u64 = 3;
+        if self
+            .runtime
+            .background_pressure_streak
+            .load(Ordering::Acquire)
+            < AUTO_START_STREAK
+        {
+            return;
+        }
+        if index_pressure
+            && !self.is_index_gc_running()
+            && !self
+                .runtime
+                .index_gc_user_stopped
+                .load(Ordering::Acquire)
+        {
+            if self.runtime.start_index_gc().is_some() {
+                self.runtime
+                    .index_gc_auto_started
+                    .store(true, Ordering::Release);
+                log::info!("background index GC auto-started on sustained pressure");
+            }
+        }
+        if vertex_pressure
+            && !self.is_vertex_gc_running()
+            && !self
+                .runtime
+                .vertex_gc_user_stopped
+                .load(Ordering::Acquire)
+        {
+            if self.runtime.start_vertex_gc().is_some() {
+                self.runtime
+                    .vertex_gc_auto_started
+                    .store(true, Ordering::Release);
+                log::info!("background vertex GC auto-started on sustained pressure");
+            }
+        }
+    }
+
+    /// Hint when TTL-tagged schemas exist but the purge sweep never ran.
+    /// TTL row counts are unknown without a scan, so this never auto-starts.
+    pub(crate) fn ttl_purge_hint(&self) {
+        if self.is_ttl_purge_running() {
+            return;
+        }
+        let runs = self
+            .ttl_purge_maintenance_diagnostics()
+            .map(|d| d.total_runs)
+            .unwrap_or(0);
+        if runs > 0 {
+            return;
+        }
+        if self.has_ttl_configured() {
+            log::warn!(
+                "TTL-configured schemas exist but the background purge never ran; expired rows accumulate until PURGE EXPIRED or the opt-in sweep"
+            );
+        }
+    }
+
+    fn has_ttl_configured(&self) -> bool {
+        let spaces = match self.persistent.schema_manager.list_spaces() {
+            Ok(spaces) => spaces,
+            Err(_) => return false,
+        };
+        for space in &spaces {
+            if let Ok(tags) = self.persistent.schema_manager.list_tags(&space.space_name) {
+                for tag in &tags {
+                    if linkrs_core::types::ttl::has_valid_ttl(
+                        tag.ttl_duration,
+                        tag.ttl_col.as_deref(),
+                    ) {
+                        return true;
+                    }
+                }
+            }
+            if let Ok(edges) = self
+                .persistent
+                .schema_manager
+                .list_edge_types(&space.space_name)
+            {
+                for edge in &edges {
+                    if linkrs_core::types::ttl::has_valid_ttl(
+                        edge.ttl_duration,
+                        edge.ttl_col.as_deref(),
+                    ) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Start the background TTL purge sweep at `interval`. The scheduler and
@@ -196,6 +425,15 @@ impl GraphStorageContext {
         self.runtime.background_maintenance_task.diagnostics()
     }
 
+    /// Wait until the in-flight CSR background maintenance pass, if any,
+    /// finishes. Returns whether idle was reached within `timeout`; a
+    /// running pass is never cancelled.
+    pub fn wait_for_background_maintenance(&self, timeout: std::time::Duration) -> bool {
+        self.runtime
+            .background_maintenance_task
+            .wait_until_idle(timeout)
+    }
+
     /// Unified scheduling diagnostics for the opportunistic/background index
     /// GC task, or `None` when no index GC manager is configured.
     pub fn index_gc_maintenance_diagnostics(
@@ -218,6 +456,17 @@ impl GraphStorageContext {
             .map(|gc| gc.maintenance_diagnostics())
     }
 
+    /// Unified scheduling diagnostics for the TTL purge sweep, or `None`
+    /// when the sweep was never started.
+    pub fn ttl_purge_maintenance_diagnostics(
+        &self,
+    ) -> Option<crate::maintenance_scheduler::MaintenanceDiagnostics> {
+        self.ttl_purge_scheduler
+            .lock()
+            .as_ref()
+            .map(|scheduler| scheduler.maintenance_diagnostics())
+    }
+
     /// One observability snapshot across every independent background task.
     /// Tasks keep their own triggers and intervals; only the scheduling
     /// state (running, backoff, completion age, progress) is unified here.
@@ -229,19 +478,31 @@ impl GraphStorageContext {
         if let Some(diagnostics) = self.vertex_gc_maintenance_diagnostics() {
             tasks.push(diagnostics);
         }
-        let (checkpoint_running, checkpoint_pending) = self
+        if let Some(diagnostics) = self.ttl_purge_maintenance_diagnostics() {
+            tasks.push(diagnostics);
+        }
+        let (checkpoint_running, checkpoint_pending, checkpoint_active) = self
             .checkpoint_scheduler
             .lock()
             .as_ref()
-            .map(|scheduler| (scheduler.is_running(), scheduler.pending()))
-            .unwrap_or((false, false));
+            .map(|scheduler| {
+                (
+                    scheduler.is_running(),
+                    scheduler.pending(),
+                    scheduler.active_count(),
+                )
+            })
+            .unwrap_or((false, false, 0));
         crate::maintenance_scheduler::MaintenanceOverview {
             tasks,
             checkpoint_running,
             checkpoint_pending,
+            checkpoint_active,
             ttl_purge_running: self.is_ttl_purge_running(),
             index_gc_loop_running: self.is_index_gc_running(),
             vertex_gc_loop_running: self.is_vertex_gc_running(),
+            index_gc_auto_started: self.is_index_gc_auto_started(),
+            vertex_gc_auto_started: self.is_vertex_gc_auto_started(),
         }
     }
 

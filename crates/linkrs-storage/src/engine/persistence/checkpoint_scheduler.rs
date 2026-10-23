@@ -15,7 +15,15 @@ use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 
 /// Overrun reporting bound for one checkpoint execution. Warn-only: the
 /// checkpoint is never cancelled, mirroring the maintenance-task timeout.
+/// Default when no operation timeout is supplied; the scheduler prefers the
+/// storage `operation_timeout` so tuning stays in one place.
+#[allow(dead_code)]
 const CHECKPOINT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Dedicated checkpoint execution threads. One poll driver plus one
+/// execution lane is the fixed default; larger values are only for tests.
+#[allow(dead_code)]
+pub const CHECKPOINT_EXECUTOR_THREADS_DEFAULT: usize = 1;
 
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRequest {
@@ -25,11 +33,15 @@ struct CheckpointRequest {
 
 /// Background checkpoint scheduler.
 ///
-/// Monitors WAL size and time since last checkpoint, triggering
-/// non-blocking checkpoint operations on the shared thread pool.
+/// Polling runs on a dedicated driver thread; executions run on a dedicated
+/// single-thread channel decoupled from the shared compute pool. Table-level
+/// fan-out inside an execution still uses the global parallel runtime, so the
+/// execution lane blocks as an external caller without forming a pool cycle.
 pub struct CheckpointScheduler {
     coordinator: Arc<parking_lot::RwLock<PersistenceCoordinator>>,
     thread_pool: Arc<StorageThreadPool>,
+    execution_pool: Arc<StorageThreadPool>,
+    execution_timeout: Duration,
     stats: Arc<Mutex<Option<Arc<StatsManager>>>>,
     pending: Arc<AtomicBool>,
     pending_request: Arc<Mutex<Option<CheckpointRequest>>>,
@@ -48,6 +60,7 @@ pub struct CheckpointScheduler {
 }
 
 impl CheckpointScheduler {
+    #[allow(dead_code)]
     pub fn new(
         coordinator: Arc<parking_lot::RwLock<PersistenceCoordinator>>,
         thread_pool: Arc<StorageThreadPool>,
@@ -60,9 +73,40 @@ impl CheckpointScheduler {
                 + Sync,
         >,
     ) -> Self {
+        Self::new_with_execution(
+            coordinator,
+            thread_pool,
+            stats,
+            poll_interval,
+            enabled,
+            executor,
+            CHECKPOINT_EXECUTION_TIMEOUT,
+            CHECKPOINT_EXECUTOR_THREADS_DEFAULT,
+        )
+    }
+
+    pub fn new_with_execution(
+        coordinator: Arc<parking_lot::RwLock<PersistenceCoordinator>>,
+        thread_pool: Arc<StorageThreadPool>,
+        stats: Option<Arc<StatsManager>>,
+        poll_interval: Duration,
+        enabled: bool,
+        executor: Arc<
+            dyn Fn(PersistenceStateGuard, CheckpointTriggerReason) -> StorageResult<CheckpointStats>
+                + Send
+                + Sync,
+        >,
+        execution_timeout: Duration,
+        execution_threads: usize,
+    ) -> Self {
+        let execution_pool = Arc::new(
+            StorageThreadPool::with_threads(execution_threads.max(1)).unwrap_or_default(),
+        );
         Self {
             coordinator,
             thread_pool,
+            execution_pool,
+            execution_timeout,
             stats: Arc::new(Mutex::new(stats)),
             pending: Arc::new(AtomicBool::new(false)),
             pending_request: Arc::new(Mutex::new(None)),
@@ -72,6 +116,21 @@ impl CheckpointScheduler {
             enabled,
             executor,
         }
+    }
+
+    /// Dedicated execution lanes (default one). The fixed background thread
+    /// count is one driver plus these lanes, fully decoupled from the pool.
+    pub fn execution_thread_count(&self) -> usize {
+        self.execution_pool.num_threads()
+    }
+
+    /// Fixed background threads owned by the scheduler: driver plus channel.
+    pub fn dedicated_thread_count(&self) -> usize {
+        1 + self.execution_thread_count()
+    }
+
+    pub fn execution_timeout(&self) -> Duration {
+        self.execution_timeout
     }
 
     pub fn set_stats(&self, stats: Option<Arc<StatsManager>>) {
@@ -110,7 +169,8 @@ impl CheckpointScheduler {
         let pending_request = self.pending_request.clone();
         let executor = self.executor.clone();
         let active = self.active.clone();
-        let thread_pool_clone = self.thread_pool.clone();
+        let execution_pool = self.execution_pool.clone();
+        let execution_timeout = self.execution_timeout;
 
         let running = Arc::new(AtomicBool::new(false));
         let poll_interval = self.poll_interval;
@@ -120,10 +180,10 @@ impl CheckpointScheduler {
             Duration::from_millis(10),
             move || {
                 // Panic-safe poll pass: a failing pass is skipped and the
-                // loop keeps running instead of dying silently on the pool.
-                // Timeout is warn-only; the checkpoint itself runs on a
-                // nested task so the poll pass stays short.
-                execute_guarded("checkpoint-poll", CHECKPOINT_EXECUTION_TIMEOUT, || {
+                // loop keeps running instead of dying silently. Timeout is
+                // warn-only; the checkpoint itself runs on the dedicated
+                // execution channel so the poll pass stays short.
+                execute_guarded("checkpoint-poll", execution_timeout, || {
                 // Passive polling: check if checkpoint is needed
                 let should = {
                     let coord = coordinator.read();
@@ -166,21 +226,22 @@ impl CheckpointScheduler {
                             let stats_clone = stats.clone();
                             let exec = executor.clone();
                             let reason = req.reason;
-                            let pool = thread_pool_clone.clone();
+                            let lane = execution_pool.clone();
                             let active_task = active.clone();
                             *active_task.0.lock() += 1;
-                            // Spawn checkpoint on the shared pool so the periodic
-                            // poll loop is never blocked by a long-running checkpoint.
-                            pool.spawn(move || {
+                            // Dedicated execution lane decoupled from the shared
+                            // pool: a slow checkpoint never occupies compute
+                            // workers needed by foreground or GC tasks.
+                            lane.spawn(move || {
                                 let started = std::time::Instant::now();
                                 let outcome = std::panic::catch_unwind(
                                     std::panic::AssertUnwindSafe(|| exec(guard, reason)),
                                 );
-                                if started.elapsed() > CHECKPOINT_EXECUTION_TIMEOUT {
+                                if started.elapsed() > execution_timeout {
                                     log::warn!(
                                         "Checkpoint execution exceeded timeout: {:?} > {:?} (reason={:?})",
                                         started.elapsed(),
-                                        CHECKPOINT_EXECUTION_TIMEOUT,
+                                        execution_timeout,
                                         reason,
                                     );
                                 }
@@ -241,6 +302,11 @@ impl CheckpointScheduler {
                 });
             },
         );
+        log::debug!(
+            "Checkpoint scheduler started (dedicated_threads={} timeout={:?})",
+            self.dedicated_thread_count(),
+            self.execution_timeout(),
+        );
         self.handle = Some(handle);
     }
 
@@ -269,6 +335,13 @@ impl CheckpointScheduler {
 
     pub fn pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
+    }
+
+    /// Number of checkpoint executions currently in flight on the dedicated
+    /// lane. Reported in [`crate::maintenance_scheduler::MaintenanceOverview`]
+    /// so a slow checkpoint is distinguishable from a stalled poll loop.
+    pub fn active_count(&self) -> usize {
+        *self.active.0.lock()
     }
 
     /// Monotonic checkpoint epoch hint for table commit manifests. Reads the
@@ -548,5 +621,105 @@ mod tests {
         );
         // Verify dedup didn't block second attempt
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn dedicated_channel_has_fixed_thread_count_and_timeout() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = crate::engine::PersistenceConfig::for_work_dir(temp_dir.path());
+        let coordinator = Arc::new(parking_lot::RwLock::new(
+            PersistenceCoordinator::new(config).unwrap(),
+        ));
+        let pool = Arc::new(StorageThreadPool::new().unwrap());
+        let executor: Arc<
+            dyn Fn(PersistenceStateGuard, CheckpointTriggerReason) -> StorageResult<CheckpointStats>
+                + Send
+                + Sync,
+        > = Arc::new(|_, _| Err(linkrs_core::StorageError::db_error("injected")));
+        let scheduler = CheckpointScheduler::new_with_execution(
+            coordinator,
+            pool,
+            None,
+            Duration::from_secs(1),
+            true,
+            executor,
+            Duration::from_secs(30),
+            1,
+        );
+        assert_eq!(scheduler.execution_thread_count(), 1);
+        assert_eq!(scheduler.dedicated_thread_count(), 2);
+        assert_eq!(scheduler.execution_timeout(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn slow_checkpoint_does_not_starve_pool_tasks() {
+        use std::sync::mpsc;
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config = crate::engine::PersistenceConfig::for_work_dir(temp_dir.path());
+        let coordinator = Arc::new(parking_lot::RwLock::new(
+            PersistenceCoordinator::new(config).unwrap(),
+        ));
+        let pool = Arc::new(StorageThreadPool::new().unwrap());
+        let stats = Arc::new(StatsManager::new());
+        let entered = Arc::new(AtomicUsize::new(0));
+        let entered_clone = entered.clone();
+        let release = Arc::new(parking_lot::Mutex::new(false));
+        let release_clone = release.clone();
+        let executor: Arc<
+            dyn Fn(PersistenceStateGuard, CheckpointTriggerReason) -> StorageResult<CheckpointStats>
+                + Send
+                + Sync,
+        > = Arc::new(move |_g, reason| {
+            entered_clone.fetch_add(1, Ordering::SeqCst);
+            for _ in 0..100 {
+                if *release_clone.lock() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(CheckpointStats {
+                checkpoint_id: 1,
+                data_flushed: 0,
+                wal_truncated: 0,
+                duration: Duration::from_millis(1),
+                snapshot_created: false,
+                checkpoint_seq: 1,
+                data_files_created: 0,
+                bytes_flushed: 0,
+                wal_files_truncated: 0,
+                trigger_reason: reason,
+                snapshot_timestamp: 0,
+            })
+        });
+        let mut scheduler = CheckpointScheduler::new_with_execution(
+            coordinator,
+            pool.clone(),
+            Some(stats),
+            Duration::from_millis(10),
+            true,
+            executor,
+            Duration::from_secs(30),
+            1,
+        );
+        scheduler.request_checkpoint(CheckpointTriggerReason::Explicit);
+        scheduler.start();
+        for _ in 0..50 {
+            if entered.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(entered.load(Ordering::SeqCst), 1);
+        assert_eq!(scheduler.active_count(), 1);
+        // Pool tasks still progress while the dedicated lane is blocked.
+        let (tx, rx) = mpsc::channel();
+        pool.spawn(move || {
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("pool task must progress during slow checkpoint");
+        *release.lock() = true;
+        scheduler.stop();
+        assert_eq!(scheduler.active_count(), 0);
     }
 }

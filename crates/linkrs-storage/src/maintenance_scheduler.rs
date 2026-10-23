@@ -10,10 +10,24 @@
 //! shared diagnostics.
 //!
 //! Tasks that fit the run-to-completion model own a [`MaintenanceTask`]
-//! (CSR maintenance, opportunistic index GC, index/vertex GC passes).
-//! Polling loops with their own idle semantics (checkpoint, TTL) keep their
-//! triggers and reuse [`execute_guarded`] for panic-safe, timeout-observed
-//! execution.
+//! (CSR maintenance, opportunistic index GC, index/vertex GC passes, TTL
+//! sweeps). Polling loops with their own idle semantics (checkpoint) keep
+//! their triggers and reuse [`execute_guarded`] for panic-safe,
+//! timeout-observed execution.
+//!
+//! Scheduling vocabulary used across every task:
+//!
+//! - `interval` (owned by [`crate::thread_pool::StorageThreadPool::spawn_periodic`])
+//!   is the maximum wake-up cadence: a loop wakes at most that often.
+//! - `min_cooldown` (owned by [`MaintenanceTask`]) is the minimum gap between
+//!   two completed passes, measured from the previous completion and
+//!   multiplied by the no-progress backoff. Throttled passes are skipped,
+//!   not queued.
+//!
+//! Timeouts are warn-only and never cancel a pass: maintenance passes hold
+//! table locks and must run to a safe point, so overruns are reported for
+//! tuning while the pass completes. Checkpoint execution additionally runs
+//! on a nested pool task so a slow checkpoint never blocks its poll loop.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -80,21 +94,33 @@ impl MaintenanceDiagnostics {
 /// One observability snapshot across every independent background task.
 /// Tasks keep their own triggers and intervals; only lifecycle and
 /// scheduling state are reported together.
+///
+/// Field semantics: each entry in `tasks` reports a single pass
+/// (`running` means one pass is in flight right now), while the
+/// `*_loop_running` / `*_running` flags report whether the periodic loop
+/// itself is scheduled. A scheduled loop with no pass in flight is the
+/// normal idle state, not a stall.
 #[derive(Debug, Clone)]
 pub struct MaintenanceOverview {
     /// Unified per-task scheduling states (CSR maintenance, index GC,
-    /// vertex GC when configured).
+    /// vertex GC, TTL purge when configured). `running` here is pass in-flight.
     pub tasks: Vec<MaintenanceDiagnostics>,
     /// Checkpoint poll loop scheduled.
     pub checkpoint_running: bool,
     /// Checkpoint requested but not yet executed.
     pub checkpoint_pending: bool,
+    /// Checkpoint executions currently in flight on the pool.
+    pub checkpoint_active: usize,
     /// TTL purge sweep scheduled.
     pub ttl_purge_running: bool,
-    /// Index GC background loop scheduled.
+    /// Index GC background loop scheduled (not pass in-flight; see `tasks`).
     pub index_gc_loop_running: bool,
-    /// Vertex GC background loop scheduled.
+    /// Vertex GC background loop scheduled (not pass in-flight; see `tasks`).
     pub vertex_gc_loop_running: bool,
+    /// Index GC loop started automatically on pressure (vs explicit start).
+    pub index_gc_auto_started: bool,
+    /// Vertex GC loop started automatically on pressure (vs explicit start).
+    pub vertex_gc_auto_started: bool,
 }
 
 impl MaintenanceOverview {
@@ -102,13 +128,16 @@ impl MaintenanceOverview {
     pub fn summary(&self) -> String {
         let tasks: Vec<String> = self.tasks.iter().map(|task| task.summary()).collect();
         format!(
-            "tasks=[{}] checkpoint_running={} checkpoint_pending={} ttl_purge_running={} index_gc_loop_running={} vertex_gc_loop_running={}",
+            "tasks=[{}] checkpoint_running={} checkpoint_pending={} checkpoint_active={} ttl_purge_running={} index_gc_loop_running={} vertex_gc_loop_running={} index_gc_auto_started={} vertex_gc_auto_started={}",
             tasks.join(", "),
             self.checkpoint_running,
             self.checkpoint_pending,
+            self.checkpoint_active,
             self.ttl_purge_running,
             self.index_gc_loop_running,
             self.vertex_gc_loop_running,
+            self.index_gc_auto_started,
+            self.vertex_gc_auto_started,
         )
     }
 }
@@ -162,6 +191,20 @@ impl MaintenanceTask {
         self.running.load(Ordering::Acquire)
     }
 
+    /// Block until no pass is in flight, up to `timeout`. Returns whether
+    /// the task reached idle in time. Never forces a running pass to stop;
+    /// callers use the result to decide whether shutdown may proceed.
+    pub fn wait_until_idle(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while self.is_running() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
     pub fn backoff(&self) -> u32 {
         self.backoff.load(Ordering::Acquire)
     }
@@ -201,31 +244,39 @@ impl MaintenanceTask {
         self.running.store(false, Ordering::Release);
     }
 
+    /// Acquire the single-flight permit and pass the completion-cooldown
+    /// gate. Returns `true` with `running` held when the caller may proceed;
+    /// returns `false` (permit released or never taken) when another pass is
+    /// in flight or the cooldown with backoff has not elapsed.
+    fn acquire_permit(&self) -> bool {
+        if !self.claim() {
+            return false;
+        }
+        if self.cooldown_active() {
+            self.release();
+            return false;
+        }
+        true
+    }
+
+    /// Shared completion bookkeeping for [`Self::tick`]: backoff reset on
+    /// progress (capped increment otherwise), run counters, completion
+    /// timestamp, and permit release. Timeout overruns are reported once by
+    /// [`execute_guarded`]; this path stays silent so a slow pass warns
+    /// exactly once.
     fn record_result(&self, progressed: bool, elapsed: Duration) {
-        if progressed {
-            self.backoff.store(0, Ordering::Relaxed);
-            self.progress_runs.fetch_add(1, Ordering::Release);
-        } else {
-            let current = self.backoff.load(Ordering::Relaxed);
-            self.backoff.store(
-                current.saturating_add(1).min(self.max_backoff_shift),
-                Ordering::Relaxed,
-            );
-        }
-        self.total_runs.fetch_add(1, Ordering::Release);
-        self.last_progress.store(progressed, Ordering::Release);
-        *self.last_duration.lock() = Some(elapsed);
-        *self.last_completion.lock() = Some(Instant::now());
+        record_completion(
+            progressed,
+            elapsed,
+            &self.backoff,
+            &self.total_runs,
+            &self.progress_runs,
+            &self.last_progress,
+            &self.last_duration,
+            &self.last_completion,
+            self.max_backoff_shift,
+        );
         self.release();
-        let timeout = *self.timeout.lock();
-        if elapsed > timeout {
-            log::warn!(
-                "Maintenance task '{}' exceeded timeout: {:?} > {:?}",
-                self.name,
-                elapsed,
-                timeout
-            );
-        }
     }
 
     /// Schedule `task` on the shared pool. Returns `false` without spawning
@@ -245,13 +296,14 @@ impl MaintenanceTask {
     where
         F: FnOnce() -> bool + Send + 'static,
     {
-        if !self.claim() {
+        if !self.acquire_permit() {
             return false;
         }
-        if self.cooldown_active() {
-            self.release();
-            return false;
-        }
+        // Shared completion path with `tick`: the spawned closure owns
+        // clones of every counter so the originating handle stays current.
+        // `RunningGuard` is belt-and-braces for paths that return early
+        // before the shared completion below; the normal path releases the
+        // permit there.
         let running = self.running.clone();
         let completion = self.last_completion.clone();
         let backoff = self.backoff.clone();
@@ -266,25 +318,17 @@ impl MaintenanceTask {
             let started = Instant::now();
             let progressed = execute_guarded(name, timeout, task);
             let elapsed = started.elapsed();
-            if progressed {
-                backoff.store(0, Ordering::Relaxed);
-                progress_runs.fetch_add(1, Ordering::Release);
-            } else {
-                let current = backoff.load(Ordering::Relaxed);
-                backoff.store(current.saturating_add(1).min(max_shift), Ordering::Relaxed);
-            }
-            total_runs.fetch_add(1, Ordering::Release);
-            last_progress.store(progressed, Ordering::Release);
-            *last_duration.lock() = Some(elapsed);
-            *completion.lock() = Some(Instant::now());
-            if elapsed > timeout {
-                log::warn!(
-                    "Maintenance task '{}' exceeded timeout: {:?} > {:?}",
-                    name,
-                    elapsed,
-                    timeout
-                );
-            }
+            apply_spawned_result(
+                progressed,
+                elapsed,
+                &backoff,
+                &total_runs,
+                &progress_runs,
+                &last_progress,
+                &last_duration,
+                &completion,
+                max_shift,
+            );
         });
         true
     }
@@ -304,11 +348,7 @@ impl MaintenanceTask {
     where
         F: FnOnce() -> bool,
     {
-        if !self.claim() {
-            return None;
-        }
-        if self.cooldown_active() {
-            self.release();
+        if !self.acquire_permit() {
             return None;
         }
         let _guard = RunningGuard {
@@ -354,6 +394,68 @@ pub(crate) fn effective_cooldown(base: Duration, backoff: u32, max_shift: u32) -
         return Duration::ZERO;
     }
     base.saturating_mul(1u32 << backoff.min(max_shift))
+}
+
+/// Shared completion bookkeeping behind both [`MaintenanceTask::tick`] and
+/// the [`MaintenanceTask::try_spawn`] closure: backoff reset on progress
+/// (capped increment otherwise), run counters, and completion timestamp.
+/// Deliberately silent on timeout overruns: [`execute_guarded`] already
+/// reported them, so warning here would log every slow pass twice.
+#[allow(clippy::too_many_arguments)]
+fn record_completion(
+    progressed: bool,
+    elapsed: Duration,
+    backoff: &Arc<AtomicU32>,
+    total_runs: &Arc<AtomicU64>,
+    progress_runs: &Arc<AtomicU64>,
+    last_progress: &Arc<AtomicBool>,
+    last_duration: &Arc<Mutex<Option<Duration>>>,
+    last_completion: &Arc<Mutex<Option<Instant>>>,
+    max_backoff_shift: u32,
+) {
+    if progressed {
+        backoff.store(0, Ordering::Relaxed);
+        progress_runs.fetch_add(1, Ordering::Release);
+    } else {
+        let current = backoff.load(Ordering::Relaxed);
+        backoff.store(
+            current.saturating_add(1).min(max_backoff_shift),
+            Ordering::Relaxed,
+        );
+    }
+    total_runs.fetch_add(1, Ordering::Release);
+    last_progress.store(progressed, Ordering::Release);
+    *last_duration.lock() = Some(elapsed);
+    *last_completion.lock() = Some(Instant::now());
+}
+
+/// Completion path for a spawned pool closure, which cannot borrow the
+/// originating [`MaintenanceTask`] and works on clones instead. Same
+/// counters as [`record_completion`]; the caller holds a `RunningGuard` so
+/// the permit clears even if this is never reached.
+#[allow(clippy::too_many_arguments)]
+fn apply_spawned_result(
+    progressed: bool,
+    elapsed: Duration,
+    backoff: &Arc<AtomicU32>,
+    total_runs: &Arc<AtomicU64>,
+    progress_runs: &Arc<AtomicU64>,
+    last_progress: &Arc<AtomicBool>,
+    last_duration: &Arc<Mutex<Option<Duration>>>,
+    last_completion: &Arc<Mutex<Option<Instant>>>,
+    max_backoff_shift: u32,
+) {
+    record_completion(
+        progressed,
+        elapsed,
+        backoff,
+        total_runs,
+        progress_runs,
+        last_progress,
+        last_duration,
+        last_completion,
+        max_backoff_shift,
+    );
 }
 
 /// Clears the running flag on drop so a panicking task cannot permanently
@@ -448,9 +550,15 @@ mod tests {
 
     #[test]
     fn tick_backoff_extends_cooldown() {
-        let task = test_task(Duration::from_millis(50));
+        // Base 100ms: one no-progress pass doubles the gate to 200ms. A
+        // 150ms wait clears the base gap but must still be throttled (proves
+        // the backoff extension); after 250ms total the pass runs and resets.
+        let task = test_task(Duration::from_millis(100));
         assert_eq!(task.tick(|| false), Some(false));
-        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(task.backoff(), 1);
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(task.tick(|| true), None);
+        std::thread::sleep(Duration::from_millis(100));
         assert_eq!(task.tick(|| true), Some(true));
         assert_eq!(task.backoff(), 0);
     }
@@ -463,6 +571,24 @@ mod tests {
         assert!(!task.is_running());
         assert_eq!(task.backoff(), 1);
         assert_eq!(task.tick(|| true), Some(true));
+    }
+
+    #[test]
+    fn try_spawn_shares_cooldown_semantics_with_tick() {
+        // `try_spawn` and `tick` share one permit gate: a completed spawn
+        // arms the same completion cooldown a tick would observe.
+        let task = test_task(Duration::from_secs(60));
+        assert!(task.try_spawn(|| true));
+        for _ in 0..100 {
+            if task.total_runs() >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(task.total_runs(), 1);
+        assert!(!task.try_spawn(|| true));
+        assert_eq!(task.tick(|| true), None);
+        assert_eq!(task.total_runs(), 1);
     }
 
     #[test]
@@ -505,5 +631,22 @@ mod tests {
         assert!(diagnostics.last_progress);
         assert!(diagnostics.last_duration_ms.is_some());
         assert!(diagnostics.millis_since_completion.is_some());
+    }
+
+    #[test]
+    fn wait_until_idle_returns_immediately_when_idle() {
+        let task = test_task(Duration::ZERO);
+        assert!(task.wait_until_idle(Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn wait_until_idle_times_out_while_pass_in_flight() {
+        let task = test_task(Duration::ZERO);
+        assert!(task.try_spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            true
+        }));
+        assert!(!task.wait_until_idle(Duration::from_millis(10)));
+        assert!(task.wait_until_idle(Duration::from_secs(5)));
     }
 }

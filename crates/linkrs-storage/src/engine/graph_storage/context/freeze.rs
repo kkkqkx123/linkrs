@@ -78,7 +78,9 @@ impl GraphStorageContext {
     /// Run background maintenance synchronously: automatic vertex compaction
     /// followed by single-segment edge compaction, then per-table automatic
     /// maintenance (tombstone GC, property compaction).
-    /// Captures watermarks once and shares across all sub-passes.
+    /// Captures watermarks once and shares across all sub-passes. Progress
+    /// covers every sub-pass so useful edge maintenance never counts as
+    /// no-progress backoff input.
     pub(crate) fn trigger_background_maintenance(&self) -> StorageResult<bool> {
         let gc = self.gc_coordinator();
         let wm = gc.capture_watermarks();
@@ -89,31 +91,36 @@ impl GraphStorageContext {
                 false
             });
         let freeze_progress = self.trigger_background_freeze_with_watermarks(&wm)?;
-        self.trigger_auto_edge_maintenance_with_watermarks(&wm)?;
-        Ok(vertex_progress || freeze_progress)
+        let edge_progress = self.trigger_auto_edge_maintenance_with_watermarks(&wm)?;
+        Ok(vertex_progress || freeze_progress || edge_progress)
     }
 
     fn trigger_auto_edge_maintenance_with_watermarks(
         &self,
         wm: &linkrs_transaction::MvccWatermarks,
-    ) -> StorageResult<()> {
+    ) -> StorageResult<bool> {
         let margin = self.persistent.config.gc_safety_margin;
+        let progressed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let progressed_clone = progressed.clone();
         self.persistent
             .data_store
             .for_all_edge_partitions_mut(|_key, table| {
                 let ran = table.maybe_run_auto_maintenance_with_watermarks(wm, margin);
-                if ran > 0 && log::log_enabled!(log::Level::Debug) {
-                    let stats = table.mvcc.tombstone_stats();
-                    log::debug!(
-                        "Auto edge maintenance (watermark) ran {} passes on {} (tombstones={})",
-                        ran,
-                        table.label(),
-                        stats.count
-                    );
+                if ran > 0 {
+                    progressed_clone.store(true, std::sync::atomic::Ordering::Release);
+                    if log::log_enabled!(log::Level::Debug) {
+                        let stats = table.mvcc.tombstone_stats();
+                        log::debug!(
+                            "Auto edge maintenance (watermark) ran {} passes on {} (tombstones={})",
+                            ran,
+                            table.label(),
+                            stats.count
+                        );
+                    }
                 }
                 Ok(())
             })?;
-        Ok(())
+        Ok(progressed.load(std::sync::atomic::Ordering::Acquire))
     }
 
     fn maybe_auto_compact_vertices_with_watermarks(

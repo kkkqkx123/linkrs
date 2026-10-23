@@ -45,7 +45,7 @@ use crate::maintenance_scheduler::{
 use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 use linkrs_core::types::Timestamp;
 use linkrs_transaction::VersionManager;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -143,6 +143,12 @@ pub struct IndexGcManager {
     /// opportunistic write-path trigger: single-flight, completion-time
     /// cooldown, exponential no-progress backoff, panic-safe execution.
     maintenance: Arc<MaintenanceTask>,
+    /// Retained periodic-loop handle so [`Self::stop`] can join the loop
+    /// even when the caller dropped the handle returned by
+    /// [`Self::start_background_gc`]. Shared across clones: the background
+    /// task runs on a clone, so the originating handle must observe the
+    /// same loop.
+    gc_loop: Arc<Mutex<Option<BackgroundTaskHandle>>>,
     gc_event_sink: Arc<RwLock<Option<GcEventSink>>>,
 }
 
@@ -172,6 +178,7 @@ impl IndexGcManager {
             stats: Arc::new(AtomicU64::new(0)),
             total_removed: Arc::new(AtomicU64::new(0)),
             maintenance,
+            gc_loop: Arc::new(Mutex::new(None)),
             gc_event_sink: Arc::new(RwLock::new(None)),
         }
     }
@@ -323,20 +330,32 @@ impl IndexGcManager {
 
     /// Start the background GC task on the shared thread pool.
     ///
-    /// Returns a [`BackgroundTaskHandle`] for the periodic task. The task
-    /// runs until `stop()` is called (or [`BackgroundTaskHandle::stop`]).
-    /// Every pass goes through the unified scheduler: completion-time
-    /// cooldown, exponential no-progress backoff, panic-safe execution, and
-    /// timeout observation. Throttled passes are skipped, not counted.
+    /// Idempotent: a second call while the loop is scheduled returns the
+    /// retained handle instead of spawning a duplicate loop. The returned
+    /// handle may be dropped; the loop is retained internally and joined by
+    /// [`Self::stop`]. Every pass goes through the unified scheduler:
+    /// completion-time cooldown, exponential no-progress backoff,
+    /// panic-safe execution, and timeout observation. Throttled passes are
+    /// skipped, not counted.
     pub fn start_background_gc(&self) -> BackgroundTaskHandle {
+        {
+            let guard = self.gc_loop.lock();
+            if let Some(handle) = guard.as_ref() {
+                if handle.is_running() {
+                    return handle.clone();
+                }
+            }
+        }
         let manager = self.clone();
         let running = self.running.clone();
         let interval = Duration::from_millis(self.config.interval_ms);
         let min_interval = Duration::from_millis(self.config.min_interval_between_gc_ms);
 
-        self.pool
+        tracing::info!("Index GC background loop started");
+        let handle = self
+            .pool
             .spawn_periodic(running, interval, min_interval, move || {
-                tracing::info!("Index GC background task started");
+                tracing::debug!("Index GC pass started");
 
                 let executed = manager.maintenance.tick(|| {
                     if manager.needs_aggressive_gc() {
@@ -359,7 +378,9 @@ impl IndexGcManager {
                 if executed.is_some() {
                     manager.stats.fetch_add(1, Ordering::Release);
                 }
-            })
+            });
+        *self.gc_loop.lock() = Some(handle.clone());
+        handle
     }
 
     /// Opportunistic write-path trigger: schedule one GC pass on the shared
@@ -394,9 +415,20 @@ impl IndexGcManager {
         self.stats.load(Ordering::Acquire)
     }
 
-    /// Stop the background GC thread
+    /// Stop the background GC loop and block until its thread exits.
+    ///
+    /// The loop handle is retained internally, so this joins even when the
+    /// caller dropped the handle returned by [`Self::start_background_gc`].
+    /// No `Drop` join: the manager is shared across clones (`Arc`), and a
+    /// per-clone `Drop` would stall unrelated owners. Callers that need
+    /// deterministic shutdown call `stop()` explicitly.
     pub fn stop(&self) {
         self.running.store(false, Ordering::Release);
+        let handle = self.gc_loop.lock().take();
+        if let Some(handle) = handle {
+            handle.stop();
+            handle.join();
+        }
     }
 
     /// Check if the background GC is running
@@ -420,6 +452,7 @@ impl Clone for IndexGcManager {
             stats: self.stats.clone(),
             total_removed: self.total_removed.clone(),
             maintenance: self.maintenance.clone(),
+            gc_loop: self.gc_loop.clone(),
             gc_event_sink: self.gc_event_sink.clone(),
         }
     }
@@ -482,5 +515,33 @@ mod tests {
 
         let stats = gc_manager.run_gc_pass();
         assert!(stats.is_empty());
+    }
+
+    #[test]
+    fn background_loop_start_is_idempotent_and_stop_joins() {
+        use std::time::Duration;
+        let version_manager = Arc::new(VersionManager::new());
+        let index_manager = IndexDataManagerImpl::new();
+        let pool = Arc::new(StorageThreadPool::new().unwrap());
+        let config = IndexGcConfig {
+            interval_ms: 20,
+            min_interval_between_gc_ms: 5,
+            ..IndexGcConfig::default()
+        };
+        let gc_manager = IndexGcManager::new(index_manager, version_manager, config, pool);
+
+        let first = gc_manager.start_background_gc();
+        assert!(gc_manager.is_running());
+        // Second start while scheduled returns the retained loop, not a
+        // duplicate.
+        let second = gc_manager.start_background_gc();
+        assert!(second.is_running());
+        // Handles may be dropped: the loop is retained internally and
+        // `stop` still joins it.
+        drop(first);
+        drop(second);
+        std::thread::sleep(Duration::from_millis(50));
+        gc_manager.stop();
+        assert!(!gc_manager.is_running());
     }
 }

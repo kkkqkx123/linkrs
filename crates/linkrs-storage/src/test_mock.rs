@@ -770,6 +770,16 @@ impl StorageGcOps for MockStorage {
     }
 
     fn stop_index_gc(&self) {}
+
+    fn is_vertex_gc_running(&self) -> bool {
+        false
+    }
+
+    fn start_vertex_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle> {
+        None
+    }
+
+    fn stop_vertex_gc(&self) {}
 }
 
 impl StorageTtlPurgeOps for MockStorage {

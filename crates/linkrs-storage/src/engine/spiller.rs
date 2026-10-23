@@ -32,9 +32,7 @@ pub struct Spiller {
     accounting: Arc<MemoryAccounting>,
     data_store: Arc<GraphDataStore>,
     cache_manager: Arc<CacheManager>,
-    active_spills: RwLock<Vec<SpillFile>>,
-    /// Ratio of hard_limit at which proactive spill triggers.
-    spill_threshold_ratio: f64,
+    active_spills: Arc<RwLock<Vec<SpillFile>>>,
 }
 
 impl Spiller {
@@ -43,15 +41,13 @@ impl Spiller {
         accounting: Arc<MemoryAccounting>,
         data_store: Arc<GraphDataStore>,
         cache_manager: Arc<CacheManager>,
-        spill_threshold_ratio: f64,
     ) -> Self {
         Self {
             spill_dir,
             accounting,
             data_store,
             cache_manager,
-            active_spills: RwLock::new(Vec::new()),
-            spill_threshold_ratio,
+            active_spills: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -68,8 +64,11 @@ impl Spiller {
 
     /// Spill cold data to free memory.
     ///
-    /// Force-evicts from cache when under pressure.
-    /// Returns the number of bytes freed (0 if nothing could be spilled).
+    /// Force-evicts from cache when under pressure. Eviction listeners and
+    /// the usage refresh below already move the accounting, so no extra
+    /// release is performed here; freed bytes are only recorded as spill
+    /// relief under the cache identity. Returns the number of bytes freed
+    /// (0 if nothing could be spilled).
     pub fn spill_cold_data(&self, requested_bytes: u64) -> Option<u64> {
         if requested_bytes == 0 {
             return None;
@@ -103,12 +102,12 @@ impl Spiller {
                     category: MemoryCategory::Cache,
                     spilled_bytes: freed,
                 });
+                self.accounting.record_spill_relief(freed);
                 total_freed += freed;
             }
         }
 
         if total_freed > 0 {
-            self.accounting.release(MemoryCategory::Data, total_freed);
             Some(total_freed)
         } else {
             None
@@ -136,11 +135,7 @@ impl Spiller {
     }
 
     pub fn active_spills(&self) -> &RwLock<Vec<SpillFile>> {
-        &self.active_spills
-    }
-
-    pub fn spill_threshold_ratio(&self) -> f64 {
-        self.spill_threshold_ratio
+        self.active_spills.as_ref()
     }
 }
 
@@ -151,8 +146,7 @@ impl Clone for Spiller {
             accounting: Arc::clone(&self.accounting),
             data_store: Arc::clone(&self.data_store),
             cache_manager: Arc::clone(&self.cache_manager),
-            active_spills: RwLock::new(Vec::new()),
-            spill_threshold_ratio: self.spill_threshold_ratio,
+            active_spills: Arc::clone(&self.active_spills),
         }
     }
 }
@@ -170,11 +164,13 @@ impl Drop for Spiller {
                 _bytes,
             );
             if let Err(e) = std::fs::remove_file(&spill.path) {
-                log::warn!(
-                    "Failed to remove spill file {}: {}",
-                    spill.path.display(),
-                    e
-                );
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!(
+                        "Failed to remove spill file {}: {}",
+                        spill.path.display(),
+                        e
+                    );
+                }
             }
         }
     }
@@ -184,7 +180,6 @@ impl std::fmt::Debug for Spiller {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Spiller")
             .field("spill_dir", &self.spill_dir)
-            .field("spill_threshold_ratio", &self.spill_threshold_ratio)
             .field("active_spills", &self.active_spills.read().len())
             .finish()
     }
@@ -211,10 +206,8 @@ mod tests {
             accounting,
             data_store,
             cache_manager,
-            0.90,
         );
         let debug = format!("{:?}", spiller);
         assert!(debug.contains("Spiller"));
-        assert!(debug.contains("0.9"));
     }
 }

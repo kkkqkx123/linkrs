@@ -226,13 +226,13 @@ impl GraphStoragePersistent {
         data_store: &Arc<GraphDataStore>,
         cache_manager: &Arc<CacheManager>,
     ) -> Arc<Spiller> {
+        let _ = config;
         let spill_dir = super::GraphStorageLayout::new().spill_dir();
         Arc::new(Spiller::new(
             spill_dir,
             Arc::clone(accounting),
             Arc::clone(data_store),
             Arc::clone(cache_manager),
-            config.resources.spill_threshold_ratio,
         ))
     }
 
@@ -272,7 +272,6 @@ impl GraphStoragePersistent {
             Arc::clone(&resource_accounting),
             Arc::clone(&data_store),
             Arc::clone(&cache_manager),
-            property_graph_config.resources.spill_threshold_ratio,
         ));
 
         Ok(Self {

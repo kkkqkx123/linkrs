@@ -71,9 +71,6 @@ pub struct ResourceConfig {
     pub cache_ttl: Option<Duration>,
     /// Record cache time-to-idle.
     pub cache_tti: Option<Duration>,
-    /// Ratio of hard_limit at which the disk spiller proactively evicts cold data.
-    /// Must satisfy soft_ratio < spill_threshold_ratio <= 1.0.
-    pub spill_threshold_ratio: f64,
     /// When true, every Moka cache eviction immediately decrements the memory
     /// accounting counter, eliminating accounting lag between refresh intervals.
     pub cache_eviction_sync: bool,
@@ -95,6 +92,10 @@ pub struct ResourceConfig {
     /// A single run already makes progress; this interval limits how often the
     /// write path may re-trigger it. Zero disables the throttle.
     pub background_freeze_min_interval: Duration,
+    /// Explicit gate for self-starting index/vertex GC loops when reclamation
+    /// pressure persists. Off by default so small deployments stay quiet;
+    /// observability warnings fire regardless of this gate.
+    pub background_gc_auto_start_enabled: bool,
 }
 
 impl Default for ResourceConfig {
@@ -114,13 +115,13 @@ impl Default for ResourceConfig {
             dirty_flush_bytes: 64 * 1024 * 1024,
             cache_ttl: Some(Duration::from_secs(60)),
             cache_tti: Some(Duration::from_secs(300)),
-            spill_threshold_ratio: 0.90,
             cache_eviction_sync: true,
             index_pool_capacity_bytes: 128 * 1024 * 1024,
             index_eviction_enabled: true,
             index_eviction_high_ratio: 0.85,
             index_eviction_low_ratio: 0.65,
             background_freeze_min_interval: Duration::from_millis(250),
+            background_gc_auto_start_enabled: false,
         }
     }
 }
@@ -176,18 +177,6 @@ impl ResourceConfig {
                     format!("{name} must be greater than 0 when configured"),
                 ));
             }
-        }
-        if !self.spill_threshold_ratio.is_finite()
-            || self.spill_threshold_ratio <= self.memory_soft_ratio
-            || self.spill_threshold_ratio > 1.0
-        {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                format!(
-                    "spill_threshold_ratio ({}) must satisfy soft_ratio < spill_ratio <= 1.0",
-                    self.spill_threshold_ratio
-                ),
-            ));
         }
         Ok(())
     }

@@ -178,13 +178,27 @@ pub trait StorageSyncContextOps: Send + Sync + std::fmt::Debug {
     fn get_sync_manager(&self) -> Option<Arc<linkrs_sync::SyncManager>>;
 }
 
-/// Index GC operations.
+/// Index and vertex GC operations.
+///
+/// The periodic GC loops are opt-in and off by default: without a
+/// `start_*_gc` call, reclamation runs only through the opportunistic
+/// write-path trigger (index GC) or not at all (vertex GC). Loop handles
+/// are retained inside the GC managers, so `stop_*_gc` always joins the
+/// loop even when the caller dropped the handle returned by `start_*_gc`
+/// (which is why the TTL sweep, whose handle is retained by the storage,
+/// does not return one either).
 pub trait StorageGcOps: Send + Sync + std::fmt::Debug {
     fn is_index_gc_running(&self) -> bool;
 
     fn start_index_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle>;
 
     fn stop_index_gc(&self);
+
+    fn is_vertex_gc_running(&self) -> bool;
+
+    fn start_vertex_gc(&self) -> Option<crate::thread_pool::BackgroundTaskHandle>;
+
+    fn stop_vertex_gc(&self);
 }
 
 /// Background TTL purge operations.

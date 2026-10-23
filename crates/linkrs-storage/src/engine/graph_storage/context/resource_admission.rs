@@ -1,4 +1,6 @@
-use crate::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
+use crate::engine::resource_budget::{
+    MemoryCategory, MemoryPressureLevel, ReliefStep, ResourceSnapshot,
+};
 
 use super::GraphStorageContext;
 
@@ -80,8 +82,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables(|tables| tables.values().map(|table| table.num_shards()).sum());
-        // Keep spiller accessors exercised.
-        let _spill_ratio = self.spiller().spill_threshold_ratio();
+        // Keep spiller/cache/GC observability exercised without虚设 thresholds.
         let _spill_dir = self.spiller().spill_dir();
         let _active_spills = self.spiller().active_spills().read().len();
         // Exercise try_reserve_with_spill with a zero-byte probe to keep
@@ -92,18 +93,163 @@ impl GraphStorageContext {
             let _total = gc.total_removed();
             let _passes = gc.pass_count();
             let _mitigations = gc.pressure_mitigations();
+            let _blocked = gc.blocked_passes();
+            let _invalidations = gc.cache_invalidations();
         }
         // Keep index GC and unified maintenance scheduling state exercised.
         if let Some(ref gc) = self.runtime.index_gc_manager {
             let _total = gc.total_removed();
             let _passes = gc.pass_count();
         }
+        // Pressure observability: warn while loops idle, advance the
+        // auto-start streak, and surface TTL hints. No behavior change when
+        // the gate is off and pressure is absent.
+        self.observe_background_pressure(&snapshot);
+        self.ttl_purge_hint();
         if log::log_enabled!(log::Level::Debug) {
             log::debug!(
                 "Background maintenance overview: {}",
                 self.maintenance_overview().summary()
             );
         }
+        snapshot
+    }
+
+    /// Fixed relief priority chain. One pressured round walks the chain in
+    /// order and stops as soon as the snapshot falls back below the hard
+    /// limit, so concurrent evictors never duplicate work. Each step reports
+    /// freed bytes under its own identity.
+    pub(crate) fn relieve_memory_pressure(&self, snapshot: &ResourceSnapshot) -> ResourceSnapshot {
+        if !snapshot.hard_limit_exceeded() {
+            return *snapshot;
+        }
+        let mut current = *snapshot;
+        // Step 1: expired trim (record-cache TTL/TTI sweep).
+        current = self.relief_step_expired_trim(current);
+        if !current.hard_limit_exceeded() {
+            return current;
+        }
+        // Step 2: index cold-chunk eviction toward the low-water target.
+        current = self.relief_step_index_evict(current);
+        if !current.hard_limit_exceeded() {
+            return current;
+        }
+        // Step 3: cache shrink via the spiller.
+        current = self.relief_step_cache_shrink(current);
+        if !current.hard_limit_exceeded() {
+            return current;
+        }
+        // Step 4: compaction and generation retirement.
+        current = self.relief_step_compaction(current);
+        current
+    }
+
+    fn relief_step_expired_trim(&self, before: ResourceSnapshot) -> ResourceSnapshot {
+        self.persistent.cache_manager.prune_expired_cache();
+        let _ = self.persistent.cache_manager.refresh_memory_usage();
+        let after = self.refresh_snapshot_totals();
+        let freed = before
+            .total_current_bytes
+            .saturating_sub(after.total_current_bytes);
+        self.persistent
+            .resource_accounting
+            .record_relief(ReliefStep::ExpiredTrim, freed);
+        self.merge_relief_counters(after)
+    }
+
+    fn relief_step_index_evict(&self, before: ResourceSnapshot) -> ResourceSnapshot {
+        let resources = &self.persistent.config.resources;
+        let limit = resources.index_memory_bytes;
+        if resources.index_eviction_enabled && limit > 0 {
+            let _ = self.persistent.index_data_manager.read().evict_cold_chunks_for_pressure(
+                limit,
+                resources.index_eviction_high_ratio,
+                resources.index_eviction_low_ratio,
+            );
+            self.persistent
+                .index_data_manager
+                .read()
+                .sync_memory_usage();
+        }
+        let after = self.refresh_snapshot_totals();
+        let freed = before
+            .total_current_bytes
+            .saturating_sub(after.total_current_bytes);
+        self.persistent
+            .resource_accounting
+            .record_relief(ReliefStep::IndexEvict, freed);
+        self.merge_relief_counters(after)
+    }
+
+    fn relief_step_cache_shrink(&self, before: ResourceSnapshot) -> ResourceSnapshot {
+        let overage = before
+            .total_current_bytes
+            .saturating_sub(before.budget.max_memory_bytes)
+            .saturating_add(1024 * 1024);
+        // The spiller records under the spill identity; no extra cache record
+        // here so the same freed bytes are never counted twice.
+        let _ = self.spiller().spill_cold_data(overage);
+        let after = self.refresh_snapshot_totals();
+        self.merge_relief_counters(after)
+    }
+
+    fn relief_step_compaction(&self, before: ResourceSnapshot) -> ResourceSnapshot {
+        let safe_ts = self.persistent.version_manager.read_timestamp();
+        let retired = self
+            .persistent
+            .index_data_manager
+            .read()
+            .retire_generations(safe_ts);
+        let _ = retired;
+        self.persistent
+            .index_data_manager
+            .read()
+            .sync_memory_usage();
+        let after = self.refresh_snapshot_totals();
+        let freed = before
+            .total_current_bytes
+            .saturating_sub(after.total_current_bytes);
+        self.persistent
+            .resource_accounting
+            .record_relief(ReliefStep::Compaction, freed);
+        self.merge_relief_counters(after)
+    }
+
+    fn refresh_snapshot_totals(&self) -> ResourceSnapshot {
+        self.persistent
+            .resource_accounting
+            .report_usage(MemoryCategory::Data, self.used_storage_size() as u64);
+        let index_bytes = self
+            .persistent
+            .index_data_manager
+            .read()
+            .cached_memory_usage_bytes();
+        self.persistent
+            .resource_accounting
+            .report_usage(MemoryCategory::Index, index_bytes);
+        let _ = self.persistent.cache_manager.refresh_memory_usage();
+        self.persistent.resource_accounting.snapshot()
+    }
+
+    fn merge_relief_counters(&self, mut snapshot: ResourceSnapshot) -> ResourceSnapshot {
+        let live = self.persistent.resource_accounting.snapshot();
+        snapshot.spill_relief_bytes = live.spill_relief_bytes;
+        snapshot.spill_relief_triggers = live.spill_relief_triggers;
+        snapshot.index_relief_bytes = live.index_relief_bytes;
+        snapshot.index_relief_triggers = live.index_relief_triggers;
+        snapshot.cache_relief_bytes = live.cache_relief_bytes;
+        snapshot.cache_relief_triggers = live.cache_relief_triggers;
+        snapshot.compaction_relief_bytes = live.compaction_relief_bytes;
+        snapshot.compaction_relief_triggers = live.compaction_relief_triggers;
+        let total = live.total_current_bytes;
+        snapshot.pressure_level = if total >= snapshot.budget.hard_limit_bytes {
+            MemoryPressureLevel::Critical
+        } else if total >= snapshot.budget.soft_limit_bytes {
+            MemoryPressureLevel::Elevated
+        } else {
+            MemoryPressureLevel::Normal
+        };
+        snapshot.total_current_bytes = total;
         snapshot
     }
 
@@ -119,14 +265,11 @@ impl GraphStorageContext {
         }
         let snapshot = self.resource_snapshot();
         if snapshot.hard_limit_exceeded() {
-            // Before failing, attempt to spill cold data to recover memory.
-            let overage = snapshot
-                .total_current_bytes
-                .saturating_sub(snapshot.budget.max_memory_bytes)
-                + 1024 * 1024;
-            self.spiller().spill_cold_data(overage);
-            let snapshot = self.resource_snapshot();
-            if snapshot.hard_limit_exceeded() {
+            // Fixed priority chain: expired trim, index eviction, cache
+            // shrink, compaction/retirement, then write rejection. Stops at
+            // the first step that brings usage back below the hard limit.
+            let relieved = self.relieve_memory_pressure(&snapshot);
+            if relieved.hard_limit_exceeded() {
                 return Err(linkrs_core::StorageError::capacity_exceeded());
             }
         }

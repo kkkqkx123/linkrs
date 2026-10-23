@@ -118,6 +118,18 @@ struct GraphStorageRuntime {
     background_maintenance_task: Arc<MaintenanceTask>,
     /// Last automatic vertex compaction time, for cooldown checks
     last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Explicit gate for self-starting GC loops on sustained pressure.
+    /// Off by default; observability warnings fire regardless of the gate.
+    background_auto_start: Arc<std::sync::atomic::AtomicBool>,
+    /// Consecutive pressured observations while the corresponding loop stays
+    /// idle. Reset on relief or on loop start.
+    background_pressure_streak: Arc<std::sync::atomic::AtomicU64>,
+    /// Whether the loop was started automatically (diagnostics).
+    index_gc_auto_started: Arc<std::sync::atomic::AtomicBool>,
+    vertex_gc_auto_started: Arc<std::sync::atomic::AtomicBool>,
+    /// Manual stops suppress future auto-starts, respecting operator intent.
+    index_gc_user_stopped: Arc<std::sync::atomic::AtomicBool>,
+    vertex_gc_user_stopped: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct WriteTimestampLease {
@@ -168,6 +180,12 @@ impl GraphStorageRuntime {
             thread_pool,
             background_maintenance_task,
             last_auto_compact: Arc::new(Mutex::new(None)),
+            background_auto_start: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            background_pressure_streak: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            index_gc_auto_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            vertex_gc_auto_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            index_gc_user_stopped: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            vertex_gc_user_stopped: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -193,6 +211,12 @@ impl GraphStorageRuntime {
             thread_pool: self.thread_pool.clone(),
             background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
+            background_auto_start: self.background_auto_start.clone(),
+            background_pressure_streak: self.background_pressure_streak.clone(),
+            index_gc_auto_started: self.index_gc_auto_started.clone(),
+            vertex_gc_auto_started: self.vertex_gc_auto_started.clone(),
+            index_gc_user_stopped: self.index_gc_user_stopped.clone(),
+            vertex_gc_user_stopped: self.vertex_gc_user_stopped.clone(),
         }
     }
 
@@ -217,6 +241,12 @@ impl GraphStorageRuntime {
             thread_pool: self.thread_pool.clone(),
             background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
+            background_auto_start: self.background_auto_start.clone(),
+            background_pressure_streak: self.background_pressure_streak.clone(),
+            index_gc_auto_started: self.index_gc_auto_started.clone(),
+            vertex_gc_auto_started: self.vertex_gc_auto_started.clone(),
+            index_gc_user_stopped: self.index_gc_user_stopped.clone(),
+            vertex_gc_user_stopped: self.vertex_gc_user_stopped.clone(),
         }
     }
 
@@ -229,6 +259,12 @@ impl GraphStorageRuntime {
             thread_pool: self.thread_pool.clone(),
             background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
+            background_auto_start: self.background_auto_start.clone(),
+            background_pressure_streak: self.background_pressure_streak.clone(),
+            index_gc_auto_started: self.index_gc_auto_started.clone(),
+            vertex_gc_auto_started: self.vertex_gc_auto_started.clone(),
+            index_gc_user_stopped: self.index_gc_user_stopped.clone(),
+            vertex_gc_user_stopped: self.vertex_gc_user_stopped.clone(),
         }
     }
 
@@ -344,7 +380,7 @@ impl GraphStorageContext {
             log::warn!("Failed to clean up stale spill files: {}", e);
         }
         crate::vertex::column::chunk_residency::cleanup_stale_spill_dirs();
-        Ok(Self {
+        let ctx = Self {
             persistent,
             runtime: GraphStorageRuntime::new(),
             operation_context: None,
@@ -358,7 +394,9 @@ impl GraphStorageContext {
         }
         .with_default_index_gc()
         .with_default_background_freeze()
-        .with_default_vertex_gc())
+        .with_default_vertex_gc();
+        ctx.apply_background_gate_from_config();
+        Ok(ctx)
     }
 
     /// Cumulative auto-commit write-gate admission statistics. Used by
@@ -540,5 +578,30 @@ mod tests {
         let write_set = recorder.write_set.lock();
         assert!(write_set.vertices.contains(&vertex_id));
         assert!(write_set.edges.contains(&edge));
+    }
+
+    #[test]
+    fn background_auto_start_defaults_off_and_suppresses_after_manual_stop() {
+        let ctx = GraphStorageContext::new();
+        assert!(!ctx.is_background_auto_start_enabled());
+        assert!(!ctx.is_index_gc_auto_started());
+        assert!(!ctx.is_vertex_gc_auto_started());
+        ctx.set_background_auto_start(true);
+        assert!(ctx.is_background_auto_start_enabled());
+        ctx.stop_index_gc();
+        ctx.stop_vertex_gc();
+        use std::sync::atomic::Ordering;
+        assert!(ctx.runtime.index_gc_user_stopped.load(Ordering::Acquire));
+        assert!(ctx.runtime.vertex_gc_user_stopped.load(Ordering::Acquire));
+        ctx.set_background_auto_start(true);
+        assert!(!ctx.runtime.index_gc_user_stopped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn background_gate_flows_from_storage_config() {
+        let mut config = PropertyGraphConfig::default();
+        config.resources.background_gc_auto_start_enabled = true;
+        let ctx = GraphStorageContext::new_with_config(config).expect("config");
+        assert!(ctx.is_background_auto_start_enabled());
     }
 }
