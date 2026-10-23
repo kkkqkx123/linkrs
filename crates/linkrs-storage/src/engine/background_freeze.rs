@@ -88,6 +88,7 @@ impl FreezeGuard {
                 self.edges_frozen,
                 duration_ms
             );
+            self.completed = false;
         }
     }
 }

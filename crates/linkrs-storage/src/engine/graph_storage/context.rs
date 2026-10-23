@@ -355,7 +355,10 @@ impl GraphStorageContext {
             auto_commit_window: None,
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
             ttl_purge_scheduler: Arc::new(Mutex::new(None)),
-        })
+        }
+        .with_default_index_gc()
+        .with_default_background_freeze()
+        .with_default_vertex_gc())
     }
 
     /// Cumulative auto-commit write-gate admission statistics. Used by

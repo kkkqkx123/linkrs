@@ -27,6 +27,8 @@ impl GraphStorageContext {
             ttl_purge_scheduler: Arc::new(Mutex::new(None)),
         }
         .with_default_index_gc()
+        .with_default_background_freeze()
+        .with_default_vertex_gc()
     }
 
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
@@ -56,14 +58,32 @@ impl GraphStorageContext {
                 ttl_purge_scheduler: Arc::new(Mutex::new(None)),
             }
             .with_default_index_gc()
+            .with_default_background_freeze()
+            .with_default_vertex_gc()
         })
     }
 
     /// assemble the index GC manager by default so generation retirement
     /// and reclamation stay bounded. Callers that manage GC themselves can
     /// replace this via [`with_index_gc`](Self::with_index_gc).
-    fn with_default_index_gc(self) -> Self {
+    pub(super) fn with_default_index_gc(self) -> Self {
         self.with_index_gc(IndexGcConfig::default())
+    }
+
+    /// Enable the background freeze decision manager by default so freeze
+    /// thresholds, deletion ratio and freeze statistics are active in
+    /// production paths.
+    pub(super) fn with_default_background_freeze(self) -> Self {
+        let freeze_config = self.persistent.config.freeze.clone();
+        let manager = Arc::new(BackgroundFreezeManager::from_config(freeze_config));
+        self.with_background_freeze(manager)
+    }
+
+    /// assemble the vertex GC manager by default so tombstone reclamation
+    /// and record-cache invalidation stay available. Callers that manage GC
+    /// themselves can replace this via [`with_vertex_gc`](Self::with_vertex_gc).
+    pub(super) fn with_default_vertex_gc(self) -> Self {
+        self.with_vertex_gc(VertexGcConfig::default())
     }
 
     pub fn with_index_gc(mut self, config: IndexGcConfig) -> Self {

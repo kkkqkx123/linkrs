@@ -273,12 +273,6 @@ impl GraphStorageContext {
             // Record freeze via guard (automatically logged on drop)
             if let Some(ref mut guard) = freeze_guard {
                 guard.record_edges(total_frozen);
-            } else {
-                // Fallback manual recording if no manager
-                if let Some(ref manager) = self.runtime.background_freeze_manager {
-                    let duration_ms = 0;
-                    manager.record_freeze(total_frozen, duration_ms);
-                }
             }
 
             if self.runtime.background_freeze_manager.is_some() {
