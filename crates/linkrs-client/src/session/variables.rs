@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::utils::error::{CliError, Result};
+use crate::utils::error::{ClientError, Result};
 
 #[derive(Debug, Clone)]
 pub enum SpecialVarType {
@@ -35,7 +35,7 @@ impl SpecialVariable {
                 match lower.as_str() {
                     "on" | "true" | "yes" | "1" => Ok("on".to_string()),
                     "off" | "false" | "no" | "0" => Ok("off".to_string()),
-                    _ => Err(CliError::Other(format!(
+                    _ => Err(ClientError::Other(format!(
                         "Invalid boolean value '{}' for {}. Use on/off.",
                         value, self.name
                     ))),
@@ -46,7 +46,7 @@ impl SpecialVariable {
                 if values.iter().any(|v| v.to_lowercase() == lower) {
                     Ok(lower)
                 } else {
-                    Err(CliError::Other(format!(
+                    Err(ClientError::Other(format!(
                         "Invalid value '{}' for {}. Valid values: {}",
                         value,
                         self.name,
@@ -56,13 +56,13 @@ impl SpecialVariable {
             }
             SpecialVarType::Number { min, max } => {
                 let num: i64 = value.parse().map_err(|_| {
-                    CliError::Other(format!(
+                    ClientError::Other(format!(
                         "Invalid number '{}' for {}. Must be {}-{}.",
                         value, self.name, min, max
                     ))
                 })?;
                 if num < *min || num > *max {
-                    return Err(CliError::Other(format!(
+                    return Err(ClientError::Other(format!(
                         "Value {} out of range for {}. Must be {}-{}.",
                         num, self.name, min, max
                     )));
@@ -331,14 +331,14 @@ impl VariableStore {
 
         if let Some(env_key) = var_name.strip_prefix("ENV_") {
             let value = std::env::var(env_key).map_err(|_| {
-                CliError::Other(format!("Undefined environment variable: {}", env_key))
+                ClientError::Other(format!("Undefined environment variable: {}", env_key))
             })?;
             return Ok((value, end));
         }
 
         let value = self
             .get(&var_name)
-            .ok_or_else(|| CliError::Other(format!("Undefined variable: :{}", var_name)))?;
+            .ok_or_else(|| ClientError::Other(format!("Undefined variable: :{}", var_name)))?;
 
         Ok((value.clone(), end))
     }
@@ -355,7 +355,7 @@ impl VariableStore {
         }
 
         if end >= chars.len() {
-            return Err(CliError::Other(
+            return Err(ClientError::Other(
                 "Unterminated quoted variable reference".to_string(),
             ));
         }
@@ -364,14 +364,14 @@ impl VariableStore {
 
         if let Some(env_key) = var_name.strip_prefix("ENV_") {
             let value = std::env::var(env_key).map_err(|_| {
-                CliError::Other(format!("Undefined environment variable: {}", env_key))
+                ClientError::Other(format!("Undefined environment variable: {}", env_key))
             })?;
             return Ok((format!("{}{}{}", quote, value, quote), end + 1));
         }
 
         let value = self
             .get(&var_name)
-            .ok_or_else(|| CliError::Other(format!("Undefined variable: :{}", var_name)))?;
+            .ok_or_else(|| ClientError::Other(format!("Undefined variable: :{}", var_name)))?;
 
         Ok((format!("{}{}{}", quote, value, quote), end + 1))
     }

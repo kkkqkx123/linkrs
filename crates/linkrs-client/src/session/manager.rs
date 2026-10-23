@@ -1,6 +1,8 @@
-use crate::client::{ClientConfig, HttpClient, QueryResult};
+use crate::config::ClientConfig;
+use crate::http_client::HttpClient;
 use crate::session::variables::VariableStore;
-use crate::utils::error::{CliError, Result};
+use crate::types::QueryResult;
+use crate::utils::error::{ClientError, Result};
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -172,7 +174,7 @@ impl SessionManager {
     /// Disconnect from the database
     pub async fn disconnect(&mut self) -> Result<()> {
         if self.session.is_none() {
-            return Err(CliError::NotConnected);
+            return Err(ClientError::NotConnected);
         }
 
         self.client.disconnect().await?;
@@ -184,7 +186,7 @@ impl SessionManager {
 
     /// Switch to a different space
     pub async fn switch_space(&mut self, space: &str) -> Result<()> {
-        let session = self.session.as_mut().ok_or(CliError::NotConnected)?;
+        let session = self.session.as_mut().ok_or(ClientError::NotConnected)?;
 
         self.client.switch_space(space).await?;
         session.current_space = Some(space.to_string());
@@ -194,7 +196,7 @@ impl SessionManager {
 
     /// Execute a query with variable substitution
     pub async fn execute_query(&self, query: &str) -> Result<QueryResult> {
-        let session = self.session.as_ref().ok_or(CliError::NotConnected)?;
+        let session = self.session.as_ref().ok_or(ClientError::NotConnected)?;
 
         let substituted = session.substitute_variables(query)?;
         self.client
@@ -204,7 +206,7 @@ impl SessionManager {
 
     /// Execute a query without variable substitution
     pub async fn execute_query_raw(&self, query: &str) -> Result<QueryResult> {
-        let session = self.session.as_ref().ok_or(CliError::NotConnected)?;
+        let session = self.session.as_ref().ok_or(ClientError::NotConnected)?;
         self.client
             .execute_query_raw(query, session.session_id)
             .await
@@ -213,7 +215,7 @@ impl SessionManager {
     /// Execute a batch of auto-commit DML statements inside one server-side
     /// auto-commit batch window. Returns one result per statement.
     pub async fn execute_batch(&self, statements: &[String]) -> Result<Vec<QueryResult>> {
-        let session = self.session.as_ref().ok_or(CliError::NotConnected)?;
+        let session = self.session.as_ref().ok_or(ClientError::NotConnected)?;
         self.client
             .execute_query_batch(statements, session.session_id)
             .await
@@ -225,34 +227,34 @@ impl SessionManager {
     }
 
     /// List all available spaces
-    pub async fn list_spaces(&self) -> Result<Vec<crate::client::SpaceInfo>> {
+    pub async fn list_spaces(&self) -> Result<Vec<crate::SpaceInfo>> {
         self.client.list_spaces().await
     }
 
     /// List all tags in current space
-    pub async fn list_tags(&self) -> Result<Vec<crate::client::TagInfo>> {
-        let session = self.session.as_ref().ok_or(CliError::NotConnected)?;
+    pub async fn list_tags(&self) -> Result<Vec<crate::TagInfo>> {
+        let session = self.session.as_ref().ok_or(ClientError::NotConnected)?;
         let space = session
             .current_space
             .as_deref()
-            .ok_or(CliError::NoSpaceSelected)?;
+            .ok_or(ClientError::NoSpaceSelected)?;
         self.client.list_tags(space).await
     }
 
     /// List all edge types in current space
-    pub async fn list_edge_types(&self) -> Result<Vec<crate::client::EdgeTypeInfo>> {
-        let session = self.session.as_ref().ok_or(CliError::NotConnected)?;
+    pub async fn list_edge_types(&self) -> Result<Vec<crate::EdgeTypeInfo>> {
+        let session = self.session.as_ref().ok_or(ClientError::NotConnected)?;
         let space = session
             .current_space
             .as_deref()
-            .ok_or(CliError::NoSpaceSelected)?;
+            .ok_or(ClientError::NoSpaceSelected)?;
         self.client.list_edge_types(space).await
     }
 
     /// List all functions registered on the server.
     pub async fn list_functions(&self) -> Result<Vec<String>> {
         if self.session.is_none() {
-            return Err(CliError::NotConnected);
+            return Err(ClientError::NotConnected);
         }
         self.client.list_functions().await
     }

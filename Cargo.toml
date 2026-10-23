@@ -18,6 +18,7 @@ members = [
     "crates/vector-client",
     "crates/simvec",
     "crates/linkrs-cli",
+    "crates/linkrs-client",
     "crates/linkrs-migration-cli",
 ]
 

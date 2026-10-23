@@ -19,10 +19,10 @@ use linkrs_wire::schema::{
     SpaceInfo, TagInfo,
 };
 
-use crate::client::config::{ClientConfig, SessionInfo};
-use crate::client::transaction::TransactionOptions;
-use crate::client::types::QueryResult;
-use crate::utils::error::{CliError, Result};
+use crate::config::{ClientConfig, SessionInfo};
+use crate::transaction::TransactionOptions;
+use crate::types::QueryResult;
+use crate::utils::error::{ClientError, Result};
 
 /// HTTP client for connecting to remote Linkrs server
 pub struct HttpClient {
@@ -46,7 +46,7 @@ impl HttpClient {
         let inner = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
-            .map_err(|e| CliError::connection(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| ClientError::connection(format!("Failed to create HTTP client: {}", e)))?;
 
         Ok(Self {
             inner,
@@ -90,9 +90,9 @@ impl HttpClient {
         }
     }
 
-    /// Reject non-2xx responses with a shared [`CliError::Http`] carrying the
+    /// Reject non-2xx responses with a shared [`ClientError::Http`] carrying the
     /// caller-supplied operation context plus the server body.
-    pub(crate) async fn check_response(
+    pub async fn check_response(
         response: reqwest::Response,
         context: impl Into<String>,
     ) -> Result<reqwest::Response> {
@@ -101,7 +101,7 @@ impl HttpClient {
         }
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        Err(CliError::http(
+        Err(ClientError::http(
             status.as_u16(),
             format!("{} ({}): {}", context.into(), status, body),
         ))
@@ -419,7 +419,7 @@ impl HttpClient {
             .session_info
             .as_ref()
             .map(|s| s.session_id)
-            .ok_or_else(|| CliError::session("Not connected".to_string()))?;
+            .ok_or_else(|| ClientError::session("Not connected".to_string()))?;
 
         let request = TransactionActionRequest { session_id };
 
@@ -442,7 +442,7 @@ impl HttpClient {
             .session_info
             .as_ref()
             .map(|s| s.session_id)
-            .ok_or_else(|| CliError::session("Not connected".to_string()))?;
+            .ok_or_else(|| ClientError::session("Not connected".to_string()))?;
 
         let request = TransactionActionRequest { session_id };
 
@@ -686,7 +686,7 @@ impl HttpClient {
         let response = Self::check_response(response, "Stream query failed").await?;
 
         let text = response.text().await?;
-        let mut parser = crate::client::sse::SseParser::new();
+        let mut parser = crate::sse::SseParser::new();
         for line in text.lines() {
             parser.feed_line(line);
         }

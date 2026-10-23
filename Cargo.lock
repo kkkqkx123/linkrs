@@ -2255,6 +2255,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "linkrs-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "linkrs-core",
+ "linkrs-wire",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "linkrs-config"
 version = "0.1.0"
 dependencies = [
@@ -2574,6 +2591,7 @@ dependencies = [
  "csv",
  "dirs",
  "futures",
+ "linkrs-client",
  "linkrs-core",
  "linkrs-grammar",
  "linkrs-wire",

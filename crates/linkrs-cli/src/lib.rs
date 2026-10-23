@@ -1,6 +1,6 @@
 pub mod analysis;
 pub mod cli;
-pub mod client;
+pub use linkrs_client as client;
 pub mod command;
 pub mod completion;
 pub mod config;
@@ -8,6 +8,6 @@ pub mod input;
 pub mod io;
 pub mod outbox;
 pub mod output;
-pub mod session;
+pub use linkrs_client::session;
 pub mod transaction;
 pub mod utils;

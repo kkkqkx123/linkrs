@@ -7,8 +7,8 @@
 
 use std::collections::HashMap;
 
-use crate::client::types::QueryResult;
-use crate::utils::error::{CliError, Result};
+use crate::types::QueryResult;
+use crate::utils::error::{ClientError, Result};
 
 /// Incremental SSE parser collecting one streaming query result.
 pub struct SseParser {
@@ -97,7 +97,7 @@ impl SseParser {
     /// Consume the parser into the collected result, or the stream error.
     pub fn finish(self) -> Result<QueryResult> {
         if let Some(error) = self.stream_error {
-            return Err(CliError::query(error));
+            return Err(ClientError::query(error));
         }
 
         let row_count = self.rows.len();

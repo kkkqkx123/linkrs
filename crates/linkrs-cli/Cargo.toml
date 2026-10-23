@@ -26,6 +26,7 @@ chrono.workspace = true
 uuid.workspace = true
 
 linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
+linkrs-client = { version = "0.1.0", path = "../linkrs-client" }
 linkrs-wire = { version = "0.1.0", path = "../linkrs-wire" }
 linkrs-grammar = { version = "0.1.0", path = "../linkrs-grammar", default-features = false }
 async-trait.workspace = true

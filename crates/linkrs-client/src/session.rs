@@ -1,6 +1,6 @@
 //! Session management module
 //!
-//! Provides session lifecycle management for both HTTP and embedded connections.
+//! Provides session lifecycle management for HTTP connections.
 
 pub mod manager;
 pub mod variables;

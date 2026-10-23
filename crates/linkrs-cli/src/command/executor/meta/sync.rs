@@ -1,6 +1,6 @@
 use crate::command::executor::CommandExecutor;
 use crate::command::parser::types::SyncAction;
-use crate::outbox::client_ext::{DegradedClearPayload, RequeuePayload};
+use crate::outbox::{DegradedClearPayload, RequeuePayload};
 use crate::session::manager::SessionManager;
 use crate::utils::error::Result;
 
