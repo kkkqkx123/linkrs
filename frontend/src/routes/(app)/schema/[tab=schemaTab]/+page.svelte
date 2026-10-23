@@ -7,7 +7,6 @@
 	import { theme } from '$stores/theme';
 	import { DATA_TYPE_LABELS } from '$config/constants';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
-	import SchemaErGraph from '$components/business/SchemaErGraph.svelte';
 	import SchemaAlterModal from '$components/business/SchemaAlterModal.svelte';
 	import type { Space, Tag, EdgeType } from '$types/schema';
 	import type { components } from '$lib/api/schema';
@@ -976,13 +975,21 @@
 						</p>
 					{/if}
 				{:else if activeTab === 'visualization'}
-					<SchemaErGraph
-						{tags}
-						{edgeTypes}
-						{isDark}
-						onAlterTag={(name) => (alterTagName = name)}
-						onAlterEdge={(name) => (alterEdgeName = name)}
-					/>
+					{#await import('$components/business/SchemaErGraph.svelte')}
+						<div class="flex items-center justify-center p-8">
+							<div
+								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+							></div>
+						</div>
+					{:then { default: SchemaErGraph }}
+						<SchemaErGraph
+							{tags}
+							{edgeTypes}
+							{isDark}
+							onAlterTag={(name: string) => (alterTagName = name)}
+							onAlterEdge={(name: string) => (alterEdgeName = name)}
+						/>
+					{/await}
 				{/if}
 			</div>
 		</div>

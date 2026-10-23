@@ -4,6 +4,12 @@
 // every basic language and the json/css/html/typescript language services and
 // their web workers, none of which the Cypher console uses.
 //
+// Contributions that a query console never exercises (folding, multicursor,
+// cursor undo, smart select, indentation commands, tab-focus toggling) are
+// deliberately not imported: Monaco reads the contribution registry once per
+// editor creation, so deferring their import cannot be undone later without
+// recreating the editor.
+//
 // Paths use the package's `exports` map (`./*` -> `./esm/vs/*`) so TypeScript
 // can resolve declarations for the editor API.
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker';
@@ -18,14 +24,8 @@ import 'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js';
 import 'monaco-editor/editor/contrib/linesOperations/browser/linesOperations.js';
 import 'monaco-editor/editor/contrib/wordOperations/browser/wordOperations.js';
 import 'monaco-editor/editor/contrib/comment/browser/comment.js';
-import 'monaco-editor/editor/contrib/folding/browser/folding.js';
-import 'monaco-editor/editor/contrib/multicursor/browser/multicursor.js';
-import 'monaco-editor/editor/contrib/cursorUndo/browser/cursorUndo.js';
 import 'monaco-editor/editor/contrib/lineSelection/browser/lineSelection.js';
-import 'monaco-editor/editor/contrib/indentation/browser/indentation.js';
-import 'monaco-editor/editor/contrib/smartSelect/browser/smartSelect.js';
 import 'monaco-editor/editor/contrib/placeholderText/browser/placeholderText.contribution.js';
-import 'monaco-editor/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode.js';
 import 'monaco-editor/editor/browser/coreCommands.js';
 
 // Monaco resolves its web worker through this global; Vite emits the worker as

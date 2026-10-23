@@ -4,6 +4,7 @@ import adapter from '@sveltejs/adapter-static';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
+import { visualizer } from 'rollup-plugin-visualizer';
 import { grammarWasmPlugin } from './vite/grammarWasm.ts';
 
 export default defineConfig({
@@ -23,6 +24,13 @@ export default defineConfig({
 			localStorageKey: 'linkrs_language',
 		}),
 		tailwindcss(),
+		visualizer({
+			template: 'markdown',
+			emitFile: true,
+			filename: 'bundle-report.md',
+			gzipSize: true,
+			brotliSize: true,
+		}),
 	],
 	resolve: {
 		alias: {
@@ -56,6 +64,6 @@ export default defineConfig({
 		},
 	},
 	build: {
-		chunkSizeWarningLimit: 4000,
+		chunkSizeWarningLimit: 600,
 	},
 });

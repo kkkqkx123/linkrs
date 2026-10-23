@@ -7,8 +7,6 @@ import {
 	GENERATED_SOFT_KEYWORDS,
 } from './generated/keywords.ts';
 
-import { registerTreeSitterHighlighting } from './treeSitterCypher.ts';
-
 export const CYPHER_LANGUAGE_ID = 'cypher';
 
 const RESERVED_WORDS = new Set([
@@ -202,7 +200,11 @@ export function registerCypherLanguage(monaco: typeof Monaco): void {
 
 	languageRegistered = true;
 
-	registerTreeSitterHighlighting(monaco, CYPHER_LANGUAGE_ID);
+	// Loaded on demand: web-tree-sitter and the grammar wasm stay out of the
+	// console route chunk until the editor actually requests semantic tokens.
+	void import('./treeSitterCypher.ts').then((module) =>
+		module.registerTreeSitterHighlighting(monaco, CYPHER_LANGUAGE_ID),
+	);
 }
 
 /**
