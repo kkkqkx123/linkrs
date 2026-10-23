@@ -345,6 +345,12 @@ pub struct GraphStorageContext {
     /// clone to avoid a reference cycle.
     ttl_purge_scheduler:
         Arc<Mutex<Option<crate::engine::graph_storage::ttl_purge::TtlPurgeScheduler>>>,
+    /// Idle fallback driver for CSR background maintenance. Shared across
+    /// context clones; auto-started from
+    /// `ResourceConfig::background_idle_maintenance_interval` during
+    /// construction. The dispatch clone carries no driver, so dropping the
+    /// last context drops the driver, which signals the loop to exit.
+    idle_maintenance: Arc<Mutex<freeze::IdleMaintenanceDriver>>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -391,11 +397,13 @@ impl GraphStorageContext {
             auto_commit_window: None,
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
             ttl_purge_scheduler: Arc::new(Mutex::new(None)),
+            idle_maintenance: Arc::new(Mutex::new(freeze::IdleMaintenanceDriver::new())),
         }
         .with_default_index_gc()
         .with_default_background_freeze()
         .with_default_vertex_gc();
         ctx.apply_background_gate_from_config();
+        ctx.start_idle_maintenance();
         Ok(ctx)
     }
 

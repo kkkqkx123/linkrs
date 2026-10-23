@@ -37,6 +37,11 @@ pub struct PersistenceConfig {
     pub wal_flush_interval_ms: u64,
     /// Enable background async WAL flush; false preserves sync behavior.
     pub wal_enable_async_flush: bool,
+    /// Create one final checkpoint when the storage is closed explicitly via
+    /// [`crate::engine::graph_storage::GraphStorage::close`]. Off by default
+    /// so close stays fast; a close checkpoint failure is logged and never
+    /// blocks the close.
+    pub checkpoint_on_close: bool,
 }
 
 impl Default for PersistenceConfig {
@@ -61,6 +66,7 @@ impl Default for PersistenceConfig {
             wal_buffer_size: 256 * 1024,
             wal_flush_interval_ms: 10,
             wal_enable_async_flush: true,
+            checkpoint_on_close: false,
         }
     }
 }

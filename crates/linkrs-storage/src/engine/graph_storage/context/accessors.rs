@@ -416,6 +416,88 @@ impl GraphStorageContext {
             .is_some_and(|scheduler| scheduler.is_running())
     }
 
+    /// Start the idle CSR-maintenance fallback driver at the configured
+    /// `background_idle_maintenance_interval`. Auto-started during
+    /// construction; a second call keeps the running driver and a zero
+    /// interval stays stopped.
+    pub fn start_idle_maintenance(&self) {
+        let interval = self
+            .persistent
+            .config
+            .resources
+            .background_idle_maintenance_interval;
+        let thread_pool = self.runtime.thread_pool.clone();
+        self.idle_maintenance
+            .lock()
+            .start(interval, thread_pool, self);
+    }
+
+    pub fn stop_idle_maintenance(&self) {
+        self.idle_maintenance.lock().stop();
+    }
+
+    pub fn is_idle_maintenance_running(&self) -> bool {
+        self.idle_maintenance.lock().is_running()
+    }
+
+    /// Clone this context for the idle maintenance driver, which must not
+    /// own the driver it runs from (that would form a reference cycle
+    /// keeping the storage context alive after the last handle drops).
+    pub(crate) fn clone_for_idle_maintenance(&self) -> Self {
+        let mut dispatch_ctx = self.clone();
+        dispatch_ctx.idle_maintenance = Arc::new(parking_lot::Mutex::new(
+            super::freeze::IdleMaintenanceDriver::new(),
+        ));
+        dispatch_ctx
+    }
+
+    /// Whether the persistence layer requests one final checkpoint on close.
+    pub(crate) fn checkpoint_on_close_enabled(&self) -> bool {
+        self.persistent
+            .persistence
+            .as_ref()
+            .is_some_and(|persistence| persistence.read().config.checkpoint_on_close)
+    }
+
+    /// Idempotent close: quiesce background loops and, when
+    /// `checkpoint_on_close` is configured, persist one final checkpoint.
+    ///
+    /// The close checkpoint reuses the synchronous checkpoint path; a
+    /// failure is logged and never blocks the close. After close, further
+    /// operations fail with `storage_not_open`. Explicitly closing is
+    /// optional: dropping the last handle stops the drivers without a
+    /// final checkpoint.
+    pub fn close(&self) {
+        if !self.persistent.is_open.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        self.stop_idle_maintenance();
+        // Drain in-flight async checkpoints before the final synchronous
+        // one so the two never race on the checkpoint directory.
+        if let Some(scheduler) = self.checkpoint_scheduler.lock().as_mut() {
+            scheduler.stop();
+        }
+        if self.checkpoint_on_close_enabled() {
+            match super::super::persistence::create_checkpoint(self) {
+                Ok(Some(stats)) => {
+                    log::info!(
+                        "Close checkpoint completed: id={} reason=explicit",
+                        stats.checkpoint_id,
+                    );
+                }
+                Ok(None) => {
+                    log::debug!("Close checkpoint skipped (persistence not enabled)");
+                }
+                Err(error) => {
+                    log::warn!("Close checkpoint failed (ignored): {}", error);
+                }
+            }
+        }
+        self.stop_ttl_purge();
+        self.runtime.stop_index_gc();
+        self.runtime.stop_vertex_gc();
+    }
+
     /// Unified scheduling diagnostics for the CSR background maintenance
     /// task: running flag, backoff step, completion age, run counts, and
     /// last-pass progress.
@@ -503,6 +585,7 @@ impl GraphStorageContext {
             vertex_gc_loop_running: self.is_vertex_gc_running(),
             index_gc_auto_started: self.is_index_gc_auto_started(),
             vertex_gc_auto_started: self.is_vertex_gc_auto_started(),
+            idle_maintenance_running: self.is_idle_maintenance_running(),
         }
     }
 

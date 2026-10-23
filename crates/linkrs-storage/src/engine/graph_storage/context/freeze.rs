@@ -1,10 +1,84 @@
 use crate::engine::background_freeze::{FreezeGuard, FreezeStats};
+use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 use linkrs_core::types::{AutoCompactConfig, CompactConfig};
 use linkrs_core::StorageResult;
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use super::GraphStorageContext;
+
+/// Idle fallback driver for CSR background maintenance.
+///
+/// The write path already schedules maintenance on pressure; this loop
+/// covers writes that paused before crossing a threshold. Each wake only
+/// dispatches through the shared `MaintenanceTask` single-flight and
+/// completion-cooldown gate (`schedule_background_maintenance`), so an idle
+/// pass is a no-op and never adds scheduling state of its own.
+///
+/// The driver wakes on a short quantum (capped at one second) but only
+/// dispatches once the configured idle interval has elapsed since the
+/// previous dispatch. The short quantum bounds shutdown lingering after
+/// `stop` without an interruptible sleep primitive, while dispatches stay
+/// low-frequency.
+pub(crate) struct IdleMaintenanceDriver {
+    handle: Option<BackgroundTaskHandle>,
+}
+
+impl IdleMaintenanceDriver {
+    pub(crate) fn new() -> Self {
+        Self { handle: None }
+    }
+
+    pub(crate) fn start(
+        &mut self,
+        interval: Duration,
+        thread_pool: Arc<StorageThreadPool>,
+        ctx: &GraphStorageContext,
+    ) {
+        if self.handle.is_some() || interval.is_zero() {
+            return;
+        }
+        // The driver thread must not retain the handle registry it runs
+        // from: the dispatch clone carries no idle handle, so dropping the
+        // last storage handle drops this driver, which signals the loop to
+        // exit instead of leaking the thread.
+        let dispatch = ctx.clone_for_idle_maintenance();
+        let quantum = interval.min(Duration::from_secs(1));
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut last_dispatch = Instant::now();
+        let handle =
+            thread_pool.spawn_periodic(running, quantum, Duration::from_millis(10), move || {
+                if last_dispatch.elapsed() >= interval {
+                    last_dispatch = Instant::now();
+                    dispatch.schedule_background_maintenance();
+                }
+            });
+        self.handle = Some(handle);
+    }
+
+    pub(crate) fn stop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.stop();
+            handle.join();
+        }
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        self.handle.as_ref().is_some_and(|h| h.is_running())
+    }
+}
+
+impl Drop for IdleMaintenanceDriver {
+    fn drop(&mut self) {
+        // Signal only, never join: teardown must not block on the sleep
+        // quantum. The loop observes the flag within one quantum and exits
+        // on its own, releasing the dispatch clone.
+        if let Some(handle) = self.handle.take() {
+            handle.stop();
+        }
+    }
+}
 
 impl GraphStorageContext {
     /// Pure decision predicate for automatic vertex compaction: enabled,
@@ -320,6 +394,8 @@ impl GraphStorageContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::config::PropertyGraphConfig;
+    use std::time::Duration;
 
     fn cfg() -> AutoCompactConfig {
         AutoCompactConfig {
@@ -427,5 +503,47 @@ mod tests {
         manager.record_delta_size(750);
         let stats = manager.get_stats();
         assert_eq!(stats.current_delta_edges, 750);
+    }
+
+    #[test]
+    fn test_idle_maintenance_auto_starts_from_config() {
+        let ctx = GraphStorageContext::new_with_config(PropertyGraphConfig::default())
+            .expect("storage context");
+        assert!(ctx.is_idle_maintenance_running());
+        assert!(ctx.maintenance_overview().idle_maintenance_running);
+        ctx.stop_idle_maintenance();
+        assert!(!ctx.is_idle_maintenance_running());
+        assert!(!ctx.maintenance_overview().idle_maintenance_running);
+    }
+
+    #[test]
+    fn test_idle_maintenance_zero_interval_stays_stopped() {
+        let ctx = GraphStorageContext::new_with_config(PropertyGraphConfig::test())
+            .expect("storage context");
+        assert!(!ctx.is_idle_maintenance_running());
+        ctx.start_idle_maintenance();
+        assert!(!ctx.is_idle_maintenance_running());
+    }
+
+    #[test]
+    fn test_idle_maintenance_dispatches_background_passes() {
+        let mut property_config = PropertyGraphConfig::test();
+        property_config
+            .resources
+            .background_idle_maintenance_interval = Duration::from_millis(50);
+        let ctx = GraphStorageContext::new_with_config(property_config).expect("storage context");
+        assert!(ctx.is_idle_maintenance_running());
+        for _ in 0..200 {
+            if ctx.background_maintenance_diagnostics().total_runs >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            ctx.background_maintenance_diagnostics().total_runs >= 1,
+            "idle driver must dispatch at least one background pass"
+        );
+        ctx.stop_idle_maintenance();
+        assert!(!ctx.is_idle_maintenance_running());
     }
 }

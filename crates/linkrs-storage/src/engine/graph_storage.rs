@@ -729,6 +729,13 @@ impl StorageTtlPurgeOps for GraphStorage {
 
 /// Direct storage controls.
 impl GraphStorage {
+    /// Idempotent close: quiesce background loops and, when
+    /// `checkpoint_on_close` is configured, persist one final checkpoint.
+    /// See [`GraphStorageContext::close`] for the exact semantics.
+    pub fn close(&self) {
+        self.ctx.close();
+    }
+
     /// Explicit gate for self-starting GC loops on sustained pressure.
     pub fn set_background_auto_start(&self, enabled: bool) {
         self.ctx.set_background_auto_start(enabled);

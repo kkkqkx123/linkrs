@@ -244,3 +244,73 @@ fn test_migration_history_survives_restart() {
     assert_eq!(after[0].from_version, 1);
     assert_eq!(after[0].to_version, 2);
 }
+
+#[test]
+fn test_persistence_config_checkpoint_on_close_defaults_off() {
+    assert!(!PersistenceConfig::default().checkpoint_on_close);
+    assert!(!PersistenceConfig::for_work_dir("/tmp/linkrs_probe").checkpoint_on_close);
+}
+
+#[test]
+fn test_close_with_checkpoint_on_close_writes_baseline() {
+    use std::sync::atomic::Ordering;
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let mut config = PersistenceConfig::for_work_dir(temp_dir.path());
+    config.checkpoint_on_close = true;
+    let ctx = GraphStorageContext::new_with_persistence(temp_dir.path().to_path_buf(), config)
+        .expect("Failed to create storage context");
+    ctx.create_vertex_type_with_id(
+        "space_1:tag:person",
+        "person",
+        1,
+        vec![
+            StoragePropertyDef::new("id".into(), DataType::BigInt),
+            StoragePropertyDef::new("name".into(), DataType::String),
+        ],
+        "id",
+    )
+    .expect("Failed to create vertex type");
+    assert!(ctx.is_open_flag().load(Ordering::Acquire));
+
+    ctx.close();
+    assert!(!ctx.is_open_flag().load(Ordering::Acquire));
+    // Idempotent: a second close checkpoints nothing and fails nothing.
+    ctx.close();
+
+    let checkpoint_one = temp_dir.path().join("checkpoint").join("checkpoint_1");
+    assert!(
+        checkpoint_one.is_dir(),
+        "close must persist one final checkpoint at {}",
+        checkpoint_one.display()
+    );
+    assert!(checkpoint_one.join("checkpoint.meta").is_file());
+}
+
+#[test]
+fn test_close_without_checkpoint_on_close_skips_checkpoint() {
+    use std::sync::atomic::Ordering;
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let ctx = create_context(&temp_dir).expect("Failed to create storage context");
+    assert!(!ctx.checkpoint_on_close_enabled());
+    ctx.close();
+    assert!(!ctx.is_open_flag().load(Ordering::Acquire));
+    assert!(
+        !temp_dir
+            .path()
+            .join("checkpoint")
+            .join("checkpoint_1")
+            .exists(),
+        "close without the flag must not write a checkpoint"
+    );
+}
+
+#[test]
+fn test_storage_close_delegate_marks_context_closed() {
+    use std::sync::atomic::Ordering;
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let storage = crate::engine::graph_storage::GraphStorage::open(temp_dir.path().to_path_buf())
+        .expect("Failed to open storage");
+    storage.close();
+    assert!(!storage.ctx.is_open_flag().load(Ordering::Acquire));
+    storage.close();
+}

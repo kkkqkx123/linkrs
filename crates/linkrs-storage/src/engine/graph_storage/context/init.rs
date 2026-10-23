@@ -14,7 +14,7 @@ use super::{GraphStorageContext, GraphStoragePersistent, GraphStorageRuntime};
 
 impl GraphStorageContext {
     pub fn new() -> Self {
-        Self {
+        let ctx = Self {
             persistent: GraphStoragePersistent::new(),
             runtime: GraphStorageRuntime::new(),
             operation_context: None,
@@ -25,10 +25,13 @@ impl GraphStorageContext {
             auto_commit_window: None,
             checkpoint_scheduler: Arc::new(Mutex::new(None)),
             ttl_purge_scheduler: Arc::new(Mutex::new(None)),
+            idle_maintenance: Arc::new(Mutex::new(super::freeze::IdleMaintenanceDriver::new())),
         }
         .with_default_index_gc()
         .with_default_background_freeze()
-        .with_default_vertex_gc()
+        .with_default_vertex_gc();
+        ctx.start_idle_maintenance();
+        ctx
     }
 
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
@@ -56,11 +59,13 @@ impl GraphStorageContext {
                 auto_commit_window: None,
                 checkpoint_scheduler: Arc::new(Mutex::new(None)),
                 ttl_purge_scheduler: Arc::new(Mutex::new(None)),
+                idle_maintenance: Arc::new(Mutex::new(super::freeze::IdleMaintenanceDriver::new())),
             }
             .with_default_index_gc()
             .with_default_background_freeze()
             .with_default_vertex_gc();
             ctx.apply_background_gate_from_config();
+            ctx.start_idle_maintenance();
             ctx
         })
     }
@@ -159,6 +164,7 @@ impl GraphStorageContext {
             auto_commit_window: self.auto_commit_window.clone(),
             checkpoint_scheduler: self.checkpoint_scheduler.clone(),
             ttl_purge_scheduler: self.ttl_purge_scheduler.clone(),
+            idle_maintenance: self.idle_maintenance.clone(),
         }
     }
 

@@ -96,6 +96,14 @@ pub struct ResourceConfig {
     /// pressure persists. Off by default so small deployments stay quiet;
     /// observability warnings fire regardless of this gate.
     pub background_gc_auto_start_enabled: bool,
+    /// Idle fallback cadence for CSR background maintenance (automatic vertex
+    /// compaction, delta freeze, edge auto-maintenance). The write path
+    /// already schedules maintenance on pressure; this low-frequency loop
+    /// covers writes that paused before crossing a threshold. Dispatch goes
+    /// through the shared [`crate::maintenance_scheduler::MaintenanceTask`]
+    /// single-flight and cooldown gate, so an idle pass is a no-op.
+    /// Zero disables the loop entirely (used by hermetic unit tests).
+    pub background_idle_maintenance_interval: Duration,
 }
 
 impl Default for ResourceConfig {
@@ -122,6 +130,7 @@ impl Default for ResourceConfig {
             index_eviction_low_ratio: 0.65,
             background_freeze_min_interval: Duration::from_millis(250),
             background_gc_auto_start_enabled: false,
+            background_idle_maintenance_interval: Duration::from_secs(30),
         }
     }
 }
@@ -388,6 +397,9 @@ impl PropertyGraphConfig {
             resources: ResourceConfig {
                 max_memory_bytes: 64 * 1024 * 1024,
                 index_memory_bytes: 16 * 1024 * 1024,
+                // Hermetic unit tests drive maintenance explicitly; no idle
+                // loop thread per test context.
+                background_idle_maintenance_interval: Duration::ZERO,
                 ..Default::default()
             },
             freeze: FreezeConfig {
@@ -549,5 +561,19 @@ mod tests {
             ..PropertyGraphConfig::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_resource_config_idle_maintenance_interval_defaults() {
+        assert_eq!(
+            ResourceConfig::default().background_idle_maintenance_interval,
+            Duration::from_secs(30)
+        );
+        assert!(PropertyGraphConfig::default().validate().is_ok());
+        // Hermetic unit tests drive maintenance explicitly: no idle driver.
+        assert!(PropertyGraphConfig::test()
+            .resources
+            .background_idle_maintenance_interval
+            .is_zero());
     }
 }

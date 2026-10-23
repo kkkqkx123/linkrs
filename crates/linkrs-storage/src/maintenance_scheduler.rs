@@ -121,6 +121,8 @@ pub struct MaintenanceOverview {
     pub index_gc_auto_started: bool,
     /// Vertex GC loop started automatically on pressure (vs explicit start).
     pub vertex_gc_auto_started: bool,
+    /// Idle CSR-maintenance fallback driver scheduled.
+    pub idle_maintenance_running: bool,
 }
 
 impl MaintenanceOverview {
@@ -128,7 +130,7 @@ impl MaintenanceOverview {
     pub fn summary(&self) -> String {
         let tasks: Vec<String> = self.tasks.iter().map(|task| task.summary()).collect();
         format!(
-            "tasks=[{}] checkpoint_running={} checkpoint_pending={} checkpoint_active={} ttl_purge_running={} index_gc_loop_running={} vertex_gc_loop_running={} index_gc_auto_started={} vertex_gc_auto_started={}",
+            "tasks=[{}] checkpoint_running={} checkpoint_pending={} checkpoint_active={} ttl_purge_running={} index_gc_loop_running={} vertex_gc_loop_running={} index_gc_auto_started={} vertex_gc_auto_started={} idle_maintenance_running={}",
             tasks.join(", "),
             self.checkpoint_running,
             self.checkpoint_pending,
@@ -138,6 +140,7 @@ impl MaintenanceOverview {
             self.vertex_gc_loop_running,
             self.index_gc_auto_started,
             self.vertex_gc_auto_started,
+            self.idle_maintenance_running,
         )
     }
 }
