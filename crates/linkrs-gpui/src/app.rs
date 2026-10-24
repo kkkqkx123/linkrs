@@ -3,9 +3,12 @@ use gpui_kit::{
     point, px, size, App, AppContext as _, Bounds, KeyBinding, Size, WindowBounds, WindowOptions,
 };
 
+use crate::connection::{SessionStore, DEFAULT_HOST, DEFAULT_PORT};
+use crate::runtime;
+use crate::services::connection_service;
 use crate::settings::{self, Settings};
 use crate::state;
-use crate::views::MainWindow;
+use crate::views::{RunQuery, Shell};
 
 pub mod actions {
     gpui_kit::actions!(linkrs, [Quit, ThemeLight, ThemeDark, ThemeSystem]);
@@ -17,7 +20,7 @@ pub use actions::*;
 const DEFAULT_WINDOW_SIZE: (f32, f32) = (1280., 800.);
 const MIN_WINDOW_SIZE: (f32, f32) = (960., 600.);
 
-/// Entry point: initialize layers, globals, then open the main window.
+/// Entry point: initialize layers and globals, then open the shell window.
 pub fn run(settings: Settings) {
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     app.run(move |cx: &mut App| {
@@ -25,11 +28,57 @@ pub fn run(settings: Settings) {
 
         settings::init_global(settings, cx);
         state::AppState::init(cx);
+        init_runtime(cx);
+        init_session(cx);
 
         bind_keys(cx);
         apply_saved_theme(cx);
+        start_heartbeat(cx);
         open_main_window(cx);
     });
+}
+
+/// Start the tokio reactor the client stack polls on. A failure only disables
+/// networking; the UI still comes up and reports the client-side error.
+fn init_runtime(cx: &mut App) {
+    match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime::init(runtime, cx),
+        Err(err) => log::error!("failed to start the async runtime: {err}"),
+    }
+}
+
+/// Create the process-wide session holder, pointed at the last used endpoint
+/// (or the default one). `connect_with_host` re-points it on sign-in.
+fn init_session(cx: &mut App) {
+    let saved = settings::global(cx).last_connection.clone();
+    let (host, port) = saved
+        .map(|entry| (entry.host, entry.port))
+        .unwrap_or_else(|| (DEFAULT_HOST.to_string(), DEFAULT_PORT));
+
+    let store = match SessionStore::new(&host, port) {
+        Ok(store) => store,
+        Err(err) => {
+            log::warn!("invalid endpoint {host}:{port} ({err}); falling back to the default");
+            match SessionStore::new(DEFAULT_HOST, DEFAULT_PORT) {
+                Ok(store) => store,
+                Err(err) => {
+                    log::error!("failed to create the session store: {err}");
+                    return;
+                }
+            }
+        }
+    };
+    SessionStore::init(store, cx);
+}
+
+/// Keep the background health probe alive for the whole app run.
+fn start_heartbeat(cx: &mut App) {
+    let heartbeat = connection_service::start_heartbeat(cx);
+    cx.global_mut::<SessionStore>().set_heartbeat(heartbeat);
 }
 
 fn bind_keys(cx: &mut App) {
@@ -38,6 +87,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-l", ThemeLight, None),
         KeyBinding::new("secondary-shift-d", ThemeDark, None),
         KeyBinding::new("secondary-shift-s", ThemeSystem, None),
+        KeyBinding::new("ctrl-enter", RunQuery, Some("Console")),
     ]);
 }
 
@@ -86,7 +136,7 @@ fn open_main_window(cx: &mut App) {
     };
 
     let (handle, _) = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| MainWindow::new(window, cx))
+        cx.new(|cx| Shell::new(window, cx))
     })
     .expect("failed to open main window");
 

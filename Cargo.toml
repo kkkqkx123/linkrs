@@ -223,6 +223,27 @@ opt-level = 0
 debug = true
 codegen-units = 64
 
+# Keep the UI stack fast in debug builds: the GPUI render loop (text shaping,
+# layout, SVG decoding) is unusably slow when these crates run unoptimized.
+# Mirrors the tuned set from the gpui-kit workspace, restricted to packages
+# that actually appear in our lock (the gpui-pre snapshot splits its crates
+# differently from the upstream gpui-kit main branch).
+[profile.dev.package]
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+smol = { opt-level = 3 }
+gpui-pre = { opt-level = 3 }
+gpui-pre-platform = { opt-level = 3 }
+gpui-pre-linux = { opt-level = 3 }
+tree-sitter = { opt-level = 3 }
+gpui-pre-sum-tree = { opt-level = 3 }
+ropey = { opt-level = 3 }
+lsp-types = { opt-level = 3 }
+markdown = { opt-level = 3 }
+xml5ever = { opt-level = 3 }
+
 [dev-dependencies]
 futures.workspace = true
 tokio-test = "0.4.4"

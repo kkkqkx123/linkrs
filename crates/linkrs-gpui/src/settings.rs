@@ -23,6 +23,16 @@ pub struct LastConnection {
     pub user: String,
 }
 
+impl LastConnection {
+    pub fn label(&self) -> String {
+        format!("{}:{} ({})", self.host, self.port, self.user)
+    }
+}
+
+/// Cap on how many distinct connections and recent queries are persisted.
+const MAX_RECENT_CONNECTIONS: usize = 8;
+const MAX_QUERY_HISTORY: usize = 50;
+
 /// Window position and size in logical pixels.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowGeometry {
@@ -38,6 +48,12 @@ pub struct Settings {
     pub theme_mode: Option<ThemeModeSetting>,
     pub last_connection: Option<LastConnection>,
     pub window: Option<WindowGeometry>,
+    /// Distinct recent connections, newest first, without passwords.
+    #[serde(default)]
+    pub recent_connections: Vec<LastConnection>,
+    /// Recently executed SQL scripts, newest first.
+    #[serde(default)]
+    pub query_history: Vec<String>,
 }
 
 impl Settings {
@@ -125,4 +141,42 @@ pub fn update(cx: &mut App, f: impl FnOnce(&mut Settings)) {
     let cell = cx.global_mut::<SettingsCell>();
     f(&mut cell.0);
     cell.0.save();
+}
+
+/// Record a successful connection: becomes `last_connection` and moves to the
+/// front of `recent_connections` (deduplicated, capped, never persisted with a
+/// password).
+pub fn record_connection(cx: &mut App, host: &str, port: u16, user: &str) {
+    update(cx, |settings| {
+        let entry = LastConnection {
+            host: host.to_string(),
+            port,
+            user: user.to_string(),
+        };
+        settings.last_connection = Some(entry.clone());
+        settings
+            .recent_connections
+            .iter()
+            .position(|existing| existing == &entry)
+            .map(|ix| settings.recent_connections.remove(ix));
+        settings.recent_connections.insert(0, entry);
+        settings.recent_connections.truncate(MAX_RECENT_CONNECTIONS);
+    });
+}
+
+/// Record an executed script in the local query history (deduplicated, capped).
+pub fn record_query(cx: &mut App, sql: &str) {
+    let sql = sql.trim();
+    if sql.is_empty() {
+        return;
+    }
+    update(cx, |settings| {
+        settings
+            .query_history
+            .iter()
+            .position(|existing| existing == sql)
+            .map(|ix| settings.query_history.remove(ix));
+        settings.query_history.insert(0, sql.to_string());
+        settings.query_history.truncate(MAX_QUERY_HISTORY);
+    });
 }
