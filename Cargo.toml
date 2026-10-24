@@ -69,7 +69,7 @@ async-trait = "0.1"
 
 # data & time
 chrono = { version = "0.4.38", features = ["serde"] }
-uuid = { version = "1.27.0", features = ["v4", "v7"] }
+uuid = { version = "1.27.0", features = ["v4", "v7", "serde"] }
 
 # text processing
 regex = "1.11.1"
@@ -116,8 +116,8 @@ fs4 = "0.13"
 bcrypt = "0.18.0"
 
 # HTTP / networking
-reqwest = { version = "0.13", features = ["json", "query", "socks"] }
-url = "2.5"
+reqwest = { version = "0.13", features = ["json", "query", "socks", "stream", "rustls"] }
+url = { version = "2.5", features = ["serde"] }
 
 # (optional) HTTP server stack
 axum = { version = "0.8", features = ["macros"] }
@@ -154,6 +154,15 @@ tree-sitter-language = "0.1.9"
 # dev-deps shared across sub-crates
 tempfile = "3.23.0"
 serial_test = "3.0"
+
+# Vendored llm-suite sub-crates: the submodule checkout under
+# crates/llm-suite is the source of truth, never a remote. Cargo resolves the
+# `{ workspace = true }` inheritance of nested path dependencies against this
+# workspace root, so the nested crates' internal sibling references must be
+# declared here. Only the crates reachable from linkrs consumers are wired.
+llm-suite-common = { version = "0.1.0", path = "crates/llm-suite/crates/llm-suite-common" }
+llm-suite-proxy = { version = "0.1.0", path = "crates/llm-suite/crates/llm-suite-proxy" }
+llm-suite-types = { version = "0.1.0", path = "crates/llm-suite/crates/llm-suite-types" }
 
 [package]
 name = "linkrs"
