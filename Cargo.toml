@@ -229,7 +229,7 @@ c_api = ["linkrs-api/embedded", "linkrs-api/c_api", "linkrs-config/embedded"]
 
 [profile.dev]
 opt-level = 0
-debug = true
+debug = "limited"
 codegen-units = 64
 
 # Keep the UI stack fast in debug builds: the GPUI render loop (text shaping,
@@ -252,6 +252,11 @@ ropey = { opt-level = 3 }
 lsp-types = { opt-level = 3 }
 markdown = { opt-level = 3 }
 xml5ever = { opt-level = 3 }
+
+# Match the gpui-kit workspace: keep release binaries small by stripping
+# debug symbols (the desktop client is the main shipped artifact).
+[profile.release]
+strip = "symbols"
 
 [dev-dependencies]
 futures.workspace = true
