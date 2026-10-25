@@ -192,7 +192,14 @@ fn test_optimizer_vertex_count() {
 #[test]
 fn test_load_bounds_staged_wal_and_retired_generations() {
     let mut db = create_test_db();
-    load_gql_file(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR))
+    // Group-commit the bulk load: `load_gql_file` runs each of the 20100
+    // auto-commit statements with its own WAL fsync, which makes this test
+    // run for several minutes on persistent storage and looks like a hang
+    // (and gets killed) under time-bounded CI runners. `load_gql_file_grouped`
+    // collapses the fsyncs to one per `group_size` window while still
+    // committing every statement, so the staged-WAL / retired-generation
+    // bounds below are exercised exactly as before — just fast.
+    load_gql_file_grouped(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR), 500)
         .expect("Failed to load optimizer_data.gql");
 
     let storage = db.storage();
