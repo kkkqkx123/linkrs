@@ -229,13 +229,7 @@ pub async fn auth_me(&self) -> Result<linkrs_wire::meta::AuthMeResponse> { /* GE
 - 本文档兑现 `docs/client/design/feature_comparison.md` 中"第三阶段"未完成项（:160-183 的事务保存点已通过 GQL 完成；性能分析、扩展功能两节仍缺）。
 - `docs/client/design/implementation_roadmap.md` 如与本文冲突，以本文的行号核验为准，落地后同步回写。
 
-## 10. 环境备忘（本次依赖安装实录）
-
-- 克隆：主仓库与 4 个子模块经 `https://gh-proxy.com/https://github.com/...` 拉取；`gpui-kit` 的嵌套子模块（tray/autostart/compograph/global-hotkey）需改写其 `.gitmodules` URL 后 `git submodule update --init --recursive`。
-- 依赖：全局 `~/.cargo/config.toml` 已配 `rsproxy-sparse`（crates.io 不可用）；Cargo.lock 中 `gpui-kit` 为 **git 依赖**，需 `git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "https://github.com/"` + `net.git-fetch-with-cli = true`，否则 `cargo fetch` 挂死。
-- 工具链：rustup 经 rsproxy 升级并安装 1.97.1（AGENTS.md:51 要求；stable 1.99.1 亦可用）。
-
-## 11. 待拍板开放点
+## 10. 待拍板开放点
 
 1. **用户管理命令的命名**：`\users create <name>`（子命令式）还是 `\create user <name>`（GQL DCL 式）？建议子命令式，与 \batch/\sync 一致。
 2. **REST savepoints 是否切替**：CLI 现走 GQL SAVEPOINT（grammar 支持），server 另有 REST savepoints（router.rs:129-139，可操作存储层 staged boundary）。是否把 CLI 事务管理切到 REST 以获得更强的崩溃一致性？（涉及 transaction.rs:118-165 重写）
