@@ -17,7 +17,10 @@
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"gen:api": "npm run gen --prefix ../tools/openapi-codegen",
-		"gen:grammar": "npm run gen --prefix ../tools/grammar-codegen"
+		"gen:grammar": "npm run gen --prefix ../tools/grammar-codegen",
+		"dev:preview": "vite dev --mode preview",
+		"build:preview": "vite build --mode preview",
+		"check:preview": "npm run check:i18n && svelte-kit sync && svelte-check --tsconfig ./tsconfig.preview.json"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

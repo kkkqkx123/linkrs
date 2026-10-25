@@ -1,0 +1,17 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"paths": {
+			"$lib/*": ["./src/lib/*"],
+			"$lib/api/client": ["./src/lib/api/client.preview.ts"],
+			"$types/*": ["./src/lib/types/*"],
+			"$utils/*": ["./src/lib/utils/*"],
+			"$services/*": ["./src/lib/services/*"],
+			"$stores/*": ["./src/lib/stores/*"],
+			"$config/*": ["./src/lib/config/*"],
+			"$i18n": ["./src/lib/i18n/index.ts"],
+			"$components/*": ["./src/lib/components/*"],
+			"$paraglide/*": ["./src/lib/paraglide/*"]
+		}
+	}
+}
