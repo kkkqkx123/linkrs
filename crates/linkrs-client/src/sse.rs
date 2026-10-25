@@ -107,6 +107,7 @@ impl SseParser {
             row_count,
             execution_time_ms: self.execution_time_ms,
             rows_scanned: self.rows_scanned,
+            trace_id: None,
             error: None,
         })
     }

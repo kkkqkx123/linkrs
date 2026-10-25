@@ -14,6 +14,9 @@ pub struct QueryResult {
     pub row_count: usize,
     pub execution_time_ms: u64,
     pub rows_scanned: u64,
+    /// Server-side trace id for query-portrait lookups; absent on errors
+    /// raised before execution.
+    pub trace_id: Option<String>,
     pub error: Option<QueryErrorInfo>,
 }
 
@@ -36,6 +39,7 @@ impl From<QueryResponse> for QueryResult {
             row_count: data.row_count,
             execution_time_ms: response.metadata.execution_time_ms,
             rows_scanned: response.metadata.rows_scanned,
+            trace_id: response.metadata.trace_id.clone(),
             error: response.error.map(|e| QueryErrorInfo {
                 code: e.code,
                 message: e.message,

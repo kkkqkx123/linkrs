@@ -32,6 +32,19 @@ fn show_general_help() -> String {
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
+        "\\show_users  or \\du", "List all server users (admin only)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\users <subcommand>",
+        "Manage users (create|drop|reset-password|enable|disable|grant|revoke)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\sessions [list|show|kill]", "Manage server sessions (admin only)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
         "\\connect <space>", "Switch to a graph space"
     ));
     output.push_str(&format!(
@@ -145,6 +158,19 @@ fn show_general_help() -> String {
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
+        "\\fulltext <subcommand>",
+        "Fulltext search and index management (search|indexes|rebuild|status|clear)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\vector <subcommand>", "Vector index management and search (create|indexes|info|drop|search|count|rebuild|status|clear)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\validate <query>", "Validate a GQL statement without executing it"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
         "\\sync <subcommand>", "Manage sync/outbox (status|diagnostics|dead-letters|requeue|retry|degraded|clear|retention-status|retention-run)"
     ));
 
@@ -216,7 +242,8 @@ fn show_general_help() -> String {
     output.push_str(&format!("\n{}\n", "Observability".yellow().bold()));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\statistics [target]", "Show query/database/system/overview/session stats"
+        "\\statistics [target]",
+        "Show query/database/system/overview/session/search/freeze/migration/profile stats"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",

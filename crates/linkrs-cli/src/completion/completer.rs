@@ -72,6 +72,13 @@ const META_COMMANDS: &[&str] = &[
     "\\batch",
     "\\sync",
     "\\outbox",
+    "\\show_users",
+    "\\du",
+    "\\users",
+    "\\sessions",
+    "\\validate",
+    "\\fulltext",
+    "\\vector",
 ];
 
 const FORMAT_VALUES: &[&str] = &["table", "csv", "json", "vertical", "html"];

@@ -747,6 +747,7 @@ impl HttpClient {
                 row_count,
                 execution_time_ms: 0,
                 rows_scanned: 0,
+                trace_id: body.trace_id,
                 error: None,
             },
             has_more,
@@ -800,6 +801,561 @@ impl HttpClient {
             })
             .unwrap_or_default();
         Ok(names)
+    }
+
+    // ── User management ──
+
+    /// List users via `GET /v1/users` (admin only).
+    pub async fn list_users(&self) -> Result<linkrs_wire::meta::UserListResponse> {
+        let url = format!("{}/users", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list users").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Create a user via `POST /v1/users` (admin only).
+    pub async fn create_user(&self, username: &str, password: &str) -> Result<()> {
+        let url = format!("{}/users", self.base_url);
+        let request = linkrs_wire::meta::CreateUserRequest {
+            username: username.to_string(),
+            password: password.to_string(),
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        Self::check_response(response, "Failed to create user").await?;
+        Ok(())
+    }
+
+    /// Drop a user via `DELETE /v1/users/{name}` (admin only).
+    pub async fn drop_user(&self, name: &str) -> Result<()> {
+        let url = format!("{}/users/{}", self.base_url, name);
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        Self::check_response(response, format!("Failed to drop user '{}'", name)).await?;
+        Ok(())
+    }
+
+    /// Reset a user's password via `POST /v1/users/{name}/password` (admin only).
+    pub async fn reset_user_password(&self, name: &str, new_password: &str) -> Result<()> {
+        let url = format!("{}/users/{}/password", self.base_url, name);
+        let request = linkrs_wire::meta::ResetPasswordRequest {
+            password: new_password.to_string(),
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        Self::check_response(response, format!("Failed to reset password for '{}'", name)).await?;
+        Ok(())
+    }
+
+    /// Enable a user via `POST /v1/users/{name}/enable` (admin only).
+    pub async fn enable_user(&self, name: &str) -> Result<()> {
+        let url = format!("{}/users/{}/enable", self.base_url, name);
+        let response = self.authed(self.inner.post(&url)).send().await?;
+        Self::check_response(response, format!("Failed to enable user '{}'", name)).await?;
+        Ok(())
+    }
+
+    /// Disable a user via `POST /v1/users/{name}/disable` (admin only).
+    pub async fn disable_user(&self, name: &str) -> Result<()> {
+        let url = format!("{}/users/{}/disable", self.base_url, name);
+        let response = self.authed(self.inner.post(&url)).send().await?;
+        Self::check_response(response, format!("Failed to disable user '{}'", name)).await?;
+        Ok(())
+    }
+
+    /// Grant a role on a space via `POST /v1/users/{name}/grant` (admin only).
+    pub async fn grant_user_role(&self, name: &str, role: &str, space: &str) -> Result<()> {
+        let url = format!("{}/users/{}/grant", self.base_url, name);
+        let request = linkrs_wire::meta::GrantRoleRequest {
+            role: role.to_string(),
+            space: space.to_string(),
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        Self::check_response(response, format!("Failed to grant role to '{}'", name)).await?;
+        Ok(())
+    }
+
+    /// Revoke a role on a space via `POST /v1/users/{name}/revoke` (admin only).
+    pub async fn revoke_user_role(&self, name: &str, space: &str) -> Result<()> {
+        let url = format!("{}/users/{}/revoke", self.base_url, name);
+        let request = linkrs_wire::meta::RevokeRoleRequest {
+            space: space.to_string(),
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        Self::check_response(response, format!("Failed to revoke role from '{}'", name)).await?;
+        Ok(())
+    }
+
+    // ── Server session management ──
+
+    /// List active server sessions via `GET /v1/sessions` (admin only).
+    pub async fn list_server_sessions(&self) -> Result<Vec<serde_json::Value>> {
+        let url = format!("{}/sessions", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list sessions").await?;
+        let body: serde_json::Value = response.json().await?;
+        Ok(body
+            .get("sessions")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Get one server session via `GET /v1/sessions/{id}` (admin only).
+    pub async fn get_server_session(&self, session_id: i64) -> Result<serde_json::Value> {
+        let url = format!("{}/sessions/{}", self.base_url, session_id);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get session").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Kill a server session via `DELETE /v1/sessions/{id}` (admin only).
+    pub async fn kill_server_session(&self, session_id: i64) -> Result<()> {
+        let url = format!("{}/sessions/{}", self.base_url, session_id);
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        Self::check_response(response, format!("Failed to kill session {}", session_id)).await?;
+        Ok(())
+    }
+
+    /// Refresh current identity via `GET /v1/auth/me`.
+    pub async fn auth_me(&self) -> Result<linkrs_wire::meta::AuthMeResponse> {
+        let url = format!("{}/auth/me", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to fetch current identity").await?;
+        Ok(response.json().await?)
+    }
+
+    // ── Query tooling ──
+
+    /// Validate a GQL statement without executing it via
+    /// `POST /v1/query/validate`.
+    pub async fn validate_query(&self, query: &str, session_id: i64) -> Result<serde_json::Value> {
+        use linkrs_wire::query::ValidateRequest;
+        let url = format!("{}/query/validate", self.base_url);
+        let request = ValidateRequest {
+            query: query.to_string(),
+            session_id,
+            need_estimate: false,
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Validate failed").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Plan a statement without executing it via `POST /v1/query/explain`.
+    pub async fn explain_query(&self, query: &str, session_id: i64) -> Result<QueryResult> {
+        use linkrs_wire::query::ExplainRequest;
+        let url = format!("{}/query/explain", self.base_url);
+        let request = ExplainRequest {
+            query: query.to_string(),
+            session_id,
+            parameters: std::collections::HashMap::new(),
+            session_variables: std::collections::HashMap::new(),
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Explain failed").await?;
+        let wire: linkrs_wire::query::QueryResponse = response.json().await?;
+        Ok(QueryResult::from(wire))
+    }
+
+    /// Fetch one query portrait via `GET /v1/statistics/queries/{trace_id}`.
+    pub async fn get_query_profile_detail(
+        &self,
+        trace_id: &str,
+    ) -> Result<linkrs_wire::meta::QueryProfileDetailResponse> {
+        let url = format!("{}/statistics/queries/{}", self.base_url, trace_id);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to fetch query profile").await?;
+        Ok(response.json().await?)
+    }
+
+    // ── Extended statistics ──
+
+    /// Get per-index search statistics via `GET /v1/statistics/search`.
+    pub async fn get_search_statistics(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/statistics/search", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get search statistics").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Get freeze statistics via `GET /v1/statistics/freeze`.
+    pub async fn get_freeze_statistics(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/statistics/freeze", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get freeze statistics").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Trigger a manual freeze via `POST /v1/statistics/freeze`.
+    pub async fn trigger_freeze(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/statistics/freeze", self.base_url);
+        let response = self.authed(self.inner.post(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to trigger freeze").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Get migration statistics via `GET /v1/statistics/migration`.
+    pub async fn get_migration_statistics(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/statistics/migration", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get migration statistics").await?;
+        Ok(response.json().await?)
+    }
+
+    // ── Function management ──
+
+    /// Get function details via `GET /v1/functions/{name}`.
+    pub async fn get_function_info(&self, name: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/functions/{}", self.base_url, name);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get function info").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Unregister a custom function via `DELETE /v1/functions/{name}`.
+    pub async fn unregister_function(&self, name: &str) -> Result<()> {
+        let url = format!("{}/functions/{}", self.base_url, name);
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        Self::check_response(
+            response,
+            format!("Failed to unregister function '{}'", name),
+        )
+        .await?;
+        Ok(())
+    }
+
+    // ── Schema versioning ──
+
+    /// Get schema version history via `GET /v1/schema/versions/{space}/{label}`.
+    pub async fn get_schema_version_history(
+        &self,
+        space: &str,
+        label: &str,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/schema/versions/{}/{}", self.base_url, space, label);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response =
+            Self::check_response(response, "Failed to get schema version history").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Get schema changes between versions via
+    /// `GET /v1/schema/changes/{space}/{label}/{from}/{to}`.
+    pub async fn get_schema_changes(
+        &self,
+        space: &str,
+        label: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/schema/changes/{}/{}/{}/{}",
+            self.base_url, space, label, from_version, to_version
+        );
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get schema changes").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Detect breaking schema changes via
+    /// `GET /v1/schema/breaking-changes/{space}/{label}/{from}/{to}`.
+    pub async fn detect_schema_breaking_changes(
+        &self,
+        space: &str,
+        label: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/schema/breaking-changes/{}/{}/{}/{}",
+            self.base_url, space, label, from_version, to_version
+        );
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to detect breaking changes").await?;
+        Ok(response.json().await?)
+    }
+
+    // ── Fulltext search management ──
+
+    /// Search a fulltext index via `POST /v1/fulltext/search`.
+    pub async fn fulltext_search(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/fulltext/search", self.base_url);
+        let body = serde_json::json!({
+            "space_id": space_id,
+            "tag_name": tag_name,
+            "field_name": field_name,
+            "query": query,
+            "limit": limit,
+        });
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&body)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Fulltext search failed").await?;
+        Ok(response.json().await?)
+    }
+
+    /// List fulltext indexes via `GET /v1/fulltext/indexes`.
+    pub async fn list_fulltext_indexes(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/fulltext/indexes", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list fulltext indexes").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Start an async fulltext index rebuild via
+    /// `POST /v1/fulltext/indexes/rebuild`.
+    pub async fn rebuild_fulltext_index(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<serde_json::Value> {
+        use linkrs_wire::fulltext::RebuildFulltextIndexRequest;
+        let url = format!("{}/fulltext/indexes/rebuild", self.base_url);
+        let request = RebuildFulltextIndexRequest {
+            space_id,
+            tag_name: tag_name.to_string(),
+            field_name: field_name.to_string(),
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to start fulltext rebuild").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Poll a fulltext rebuild via `GET /v1/fulltext/rebuilds/{id}`.
+    pub async fn fulltext_rebuild_status(&self, rebuild_id: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/fulltext/rebuilds/{}", self.base_url, rebuild_id);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get rebuild status").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Clear all documents of a fulltext index via
+    /// `POST /v1/fulltext/indexes/clear` (destructive).
+    pub async fn clear_fulltext_index(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<serde_json::Value> {
+        use linkrs_wire::fulltext::ClearFulltextIndexRequest;
+        let url = format!("{}/fulltext/indexes/clear", self.base_url);
+        let request = ClearFulltextIndexRequest {
+            space_id,
+            tag_name: tag_name.to_string(),
+            field_name: field_name.to_string(),
+            force: true,
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to clear fulltext index").await?;
+        Ok(response.json().await?)
+    }
+
+    // ── Vector search management ──
+
+    /// Create a vector index via `POST /v1/vector/indexes`.
+    pub async fn create_vector_index(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        vector_size: usize,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/vector/indexes", self.base_url);
+        let body = serde_json::json!({
+            "space_id": space_id,
+            "tag_name": tag_name,
+            "field_name": field_name,
+            "vector_size": vector_size,
+        });
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&body)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to create vector index").await?;
+        Ok(response.json().await?)
+    }
+
+    /// List vector indexes via `GET /v1/vector/indexes`.
+    pub async fn list_vector_indexes(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/vector/indexes", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list vector indexes").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Get one vector index via
+    /// `GET /v1/vector/indexes/{space_id}/{tag_name}/{field_name}`.
+    pub async fn get_vector_index_info(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/vector/indexes/{}/{}/{}",
+            self.base_url, space_id, tag_name, field_name
+        );
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get vector index").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Drop a vector index via
+    /// `DELETE /v1/vector/indexes/{space_id}/{tag_name}/{field_name}`.
+    pub async fn drop_vector_index(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/vector/indexes/{}/{}/{}",
+            self.base_url, space_id, tag_name, field_name
+        );
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        Self::check_response(response, "Failed to drop vector index").await?;
+        Ok(())
+    }
+
+    /// Vector similarity search via `POST /v1/vector/search`.
+    pub async fn vector_search(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/vector/search", self.base_url);
+        let body = serde_json::json!({
+            "space_id": space_id,
+            "tag_name": tag_name,
+            "field_name": field_name,
+            "query_vector": query_vector,
+            "limit": limit,
+        });
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&body)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Vector search failed").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Count vectors of one index via
+    /// `GET /v1/vector/{space_id}/{tag_name}/{field_name}/count`.
+    pub async fn vector_count(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/vector/{}/{}/{}/count",
+            self.base_url, space_id, tag_name, field_name
+        );
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to count vectors").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Start an async vector index rebuild via
+    /// `POST /v1/vector/indexes/rebuild`.
+    pub async fn rebuild_vector_index(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<serde_json::Value> {
+        use linkrs_wire::vector::RebuildVectorIndexRequest;
+        let url = format!("{}/vector/indexes/rebuild", self.base_url);
+        let request = RebuildVectorIndexRequest {
+            space_id,
+            tag_name: tag_name.to_string(),
+            field_name: field_name.to_string(),
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to start vector rebuild").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Poll a vector rebuild via `GET /v1/vector/rebuilds/{id}`.
+    pub async fn vector_rebuild_status(&self, rebuild_id: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/vector/rebuilds/{}", self.base_url, rebuild_id);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get rebuild status").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Clear all vectors of one index via
+    /// `POST /v1/vector/indexes/clear` (destructive).
+    pub async fn clear_vector_index(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+    ) -> Result<serde_json::Value> {
+        use linkrs_wire::vector::ClearVectorIndexRequest;
+        let url = format!("{}/vector/indexes/clear", self.base_url);
+        let request = ClearVectorIndexRequest {
+            space_id,
+            tag_name: tag_name.to_string(),
+            field_name: field_name.to_string(),
+            force: true,
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to clear vector index").await?;
+        Ok(response.json().await?)
     }
 
     // ── Auth ──

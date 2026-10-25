@@ -5,14 +5,20 @@ pub fn parse_statistics(arg: &str) -> Result<MetaCommand, String> {
         None
     } else {
         let lowered = arg.trim().to_lowercase();
-        match lowered.as_str() {
-            "queries" | "query" | "database" | "db" | "system" | "overview" | "session" => {
-                Some(lowered)
-            }
-            _ => {
-                return Err(
-                    "Usage: \\statistics [queries|database|system|overview|session]".to_string(),
-                );
+        let starts_with_profile =
+            lowered.starts_with("profile ") && !lowered["profile ".len()..].trim().is_empty();
+        if starts_with_profile {
+            Some(lowered)
+        } else {
+            match lowered.as_str() {
+                "queries" | "query" | "database" | "db" | "system" | "overview" | "session"
+                | "search" | "freeze" | "migration" => Some(lowered),
+                _ => {
+                    return Err(
+                        "Usage: \\statistics [queries|database|system|overview|session|search|freeze|migration|profile <trace_id>]"
+                            .to_string(),
+                    );
+                }
             }
         }
     };

@@ -657,3 +657,145 @@ fn test_parse_meta_command_export_space() {
         _ => panic!("Expected ExportSpace command"),
     }
 }
+
+#[test]
+fn test_parse_users_subcommands() {
+    use crate::command::parser::types::UsersAction;
+
+    let result = crate::command::parser::parse_command("\\users create alice secret");
+    match result {
+        Command::MetaCommand(MetaCommand::Users {
+            action: UsersAction::Create { username, password },
+        }) => {
+            assert_eq!(username, "alice");
+            assert_eq!(password, "secret");
+        }
+        _ => panic!("Expected Users create command"),
+    }
+
+    let result = crate::command::parser::parse_command("\\users grant alice admin my_space");
+    match result {
+        Command::MetaCommand(MetaCommand::Users {
+            action:
+                UsersAction::Grant {
+                    username,
+                    role,
+                    space,
+                },
+        }) => {
+            assert_eq!(username, "alice");
+            assert_eq!(role, "admin");
+            assert_eq!(space, "my_space");
+        }
+        _ => panic!("Expected Users grant command"),
+    }
+}
+
+#[test]
+fn test_parse_sessions() {
+    use crate::command::parser::types::SessionsAction;
+
+    let result = crate::command::parser::parse_command("\\sessions list");
+    assert!(matches!(
+        result,
+        Command::MetaCommand(MetaCommand::Sessions {
+            action: SessionsAction::List
+        })
+    ));
+
+    let result = crate::command::parser::parse_command("\\sessions kill 42");
+    match result {
+        Command::MetaCommand(MetaCommand::Sessions {
+            action: SessionsAction::Kill { session_id },
+        }) => assert_eq!(session_id, 42),
+        _ => panic!("Expected Sessions kill command"),
+    }
+}
+
+#[test]
+fn test_parse_validate() {
+    let result = crate::command::parser::parse_command("\\validate MATCH (p:person) RETURN p");
+    match result {
+        Command::MetaCommand(MetaCommand::Validate { query }) => {
+            assert_eq!(query, "MATCH (p:person) RETURN p");
+        }
+        _ => panic!("Expected Validate command"),
+    }
+}
+
+#[test]
+fn test_parse_fulltext() {
+    use crate::command::parser::types::FulltextAction;
+
+    let result = crate::command::parser::parse_command("\\fulltext search 1 person name hello 20");
+    match result {
+        Command::MetaCommand(MetaCommand::Fulltext {
+            action:
+                FulltextAction::Search {
+                    space_id,
+                    tag_name,
+                    field_name,
+                    query,
+                    limit,
+                },
+        }) => {
+            assert_eq!(space_id, 1);
+            assert_eq!(tag_name, "person");
+            assert_eq!(field_name, "name");
+            assert_eq!(query, "hello");
+            assert_eq!(limit, 20);
+        }
+        _ => panic!("Expected Fulltext search command"),
+    }
+
+    let result = crate::command::parser::parse_command("\\fulltext indexes");
+    assert!(matches!(
+        result,
+        Command::MetaCommand(MetaCommand::Fulltext {
+            action: FulltextAction::ListIndexes
+        })
+    ));
+}
+
+#[test]
+fn test_parse_vector() {
+    use crate::command::parser::types::VectorAction;
+
+    let result =
+        crate::command::parser::parse_command("\\vector search 1 person embedding 0.1,0.2,0.3 5");
+    match result {
+        Command::MetaCommand(MetaCommand::Vector {
+            action:
+                VectorAction::Search {
+                    space_id,
+                    tag_name,
+                    field_name,
+                    vector,
+                    limit,
+                },
+        }) => {
+            assert_eq!(space_id, 1);
+            assert_eq!(tag_name, "person");
+            assert_eq!(field_name, "embedding");
+            assert_eq!(vector, vec![0.1, 0.2, 0.3]);
+            assert_eq!(limit, 5);
+        }
+        _ => panic!("Expected Vector search command"),
+    }
+
+    let result = crate::command::parser::parse_command("\\vector create 1 person embedding 128");
+    match result {
+        Command::MetaCommand(MetaCommand::Vector {
+            action:
+                VectorAction::Create {
+                    space_id,
+                    vector_size,
+                    ..
+                },
+        }) => {
+            assert_eq!(space_id, 1);
+            assert_eq!(vector_size, 128);
+        }
+        _ => panic!("Expected Vector create command"),
+    }
+}

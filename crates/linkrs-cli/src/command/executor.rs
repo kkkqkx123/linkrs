@@ -211,6 +211,13 @@ impl CommandExecutor {
                 meta::connection::execute_login(self, &username, password, session_mgr).await
             }
             MetaCommand::Passwd => meta::connection::execute_passwd(self, session_mgr).await,
+            MetaCommand::ShowUsers => meta::users::execute_show_users(self, session_mgr),
+            MetaCommand::Users { action } => {
+                meta::users::execute_users(self, &action, session_mgr).await
+            }
+            MetaCommand::Sessions { action } => {
+                meta::users::execute_sessions(self, &action, session_mgr).await
+            }
             MetaCommand::ShowSpaces => meta::schema::execute_show_spaces(self, session_mgr).await,
             MetaCommand::ShowTags { .. } => {
                 meta::schema::execute_show_tags(self, session_mgr).await
@@ -308,6 +315,15 @@ impl CommandExecutor {
             } => meta::analyze::execute_explain(self, &query, analyze, session_mgr).await,
             MetaCommand::Profile { query } => {
                 meta::analyze::execute_profile(self, &query, session_mgr).await
+            }
+            MetaCommand::Validate { query } => {
+                meta::analyze::execute_validate(self, &query, session_mgr).await
+            }
+            MetaCommand::Fulltext { action } => {
+                meta::search::execute_fulltext(self, &action, session_mgr).await
+            }
+            MetaCommand::Vector { action } => {
+                meta::search::execute_vector(self, &action, session_mgr).await
             }
             MetaCommand::Import {
                 format,

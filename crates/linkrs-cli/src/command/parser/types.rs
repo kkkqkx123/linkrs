@@ -27,6 +27,13 @@ pub enum MetaCommand {
     },
     Passwd,
     WhoAmI,
+    ShowUsers,
+    Users {
+        action: UsersAction,
+    },
+    Sessions {
+        action: SessionsAction,
+    },
     ShowSpaces,
     ShowTags {
         pattern: Option<String>,
@@ -117,6 +124,15 @@ pub enum MetaCommand {
     Profile {
         query: String,
     },
+    Validate {
+        query: String,
+    },
+    Fulltext {
+        action: FulltextAction,
+    },
+    Vector {
+        action: VectorAction,
+    },
     Import {
         format: ImportFormat,
         file_path: String,
@@ -203,6 +219,117 @@ pub enum ConfigAction {
 pub enum CopyDirection {
     From,
     To,
+}
+
+/// User-management subcommands (`\users ...`).
+#[derive(Debug, Clone)]
+pub enum UsersAction {
+    Create {
+        username: String,
+        password: String,
+    },
+    Drop {
+        username: String,
+    },
+    ResetPassword {
+        username: String,
+    },
+    Enable {
+        username: String,
+    },
+    Disable {
+        username: String,
+    },
+    Grant {
+        username: String,
+        role: String,
+        space: String,
+    },
+    Revoke {
+        username: String,
+        space: String,
+    },
+}
+
+/// Server-session management subcommands (`\sessions ...`).
+#[derive(Debug, Clone)]
+pub enum SessionsAction {
+    List,
+    Show { session_id: i64 },
+    Kill { session_id: i64 },
+}
+
+/// Fulltext index subcommands (`\fulltext ...`).
+#[derive(Debug, Clone)]
+pub enum FulltextAction {
+    Search {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+        query: String,
+        limit: usize,
+    },
+    ListIndexes,
+    Rebuild {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+    },
+    RebuildStatus {
+        rebuild_id: String,
+    },
+    Clear {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+    },
+}
+
+/// Vector index subcommands (`\vector ...`).
+#[derive(Debug, Clone)]
+pub enum VectorAction {
+    Create {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+        vector_size: usize,
+    },
+    ListIndexes,
+    Info {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+    },
+    Drop {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+    },
+    Search {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+        vector: Vec<f32>,
+        limit: usize,
+    },
+    Count {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+    },
+    Rebuild {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+    },
+    RebuildStatus {
+        rebuild_id: String,
+    },
+    Clear {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+    },
 }
 
 #[derive(Debug, Clone)]

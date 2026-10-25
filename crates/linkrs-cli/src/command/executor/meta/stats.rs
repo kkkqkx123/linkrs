@@ -9,7 +9,7 @@ fn session_id(session_mgr: &SessionManager) -> Result<i64> {
         .ok_or(CliError::NotConnected)
 }
 
-fn pretty(value: &serde_json::Value) -> String {
+pub(crate) fn pretty(value: &serde_json::Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
@@ -53,6 +53,32 @@ pub async fn execute_statistics(
             let sid = session_id(session_mgr)?;
             let stats = session_mgr.client().get_session_statistics(sid).await?;
             let json = serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null);
+            executor.write_output(&pretty(&json))?;
+        }
+        Some("search") => {
+            let stats = session_mgr.client().get_search_statistics().await?;
+            executor.write_output(&pretty(&stats))?;
+        }
+        Some("freeze") => {
+            let stats = session_mgr.client().get_freeze_statistics().await?;
+            executor.write_output(&pretty(&stats))?;
+        }
+        Some("migration") => {
+            let stats = session_mgr.client().get_migration_statistics().await?;
+            executor.write_output(&pretty(&stats))?;
+        }
+        Some(other) if other.starts_with("profile ") => {
+            let trace_id = other["profile ".len()..].trim();
+            if trace_id.is_empty() {
+                return Err(CliError::InvalidValue(
+                    "Usage: \\statistics profile <trace_id>".to_string(),
+                ));
+            }
+            let profile = session_mgr
+                .client()
+                .get_query_profile_detail(trace_id)
+                .await?;
+            let json = serde_json::to_value(&profile).unwrap_or(serde_json::Value::Null);
             executor.write_output(&pretty(&json))?;
         }
         Some(other) => {

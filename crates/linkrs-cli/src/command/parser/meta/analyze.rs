@@ -41,3 +41,13 @@ pub fn parse_profile(arg: &str) -> Result<MetaCommand, String> {
         })
     }
 }
+
+pub fn parse_validate(arg: &str) -> Result<MetaCommand, String> {
+    if arg.is_empty() {
+        Err("Usage: \\validate <query>".to_string())
+    } else {
+        Ok(MetaCommand::Validate {
+            query: arg.to_string(),
+        })
+    }
+}
