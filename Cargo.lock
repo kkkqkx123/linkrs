@@ -5121,7 +5121,6 @@ dependencies = [
 name = "linkrs-wire"
 version = "0.1.0"
 dependencies = [
- "linkrs-core",
  "serde",
  "serde_json",
  "utoipa",

@@ -12,7 +12,9 @@ pub fn parse_statistics(arg: &str) -> Result<MetaCommand, String> {
         } else {
             match lowered.as_str() {
                 "queries" | "query" | "database" | "db" | "system" | "overview" | "session"
-                | "search" | "freeze" | "migration" => Some(lowered),
+                | "search" | "freeze" | "freeze trigger" | "freeze run" | "migration" => {
+                    Some(lowered)
+                }
                 _ => {
                     return Err(
                         "Usage: \\statistics [queries|database|system|overview|session|search|freeze|migration|profile <trace_id>]"

@@ -2,6 +2,7 @@ use crate::command::executor::CommandExecutor;
 use crate::command::parser::types::{FulltextAction, VectorAction};
 use crate::session::manager::SessionManager;
 use crate::utils::error::Result;
+use std::io::{self, Write};
 
 /// `\fulltext <subcommand>` — fulltext index management and search.
 pub async fn execute_fulltext(
@@ -28,6 +29,10 @@ pub async fn execute_fulltext(
         }
         FulltextAction::ListIndexes => {
             let indexes = client.list_fulltext_indexes().await?;
+            crate::command::executor::meta::stats::pretty(&indexes)
+        }
+        FulltextAction::Inconsistent => {
+            let indexes = client.list_inconsistent_fulltext_indexes().await?;
             crate::command::executor::meta::stats::pretty(&indexes)
         }
         FulltextAction::Rebuild {
@@ -58,13 +63,20 @@ pub async fn execute_fulltext(
             tag_name,
             field_name,
         } => {
-            let result = client
-                .clear_fulltext_index(*space_id, tag_name, field_name)
-                .await?;
-            format!(
-                "Fulltext index cleared.\n{}",
-                crate::command::executor::meta::stats::pretty(&result)
-            )
+            if !confirm_destructive(&format!(
+                "Clear fulltext index space {} tag '{}' field '{}'?",
+                space_id, tag_name, field_name
+            ))? {
+                "Cancelled.".to_string()
+            } else {
+                let result = client
+                    .clear_fulltext_index(*space_id, tag_name, field_name, true)
+                    .await?;
+                format!(
+                    "Fulltext index cleared.\n{}",
+                    crate::command::executor::meta::stats::pretty(&result)
+                )
+            }
         }
     };
     executor.write_output(&output)?;
@@ -140,6 +152,71 @@ pub async fn execute_vector(
             let result = client.vector_count(*space_id, tag_name, field_name).await?;
             crate::command::executor::meta::stats::pretty(&result)
         }
+        VectorAction::Get {
+            space_id,
+            tag_name,
+            field_name,
+            point_id,
+        } => {
+            let result = client
+                .get_vector_point(*space_id, tag_name, field_name, point_id)
+                .await?;
+            crate::command::executor::meta::stats::pretty(&result)
+        }
+        VectorAction::Scroll {
+            space_id,
+            tag_name,
+            field_name,
+            limit,
+            offset,
+        } => {
+            let result = client
+                .scroll_vectors(*space_id, tag_name, field_name, *limit, offset.as_deref())
+                .await?;
+            crate::command::executor::meta::stats::pretty(&result)
+        }
+        VectorAction::SetPayload {
+            space_id,
+            tag_name,
+            field_name,
+            point_ids,
+            payload,
+        } => {
+            let result = client
+                .set_vector_payload(*space_id, tag_name, field_name, point_ids, payload.clone())
+                .await?;
+            crate::command::executor::meta::stats::pretty(&result)
+        }
+        VectorAction::MergePayloadFields {
+            space_id,
+            tag_name,
+            field_name,
+            point_ids,
+            payload,
+        } => {
+            let result = client
+                .merge_vector_payload_fields(
+                    *space_id,
+                    tag_name,
+                    field_name,
+                    point_ids,
+                    payload.clone(),
+                )
+                .await?;
+            crate::command::executor::meta::stats::pretty(&result)
+        }
+        VectorAction::DeletePayload {
+            space_id,
+            tag_name,
+            field_name,
+            point_ids,
+            keys,
+        } => {
+            let result = client
+                .delete_vector_payload(*space_id, tag_name, field_name, point_ids, keys)
+                .await?;
+            crate::command::executor::meta::stats::pretty(&result)
+        }
         VectorAction::Rebuild {
             space_id,
             tag_name,
@@ -168,15 +245,34 @@ pub async fn execute_vector(
             tag_name,
             field_name,
         } => {
-            let result = client
-                .clear_vector_index(*space_id, tag_name, field_name)
-                .await?;
-            format!(
-                "Vector index cleared.\n{}",
-                crate::command::executor::meta::stats::pretty(&result)
-            )
+            if !confirm_destructive(&format!(
+                "Clear vector index space {} tag '{}' field '{}'?",
+                space_id, tag_name, field_name
+            ))? {
+                "Cancelled.".to_string()
+            } else {
+                let result = client
+                    .clear_vector_index(*space_id, tag_name, field_name, true)
+                    .await?;
+                format!(
+                    "Vector index cleared.\n{}",
+                    crate::command::executor::meta::stats::pretty(&result)
+                )
+            }
         }
     };
     executor.write_output(&output)?;
     Ok(true)
+}
+
+/// Prompt the user for confirmation before a destructive operation.
+fn confirm_destructive(prompt: &str) -> Result<bool> {
+    print!("{} [y/N] ", prompt);
+    let _ = io::stdout().flush();
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| crate::utils::error::CliError::IoError(e))?;
+    let answer = input.trim().to_lowercase();
+    Ok(answer == "y" || answer == "yes")
 }

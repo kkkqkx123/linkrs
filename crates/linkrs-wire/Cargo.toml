@@ -8,7 +8,6 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
 serde.workspace = true
 serde_json.workspace = true
 utoipa = { workspace = true }

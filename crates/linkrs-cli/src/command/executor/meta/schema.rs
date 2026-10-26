@@ -17,26 +17,39 @@ pub async fn execute_show_spaces(
 
 pub async fn execute_show_tags(
     executor: &mut CommandExecutor,
+    pattern: Option<&str>,
     session_mgr: &mut SessionManager,
 ) -> Result<bool> {
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
     let tags = session_mgr.list_tags().await?;
-    let output = executor.formatter().format_tags(&tags);
+    let filtered: Vec<_> = match pattern {
+        Some(p) => tags.into_iter().filter(|t| t.name.contains(p)).collect(),
+        None => tags,
+    };
+    let output = executor.formatter().format_tags(&filtered);
     executor.write_output(&output)?;
     Ok(true)
 }
 
 pub async fn execute_show_edges(
     executor: &mut CommandExecutor,
+    pattern: Option<&str>,
     session_mgr: &mut SessionManager,
 ) -> Result<bool> {
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
     let edge_types = session_mgr.list_edge_types().await?;
-    let output = executor.formatter().format_edge_types(&edge_types);
+    let filtered: Vec<_> = match pattern {
+        Some(p) => edge_types
+            .into_iter()
+            .filter(|e| e.name.contains(p))
+            .collect(),
+        None => edge_types,
+    };
+    let output = executor.formatter().format_edge_types(&filtered);
     executor.write_output(&output)?;
     Ok(true)
 }

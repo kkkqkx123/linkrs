@@ -1,4 +1,3 @@
-use crate::analysis::explain::ExplainFormat;
 use crate::io::{ExportFormat, ImportFormat, ImportTarget};
 use crate::output::formatter::OutputFormat;
 
@@ -41,7 +40,36 @@ pub enum MetaCommand {
     ShowEdges {
         pattern: Option<String>,
     },
+    SchemaVersions {
+        space: String,
+        label: String,
+        is_edge: bool,
+    },
+    SchemaChanges {
+        space: String,
+        label: String,
+        from: u64,
+        to: u64,
+        is_edge: bool,
+    },
+    SchemaBreaking {
+        space: String,
+        label: String,
+        from: u64,
+        to: u64,
+        is_edge: bool,
+    },
     ShowFunctions,
+    ShowFunction {
+        name: String,
+    },
+    RegisterFunction {
+        name: String,
+        implementation: String,
+    },
+    UnregisterFunction {
+        name: String,
+    },
     Describe {
         object: String,
     },
@@ -119,7 +147,6 @@ pub enum MetaCommand {
     Explain {
         query: String,
         analyze: bool,
-        format: ExplainFormat,
     },
     Profile {
         query: String,
@@ -224,6 +251,7 @@ pub enum CopyDirection {
 /// User-management subcommands (`\users ...`).
 #[derive(Debug, Clone)]
 pub enum UsersAction {
+    List,
     Create {
         username: String,
         password: String,
@@ -270,6 +298,7 @@ pub enum FulltextAction {
         limit: usize,
     },
     ListIndexes,
+    Inconsistent,
     Rebuild {
         space_id: u64,
         tag_name: String,
@@ -311,6 +340,40 @@ pub enum VectorAction {
         field_name: String,
         vector: Vec<f32>,
         limit: usize,
+    },
+    Get {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+        point_id: String,
+    },
+    Scroll {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+        limit: usize,
+        offset: Option<String>,
+    },
+    SetPayload {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+        point_ids: Vec<String>,
+        payload: serde_json::Map<String, serde_json::Value>,
+    },
+    MergePayloadFields {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+        point_ids: Vec<String>,
+        payload: serde_json::Map<String, serde_json::Value>,
+    },
+    DeletePayload {
+        space_id: u64,
+        tag_name: String,
+        field_name: String,
+        point_ids: Vec<String>,
+        keys: Vec<String>,
     },
     Count {
         space_id: u64,

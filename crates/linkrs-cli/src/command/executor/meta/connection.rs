@@ -39,17 +39,35 @@ pub fn execute_conninfo(
     Ok(true)
 }
 
-pub fn execute_whoami(
+pub async fn execute_whoami(
     executor: &mut CommandExecutor,
     session_mgr: &SessionManager,
 ) -> Result<bool> {
+    if !executor.conditional_stack().is_active() {
+        return Ok(true);
+    }
     match session_mgr.session() {
         Some(session) => {
             let role = session.display_role.as_deref().unwrap_or("(unknown)");
-            executor.write_output(&format!(
+            let mut line = format!(
                 "{} (session {}, role {})",
                 session.username, session.session_id, role
-            ))?;
+            );
+            // Refresh identity from the server when possible; fall back to
+            // the cached session on failure.
+            match session_mgr.client().auth_me().await {
+                Ok(info) => {
+                    line = format!(
+                        "{} (server role {})",
+                        info.username,
+                        info.role.as_deref().unwrap_or("(unknown)")
+                    );
+                }
+                Err(_) => {
+                    line.push_str(" [cached]");
+                }
+            }
+            executor.write_output(&line)?;
         }
         None => {
             executor.write_output("Not connected")?;

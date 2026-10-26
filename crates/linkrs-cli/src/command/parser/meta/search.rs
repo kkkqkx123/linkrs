@@ -30,8 +30,21 @@ pub fn parse_fulltext(arg: &str) -> Result<MetaCommand, String> {
                 );
             }
             let (space_id, tag_name, field_name) = parse_triple(&parts[1..])?;
-            let limit: usize = parts.get(5).map(|s| s.parse().unwrap_or(10)).unwrap_or(10);
-            let query = parts[4].to_string();
+            // Query may contain multiple words: collect everything between the
+            // field name and an optional trailing limit.
+            let rest = &parts[4..];
+            let (query, limit) = if let Some(last) = rest.last() {
+                if rest.len() > 1 && last.chars().all(|c| c.is_ascii_digit()) {
+                    let limit: usize = last
+                        .parse()
+                        .map_err(|_| format!("Invalid limit '{}'", last))?;
+                    (rest[..rest.len() - 1].join(" "), limit)
+                } else {
+                    (rest.join(" "), 10)
+                }
+            } else {
+                return Err("Usage: \\fulltext search <space_id> <tag> <field> <query> [limit]".to_string());
+            };
             Ok(MetaCommand::Fulltext {
                 action: FulltextAction::Search {
                     space_id,
@@ -44,6 +57,9 @@ pub fn parse_fulltext(arg: &str) -> Result<MetaCommand, String> {
         }
         "indexes" | "list" => Ok(MetaCommand::Fulltext {
             action: FulltextAction::ListIndexes,
+        }),
+        "inconsistent" => Ok(MetaCommand::Fulltext {
+            action: FulltextAction::Inconsistent,
         }),
         "rebuild" => {
             let (space_id, tag_name, field_name) = parse_triple(parts.get(1..).unwrap_or(&[]))?;
@@ -76,7 +92,7 @@ pub fn parse_fulltext(arg: &str) -> Result<MetaCommand, String> {
             })
         }
         other => Err(format!(
-            "Unknown fulltext subcommand: {}. Expected search|indexes|rebuild|status|clear",
+            "Unknown fulltext subcommand: {}. Expected search|indexes|inconsistent|rebuild|status|clear",
             other
         )),
     }
@@ -89,7 +105,12 @@ pub fn parse_vector(arg: &str) -> Result<MetaCommand, String> {
         return Err(
             "Usage: \\vector create <space_id> <tag> <field> <vector_size> | indexes | \
              info <space_id> <tag> <field> | drop <space_id> <tag> <field> | \
-             search <space_id> <tag> <field> <v1,v2,...> [limit] | count <space_id> <tag> <field> | \
+             search <space_id> <tag> <field> <v1,v2,...> [limit] | \
+             get <space_id> <tag> <field> <point_id> | \
+             scroll <space_id> <tag> <field> [limit] [offset] | count <space_id> <tag> <field> | \
+             set-payload <space_id> <tag> <field> <id1,id2> <json> | \
+             merge-payload <space_id> <tag> <field> <id1,id2> <json> | \
+             delete-payload <space_id> <tag> <field> <id1,id2> <key1,key2> | \
              rebuild <space_id> <tag> <field> | status <rebuild_id> | clear <space_id> <tag> <field>"
                 .to_string(),
         );
@@ -145,10 +166,12 @@ pub fn parse_vector(arg: &str) -> Result<MetaCommand, String> {
             }
             let (space_id, tag_name, field_name) = parse_triple(&parts[1..])?;
             let vector = parse_vector_values(parts[4])?;
-            let limit: usize = parts
-                .get(5)
-                .map(|s| s.parse().unwrap_or(10))
-                .unwrap_or(10);
+            let limit: usize = match parts.get(5) {
+                Some(s) => s
+                    .parse()
+                    .map_err(|_| format!("Invalid limit '{}', expected integer", s))?,
+                None => 10,
+            };
             Ok(MetaCommand::Vector {
                 action: VectorAction::Search {
                     space_id,
@@ -156,6 +179,104 @@ pub fn parse_vector(arg: &str) -> Result<MetaCommand, String> {
                     field_name,
                     vector,
                     limit,
+                },
+            })
+        }
+        "get" => {
+            if parts.len() < 5 {
+                return Err(
+                    "Usage: \\vector get <space_id> <tag> <field> <point_id>".to_string(),
+                );
+            }
+            let (space_id, tag_name, field_name) = parse_triple(&parts[1..])?;
+            Ok(MetaCommand::Vector {
+                action: VectorAction::Get {
+                    space_id,
+                    tag_name,
+                    field_name,
+                    point_id: parts[4].to_string(),
+                },
+            })
+        }
+        "scroll" => {
+            if parts.len() < 4 {
+                return Err(
+                    "Usage: \\vector scroll <space_id> <tag> <field> [limit] [offset]"
+                        .to_string(),
+                );
+            }
+            let (space_id, tag_name, field_name) = parse_triple(&parts[1..])?;
+            let limit: usize = match parts.get(4) {
+                Some(s) => s
+                    .parse()
+                    .map_err(|_| format!("Invalid limit '{}', expected integer", s))?,
+                None => 10,
+            };
+            Ok(MetaCommand::Vector {
+                action: VectorAction::Scroll {
+                    space_id,
+                    tag_name,
+                    field_name,
+                    limit,
+                    offset: parts.get(5).map(|s| s.to_string()),
+                },
+            })
+        }
+        "set-payload" | "merge-payload" => {
+            let set = parts[0].eq_ignore_ascii_case("set-payload");
+            let usage = if set {
+                "Usage: \\vector set-payload <space_id> <tag> <field> <id1,id2> <json>"
+            } else {
+                "Usage: \\vector merge-payload <space_id> <tag> <field> <id1,id2> <json>"
+            };
+            if parts.len() < 6 {
+                return Err(usage.to_string());
+            }
+            let (space_id, tag_name, field_name) = parse_triple(&parts[1..])?;
+            let point_ids = parse_id_list(parts[4])?;
+            // Payload may contain whitespace, so everything after the id
+            // list is treated as the JSON document.
+            let payload_raw = parts[5..].join(" ");
+            // Payload must be a JSON object; reject anything else instead of
+            // silently coercing so the server never sees a misshaped request.
+            let payload: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&payload_raw).map_err(|_| {
+                    format!("Invalid payload '{}', expected a JSON object", payload_raw)
+                })?;
+            let action = if set {
+                VectorAction::SetPayload {
+                    space_id,
+                    tag_name,
+                    field_name,
+                    point_ids,
+                    payload,
+                }
+            } else {
+                VectorAction::MergePayloadFields {
+                    space_id,
+                    tag_name,
+                    field_name,
+                    point_ids,
+                    payload,
+                }
+            };
+            Ok(MetaCommand::Vector { action })
+        }
+        "delete-payload" => {
+            if parts.len() < 6 {
+                return Err(
+                    "Usage: \\vector delete-payload <space_id> <tag> <field> <id1,id2> <key1,key2>"
+                        .to_string(),
+                );
+            }
+            let (space_id, tag_name, field_name) = parse_triple(&parts[1..])?;
+            Ok(MetaCommand::Vector {
+                action: VectorAction::DeletePayload {
+                    space_id,
+                    tag_name,
+                    field_name,
+                    point_ids: parse_id_list(parts[4])?,
+                    keys: parse_id_list(parts[5])?,
                 },
             })
         }
@@ -200,7 +321,7 @@ pub fn parse_vector(arg: &str) -> Result<MetaCommand, String> {
             })
         }
         other => Err(format!(
-            "Unknown vector subcommand: {}. Expected create|indexes|info|drop|search|count|rebuild|status|clear",
+            "Unknown vector subcommand: {}. Expected create|indexes|info|drop|search|get|scroll|count|set-payload|merge-payload|delete-payload|rebuild|status|clear",
             other
         )),
     }
@@ -216,4 +337,17 @@ fn parse_vector_values(raw: &str) -> Result<Vec<f32>, String> {
                 .map_err(|_| format!("Invalid vector component '{}', expected float", token))
         })
         .collect()
+}
+
+/// Parse a comma-separated id/key list like `id1,id2`. Empty entries are
+/// rejected so a stray trailing comma cannot silently drop an id.
+fn parse_id_list(raw: &str) -> Result<Vec<String>, String> {
+    let ids: Vec<String> = raw
+        .split(',')
+        .map(|token| token.trim().to_string())
+        .collect();
+    if ids.iter().any(|id| id.is_empty()) {
+        return Err(format!("Invalid id list '{}', expected id1,id2,...", raw));
+    }
+    Ok(ids)
 }

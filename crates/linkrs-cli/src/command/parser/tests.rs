@@ -495,41 +495,19 @@ fn test_parse_meta_command_endif() {
 #[test]
 fn test_parse_meta_command_explain() {
     match parse_command("\\explain MATCH (v) RETURN v") {
-        Command::MetaCommand(MetaCommand::Explain {
-            query,
-            analyze,
-            format,
-        }) => {
+        Command::MetaCommand(MetaCommand::Explain { query, analyze }) => {
             assert_eq!(query, "MATCH (v) RETURN v");
             assert!(!analyze);
-            assert!(matches!(
-                format,
-                crate::analysis::explain::ExplainFormat::Text
-            ));
         }
         _ => panic!("Expected Explain command"),
     }
 
     match parse_command("\\explain analyze MATCH (v) RETURN v") {
-        Command::MetaCommand(MetaCommand::Explain {
-            query,
-            analyze,
-            format: _,
-        }) => {
+        Command::MetaCommand(MetaCommand::Explain { query, analyze }) => {
             assert_eq!(query, "MATCH (v) RETURN v");
             assert!(analyze);
         }
         _ => panic!("Expected Explain command with analyze"),
-    }
-
-    match parse_command("\\explain format=json MATCH (v) RETURN v") {
-        Command::MetaCommand(MetaCommand::Explain { format, .. }) => {
-            assert!(matches!(
-                format,
-                crate::analysis::explain::ExplainFormat::Json
-            ));
-        }
-        _ => panic!("Expected Explain command with json format"),
     }
 }
 
@@ -798,4 +776,109 @@ fn test_parse_vector() {
         }
         _ => panic!("Expected Vector create command"),
     }
+
+    let result = crate::command::parser::parse_command("\\vector get 1 person embedding point-1");
+    match result {
+        Command::MetaCommand(MetaCommand::Vector {
+            action:
+                VectorAction::Get {
+                    space_id,
+                    tag_name,
+                    field_name,
+                    point_id,
+                },
+        }) => {
+            assert_eq!(space_id, 1);
+            assert_eq!(tag_name, "person");
+            assert_eq!(field_name, "embedding");
+            assert_eq!(point_id, "point-1");
+        }
+        _ => panic!("Expected Vector get command"),
+    }
+
+    let result =
+        crate::command::parser::parse_command("\\vector scroll 1 person embedding 50 next-9");
+    match result {
+        Command::MetaCommand(MetaCommand::Vector {
+            action:
+                VectorAction::Scroll {
+                    space_id,
+                    limit,
+                    offset,
+                    ..
+                },
+        }) => {
+            assert_eq!(space_id, 1);
+            assert_eq!(limit, 50);
+            assert_eq!(offset, Some("next-9".to_string()));
+        }
+        _ => panic!("Expected Vector scroll command"),
+    }
+
+    let result = crate::command::parser::parse_command("\\vector scroll 1 person embedding");
+    match result {
+        Command::MetaCommand(MetaCommand::Vector {
+            action: VectorAction::Scroll { limit, offset, .. },
+        }) => {
+            assert_eq!(limit, 10);
+            assert_eq!(offset, None);
+        }
+        _ => panic!("Expected Vector scroll with defaults"),
+    }
+
+    let result = crate::command::parser::parse_command(
+        "\\vector set-payload 1 person embedding a,b {\"color\": \"red\"}",
+    );
+    match result {
+        Command::MetaCommand(MetaCommand::Vector {
+            action:
+                VectorAction::SetPayload {
+                    space_id,
+                    point_ids,
+                    payload,
+                    ..
+                },
+        }) => {
+            assert_eq!(space_id, 1);
+            assert_eq!(point_ids, vec!["a".to_string(), "b".to_string()]);
+            assert_eq!(
+                payload["color"],
+                serde_json::Value::String("red".to_string())
+            );
+        }
+        _ => panic!("Expected Vector set-payload command"),
+    }
+
+    let result = crate::command::parser::parse_command(
+        "\\vector merge-payload 1 person embedding a {\"n\": 1}",
+    );
+    assert!(matches!(
+        result,
+        Command::MetaCommand(MetaCommand::Vector {
+            action: VectorAction::MergePayloadFields { .. },
+        })
+    ));
+
+    let result =
+        crate::command::parser::parse_command("\\vector delete-payload 1 person embedding a,b x,y");
+    match result {
+        Command::MetaCommand(MetaCommand::Vector {
+            action: VectorAction::DeletePayload {
+                point_ids, keys, ..
+            },
+        }) => {
+            assert_eq!(point_ids, vec!["a".to_string(), "b".to_string()]);
+            assert_eq!(keys, vec!["x".to_string(), "y".to_string()]);
+        }
+        _ => panic!("Expected Vector delete-payload command"),
+    }
+
+    assert!(matches!(
+        crate::command::parser::parse_command("\\vector set-payload 1 person embedding a [1,2]"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+    assert!(matches!(
+        crate::command::parser::parse_command("\\vector delete-payload 1 person embedding a, x"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
 }

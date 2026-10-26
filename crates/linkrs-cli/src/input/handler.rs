@@ -70,6 +70,14 @@ impl InputHandler {
         let _ = self.history_mgr.save_all();
     }
 
+    pub fn clear_history(&mut self) -> Result<()> {
+        self.history_mgr.clear()?;
+        self.editor
+            .clear_history()
+            .map_err(|e| CliError::Other(format!("Failed to clear line history: {}", e)))?;
+        Ok(())
+    }
+
     pub fn history_manager(&self) -> &HistoryManager {
         &self.history_mgr
     }

@@ -63,6 +63,10 @@ pub async fn execute_statistics(
             let stats = session_mgr.client().get_freeze_statistics().await?;
             executor.write_output(&pretty(&stats))?;
         }
+        Some("freeze trigger") | Some("freeze run") => {
+            let result = session_mgr.client().trigger_freeze().await?;
+            executor.write_output(&pretty(&result))?;
+        }
         Some("migration") => {
             let stats = session_mgr.client().get_migration_statistics().await?;
             executor.write_output(&pretty(&stats))?;

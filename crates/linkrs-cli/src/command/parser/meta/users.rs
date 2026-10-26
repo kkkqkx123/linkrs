@@ -5,12 +5,15 @@ pub fn parse_users(arg: &str) -> Result<MetaCommand, String> {
     let parts: Vec<&str> = arg.split_whitespace().collect();
     if parts.is_empty() {
         return Err(
-            "Usage: \\users create <user> <password> | drop <user> | reset-password <user> | \
+            "Usage: \\users list | create <user> <password> | drop <user> | reset-password <user> | \
              enable <user> | disable <user> | grant <user> <role> <space> | revoke <user> <space>"
                 .to_string(),
         );
     }
     match parts[0].to_lowercase().as_str() {
+        "list" | "ls" => Ok(MetaCommand::Users {
+            action: UsersAction::List,
+        }),
         "create" | "add" => {
             if parts.len() < 3 {
                 return Err("Usage: \\users create <user> <password>".to_string());
@@ -86,7 +89,7 @@ pub fn parse_users(arg: &str) -> Result<MetaCommand, String> {
             })
         }
         other => Err(format!(
-            "Unknown users subcommand: {}. Expected create|drop|reset-password|enable|disable|grant|revoke",
+            "Unknown users subcommand: {}. Expected list|create|drop|reset-password|enable|disable|grant|revoke",
             other
         )),
     }

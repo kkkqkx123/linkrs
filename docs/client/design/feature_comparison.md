@@ -56,8 +56,9 @@
 |------|------|-------------|------|
 | 编辑器编辑 | `\e` | `\e` | 使用编辑器编辑查询 |
 | 编辑函数 | `\ef [func]` | `\ef [func]` | 编辑函数 |
-| 命令历史 | 自动保存 | 自动保存 | 自动保存命令历史 |
+| 命令历史 | 自动保存 | 自动保存（`~/.linkrs/cli_history`，增量写入） | REPL 输入自动记录，异常退出不丢失 |
 | 历史搜索 | Ctrl+R | Ctrl+R | 搜索历史命令 |
+| 历史管理 | `\!` 回调 | `\history [N]`、`search`、`exec <id>`、`clear` | 查看、搜索、重执行、清空历史 |
 
 ### 1.7 事务管理
 
@@ -93,8 +94,10 @@
 | `\show_tags` | 列出所有 Tag（节点类型） | `\show_tags person*` |
 | `\show_edges` | 列出所有 Edge（边类型） | `\show_edges` |
 | `\describe_edge` | 查看 Edge 结构 | `\describe_edge follow` |
-| `\show_fulltext_indexes` | 列出全文索引 | `\show_fulltext_indexes` |
-| `\show_vector_indexes` | 列出向量索引 | `\show_vector_indexes` |
+| `\show_fulltext_indexes` | 列出全文索引 | `\fulltext indexes` |
+| `\show_vector_indexes` | 列出向量索引 | `\vector indexes` |
+| `\show_users` | 列出用户 | `\show_users` 或 `\du`，`\users list` |
+| `\vector scroll/get/payload` | 向量分页、单点与载荷管理 | `\vector scroll`、`get`、`set-payload`、`merge-payload`、`delete-payload` |
 
 ### 2.2 图查询特有功能
 

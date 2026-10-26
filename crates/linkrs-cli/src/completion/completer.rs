@@ -83,6 +83,59 @@ const META_COMMANDS: &[&str] = &[
 
 const FORMAT_VALUES: &[&str] = &["table", "csv", "json", "vertical", "html"];
 
+const USERS_SUBCOMMANDS: &[&str] = &[
+    "list",
+    "create",
+    "drop",
+    "reset-password",
+    "enable",
+    "disable",
+    "grant",
+    "revoke",
+];
+
+const SESSIONS_SUBCOMMANDS: &[&str] = &["list", "show", "kill"];
+
+const FULLTEXT_SUBCOMMANDS: &[&str] = &[
+    "search",
+    "indexes",
+    "inconsistent",
+    "rebuild",
+    "status",
+    "clear",
+];
+
+const VECTOR_SUBCOMMANDS: &[&str] = &[
+    "create",
+    "indexes",
+    "info",
+    "drop",
+    "search",
+    "get",
+    "scroll",
+    "count",
+    "set-payload",
+    "merge-payload",
+    "delete-payload",
+    "rebuild",
+    "status",
+    "clear",
+];
+
+const STATISTICS_TARGETS: &[&str] = &[
+    "queries",
+    "database",
+    "system",
+    "overview",
+    "session",
+    "search",
+    "freeze",
+    "migration",
+    "profile",
+];
+
+const STATISTICS_FREEZE_ACTIONS: &[&str] = &["trigger", "run"];
+
 #[derive(Debug)]
 pub struct StringCandidate {
     display: String,
@@ -189,11 +242,27 @@ impl LinkrsCompleter {
 
         let after_cmd = if let Some(space_pos) = partial.find(|c: char| c.is_whitespace()) {
             let cmd = &partial[..space_pos];
-            let arg = partial[space_pos..].trim();
-            if !arg.is_empty() {
-                let cmd_lower = cmd.to_lowercase();
-                match cmd_lower.as_str() {
-                    "format" => {
+            let rest = &partial[space_pos..];
+            let arg = rest.trim();
+            let cmd_lower = cmd.to_lowercase();
+            match cmd_lower.as_str() {
+                "users" | "user" => {
+                    return self.complete_word_list(USERS_SUBCOMMANDS, arg, pos);
+                }
+                "sessions" => {
+                    return self.complete_word_list(SESSIONS_SUBCOMMANDS, arg, pos);
+                }
+                "fulltext" => {
+                    return self.complete_word_list(FULLTEXT_SUBCOMMANDS, arg, pos);
+                }
+                "vector" => {
+                    return self.complete_word_list(VECTOR_SUBCOMMANDS, arg, pos);
+                }
+                "statistics" | "status" => {
+                    return self.complete_statistics_arg(rest, pos);
+                }
+                "format" => {
+                    if !arg.is_empty() {
                         let completions: Vec<StringCandidate> = FORMAT_VALUES
                             .iter()
                             .filter(|v| v.starts_with(arg))
@@ -205,17 +274,23 @@ impl LinkrsCompleter {
                         let start = pos - arg.len();
                         return Ok((start, completions));
                     }
-                    "connect" | "c" => {
+                }
+                "connect" | "c" => {
+                    if !arg.is_empty() {
                         return self.complete_space_after_meta(arg, pos);
                     }
-                    "describe" | "d" => {
+                }
+                "describe" | "d" => {
+                    if !arg.is_empty() {
                         return self.complete_tag_after_meta(arg, pos);
                     }
-                    "describe_edge" => {
+                }
+                "describe_edge" => {
+                    if !arg.is_empty() {
                         return self.complete_edge_after_meta(arg, pos);
                     }
-                    _ => {}
                 }
+                _ => {}
             }
             false
         } else {
@@ -392,6 +467,56 @@ impl LinkrsCompleter {
         let completions = filter_names(&names, arg);
         let start = pos - arg.len();
         Ok((start, completions))
+    }
+
+    /// Complete the first subcommand token of a meta command from a fixed
+    /// word list. Deeper argument positions are left alone.
+    fn complete_word_list(
+        &self,
+        words: &[&str],
+        arg: &str,
+        pos: usize,
+    ) -> Result<(usize, Vec<StringCandidate>)> {
+        if arg.contains(char::is_whitespace) {
+            return Ok((pos, Vec::new()));
+        }
+        let completions: Vec<StringCandidate> = words
+            .iter()
+            .filter(|w| w.starts_with(arg))
+            .map(|w| StringCandidate {
+                display: w.to_string(),
+                replacement: w[arg.len()..].to_string(),
+            })
+            .collect();
+        let start = pos - arg.len();
+        Ok((start, completions))
+    }
+
+    /// Complete `\statistics` targets, plus the second-level
+    /// `freeze trigger|run` action. Trace ids and deeper positions are
+    /// dynamic, so nothing is suggested there.
+    fn complete_statistics_arg(
+        &self,
+        rest: &str,
+        pos: usize,
+    ) -> Result<(usize, Vec<StringCandidate>)> {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            return self.complete_word_list(STATISTICS_TARGETS, "", pos);
+        }
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        let completing_new_token = rest.ends_with(char::is_whitespace);
+        if tokens.len() == 1 && !completing_new_token {
+            return self.complete_word_list(STATISTICS_TARGETS, tokens[0], pos);
+        }
+        if tokens[0].eq_ignore_ascii_case("freeze") && tokens.len() <= 2 {
+            let fragment = if completing_new_token { "" } else { tokens[1] };
+            if tokens.len() == 2 && completing_new_token {
+                return Ok((pos, Vec::new()));
+            }
+            return self.complete_word_list(STATISTICS_FREEZE_ACTIONS, fragment, pos);
+        }
+        Ok((pos, Vec::new()))
     }
 
     fn complete_tag_after_meta(
@@ -860,6 +985,88 @@ mod tests {
             .expect("complete_meta failed");
         assert!(!candidates.is_empty());
         assert!(candidates.iter().any(|c| c.display() == "table"));
+    }
+
+    #[test]
+    fn test_complete_meta_users_subcommands() {
+        let completer = LinkrsCompleter::new();
+        let (start, candidates) = completer
+            .complete_meta("\\users ", 7)
+            .expect("complete_meta failed");
+        assert_eq!(start, 7);
+        assert_eq!(candidates.len(), 8);
+        assert!(candidates.iter().any(|c| c.display() == "list"));
+
+        let (start, candidates) = completer
+            .complete_meta("\\users cr", 9)
+            .expect("complete_meta failed");
+        assert_eq!(start, 7);
+        assert!(candidates.iter().any(|c| c.display() == "create"));
+
+        let (_, candidates) = completer
+            .complete_meta("\\users grant alice ", 19)
+            .expect("complete_meta failed");
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn test_complete_meta_sessions_subcommands() {
+        let completer = LinkrsCompleter::new();
+        let (_, candidates) = completer
+            .complete_meta("\\sessions ", 10)
+            .expect("complete_meta failed");
+        assert_eq!(candidates.len(), 3);
+        assert!(candidates.iter().any(|c| c.display() == "kill"));
+    }
+
+    #[test]
+    fn test_complete_meta_fulltext_subcommands() {
+        let completer = LinkrsCompleter::new();
+        let (_, candidates) = completer
+            .complete_meta("\\fulltext inc", 13)
+            .expect("complete_meta failed");
+        assert!(candidates.iter().any(|c| c.display() == "inconsistent"));
+    }
+
+    #[test]
+    fn test_complete_meta_vector_subcommands() {
+        let completer = LinkrsCompleter::new();
+        let (_, candidates) = completer
+            .complete_meta("\\vector set-", 12)
+            .expect("complete_meta failed");
+        assert!(candidates.iter().any(|c| c.display() == "set-payload"));
+
+        let (_, candidates) = completer
+            .complete_meta("\\vector ", 8)
+            .expect("complete_meta failed");
+        assert_eq!(candidates.len(), 14);
+        assert!(candidates.iter().any(|c| c.display() == "scroll"));
+    }
+
+    #[test]
+    fn test_complete_meta_statistics_targets() {
+        let completer = LinkrsCompleter::new();
+        let (start, candidates) = completer
+            .complete_meta("\\statistics ", 12)
+            .expect("complete_meta failed");
+        assert_eq!(start, 12);
+        assert_eq!(candidates.len(), 9);
+
+        let (_, candidates) = completer
+            .complete_meta("\\statistics fr", 14)
+            .expect("complete_meta failed");
+        assert!(candidates.iter().any(|c| c.display() == "freeze"));
+
+        let (_, candidates) = completer
+            .complete_meta("\\statistics freeze ", 19)
+            .expect("complete_meta failed");
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.iter().any(|c| c.display() == "trigger"));
+
+        let (_, candidates) = completer
+            .complete_meta("\\statistics profile abc ", 24)
+            .expect("complete_meta failed");
+        assert!(candidates.is_empty());
     }
 
     #[test]

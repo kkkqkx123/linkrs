@@ -1,78 +1,13 @@
 //! Vector protocol DTOs.
 //!
-//! Transport-independent request/response shapes for vector search and
-//! payload index management, shared between the server handlers and CLI
-//! clients. Generic payload/filter types come from `linkrs-core::core::vector`
-//! so the wire layer never depends on the storage engine.
+//! Transport-independent request/response shapes for vector index management,
+//! shared between the server handlers and CLI clients.
+//!
+//! Only the shapes actually served over HTTP live here: async rebuild/clear
+//! tasks. Search, scroll, payload, and index listing travel as plain JSON
+//! values because the server handlers define their own response shapes.
 
 use serde::{Deserialize, Serialize};
-
-pub use linkrs_core::vector::{Payload, PayloadSchemaType, PayloadSelector, VectorFilter};
-
-/// Vector search request.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct VectorSearchRequest {
-    pub collection: String,
-    pub vector: Vec<f32>,
-    pub top_k: usize,
-    #[serde(default)]
-    pub filter: Option<VectorFilter>,
-    #[serde(default)]
-    pub with_payload: Option<bool>,
-    #[serde(default)]
-    pub with_vector: Option<bool>,
-    /// Returned-payload field projection (include / exclude lists).
-    #[serde(default)]
-    pub payload_selector: Option<PayloadSelector>,
-}
-
-/// Vector search response.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct VectorSearchResponse {
-    pub results: Vec<VectorSearchResult>,
-}
-
-/// One scored hit of a [`VectorSearchResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct VectorSearchResult {
-    pub doc_id: String,
-    /// "Higher is better" similarity score, normalized across backends.
-    pub score: f32,
-    #[serde(default)]
-    #[schema(value_type = utoipa::openapi::Object)]
-    pub payload: Option<Payload>,
-    #[serde(default)]
-    pub vector: Option<Vec<f32>>,
-}
-
-/// Create a payload field index on a collection.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct CreatePayloadIndexRequest {
-    pub collection: String,
-    pub field: String,
-    pub schema_type: PayloadSchemaType,
-}
-
-/// Delete the payload field index on a collection's field.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct DeletePayloadIndexRequest {
-    pub collection: String,
-    pub field: String,
-}
-
-/// One declared payload index of [`ListPayloadIndexesResponse`].
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct PayloadIndexInfo {
-    pub field: String,
-    pub schema_type: PayloadSchemaType,
-}
-
-/// All declared payload indexes of one collection.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct ListPayloadIndexesResponse {
-    pub collection: String,
-    pub indexes: Vec<PayloadIndexInfo>,
-}
 
 /// Rebuild a vector index request.
 ///

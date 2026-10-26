@@ -206,12 +206,12 @@ impl CommandExecutor {
                 meta::connection::execute_disconnect(self, session_mgr).await
             }
             MetaCommand::ConnInfo => meta::connection::execute_conninfo(self, session_mgr),
-            MetaCommand::WhoAmI => meta::connection::execute_whoami(self, session_mgr),
+            MetaCommand::WhoAmI => meta::connection::execute_whoami(self, session_mgr).await,
             MetaCommand::Login { username, password } => {
                 meta::connection::execute_login(self, &username, password, session_mgr).await
             }
             MetaCommand::Passwd => meta::connection::execute_passwd(self, session_mgr).await,
-            MetaCommand::ShowUsers => meta::users::execute_show_users(self, session_mgr),
+            MetaCommand::ShowUsers => meta::users::execute_show_users(self, session_mgr).await,
             MetaCommand::Users { action } => {
                 meta::users::execute_users(self, &action, session_mgr).await
             }
@@ -219,20 +219,88 @@ impl CommandExecutor {
                 meta::users::execute_sessions(self, &action, session_mgr).await
             }
             MetaCommand::ShowSpaces => meta::schema::execute_show_spaces(self, session_mgr).await,
-            MetaCommand::ShowTags { .. } => {
-                meta::schema::execute_show_tags(self, session_mgr).await
+            MetaCommand::ShowTags { pattern } => {
+                meta::schema::execute_show_tags(self, pattern.as_deref(), session_mgr).await
             }
-            MetaCommand::ShowEdges { .. } => {
-                meta::schema::execute_show_edges(self, session_mgr).await
+            MetaCommand::ShowEdges { pattern } => {
+                meta::schema::execute_show_edges(self, pattern.as_deref(), session_mgr).await
             }
             MetaCommand::ShowFunctions => {
                 meta::schema::execute_show_functions(self, session_mgr).await
+            }
+            MetaCommand::ShowFunction { name } => {
+                meta::functions::execute_show_function(self, &name, session_mgr).await
+            }
+            MetaCommand::RegisterFunction {
+                name,
+                implementation,
+            } => {
+                meta::functions::execute_register_function(
+                    self,
+                    &name,
+                    &implementation,
+                    session_mgr,
+                )
+                .await
+            }
+            MetaCommand::UnregisterFunction { name } => {
+                meta::functions::execute_unregister_function(self, &name, session_mgr).await
             }
             MetaCommand::Describe { object } => {
                 meta::schema::execute_describe(self, &object, session_mgr).await
             }
             MetaCommand::DescribeEdge { name } => {
                 meta::schema::execute_describe_edge(self, &name, session_mgr).await
+            }
+            MetaCommand::SchemaVersions {
+                space,
+                label,
+                is_edge,
+            } => {
+                meta::schema_version::execute_schema_versions(
+                    self,
+                    &space,
+                    &label,
+                    is_edge,
+                    session_mgr,
+                )
+                .await
+            }
+            MetaCommand::SchemaChanges {
+                space,
+                label,
+                from,
+                to,
+                is_edge,
+            } => {
+                meta::schema_version::execute_schema_changes(
+                    self,
+                    &space,
+                    &label,
+                    from,
+                    to,
+                    is_edge,
+                    session_mgr,
+                )
+                .await
+            }
+            MetaCommand::SchemaBreaking {
+                space,
+                label,
+                from,
+                to,
+                is_edge,
+            } => {
+                meta::schema_version::execute_schema_breaking(
+                    self,
+                    &space,
+                    &label,
+                    from,
+                    to,
+                    is_edge,
+                    session_mgr,
+                )
+                .await
             }
             MetaCommand::Format { format } => meta::control::execute_format(self, format),
             MetaCommand::Pager { command } => meta::control::execute_pager(self, command),
@@ -308,11 +376,9 @@ impl CommandExecutor {
                 self.conditional_stack.pop();
                 Ok(true)
             }
-            MetaCommand::Explain {
-                query,
-                analyze,
-                format: _,
-            } => meta::analyze::execute_explain(self, &query, analyze, session_mgr).await,
+            MetaCommand::Explain { query, analyze } => {
+                meta::analyze::execute_explain(self, &query, analyze, session_mgr).await
+            }
             MetaCommand::Profile { query } => {
                 meta::analyze::execute_profile(self, &query, session_mgr).await
             }

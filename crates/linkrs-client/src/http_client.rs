@@ -948,7 +948,7 @@ impl HttpClient {
         let request = ValidateRequest {
             query: query.to_string(),
             session_id,
-            need_estimate: false,
+            need_estimate: true,
         };
         let response = self
             .authed(self.inner.post(&url))
@@ -1046,6 +1046,26 @@ impl HttpClient {
         Ok(())
     }
 
+    /// Register a custom function via `POST /v1/functions`.
+    pub async fn register_function(
+        &self,
+        name: &str,
+        implementation: &str,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/functions", self.base_url);
+        let body = serde_json::json!({
+            "name": name,
+            "implementation": implementation,
+        });
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&body)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to register function").await?;
+        Ok(response.json().await?)
+    }
+
     // ── Schema versioning ──
 
     /// Get schema version history via `GET /v1/schema/versions/{space}/{label}`.
@@ -1053,8 +1073,12 @@ impl HttpClient {
         &self,
         space: &str,
         label: &str,
+        is_edge: bool,
     ) -> Result<serde_json::Value> {
-        let url = format!("{}/schema/versions/{}/{}", self.base_url, space, label);
+        let mut url = format!("{}/schema/versions/{}/{}", self.base_url, space, label);
+        if is_edge {
+            url.push_str("?is_edge=true");
+        }
         let response = self.authed(self.inner.get(&url)).send().await?;
         let response =
             Self::check_response(response, "Failed to get schema version history").await?;
@@ -1069,11 +1093,15 @@ impl HttpClient {
         label: &str,
         from_version: u64,
         to_version: u64,
+        is_edge: bool,
     ) -> Result<serde_json::Value> {
-        let url = format!(
+        let mut url = format!(
             "{}/schema/changes/{}/{}/{}/{}",
             self.base_url, space, label, from_version, to_version
         );
+        if is_edge {
+            url.push_str("?is_edge=true");
+        }
         let response = self.authed(self.inner.get(&url)).send().await?;
         let response = Self::check_response(response, "Failed to get schema changes").await?;
         Ok(response.json().await?)
@@ -1087,11 +1115,15 @@ impl HttpClient {
         label: &str,
         from_version: u64,
         to_version: u64,
+        is_edge: bool,
     ) -> Result<serde_json::Value> {
-        let url = format!(
+        let mut url = format!(
             "{}/schema/breaking-changes/{}/{}/{}/{}",
             self.base_url, space, label, from_version, to_version
         );
+        if is_edge {
+            url.push_str("?is_edge=true");
+        }
         let response = self.authed(self.inner.get(&url)).send().await?;
         let response = Self::check_response(response, "Failed to detect breaking changes").await?;
         Ok(response.json().await?)
@@ -1130,6 +1162,15 @@ impl HttpClient {
         let url = format!("{}/fulltext/indexes", self.base_url);
         let response = self.authed(self.inner.get(&url)).send().await?;
         let response = Self::check_response(response, "Failed to list fulltext indexes").await?;
+        Ok(response.json().await?)
+    }
+
+    /// List inconsistent fulltext indexes via `GET /v1/fulltext/indexes/inconsistent`.
+    pub async fn list_inconsistent_fulltext_indexes(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/fulltext/indexes/inconsistent", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response =
+            Self::check_response(response, "Failed to list inconsistent fulltext indexes").await?;
         Ok(response.json().await?)
     }
 
@@ -1172,6 +1213,7 @@ impl HttpClient {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
+        force: bool,
     ) -> Result<serde_json::Value> {
         use linkrs_wire::fulltext::ClearFulltextIndexRequest;
         let url = format!("{}/fulltext/indexes/clear", self.base_url);
@@ -1179,7 +1221,7 @@ impl HttpClient {
             space_id,
             tag_name: tag_name.to_string(),
             field_name: field_name.to_string(),
-            force: true,
+            force,
         };
         let response = self
             .authed(self.inner.post(&url))
@@ -1340,6 +1382,7 @@ impl HttpClient {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
+        force: bool,
     ) -> Result<serde_json::Value> {
         use linkrs_wire::vector::ClearVectorIndexRequest;
         let url = format!("{}/vector/indexes/clear", self.base_url);
@@ -1347,7 +1390,7 @@ impl HttpClient {
             space_id,
             tag_name: tag_name.to_string(),
             field_name: field_name.to_string(),
-            force: true,
+            force,
         };
         let response = self
             .authed(self.inner.post(&url))
@@ -1355,6 +1398,125 @@ impl HttpClient {
             .send()
             .await?;
         let response = Self::check_response(response, "Failed to clear vector index").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Get one vector point by id via
+    /// `GET /v1/vector/{space_id}/{tag_name}/{field_name}/{point_id}`.
+    pub async fn get_vector_point(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_id: &str,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/vector/{}/{}/{}/{}",
+            self.base_url, space_id, tag_name, field_name, point_id
+        );
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get vector point").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Scroll vector points via `POST /v1/vector/scroll`.
+    ///
+    /// `offset` resumes a previous page; payload/vector inclusion is left to
+    /// the server defaults by omitting those keys.
+    pub async fn scroll_vectors(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        limit: usize,
+        offset: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/vector/scroll", self.base_url);
+        let mut body = serde_json::json!({
+            "space_id": space_id,
+            "tag_name": tag_name,
+            "field_name": field_name,
+            "limit": limit,
+        });
+        if let Some(offset) = offset {
+            body["offset"] = serde_json::Value::String(offset.to_string());
+        }
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&body)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Vector scroll failed").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Overwrite payload for vector points via `PUT /v1/vector/payload`.
+    pub async fn set_vector_payload(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_ids: &[String],
+        payload: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/vector/payload", self.base_url);
+        let body = serde_json::json!({
+            "space_id": space_id,
+            "tag_name": tag_name,
+            "field_name": field_name,
+            "point_ids": point_ids,
+            "payload": payload,
+        });
+        let response = self.authed(self.inner.put(&url)).json(&body).send().await?;
+        let response = Self::check_response(response, "Failed to set vector payload").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Merge payload fields for vector points via `PUT /v1/vector/payload/fields`.
+    pub async fn merge_vector_payload_fields(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_ids: &[String],
+        payload: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/vector/payload/fields", self.base_url);
+        let body = serde_json::json!({
+            "space_id": space_id,
+            "tag_name": tag_name,
+            "field_name": field_name,
+            "point_ids": point_ids,
+            "payload": payload,
+        });
+        let response = self.authed(self.inner.put(&url)).json(&body).send().await?;
+        let response = Self::check_response(response, "Failed to merge vector payload").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Delete payload keys from vector points via `POST /v1/vector/payload/delete`.
+    pub async fn delete_vector_payload(
+        &self,
+        space_id: u64,
+        tag_name: &str,
+        field_name: &str,
+        point_ids: &[String],
+        keys: &[String],
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/vector/payload/delete", self.base_url);
+        let body = serde_json::json!({
+            "space_id": space_id,
+            "tag_name": tag_name,
+            "field_name": field_name,
+            "point_ids": point_ids,
+            "keys": keys,
+        });
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&body)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to delete vector payload").await?;
         Ok(response.json().await?)
     }
 

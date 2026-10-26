@@ -3,16 +3,16 @@ use crate::command::parser::types::{SessionsAction, UsersAction};
 use crate::session::manager::SessionManager;
 use crate::utils::error::Result;
 
-/// `\show_users` — list server users (admin only).
-pub fn execute_show_users(
+/// `\show_users` / `\du` — list server users (admin only).
+pub async fn execute_show_users(
     executor: &mut CommandExecutor,
-    _session_mgr: &SessionManager,
+    session_mgr: &mut SessionManager,
 ) -> Result<bool> {
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
-    executor.write_output("Use \\users list to refresh the user list (admin only).")?;
-    Ok(true)
+    let action = crate::command::parser::types::UsersAction::List;
+    execute_users(executor, &action, session_mgr).await
 }
 
 /// `\users <subcommand>` — user management.
@@ -26,6 +26,22 @@ pub async fn execute_users(
     }
     let client = session_mgr.client();
     match action {
+        UsersAction::List => {
+            let users = client.list_users().await?;
+            let mut out = String::from("Users:\n");
+            for u in &users.users {
+                out.push_str(&format!(
+                    "  {}  role={} status={}\n",
+                    u.username,
+                    u.role.as_deref().unwrap_or("(none)"),
+                    u.status.as_deref().unwrap_or("(unknown)")
+                ));
+            }
+            if users.users.is_empty() {
+                out.push_str("  (none)\n");
+            }
+            executor.write_output(out.trim_end())?;
+        }
         UsersAction::Create { username, password } => {
             client.create_user(username, password).await?;
             executor.write_output(&format!("User '{}' created.", username))?;

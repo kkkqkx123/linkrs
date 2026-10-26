@@ -37,7 +37,7 @@ fn show_general_help() -> String {
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\users <subcommand>",
-        "Manage users (create|drop|reset-password|enable|disable|grant|revoke)"
+        "Manage users (list|create|drop|reset-password|enable|disable|grant|revoke)"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
@@ -72,6 +72,15 @@ fn show_general_help() -> String {
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\show_functions or \\df", "List all functions"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\functions <subcommand>",
+        "Show, register or unregister a function (info|register|unregister)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\schema <subcommand>", "Schema version history (versions|changes|breaking)"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
@@ -159,11 +168,11 @@ fn show_general_help() -> String {
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\fulltext <subcommand>",
-        "Fulltext search and index management (search|indexes|rebuild|status|clear)"
+        "Fulltext search and index management (search|indexes|inconsistent|rebuild|status|clear)"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\vector <subcommand>", "Vector index management and search (create|indexes|info|drop|search|count|rebuild|status|clear)"
+        "\\vector <subcommand>", "Vector index management and search (create|indexes|info|drop|search|get|scroll|count|set-payload|merge-payload|delete-payload|rebuild|status|clear)"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
@@ -528,7 +537,9 @@ Example:
             let mut s = String::new();
             s.push_str("Server statistics\n\n");
             s.push_str("Commands:\n");
-            s.push_str("  \\statistics [queries|database|system|overview|session]\n");
+            s.push_str("  \\statistics [queries|database|system|overview|session|search|freeze|migration]\n");
+            s.push_str("  \\statistics freeze trigger  - Trigger a manual freeze\n");
+            s.push_str("  \\statistics profile <trace_id>  - Query profile detail\n");
             s.push_str("  \\status  - Alias for the overview report\n");
             s
         }
@@ -543,8 +554,7 @@ Example:
             s.push_str("  \\config reset <sec> <key> - Reset an item to default\n");
             s
         }
-        "edit" | "buffer" => {
-            let mut s = String::new();
+        "edit" | "buffer" => {            let mut s = String::new();
             s.push_str("Query Buffer and External Editor\n\n");
             s.push_str("Commands:\n");
             s.push_str("  \\e [file] [+line]  - Edit in external editor\n");
@@ -556,6 +566,32 @@ Example:
             s.push_str("  2. EDITOR environment variable\n");
             s.push_str("  3. VISUAL environment variable\n");
             s.push_str("  4. Default: vi (or notepad on Windows)\n");
+            s
+        }
+        "fulltext" => {
+            let mut s = String::new();
+            s.push_str("Fulltext search and index management\n\n");
+            s.push_str("Commands:\n");
+            s.push_str("  \\fulltext search <space> <tag> <field> <query> [limit]\n");
+            s.push_str("  \\fulltext indexes                  - List fulltext indexes\n");
+            s.push_str("  \\fulltext inconsistent              - List inconsistent indexes\n");
+            s.push_str("  \\fulltext rebuild <space> <tag> <field>\n");
+            s.push_str("  \\fulltext status <rebuild_id>\n");
+            s.push_str("  \\fulltext clear <space> <tag> <field>  - Destructive, asks first\n");
+            s
+        }
+        "vector" => {
+            let mut s = String::new();
+            s.push_str("Vector index management and search\n\n");
+            s.push_str("Commands:\n");
+            s.push_str("  \\vector search <space> <tag> <field> <v1,v2,...> [limit]\n");
+            s.push_str("  \\vector get <space> <tag> <field> <point_id>\n");
+            s.push_str("  \\vector scroll <space> <tag> <field> [limit] [offset]\n");
+            s.push_str("  \\vector count <space> <tag> <field>\n");
+            s.push_str("  \\vector set-payload <space> <tag> <field> <id1,id2> <json>\n");
+            s.push_str("  \\vector merge-payload <space> <tag> <field> <id1,id2> <json>\n");
+            s.push_str("  \\vector delete-payload <space> <tag> <field> <id1,id2> <key1,key2>\n");
+            s.push_str("  \\vector create|indexes|info|drop|rebuild|status|clear ...\n");
             s
         }
         _ => format!(

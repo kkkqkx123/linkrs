@@ -27,6 +27,7 @@
 //!     row_count: 1,
 //!     execution_time_ms: 0,
 //!     rows_scanned: 1,
+//!     trace_id: None,
 //!     error: None,
 //! };
 //!
