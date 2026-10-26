@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::io::{
     BatchProcessor, ErrorHandling, ImportConfig, ImportError, ImportStats, ImportTarget,
 };
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 
 pub struct JsonImporter {
     config: ImportConfig,

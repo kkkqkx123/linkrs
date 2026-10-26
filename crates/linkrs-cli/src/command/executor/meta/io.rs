@@ -4,7 +4,7 @@ use crate::io::{
     CsvExporter, CsvImporter, ExportConfig, ExportFormat, ImportConfig, ImportFormat, ImportTarget,
     JsonExporter, JsonImporter,
 };
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::Result;
 
 pub fn execute_output_redirect(

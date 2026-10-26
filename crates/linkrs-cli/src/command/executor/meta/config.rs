@@ -1,6 +1,6 @@
 use crate::command::executor::CommandExecutor;
 use crate::command::parser::types::ConfigAction;
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::Result;
 
 fn pretty(value: &serde_json::Value) -> String {

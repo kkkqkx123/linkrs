@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::{CliError, Result};
 
 use super::{IsolationLevel, Savepoint, TransactionInfo, TransactionState};

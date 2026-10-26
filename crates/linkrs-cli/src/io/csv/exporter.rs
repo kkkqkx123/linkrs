@@ -4,7 +4,7 @@ use std::time::Instant;
 use anyhow::Result;
 
 use crate::io::{ExportConfig, ExportStats};
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 
 pub struct CsvExporter {
     config: ExportConfig,

@@ -5156,6 +5156,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "linkrs_shell"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "colored",
+ "linkrs-api",
+ "linkrs-storage",
+ "linkrs_cli",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "linktime-proc-macro"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

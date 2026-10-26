@@ -11,7 +11,7 @@ use crate::command::script::{
 };
 use crate::input::buffer::QueryBuffer;
 use crate::output::formatter::OutputFormatter;
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::transaction::TransactionManager;
 use crate::utils::error::{CliError, Result};
 

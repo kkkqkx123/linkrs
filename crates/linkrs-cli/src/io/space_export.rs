@@ -12,7 +12,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::io::ExportFormat;
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 
 #[derive(Debug, Clone)]
 pub struct SpaceExportConfig {
@@ -257,7 +257,7 @@ impl SpaceExporter {
         (tags, edge_types)
     }
 
-    async fn fetch_vertices(&self, session: &SessionManager, tag: &str) -> Vec<serde_json::Value> {
+    async fn fetch_vertices(&self, session: &mut SessionManager, tag: &str) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
         let mut offset = 0usize;
         loop {
@@ -286,7 +286,7 @@ impl SpaceExporter {
 
     async fn fetch_edges(
         &self,
-        session: &SessionManager,
+        session: &mut SessionManager,
         edge_type: &str,
     ) -> Vec<serde_json::Value> {
         let mut out = Vec::new();

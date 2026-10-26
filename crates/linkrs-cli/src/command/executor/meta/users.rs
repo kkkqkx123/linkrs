@@ -1,6 +1,6 @@
 use crate::command::executor::CommandExecutor;
 use crate::command::parser::types::{SessionsAction, UsersAction};
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::Result;
 
 /// `\show_users` / `\du` — list server users (admin only).

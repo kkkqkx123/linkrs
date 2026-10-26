@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Result;
 
 use crate::io::{ExportConfig, ExportFormat, ExportStats};
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 
 pub struct JsonExporter {
     config: ExportConfig,

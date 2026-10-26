@@ -1,6 +1,6 @@
 use crate::command::executor::CommandExecutor;
 use crate::command::parser::types::BatchAction;
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::{CliError, Result};
 use linkrs_wire::batch::BatchType;
 

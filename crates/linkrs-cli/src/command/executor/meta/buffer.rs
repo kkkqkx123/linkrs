@@ -1,6 +1,6 @@
 use crate::command::executor::CommandExecutor;
 use crate::input::buffer::{self};
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::Result;
 
 pub fn execute_edit(

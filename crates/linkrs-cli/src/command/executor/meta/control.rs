@@ -1,7 +1,7 @@
 use crate::command::executor::CommandExecutor;
 use crate::command::meta_commands;
 use crate::output::formatter::OutputFormat;
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::Result;
 
 pub fn execute_help(executor: &mut CommandExecutor, topic: Option<&str>) -> Result<bool> {

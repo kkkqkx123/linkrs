@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use linkrs_core::types::import_export::SchemaImportResult;
 
 #[derive(Debug, Clone)]

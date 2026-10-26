@@ -1,5 +1,5 @@
 use crate::command::executor::CommandExecutor;
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::transaction::IsolationLevel;
 use crate::utils::error::{CliError, Result};
 

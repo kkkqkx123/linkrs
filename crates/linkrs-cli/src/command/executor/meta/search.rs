@@ -1,6 +1,6 @@
 use crate::command::executor::CommandExecutor;
 use crate::command::parser::types::{FulltextAction, VectorAction};
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::Result;
 use std::io::{self, Write};
 

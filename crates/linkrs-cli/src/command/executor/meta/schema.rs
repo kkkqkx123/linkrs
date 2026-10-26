@@ -1,5 +1,5 @@
 use crate::command::executor::CommandExecutor;
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::Result;
 
 pub async fn execute_show_spaces(

@@ -1,5 +1,5 @@
 use crate::command::executor::CommandExecutor;
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 use crate::utils::error::{CliError, Result};
 
 fn session_id(session_mgr: &SessionManager) -> Result<i64> {

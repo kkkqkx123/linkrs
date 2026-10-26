@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod app;
 pub mod cli;
 pub use linkrs_client as client;
 pub mod command;
@@ -9,6 +10,6 @@ pub mod io;
 pub mod outbox;
 pub mod output;
 pub mod service;
-pub use linkrs_client::session;
+pub mod session;
 pub mod transaction;
 pub mod utils;

@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::session::manager::SessionManager;
+use crate::session::SessionManager;
 
 pub struct BatchProcessor {
     buffer: Vec<String>,
