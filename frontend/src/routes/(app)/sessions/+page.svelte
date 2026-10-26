@@ -69,7 +69,7 @@
 	{/if}
 
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		{#if sessions.length === 0}
 			<p class="text-sm text-gray-500 dark:text-gray-400">{t('sessions.empty')}</p>
@@ -88,7 +88,7 @@
 					<tbody>
 						{#each sessions as session (session.session_id)}
 							<tr
-								class="border-t border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-200"
+								class="border-t border-[var(--color-border-light)] text-gray-700 dark:text-gray-200"
 							>
 								<td class="py-2 pr-4 font-mono">{session.session_id}</td>
 								<td class="py-2 pr-4 font-mono">{session.username}</td>

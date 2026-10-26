@@ -103,7 +103,7 @@
 	{/if}
 
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 			{t('transfer.import')}
@@ -190,7 +190,7 @@
 	</section>
 
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 			{t('transfer.export')}
@@ -223,7 +223,7 @@
 
 	{#if resultText}
 		<section
-			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+			class="ui-card shadow-sm p-5"
 		>
 			<pre
 				class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{resultText}</pre

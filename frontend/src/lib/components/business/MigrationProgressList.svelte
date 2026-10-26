@@ -43,7 +43,7 @@
 </script>
 
 <section
-	class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+	class="ui-card shadow-sm p-5"
 >
 	<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 		{t('migration.stream')}

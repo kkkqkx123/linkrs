@@ -7,7 +7,7 @@
 	<!-- Stats Cards Row -->
 	<div class="grid grid-cols-4 gap-4">
 		<div
-			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm hover:shadow transition-all duration-300 hover:scale-[1.02]"
+			class="ui-card shadow-sm p-5 hover:shadow transition-all duration-300 hover:scale-[1.02]"
 		>
 			<div class="space-y-2">
 				<p class="text-sm font-medium text-gray-500 dark:text-gray-400">
@@ -20,7 +20,7 @@
 			</div>
 		</div>
 		<div
-			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm hover:shadow transition-all duration-300 hover:scale-[1.02]"
+			class="ui-card shadow-sm p-5 hover:shadow transition-all duration-300 hover:scale-[1.02]"
 		>
 			<div class="space-y-2">
 				<p class="text-sm font-medium text-gray-500 dark:text-gray-400">
@@ -33,7 +33,7 @@
 			</div>
 		</div>
 		<div
-			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm hover:shadow transition-all duration-300 hover:scale-[1.02]"
+			class="ui-card shadow-sm p-5 hover:shadow transition-all duration-300 hover:scale-[1.02]"
 		>
 			<div class="space-y-2">
 				<p class="text-sm font-medium text-gray-500 dark:text-gray-400">
@@ -46,7 +46,7 @@
 			</div>
 		</div>
 		<div
-			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm hover:shadow transition-all duration-300 hover:scale-[1.02]"
+			class="ui-card shadow-sm p-5 hover:shadow transition-all duration-300 hover:scale-[1.02]"
 		>
 			<div class="space-y-2">
 				<p class="text-sm font-medium text-gray-500 dark:text-gray-400">
@@ -59,7 +59,7 @@
 			</div>
 		</div>
 		<button
-			class="text-left bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
+			class="text-left ui-card shadow-sm p-5 hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
 			onclick={() => goto('/monitoring')}
 		>
 			<div class="space-y-2">
@@ -76,7 +76,7 @@
 
 	<!-- Welcome Card -->
 	<div
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-8 border border-gray-100 dark:border-gray-700/50 shadow-sm animate-slide-up animation-delay-200"
+		class="ui-card shadow-sm p-8 animate-slide-up animation-delay-200"
 	>
 		<h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-4">
 			{t('app.title')}

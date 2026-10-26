@@ -8,9 +8,11 @@
 	const managesUsers = fromStore(canManageUsers);
 
 	// ---- 侧栏宽度:可拖拽调节,持久化到 localStorage ----
-	const SIDEBAR_DEFAULT = 208;
-	const SIDEBAR_MIN = 176;
-	const SIDEBAR_MAX = 320;
+	// Menu content (icon + label + padding) needs ~150px; the default leaves
+	// even breathing room while staying well under the old oversized width.
+	const SIDEBAR_DEFAULT = 192;
+	const SIDEBAR_MIN = 168;
+	const SIDEBAR_MAX = 288;
 	const WIDTH_KEY = 'linkrs.sidebar-width';
 
 	function loadWidth(): number {
@@ -27,6 +29,8 @@
 	function startResize(e: PointerEvent) {
 		e.preventDefault();
 		resizing = true;
+		document.body.style.cursor = 'col-resize';
+		document.body.style.userSelect = 'none';
 		const startX = e.clientX;
 		const startWidth = width;
 
@@ -38,6 +42,8 @@
 		}
 		function onUp() {
 			resizing = false;
+			document.body.style.cursor = '';
+			document.body.style.userSelect = '';
 			localStorage.setItem(WIDTH_KEY, String(width));
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
@@ -269,7 +275,7 @@
 		role="separator"
 		aria-orientation="vertical"
 		title="{t('sidebar.resizeHint')} ({t('common.doubleClickReset')})"
-		class="absolute top-0 right-[-2px] w-1 h-full cursor-col-resize z-10 {resizing
+		class="absolute top-0 right-[-2px] w-1 h-full cursor-col-resize touch-none z-10 {resizing
 			? 'bg-[var(--color-primary)]/40'
 			: 'bg-transparent hover:bg-[var(--color-primary)]/25'} transition-colors"
 		onpointerdown={startResize}

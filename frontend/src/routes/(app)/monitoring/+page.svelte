@@ -494,7 +494,7 @@
 	</div>
 
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl px-5 py-3 border border-gray-100 dark:border-gray-700/50 shadow-sm flex items-center gap-4 flex-wrap text-sm"
+		class="ui-card shadow-sm px-5 py-3 flex items-center gap-4 flex-wrap text-sm"
 	>
 		<span class="font-medium text-gray-700 dark:text-gray-300">{t('monitoring.thresholds')}</span>
 		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
@@ -543,7 +543,7 @@
 
 	<!-- Overview -->
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 			{t('monitoring.overview')}
@@ -643,7 +643,7 @@
 
 	<!-- Resources -->
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 			{t('monitoring.resources')}
@@ -723,7 +723,7 @@
 
 	<!-- Queries -->
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 			{t('monitoring.queries')}
@@ -827,7 +827,7 @@
 					<tbody>
 						{#each patterns as p (p.normalized_query)}
 							<tr
-								class="border-t border-gray-100 dark:border-gray-700/50 font-mono"
+								class="border-t border-[var(--color-border-light)] font-mono"
 							>
 								<td
 									class="py-1 pr-3 max-w-72 truncate text-gray-700 dark:text-gray-200"
@@ -865,7 +865,7 @@
 					<tbody>
 						{#each executors as e (e.executor_type)}
 							<tr
-								class="border-t border-gray-100 dark:border-gray-700/50 font-mono"
+								class="border-t border-[var(--color-border-light)] font-mono"
 							>
 								<td class="py-1 pr-3 text-gray-700 dark:text-gray-200"
 									>{e.executor_type}</td
@@ -898,7 +898,7 @@
 					<tbody>
 						{#each slowRows as row (row.trace_id)}
 							<tr
-								class="border-t border-gray-100 dark:border-gray-700/50 {Number(
+								class="border-t border-[var(--color-border-light)] {Number(
 									row.duration_ms,
 								) > thresholds.slowMs
 									? 'bg-red-50 dark:bg-red-900/10'
@@ -930,7 +930,7 @@
 
 	<!-- Storage -->
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 			{t('monitoring.storage')}
@@ -1028,7 +1028,7 @@
 	<!-- Transactions + sync + search -->
 	<div class="grid md:grid-cols-3 gap-4">
 		<section
-			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+			class="ui-card shadow-sm p-5"
 		>
 			<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 				{t('monitoring.transactions')}
@@ -1073,7 +1073,7 @@
 			</div>
 		</section>
 		<section
-			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+			class="ui-card shadow-sm p-5"
 		>
 			<div class="flex items-center justify-between mb-3">
 				<h2 class="font-semibold text-gray-800 dark:text-gray-100">
@@ -1243,7 +1243,7 @@
 			</div>
 		</section>
 		<section
-			class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+			class="ui-card shadow-sm p-5"
 		>
 			<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
 				{t('common.search')}
@@ -1272,7 +1272,7 @@
 					<table class="min-w-full text-xs font-mono">
 						<tbody>
 							{#each byIndex.slice(0, 8) as entry (entry.index)}
-								<tr class="border-t border-gray-100 dark:border-gray-700/50">
+								<tr class="border-t border-[var(--color-border-light)]">
 									<td class="py-1 pr-2 max-w-40 truncate">{entry.index}</td>
 									<td class="py-1 pr-2">{formatCount(entry.search_queries)}</td>
 									<td class="py-1"
@@ -1289,7 +1289,7 @@
 
 	<!-- Operations -->
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<div class="flex items-center justify-between mb-3">
 			<h2 class="font-semibold text-gray-800 dark:text-gray-100">
@@ -1326,7 +1326,7 @@
 							</thead>
 							<tbody>
 								{#each activeTransactions as txn (txn.transaction_id)}
-									<tr class="border-t border-gray-100 dark:border-gray-700/50">
+									<tr class="border-t border-[var(--color-border-light)]">
 										<td class="py-1 pr-3">{txn.transaction_id}</td>
 										<td class="py-1 pr-3">{txn.state}</td>
 										<td class="py-1 pr-3">{formatLatencyMs(txn.elapsed_ms)}</td>

@@ -204,7 +204,7 @@
 	{/if}
 
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3 text-sm">
 			{t('users.create')}
@@ -234,7 +234,7 @@
 	</section>
 
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3 text-sm">
 			{t('users.changeOwnPassword')}
@@ -272,7 +272,7 @@
 	</section>
 
 	<section
-		class="bg-white dark:bg-[#1C2333] rounded-xl p-5 border border-gray-100 dark:border-gray-700/50 shadow-sm"
+		class="ui-card shadow-sm p-5"
 	>
 		<div class="mb-3">
 			<input
@@ -298,7 +298,7 @@
 					<tbody>
 						{#each filtered as user (user.username)}
 							<tr
-								class="border-t border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-200"
+								class="border-t border-[var(--color-border-light)] text-gray-700 dark:text-gray-200"
 							>
 								<td class="py-2 pr-4 font-mono">{user.username}</td>
 								<td class="py-2 pr-4">{user.role ?? '—'}</td>
