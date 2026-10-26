@@ -68,10 +68,18 @@ pub async fn start_http_server<
     let listener = TcpListener::bind(&addr).await?;
 
     info!("HTTP server listening on {}", addr);
+    crate::http::handlers::health::set_ready(true);
+    crate::systemd::notify_ready();
 
-    serve(listener, app)
-        .with_graceful_shutdown(async_shutdown_signal())
-        .await?;
+    let shutdown_timeout = std::time::Duration::from_secs(config.shutdown_timeout_secs());
+    let serve_future = serve(listener, app).with_graceful_shutdown(async_shutdown_signal());
+    tokio::select! {
+        result = serve_future => result?,
+        _ = tokio::time::sleep(shutdown_timeout) => {
+            log::error!("HTTP server graceful shutdown timed out after {}s; forcing exit", shutdown_timeout.as_secs());
+            std::process::exit(1);
+        }
+    }
 
     Ok(())
 }
@@ -143,9 +151,17 @@ pub async fn start_http_and_grpc_servers<
         let http_addr = format!("{}:{}", http_bind, http_port);
         let http_listener = TcpListener::bind(&http_addr).await?;
         info!("HTTP server listening on {}", http_addr);
-        serve(http_listener, http_app)
-            .with_graceful_shutdown(async_shutdown_signal())
-            .await?;
+        crate::http::handlers::health::set_ready(true);
+        crate::systemd::notify_ready();
+        let shutdown_timeout = std::time::Duration::from_secs(config.shutdown_timeout_secs());
+        let serve_future = serve(http_listener, http_app).with_graceful_shutdown(async_shutdown_signal());
+        tokio::select! {
+            result = serve_future => result?,
+            _ = tokio::time::sleep(shutdown_timeout) => {
+                log::error!("HTTP server graceful shutdown timed out after {}s; forcing exit", shutdown_timeout.as_secs());
+                std::process::exit(1);
+            }
+        }
         Ok::<(), linkrs_core::error::DBError>(())
     };
 

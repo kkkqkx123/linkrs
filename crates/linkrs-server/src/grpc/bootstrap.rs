@@ -72,7 +72,11 @@ pub async fn run_server<
             .max_encoding_message_size(grpc_cfg.max_response_size),
     );
 
-    router.serve(addr).await?;
+    router
+        .serve_with_shutdown(addr, async {
+            crate::shutdown_signal().await;
+        })
+        .await?;
 
     Ok(())
 }
@@ -97,7 +101,9 @@ pub async fn run_server_with_grpc_service<
 
     Server::builder()
         .add_service(LinkrsServiceServer::new(service))
-        .serve(addr)
+        .serve_with_shutdown(addr, async {
+            crate::shutdown_signal().await;
+        })
         .await?;
 
     Ok(())

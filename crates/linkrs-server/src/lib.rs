@@ -20,6 +20,7 @@ pub mod storage {
 pub mod http_server;
 mod shutdown;
 pub mod startup;
+pub mod systemd;
 pub mod value;
 
 #[cfg(feature = "vector")]

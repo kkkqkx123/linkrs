@@ -8,6 +8,7 @@ pub mod input;
 pub mod io;
 pub mod outbox;
 pub mod output;
+pub mod service;
 pub use linkrs_client::session;
 pub mod transaction;
 pub mod utils;

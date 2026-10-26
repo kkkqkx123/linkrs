@@ -1,0 +1,9 @@
+Package: linkrs
+Version: 1.0.0
+Section: database
+Priority: optional
+Architecture: amd64
+Depends: libc6, systemd
+Maintainer: Linkrs Contributors <linkrs@example.com>
+Description: Linkrs graph database server
+ Lightweight single-node graph database service.

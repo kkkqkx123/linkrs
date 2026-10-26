@@ -117,8 +117,13 @@ impl EmbeddedConfig {
     }
 }
 
+#[cfg(feature = "server")]
+fn default_shutdown_timeout_secs() -> u64 {
+    30
+}
+
 /// Server configuration aggregator
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
     #[cfg(feature = "server")]
     #[serde(default)]
@@ -135,6 +140,11 @@ pub struct ServerConfig {
     #[cfg(feature = "server")]
     #[serde(default)]
     pub security: SecurityConfig,
+
+    /// Graceful shutdown timeout in seconds. Zero means the default (30).
+    #[cfg(feature = "server")]
+    #[serde(default = "default_shutdown_timeout_secs")]
+    pub shutdown_timeout_secs: u64,
 }
 
 #[cfg(feature = "server")]
@@ -182,6 +192,20 @@ impl ServerConfig {
     }
 }
 
+#[cfg(feature = "server")]
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            grpc: GrpcConfig::default(),
+            http: HttpServerConfig::default(),
+            auth: AuthConfig::default(),
+            bootstrap: BootstrapConfig::default(),
+            security: SecurityConfig::default(),
+            shutdown_timeout_secs: default_shutdown_timeout_secs(),
+        }
+    }
+}
+
 /// Global configuration aggregator
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
@@ -205,6 +229,8 @@ pub struct Config {
 }
 
 impl Config {
+    // lifecycle helpers
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1549,5 +1575,22 @@ max_files = 10
         config.validate().expect("prod example must validate");
         assert_eq!(config.vector_engine(), Some(VectorEngineKind::Qdrant));
         assert_eq!(config.common.monitoring.slow_query_log.max_files, 10);
+    }
+}
+
+
+impl Config {
+    #[cfg(feature = "server")]
+    pub fn shutdown_timeout_secs(&self) -> u64 {
+        if self.server.shutdown_timeout_secs == 0 {
+            30
+        } else {
+            self.server.shutdown_timeout_secs
+        }
+    }
+
+    #[cfg(feature = "server")]
+    pub fn shutdown_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.shutdown_timeout_secs())
     }
 }

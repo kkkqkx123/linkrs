@@ -22,7 +22,45 @@ async fn main() {
     }
 }
 
-async fn run(cli: Cli) -> Result<()> {
+async fn run(mut cli: Cli) -> Result<()> {
+    if let Some(subcommand) = cli.subcommand.take() {
+        match subcommand {
+            linkrs_cli::cli::Commands::Service { action } => match action {
+                linkrs_cli::cli::ServiceAction::Start {
+                    bin,
+                    config,
+                    data_dir,
+                    http_port,
+                    grpc_port,
+                    foreground,
+                } => {
+                    linkrs_cli::service::start(
+                        bin.as_deref(),
+                        config.as_deref(),
+                        data_dir.as_deref(),
+                        http_port,
+                        grpc_port,
+                        foreground,
+                    )
+                    .map_err(|e| linkrs_cli::utils::error::CliError::CommandError(e))?;
+                }
+                linkrs_cli::cli::ServiceAction::Stop => {
+                    linkrs_cli::service::stop()
+                        .map_err(|e| linkrs_cli::utils::error::CliError::CommandError(e))?;
+                }
+                linkrs_cli::cli::ServiceAction::Restart => {
+                    linkrs_cli::service::restart(None, None, None, None, None)
+                        .map_err(|e| linkrs_cli::utils::error::CliError::CommandError(e))?;
+                }
+                linkrs_cli::cli::ServiceAction::Status => {
+                    linkrs_cli::service::status()
+                        .map_err(|e| linkrs_cli::utils::error::CliError::CommandError(e))?;
+                }
+            },
+        }
+        return Ok(());
+    }
+
     let config = Config::load().unwrap_or_default();
 
     let host = if cli.host == "127.0.0.1" && config.connection.default_host != "127.0.0.1" {

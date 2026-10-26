@@ -106,6 +106,8 @@ pub async fn start_service_with_config_path(
     stats_manager.set_histogram_max_samples(m.histogram_max_samples);
 
     let storage_path = PathBuf::from(config.storage_path());
+    let pid_file_path = storage_path.join("linkrs.pid");
+    let _ = std::fs::write(&pid_file_path, std::process::id().to_string());
     let mut persistence_config = PersistenceConfig::for_work_dir(&storage_path)
         .with_property_graph_config(property_graph_config_from_config(&config.storage));
     persistence_config.sync_policy = Some(config.storage.sync_mode.to_sync_policy());
@@ -570,6 +572,10 @@ pub async fn start_service_with_config_path(
         );
     }
 
+    // Best-effort readiness notification for systemd (no-op outside systemd).
+    crate::http::handlers::health::set_ready(true);
+    crate::systemd::notify_ready();
+
     #[cfg(feature = "grpc")]
     if let Err(e) = super::start_http_and_grpc_servers(http_server, &config).await {
         error!("HTTP/gRPC server error: {}", e);
@@ -580,10 +586,24 @@ pub async fn start_service_with_config_path(
     }
 
     super::shutdown_signal().await;
+    crate::http::handlers::health::set_ready(false);
+    crate::http::handlers::health::set_stopping(true);
+    crate::systemd::notify_stopping();
 
     info!("Shutting down Linkrs service...");
+    let shutdown_timeout = config.shutdown_timeout();
+    let watchdog = tokio::spawn(async move {
+        tokio::time::sleep(shutdown_timeout).await;
+        error!(
+            "Graceful shutdown timed out after {}s; forcing exit",
+            shutdown_timeout.as_secs()
+        );
+        std::process::exit(1);
+    });
     graph_service.shutdown();
     close_storage.close();
+    let _ = std::fs::remove_file(&pid_file_path);
+    watchdog.abort();
     Ok(())
 }
 

@@ -1,0 +1,23 @@
+[Unit]
+Description=Linkrs graph database server
+Documentation=https://github.com/linkrs/linkrs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=linkrs
+Group=linkrs
+WorkingDirectory=/var/lib/linkrs
+Environment=LINKRS_CONFIG=/etc/linkrs/config.toml
+ExecStart=/usr/local/bin/linkrs-server serve --config /etc/linkrs/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=linkrs
+
+[Install]
+WantedBy=multi-user.target

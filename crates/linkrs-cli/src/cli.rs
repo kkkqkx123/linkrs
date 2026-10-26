@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -10,7 +10,7 @@ use clap::Parser;
                   schema inspection, and various output formats."
 )]
 pub struct Cli {
-    #[clap(short, long, default_value = "127.0.0.1", help = "Server host")]
+    #[clap(long, default_value = "127.0.0.1", help = "Server host")]
     pub host: String,
 
     #[clap(short, long, default_value_t = 8080, help = "Server port")]
@@ -66,4 +66,41 @@ pub struct Cli {
         help = "Set variable before execution"
     )]
     pub variables: Vec<String>,
+
+    #[command(subcommand)]
+    pub subcommand: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Manage a local linkrs-server process
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServiceAction {
+    /// Start linkrs-server
+    Start {
+        #[clap(long, help = "Path to linkrs-server binary")]
+        bin: Option<String>,
+        #[clap(long, help = "Config file path")]
+        config: Option<String>,
+        #[clap(long, help = "Data directory")]
+        data_dir: Option<String>,
+        #[clap(long, help = "HTTP port")]
+        http_port: Option<u16>,
+        #[clap(long, help = "gRPC port")]
+        grpc_port: Option<u16>,
+        #[clap(long, help = "Run in foreground")]
+        foreground: bool,
+    },
+    /// Stop the managed linkrs-server process
+    Stop,
+    /// Restart the managed linkrs-server process
+    Restart,
+    /// Show managed process status
+    Status,
 }
