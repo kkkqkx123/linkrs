@@ -16,19 +16,19 @@
 <div class="fixed inset-0 z-50 flex justify-end">
 	<div class="absolute inset-0 bg-black/20" role="presentation" onclick={onClose}></div>
 	<div
-		class="relative w-96 bg-white dark:bg-[#1C2333] shadow-lg h-full overflow-y-auto"
+		class="ui-drawer"
 		role="dialog"
 		aria-labelledby="favorites-panel-title"
 	>
 		<div
 			id="favorites-panel-title"
-			class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between"
+			class="p-5 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between"
 		>
-			<h3 class="font-semibold text-gray-800 dark:text-gray-100">
+			<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">
 				{t('console.favorites')}
 			</h3>
 			<button
-				class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer text-lg"
+				class="ui-icon-btn text-lg"
 				onclick={onClose}
 				aria-label={t('common.close')}>✕</button
 			>
@@ -43,7 +43,7 @@
 					<div
 						role="button"
 						tabindex="0"
-						class="mb-3 p-3 border border-gray-200 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-700/30 cursor-pointer"
+						class="ui-list-item"
 						onclick={() => onLoad(fav)}
 						onkeydown={(e) => {
 							if (e.key === 'Enter' || e.key === ' ') onLoad(fav);

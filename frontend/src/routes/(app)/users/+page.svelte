@@ -177,9 +177,9 @@
 	}
 </script>
 
-<div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
-	<div class="flex items-center justify-between">
-		<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">
+<div class="ui-page-doc animate-fade-in">
+	<div class="ui-page-head">
+		<h1 class="ui-page-title">
 			{t('users.title')}
 		</h1>
 		<button
@@ -193,20 +193,20 @@
 
 	{#if fallback}
 		<p
-			class="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-700 dark:text-yellow-300"
+			class="ui-alert ui-alert-warn"
 		>
 			{t('users.queryFallback')}
 		</p>
 	{/if}
 
 	{#if error}
-		<p class="text-xs text-red-500">{error}</p>
+		<p class="ui-error-text">{error}</p>
 	{/if}
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3 text-sm">
+		<h2 class="ui-section-title">
 			{t('users.create')}
 		</h2>
 		<div class="flex flex-wrap gap-2 text-sm">
@@ -234,9 +234,9 @@
 	</section>
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3 text-sm">
+		<h2 class="ui-section-title">
 			{t('users.changeOwnPassword')}
 		</h2>
 		<div class="flex flex-wrap gap-2 text-sm">
@@ -272,7 +272,7 @@
 	</section>
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
 		<div class="mb-3">
 			<input
@@ -285,28 +285,26 @@
 			<p class="text-sm text-gray-500 dark:text-gray-400">{t('users.empty')}</p>
 		{:else}
 			<div class="overflow-x-auto">
-				<table class="w-full text-sm">
+				<table class="ui-table w-full">
 					<thead>
-						<tr class="text-left text-xs text-gray-500 dark:text-gray-400">
-							<th class="py-2 pr-4">{t('common.username')}</th>
-							<th class="py-2 pr-4">{t('users.role')}</th>
-							<th class="py-2 pr-4">{t('users.status')}</th>
-							<th class="py-2 pr-4">{t('users.lastActive')}</th>
-							<th class="py-2">{t('common.actions')}</th>
+						<tr>
+							<th>{t('common.username')}</th>
+							<th>{t('users.role')}</th>
+							<th>{t('users.status')}</th>
+							<th>{t('users.lastActive')}</th>
+							<th>{t('common.actions')}</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each filtered as user (user.username)}
-							<tr
-								class="border-t border-[var(--color-border-light)] text-gray-700 dark:text-gray-200"
-							>
-								<td class="py-2 pr-4 font-mono">{user.username}</td>
-								<td class="py-2 pr-4">{user.role ?? '—'}</td>
-								<td class="py-2 pr-4">
+							<tr>
+								<td class="font-mono">{user.username}</td>
+								<td>{user.role ?? '—'}</td>
+								<td>
 									{user.status ?? (fallback ? '—' : t('users.enabled'))}
 								</td>
-								<td class="py-2 pr-4">{user.lastActive ?? '—'}</td>
-								<td class="py-2">
+								<td>{user.lastActive ?? '—'}</td>
+								<td>
 									<div class="flex flex-wrap gap-2">
 										<button
 											class="ui-btn ui-btn-ghost ui-btn-sm"
@@ -341,7 +339,7 @@
 											{t('users.grant')}
 										</button>
 										<button
-											class="px-2 py-1 text-xs border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 rounded hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer"
+											class="ui-btn ui-btn-danger-outline ui-btn-xs"
 											onclick={() => deleteUser(user)}
 											disabled={loading}
 										>

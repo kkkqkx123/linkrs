@@ -394,11 +394,11 @@
 	}
 </script>
 
-<div class="flex flex-col h-full gap-4 animate-fade-in">
+<div class="ui-page animate-fade-in">
 	<!-- Header -->
-	<div class="ui-card shadow-sm px-5 py-3">
+	<div class="ui-card shadow-sm px-6 py-4">
 		<h2
-			class="text-lg font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2"
+			class="ui-page-title flex items-center gap-2"
 		>
 			<span>⌨</span>
 			{t('console.title')}
@@ -406,8 +406,8 @@
 	</div>
 
 	<!-- Editor Section -->
-	<div class="ui-card shadow-sm flex flex-col">
-		<div class="p-4 pb-2">
+	<div class="ui-card ui-card-flush shadow-sm flex flex-col">
+		<div class="p-5 pb-3">
 			<CypherEditor
 				bind:this={editorRef}
 				bind:value={editorContent}
@@ -479,7 +479,7 @@
 		/>
 		{#if validateMessage}
 			<div
-				class="mx-4 mb-3 p-2 text-xs rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-600 dark:text-gray-300"
+				class="ui-alert ui-alert-neutral mx-4 mb-3"
 			>
 				{validateMessage}
 			</div>
@@ -490,7 +490,7 @@
 					<span class="font-medium">{t('console.planTitle')}</span>
 					<div class="flex-1"></div>
 					<button
-						class="text-xs px-2 py-0.5 border border-purple-300 dark:border-purple-700 rounded hover:bg-purple-100 dark:hover:bg-purple-900/40 cursor-pointer"
+						class="ui-btn ui-btn-ghost ui-btn-xs"
 						onclick={() => (planOpen = false)}
 					>
 						{t('common.close')}
@@ -502,7 +502,7 @@
 							<span class="font-medium">{planError.code}</span>: {planError.message}
 							{#if planError.position}
 								<button
-									class="-btn ui-btn-danger-outline ui-btn-sm"
+									class="ui-btn ui-btn-danger-outline ui-btn-sm"
 									onclick={() => handleJumpToError(planError!.position!)}
 								>
 									{t('console.jumpToError', {
@@ -515,11 +515,11 @@
 					{:else if planResult}
 						{#if planResult.columns.length > 0}
 							<div class="overflow-x-auto bg-white dark:bg-[#1C2333] rounded border border-purple-200 dark:border-purple-800">
-								<table class="w-full text-xs border-collapse">
+								<table class="ui-table w-full border-collapse">
 									<thead>
 										<tr class="bg-purple-100/50 dark:bg-purple-900/30">
 											{#each planResult.columns as col (col)}
-												<th class="px-3 py-1.5 text-left font-medium whitespace-nowrap">{col}</th>
+												<th>{col}</th>
 											{/each}
 										</tr>
 									</thead>
@@ -527,7 +527,7 @@
 										{#each planResult.rows as row, i (i)}
 											<tr class="even:bg-purple-50/50 dark:even:bg-purple-900/10">
 												{#each planResult.columns as col (col)}
-													<td class="px-3 py-1 border-t border-purple-100 dark:border-purple-800/50 font-mono max-w-md truncate">{String(row[col] ?? '')}</td>
+													<td class="font-mono max-w-md truncate">{String(row[col] ?? '')}</td>
 												{/each}
 											</tr>
 										{/each}

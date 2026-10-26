@@ -370,6 +370,7 @@
 	"schema.vidType": "VID Type",
 	"sidebar.console": "Console",
 	"sidebar.resizeHint": "Drag to resize sidebar",
+	"sidebar.fitHint": "Double-click to fit content width",
 	"sidebar.dataBrowser": "Data Browser",
 	"sidebar.edges": "Edges",
 	"sidebar.graph": "Graph",

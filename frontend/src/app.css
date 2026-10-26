@@ -1,12 +1,11 @@
 @import 'tailwindcss';
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Type scale override: raise text-xs from 12px to 13px so secondary text
-   stays legible on desktop while text-sm (14px) keeps matching
-   --font-size-base. One definition here applies to every text-xs usage. */
+/* Type scale: base 15px for comfortable Chinese reading; text-xs is 14px
+   so secondary text stays legible. One definition here applies to every text-xs usage. */
 @theme {
-	--text-xs: 0.8125rem;
-	--text-xs--line-height: 1.45;
+	--text-xs: 0.875rem;
+	--text-xs--line-height: 1.5;
 }
 
 :root {
@@ -26,7 +25,7 @@
 	--radius-md: 6px;
 	--radius-lg: 8px;
 	--radius-card: 8px;
-	--font-size-base: 14px;
+	--font-size-base: 15px;
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
 	--shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
 	--shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
@@ -47,238 +46,635 @@
 	--shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
-* {
-	margin: 0;
-	padding: 0;
-	box-sizing: border-box;
+/* Tailwind v4 preflight already resets margins, paddings and box-sizing.
+   Do not add an unlayered `*` reset here: unlayered author CSS beats
+   everything inside cascade layers, so it would zero out all Tailwind
+   spacing utilities (p-*, px-*, m-*, ...) and pin content to card edges. */
+
+@layer base {
+	body {
+		font-family:
+			-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+			Arial, sans-serif;
+		font-size: 15px;
+		color: var(--color-text);
+		background: var(--color-bg);
+		line-height: 1.5;
+		-webkit-font-smoothing: antialiased;
+		transition:
+			background-color 0.3s ease,
+			color 0.3s ease;
+	}
+
+	a {
+		color: var(--color-primary);
+		text-decoration: none;
+	}
+
+	a:hover {
+		color: var(--color-primary-hover);
+	}
+
+	/* Scrollbar */
+	::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+	}
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	::-webkit-scrollbar-thumb {
+		background: #d9d9d9;
+		border-radius: 3px;
+	}
+	::-webkit-scrollbar-thumb:hover {
+		background: #bbb;
+	}
+
+	.dark ::-webkit-scrollbar-thumb {
+		background: #4a5568;
+	}
+	.dark ::-webkit-scrollbar-thumb:hover {
+		background: #5a6578;
+	}
+
+	/* Base form controls: unmigrated pages inherit the unified look.
+	   Keep padding/border here minimal; .ui-input in components and
+	   spacing utilities both override this. */
+	input[type='text'],
+	input[type='password'],
+	input[type='number'],
+	input[type='search'],
+	input[type='email'],
+	input:not([type]),
+	select,
+	textarea {
+		font-size: var(--font-size-base);
+		color: var(--color-text);
+		background: var(--color-bg-white);
+		border: 1px solid var(--color-border);
+		padding: 0.625rem 0.875rem;
+		border-radius: var(--radius-md);
+	}
+	input:focus-visible,
+	select:focus-visible,
+	textarea:focus-visible {
+		outline: none;
+		border-color: var(--color-primary);
+		box-shadow: 0 0 0 2px
+			color-mix(in srgb, var(--color-primary) 18%, transparent);
+	}
+
+	button {
+		font-size: var(--font-size-base);
+	}
+
+	input[type='checkbox'] {
+		width: 1rem;
+		height: 1rem;
+		accent-color: var(--color-primary);
+		cursor: pointer;
+	}
 }
 
-body {
-	font-family:
-		-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
-		Arial, sans-serif;
-	font-size: 14px;
-	color: var(--color-text);
-	background: var(--color-bg);
-	line-height: 1.5;
-	-webkit-font-smoothing: antialiased;
-	transition:
-		background-color 0.3s ease,
-		color 0.3s ease;
-}
+/* ===== Shared component classes =====
+   Components live in their own layer so Tailwind spacing utilities
+   (p-6, px-6 py-4, ...) keep overriding them as authors expect. */
 
-a {
-	color: var(--color-primary);
-	text-decoration: none;
-}
+@layer components {
+	/* Card: shared container with 1px border and unified radius.
+	   Shadow is controlled by shadow-* utilities.
+	   Default padding 1.5rem matches p-6 so a bare ui-card never hugs edges.
+	   Structural cards that need bleeding headers/tables/canvas use
+	   ui-card-flush and provide their own inner spacing. */
+	.ui-card {
+		background: var(--color-bg-white);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-card);
+		padding: 1.5rem;
+	}
 
-a:hover {
-	color: var(--color-primary-hover);
-}
+	/* Structural card: edge-to-edge tab bars, tables, canvas and result
+	   headers; inner header/body layers own px-5/py-3/p-5 style spacing */
+	.ui-card-flush {
+		padding: 0;
+	}
 
-/* Scrollbar */
-::-webkit-scrollbar {
-	width: 6px;
-	height: 6px;
-}
-::-webkit-scrollbar-track {
-	background: transparent;
-}
-::-webkit-scrollbar-thumb {
-	background: #d9d9d9;
-	border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-	background: #bbb;
-}
+	/* Form input: unified height, type size, border and focus ring */
+	.ui-input {
+		width: 100%;
+		padding: 0.625rem 0.875rem;
+		font-size: var(--font-size-base);
+		color: var(--color-text);
+		background: var(--color-bg-white);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		transition:
+			border-color 0.2s ease,
+			box-shadow 0.2s ease;
+	}
+	.ui-input::placeholder {
+		color: var(--color-text-secondary);
+		opacity: 0.7;
+	}
+	.ui-input:focus {
+		outline: none;
+		border-color: var(--color-primary);
+		box-shadow: 0 0 0 3px
+			color-mix(in srgb, var(--color-primary) 18%, transparent);
+	}
+	.ui-input:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	/* Compact variant: dense scenes such as toolbars and inline table filters */
+	.ui-input.ui-input-sm {
+		padding: 0.375rem 0.75rem;
+		font-size: 14px;
+		border-radius: var(--radius-sm);
+	}
 
-.dark ::-webkit-scrollbar-thumb {
-	background: #4a5568;
-}
-.dark ::-webkit-scrollbar-thumb:hover {
-	background: #5a6578;
-}
+	/* Miniature variant: tiny inline inputs such as range editors */
+	.ui-input.ui-input-xs {
+		padding: 0.25rem 0.5rem;
+		font-size: var(--text-xs);
+		border-radius: var(--radius-sm);
+	}
 
-/* ===== 统一组件类 ===== */
+	/* Button: unified height and type size; primary is solid, ghost is outlined */
+	.ui-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.375rem;
+		padding: 0.625rem 1.125rem;
+		font-size: var(--font-size-base);
+		font-weight: 500;
+		line-height: 1.25;
+		border-radius: var(--radius-md);
+		border: 1px solid transparent;
+		cursor: pointer;
+		transition:
+			background-color 0.2s ease,
+			color 0.2s ease,
+			border-color 0.2s ease;
+	}
+	.ui-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	/* Compact variant: inline small buttons */
+	.ui-btn.ui-btn-sm {
+		padding: 0.375rem 0.75rem;
+		font-size: 14px;
+	}
+	/* Tiny variant: view switchers and other miniature actions */
+	.ui-btn.ui-btn-xs {
+		padding: 0.25rem 0.5rem;
+		font-size: var(--text-xs);
+	}
+	/* Solid tones for semantic actions; combine with .ui-btn-sm/.ui-btn-xs */
+	.ui-btn-success {
+		background: #16a34a;
+		color: #fff;
+	}
+	.ui-btn-success:hover:not(:disabled) {
+		background: #15803d;
+	}
+	.ui-btn-warn {
+		background: #f59e0b;
+		color: #fff;
+	}
+	.ui-btn-warn:hover:not(:disabled) {
+		background: #d97706;
+	}
+	.ui-btn-muted {
+		background: #6b7280;
+		color: #fff;
+	}
+	.ui-btn-muted:hover:not(:disabled) {
+		background: #4b5563;
+	}
+	.ui-btn-info {
+		background: #3b82f6;
+		color: #fff;
+	}
+	.ui-btn-info:hover:not(:disabled) {
+		background: #2563eb;
+	}
+	/* Soft secondary action: neutral filled button for toolbar toggles */
+	.ui-btn-soft {
+		background: #f3f4f6;
+		color: #374151;
+		border-color: transparent;
+	}
+	.ui-btn-soft:hover:not(:disabled) {
+		background: #e5e7eb;
+		color: #111827;
+	}
+	.dark .ui-btn-soft {
+		background: rgba(55, 65, 81, 0.5);
+		color: #e5e7eb;
+	}
+	.dark .ui-btn-soft:hover:not(:disabled) {
+		background: rgba(55, 65, 81, 0.8);
+	}
+	/* Destructive action: solid red, derived from --color-error */
+	.ui-btn-danger {
+		background: var(--color-error);
+		color: #fff;
+	}
+	.ui-btn-danger:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--color-error) 85%, #000);
+	}
+	/* Outlined destructive variant */
+	.ui-btn-danger-outline {
+		background: transparent;
+		color: var(--color-error);
+		border-color: color-mix(in srgb, var(--color-error) 45%, transparent);
+	}
+	.ui-btn-danger-outline:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--color-error) 10%, transparent);
+	}
+	.ui-btn-primary {
+		background: var(--color-primary);
+		color: #fff;
+	}
+	.ui-btn-primary:hover:not(:disabled) {
+		background: var(--color-primary-hover);
+	}
+	.ui-btn-ghost {
+		background: transparent;
+		color: var(--color-text-secondary);
+		border-color: var(--color-border);
+	}
+	.ui-btn-ghost:hover:not(:disabled) {
+		color: var(--color-text);
+		background: var(--color-primary-light);
+	}
 
-/* 卡片:全站统一的卡片容器,1px 清晰边框 + 统一圆角;阴影由 shadow-* 工具类控制 */
-.ui-card {
-	background: var(--color-bg-white);
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-card);
-}
+	/* Badge */
+	.ui-badge {
+		display: inline-flex;
+		align-items: center;
+		padding: 0.25rem 0.75rem;
+		font-size: 14px;
+		line-height: 1.4;
+		border-radius: 9999px;
+		border: 1px solid var(--color-border);
+	}
 
-/* 输入控件:统一高度、字号、边框与焦点态 */
-.ui-input {
-	width: 100%;
-	padding: 0.5rem 0.75rem;
-	font-size: var(--font-size-base);
-	color: var(--color-text);
-	background: var(--color-bg-white);
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-md);
-	transition:
-		border-color 0.2s ease,
-		box-shadow 0.2s ease;
-}
-.ui-input::placeholder {
-	color: var(--color-text-secondary);
-	opacity: 0.7;
-}
-.ui-input:focus {
-	outline: none;
-	border-color: var(--color-primary);
-	box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 18%, transparent);
-}
-.ui-input:disabled {
-	opacity: 0.6;
-	cursor: not-allowed;
-}
-/* 紧凑变体:工具栏、表格内联过滤等密集场景 */
-.ui-input.ui-input-sm {
-	padding: 0.25rem 0.625rem;
-	font-size: 13px;
-	border-radius: var(--radius-sm);
-}
+	/* Text-button style link: chromeless, color with hover */
+	.ui-link {
+		color: var(--color-primary);
+		cursor: pointer;
+	}
+	.ui-link:hover {
+		color: var(--color-primary-hover);
+	}
+	.ui-link-danger {
+		color: var(--color-error);
+		cursor: pointer;
+	}
+	.ui-link-danger:hover {
+		color: color-mix(in srgb, var(--color-error) 80%, #000);
+	}
 
-/* 按钮:统一高度与字号;primary 实底,ghost 描边 */
-.ui-btn {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: 0.375rem;
-	padding: 0.5rem 1rem;
-	font-size: var(--font-size-base);
-	font-weight: 500;
-	line-height: 1.25;
-	border-radius: var(--radius-md);
-	border: 1px solid transparent;
-	cursor: pointer;
-	transition:
-		background-color 0.2s ease,
-		color 0.2s ease,
-		border-color 0.2s ease;
-}
-.ui-btn:disabled {
-	opacity: 0.5;
-	cursor: not-allowed;
-}
-/* 紧凑变体:行内小按钮 */
-.ui-btn.ui-btn-sm {
-	padding: 0.25rem 0.625rem;
-	font-size: 13px;
-}
-/* 危险操作:实底红,色值由 --color-error 派生 */
-.ui-btn-danger {
-	background: var(--color-error);
-	color: #fff;
-}
-.ui-btn-danger:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--color-error) 85%, #000);
-}
-/* 危险操作:描边变体 */
-.ui-btn-danger-outline {
-	background: transparent;
-	color: var(--color-error);
-	border-color: color-mix(in srgb, var(--color-error) 45%, transparent);
-}
-.ui-btn-danger-outline:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--color-error) 10%, transparent);
-}
-.ui-btn-primary {
-	background: var(--color-primary);
-	color: #fff;
-}
-.ui-btn-primary:hover:not(:disabled) {
-	background: var(--color-primary-hover);
-}
-.ui-btn-ghost {
-	background: transparent;
-	color: var(--color-text-secondary);
-	border-color: var(--color-border);
-}
-.ui-btn-ghost:hover:not(:disabled) {
-	color: var(--color-text);
-	background: var(--color-primary-light);
-}
+	/* Data table: unified header/cell density and row hover */
+	.ui-table th {
+		padding: 0.75rem 1rem;
+		text-align: left;
+		font-size: 14px;
+		font-weight: 500;
+		color: var(--color-text-secondary);
+		border-bottom: 1px solid var(--color-border);
+		white-space: nowrap;
+	}
+	.ui-table td {
+		padding: 0.625rem 1rem;
+		font-size: 14px;
+		color: var(--color-text);
+		border-bottom: 1px solid var(--color-border-light);
+	}
+	.ui-table tbody tr:hover {
+		background: color-mix(in srgb, var(--color-primary-light) 40%, transparent);
+	}
 
-/* 徽标 */
-.ui-badge {
-	display: inline-flex;
-	align-items: center;
-	padding: 0.125rem 0.5rem;
-	font-size: 13px;
-	line-height: 1.4;
-	border-radius: 9999px;
-	border: 1px solid var(--color-border);
-}
+	/* Dense variant: compact monitoring/detail tables with small type */
+	.ui-table-dense th {
+		padding: 0.25rem 0.75rem;
+		font-size: var(--text-xs);
+	}
+	.ui-table-dense td {
+		padding: 0.25rem 0.75rem;
+	}
 
-/* 链接式文字按钮:无框,仅色与悬停 */
-.ui-link {
-	color: var(--color-primary);
-	cursor: pointer;
-}
-.ui-link:hover {
-	color: var(--color-primary-hover);
-}
-.ui-link-danger {
-	color: var(--color-error);
-	cursor: pointer;
-}
-.ui-link-danger:hover {
-	color: color-mix(in srgb, var(--color-error) 80%, #000);
-}
+	/* Alert: single-message notice box with semantic tones */
+	.ui-alert {
+		padding: 0.625rem 0.875rem;
+		font-size: var(--text-xs);
+		line-height: 1.5;
+		border: 1px solid transparent;
+		border-radius: var(--radius-md);
+	}
+	.ui-alert-info {
+		background: #eff6ff;
+		border-color: #bfdbfe;
+		color: #1d4ed8;
+	}
+	.dark .ui-alert-info {
+		background: rgba(30, 58, 138, 0.25);
+		border-color: #1e40af;
+		color: #93c5fd;
+	}
+	.ui-alert-ok {
+		background: #f0fdf4;
+		border-color: #bbf7d0;
+		color: #15803d;
+	}
+	.dark .ui-alert-ok {
+		background: rgba(20, 83, 45, 0.25);
+		border-color: #166534;
+		color: #4ade80;
+	}
+	.ui-alert-warn {
+		background: #fefce8;
+		border-color: #fef08a;
+		color: #a16207;
+	}
+	.dark .ui-alert-warn {
+		background: rgba(113, 63, 18, 0.25);
+		border-color: #854d0e;
+		color: #fcd34d;
+	}
+	.ui-alert-error {
+		background: #fef2f2;
+		border-color: #fecaca;
+		color: #dc2626;
+	}
+	.dark .ui-alert-error {
+		background: rgba(127, 29, 29, 0.25);
+		border-color: #991b1b;
+		color: #f87171;
+	}
+	.ui-alert-neutral {
+		background: #f9fafb;
+		border-color: #e5e7eb;
+		color: #4b5563;
+	}
+	.dark .ui-alert-neutral {
+		background: rgba(31, 41, 55, 0.5);
+		border-color: #374151;
+		color: #d1d5db;
+	}
+	.ui-alert-accent {
+		background: #faf5ff;
+		border-color: #e9d5ff;
+		color: #7e22bb;
+	}
+	.dark .ui-alert-accent {
+		background: rgba(88, 28, 135, 0.2);
+		border-color: #6b21a8;
+		color: #d8b4fe;
+	}
 
-/* 数据表:统一表头/单元格/行悬停密度 */
-.ui-table th {
-	padding: 0.5rem 0.75rem;
-	text-align: left;
-	font-size: 13px;
-	font-weight: 500;
-	color: var(--color-text-secondary);
-	border-bottom: 1px solid var(--color-border);
-	white-space: nowrap;
-}
-.ui-table td {
-	padding: 0.375rem 0.75rem;
-	font-size: 13px;
-	color: var(--color-text);
-	border-bottom: 1px solid var(--color-border-light);
-}
-.ui-table tbody tr:hover {
-	background: color-mix(in srgb, var(--color-primary-light) 40%, transparent);
-}
+	/* Code block: readonly pre-formatted output with border and scroll */
+	.ui-pre {
+		padding: 0.75rem;
+		font-family: monospace;
+		font-size: var(--text-xs);
+		line-height: 1.5;
+		color: var(--color-text);
+		background: #f9fafb;
+		border: 1px solid var(--color-border-light);
+		border-radius: var(--radius-sm);
+		overflow: auto;
+		max-height: 24rem;
+		overflow-wrap: break-word;
+	}
+	.dark .ui-pre {
+		background: rgba(31, 41, 55, 0.5);
+	}
+	.ui-pre-sm {
+		padding: 0.5rem;
+		max-height: 10rem;
+	}
+	.ui-pre-lg {
+		padding: 1.25rem;
+	}
 
-/* ===== 基础元素默认样式(未迁移到组件类的页面自动继承) ===== */
+	/* Result header: status bar topping table/json/graph result cards */
+	.ui-result-head {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.75rem 1.25rem;
+		font-size: var(--text-xs);
+		color: var(--color-text-secondary);
+		background: #f9fafb;
+		border-bottom: 1px solid var(--color-border-light);
+	}
+	.dark .ui-result-head {
+		background: rgba(31, 41, 55, 0.5);
+	}
 
-input[type='text'],
-input[type='password'],
-input[type='number'],
-input[type='search'],
-input[type='email'],
-input:not([type]),
-select,
-textarea {
-	font-size: var(--font-size-base);
-	color: var(--color-text);
-	background: var(--color-bg-white);
-	border: 1px solid var(--color-border);
-	/* Match .ui-input exactly so unmigrated controls share the same height,
-	   padding and corner radius as the unified component class. */
-	padding: 0.5rem 0.75rem;
-	border-radius: var(--radius-md);
-}
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-	outline: none;
-	border-color: var(--color-primary);
-	box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 18%, transparent);
-}
+	/* Segmented view switcher: table/json/graph toggles inside result heads */
+	.ui-seg {
+		padding: 0.125rem 0.5rem;
+		font-size: var(--text-xs);
+		line-height: 1.5;
+		border-radius: var(--radius-sm);
+		color: var(--color-text-secondary);
+		background: transparent;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.ui-seg:hover {
+		color: var(--color-text);
+	}
+	.ui-seg-active {
+		background: #dbeafe;
+		color: #2563eb;
+	}
+	.dark .ui-seg-active {
+		background: rgba(30, 58, 138, 0.3);
+		color: #93c5fd;
+	}
 
-button {
-	font-size: var(--font-size-base);
-}
+	/* Icon button: chromeless dismiss/close action */
+	.ui-icon-btn {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0.25rem;
+		line-height: 1;
+		color: #9ca3af;
+		background: transparent;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+	}
+	.ui-icon-btn:hover {
+		color: #4b5563;
+	}
+	.dark .ui-icon-btn:hover {
+		color: #d1d5db;
+	}
+
+	/* Tab: text tab inside a structural card tab bar */
+	.ui-tab {
+		padding: 1rem 1.5rem;
+		font-size: var(--text-xs);
+		font-weight: 500;
+		color: var(--color-text-secondary);
+		background: transparent;
+		border-bottom: 2px solid transparent;
+		cursor: pointer;
+		white-space: nowrap;
+		transition:
+			color 0.2s ease,
+			border-color 0.2s ease;
+	}
+	.ui-tab:hover {
+		color: var(--color-text);
+	}
+	.ui-tab-active {
+		color: var(--color-primary);
+		border-bottom-color: var(--color-primary);
+	}
+
+	/* Chip: small toggle pill for filters and panel switches */
+	.ui-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		padding: 0.25rem 0.75rem;
+		font-size: var(--text-xs);
+		line-height: 1.5;
+		color: var(--color-text);
+		background: var(--color-bg-white);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		white-space: nowrap;
+		transition:
+			background-color 0.2s ease,
+			color 0.2s ease,
+			border-color 0.2s ease;
+	}
+	.ui-chip-active {
+		background: var(--color-primary);
+		border-color: var(--color-primary);
+		color: #fff;
+	}
+
+	/* Page frame: app-like pages fill height, doc-like pages center content */
+	.ui-page {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		gap: 1.25rem;
+	}
+	.ui-page-doc {
+		display: flex;
+		flex-direction: column;
+		max-width: 72rem;
+		margin-inline: auto;
+		gap: 1rem;
+		padding-bottom: 2rem;
+	}
+	/* Page header row: title on the left, actions on the right */
+	.ui-page-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+	/* Page title and card section title */
+	.ui-page-title {
+		margin: 0;
+		font-size: 1.25rem;
+		font-weight: 700;
+		line-height: 1.4;
+		color: var(--color-text);
+	}
+	.ui-section-title {
+		margin: 0 0 1rem;
+		font-size: 1.125rem;
+		font-weight: 600;
+		line-height: 1.4;
+		color: var(--color-text);
+	}
+
+	/* Field: stacked label/control group used by filter and option forms */
+	.ui-field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		font-size: var(--text-xs);
+		color: var(--color-text-secondary);
+	}
+
+	/* Empty state: centered placeholder for no-data views */
+	.ui-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 12rem;
+		padding: 1rem;
+		font-size: var(--text-xs);
+		text-align: center;
+		color: #9ca3af;
+	}
+
+	/* Spinner: loading indicator in two sizes */
+	.ui-spinner {
+		display: inline-block;
+		width: 1.5rem;
+		height: 1.5rem;
+		border: 2px solid #3b82f6;
+		border-top-color: transparent;
+		border-radius: 9999px;
+		animation: ui-spin 1s linear infinite;
+	}
+	.ui-spinner-lg {
+		width: 2rem;
+		height: 2rem;
+		border-width: 3px;
+	}
+
+	/* Inline error text under forms and page headers */
+	.ui-error-text {
+		font-size: var(--text-xs);
+		color: var(--color-error);
+	}
+
+	/* List item: clickable row inside sidebars and option lists */
+	.ui-list-item {
+		margin-bottom: 0.75rem;
+		padding: 0.75rem;
+		color: var(--color-text);
+		background: transparent;
+		border: 1px solid var(--color-border-light);
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+		transition: background-color 0.2s ease;
+	}
+	.ui-list-item:hover {
+		background: color-mix(in srgb, var(--color-primary-light) 40%, transparent);
+	}
+
+	/* Drawer: floating side panel for history and favorites */
+	.ui-drawer {
+		position: relative;
+		width: 24rem;
+		max-width: 90vw;
+		height: 100%;
+		overflow-y: auto;
+		background: var(--color-bg-white);
+		box-shadow: var(--shadow-lg);
+	}
+} /* @layer components */
 
 /* ===== Utility Animations ===== */
 @keyframes fade-in {
@@ -337,45 +733,66 @@ button {
 	}
 }
 
-.animate-fade-in {
-	animation: fade-in 0.4s ease-out;
+@keyframes ui-spin {
+	to {
+		transform: rotate(360deg);
+	}
 }
-.animate-slide-up {
-	animation: slide-up 0.4s ease-out;
-}
-.animate-slide-down {
-	animation: slide-down 0.4s ease-out;
-}
-.animate-scale-in {
-	animation: scale-in 0.25s ease-out;
-}
-.animate-shimmer {
-	background: linear-gradient(
-		90deg,
-		transparent 0%,
-		rgba(255, 255, 255, 0.15) 50%,
-		transparent 100%
-	);
-	background-size: 200% 100%;
-	animation: shimmer 2s linear infinite;
-}
-.animate-pulse-scale {
-	animation: pulse-scale 2s ease-in-out infinite;
+@keyframes slide-in-right {
+	from {
+		transform: translateX(100%);
+		opacity: 0;
+	}
+	to {
+		transform: translateX(0);
+		opacity: 1;
+	}
 }
 
-/* Delay utilities */
-.animation-delay-100 {
-	animation-delay: 100ms;
-}
-.animation-delay-200 {
-	animation-delay: 200ms;
-}
-.animation-delay-300 {
-	animation-delay: 300ms;
-}
-.animation-delay-400 {
-	animation-delay: 400ms;
-}
-.animation-delay-500 {
-	animation-delay: 500ms;
+@layer utilities {
+	.animate-fade-in {
+		animation: fade-in 0.4s ease-out;
+	}
+	.animate-slide-up {
+		animation: slide-up 0.4s ease-out;
+	}
+	.animate-slide-down {
+		animation: slide-down 0.4s ease-out;
+	}
+	.animate-scale-in {
+		animation: scale-in 0.25s ease-out;
+	}
+	.animate-shimmer {
+		background: linear-gradient(
+			90deg,
+			transparent 0%,
+			rgba(255, 255, 255, 0.15) 50%,
+			transparent 100%
+		);
+		background-size: 200% 100%;
+		animation: shimmer 2s linear infinite;
+	}
+	.animate-pulse-scale {
+		animation: pulse-scale 2s ease-in-out infinite;
+	}
+	.animate-slide-in-right {
+		animation: slide-in-right 0.3s ease-out;
+	}
+
+	/* Delay utilities */
+	.animation-delay-100 {
+		animation-delay: 100ms;
+	}
+	.animation-delay-200 {
+		animation-delay: 200ms;
+	}
+	.animation-delay-300 {
+		animation-delay: 300ms;
+	}
+	.animation-delay-400 {
+		animation-delay: 400ms;
+	}
+	.animation-delay-500 {
+		animation-delay: 500ms;
+	}
 }

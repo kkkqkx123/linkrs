@@ -93,30 +93,30 @@
 	}
 </script>
 
-<div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
-	<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">
+<div class="ui-page-doc animate-fade-in">
+	<h1 class="ui-page-title">
 		{t('sidebar.transfer')}
 	</h1>
 
 	{#if error}
-		<p class="text-xs text-red-500">{error}</p>
+		<p class="ui-error-text">{error}</p>
 	{/if}
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('transfer.import')}
 		</h2>
 		<div class="grid md:grid-cols-4 gap-2 text-sm mb-3">
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('transfer.space')}
 				<input
 					class="ui-input ui-input-sm font-mono"
 					bind:value={space}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('transfer.format')}
 				<select
 					class="ui-input ui-input-sm"
@@ -127,7 +127,7 @@
 					<option value="jsonl">jsonl</option>
 				</select>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('transfer.targetType')}
 				<select
 					class="ui-input ui-input-sm"
@@ -138,7 +138,7 @@
 					<option value="edge">edge</option>
 				</select>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('transfer.targetName')}
 				<input
 					class="ui-input ui-input-sm font-mono"
@@ -147,7 +147,7 @@
 			</label>
 		</div>
 		<div class="grid md:grid-cols-2 gap-2 text-sm mb-3">
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('batch.size')}
 				<input
 					type="number"
@@ -155,7 +155,7 @@
 					bind:value={batchSize}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('transfer.file')}
 				<input
 					type="file"
@@ -190,12 +190,12 @@
 	</section>
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('transfer.export')}
 		</h2>
-		<label class="flex flex-col gap-1 text-xs text-gray-500 mb-3">
+		<label class="ui-field mb-3">
 			{t('transfer.query')}
 			<textarea
 				rows="3"
@@ -223,10 +223,10 @@
 
 	{#if resultText}
 		<section
-			class="ui-card shadow-sm p-5"
+			class="ui-card shadow-sm p-6"
 		>
 			<pre
-				class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{resultText}</pre
+				class="ui-pre">{resultText}</pre
 			>
 		</section>
 	{/if}

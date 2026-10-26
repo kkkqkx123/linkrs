@@ -64,12 +64,12 @@
 	}
 </script>
 
-<div class="flex-1 ui-card shadow-sm overflow-hidden flex flex-col">
+<div class="flex-1 ui-card ui-card-flush shadow-sm overflow-hidden flex flex-col">
 	{#if isExecuting}
-		<div class="flex items-center justify-center flex-1">
+		<div class="ui-empty flex-1">
 			<div class="text-center">
 				<div
-					class="inline-block w-8 h-8 border-3 border-blue-500 border-t-transparent rounded-full animate-spin"
+					class="ui-spinner ui-spinner-lg"
 				></div>
 				<p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
 					{t('common.loading')}
@@ -78,7 +78,7 @@
 		</div>
 	{:else if error && results.length === 0}
 		<div
-			class="m-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded"
+			class="ui-alert ui-alert-error m-5 p-5"
 		>
 			<p class="text-red-700 dark:text-red-400 font-medium text-sm">
 				{error.code}
@@ -88,7 +88,7 @@
 			</p>
 			{#if error.position && onJumpToError}
 				<button
-					class="-btn ui-btn-danger-outline ui-btn-sm"
+					class="ui-btn ui-btn-danger-outline ui-btn-sm"
 					onclick={() => onJumpToError?.(error.position!)}
 				>
 					{t('console.jumpToError', {
@@ -100,7 +100,7 @@
 		</div>
 	{:else if isMultiResult || (results.length === 1 && !currentResult)}
 		<div
-			class="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400"
+			class="ui-result-head"
 		>
 			<span>⏱ {t('console.time')}: {formatExecutionTime(executionTime)}</span>
 			<span>|</span>
@@ -111,7 +111,7 @@
 				)}</span
 			>
 		</div>
-		<div class="flex-1 overflow-auto p-4 flex flex-col gap-3">
+		<div class="flex-1 overflow-auto p-5 flex flex-col gap-3">
 			{#each results as entry, index (index)}
 				<details
 					class="border border-gray-200 dark:border-gray-700 rounded overflow-hidden"
@@ -153,7 +153,7 @@
 									.error.message}
 								{#if entry.error.position && onJumpToError}
 									<button
-										class="-btn ui-btn-danger-outline ui-btn-sm"
+										class="ui-btn ui-btn-danger-outline ui-btn-sm"
 										onclick={() => onJumpToError?.(entry.error!.position!)}
 									>
 										{t('console.jumpToError', {
@@ -197,7 +197,7 @@
 		</div>
 	{:else if currentResult}
 		<div
-			class="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400"
+			class="ui-result-head"
 		>
 			<span
 				title={primaryEntry?.stages
@@ -225,10 +225,7 @@
 			<div class="flex gap-1">
 				{#each ['table', 'json', 'graph'] as view (view)}
 					<button
-						class="px-2 py-0.5 text-xs rounded cursor-pointer {activeView ===
-						view
-							? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-							: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+						class="ui-seg {activeView === view ? 'ui-seg-active' : ''}"
 						onclick={() => onViewChange(view as 'table' | 'json' | 'graph')}
 					>
 						{view === 'table'
@@ -249,7 +246,7 @@
 				onclick={() => exportToJSON(currentResult)}>JSON</button
 			>
 		</div>
-		<div class="flex-1 overflow-auto p-4">
+		<div class="flex-1 overflow-auto p-5">
 			{#if activeView === 'table'}
 				<div class="overflow-x-auto">
 					<table class="ui-table w-full border-collapse">
@@ -273,7 +270,7 @@
 				</div>
 			{:else if activeView === 'json'}
 				<pre
-					class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-4 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{JSON.stringify(
+					class="ui-pre ui-pre-lg">{JSON.stringify(
 						currentResult,
 						null,
 						2,
@@ -299,7 +296,7 @@
 					</div>
 				{:else}
 					<div
-						class="flex items-center justify-center h-48 text-gray-400 text-sm"
+						class="ui-empty"
 					>
 						{t('console.viewGraph')} - {t('graph.noData')}
 					</div>
@@ -308,7 +305,7 @@
 		</div>
 	{:else}
 		<div
-			class="flex items-center justify-center flex-1 text-gray-400 dark:text-gray-500 text-sm"
+			class="ui-empty flex-1"
 		>
 			{t('console.noResult')}
 		</div>

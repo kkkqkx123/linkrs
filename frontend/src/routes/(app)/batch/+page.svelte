@@ -47,23 +47,23 @@
 	}
 </script>
 
-<div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
-	<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">
+<div class="ui-page-doc animate-fade-in">
+	<h1 class="ui-page-title">
 		{t('sidebar.batch')}
 	</h1>
 
 	{#if error}
-		<p class="text-xs text-red-500">{error}</p>
+		<p class="ui-error-text">{error}</p>
 	{/if}
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('batch.create')}
 		</h2>
 		<div class="grid md:grid-cols-3 gap-2 text-sm mb-3">
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('batch.spaceId')}
 				<input
 					type="number"
@@ -71,7 +71,7 @@
 					bind:value={spaceId}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('batch.type')}
 				<select
 					class="ui-input ui-input-sm"
@@ -82,7 +82,7 @@
 					<option value="mixed">mixed</option>
 				</select>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('batch.size')}
 				<input
 					type="number"
@@ -110,19 +110,19 @@
 	</section>
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('batch.manage')}
 		</h2>
-		<label class="flex flex-col gap-1 text-xs text-gray-500 mb-3">
+		<label class="ui-field mb-3">
 			{t('batch.id')}
 			<input
 				class="ui-input ui-input-sm font-mono"
 				bind:value={batchId}
 			/>
 		</label>
-		<label class="flex flex-col gap-1 text-xs text-gray-500 mb-3">
+		<label class="ui-field mb-3">
 			{t('batch.items')}
 			<textarea
 				rows="4"
@@ -139,7 +139,7 @@
 				{t('batch.addItems')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-success ui-btn-xs"
 				onclick={() => run(() => batchService.execute(batchId))}
 				disabled={loading || !batchId}
 			>
@@ -153,7 +153,7 @@
 				{t('common.status')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-warn ui-btn-xs"
 				onclick={() => run(() => batchService.cancel(batchId))}
 				disabled={loading || !batchId}
 			>
@@ -171,10 +171,10 @@
 
 	{#if resultText}
 		<section
-			class="ui-card shadow-sm p-5"
+			class="ui-card shadow-sm p-6"
 		>
 			<pre
-				class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{resultText}</pre
+				class="ui-pre">{resultText}</pre
 			>
 		</section>
 	{/if}

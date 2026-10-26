@@ -61,7 +61,7 @@
 	}: Props = $props();
 </script>
 
-<div class="px-4 pb-3 flex items-center gap-2 flex-wrap">
+<div class="px-5 pb-4 flex items-center gap-2 flex-wrap">
 	<button
 		class="ui-btn ui-btn-primary"
 		onclick={onExecute}
@@ -78,7 +78,7 @@
 		</button>
 	{/if}
 	<button
-		class="px-4 py-1.5 bg-teal-500 hover:bg-teal-600 text-white text-sm rounded transition-colors disabled:opacity-50 cursor-pointer"
+		class="ui-btn ui-btn-info ui-btn-sm"
 		onclick={onStreamExecute}
 		disabled={isBusy || !streamEligibility.eligible}
 		title={streamEligibility.mode === 'single' && parametersCount > 0
@@ -88,7 +88,7 @@
 		{t('console.execStream')}
 	</button>
 	<button
-		class="px-4 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white text-sm rounded transition-colors disabled:opacity-50 cursor-pointer"
+		class="ui-btn ui-btn-ghost ui-btn-sm"
 		onclick={onCursorExecute}
 		disabled={isBusy || streamEligibility.mode !== 'single'}
 		title={t('console.cursorExecuteHint')}
@@ -178,7 +178,7 @@
 	</button>
 </div>
 {#if autoDecision}
-	<div class="mx-4 mb-3 p-2 text-xs rounded border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">
+	<div class="ui-alert ui-alert-info mx-4 mb-3">
 		{#if autoDecision.estimatedRows === null}
 			{t('console.autoDecisionUnknown', { threshold: autoDecision.threshold })}
 		{:else if autoDecision.path === 'stream'}

@@ -19,9 +19,9 @@
 </script>
 
 <section
-	class="ui-card shadow-sm p-5"
+	class="ui-card shadow-sm p-6"
 >
-	<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+	<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
 		{t('migration.execute')}
 	</h2>
 	<label class="flex flex-col gap-1 text-xs text-gray-500 mb-3">
@@ -34,7 +34,7 @@
 	</label>
 	<div class="flex flex-wrap gap-2">
 		<button
-			class="px-3 py-1 text-xs rounded bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-warn ui-btn-xs"
 			onclick={onDryRun}
 			disabled={loading || !planJson}
 		>

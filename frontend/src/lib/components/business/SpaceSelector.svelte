@@ -24,7 +24,7 @@
 <div class="flex items-center gap-2 text-sm">
 	<span class="text-gray-500">{t('sidebar.spaces')}:</span>
 	<select
-		class="px-2 py-1 border border-gray-300 rounded text-sm bg-white focus:outline-none focus:border-blue-500"
+		class="ui-input ui-input-sm w-auto"
 		value={currentSpace || ''}
 		onchange={handleChange}
 	>

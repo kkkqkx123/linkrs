@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { t, type MessageKey } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
@@ -8,23 +9,65 @@
 	const managesUsers = fromStore(canManageUsers);
 
 	// ---- 侧栏宽度:可拖拽调节,持久化到 localStorage ----
-	// Menu content (icon + label + padding) needs ~150px; the default leaves
-	// even breathing room while staying well under the old oversized width.
-	const SIDEBAR_DEFAULT = 192;
-	const SIDEBAR_MIN = 168;
-	const SIDEBAR_MAX = 288;
+	// 下限是物理诚实值:图标约 20px + gap 8px + 链接 px-3 24px + 导航 p-3 24px.
+	// 到达下限时图标完整显示、标签自然收为零,不留死区.
+	// 上限 300 容纳长标签不换行;默认 176 只是回退,首次加载以实测贴合宽度为准.
+	const SIDEBAR_DEFAULT = 176;
+	const SIDEBAR_MIN = 76;
+	const SIDEBAR_MAX = 300;
+	const SNAP_PX = 6;
 	const WIDTH_KEY = 'linkrs.sidebar-width';
 
 	function loadWidth(): number {
 		const saved = Number(localStorage.getItem(WIDTH_KEY));
-		if (Number.isFinite(saved) && saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) {
-			return saved;
+		if (Number.isFinite(saved)) {
+			return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, saved));
 		}
 		return SIDEBAR_DEFAULT;
 	}
 
 	let width = $state(loadWidth());
 	let resizing = $state(false);
+	let navEl: HTMLElement | null = null;
+
+	function persist() {
+		localStorage.setItem(WIDTH_KEY, String(Math.round(width)));
+	}
+
+	// 边缘贴合文字:最宽一行的完整内容宽度 + 导航内边距.
+	// 标签始终保留在 DOM 中只做省略裁剪,因此 scrollWidth 就是文字全宽,
+	// 测量时临时展开 details,避免收起的子菜单被低估.
+	function measureFitWidth(): number {
+		if (!navEl) return SIDEBAR_DEFAULT;
+		const details = [
+			...navEl.querySelectorAll('details'),
+		] as HTMLDetailsElement[];
+		const wasOpen = details.map((d) => d.open);
+		details.forEach((d) => (d.open = true));
+		let maxRow = 0;
+		navEl.querySelectorAll('a, summary').forEach((row) => {
+			maxRow = Math.max(maxRow, (row as HTMLElement).scrollWidth);
+		});
+		details.forEach((d, i) => (d.open = wasOpen[i]));
+		const cs = getComputedStyle(navEl);
+		const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+		return Math.min(
+			SIDEBAR_MAX,
+			Math.max(SIDEBAR_MIN, Math.ceil(maxRow + pad) + 1),
+		);
+	}
+
+	function fitWidth() {
+		width = measureFitWidth();
+		persist();
+	}
+
+	onMount(() => {
+		// 无存档时不使用拍脑袋的默认值,直接贴合当前语言下的内容宽度.
+		if (localStorage.getItem(WIDTH_KEY) === null) {
+			width = measureFitWidth();
+		}
+	});
 
 	function startResize(e: PointerEvent) {
 		e.preventDefault();
@@ -33,28 +76,23 @@
 		document.body.style.userSelect = 'none';
 		const startX = e.clientX;
 		const startWidth = width;
+		const fit = measureFitWidth();
 
 		function onMove(ev: PointerEvent) {
-			width = Math.min(
-				SIDEBAR_MAX,
-				Math.max(SIDEBAR_MIN, startWidth + (ev.clientX - startX)),
-			);
+			let next = startWidth + (ev.clientX - startX);
+			if (Math.abs(next - fit) <= SNAP_PX) next = fit;
+			width = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, next));
 		}
 		function onUp() {
 			resizing = false;
 			document.body.style.cursor = '';
 			document.body.style.userSelect = '';
-			localStorage.setItem(WIDTH_KEY, String(width));
+			persist();
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
 		}
 		window.addEventListener('pointermove', onMove);
 		window.addEventListener('pointerup', onUp);
-	}
-
-	function resetWidth() {
-		width = SIDEBAR_DEFAULT;
-		localStorage.removeItem(WIDTH_KEY);
 	}
 
 	interface MenuItem {
@@ -210,75 +248,97 @@
 	}
 </script>
 
-<div class="flex flex-shrink-0 relative" style="width: {width}px">
+<div
+	class="flex flex-shrink-0 relative"
+	style="width: {width}px; min-width: {SIDEBAR_MIN}px"
+>
 	<aside
-		class="w-full bg-white dark:bg-[#1C2333] border-r border-gray-200 dark:border-gray-700/50 flex flex-col overflow-y-auto transition-colors duration-300 {resizing
+		class="w-full bg-white dark:bg-[#1C2333] border-r border-gray-200 dark:border-gray-700/50 flex flex-col overflow-y-auto overflow-x-hidden transition-colors duration-300 {resizing
 			? 'pointer-events-none select-none'
 			: ''}"
 	>
-		<div class="px-5 py-4 border-b border-gray-200 dark:border-gray-700/50">
-			<h1 class="text-lg font-bold text-[var(--color-primary)]">Linkrs</h1>
+		<div class="px-4 py-4 border-b border-gray-200 dark:border-gray-700/50">
+			<h1
+				class="text-lg font-bold text-[var(--color-primary)] truncate whitespace-nowrap overflow-hidden"
+				title="Linkrs"
+			>
+				Linkrs
+			</h1>
 		</div>
-	<nav class="flex-1 p-3">
-		<ul class="space-y-1">
-			{#each visibleItems as item (item.key)}
-				{#if item.children}
-					<li>
-						<details open={item.children.some((c) => path.startsWith(c.key))}>
-							<summary
-								class="flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50"
+		<nav bind:this={navEl} class="flex-1 p-3">
+			<ul class="space-y-1">
+				{#each visibleItems as item (item.key)}
+					{#if item.children}
+						<li>
+							<details open={item.children.some((c) => path.startsWith(c.key))}>
+								<summary
+									class="flex items-center gap-2 px-3 py-2.5 rounded-md cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50 overflow-hidden whitespace-nowrap"
+									title={t(item.label)}
+								>
+									<span class="flex-shrink-0 text-base leading-none"
+										>{item.icon}</span
+									>
+									<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
+								</summary>
+								<ul class="ml-4 mt-1 space-y-1">
+									{#each item.children as child (child.key)}
+										<li>
+											<a
+												href={child.route}
+												title={t(child.label)}
+												onpointerenter={() => prefetchGraphChunk(child)}
+												class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors overflow-hidden whitespace-nowrap {isActive(
+													child,
+												)
+													? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium'
+													: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
+											>
+												<span class="flex-shrink-0">{child.icon}</span>
+												<span class="min-w-0 flex-1 truncate"
+													>{t(child.label)}</span
+												>
+											</a>
+										</li>
+									{/each}
+								</ul>
+							</details>
+						</li>
+					{:else}
+						<li>
+							<a
+								href={item.route}
+								title={t(item.label)}
+								onpointerenter={() => prefetchGraphChunk(item)}
+								class="w-full flex items-center gap-2 px-3 py-2.5 rounded-md text-sm transition-colors overflow-hidden whitespace-nowrap {isActive(
+									item,
+								)
+									? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium'
+									: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
 							>
-								<span>{item.icon}</span>
-								<span>{t(item.label)}</span>
-							</summary>
-							<ul class="ml-4 mt-1 space-y-1">
-								{#each item.children as child (child.key)}
-									<li>
-										<a
-											href={child.route}
-											onpointerenter={() => prefetchGraphChunk(child)}
-											class="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors {isActive(
-												child,
-											)
-												? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium'
-												: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
-										>
-											<span>{child.icon}</span>
-											<span>{t(child.label)}</span>
-										</a>
-									</li>
-								{/each}
-							</ul>
-						</details>
-					</li>
-				{:else}
-					<li>
-						<a
-							href={item.route}
-							onpointerenter={() => prefetchGraphChunk(item)}
-							class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors {isActive(
-								item,
-							)
-								? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium'
-								: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
-						>
-							<span>{item.icon}</span>
-							<span>{t(item.label)}</span>
-						</a>
-					</li>
-				{/if}
-			{/each}
-		</ul>
-	</nav>
+								<span class="flex-shrink-0 text-base leading-none"
+									>{item.icon}</span
+								>
+								<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
+							</a>
+						</li>
+					{/if}
+				{/each}
+			</ul>
+		</nav>
 	</aside>
 	<div
 		role="separator"
 		aria-orientation="vertical"
-		title="{t('sidebar.resizeHint')} ({t('common.doubleClickReset')})"
-		class="absolute top-0 right-[-2px] w-1 h-full cursor-col-resize touch-none z-10 {resizing
+		aria-valuenow={Math.round(width)}
+		aria-valuemin={SIDEBAR_MIN}
+		aria-valuemax={SIDEBAR_MAX}
+		title="{t('sidebar.resizeHint')} ({t('sidebar.fitHint')})"
+		class="absolute top-0 right-[-6px] w-3 h-full cursor-col-resize touch-none z-10 flex justify-center {resizing
 			? 'bg-[var(--color-primary)]/40'
 			: 'bg-transparent hover:bg-[var(--color-primary)]/25'} transition-colors"
 		onpointerdown={startResize}
-		ondblclick={resetWidth}
-	></div>
+		ondblclick={fitWidth}
+	>
+		<div class="w-1 h-full bg-current opacity-0"></div>
+	</div>
 </div>

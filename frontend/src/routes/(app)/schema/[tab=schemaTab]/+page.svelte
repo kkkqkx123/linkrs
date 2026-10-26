@@ -405,15 +405,15 @@
 {#if !pageInitialized}
 	<PageSkeleton />
 {:else}
-	<div class="flex flex-col h-full gap-4">
-		<div class="ui-card shadow-sm px-5 py-3">
-			<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+	<div class="ui-page">
+		<div class="ui-card shadow-sm px-6 py-4">
+			<h2 class="ui-page-title">
 				{t('schema.title')}
 			</h2>
 		</div>
 
 		<!-- Space Selector -->
-		<div class="ui-card shadow-sm px-5 py-3">
+		<div class="ui-card shadow-sm px-6 py-4">
 			<div class="flex items-center gap-4">
 				<span class="text-sm font-medium text-gray-600 dark:text-gray-400"
 					>{t('sidebar.spaces')}:</span
@@ -440,15 +440,12 @@
 		</div>
 
 		<!-- Tabs -->
-		<div class="ui-card shadow-sm flex flex-col flex-1 overflow-hidden">
+		<div class="ui-card ui-card-flush shadow-sm flex flex-col flex-1 overflow-hidden">
 			<div class="flex border-b border-gray-200 dark:border-gray-700">
 				{#each TABS as tab (tab.id)}
 					<a
 						href={`/schema/${tab.id}`}
-						class="px-5 py-3 text-sm font-medium transition-colors {activeTab ===
-						tab.id
-							? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500'
-							: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+						class="ui-tab {activeTab === tab.id ? 'ui-tab-active' : ''}"
 						aria-current={activeTab === tab.id ? 'page' : undefined}
 					>
 						{t(tab.label)}
@@ -456,12 +453,12 @@
 				{/each}
 			</div>
 
-			<div class="flex-1 overflow-auto p-4">
+			<div class="flex-1 overflow-auto p-5">
 				{#if activeTab === 'spaces'}
 					{#if isLoadingSpaces}
-						<div class="flex items-center justify-center p-8">
+						<div class="ui-empty">
 							<div
-								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+								class="ui-spinner"
 							></div>
 						</div>
 					{:else if spaces.length === 0}
@@ -514,9 +511,9 @@
 						>
 					</div>
 					{#if isLoadingTags}
-						<div class="flex items-center justify-center p-8">
+						<div class="ui-empty">
 							<div
-								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+								class="ui-spinner"
 							></div>
 						</div>
 					{:else if tags.length === 0}
@@ -581,9 +578,9 @@
 						>
 					</div>
 					{#if isLoadingEdgeTypes}
-						<div class="flex items-center justify-center p-8">
+						<div class="ui-empty">
 							<div
-								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+								class="ui-spinner"
 							></div>
 						</div>
 					{:else if edgeTypes.length === 0}
@@ -648,9 +645,9 @@
 						>
 					</div>
 					{#if isLoadingIndexes}
-						<div class="flex items-center justify-center p-8">
+						<div class="ui-empty">
 							<div
-								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+								class="ui-spinner"
 							></div>
 						</div>
 					{:else if indexes.length === 0}
@@ -738,9 +735,9 @@
 						{t('common.create')}
 					</button>
 					{#if isLoadingFunctions}
-						<div class="flex items-center justify-center p-8">
+						<div class="ui-empty">
 							<div
-								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+								class="ui-spinner"
 							></div>
 						</div>
 					{:else if functions.length === 0 && !functionsResult}
@@ -780,7 +777,7 @@
 					{/if}
 					{#if functionsResult}
 						<pre
-							class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-64 text-gray-700 dark:text-gray-300">{functionsResult}</pre>
+							class="ui-pre max-h-64">{functionsResult}</pre>
 					{/if}
 				{:else if activeTab === 'versions'}
 					<div class="grid md:grid-cols-5 gap-2 text-sm mb-3">
@@ -854,7 +851,7 @@
 							{t('versions.changes')}
 						</button>
 						<button
-							class="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+							class="ui-btn ui-btn-warn ui-btn-sm"
 							onclick={() =>
 								runVersionQuery(() =>
 									schemaVersionsService.breakingChanges(
@@ -871,14 +868,14 @@
 						</button>
 					</div>
 					{#if isLoadingVersions}
-						<div class="flex items-center justify-center p-8">
+						<div class="ui-empty">
 							<div
-								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+								class="ui-spinner"
 							></div>
 						</div>
 					{:else if versionsResult}
 						<pre
-							class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{versionsResult}</pre>
+							class="ui-pre">{versionsResult}</pre>
 					{:else}
 						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
 							{t('versions.hint')}
@@ -886,9 +883,9 @@
 					{/if}
 				{:else if activeTab === 'visualization'}
 					{#await import('$components/business/SchemaErGraph.svelte')}
-						<div class="flex items-center justify-center p-8">
+						<div class="ui-empty">
 							<div
-								class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+								class="ui-spinner"
 							></div>
 						</div>
 					{:then { default: SchemaErGraph }}
@@ -1201,7 +1198,7 @@
 			class="relative ui-card shadow-lg p-6 w-96"
 			onclick={(e) => e.stopPropagation()}
 		>
-			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-4">
+			<h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
 				{t('schema.createIndex')}
 			</h3>
 			<div class="space-y-3">

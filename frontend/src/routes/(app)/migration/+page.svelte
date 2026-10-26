@@ -72,13 +72,13 @@
 	}
 </script>
 
-<div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
-	<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">
+<div class="ui-page-doc animate-fade-in">
+	<h1 class="ui-page-title">
 		{t('sidebar.migration')}
 	</h1>
 
 	{#if error}
-		<p class="text-xs text-red-500">{error}</p>
+		<p class="ui-error-text">{error}</p>
 	{/if}
 
 	<MigrationPlanForm
@@ -117,10 +117,10 @@
 
 	{#if resultText}
 		<section
-			class="ui-card shadow-sm p-5"
+			class="ui-card shadow-sm p-6"
 		>
 			<pre
-				class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{resultText}</pre
+				class="ui-pre">{resultText}</pre
 			>
 		</section>
 	{/if}

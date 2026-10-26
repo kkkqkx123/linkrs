@@ -104,7 +104,7 @@
 
 	{#if panelOpen}
 		<div
-			class="absolute right-0 top-full mt-2 w-72 ui-card shadow-lg border border-gray-200 dark:border-gray-700 z-50 animate-fade-in"
+			class="absolute right-0 top-full mt-2 w-72 ui-card ui-card-flush shadow-lg z-50 animate-fade-in"
 		>
 			<div class="p-4">
 				<div class="flex items-center justify-between mb-3">
@@ -236,7 +236,7 @@
 
 					{#if checkError}
 						<div
-							class="mt-2 p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs text-red-600 dark:text-red-400"
+							class="ui-alert ui-alert-error mt-2"
 						>
 							{checkError}
 						</div>

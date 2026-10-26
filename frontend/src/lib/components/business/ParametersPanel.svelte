@@ -50,9 +50,9 @@
 	}
 </script>
 
-<div class="px-4 pb-3">
+<div class="px-5 pb-4">
 	<button
-		class="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 cursor-pointer"
+		class="ui-icon-btn"
 		onclick={onToggle}
 	>
 		{open ? '▾' : '▸'}
@@ -60,7 +60,7 @@
 	</button>
 	{#if open}
 		<div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-			<div class="border border-gray-200 dark:border-gray-700 rounded p-2">
+			<div class="ui-card p-2">
 				<p class="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
 					@ {t('console.parameters')}
 				</p>
@@ -92,7 +92,7 @@
 					{t('console.addBinding')}
 				</button>
 			</div>
-			<div class="border border-gray-200 dark:border-gray-700 rounded p-2">
+			<div class="ui-card p-2">
 				<p class="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
 					$ {t('console.sessionVariables')}
 				</p>

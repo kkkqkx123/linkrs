@@ -48,7 +48,7 @@ export default defineConfig(({ mode }) => {
 			tailwindcss(),
 			// The bundle report costs several seconds of build time; opt in with
 			// VITE_BUNDLE_REPORT=1 when auditing chunk sizes.
-			...(process.env.VITE_BUNDLE_REPORT
+			...(process.env.VITE_BUNDLE_REPORT === '1'
 				? [
 						visualizer({
 							template: 'markdown',

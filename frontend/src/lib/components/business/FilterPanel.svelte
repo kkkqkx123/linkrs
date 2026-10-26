@@ -95,7 +95,7 @@
 </script>
 
 <div
-	class="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1C2333] p-4 flex flex-col gap-3"
+	class="ui-card p-4 flex flex-col gap-3"
 >
 	<div class="flex items-center justify-between">
 		<h3 class="text-sm font-semibold text-gray-800 dark:text-gray-100">
@@ -103,16 +103,12 @@
 		</h3>
 		<div class="flex items-center gap-1 text-xs">
 			<button
-				class="px-2 py-0.5 rounded cursor-pointer {logic === 'AND'
-					? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-					: 'text-gray-500 dark:text-gray-400'}"
+				class="ui-seg {logic === 'AND' ? 'ui-seg-active' : ''}"
 				onclick={() => handleLogicChange('AND')}
 				>{t('dataBrowser.filterPanel.logicAnd')}</button
 			>
 			<button
-				class="px-2 py-0.5 rounded cursor-pointer {logic === 'OR'
-					? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-					: 'text-gray-500 dark:text-gray-400'}"
+				class="ui-seg {logic === 'OR' ? 'ui-seg-active' : ''}"
 				onclick={() => handleLogicChange('OR')}
 				>{t('dataBrowser.filterPanel.logicOr')}</button
 			>

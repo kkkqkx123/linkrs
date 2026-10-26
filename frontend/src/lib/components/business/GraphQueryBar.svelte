@@ -48,7 +48,7 @@
 </script>
 
 <div
-	class="ui-card shadow-sm px-4 py-3 flex items-center gap-2 flex-wrap"
+	class="ui-card shadow-sm px-5 py-4 flex items-center gap-2 flex-wrap"
 >
 	<input
 		type="text"
@@ -77,7 +77,7 @@
 		{running ? t('graph.queryRunning') : t('graph.queryRun')}
 	</button>
 	<button
-		class="px-3 py-1.5 text-xs text-gray-500 hover:text-blue-500 dark:text-gray-400 cursor-pointer"
+		class="ui-icon-btn"
 		onclick={openConsole}
 	>
 		{t('graph.queryOpenConsole')}

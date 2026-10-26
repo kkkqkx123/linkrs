@@ -2,9 +2,9 @@
 	import Skeleton from './Skeleton.svelte';
 </script>
 
-<div class="flex flex-col h-full gap-4 animate-fade-in">
+<div class="ui-page animate-fade-in">
 	<!-- Header skeleton -->
-	<div class="ui-card shadow-sm px-5 py-3">
+	<div class="ui-card shadow-sm px-6 py-4">
 		<Skeleton width="120px" height="1.25rem" rounded="md" />
 	</div>
 
@@ -29,16 +29,3 @@
 	</div>
 </div>
 
-<style>
-	@keyframes fade-in {
-		from {
-			opacity: 0;
-		}
-		to {
-			opacity: 1;
-		}
-	}
-	.animate-fade-in {
-		animation: fade-in 0.3s ease-out;
-	}
-</style>

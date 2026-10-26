@@ -142,7 +142,7 @@
 
 	{#if selected}
 		<div
-			class="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1C2333] px-4 py-3 text-sm"
+			class="ui-card px-4 py-3 text-sm"
 		>
 			<div class="flex items-center justify-between">
 				<span class="font-medium text-gray-800 dark:text-gray-100"
@@ -165,7 +165,7 @@
 						</button>
 					{/if}
 					<button
-						class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer"
+						class="ui-icon-btn"
 						onclick={() => (selected = null)}
 						aria-label={t('common.close')}>✕</button
 					>

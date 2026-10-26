@@ -11,7 +11,7 @@
 	let {
 		columns = [],
 		rows = [],
-		rowHeight = 32,
+		rowHeight = 40,
 		height = 400,
 	}: {
 		columns: string[];

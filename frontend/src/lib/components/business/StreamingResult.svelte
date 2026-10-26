@@ -116,7 +116,7 @@
 	{@const synthetic = syntheticOf(card, model.dense)}
 	{#if card.error}
 		<div
-			class="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded"
+			class="ui-alert ui-alert-error mb-3"
 		>
 			<p class="text-red-700 dark:text-red-400 font-medium text-sm">
 				{card.error.code}
@@ -134,7 +134,7 @@
 	{#if activeView === 'table'}
 		{#if card.columns.length === 0}
 			<div
-				class="flex items-center justify-center h-48 text-gray-400 dark:text-gray-500 text-sm"
+				class="ui-empty"
 			>
 				{t('console.streamWaitingColumns')}
 			</div>
@@ -144,7 +144,7 @@
 	{:else if activeView === 'json'}
 		{#if model.dense.length === 0}
 			<div
-				class="flex items-center justify-center h-48 text-gray-400 dark:text-gray-500 text-sm"
+				class="ui-empty"
 			>
 				{t('console.noResult')}
 			</div>
@@ -158,7 +158,7 @@
 				</p>
 			{/if}
 			<pre
-				class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-4 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{jsonPreviewOf(
+				class="ui-pre ui-pre-lg">{jsonPreviewOf(
 					card,
 					model.dense,
 				)}</pre>
@@ -186,15 +186,16 @@
 				{/if}
 			</div>
 		{:else}
-			<div class="flex items-center justify-center h-48 text-gray-400 text-sm">
+			<div class="ui-empty">
 				{t('console.viewGraph')} - {t('graph.noData')}
 			</div>
 		{/if}
 	{/if}
 {/snippet}
 
+<div class="flex-1 ui-card ui-card-flush shadow-sm overflow-hidden flex flex-col">
 <div
-	class="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400"
+	class="ui-result-head"
 >
 	<span
 		class="inline-block w-2 h-2 rounded-full {stream.status === 'failed'
@@ -230,9 +231,7 @@
 	<div class="flex gap-1">
 		{#each ['table', 'json', 'graph'] as view (view)}
 			<button
-				class="px-2 py-0.5 text-xs rounded cursor-pointer {activeView === view
-					? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-					: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+				class="ui-seg {activeView === view ? 'ui-seg-active' : ''}"
 				onclick={() => onViewChange(view as 'table' | 'json' | 'graph')}
 			>
 				{view === 'table'
@@ -259,10 +258,10 @@
 	{/if}
 </div>
 
-<div class="flex-1 overflow-auto p-4">
+<div class="flex-1 overflow-auto p-5">
 	{#if exportError}
 		<div
-			class="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded flex items-start gap-2"
+			class="ui-alert ui-alert-error mb-3 flex items-start gap-2"
 		>
 			<p class="flex-1 text-red-600 dark:text-red-300 text-sm">{exportError}</p>
 			<button
@@ -276,7 +275,7 @@
 	{/if}
 	{#if stream.error && !stream.batch}
 		<div
-			class="mb-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded"
+			class="ui-alert ui-alert-error mb-3"
 		>
 			<p class="text-red-700 dark:text-red-400 font-medium text-sm">
 				{stream.error.code}
@@ -344,9 +343,10 @@
 		{@render cardBody(stream.cards[0])}
 	{:else}
 		<div
-			class="flex items-center justify-center h-48 text-gray-400 dark:text-gray-500 text-sm"
+			class="ui-empty"
 		>
 			{t('console.noResult')}
 		</div>
 	{/if}
+</div>
 </div>

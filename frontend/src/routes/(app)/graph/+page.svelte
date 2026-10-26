@@ -327,12 +327,12 @@
 	}
 </script>
 
-<div class="flex flex-col h-full gap-4">
+<div class="ui-page">
 	<div
-		class="ui-card shadow-sm px-5 py-3 flex items-center justify-between"
+		class="ui-card shadow-sm px-6 py-4 flex items-center justify-between"
 	>
 		<h2
-			class="text-lg font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2"
+			class="ui-page-title flex items-center gap-2"
 		>
 			<span>🔗</span>
 			{t('graph.title')}
@@ -441,7 +441,7 @@
 
 	{#if filterPanelOpen && graphData}
 		<div
-			class="ui-card shadow-sm px-5 py-3 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
+			class="ui-card shadow-sm px-6 py-4 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
 		>
 			<div>
 				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -450,9 +450,7 @@
 				<div class="flex flex-wrap gap-2">
 					{#each Object.keys(nodeStyles) as tag (tag)}
 						<button
-							class="px-2 py-1 text-xs rounded border cursor-pointer {filterTags.has(tag)
-								? 'bg-blue-500 text-white border-blue-500'
-								: 'bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600'}"
+							class="ui-chip {filterTags.has(tag) ? 'ui-chip-active' : ''}"
 							onclick={() => graphStore.toggleFilterTag(tag)}
 						>
 							{tag}
@@ -467,9 +465,7 @@
 				<div class="flex flex-wrap gap-2">
 					{#each Object.keys(edgeStyles) as type (type)}
 						<button
-							class="px-2 py-1 text-xs rounded border cursor-pointer {filterEdgeTypes.has(type)
-								? 'bg-blue-500 text-white border-blue-500'
-								: 'bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600'}"
+							class="ui-chip {filterEdgeTypes.has(type) ? 'ui-chip-active' : ''}"
 							onclick={() => graphStore.toggleFilterEdgeType(type)}
 						>
 							{type}
@@ -500,7 +496,7 @@
 
 	{#if stylePanelOpen && graphData}
 		<div
-			class="ui-card shadow-sm px-5 py-3 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
+			class="ui-card shadow-sm px-6 py-4 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
 		>
 			<div>
 				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -609,7 +605,7 @@
 	{/if}
 
 	<div
-		class="flex-1 ui-card shadow-sm flex overflow-hidden"
+		class="flex-1 ui-card ui-card-flush shadow-sm flex overflow-hidden"
 	>
 		<div class="flex-1 relative">
 			{#if graphData}
@@ -651,16 +647,16 @@
 
 		{#if detailPanelVisible && detailData}
 			<div
-				class="w-80 border-l border-gray-200 dark:border-gray-700 p-4 overflow-y-auto flex-shrink-0"
+				class="w-80 border-l border-gray-200 dark:border-gray-700 p-5 overflow-y-auto flex-shrink-0"
 			>
 				<div class="flex items-center justify-between mb-4">
-					<h3 class="font-semibold text-gray-800 dark:text-gray-100">
+					<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">
 						{detailType === 'node'
 							? t('graph.selectNode')
 							: t('graph.selectEdge')} Detail
 					</h3>
 					<button
-						class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer"
+						class="ui-icon-btn"
 						onclick={() => graphStore.hideDetail()}>✕</button
 					>
 				</div>

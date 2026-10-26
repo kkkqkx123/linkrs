@@ -45,9 +45,9 @@
 	}
 </script>
 
-<div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
-	<div class="flex items-center justify-between flex-wrap gap-2">
-		<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">
+<div class="ui-page-doc animate-fade-in">
+	<div class="ui-page-head">
+		<h1 class="ui-page-title">
 			{t('sidebar.vector')}
 		</h1>
 		<button
@@ -60,17 +60,17 @@
 	</div>
 
 	{#if error}
-		<p class="text-xs text-red-500">{error}</p>
+		<p class="ui-error-text">{error}</p>
 	{/if}
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('vector.manage')}
 		</h2>
 		<div class="grid md:grid-cols-4 gap-2 text-sm mb-3">
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('vector.spaceId')}
 				<input
 					type="number"
@@ -78,21 +78,21 @@
 					bind:value={spaceId}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('vector.tag')}
 				<input
 					class="ui-input ui-input-sm font-mono"
 					bind:value={tagName}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('vector.field')}
 				<input
 					class="ui-input ui-input-sm font-mono"
 					bind:value={fieldName}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('vector.size')}
 				<input
 					type="number"
@@ -102,7 +102,7 @@
 			</label>
 		</div>
 		<div class="grid md:grid-cols-2 gap-2 text-sm mb-3">
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('vector.distance')}
 				<select
 					class="ui-input ui-input-sm"
@@ -113,7 +113,7 @@
 					<option value="DotProduct">DotProduct</option>
 				</select>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('vector.rebuildId')}
 				<input
 					class="ui-input ui-input-sm font-mono"
@@ -153,7 +153,7 @@
 				{t('common.delete')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-warn ui-btn-xs"
 				onclick={() =>
 					run(() =>
 						vectorService.rebuild({
@@ -167,7 +167,7 @@
 				{t('schema.rebuild')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-gray-500 hover:bg-gray-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-muted ui-btn-xs"
 				onclick={() =>
 					run(() =>
 						vectorService.clear({
@@ -191,13 +191,13 @@
 	</section>
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('vector.search')}
 		</h2>
 		<div class="grid md:grid-cols-2 gap-2 text-sm mb-3">
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('vector.queryVector')}
 				<input
 					class="ui-input ui-input-sm font-mono"
@@ -205,7 +205,7 @@
 					bind:value={queryVectorText}
 				/>
 			</label>
-			<label class="flex flex-col gap-1 text-xs text-gray-500">
+			<label class="ui-field">
 				{t('vector.limit')}
 				<input
 					type="number"
@@ -234,10 +234,10 @@
 
 	{#if resultText}
 		<section
-			class="ui-card shadow-sm p-5"
+			class="ui-card shadow-sm p-6"
 		>
 			<pre
-				class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{resultText}</pre
+				class="ui-pre">{resultText}</pre
 			>
 		</section>
 	{/if}

@@ -50,9 +50,9 @@
 	}
 </script>
 
-<div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
-	<div class="flex items-center justify-between">
-		<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">
+<div class="ui-page-doc animate-fade-in">
+	<div class="ui-page-head">
+		<h1 class="ui-page-title">
 			{t('sessions.title')}
 		</h1>
 		<button
@@ -65,38 +65,36 @@
 	</div>
 
 	{#if error}
-		<p class="text-xs text-red-500">{error}</p>
+		<p class="ui-error-text">{error}</p>
 	{/if}
 
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
 		{#if sessions.length === 0}
 			<p class="text-sm text-gray-500 dark:text-gray-400">{t('sessions.empty')}</p>
 		{:else}
 			<div class="overflow-x-auto">
-				<table class="w-full text-sm">
+				<table class="ui-table w-full">
 					<thead>
-						<tr class="text-left text-xs text-gray-500 dark:text-gray-400">
-							<th class="py-2 pr-4">ID</th>
-							<th class="py-2 pr-4">{t('common.username')}</th>
-							<th class="py-2 pr-4">{t('users.space')}</th>
-							<th class="py-2 pr-4">Graph</th>
-							<th class="py-2">{t('common.actions')}</th>
+						<tr>
+							<th>ID</th>
+							<th>{t('common.username')}</th>
+							<th>{t('users.space')}</th>
+							<th>Graph</th>
+							<th>{t('common.actions')}</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each sessions as session (session.session_id)}
-							<tr
-								class="border-t border-[var(--color-border-light)] text-gray-700 dark:text-gray-200"
-							>
-								<td class="py-2 pr-4 font-mono">{session.session_id}</td>
-								<td class="py-2 pr-4 font-mono">{session.username}</td>
-								<td class="py-2 pr-4">{session.space_name ?? '—'}</td>
-								<td class="py-2 pr-4">{session.graph_addr ?? '—'}</td>
-								<td class="py-2">
+							<tr>
+								<td class="font-mono">{session.session_id}</td>
+								<td class="font-mono">{session.username}</td>
+								<td>{session.space_name ?? '—'}</td>
+								<td>{session.graph_addr ?? '—'}</td>
+								<td>
 									<button
-										class="px-2 py-1 text-xs border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 rounded hover:bg-red-50 dark:hover:bg-red-900/20 cursor-pointer"
+										class="ui-btn ui-btn-danger-outline ui-btn-xs"
 										onclick={() => terminateSession(session.session_id)}
 										disabled={loading}
 									>

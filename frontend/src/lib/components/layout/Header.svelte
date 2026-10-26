@@ -26,10 +26,10 @@
 </script>
 
 <header
-	class="h-14 bg-white dark:bg-[#1C2333] border-b border-gray-200 dark:border-gray-700/50 flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-300"
+	class="h-16 bg-white dark:bg-[#1C2333] border-b border-gray-200 dark:border-gray-700/50 flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-300"
 >
 	<div class="flex items-center gap-4">
-		<span class="font-semibold text-gray-800 dark:text-gray-100"
+		<span class="text-xl font-semibold text-gray-800 dark:text-gray-100"
 			>{t('app.title')}</span
 		>
 		{#if store.isVerified}

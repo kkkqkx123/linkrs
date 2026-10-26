@@ -7,6 +7,7 @@
 		"dev": "vite dev",
 		"dev:mock": "vite dev --mode mock",
 		"build": "vite build",
+		"build:analyze": "VITE_BUNDLE_REPORT=1 vite build",
 		"build:mock": "vite build --mode mock",
 		"preview": "vite preview",
 		"check": "npm run check:i18n && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

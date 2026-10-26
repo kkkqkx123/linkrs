@@ -38,25 +38,25 @@
 </script>
 
 <section
-	class="ui-card shadow-sm p-5"
+	class="ui-card shadow-sm p-6"
 >
-	<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+	<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
 		{t('migration.plan')}
 	</h2>
 	<div class="grid md:grid-cols-4 gap-2 text-sm mb-3">
-		<label class="flex flex-col gap-1 text-xs text-gray-500">
+		<label class="ui-field">
 			{t('migration.space')}
 			<input class={inputClass} bind:value={space} />
 		</label>
-		<label class="flex flex-col gap-1 text-xs text-gray-500">
+		<label class="ui-field">
 			{t('migration.label')}
 			<input class={inputClass} bind:value={label} />
 		</label>
-		<label class="flex flex-col gap-1 text-xs text-gray-500">
+		<label class="ui-field">
 			{t('migration.fromVersion')}
 			<input type="number" class={inputClass} bind:value={fromVersion} />
 		</label>
-		<label class="flex flex-col gap-1 text-xs text-gray-500">
+		<label class="ui-field">
 			{t('migration.toVersion')}
 			<input type="number" class={inputClass} bind:value={toVersion} />
 		</label>

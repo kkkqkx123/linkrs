@@ -65,9 +65,9 @@
 			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
 		>
 			<div class="flex items-center justify-between mb-4">
-				<h3 class="font-semibold text-gray-800 dark:text-gray-100">{title}</h3>
+				<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">{title}</h3>
 				<button
-					class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer"
+					class="ui-icon-btn"
 					onclick={onClose}>✕</button
 				>
 			</div>
@@ -107,12 +107,12 @@
 					{t('dataBrowser.edit.statement')}
 				</h4>
 				<pre
-					class="text-xs bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded p-2 overflow-x-auto text-gray-700 dark:text-gray-300 font-mono whitespace-pre-wrap">{statement}</pre>
+					class="ui-pre ui-pre-sm whitespace-pre-wrap">{statement}</pre>
 			</div>
 
 			{#if errorMessage}
 				<div
-					class="mt-3 p-2 text-xs rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400"
+					class="ui-alert ui-alert-error mt-3"
 				>
 					{errorMessage}
 				</div>

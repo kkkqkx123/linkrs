@@ -510,9 +510,9 @@
 {#if !pageInitialized}
 	<PageSkeleton />
 {:else if currentSpace}
-	<div class="flex flex-col h-full gap-4">
-		<div class="ui-card shadow-sm px-5 py-3 flex items-center justify-between">
-			<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+	<div class="ui-page">
+		<div class="ui-card shadow-sm px-6 py-4 flex items-center justify-between">
+			<h2 class="ui-page-title">
 				📋 {t('sidebar.dataBrowser')}
 			</h2>
 			<div class="flex gap-2">
@@ -520,9 +520,7 @@
 					🔄 {t('common.refresh')}
 				</button>
 				<button
-					class="px-3 py-1.5 border rounded text-sm cursor-pointer {filterPanelVisible
-						? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400'
-						: 'border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300'}"
+					class="ui-chip {filterPanelVisible ? 'ui-chip-active' : ''}"
 					onclick={() => dataBrowserStore.toggleFilterPanel()}
 				>
 					🔍 {t('dataBrowser.filter')}
@@ -536,7 +534,7 @@
 
 		{#if error}
 			<div
-				class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-3 text-red-600 dark:text-red-400 text-sm"
+				class="ui-alert ui-alert-error text-sm"
 			>
 				{error}
 			</div>
@@ -544,7 +542,7 @@
 
 		{#if selectedIds.size > 0}
 			<div
-				class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-3 flex items-center gap-3 text-sm"
+				class="ui-alert ui-alert-info flex items-center gap-3 text-sm"
 			>
 				<span class="text-blue-700 dark:text-blue-300">
 					{t('dataBrowser.batch.selected', { count: selectedIds.size })}
@@ -563,7 +561,7 @@
 		{/if}
 		{#if batchMessage}
 			<div
-				class="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded p-3 text-green-700 dark:text-green-400 text-sm"
+				class="ui-alert ui-alert-ok text-sm"
 			>
 				{batchMessage}
 				{#if batchError}
@@ -574,30 +572,24 @@
 			</div>
 		{/if}
 
-		<div class="flex-1 ui-card shadow-sm overflow-hidden flex">
+		<div class="flex-1 ui-card ui-card-flush shadow-sm overflow-hidden flex">
 			<div class="flex-1 flex flex-col overflow-hidden">
 				<div class="flex border-b border-gray-200 dark:border-gray-700">
 					<button
-						class="px-5 py-3 text-sm font-medium cursor-pointer {activeTab ===
-						'vertices'
-							? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500'
-							: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+						class="ui-tab {activeTab === 'vertices' ? 'ui-tab-active' : ''}"
 						onclick={() => handleTabChange('vertices')}
 					>
 						📦 {t('dataBrowser.vertices')}
 					</button>
 					<button
-						class="px-5 py-3 text-sm font-medium cursor-pointer {activeTab ===
-						'edges'
-							? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-500'
-							: 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+						class="ui-tab {activeTab === 'edges' ? 'ui-tab-active' : ''}"
 						onclick={() => handleTabChange('edges')}
 					>
 						↔ {t('sidebar.edges')}
 					</button>
 				</div>
 
-				<div class="p-4 flex-1 overflow-auto">
+				<div class="p-5 flex-1 overflow-auto">
 					{#if activeTab === 'vertices'}
 						<div class="mb-4">
 							<select
@@ -613,9 +605,9 @@
 						</div>
 
 						{#if loading}
-							<div class="flex items-center justify-center p-8">
+							<div class="ui-empty">
 								<div
-									class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+									class="ui-spinner"
 								></div>
 							</div>
 						{:else if vertices.length > 0}
@@ -737,9 +729,9 @@
 						</div>
 
 						{#if loading}
-							<div class="flex items-center justify-center p-8">
+							<div class="ui-empty">
 								<div
-									class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full"
+									class="ui-spinner"
 								></div>
 							</div>
 						{:else if edges.length > 0}
@@ -857,9 +849,9 @@
 
 			<!-- Statistics Panel -->
 			<div
-				class="w-64 border-l border-gray-200 dark:border-gray-700 p-4 bg-gray-50 dark:bg-gray-800/20 overflow-y-auto"
+				class="w-64 border-l border-gray-200 dark:border-gray-700 p-5 bg-gray-50 dark:bg-gray-800/20 overflow-y-auto"
 			>
-				<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-3 text-sm">
+				<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-3">
 					{t('dataBrowser.statistics')}
 				</h3>
 				{#if statistics}
@@ -924,14 +916,14 @@
 			class="relative ui-card shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
 		>
 			<div class="flex items-center justify-between mb-4">
-				<h3 class="font-semibold text-gray-800 dark:text-gray-100">
+				<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">
 					{detailType === 'vertex'
 						? t('dataBrowser.vertices')
 						: t('sidebar.edges')}
 					{t('common.detail')}
 				</h3>
 				<button
-					class="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 cursor-pointer"
+					class="ui-icon-btn"
 					onclick={() => dataBrowserStore.hideDetail()}>✕</button
 				>
 			</div>
@@ -995,7 +987,7 @@
 		<div
 			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
 		>
-			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-2">
+			<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-2">
 				{t('dataBrowser.edit.changed')}
 			</h3>
 			<p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
@@ -1043,7 +1035,7 @@
 		<div
 			class="relative ui-card shadow-lg p-6 w-[26rem] max-h-[85vh] overflow-y-auto"
 		>
-			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-2">
+			<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-2">
 				{t('common.delete')}
 			</h3>
 			<p class="text-sm text-gray-600 dark:text-gray-300">
@@ -1062,10 +1054,10 @@
 				</p>
 			{/if}
 			<pre
-				class="mt-3 text-xs bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded p-2 overflow-x-auto text-gray-700 dark:text-gray-300 font-mono whitespace-pre-wrap">{deleteConfirm.statement}</pre>
+				class="ui-pre ui-pre-sm whitespace-pre-wrap mt-3">{deleteConfirm.statement}</pre>
 			{#if deleteError}
 				<div
-					class="mt-3 p-2 text-xs rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400"
+					class="ui-alert ui-alert-error mt-3"
 				>
 					{deleteError}
 				</div>

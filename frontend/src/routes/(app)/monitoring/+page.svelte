@@ -464,9 +464,9 @@
 	onDestroy(() => monitoringStore.stopPolling());
 </script>
 
-<div class="max-w-6xl mx-auto space-y-4 animate-fade-in pb-8">
-	<div class="flex items-center justify-between flex-wrap gap-2">
-		<h1 class="text-xl font-bold text-gray-800 dark:text-gray-100">
+<div class="ui-page-doc animate-fade-in">
+	<div class="ui-page-head">
+		<h1 class="ui-page-title">
 			{t('sidebar.monitoring')}
 		</h1>
 		<div class="flex items-center gap-2 text-sm">
@@ -478,7 +478,7 @@
 				</span>
 			{/if}
 			<button
-				class="px-3 py-1 rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 cursor-pointer"
+				class="ui-btn ui-btn-soft ui-btn-sm"
 				onclick={togglePaused}
 			>
 				{monitor.paused ? t('monitoring.resume') : t('monitoring.pause')}
@@ -494,7 +494,7 @@
 	</div>
 
 	<section
-		class="ui-card shadow-sm px-5 py-3 flex items-center gap-4 flex-wrap text-sm"
+		class="ui-card shadow-sm px-6 py-4 flex items-center gap-4 flex-wrap text-sm"
 	>
 		<span class="font-medium text-gray-700 dark:text-gray-300">{t('monitoring.thresholds')}</span>
 		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
@@ -534,18 +534,16 @@
 	</section>
 
 	{#if monitor.error}
-		<div
-			class="p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-700 dark:text-yellow-300"
-		>
+		<div class="ui-alert ui-alert-warn">
 			{t('monitoring.loadFailed')}: {monitor.error}
 		</div>
 	{/if}
 
 	<!-- Overview -->
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('monitoring.overview')}
 		</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
@@ -643,9 +641,9 @@
 
 	<!-- Resources -->
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('monitoring.resources')}
 		</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
@@ -723,9 +721,9 @@
 
 	<!-- Queries -->
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('monitoring.queries')}
 		</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
@@ -813,32 +811,32 @@
 			{#if patterns.length === 0}
 				<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
 			{:else}
-				<table class="min-w-full text-sm">
+				<table class="ui-table ui-table-dense min-w-full">
 					<thead>
-						<tr class="text-left text-xs text-gray-500 dark:text-gray-400">
-							<th class="py-1 pr-3">{t('monitoring.pattern')}</th>
-							<th class="py-1 pr-3">{t('monitoring.count')}</th>
-							<th class="py-1 pr-3">{t('monitoring.avg')}</th>
-							<th class="py-1 pr-3">p95</th>
-							<th class="py-1 pr-3">p99</th>
-							<th class="py-1 pr-3">{t('monitoring.errorRate')}</th>
+						<tr>
+							<th>{t('monitoring.pattern')}</th>
+							<th>{t('monitoring.count')}</th>
+							<th>{t('monitoring.avg')}</th>
+							<th>p95</th>
+							<th>p99</th>
+							<th>{t('monitoring.errorRate')}</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each patterns as p (p.normalized_query)}
 							<tr
-								class="border-t border-[var(--color-border-light)] font-mono"
+								class="font-mono"
 							>
 								<td
-									class="py-1 pr-3 max-w-72 truncate text-gray-700 dark:text-gray-200"
+									class="max-w-72 truncate"
 								>
 									{p.normalized_query}
 								</td>
-								<td class="py-1 pr-3">{formatCount(p.execution_count)}</td>
-								<td class="py-1 pr-3">{formatLatencyMs(p.avg_duration_ms)}</td>
-								<td class="py-1 pr-3">{formatLatencyMs(p.p95_duration_ms)}</td>
-								<td class="py-1 pr-3">{formatLatencyMs(p.p99_duration_ms)}</td>
-								<td class="py-1 pr-3">{formatPercent(p.error_rate)}</td>
+								<td>{formatCount(p.execution_count)}</td>
+								<td>{formatLatencyMs(p.avg_duration_ms)}</td>
+								<td>{formatLatencyMs(p.p95_duration_ms)}</td>
+								<td>{formatLatencyMs(p.p99_duration_ms)}</td>
+								<td>{formatPercent(p.error_rate)}</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -853,26 +851,26 @@
 			{#if executors.length === 0}
 				<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
 			{:else}
-				<table class="min-w-full text-sm">
+				<table class="ui-table ui-table-dense min-w-full">
 					<thead>
-						<tr class="text-left text-xs text-gray-500 dark:text-gray-400">
-							<th class="py-1 pr-3">{t('monitoring.executor')}</th>
-							<th class="py-1 pr-3">{t('monitoring.count')}</th>
-							<th class="py-1 pr-3">{t('monitoring.totalTime')}</th>
-							<th class="py-1 pr-3">{t('monitoring.totalRows')}</th>
+						<tr>
+							<th>{t('monitoring.executor')}</th>
+							<th>{t('monitoring.count')}</th>
+							<th>{t('monitoring.totalTime')}</th>
+							<th>{t('monitoring.totalRows')}</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each executors as e (e.executor_type)}
 							<tr
-								class="border-t border-[var(--color-border-light)] font-mono"
+								class="font-mono"
 							>
-								<td class="py-1 pr-3 text-gray-700 dark:text-gray-200"
+								<td>
 									>{e.executor_type}</td
 								>
-								<td class="py-1 pr-3">{formatCount(e.count)}</td>
-								<td class="py-1 pr-3">{formatLatencyMs(e.total_time_ms)}</td>
-								<td class="py-1 pr-3">{formatCount(e.total_rows)}</td>
+								<td>{formatCount(e.count)}</td>
+								<td>{formatLatencyMs(e.total_time_ms)}</td>
+								<td>{formatCount(e.total_rows)}</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -887,25 +885,25 @@
 			{#if slowRows.length === 0}
 				<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
 			{:else}
-				<table class="min-w-full text-sm">
+				<table class="ui-table ui-table-dense min-w-full">
 					<thead>
-						<tr class="text-left text-xs text-gray-500 dark:text-gray-400">
-							<th class="py-1 pr-3">{t('monitoring.query')}</th>
-							<th class="py-1 pr-3">{t('monitoring.duration')}</th>
-							<th class="py-1 pr-3">{t('monitoring.trace')}</th>
+						<tr>
+							<th>{t('monitoring.query')}</th>
+							<th>{t('monitoring.duration')}</th>
+							<th>{t('monitoring.trace')}</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each slowRows as row (row.trace_id)}
 							<tr
-								class="border-t border-[var(--color-border-light)] {Number(
+								class="{Number(
 									row.duration_ms,
 								) > thresholds.slowMs
 									? 'bg-red-50 dark:bg-red-900/10'
 									: ''}"
 							>
 								<td
-									class="py-1 pr-3 max-w-80 truncate font-mono text-gray-700 dark:text-gray-200"
+									class="max-w-80 truncate font-mono"
 								>
 									<button
 										class="hover:underline cursor-pointer text-left"
@@ -914,10 +912,10 @@
 										{row.query}
 									</button>
 								</td>
-								<td class="py-1 pr-3 font-mono"
+								<td class="font-mono"
 									>{formatLatencyMs(row.duration_ms)}</td
 								>
-								<td class="py-1 pr-3 font-mono text-xs text-gray-500"
+								<td class="font-mono text-gray-500 dark:text-gray-400"
 									>{row.trace_id}</td
 								>
 							</tr>
@@ -930,9 +928,9 @@
 
 	<!-- Storage -->
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
-		<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+		<h2 class="ui-section-title">
 			{t('monitoring.storage')}
 		</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
@@ -1028,9 +1026,9 @@
 	<!-- Transactions + sync + search -->
 	<div class="grid md:grid-cols-3 gap-4">
 		<section
-			class="ui-card shadow-sm p-5"
+			class="ui-card shadow-sm p-6"
 		>
-			<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+			<h2 class="ui-section-title">
 				{t('monitoring.transactions')}
 			</h2>
 			<div class="space-y-1 text-sm font-mono">
@@ -1073,10 +1071,10 @@
 			</div>
 		</section>
 		<section
-			class="ui-card shadow-sm p-5"
+			class="ui-card shadow-sm p-6"
 		>
 			<div class="flex items-center justify-between mb-3">
-				<h2 class="font-semibold text-gray-800 dark:text-gray-100">
+				<h2 class="ui-section-title mb-0">
 					{t('monitoring.sync')}
 				</h2>
 				<button
@@ -1099,7 +1097,7 @@
 				</div>
 				{#if syncStatusText}
 					<pre
-						class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-32 text-gray-700 dark:text-gray-300">{syncStatusText}</pre
+						class="ui-pre ui-pre-sm max-h-32">{syncStatusText}</pre
 					>
 				{/if}
 				<div class="flex justify-between">
@@ -1123,11 +1121,11 @@
 				</div>
 			</div>
 			{#if syncError}
-				<p class="text-xs text-red-500 mb-2">{syncError}</p>
+				<p class="ui-error-text mb-2">{syncError}</p>
 			{/if}
 			{#if syncMessage}
 				<pre
-					class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-32 mb-2 text-gray-700 dark:text-gray-300">{syncMessage}</pre
+					class="ui-pre ui-pre-sm max-h-32 mb-2">{syncMessage}</pre
 				>
 			{/if}
 			<div class="flex flex-wrap gap-2 mb-3">
@@ -1139,14 +1137,14 @@
 					{t('monitoring.retryOutbox')}
 				</button>
 				<button
-					class="px-2 py-1 text-xs rounded bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 cursor-pointer"
+					class="ui-btn ui-btn-warn ui-btn-xs"
 					onclick={requeueDeadLetters}
 					disabled={syncLoading}
 				>
 					{t('monitoring.requeueDeadLetters')}
 				</button>
 				<button
-					class="px-2 py-1 text-xs rounded bg-gray-500 hover:bg-gray-600 text-white disabled:opacity-50 cursor-pointer"
+					class="ui-btn ui-btn-muted ui-btn-xs"
 					onclick={runRetention}
 					disabled={syncLoading}
 				>
@@ -1160,7 +1158,7 @@
 					</h3>
 					{#if deadLettersText}
 						<pre
-							class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-40 text-gray-700 dark:text-gray-300">{deadLettersText}</pre
+							class="ui-pre ui-pre-sm">{deadLettersText}</pre
 						>
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
@@ -1172,37 +1170,37 @@
 					</h3>
 					{#if degradedText}
 						<pre
-							class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-40 text-gray-700 dark:text-gray-300">{degradedText}</pre
+							class="ui-pre ui-pre-sm">{degradedText}</pre
 						>
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
 					{/if}
 					<div class="grid grid-cols-2 gap-1 mt-2">
 						<input
-							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+							class="ui-input ui-input-xs"
 							placeholder="target"
 							bind:value={clearTarget}
 						/>
 						<input
-							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+							class="ui-input ui-input-xs"
 							placeholder="index_id"
 							inputmode="numeric"
 							bind:value={clearIndexId}
 						/>
 						<input
-							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+							class="ui-input ui-input-xs"
 							placeholder="generation"
 							inputmode="numeric"
 							bind:value={clearGeneration}
 						/>
 						<input
-							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+							class="ui-input ui-input-xs"
 							placeholder="start_lsn"
 							inputmode="numeric"
 							bind:value={clearStartLsn}
 						/>
 						<input
-							class="px-2 py-1 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 col-span-2"
+							class="ui-input ui-input-xs col-span-2"
 							placeholder="end_lsn"
 							inputmode="numeric"
 							bind:value={clearEndLsn}
@@ -1222,7 +1220,7 @@
 					</h3>
 					{#if syncDiagnostics}
 						<pre
-							class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-40 text-gray-700 dark:text-gray-300">{syncDiagnostics}</pre
+							class="ui-pre ui-pre-sm">{syncDiagnostics}</pre
 						>
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
@@ -1234,7 +1232,7 @@
 					</h3>
 					{#if retentionText}
 						<pre
-							class="font-mono bg-gray-50 dark:bg-gray-800/50 p-2 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-40 text-gray-700 dark:text-gray-300">{retentionText}</pre
+							class="ui-pre ui-pre-sm">{retentionText}</pre
 						>
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
@@ -1243,9 +1241,9 @@
 			</div>
 		</section>
 		<section
-			class="ui-card shadow-sm p-5"
+			class="ui-card shadow-sm p-6"
 		>
-			<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+			<h2 class="ui-section-title">
 				{t('common.search')}
 			</h2>
 			<div class="space-y-1 text-sm font-mono">
@@ -1269,13 +1267,13 @@
 					{t('monitoring.byIndex')}
 				</h3>
 				<div class="overflow-x-auto">
-					<table class="min-w-full text-xs font-mono">
+					<table class="ui-table ui-table-dense min-w-full font-mono">
 						<tbody>
 							{#each byIndex.slice(0, 8) as entry (entry.index)}
-								<tr class="border-t border-[var(--color-border-light)]">
-									<td class="py-1 pr-2 max-w-40 truncate">{entry.index}</td>
-									<td class="py-1 pr-2">{formatCount(entry.search_queries)}</td>
-									<td class="py-1"
+								<tr>
+									<td class="max-w-40 truncate">{entry.index}</td>
+									<td>{formatCount(entry.search_queries)}</td>
+									<td
 										>{formatLatencyMs(entry.avg_search_latency_ms)}</td
 									>
 								</tr>
@@ -1289,10 +1287,10 @@
 
 	<!-- Operations -->
 	<section
-		class="ui-card shadow-sm p-5"
+		class="ui-card shadow-sm p-6"
 	>
 		<div class="flex items-center justify-between mb-3">
-			<h2 class="font-semibold text-gray-800 dark:text-gray-100">
+			<h2 class="ui-section-title mb-0">
 				{t('monitoring.operations')}
 			</h2>
 			<button
@@ -1304,7 +1302,7 @@
 			</button>
 		</div>
 		{#if opsError}
-			<p class="text-xs text-red-500 mb-2">{opsError}</p>
+			<p class="ui-error-text mb-2">{opsError}</p>
 		{/if}
 		<div class="grid md:grid-cols-2 gap-4">
 			<div>
@@ -1315,22 +1313,22 @@
 					<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
 				{:else}
 					<div class="overflow-x-auto">
-						<table class="min-w-full text-xs font-mono">
+						<table class="ui-table ui-table-dense min-w-full font-mono">
 							<thead>
-								<tr class="text-left text-gray-500 dark:text-gray-400">
-									<th class="py-1 pr-3">id</th>
-									<th class="py-1 pr-3">{t('common.status')}</th>
-									<th class="py-1 pr-3">{t('monitoring.duration')}</th>
-									<th class="py-1 pr-3">{t('common.actions')}</th>
+								<tr>
+									<th>id</th>
+									<th>{t('common.status')}</th>
+									<th>{t('monitoring.duration')}</th>
+									<th>{t('common.actions')}</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each activeTransactions as txn (txn.transaction_id)}
-									<tr class="border-t border-[var(--color-border-light)]">
-										<td class="py-1 pr-3">{txn.transaction_id}</td>
-										<td class="py-1 pr-3">{txn.state}</td>
-										<td class="py-1 pr-3">{formatLatencyMs(txn.elapsed_ms)}</td>
-										<td class="py-1 pr-3">
+									<tr>
+										<td>{txn.transaction_id}</td>
+										<td>{txn.state}</td>
+										<td>{formatLatencyMs(txn.elapsed_ms)}</td>
+										<td>
 											<button
 												class="ui-link-danger"
 												onclick={() => killTransaction(txn.transaction_id)}
@@ -1381,7 +1379,7 @@
 												{t('common.save')}
 											</button>
 											<button
-												class="px-2 py-1 rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+												class="ui-btn ui-btn-soft ui-btn-xs"
 												onclick={() => resetConfigKey(section, key)}
 												disabled={configBusy[entry] === true}
 											>
@@ -1395,7 +1393,7 @@
 					</div>
 				{:else if configText}
 					<pre
-						class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-64 text-gray-700 dark:text-gray-300">{configText}</pre
+						class="ui-pre max-h-64">{configText}</pre
 					>
 				{:else}
 					<p class="text-sm text-gray-400">{t('monitoring.configHint')}</p>
@@ -1416,11 +1414,11 @@
 				class="relative w-full max-w-md h-full bg-white dark:bg-[#1C2333] shadow-xl border-l border-gray-200 dark:border-gray-700 p-5 overflow-y-auto"
 			>
 				<div class="flex items-center justify-between mb-3">
-					<h2 class="font-semibold text-gray-800 dark:text-gray-100">
+					<h2 class="ui-section-title mb-0">
 						{t('monitoring.portrait')}
 					</h2>
 					<button
-						class="px-2 py-1 text-sm text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 cursor-pointer"
+						class="ui-icon-btn"
 						onclick={closePortrait}
 					>
 						{t('common.close')}
@@ -1439,13 +1437,13 @@
 						</div>
 						<div class="flex gap-2">
 							<button
-								class="px-2 py-1 text-xs bg-gray-100 dark:bg-gray-700 rounded cursor-pointer"
+								class="ui-btn ui-btn-soft ui-btn-xs"
 								onclick={copyTrace}
 							>
 								{copied ? t('monitoring.copied') : t('monitoring.copyTrace')}
 							</button>
 							<button
-								class="px-2 py-1 text-xs bg-blue-500 text-white rounded cursor-pointer"
+								class="ui-btn ui-btn-info ui-btn-xs"
 								onclick={backToConsole}
 							>
 								{t('monitoring.backToConsole')}

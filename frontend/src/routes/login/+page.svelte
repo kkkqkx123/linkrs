@@ -73,7 +73,7 @@
 		<form onsubmit={handleSubmit}>
 			{#if errorMsg}
 				<div
-					class="mb-5 p-3 bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-md text-red-600 dark:text-red-400 text-sm"
+					class="ui-alert ui-alert-error mb-5 text-sm"
 				>
 					{errorMsg}
 				</div>

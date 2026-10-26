@@ -27,7 +27,7 @@
 			<h3>{t('console.saveFavorite')}</h3>
 			{#if error}
 				<div
-					class="mb-3 p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-red-600 dark:text-red-400 text-xs"
+					class="ui-alert ui-alert-error mb-3"
 				>
 					{error}
 				</div>

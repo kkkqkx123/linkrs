@@ -43,9 +43,9 @@
 </script>
 
 <section
-	class="ui-card shadow-sm p-5"
+	class="ui-card shadow-sm p-6"
 >
-	<h2 class="font-semibold text-gray-800 dark:text-gray-100 mb-3">
+	<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
 		{t('migration.stream')}
 		{#if streaming}
 			<span class="ml-2 text-xs font-normal text-gray-400">…</span>
