@@ -115,6 +115,12 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
     }
 
     pub fn should_flush(&self) -> bool {
+        // Bulk-load suspension: data flush is deferred to the single final
+        // checkpoint performed by `BulkLoadSession::finish`, so a large
+        // ingest does not pay repeated table rewrites mid-load.
+        if self.bulk_load_active() {
+            return false;
+        }
         let last_flush_lsn = *self.last_flush_lsn.read();
         let last_flush = *self.last_flush_time.read();
 
@@ -123,6 +129,14 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
     }
 
     pub fn should_checkpoint(&self) -> bool {
+        // Bulk-load suspension: threshold/time-based triggers are suppressed
+        // for the whole session. The hard `max_wal_size` safety valve stays
+        // active so a very large ingest still cannot grow the WAL without
+        // bound; `BulkLoadSession::finish` runs exactly one final checkpoint.
+        if self.bulk_load_active() {
+            let last_checkpoint_lsn = *self.last_checkpoint_lsn.read();
+            return self.wal_bytes_since(last_checkpoint_lsn) >= self.config.max_wal_size;
+        }
         let last_checkpoint_lsn = *self.last_checkpoint_lsn.read();
         let last_checkpoint = *self.last_checkpoint_time.read();
         let wal_bytes_since_checkpoint = self.wal_bytes_since(last_checkpoint_lsn);

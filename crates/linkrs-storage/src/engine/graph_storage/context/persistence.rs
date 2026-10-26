@@ -114,7 +114,7 @@ impl GraphStorageContext {
                 .map(|(label_id, table)| (*label_id, table.clone()))
                 .collect()
         });
-        self.runtime.thread_pool.install(|| -> StorageResult<()> {
+        self.runtime.checkpoint_flush_pool.install(|| -> StorageResult<()> {
             vertex_tables.par_iter().try_for_each(|(label_id, table)| {
                 let table_dir = vertex_dir.join(format!("label_{}", label_id));
                 table.flush(&table_dir, compression)
@@ -137,7 +137,7 @@ impl GraphStorageContext {
                     .map(|(key, arc)| (*key, arc.clone()))
                     .collect()
             });
-            self.runtime.thread_pool.install(|| -> StorageResult<()> {
+            self.runtime.checkpoint_flush_pool.install(|| -> StorageResult<()> {
                 edge_tables
                     .par_iter()
                     .try_for_each(|(key, edge_table)| -> StorageResult<()> {
@@ -310,11 +310,17 @@ impl GraphStorageContext {
                 verdict_kind,
             );
         }
-        let mut use_incremental = matches!(
-            strategy,
-            crate::persistence::dirty_page::CheckpointStrategy::Incremental
-        ) && global_dirty_ratio < 0.1
-            && global_dirty_ratio > 0.0;
+        // Incremental selection trusts the per-table flush-policy verdicts
+        // (`decide`: delta thresholds, baseline age, fragmentation) instead of
+        // the global dirty-ratio heuristic alone. The old gate additionally
+        // required the global ratio < 0.1, so a steady-state ingest with the
+        // global ratio in [0.1, 0.5) (the `Hybrid` band) was forced into a
+        // full-dataset rewrite per checkpoint even when every table verdict
+        // was incremental — the O(n²) bulk-load pathology. Writing only the
+        // dirty pages as deltas is strictly cheaper than a full rewrite at
+        // any ratio; the `PAGE_MERGE_RATIO` (0.5) consensus stays as the
+        // escalation guard, and a Full table verdict still escalates below.
+        let mut use_incremental = global_dirty_ratio > 0.0 && global_dirty_ratio < 0.5;
         if verdict_kind == crate::vertex::vertex_table::flush_trigger::FlushKind::Full {
             use_incremental = false;
         }
@@ -336,7 +342,7 @@ impl GraphStorageContext {
             (pages, total)
         };
 
-        self.runtime.thread_pool.install(|| -> StorageResult<()> {
+        self.runtime.checkpoint_flush_pool.install(|| -> StorageResult<()> {
             vertex_tables.par_iter().try_for_each(|(label_id, table)| {
                 let table_dir = vertex_dir.join(format!("label_{}", label_id));
                 if use_incremental {
@@ -441,7 +447,7 @@ impl GraphStorageContext {
                     .map(|(key, arc)| (*key, arc.clone()))
                     .collect()
             });
-            self.runtime.thread_pool.install(|| -> StorageResult<()> {
+            self.runtime.checkpoint_flush_pool.install(|| -> StorageResult<()> {
                 edge_tables
                     .par_iter()
                     .try_for_each(|(key, edge_table)| -> StorageResult<()> {

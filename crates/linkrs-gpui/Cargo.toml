@@ -8,11 +8,11 @@ license.workspace = true
 publish = false
 
 [dependencies]
-# Consumed as a git dependency because cargo resolves `{ workspace = true }`
-# inheritance of path dependencies against the consuming workspace root, which
-# cannot provide gpui-kit's private dependency table. The checkout under
-# crates/gpui-kit (submodule) mirrors this revision for local development.
-gpui-kit = { git = "https://github.com/kkkqkx123/gpui-kit", branch = "feat/compograph", default-features = false, features = ["component", "assets", "syntect"] }
+# Consumed as a local path dependency: crates/gpui-kit (submodule) is the
+# source of truth, never a remote. gpui-kit has its own workspace root, so its
+# internal `workspace = true` inheritance resolves against crates/gpui-kit,
+# not against the linkrs workspace.
+gpui-kit = { path = "../gpui-kit/crates/kit", default-features = false, features = ["component", "assets", "syntect"] }
 linkrs-client = { path = "../linkrs-client" }
 linkrs-wire = { path = "../linkrs-wire" }
 anyhow.workspace = true

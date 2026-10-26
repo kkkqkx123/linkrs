@@ -191,14 +191,17 @@ fn test_optimizer_vertex_count() {
 
 #[test]
 fn test_load_bounds_staged_wal_and_retired_generations() {
-    let mut db = create_test_db();
-    // Group-commit the bulk load: `load_gql_file` runs each of the 20100
-    // auto-commit statements with its own WAL fsync, which makes this test
-    // run for several minutes on persistent storage and looks like a hang
-    // (and gets killed) under time-bounded CI runners. `load_gql_file_grouped`
-    // collapses the fsyncs to one per `group_size` window while still
-    // committing every statement, so the staged-WAL / retired-generation
-    // bounds below are exercised exactly as before — just fast.
+    // Both asserted bounds are pure in-memory state: `staged_wal_len` is the
+    // in-flight transaction staging map (`GraphStorageContext::staged_wal`)
+    // and `retired_generation_count` is native-index runtime state, neither
+    // of which depends on persistence. Running in memory keeps the invariant
+    // check fast and linear (~28s for the 20100-statement file at ~1.4
+    // ms/statement); the previous on-disk variant paid an amortized O(n²)
+    // full-dataset flush per `checkpoint_threshold` window (~194s) — see
+    // docs/issue/ISSUE-008 and the bulk-load session that fixes the storage
+    // side. Bulk-load throughput on persistent storage is guarded by
+    // `e2e::perf_bulk_load`.
+    let mut db = create_test_db_in_memory();
     load_gql_file_grouped(&mut db, &format!("{}/optimizer_data.gql", DATA_DIR), 500)
         .expect("Failed to load optimizer_data.gql");
 

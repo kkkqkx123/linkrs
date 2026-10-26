@@ -30,6 +30,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
@@ -129,6 +130,16 @@ pub struct PersistenceCoordinator {
     /// passes; a restart starts empty and self-heals via lazy manifest load
     /// in `GcCoordinator`.
     checkpoint_watermark: RwLock<(Option<Timestamp>, CommitLsn)>,
+    /// Bulk-load suspension reference count: while at least one bulk-load
+    /// session is active, threshold/time-based checkpoint and flush triggers
+    /// are suppressed so a large ingest does not pay a full-dataset flush per
+    /// `checkpoint_threshold` window (amortized O(n²) total flush cost). The
+    /// hard `max_wal_size` safety valve in
+    /// [`PersistenceCoordinator::should_checkpoint`] stays active. Overlapping
+    /// sessions each hold one reference; suppression persists until the last
+    /// session exits. Entered/exited by
+    /// [`crate::engine::graph_storage::bulk_load::BulkLoadSession`].
+    bulk_load_sessions: AtomicUsize,
 }
 
 impl PersistenceCoordinator {
@@ -214,7 +225,28 @@ impl PersistenceCoordinator {
             outbox_frontier_provider: RwLock::new(None),
             storage_callbacks: Arc::new(EventSubscriptions::new()),
             checkpoint_watermark: RwLock::new((None, CommitLsn::ZERO)),
+            bulk_load_sessions: AtomicUsize::new(0),
         })
+    }
+
+    /// Whether at least one bulk-load session is currently suspending
+    /// threshold/time-based checkpoint and flush triggers.
+    pub(crate) fn bulk_load_active(&self) -> bool {
+        self.bulk_load_sessions.load(Ordering::Acquire) > 0
+    }
+
+    /// Register one bulk-load session: increments the suspension reference
+    /// count so checkpoint/flush suppression stays engaged until the
+    /// matching [`PersistenceCoordinator::exit_bulk_load`].
+    pub(crate) fn enter_bulk_load(&self) {
+        self.bulk_load_sessions.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Unregister one bulk-load session: decrements the suspension reference
+    /// count. Suppression lifts only when the count reaches zero.
+    pub(crate) fn exit_bulk_load(&self) {
+        let previous = self.bulk_load_sessions.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "bulk-load session count underflow");
     }
 
     /// Shared storage-event registry for the central `HookBus`.

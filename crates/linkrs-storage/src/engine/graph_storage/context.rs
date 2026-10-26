@@ -112,6 +112,13 @@ struct GraphStorageRuntime {
     /// Shared rayon-backed pool for background maintenance work (freeze,
     /// vertex/index GC loops). See [`crate::thread_pool`].
     thread_pool: Arc<crate::thread_pool::StorageThreadPool>,
+    /// Dedicated rayon pool for checkpoint/flush table fan-out. Isolating
+    /// flush workers from [`Self::thread_pool`] keeps a slow checkpoint's
+    /// parallel table rewrites from starving the foreground insert path,
+    /// which shares `thread_pool` with GC and maintenance loops. Sized to a
+    /// small fixed clamp (2..=4): flush work is I/O-bound and bounded by the
+    /// table count, not by available parallelism.
+    checkpoint_flush_pool: Arc<crate::thread_pool::StorageThreadPool>,
     /// Unified scheduling state for CSR background maintenance: single-flight,
     /// completion-time cooldown, exponential no-progress backoff, panic-safe
     /// execution. Shared across context clones.
@@ -162,6 +169,18 @@ impl GraphStorageRuntime {
                 crate::thread_pool::StorageThreadPool::default()
             },
         ));
+        let checkpoint_flush_pool = Arc::new(
+            crate::thread_pool::StorageThreadPool::with_threads(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(2)
+                    .clamp(2, 4),
+            )
+            .unwrap_or_else(|e| {
+                log::error!("Failed to build checkpoint flush pool: {}", e);
+                crate::thread_pool::StorageThreadPool::default()
+            }),
+        );
         // Defaults mirror `ResourceConfig::default()`; every schedule call
         // refreshes cooldown and timeout from the live configuration.
         let background_maintenance_task = Arc::new(MaintenanceTask::new(
@@ -178,6 +197,7 @@ impl GraphStorageRuntime {
             background_freeze_manager: None,
             deferred_wal_ops: DeferredWalOps::new(),
             thread_pool,
+            checkpoint_flush_pool,
             background_maintenance_task,
             last_auto_compact: Arc::new(Mutex::new(None)),
             background_auto_start: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -209,6 +229,7 @@ impl GraphStorageRuntime {
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
+            checkpoint_flush_pool: self.checkpoint_flush_pool.clone(),
             background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             background_auto_start: self.background_auto_start.clone(),
@@ -239,6 +260,7 @@ impl GraphStorageRuntime {
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
+            checkpoint_flush_pool: self.checkpoint_flush_pool.clone(),
             background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             background_auto_start: self.background_auto_start.clone(),
@@ -257,6 +279,7 @@ impl GraphStorageRuntime {
             background_freeze_manager: Some(manager),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             thread_pool: self.thread_pool.clone(),
+            checkpoint_flush_pool: self.checkpoint_flush_pool.clone(),
             background_maintenance_task: self.background_maintenance_task.clone(),
             last_auto_compact: self.last_auto_compact.clone(),
             background_auto_start: self.background_auto_start.clone(),

@@ -249,6 +249,17 @@ impl GraphStorageContext {
     }
 
     pub(crate) fn request_async_checkpoint(&self, reason: CheckpointTriggerReason) {
+        // Bulk-load suspension: threshold/time-based async requests are
+        // suppressed for the whole session; the final checkpoint is run by
+        // `BulkLoadSession::finish`.
+        if self
+            .persistent
+            .persistence
+            .as_ref()
+            .is_some_and(|persistence| persistence.read().bulk_load_active())
+        {
+            return;
+        }
         self.ensure_checkpoint_scheduler();
         if let Some(scheduler) = self.checkpoint_scheduler.lock().as_ref() {
             scheduler.request_checkpoint(reason);

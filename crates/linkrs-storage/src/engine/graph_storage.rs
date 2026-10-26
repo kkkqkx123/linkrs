@@ -4,6 +4,7 @@
 //! This module acts as an adapter layer between the high-level StorageClient API
 //! and the low-level storage engine.
 
+mod bulk_load;
 mod commit_api;
 pub mod context;
 mod cursor_impl;
@@ -24,6 +25,7 @@ pub(crate) mod ttl_purge;
 mod writer;
 mod writer_api;
 
+pub use bulk_load::BulkLoadSession;
 pub use context::{AutoCommitBatchWindow, GraphStorageContext, WriteGateStats};
 pub use serial::SerialKey;
 
@@ -242,6 +244,25 @@ impl GraphStorage {
     pub fn new_with_persistence(path: PathBuf, config: PersistenceConfig) -> StorageResult<Self> {
         GraphStorageContext::new_with_persistence(path, config)
             .map(|ctx| Self { ctx: Arc::new(ctx) })
+    }
+
+    /// Begin a bulk-load session: suspend threshold/time-based checkpoint and
+    /// flush triggers for the duration of a large ingest, then anchor the
+    /// whole load with exactly one final checkpoint.
+    ///
+    /// Without a session, a checkpoint fires every `checkpoint_threshold` WAL
+    /// bytes and each one flushes the full dataset (the incremental path is
+    /// defeated during a bulk load: no baseline on the first checkpoint, and
+    /// slow checkpoints age the baseline into further full rewrites), making
+    /// total flush cost amortized O(n²) in loaded statements. The session
+    /// keeps the hard `max_wal_size` safety valve active so the WAL still
+    /// cannot grow without bound.
+    ///
+    /// In-memory storage has no persistence layer; the returned session is a
+    /// no-op and its `finish` reports `Ok(None)`.
+    pub fn begin_bulk_load(&self) -> StorageResult<bulk_load::BulkLoadSession> {
+        let coordinator = self.ctx.persistence().as_ref().cloned();
+        Ok(bulk_load::BulkLoadSession::new(coordinator, self.ctx.clone()))
     }
 
     pub fn open_with_persistence(

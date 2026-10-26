@@ -44,7 +44,7 @@ pub use cursor::{
     ShardSlice, VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
 pub use engine::config::{PropertyGraphConfig, ResourceConfig};
-pub use engine::graph_storage::{AutoCommitBatchWindow, GraphStorage, WriteGateStats};
+pub use engine::graph_storage::{AutoCommitBatchWindow, BulkLoadSession, GraphStorage, WriteGateStats};
 pub use engine::persistence_coordinator::{
     CatalogLockDiagnostic, CheckpointDiagnostics, CheckpointStats, GcEventSink, PersistenceConfig,
     PersistenceDiagnostics, PersistenceFaultPoint, SnapshotStats, StorageEvent,

@@ -20,6 +20,8 @@ pub mod data_driven;
 pub mod extended_types;
 #[path = "e2e/optimizer.rs"]
 pub mod optimizer;
+#[path = "e2e/perf_bulk_load.rs"]
+pub mod perf_bulk_load;
 #[path = "e2e/schema_manager.rs"]
 pub mod schema_manager;
 #[path = "e2e/session_transaction.rs"]
