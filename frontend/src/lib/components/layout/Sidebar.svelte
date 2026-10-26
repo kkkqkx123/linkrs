@@ -7,6 +7,50 @@
 	const path = $derived(page.url.pathname);
 	const managesUsers = fromStore(canManageUsers);
 
+	// ---- 侧栏宽度:可拖拽调节,持久化到 localStorage ----
+	const SIDEBAR_DEFAULT = 208;
+	const SIDEBAR_MIN = 176;
+	const SIDEBAR_MAX = 320;
+	const WIDTH_KEY = 'linkrs.sidebar-width';
+
+	function loadWidth(): number {
+		const saved = Number(localStorage.getItem(WIDTH_KEY));
+		if (Number.isFinite(saved) && saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) {
+			return saved;
+		}
+		return SIDEBAR_DEFAULT;
+	}
+
+	let width = $state(loadWidth());
+	let resizing = $state(false);
+
+	function startResize(e: PointerEvent) {
+		e.preventDefault();
+		resizing = true;
+		const startX = e.clientX;
+		const startWidth = width;
+
+		function onMove(ev: PointerEvent) {
+			width = Math.min(
+				SIDEBAR_MAX,
+				Math.max(SIDEBAR_MIN, startWidth + (ev.clientX - startX)),
+			);
+		}
+		function onUp() {
+			resizing = false;
+			localStorage.setItem(WIDTH_KEY, String(width));
+			window.removeEventListener('pointermove', onMove);
+			window.removeEventListener('pointerup', onUp);
+		}
+		window.addEventListener('pointermove', onMove);
+		window.addEventListener('pointerup', onUp);
+	}
+
+	function resetWidth() {
+		width = SIDEBAR_DEFAULT;
+		localStorage.removeItem(WIDTH_KEY);
+	}
+
 	interface MenuItem {
 		key: string;
 		icon: string;
@@ -160,12 +204,15 @@
 	}
 </script>
 
-<aside
-	class="w-60 bg-white dark:bg-[#1C2333] border-r border-gray-200 dark:border-gray-700/50 flex flex-col flex-shrink-0 overflow-y-auto transition-colors duration-300"
->
-	<div class="px-5 py-4 border-b border-gray-200 dark:border-gray-700/50">
-		<h1 class="text-lg font-bold text-[var(--color-primary)]">Linkrs</h1>
-	</div>
+<div class="flex flex-shrink-0 relative" style="width: {width}px">
+	<aside
+		class="w-full bg-white dark:bg-[#1C2333] border-r border-gray-200 dark:border-gray-700/50 flex flex-col overflow-y-auto transition-colors duration-300 {resizing
+			? 'pointer-events-none select-none'
+			: ''}"
+	>
+		<div class="px-5 py-4 border-b border-gray-200 dark:border-gray-700/50">
+			<h1 class="text-lg font-bold text-[var(--color-primary)]">Linkrs</h1>
+		</div>
 	<nav class="flex-1 p-3">
 		<ul class="space-y-1">
 			{#each visibleItems as item (item.key)}
@@ -217,4 +264,15 @@
 			{/each}
 		</ul>
 	</nav>
-</aside>
+	</aside>
+	<div
+		role="separator"
+		aria-orientation="vertical"
+		title="{t('sidebar.resizeHint')} ({t('common.doubleClickReset')})"
+		class="absolute top-0 right-[-2px] w-1 h-full cursor-col-resize z-10 {resizing
+			? 'bg-[var(--color-primary)]/40'
+			: 'bg-transparent hover:bg-[var(--color-primary)]/25'} transition-colors"
+		onpointerdown={startResize}
+		ondblclick={resetWidth}
+	></div>
+</div>

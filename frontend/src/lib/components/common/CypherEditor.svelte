@@ -267,7 +267,7 @@
 </script>
 
 <div
-	class="w-full border border-gray-300 dark:border-gray-600 rounded overflow-hidden"
+	class="w-full border border-[color:var(--color-border)] rounded-md overflow-hidden"
 >
 	<div
 		class="w-full overflow-hidden"

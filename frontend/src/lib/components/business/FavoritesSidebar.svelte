@@ -71,7 +71,7 @@
 						{/if}
 						<div class="flex gap-3">
 							<button
-								class="mt-1 text-xs text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 cursor-pointer"
+								class="mt-1 ui-link text-xs"
 								title={t('console.historyRerunHint')}
 								onclick={(e) => {
 									e.stopPropagation();
@@ -81,7 +81,7 @@
 								↻ {t('console.historyRerun')}
 							</button>
 							<button
-								class="mt-1 text-xs text-red-400 hover:text-red-600 cursor-pointer"
+								class="mt-1 text-xs ui-link-danger"
 								onclick={(e) => {
 									e.stopPropagation();
 									onDelete(fav.id);

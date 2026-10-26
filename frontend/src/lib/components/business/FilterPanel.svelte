@@ -128,7 +128,7 @@
 			{#each conditions as condition, index (index)}
 				<div class="flex items-center gap-2">
 					<select
-						class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="flex-1 ui-input ui-input-sm"
 						value={condition.property}
 						onchange={(e) =>
 							updateCondition(index, {
@@ -143,7 +143,7 @@
 						{/each}
 					</select>
 					<select
-						class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input ui-input-sm"
 						value={condition.operator}
 						onchange={(e) =>
 							updateCondition(index, {
@@ -157,7 +157,7 @@
 					</select>
 					<input
 						type="text"
-						class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="flex-1 ui-input ui-input-sm"
 						placeholder={t('dataBrowser.filterPanel.value')}
 						value={String(condition.value)}
 						oninput={(e) =>
@@ -166,7 +166,7 @@
 							})}
 					/>
 					<button
-						class="text-red-400 hover:text-red-600 cursor-pointer px-1"
+						class="ui-link-danger px-1"
 						onclick={() => removeCondition(index)}>✕</button
 					>
 				</div>
@@ -176,19 +176,19 @@
 
 	<div class="flex items-center gap-2">
 		<button
-			class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+			class="ui-link text-xs"
 			onclick={addCondition}
 			>+ {t('dataBrowser.filterPanel.addCondition')}</button
 		>
 		<div class="flex-1"></div>
 		<button
-			class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+			class="ui-btn ui-btn-ghost ui-btn-sm"
 			onclick={handleClear}
 		>
 			{t('common.clear')}
 		</button>
 		<button
-			class="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs rounded cursor-pointer"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={handleApply}
 		>
 			{t('dataBrowser.filterPanel.apply')}

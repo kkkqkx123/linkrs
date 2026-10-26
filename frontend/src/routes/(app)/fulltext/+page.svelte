@@ -38,7 +38,7 @@
 			{t('sidebar.fulltext')}
 		</h1>
 		<button
-			class="px-3 py-1 text-sm rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-primary"
 			onclick={() => run(() => fulltextService.inconsistent())}
 			disabled={loading}
 		>
@@ -61,21 +61,21 @@
 				{t('vector.spaceId')}
 				<input
 					type="number"
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={spaceId}
 				/>
 			</label>
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('vector.tag')}
 				<input
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={tagName}
 				/>
 			</label>
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('vector.field')}
 				<input
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={fieldName}
 				/>
 			</label>
@@ -83,7 +83,7 @@
 		<label class="flex flex-col gap-1 text-xs text-gray-500 mb-3">
 			{t('vector.rebuildId')}
 			<input
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm font-mono"
 				bind:value={rebuildId}
 			/>
 		</label>
@@ -117,7 +117,7 @@
 				{t('common.clear')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-ghost ui-btn-sm"
 				onclick={() => run(() => fulltextService.rebuildStatus(rebuildId))}
 				disabled={loading || !rebuildId}
 			>

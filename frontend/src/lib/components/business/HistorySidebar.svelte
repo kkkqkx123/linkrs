@@ -97,7 +97,7 @@
 							{/if}
 						</div>
 						<button
-							class="mt-1 text-xs text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 cursor-pointer"
+							class="mt-1 ui-link text-xs"
 							title={t('console.historyRerunHint')}
 							onclick={(e) => {
 								e.stopPropagation();
@@ -110,7 +110,7 @@
 				{/each}
 				{#if history.length > 0}
 					<button
-						class="w-full text-center text-sm text-red-500 hover:text-red-700 py-2 cursor-pointer"
+						class="w-full text-center text-sm ui-link-danger py-2"
 						onclick={onClear}
 					>
 						{t('common.delete')}

@@ -70,23 +70,23 @@
 							type="text"
 							bind:value={row.name}
 							placeholder={t('common.name')}
-							class="w-1/3 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+							class="w-1/3 ui-input ui-input-sm font-mono"
 						/>
 						<input
 							type="text"
 							bind:value={row.text}
 							placeholder={t('console.bindingValue')}
-							class="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+							class="flex-1 ui-input ui-input-sm font-mono"
 						/>
 						<button
-							class="px-1.5 text-xs text-red-400 hover:text-red-600 cursor-pointer"
+							class="px-1.5 ui-link-danger text-xs"
 							onclick={() => removeRow(row.id)}
 							aria-label={t('common.delete')}>✕</button
 						>
 					</div>
 				{/each}
 				<button
-					class="text-xs text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 cursor-pointer"
+					class="ui-link text-xs"
 					onclick={addRow}
 				>
 					{t('console.addBinding')}
@@ -102,23 +102,23 @@
 							type="text"
 							bind:value={row.name}
 							placeholder={t('common.name')}
-							class="w-1/3 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+							class="w-1/3 ui-input ui-input-sm font-mono"
 						/>
 						<input
 							type="text"
 							bind:value={row.text}
 							placeholder={t('console.bindingValue')}
-							class="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+							class="flex-1 ui-input ui-input-sm font-mono"
 						/>
 						<button
-							class="px-1.5 text-xs text-red-400 hover:text-red-600 cursor-pointer"
+							class="px-1.5 ui-link-danger text-xs"
 							onclick={() => removeSessionVariable(row.id)}
 							aria-label={t('common.delete')}>✕</button
 						>
 					</div>
 				{/each}
 				<button
-					class="text-xs text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 cursor-pointer"
+					class="ui-link text-xs"
 					onclick={addSessionVariable}
 				>
 					{t('console.addBinding')}

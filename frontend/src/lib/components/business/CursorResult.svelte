@@ -110,14 +110,14 @@
 	<span>{formatRowCount(cursor.receivedCount)}{cursor.hasMore ? '+' : ''}</span>
 	{#if cursor.hasMore && cursor.status === 'open'}
 		<button
-			class="ml-2 px-2 py-0.5 text-xs rounded border border-blue-300 dark:border-blue-700 text-blue-500 hover:text-blue-700 cursor-pointer"
+			class="ml-2 ui-btn ui-btn-ghost ui-btn-sm"
 			onclick={onLoadMore}
 		>
 			{t('console.cursorLoadMore')}
 		</button>
 	{/if}
 	<button
-		class="px-2 py-0.5 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:text-gray-700 cursor-pointer"
+		class="ui-btn ui-btn-ghost ui-btn-sm"
 		onclick={onClose}
 	>
 		{t('common.close')}
@@ -141,12 +141,12 @@
 	</div>
 	<div class="h-4 w-px bg-gray-300 dark:bg-gray-600"></div>
 	<button
-		class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+		class="ui-link text-xs"
 		title={t('console.serverExportHint')}
 		onclick={() => void handleServerExport('csv')}>CSV</button
 	>
 	<button
-		class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+		class="ui-link text-xs"
 		title={t('console.serverExportHint')}
 		onclick={() => void handleServerExport('jsonl')}>JSONL</button
 	>
@@ -159,7 +159,7 @@
 		>
 			<p class="flex-1 text-red-600 dark:text-red-300 text-sm">{exportError}</p>
 			<button
-				class="text-red-400 hover:text-red-600 text-sm cursor-pointer"
+				class="ui-link-danger text-sm"
 				onclick={() => {
 					exportError = null;
 				}}

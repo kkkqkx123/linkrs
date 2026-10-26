@@ -59,7 +59,7 @@
 				if (e.key === 'Enter' || e.key === ' ') onClose();
 			}}
 		></div>
-		<div class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96">
+		<div class="relative ui-card shadow-lg p-6 w-96">
 			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-4">{title}</h3>
 			<div class="space-y-2 max-h-48 overflow-y-auto mb-3">
 				{#each properties as prop (prop.name)}
@@ -84,13 +84,13 @@
 				<input
 					type="text"
 					bind:value={addName}
-					class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input flex-1"
 					placeholder={t('common.name')}
 					disabled={busy}
 				/>
 				<select
 					bind:value={addType}
-					class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input"
 					disabled={busy}
 				>
 					{#each dataTypes as dt (dt)}
@@ -101,12 +101,12 @@
 			<p class="text-xs text-gray-400 mb-3">{t('schema.alterHint')}</p>
 			<div class="flex justify-end gap-2">
 				<button
-					class="px-4 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+					class="ui-btn ui-btn-ghost"
 					onclick={onClose}
 					disabled={busy}>{t('common.cancel')}</button
 				>
 				<button
-					class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+					class="ui-btn ui-btn-primary"
 					onclick={submit}
 					disabled={busy}>{t('common.save')}</button
 				>

@@ -406,20 +406,20 @@
 	<PageSkeleton />
 {:else}
 	<div class="flex flex-col h-full gap-4">
-		<div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3">
+		<div class="ui-card shadow-sm px-5 py-3">
 			<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
 				{t('schema.title')}
 			</h2>
 		</div>
 
 		<!-- Space Selector -->
-		<div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3">
+		<div class="ui-card shadow-sm px-5 py-3">
 			<div class="flex items-center gap-4">
 				<span class="text-sm font-medium text-gray-600 dark:text-gray-400"
 					>{t('sidebar.spaces')}:</span
 				>
 				<select
-					class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 focus:outline-none focus:border-blue-500"
+					class="ui-input"
 					value={currentSpace || ''}
 					onchange={(e) => selectSpace((e.target as HTMLSelectElement).value)}
 				>
@@ -429,7 +429,7 @@
 					{/each}
 				</select>
 				<button
-					class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer"
+					class="ui-btn ui-btn-primary"
 					onclick={() => {
 						showCreateSpace = true;
 					}}
@@ -440,9 +440,7 @@
 		</div>
 
 		<!-- Tabs -->
-		<div
-			class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm flex flex-col flex-1 overflow-hidden"
-		>
+		<div class="ui-card shadow-sm flex flex-col flex-1 overflow-hidden">
 			<div class="flex border-b border-gray-200 dark:border-gray-700">
 				{#each TABS as tab (tab.id)}
 					<a
@@ -472,21 +470,12 @@
 						</p>
 					{:else}
 						<div class="overflow-x-auto">
-							<table class="w-full text-sm border-collapse">
+							<table class="ui-table w-full border-collapse">
 								<thead>
 									<tr class="bg-gray-50 dark:bg-gray-800/50">
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.name')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('schema.vidType')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.actions')}</th
-										>
+										<th>{t('common.name')}</th>
+										<th>{t('schema.vidType')}</th>
+										<th>{t('common.actions')}</th>
 									</tr>
 								</thead>
 								<tbody>
@@ -497,19 +486,11 @@
 												? 'bg-blue-50 dark:bg-blue-900/20'
 												: ''}"
 										>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-medium text-gray-800 dark:text-gray-200"
-												>{space.name}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300"
-												>{space.vid_type}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
-											>
+											<td class="font-medium">{space.name}</td>
+											<td class="font-mono">{space.vid_type}</td>
+											<td>
 												<button
-													class="text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													class="ui-link-danger text-xs"
 													onclick={() => deleteSpace(space.name)}
 													>{t('common.delete')}</button
 												>
@@ -526,7 +507,7 @@
 							>{tags.length} {t('sidebar.tags')}</span
 						>
 						<button
-							class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer"
+							class="ui-btn ui-btn-primary"
 							onclick={() => {
 								showCreateTag = true;
 							}}>+ {t('schema.createTag')}</button
@@ -544,33 +525,19 @@
 						</p>
 					{:else}
 						<div class="overflow-x-auto">
-							<table class="w-full text-sm border-collapse">
+							<table class="ui-table w-full border-collapse">
 								<thead>
 									<tr class="bg-gray-50 dark:bg-gray-800/50">
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.name')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.properties')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.actions')}</th
-										>
+										<th>{t('common.name')}</th>
+										<th>{t('common.properties')}</th>
+										<th>{t('common.actions')}</th>
 									</tr>
 								</thead>
 								<tbody>
 									{#each tags as tag (tag.name)}
-										<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-medium text-gray-800 dark:text-gray-200"
-												>{tag.name}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
-											>
+										<tr>
+											<td class="font-medium">{tag.name}</td>
+											<td>
 												{#if tag.properties?.length}
 													<span class="text-xs text-gray-500 dark:text-gray-400"
 														>{tag.properties
@@ -583,16 +550,14 @@
 													>
 												{/if}
 											</td>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
-											>
+											<td>
 												<button
-													class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+													class="ui-link text-xs"
 													onclick={() => (alterTagName = tag.name)}
 													>{t('schema.alter')}</button
 												>
 												<button
-													class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													class="ml-2 ui-link-danger text-xs"
 													onclick={() => deleteTag(tag.name)}
 													>{t('common.delete')}</button
 												>
@@ -609,7 +574,7 @@
 							>{edgeTypes.length} {t('sidebar.edges')}</span
 						>
 						<button
-							class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer"
+							class="ui-btn ui-btn-primary"
 							onclick={() => {
 								showCreateEdge = true;
 							}}>+ {t('schema.createEdge')}</button
@@ -627,33 +592,19 @@
 						</p>
 					{:else}
 						<div class="overflow-x-auto">
-							<table class="w-full text-sm border-collapse">
+							<table class="ui-table w-full border-collapse">
 								<thead>
 									<tr class="bg-gray-50 dark:bg-gray-800/50">
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.name')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.properties')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.actions')}</th
-										>
+										<th>{t('common.name')}</th>
+										<th>{t('common.properties')}</th>
+										<th>{t('common.actions')}</th>
 									</tr>
 								</thead>
 								<tbody>
 									{#each edgeTypes as edge (edge.name)}
-										<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-medium text-gray-800 dark:text-gray-200"
-												>{edge.name}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
-											>
+										<tr>
+											<td class="font-medium">{edge.name}</td>
+											<td>
 												{#if edge.properties?.length}
 													<span class="text-xs text-gray-500 dark:text-gray-400"
 														>{edge.properties
@@ -666,16 +617,14 @@
 													>
 												{/if}
 											</td>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
-											>
+											<td>
 												<button
-													class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+													class="ui-link text-xs"
 													onclick={() => (alterEdgeName = edge.name)}
 													>{t('schema.alter')}</button
 												>
 												<button
-													class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													class="ml-2 ui-link-danger text-xs"
 													onclick={() => deleteEdge(edge.name)}
 													>{t('common.delete')}</button
 												>
@@ -692,7 +641,7 @@
 							>{indexes.length} {t('sidebar.indexes')}</span
 						>
 						<button
-							class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer"
+							class="ui-btn ui-btn-primary"
 							onclick={() => {
 								showCreateIndex = true;
 							}}>+ {t('schema.createIndex')}</button
@@ -710,60 +659,31 @@
 						</p>
 					{:else}
 						<div class="overflow-x-auto">
-							<table class="w-full text-sm border-collapse">
+							<table class="ui-table w-full border-collapse">
 								<thead>
 									<tr class="bg-gray-50 dark:bg-gray-800/50">
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.name')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.type')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.entity')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.fields')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.actions')}</th
-										>
+										<th>{t('common.name')}</th>
+										<th>{t('common.type')}</th>
+										<th>{t('common.entity')}</th>
+										<th>{t('common.fields')}</th>
+										<th>{t('common.actions')}</th>
 									</tr>
 								</thead>
 								<tbody>
 									{#each indexes as idx (idx.name)}
-										<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-medium text-gray-800 dark:text-gray-200"
-												>{idx.name}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300"
-												>{idx.index_type}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300"
-												>{idx.entity_type}: {idx.entity_name}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300"
-												>{idx.fields?.join(', ')}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
-											>
+										<tr>
+											<td class="font-medium">{idx.name}</td>
+											<td>{idx.index_type}</td>
+											<td>{idx.entity_type}: {idx.entity_name}</td>
+											<td>{idx.fields?.join(', ')}</td>
+											<td>
 												<button
-													class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+													class="ui-link text-xs"
 													onclick={() => rebuildIndex(idx.name)}
 													>{t('schema.rebuild')}</button
 												>
 												<button
-													class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													class="ml-2 ui-link-danger text-xs"
 													onclick={() => deleteIndex(idx.name)}
 													>{t('common.delete')}</button
 												>
@@ -777,10 +697,11 @@
 				{:else if activeTab === 'functions'}
 					<div class="flex justify-between items-center mb-4">
 						<span class="text-sm text-gray-500 dark:text-gray-400">
-							{functions.length} {t('sidebar.functions')}
+							{functions.length}
+							{t('sidebar.functions')}
 						</span>
 						<button
-							class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+							class="ui-btn ui-btn-primary"
 							onclick={loadFunctions}
 							disabled={isLoadingFunctions}
 						>
@@ -794,23 +715,25 @@
 						<label class="flex flex-col gap-1 text-xs text-gray-500">
 							{t('common.name')}
 							<input
-								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input ui-input-sm font-mono"
 								bind:value={newFunctionName}
 							/>
 						</label>
 						<label class="flex flex-col gap-1 text-xs text-gray-500">
 							{t('functions.implementation')}
 							<input
-								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input ui-input-sm font-mono"
 								placeholder="/usr/lib/linkrs/udf.so"
 								bind:value={newFunctionImpl}
 							/>
 						</label>
 					</div>
 					<button
-						class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50 mb-4"
+						class="ui-btn ui-btn-primary mb-4"
 						onclick={registerFunction}
-						disabled={isLoadingFunctions || !newFunctionName || !newFunctionImpl}
+						disabled={isLoadingFunctions ||
+							!newFunctionName ||
+							!newFunctionImpl}
 					>
 						{t('common.create')}
 					</button>
@@ -826,36 +749,25 @@
 						</p>
 					{:else}
 						<div class="overflow-x-auto mb-4">
-							<table class="w-full text-sm border-collapse">
+							<table class="ui-table w-full border-collapse">
 								<thead>
 									<tr class="bg-gray-50 dark:bg-gray-800/50">
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.name')}</th
-										>
-										<th
-											class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											>{t('common.actions')}</th
-										>
+										<th>{t('common.name')}</th>
+										<th>{t('common.actions')}</th>
 									</tr>
 								</thead>
 								<tbody>
 									{#each functions as name (name)}
-										<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50 font-mono text-gray-800 dark:text-gray-200"
-												>{name}</td
-											>
-											<td
-												class="px-3 py-2 border-b border-gray-100 dark:border-gray-700/50"
-											>
+										<tr>
+											<td>{name}</td>
+											<td>
 												<button
-													class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+													class="ui-link text-xs"
 													onclick={() => showFunctionInfo(name)}
 													>{t('common.detail')}</button
 												>
 												<button
-													class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+													class="ml-2 ui-link-danger text-xs"
 													onclick={() => unregisterFunction(name)}
 													>{t('common.delete')}</button
 												>
@@ -868,22 +780,21 @@
 					{/if}
 					{#if functionsResult}
 						<pre
-							class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-64 text-gray-700 dark:text-gray-300">{functionsResult}</pre
-						>
+							class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-64 text-gray-700 dark:text-gray-300">{functionsResult}</pre>
 					{/if}
 				{:else if activeTab === 'versions'}
 					<div class="grid md:grid-cols-5 gap-2 text-sm mb-3">
 						<label class="flex flex-col gap-1 text-xs text-gray-500">
 							{t('migration.space')}
 							<input
-								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input ui-input-sm font-mono"
 								bind:value={versionSpace}
 							/>
 						</label>
 						<label class="flex flex-col gap-1 text-xs text-gray-500">
 							{t('migration.label')}
 							<input
-								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input ui-input-sm font-mono"
 								bind:value={versionLabel}
 							/>
 						</label>
@@ -891,7 +802,7 @@
 							{t('migration.fromVersion')}
 							<input
 								type="number"
-								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input ui-input-sm font-mono"
 								bind:value={versionFrom}
 							/>
 						</label>
@@ -899,7 +810,7 @@
 							{t('migration.toVersion')}
 							<input
 								type="number"
-								class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input ui-input-sm font-mono"
 								bind:value={versionTo}
 							/>
 						</label>
@@ -913,7 +824,7 @@
 					{/if}
 					<div class="flex flex-wrap gap-2 mb-4">
 						<button
-							class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+							class="ui-btn ui-btn-primary"
 							onclick={() =>
 								runVersionQuery(() =>
 									schemaVersionsService.history(
@@ -967,8 +878,7 @@
 						</div>
 					{:else if versionsResult}
 						<pre
-							class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{versionsResult}</pre
-						>
+							class="text-xs font-mono bg-gray-50 dark:bg-gray-800/50 p-3 rounded border border-gray-200 dark:border-gray-700 overflow-auto max-h-96 text-gray-700 dark:text-gray-300">{versionsResult}</pre>
 					{:else}
 						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
 							{t('versions.hint')}
@@ -1015,7 +925,7 @@
 		></div>
 		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 		<div
-			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96"
+			class="relative ui-card shadow-lg p-6 w-96"
 			role="application"
 			tabindex="-1"
 			onkeydown={(e) => e.stopPropagation()}
@@ -1038,7 +948,7 @@
 						id="space-name"
 						type="text"
 						bind:value={newSpaceName}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500 bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 						placeholder={t('sidebar.spaces')}
 					/>
 				</div>
@@ -1051,7 +961,7 @@
 					<select
 						id="space-vid-type"
 						bind:value={newSpaceVidType}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 focus:outline-none focus:border-blue-500"
+						class="ui-input w-full focus:outline-none focus:border-blue-500"
 					>
 						<option value="INT64">INT64</option>
 						<option value="FIXED_STRING(32)">FIXED_STRING(32)</option>
@@ -1067,7 +977,7 @@
 						id="space-partition-num"
 						type="number"
 						bind:value={newSpacePartitionNum}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500 bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 					/>
 				</div>
 				<div>
@@ -1080,18 +990,17 @@
 						id="space-replica-factor"
 						type="number"
 						bind:value={newSpaceReplicaFactor}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500 bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 					/>
 				</div>
 			</div>
 			<div class="flex justify-end gap-2 mt-4">
 				<button
-					class="px-4 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+					class="ui-btn ui-btn-ghost"
 					onclick={() => (showCreateSpace = false)}>{t('common.cancel')}</button
 				>
-				<button
-					class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer"
-					onclick={createSpace}>{t('common.create')}</button
+				<button class="ui-btn ui-btn-primary" onclick={createSpace}
+					>{t('common.create')}</button
 				>
 			</div>
 		</div>
@@ -1117,7 +1026,7 @@
 		></div>
 		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 		<div
-			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
+			class="relative ui-card shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
 			role="application"
 			tabindex="-1"
 			onkeydown={(e) => e.stopPropagation()}
@@ -1140,7 +1049,7 @@
 						id="tag-name"
 						type="text"
 						bind:value={newTagName}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm focus:outline-none focus:border-blue-500 bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 						placeholder={t('sidebar.tags')}
 					/>
 				</div>
@@ -1154,25 +1063,22 @@
 							<input
 								type="text"
 								bind:value={prop.name}
-								class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input"
 								placeholder={t('common.name')}
 							/>
-							<select
-								bind:value={prop.data_type}
-								class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
-							>
+							<select bind:value={prop.data_type} class="ui-input">
 								{#each dataTypes as dt (dt)}
 									<option value={dt}>{dt}</option>
 								{/each}
 							</select>
 							<button
-								class="text-red-400 hover:text-red-600 cursor-pointer px-1"
+								class="ui-link-danger px-1"
 								onclick={() => removeProp(newTagProps, i)}>✕</button
 							>
 						</div>
 					{/each}
 					<button
-						class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+						class="ui-link text-xs"
 						onclick={() => addProp(newTagProps)}
 						>+ {t('common.addProperty')}</button
 					>
@@ -1180,12 +1086,11 @@
 			</div>
 			<div class="flex justify-end gap-2 mt-4">
 				<button
-					class="px-4 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+					class="ui-btn ui-btn-ghost"
 					onclick={() => (showCreateTag = false)}>{t('common.cancel')}</button
 				>
-				<button
-					class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer"
-					onclick={createTag}>{t('common.create')}</button
+				<button class="ui-btn ui-btn-primary" onclick={createTag}
+					>{t('common.create')}</button
 				>
 			</div>
 		</div>
@@ -1211,7 +1116,7 @@
 		></div>
 		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 		<div
-			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
+			class="relative ui-card shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
 			role="application"
 			tabindex="-1"
 			onkeydown={(e) => e.stopPropagation()}
@@ -1234,7 +1139,7 @@
 						id="edge-name"
 						type="text"
 						bind:value={newEdgeName}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 						placeholder={t('sidebar.edges')}
 					/>
 				</div>
@@ -1248,25 +1153,22 @@
 							<input
 								type="text"
 								bind:value={prop.name}
-								class="flex-1 px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input"
 								placeholder={t('common.name')}
 							/>
-							<select
-								bind:value={prop.data_type}
-								class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
-							>
+							<select bind:value={prop.data_type} class="ui-input">
 								{#each dataTypes as dt (dt)}
 									<option value={dt}>{dt}</option>
 								{/each}
 							</select>
 							<button
-								class="text-red-400 hover:text-red-600 cursor-pointer"
+								class="ui-link-danger"
 								onclick={() => removeProp(newEdgeProps, i)}>✕</button
 							>
 						</div>
 					{/each}
 					<button
-						class="text-blue-500 hover:text-blue-700 text-xs cursor-pointer"
+						class="ui-link text-xs"
 						onclick={() => addProp(newEdgeProps)}
 						>+ {t('common.addProperty')}</button
 					>
@@ -1274,12 +1176,11 @@
 			</div>
 			<div class="flex justify-end gap-2 mt-4">
 				<button
-					class="px-4 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+					class="ui-btn ui-btn-ghost"
 					onclick={() => (showCreateEdge = false)}>{t('common.cancel')}</button
 				>
-				<button
-					class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer"
-					onclick={createEdge}>{t('common.create')}</button
+				<button class="ui-btn ui-btn-primary" onclick={createEdge}
+					>{t('common.create')}</button
 				>
 			</div>
 		</div>
@@ -1297,7 +1198,7 @@
 		<div class="absolute inset-0 bg-black/20"></div>
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
-			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96"
+			class="relative ui-card shadow-lg p-6 w-96"
 			onclick={(e) => e.stopPropagation()}
 		>
 			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-4">
@@ -1314,7 +1215,7 @@
 						id="index-name"
 						type="text"
 						bind:value={newIndexName}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 						placeholder={t('sidebar.indexes')}
 					/>
 				</div>
@@ -1327,7 +1228,7 @@
 					<select
 						id="index-entity-type"
 						bind:value={newIndexEntityType}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 					>
 						<option value="TAG">TAG</option>
 						<option value="EDGE">EDGE</option>
@@ -1343,7 +1244,7 @@
 						id="index-entity-name"
 						type="text"
 						bind:value={newIndexEntityName}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 						placeholder="{t('sidebar.tags')} / {t('sidebar.edges')}"
 					/>
 				</div>
@@ -1357,19 +1258,18 @@
 						id="index-fields"
 						type="text"
 						bind:value={newIndexFields}
-						class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+						class="ui-input w-full"
 						placeholder={t('schema.fieldPlaceholder')}
 					/>
 				</div>
 			</div>
 			<div class="flex justify-end gap-2 mt-4">
 				<button
-					class="px-4 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+					class="ui-btn ui-btn-ghost"
 					onclick={() => (showCreateIndex = false)}>{t('common.cancel')}</button
 				>
-				<button
-					class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer"
-					onclick={createIndex}>{t('common.create')}</button
+				<button class="ui-btn ui-btn-primary" onclick={createIndex}
+					>{t('common.create')}</button
 				>
 			</div>
 		</div>
@@ -1386,7 +1286,8 @@
 />
 <SchemaAlterModal
 	title={alterEdgeName ? `${t('schema.alterEdge')}: ${alterEdgeName}` : ''}
-	properties={edgeTypes.find((item) => item.name === alterEdgeName)?.properties ?? []}
+	properties={edgeTypes.find((item) => item.name === alterEdgeName)
+		?.properties ?? []}
 	open={alterEdgeName !== null}
 	busy={alterBusy}
 	onClose={() => (alterEdgeName = null)}

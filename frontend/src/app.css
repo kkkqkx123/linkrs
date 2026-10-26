@@ -12,11 +12,13 @@
 	--color-bg-white: #ffffff;
 	--color-text: #333333;
 	--color-text-secondary: #666666;
-	--color-border: #e8e8e8;
-	--color-border-light: #f0f0f0;
+	--color-border: #d9dce3;
+	--color-border-light: #eef0f4;
 	--radius-sm: 4px;
 	--radius-md: 6px;
 	--radius-lg: 8px;
+	--radius-card: 8px;
+	--font-size-base: 14px;
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
 	--shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
 	--shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
@@ -30,7 +32,7 @@
 	--color-bg-white: #1c2333;
 	--color-text: #e5e7eb;
 	--color-text-secondary: #9ca3af;
-	--color-border: #374151;
+	--color-border: #3a4354;
 	--color-border-light: #2d3748;
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
 	--shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
@@ -87,6 +89,185 @@ a:hover {
 }
 .dark ::-webkit-scrollbar-thumb:hover {
 	background: #5a6578;
+}
+
+/* ===== 统一组件类 ===== */
+
+/* 卡片:全站统一的卡片容器,1px 清晰边框 + 统一圆角;阴影由 shadow-* 工具类控制 */
+.ui-card {
+	background: var(--color-bg-white);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-card);
+}
+
+/* 输入控件:统一高度、字号、边框与焦点态 */
+.ui-input {
+	width: 100%;
+	padding: 0.5rem 0.75rem;
+	font-size: var(--font-size-base);
+	color: var(--color-text);
+	background: var(--color-bg-white);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	transition:
+		border-color 0.2s ease,
+		box-shadow 0.2s ease;
+}
+.ui-input::placeholder {
+	color: var(--color-text-secondary);
+	opacity: 0.7;
+}
+.ui-input:focus {
+	outline: none;
+	border-color: var(--color-primary);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+.ui-input:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+/* 紧凑变体:工具栏、表格内联过滤等密集场景 */
+.ui-input.ui-input-sm {
+	padding: 0.25rem 0.625rem;
+	font-size: 13px;
+	border-radius: var(--radius-sm);
+}
+
+/* 按钮:统一高度与字号;primary 实底,ghost 描边 */
+.ui-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.375rem;
+	padding: 0.5rem 1rem;
+	font-size: var(--font-size-base);
+	font-weight: 500;
+	line-height: 1.25;
+	border-radius: var(--radius-md);
+	border: 1px solid transparent;
+	cursor: pointer;
+	transition:
+		background-color 0.2s ease,
+		color 0.2s ease,
+		border-color 0.2s ease;
+}
+.ui-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+/* 紧凑变体:行内小按钮 */
+.ui-btn.ui-btn-sm {
+	padding: 0.25rem 0.625rem;
+	font-size: 13px;
+}
+/* 危险操作:实底红,色值由 --color-error 派生 */
+.ui-btn-danger {
+	background: var(--color-error);
+	color: #fff;
+}
+.ui-btn-danger:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--color-error) 85%, #000);
+}
+/* 危险操作:描边变体 */
+.ui-btn-danger-outline {
+	background: transparent;
+	color: var(--color-error);
+	border-color: color-mix(in srgb, var(--color-error) 45%, transparent);
+}
+.ui-btn-danger-outline:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--color-error) 10%, transparent);
+}
+.ui-btn-primary {
+	background: var(--color-primary);
+	color: #fff;
+}
+.ui-btn-primary:hover:not(:disabled) {
+	background: var(--color-primary-hover);
+}
+.ui-btn-ghost {
+	background: transparent;
+	color: var(--color-text-secondary);
+	border-color: var(--color-border);
+}
+.ui-btn-ghost:hover:not(:disabled) {
+	color: var(--color-text);
+	background: var(--color-primary-light);
+}
+
+/* 徽标 */
+.ui-badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.125rem 0.5rem;
+	font-size: 12px;
+	line-height: 1.4;
+	border-radius: 9999px;
+	border: 1px solid var(--color-border);
+}
+
+/* 链接式文字按钮:无框,仅色与悬停 */
+.ui-link {
+	color: var(--color-primary);
+	cursor: pointer;
+}
+.ui-link:hover {
+	color: var(--color-primary-hover);
+}
+.ui-link-danger {
+	color: var(--color-error);
+	cursor: pointer;
+}
+.ui-link-danger:hover {
+	color: color-mix(in srgb, var(--color-error) 80%, #000);
+}
+
+/* 数据表:统一表头/单元格/行悬停密度 */
+.ui-table th {
+	padding: 0.5rem 0.75rem;
+	text-align: left;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--color-text-secondary);
+	border-bottom: 1px solid var(--color-border);
+	white-space: nowrap;
+}
+.ui-table td {
+	padding: 0.375rem 0.75rem;
+	font-size: 13px;
+	color: var(--color-text);
+	border-bottom: 1px solid var(--color-border-light);
+}
+.ui-table tbody tr:hover {
+	background: color-mix(in srgb, var(--color-primary-light) 40%, transparent);
+}
+
+/* ===== 基础元素默认样式(未迁移到组件类的页面自动继承) ===== */
+
+input[type='text'],
+input[type='password'],
+input[type='number'],
+input[type='search'],
+input[type='email'],
+input:not([type]),
+select,
+textarea {
+	font-size: var(--font-size-base);
+	color: var(--color-text);
+	background: var(--color-bg-white);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	padding: 0.375rem 0.625rem;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+	outline: none;
+	border-color: var(--color-primary);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+button {
+	font-size: var(--font-size-base);
 }
 
 /* ===== Utility Animations ===== */

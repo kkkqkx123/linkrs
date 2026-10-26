@@ -28,7 +28,7 @@
 		{t('migration.planJson')}
 		<textarea
 			rows="4"
-			class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+			class="ui-input ui-input-sm font-mono"
 			bind:value={planJson}
 		></textarea>
 	</label>
@@ -41,14 +41,14 @@
 			{t('migration.dryRun')}
 		</button>
 		<button
-			class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={onExecute}
 			disabled={loading || !planJson}
 		>
 			{t('migration.run')}
 		</button>
 		<button
-			class="px-3 py-1 text-xs rounded bg-red-500 hover:bg-red-600 text-white disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-danger ui-btn-sm"
 			onclick={onRollback}
 			disabled={loading || !planJson}
 		>

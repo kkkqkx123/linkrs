@@ -484,7 +484,7 @@
 				{monitor.paused ? t('monitoring.resume') : t('monitoring.pause')}
 			</button>
 			<button
-				class="px-3 py-1 rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={() => monitoringStore.refresh()}
 				disabled={monitor.loading}
 			>
@@ -503,7 +503,7 @@
 				type="number"
 				min="1"
 				max="100"
-				class="w-16 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="w-16 ui-input ui-input-sm font-mono"
 				bind:value={thresholds.cpuPercent}
 			/>%
 		</label>
@@ -513,7 +513,7 @@
 				type="number"
 				min="1"
 				max="100"
-				class="w-16 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="w-16 ui-input ui-input-sm font-mono"
 				bind:value={thresholds.memPercent}
 			/>%
 		</label>
@@ -522,7 +522,7 @@
 			<input
 				type="number"
 				min="1"
-				class="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="w-20 ui-input ui-input-sm font-mono"
 				bind:value={thresholds.slowMs}
 			/>ms
 		</label>
@@ -1080,7 +1080,7 @@
 					{t('monitoring.sync')}
 				</h2>
 				<button
-					class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+					class="ui-btn ui-btn-primary ui-btn-sm"
 					onclick={loadSyncDiagnostics}
 					disabled={syncLoading}
 				>
@@ -1132,7 +1132,7 @@
 			{/if}
 			<div class="flex flex-wrap gap-2 mb-3">
 				<button
-					class="px-2 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+					class="ui-btn ui-btn-primary ui-btn-sm"
 					onclick={retryOutbox}
 					disabled={syncLoading}
 				>
@@ -1209,7 +1209,7 @@
 						/>
 					</div>
 					<button
-						class="mt-2 px-2 py-1 text-xs rounded bg-red-500 hover:bg-red-600 text-white disabled:opacity-50 cursor-pointer"
+						class="ui-btn ui-btn-danger ui-btn-sm"
 						onclick={clearDegradedRange}
 						disabled={syncLoading}
 					>
@@ -1296,7 +1296,7 @@
 				{t('monitoring.operations')}
 			</h2>
 			<button
-				class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={loadOps}
 				disabled={opsLoading}
 			>
@@ -1332,7 +1332,7 @@
 										<td class="py-1 pr-3">{formatLatencyMs(txn.elapsed_ms)}</td>
 										<td class="py-1 pr-3">
 											<button
-												class="text-red-500 hover:text-red-700 cursor-pointer"
+												class="ui-link-danger"
 												onclick={() => killTransaction(txn.transaction_id)}
 											>
 												{t('monitoring.kill')}
@@ -1370,11 +1370,11 @@
 										<div class="flex items-center gap-2 text-xs">
 											<span class="font-mono w-40 shrink-0 truncate" title={key}>{key}</span>
 											<input
-												class="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+												class="flex-1 ui-input ui-input-sm font-mono"
 												bind:value={configDrafts[entry]}
 											/>
 											<button
-												class="px-2 py-1 rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+												class="ui-btn ui-btn-primary ui-btn-sm"
 												onclick={() => saveConfigKey(section, key)}
 												disabled={configBusy[entry] === true}
 											>

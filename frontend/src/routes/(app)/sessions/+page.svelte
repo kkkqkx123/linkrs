@@ -56,7 +56,7 @@
 			{t('sessions.title')}
 		</h1>
 		<button
-			class="px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={loadSessions}
 			disabled={loading}
 		>

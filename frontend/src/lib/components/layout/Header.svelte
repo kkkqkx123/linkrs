@@ -44,7 +44,7 @@
 		{#if store.isVerified}
 			{#if store.mustChangePassword}
 				<span
-					class="px-2 py-0.5 text-xs rounded-full bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800"
+					class="ui-badge bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-yellow-200 dark:border-yellow-800"
 				>
 					{t('login.mustChangePassword')}
 				</span>
@@ -54,13 +54,13 @@
 			>
 			{#if store.role}
 				<span
-					class="px-2 py-0.5 text-xs rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 border border-blue-200 dark:border-blue-800"
+					class="ui-badge bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 border-blue-200 dark:border-blue-800"
 				>
 					{roleLabel(store.role)}
 				</span>
 			{/if}
 			<button
-				class="px-3 py-1 text-sm text-gray-600 dark:text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors cursor-pointer"
+				class="ui-btn ui-btn-ghost !px-3 !py-1"
 				onclick={async () => {
 					await connectionStore.logout();
 					goto('/login');

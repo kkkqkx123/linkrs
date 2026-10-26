@@ -396,7 +396,7 @@
 
 <div class="flex flex-col h-full gap-4 animate-fade-in">
 	<!-- Header -->
-	<div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3">
+	<div class="ui-card shadow-sm px-5 py-3">
 		<h2
 			class="text-lg font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2"
 		>
@@ -406,7 +406,7 @@
 	</div>
 
 	<!-- Editor Section -->
-	<div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm flex flex-col">
+	<div class="ui-card shadow-sm flex flex-col">
 		<div class="p-4 pb-2">
 			<CypherEditor
 				bind:this={editorRef}
@@ -455,13 +455,13 @@
 				consoleStore.setAutoStreamThreshold(clampAutoThreshold(val))}
 		/>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer"
+				class="ui-btn ui-btn-ghost"
 				onclick={() => (historyOpen = !historyOpen)}
 			>
 				📋 {t('console.history')} ({history.length})
 			</button>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer"
+				class="ui-btn ui-btn-ghost"
 				onclick={() => (favoritesOpen = !favoritesOpen)}
 			>
 				⭐ {t('console.favorites')} ({favorites.length})
@@ -502,7 +502,7 @@
 							<span class="font-medium">{planError.code}</span>: {planError.message}
 							{#if planError.position}
 								<button
-									class="ml-2 px-2 py-0.5 text-xs border border-red-300 dark:border-red-700 rounded hover:bg-red-100 dark:hover:bg-red-900/40 cursor-pointer"
+									class="-btn ui-btn-danger-outline ui-btn-sm"
 									onclick={() => handleJumpToError(planError!.position!)}
 								>
 									{t('console.jumpToError', {

@@ -196,8 +196,7 @@
 	// --- Edit preview with optimistic conflict protection ---
 
 	type EditTarget =
-		| { kind: 'vertex'; data: VertexData }
-		| { kind: 'edge'; data: EdgeData };
+		{ kind: 'vertex'; data: VertexData } | { kind: 'edge'; data: EdgeData };
 
 	let editOpen = $state(false);
 	let editTarget = $state<EditTarget | null>(null);
@@ -242,9 +241,7 @@
 		editTarget = null;
 	}
 
-	async function refreshTarget(): Promise<
-		Record<string, unknown> | null
-	> {
+	async function refreshTarget(): Promise<Record<string, unknown> | null> {
 		// Re-read the row being edited so a concurrent change can be detected
 		// before the update statement is submitted.
 		if (!currentSpace || !editTarget) return null;
@@ -278,9 +275,7 @@
 				1,
 				{ field: 'id', order: 'asc' },
 				{
-					conditions: [
-						{ property: 'id', operator: 'eq', value: String(e.id) },
-					],
+					conditions: [{ property: 'id', operator: 'eq', value: String(e.id) }],
 					logic: 'AND',
 				},
 			);
@@ -474,7 +469,6 @@
 		}
 	}
 
-
 	function viewInGraph(data: VertexData | EdgeData, type: 'vertex' | 'edge') {
 		if (type === 'vertex') {
 			const v = data as VertexData;
@@ -517,17 +511,12 @@
 	<PageSkeleton />
 {:else if currentSpace}
 	<div class="flex flex-col h-full gap-4">
-		<div
-			class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3 flex items-center justify-between"
-		>
+		<div class="ui-card shadow-sm px-5 py-3 flex items-center justify-between">
 			<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
 				📋 {t('sidebar.dataBrowser')}
 			</h2>
 			<div class="flex gap-2">
-				<button
-					class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
-					onclick={loadStatistics}
-				>
+				<button class="ui-btn ui-btn-ghost" onclick={loadStatistics}>
 					🔄 {t('common.refresh')}
 				</button>
 				<button
@@ -546,49 +535,46 @@
 		{/if}
 
 		{#if error}
-		 <div
-		  class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-3 text-red-600 dark:text-red-400 text-sm"
-		 >
-		  {error}
-		 </div>
+			<div
+				class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-3 text-red-600 dark:text-red-400 text-sm"
+			>
+				{error}
+			</div>
 		{/if}
 
 		{#if selectedIds.size > 0}
-		 <div
-		  class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-3 flex items-center gap-3 text-sm"
-		 >
-		  <span class="text-blue-700 dark:text-blue-300">
-		   {t('dataBrowser.batch.selected', { count: selectedIds.size })}
-		  </span>
-		  <button
-		   class="px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs rounded cursor-pointer disabled:opacity-50"
-		   disabled={batchBusy}
-		   onclick={batchDelete}
-		  >
-		   {t('dataBrowser.batch.deleteSelected')}
-		  </button>
-		  <button
-		   class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
-		   onclick={clearSelection}
-		  >
-		   {t('common.clear')}
-		  </button>
-		 </div>
+			<div
+				class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-3 flex items-center gap-3 text-sm"
+			>
+				<span class="text-blue-700 dark:text-blue-300">
+					{t('dataBrowser.batch.selected', { count: selectedIds.size })}
+				</span>
+				<button
+					class="ui-btn ui-btn-danger ui-btn-sm"
+					disabled={batchBusy}
+					onclick={batchDelete}
+				>
+					{t('dataBrowser.batch.deleteSelected')}
+				</button>
+				<button class="ui-btn ui-btn-ghost ui-btn-sm" onclick={clearSelection}>
+					{t('common.clear')}
+				</button>
+			</div>
 		{/if}
 		{#if batchMessage}
-		 <div
-		  class="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded p-3 text-green-700 dark:text-green-400 text-sm"
-		 >
-		  {batchMessage}
-		  {#if batchError}
-		   <div class="mt-1 text-red-600 dark:text-red-400 text-xs">{batchError}</div>
-		  {/if}
-		 </div>
+			<div
+				class="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded p-3 text-green-700 dark:text-green-400 text-sm"
+			>
+				{batchMessage}
+				{#if batchError}
+					<div class="mt-1 text-red-600 dark:text-red-400 text-xs">
+						{batchError}
+					</div>
+				{/if}
+			</div>
 		{/if}
 
-		<div
-			class="flex-1 bg-white dark:bg-[#1C2333] rounded-lg shadow-sm overflow-hidden flex"
-		>
+		<div class="flex-1 ui-card shadow-sm overflow-hidden flex">
 			<div class="flex-1 flex flex-col overflow-hidden">
 				<div class="flex border-b border-gray-200 dark:border-gray-700">
 					<button
@@ -615,7 +601,7 @@
 					{#if activeTab === 'vertices'}
 						<div class="mb-4">
 							<select
-								class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input"
 								value={selectedTag || ''}
 								onchange={handleTagChange}
 							>
@@ -634,39 +620,22 @@
 							</div>
 						{:else if vertices.length > 0}
 							<div class="overflow-x-auto">
-								<table class="w-full text-sm border-collapse">
+								<table class="ui-table w-full border-collapse">
 									<thead>
 										<tr class="bg-gray-50 dark:bg-gray-800/50">
-											<th
-											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											 >{t('dataBrowser.batch.deletedColumn')}</th
-											>
-											<th
-											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											 >ID</th
-											>
-											<th
-											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											 >{t('sidebar.tags')}</th
-											>
+											<th>{t('dataBrowser.batch.deletedColumn')}</th>
+											<th>ID</th>
+											<th>{t('sidebar.tags')}</th>
 											{#each vertexProperties as prop (prop)}
-												<th
-													class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-													>{prop}</th
-												>
+												<th>{prop}</th>
 											{/each}
-											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>{t('common.actions')}</th
-											>
+											<th>{t('common.actions')}</th>
 										</tr>
 									</thead>
 									<tbody>
 										{#each vertices as v (v.id)}
-											<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50"
-												>
+											<tr>
+												<td>
 													<input
 														type="checkbox"
 														class="cursor-pointer"
@@ -674,25 +643,16 @@
 														onchange={() => toggleSelect(String(v.id))}
 													/>
 												</td>
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200"
-													>{v.id}</td
-												>
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300"
-													>{v.tag}</td
-												>
+												<td class="font-mono">{v.id}</td>
+												<td>{v.tag}</td>
 												{#each vertexProperties as prop (prop)}
-													<td
-														class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 max-w-40 truncate text-gray-700 dark:text-gray-300"
+													<td class="max-w-40 truncate"
 														>{formatCellValue(v.properties[prop])}</td
 													>
 												{/each}
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50"
-												>
+												<td>
 													<button
-														class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+														class="ui-link text-xs"
 														onclick={() => showDetail(v, 'vertex')}
 														>{t('dataBrowser.viewDetail')}</button
 													>
@@ -712,7 +672,7 @@
 														>{t('dataBrowser.editUpdate')}</button
 													>
 													<button
-														class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+														class="ml-2 ui-link-danger text-xs"
 														onclick={() => requestDelete(v, 'vertex')}
 														>{t('dataBrowser.editDelete')}</button
 													>
@@ -731,7 +691,7 @@
 								>
 								<div class="flex gap-2">
 									<button
-										class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 cursor-pointer disabled:opacity-50"
+										class="ui-btn ui-btn-ghost ui-btn-sm"
 										disabled={vertexPage <= 1}
 										onclick={() => {
 											dataBrowserStore.setVertexPage(vertexPage - 1);
@@ -742,7 +702,7 @@
 										>{t('common.page')} {vertexPage}</span
 									>
 									<button
-										class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 cursor-pointer disabled:opacity-50"
+										class="ui-btn ui-btn-ghost ui-btn-sm"
 										disabled={vertexPage * vertexPageSize >= vertexTotal}
 										onclick={() => {
 											dataBrowserStore.setVertexPage(vertexPage + 1);
@@ -764,7 +724,7 @@
 					{:else}
 						<div class="mb-4">
 							<select
-								class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+								class="ui-input"
 								value={selectedEdgeType || ''}
 								onchange={handleEdgeTypeChange}
 							>
@@ -784,51 +744,25 @@
 							</div>
 						{:else if edges.length > 0}
 							<div class="overflow-x-auto">
-								<table class="w-full text-sm border-collapse">
+								<table class="ui-table w-full border-collapse">
 									<thead>
 										<tr class="bg-gray-50 dark:bg-gray-800/50">
-											<th
-											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											 >{t('dataBrowser.batch.deletedColumn')}</th
-											>
-											<th
-											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											 >ID</th
-											>
-											<th
-											 class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-											 >{t('common.type')}</th
-											>
-											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>{t('dataBrowser.source')}</th
-											>
-											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>{t('dataBrowser.target')}</th
-											>
-											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>{t('dataBrowser.rank')}</th
-											>
+											<th>{t('dataBrowser.batch.deletedColumn')}</th>
+											<th>ID</th>
+											<th>{t('common.type')}</th>
+											<th>{t('dataBrowser.source')}</th>
+											<th>{t('dataBrowser.target')}</th>
+											<th>{t('dataBrowser.rank')}</th>
 											{#each edgeProperties as prop (prop)}
-												<th
-													class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-													>{prop}</th
-												>
+												<th>{prop}</th>
 											{/each}
-											<th
-												class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700"
-												>{t('common.actions')}</th
-											>
+											<th>{t('common.actions')}</th>
 										</tr>
 									</thead>
 									<tbody>
 										{#each edges as e (e.id)}
-											<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/30">
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50"
-												>
+											<tr>
+												<td>
 													<input
 														type="checkbox"
 														class="cursor-pointer"
@@ -836,37 +770,19 @@
 														onchange={() => toggleSelect(String(e.id))}
 													/>
 												</td>
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200"
-													>{e.id}</td
-												>
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300"
-													>{e.type}</td
-												>
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200"
-													>{e.src}</td
-												>
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 font-mono text-xs text-gray-800 dark:text-gray-200"
-													>{e.dst}</td
-												>
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300"
-													>{e.rank}</td
-												>
+												<td class="font-mono">{e.id}</td>
+												<td>{e.type}</td>
+												<td class="font-mono">{e.src}</td>
+												<td class="font-mono">{e.dst}</td>
+												<td>{e.rank}</td>
 												{#each edgeProperties as prop (prop)}
-													<td
-														class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 max-w-40 truncate text-gray-700 dark:text-gray-300"
+													<td class="max-w-40 truncate"
 														>{formatCellValue(e.properties[prop])}</td
 													>
 												{/each}
-												<td
-													class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50"
-												>
+												<td>
 													<button
-														class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+														class="ui-link text-xs"
 														onclick={() => showDetail(e, 'edge')}
 														>{t('dataBrowser.viewDetail')}</button
 													>
@@ -886,7 +802,7 @@
 														>{t('dataBrowser.editUpdate')}</button
 													>
 													<button
-														class="ml-2 text-red-500 hover:text-red-700 text-xs cursor-pointer"
+														class="ml-2 ui-link-danger text-xs"
 														onclick={() => requestDelete(e, 'edge')}
 														>{t('dataBrowser.editDelete')}</button
 													>
@@ -905,7 +821,7 @@
 								>
 								<div class="flex gap-2">
 									<button
-										class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 cursor-pointer disabled:opacity-50"
+										class="ui-btn ui-btn-ghost ui-btn-sm"
 										disabled={edgePage <= 1}
 										onclick={() => {
 											dataBrowserStore.setEdgePage(edgePage - 1);
@@ -916,7 +832,7 @@
 										>{t('common.page')} {edgePage}</span
 									>
 									<button
-										class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 cursor-pointer disabled:opacity-50"
+										class="ui-btn ui-btn-ghost ui-btn-sm"
 										disabled={edgePage * edgePageSize >= edgeTotal}
 										onclick={() => {
 											dataBrowserStore.setEdgePage(edgePage + 1);
@@ -987,7 +903,7 @@
 		</div>
 	</div>
 {:else}
-	<div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm p-8 text-center">
+	<div class="ui-card shadow-sm p-8 text-center">
 		<p class="text-gray-500 dark:text-gray-400">
 			{t('common.select')}
 			{t('sidebar.spaces')}
@@ -1005,7 +921,7 @@
 			onclick={() => dataBrowserStore.hideDetail()}
 		></div>
 		<div
-			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
+			class="relative ui-card shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
 		>
 			<div class="flex items-center justify-between mb-4">
 				<h3 class="font-semibold text-gray-800 dark:text-gray-100">
@@ -1077,7 +993,7 @@
 			onclick={() => (conflictState = 'none')}
 		></div>
 		<div
-			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
+			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
 		>
 			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-2">
 				{t('dataBrowser.edit.changed')}
@@ -1088,7 +1004,9 @@
 			<div class="space-y-1">
 				{#each Object.keys(editOriginalProps) as key (key)}
 					<div class="text-xs flex gap-2 font-mono">
-						<span class="text-gray-500 dark:text-gray-400 w-24 truncate">{key}</span>
+						<span class="text-gray-500 dark:text-gray-400 w-24 truncate"
+							>{key}</span
+						>
 						<span class="text-gray-800 dark:text-gray-200 flex-1 truncate"
 							>{String(editOriginalProps[key] ?? '')}</span
 						>
@@ -1099,12 +1017,11 @@
 				{/each}
 			</div>
 			<div class="mt-4 flex justify-end gap-2">
-				<button
-					class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
-					onclick={closeEdit}>{t('dataBrowser.edit.conflictDiscard')}</button
+				<button class="ui-btn ui-btn-ghost" onclick={closeEdit}
+					>{t('dataBrowser.edit.conflictDiscard')}</button
 				>
 				<button
-					class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+					class="ui-btn ui-btn-primary"
 					disabled={editBusy}
 					onclick={() => confirmEdit(true)}
 				>
@@ -1124,7 +1041,7 @@
 			onclick={() => (deleteConfirm = null)}
 		></div>
 		<div
-			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-[26rem] max-h-[85vh] overflow-y-auto"
+			class="relative ui-card shadow-lg p-6 w-[26rem] max-h-[85vh] overflow-y-auto"
 		>
 			<h3 class="font-semibold text-gray-800 dark:text-gray-100 mb-2">
 				{t('common.delete')}
@@ -1155,11 +1072,11 @@
 			{/if}
 			<div class="mt-4 flex justify-end gap-2">
 				<button
-					class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+					class="ui-btn ui-btn-ghost"
 					onclick={() => (deleteConfirm = null)}>{t('common.cancel')}</button
 				>
 				<button
-					class="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+					class="ui-btn ui-btn-danger"
 					disabled={deleteBusy}
 					onclick={confirmDelete}
 				>

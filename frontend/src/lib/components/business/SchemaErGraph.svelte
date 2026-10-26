@@ -108,7 +108,7 @@
 		</span>
 		<input
 			type="text"
-			class="ml-auto px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 w-40"
+			class="ml-auto ui-input ui-input-sm w-40"
 			placeholder={t('common.search')}
 			value={search}
 			oninput={(e) => (search = (e.target as HTMLInputElement).value)}
@@ -151,14 +151,14 @@
 				<div class="flex items-center gap-2">
 					{#if selected.kind === 'tag' && onAlterTag}
 						<button
-							class="px-2 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 cursor-pointer"
+							class="ui-btn ui-btn-ghost ui-btn-sm"
 							onclick={() => onAlterTag!(selected!.id)}
 						>
 							{t('schema.alterTag')}
 						</button>
 					{:else if selected.kind === 'edge' && onAlterEdge}
 						<button
-							class="px-2 py-0.5 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 cursor-pointer"
+							class="ui-btn ui-btn-ghost ui-btn-sm"
 							onclick={() => onAlterEdge!(selected!.id)}
 						>
 							{t('schema.alterEdge')}

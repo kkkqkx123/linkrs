@@ -48,11 +48,11 @@
 </script>
 
 <div
-	class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-4 py-3 flex items-center gap-2 flex-wrap"
+	class="ui-card shadow-sm px-4 py-3 flex items-center gap-2 flex-wrap"
 >
 	<input
 		type="text"
-		class="flex-1 min-w-52 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 focus:outline-none focus:border-blue-500"
+		class="flex-1 min-w-52 ui-input"
 		placeholder={t('graph.queryPlaceholder')}
 		bind:value={query}
 		onkeydown={(e) => {
@@ -61,7 +61,7 @@
 		disabled={running}
 	/>
 	<select
-		class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300 cursor-pointer"
+		class="ui-input ui-input-sm cursor-pointer"
 		bind:value={mode}
 		disabled={running}
 		aria-label={t('graph.queryMode')}
@@ -70,7 +70,7 @@
 		<option value="replace">{t('graph.queryReplace')}</option>
 	</select>
 	<button
-		class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded disabled:opacity-50 cursor-pointer"
+		class="ui-btn ui-btn-primary"
 		onclick={run}
 		disabled={running || !query.trim()}
 	>

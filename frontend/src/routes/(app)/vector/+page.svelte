@@ -51,7 +51,7 @@
 			{t('sidebar.vector')}
 		</h1>
 		<button
-			class="px-3 py-1 text-sm rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-primary"
 			onclick={() => run(() => vectorService.list())}
 			disabled={loading}
 		>
@@ -74,21 +74,21 @@
 				{t('vector.spaceId')}
 				<input
 					type="number"
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={spaceId}
 				/>
 			</label>
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('vector.tag')}
 				<input
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={tagName}
 				/>
 			</label>
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('vector.field')}
 				<input
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={fieldName}
 				/>
 			</label>
@@ -96,7 +96,7 @@
 				{t('vector.size')}
 				<input
 					type="number"
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={vectorSize}
 				/>
 			</label>
@@ -105,7 +105,7 @@
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('vector.distance')}
 				<select
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm"
 					bind:value={distance}
 				>
 					<option value="Cosine">Cosine</option>
@@ -116,14 +116,14 @@
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('vector.rebuildId')}
 				<input
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={rebuildId}
 				/>
 			</label>
 		</div>
 		<div class="flex flex-wrap gap-2">
 			<button
-				class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={() =>
 					run(() =>
 						vectorService.create({
@@ -139,14 +139,14 @@
 				{t('common.create')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-ghost ui-btn-sm"
 				onclick={() => run(() => vectorService.info(spaceId, tagName, fieldName))}
 				disabled={loading}
 			>
 				{t('common.detail')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-red-500 hover:bg-red-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-danger ui-btn-sm"
 				onclick={() => run(() => vectorService.drop(spaceId, tagName, fieldName))}
 				disabled={loading}
 			>
@@ -181,7 +181,7 @@
 				{t('common.clear')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-ghost ui-btn-sm"
 				onclick={() => run(() => vectorService.rebuildStatus(rebuildId))}
 				disabled={loading || !rebuildId}
 			>
@@ -200,7 +200,7 @@
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('vector.queryVector')}
 				<input
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					placeholder="0.1, 0.2, 0.3"
 					bind:value={queryVectorText}
 				/>
@@ -209,13 +209,13 @@
 				{t('vector.limit')}
 				<input
 					type="number"
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={limit}
 				/>
 			</label>
 		</div>
 		<button
-			class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={() =>
 				run(() =>
 					vectorService.search({

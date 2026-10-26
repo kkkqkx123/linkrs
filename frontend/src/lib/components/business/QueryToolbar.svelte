@@ -63,7 +63,7 @@
 
 <div class="px-4 pb-3 flex items-center gap-2 flex-wrap">
 	<button
-		class="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded transition-colors disabled:opacity-50 cursor-pointer"
+		class="ui-btn ui-btn-primary"
 		onclick={onExecute}
 		disabled={isBusy || !editorContent.trim()}
 	>
@@ -71,7 +71,7 @@
 	</button>
 	{#if isExecuting && resultMode === 'materialized'}
 		<button
-			class="px-4 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-colors cursor-pointer"
+			class="ui-btn ui-btn-danger"
 			onclick={onCancel}
 		>
 			{t('console.cancel')}
@@ -105,14 +105,14 @@
 		</span>
 	{/if}
 	<button
-		class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer disabled:opacity-50"
+		class="ui-btn ui-btn-ghost"
 		onclick={onValidate}
 		disabled={isValidating || !editorContent.trim()}
 	>
 		{isValidating ? t('console.validating') : t('console.validate')}
 	</button>
 	<button
-		class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer disabled:opacity-50"
+		class="ui-btn ui-btn-ghost"
 		onclick={onExplain}
 		disabled={isExplaining || isBusy || !editorContent.trim()}
 		title={t('console.explainHint')}
@@ -120,14 +120,14 @@
 		{isExplaining ? t('console.explaining') : t('console.explain')}
 	</button>
 	<button
-		class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer disabled:opacity-50"
+		class="ui-btn ui-btn-ghost"
 		onclick={onFormat}
 		disabled={!editorContent.trim()}
 	>
 		{t('console.format')}
 	</button>
 	<select
-		class="px-2 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+		class="ui-input ui-input-sm cursor-pointer"
 		value={executionPreference}
 		onchange={(e) => onPreferenceChange(e.currentTarget.value as ExecutionPreference)}
 		title={t('console.execPreferenceHint')}
@@ -144,33 +144,33 @@
 				min="1"
 				max="10000000"
 				step="100"
-				class="w-24 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="w-24 ui-input ui-input-sm font-mono"
 				value={autoStreamThreshold}
 				onchange={(e) => onThresholdChange(Number(e.currentTarget.value))}
 			/>
 		</label>
 	{/if}
 	<button
-		class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer"
+		class="ui-btn ui-btn-ghost"
 		onclick={onClear}
 	>
 		{t('common.clear')}
 	</button>
 	<div class="flex-1"></div>
 	<button
-		class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer"
+		class="ui-btn ui-btn-ghost"
 		onclick={onToggleHistory}
 	>
 		📋 {t('console.history')} ({historyCount})
 	</button>
 	<button
-		class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer"
+		class="ui-btn ui-btn-ghost"
 		onclick={onToggleFavorites}
 	>
 		⭐ {t('console.favorites')} ({favoritesCount})
 	</button>
 	<button
-		class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded transition-colors cursor-pointer"
+		class="ui-btn ui-btn-ghost"
 		onclick={onSaveFavorite}
 		disabled={!editorContent.trim()}
 	>

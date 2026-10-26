@@ -71,7 +71,7 @@
 	bind:this={containerEl}
 	onscroll={onScroll}
 >
-	<table class="w-full text-sm border-collapse" style="table-layout: fixed;">
+	<table class="ui-table w-full border-collapse" style="table-layout: fixed;">
 		<colgroup>
 			<col style="width: 64px;" />
 			{#each widths as width, i (i)}
@@ -86,7 +86,7 @@
 				>
 				{#each columns as column (column)}
 					<th
-						class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap overflow-hidden text-ellipsis sticky top-0 bg-gray-50 dark:bg-gray-800 z-10"
+						class="sticky top-0 bg-[var(--color-bg)] z-10 overflow-hidden text-ellipsis"
 						title={column}>{column}</th
 					>
 				{/each}
@@ -103,16 +103,15 @@
 			{/if}
 			{#each visible as entry (entry.index)}
 				<tr
-					class="hover:bg-gray-50 dark:hover:bg-gray-800/30 even:bg-gray-50/50 dark:even:bg-gray-800/20"
+					class="even:bg-gray-50/50 dark:even:bg-gray-800/20"
 					style="height: {rowHeight}px;"
 				>
-					<td
-						class="px-3 py-1 border-b border-gray-100 dark:border-gray-700/50 text-gray-400 text-xs whitespace-nowrap overflow-hidden"
+					<td class="text-gray-400 whitespace-nowrap overflow-hidden"
 						>{entry.index + 1}</td
 					>
 					{#each columns as column (column)}
 						<td
-							class="px-3 py-1 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 whitespace-nowrap overflow-hidden text-ellipsis"
+							class="whitespace-nowrap overflow-hidden text-ellipsis"
 							title={formatCellValue(entry.row[column])}
 							>{formatCellValue(entry.row[column])}</td
 						>

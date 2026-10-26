@@ -183,7 +183,7 @@
 			{t('users.title')}
 		</h1>
 		<button
-			class="px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={loadUsers}
 			disabled={loading}
 		>
@@ -211,20 +211,20 @@
 		</h2>
 		<div class="flex flex-wrap gap-2 text-sm">
 			<input
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm"
 				placeholder={t('common.username')}
 				bind:value={newUsername}
 				disabled={loading}
 			/>
 			<input
 				type="password"
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm"
 				placeholder={t('common.password')}
 				bind:value={newPassword}
 				disabled={loading}
 			/>
 			<button
-				class="px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={createUser}
 				disabled={loading || !newUsername.trim() || !newPassword.trim()}
 			>
@@ -242,27 +242,27 @@
 		<div class="flex flex-wrap gap-2 text-sm">
 			<input
 				type="password"
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm"
 				placeholder={t('users.oldPassword')}
 				bind:value={ownOldPassword}
 				disabled={loading}
 			/>
 			<input
 				type="password"
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm"
 				placeholder={t('users.newPassword')}
 				bind:value={ownNewPassword}
 				disabled={loading}
 			/>
 			<input
 				type="password"
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm"
 				placeholder={t('users.confirmPassword')}
 				bind:value={ownConfirmPassword}
 				disabled={loading}
 			/>
 			<button
-				class="px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={submitOwnPassword}
 				disabled={loading || !ownOldPassword.trim() || !ownNewPassword.trim()}
 			>
@@ -276,7 +276,7 @@
 	>
 		<div class="mb-3">
 			<input
-				class="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input w-full"
 				placeholder={t('users.search')}
 				bind:value={query}
 			/>
@@ -309,7 +309,7 @@
 								<td class="py-2">
 									<div class="flex flex-wrap gap-2">
 										<button
-											class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+											class="ui-btn ui-btn-ghost ui-btn-sm"
 											onclick={() =>
 												(resetTarget =
 													resetTarget === user.username ? null : user.username)}
@@ -318,14 +318,14 @@
 										</button>
 										{#if !fallback}
 											<button
-												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+												class="ui-btn ui-btn-ghost ui-btn-sm"
 												onclick={() => toggleEnabled(user, false)}
 												disabled={loading}
 											>
 												{t('users.disable')}
 											</button>
 											<button
-												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+												class="ui-btn ui-btn-ghost ui-btn-sm"
 												onclick={() => toggleEnabled(user, true)}
 												disabled={loading}
 											>
@@ -333,7 +333,7 @@
 											</button>
 										{/if}
 										<button
-											class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+											class="ui-btn ui-btn-ghost ui-btn-sm"
 											onclick={() =>
 												(roleTarget =
 													roleTarget === user.username ? null : user.username)}
@@ -351,19 +351,19 @@
 									{#if roleTarget === user.username}
 										<div class="mt-2 flex flex-wrap gap-2">
 											<input
-												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333]"
+												class="ui-input ui-input-sm"
 												placeholder={t('users.space')}
 												bind:value={roleSpace}
 												disabled={loading}
 											/>
 											<input
-												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333]"
+												class="ui-input ui-input-sm"
 												placeholder={t('users.role')}
 												bind:value={roleName}
 												disabled={loading}
 											/>
 											<button
-												class="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded cursor-pointer"
+												class="ui-btn ui-btn-primary ui-btn-sm"
 												onclick={() => submitGrant(user)}
 												disabled={loading ||
 													!roleSpace.trim() ||
@@ -372,7 +372,7 @@
 												{t('users.grant')}
 											</button>
 											<button
-												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+												class="ui-btn ui-btn-ghost ui-btn-sm"
 												onclick={() => submitRevoke(user)}
 												disabled={loading ||
 													!roleSpace.trim() ||
@@ -386,13 +386,13 @@
 										<div class="mt-2 flex gap-2">
 											<input
 												type="password"
-												class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333]"
+												class="ui-input ui-input-sm"
 												placeholder={t('common.password')}
 												bind:value={resetPassword}
 												disabled={loading}
 											/>
 											<button
-												class="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded cursor-pointer"
+												class="ui-btn ui-btn-primary ui-btn-sm"
 												onclick={() => submitReset(user)}
 												disabled={loading || !resetPassword.trim()}
 											>

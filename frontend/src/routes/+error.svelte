@@ -16,7 +16,7 @@
 	</p>
 	<a
 		href="/"
-		class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-md transition-colors"
+		class="ui-btn ui-btn-primary"
 	>
 		{t('common.backHome')}
 	</a>

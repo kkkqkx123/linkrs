@@ -112,14 +112,14 @@
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('transfer.space')}
 				<input
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={space}
 				/>
 			</label>
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('transfer.format')}
 				<select
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm"
 					bind:value={format}
 				>
 					<option value="csv">csv</option>
@@ -130,7 +130,7 @@
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('transfer.targetType')}
 				<select
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm"
 					bind:value={targetType}
 				>
 					<option value="tag">tag</option>
@@ -141,7 +141,7 @@
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('transfer.targetName')}
 				<input
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={targetName}
 				/>
 			</label>
@@ -151,7 +151,7 @@
 				{t('batch.size')}
 				<input
 					type="number"
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={batchSize}
 				/>
 			</label>
@@ -168,19 +168,19 @@
 		</div>
 		<div class="flex flex-wrap gap-2">
 			<button
-				class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={runImport}
 				disabled={loading}
 			>
 				{t('transfer.runImport')}
 			</button>
 			<input
-				class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm font-mono"
 				placeholder={t('transfer.jobId')}
 				bind:value={importId}
 			/>
 			<button
-				class="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-ghost ui-btn-sm"
 				onclick={runImportStatus}
 				disabled={loading || !importId}
 			>
@@ -199,20 +199,20 @@
 			{t('transfer.query')}
 			<textarea
 				rows="3"
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm font-mono"
 				bind:value={exportQuery}
 			></textarea>
 		</label>
 		<div class="flex flex-wrap items-center gap-2">
 			<select
-				class="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm"
 				bind:value={exportFormat}
 			>
 				<option value="csv">csv</option>
 				<option value="jsonl">jsonl</option>
 			</select>
 			<button
-				class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={runExport}
 				disabled={loading || !exportQuery}
 			>

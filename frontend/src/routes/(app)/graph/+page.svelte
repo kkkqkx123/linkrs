@@ -329,7 +329,7 @@
 
 <div class="flex flex-col h-full gap-4">
 	<div
-		class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3 flex items-center justify-between"
+		class="ui-card shadow-sm px-5 py-3 flex items-center justify-between"
 	>
 		<h2
 			class="text-lg font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2"
@@ -353,56 +353,56 @@
 		<div class="flex items-center gap-3">
 			<input
 				type="text"
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 focus:outline-none focus:border-blue-500 w-48"
+				class="ui-input"
 				placeholder={t('graph.search')}
 				value={searchQuery}
 				oninput={(e) => graphStore.setSearchQuery((e.target as HTMLInputElement).value)}
 				disabled={!graphData}
 			/>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+				class="ui-btn ui-btn-ghost"
 				onclick={() => (filterPanelOpen = !filterPanelOpen)}
 				disabled={!graphData}
 			>
 				{t('dataBrowser.filter')}
 			</button>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+				class="ui-btn ui-btn-ghost"
 				onclick={handleFitToScreen}
 				disabled={!graphData}
 			>
 				{t('graph.fit')}
 			</button>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+				class="ui-btn ui-btn-ghost"
 				onclick={handleResetZoom}
 				disabled={!graphData}
 			>
 				{t('graph.reset')}
 			</button>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+				class="ui-btn ui-btn-ghost"
 				onclick={() => (stylePanelOpen = !stylePanelOpen)}
 				disabled={!graphData}
 			>
 				{t('graph.style')}
 			</button>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+				class="ui-btn ui-btn-ghost"
 				onclick={handleExportPng}
 				disabled={!graphData}
 			>
 				PNG
 			</button>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+				class="ui-btn ui-btn-ghost"
 				onclick={handleExportJson}
 				disabled={!graphData}
 			>
 				JSON
 			</button>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer disabled:opacity-50"
+				class="ui-btn ui-btn-ghost"
 				onclick={undoExploreStep}
 				disabled={!graphData || exploreStack.length === 0}
 				title={t('graph.undoExpand')}
@@ -410,7 +410,7 @@
 				↩ {t('graph.undoExpand')}
 			</button>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer disabled:opacity-50"
+				class="ui-btn ui-btn-ghost"
 				onclick={resetExplore}
 				disabled={!graphData || exploreStack.length === 0}
 				title={t('graph.resetExplore')}
@@ -418,7 +418,7 @@
 				{t('graph.resetExplore')}
 			</button>
 			<select
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 focus:outline-none focus:border-blue-500"
+				class="ui-input"
 				aria-label={t('graph.layoutLabel')}
 				value={layout}
 				onchange={handleLayoutChange}
@@ -428,7 +428,7 @@
 				{/each}
 			</select>
 			<button
-				class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer disabled:opacity-50"
+				class="ui-btn ui-btn-ghost"
 				onclick={handleClearGraph}
 				disabled={!graphData}
 			>
@@ -441,7 +441,7 @@
 
 	{#if filterPanelOpen && graphData}
 		<div
-			class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
+			class="ui-card shadow-sm px-5 py-3 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
 		>
 			<div>
 				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -500,7 +500,7 @@
 
 	{#if stylePanelOpen && graphData}
 		<div
-			class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
+			class="ui-card shadow-sm px-5 py-3 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
 		>
 			<div>
 				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -521,7 +521,7 @@
 							>{tag}</span
 						>
 						<select
-							class="ml-auto px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300 max-w-28 truncate"
+							class="ml-auto ui-input ui-input-sm max-w-28 truncate"
 							value={style.labelProperty}
 							onchange={(e) =>
 								graphStore.setNodeStyle(tag, {
@@ -555,7 +555,7 @@
 							>{type}</span
 						>
 						<select
-							class="ml-auto px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300 max-w-28 truncate"
+							class="ml-auto ui-input ui-input-sm max-w-28 truncate"
 							value={style.labelProperty}
 							onchange={(e) =>
 								graphStore.setEdgeStyle(type, {
@@ -579,7 +579,7 @@
 						{t('graph.nodeRepulsion')}
 						<input
 							type="number"
-							class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300"
+							class="ui-input ui-input-sm"
 							value={layoutParams.nodeRepulsion}
 							onchange={(e) => graphStore.setLayoutParams({ nodeRepulsion: Number((e.target as HTMLInputElement).value) })}
 						/>
@@ -589,7 +589,7 @@
 						<input
 							type="number"
 							step="0.01"
-							class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300"
+							class="ui-input ui-input-sm"
 							value={layoutParams.gravity}
 							onchange={(e) => graphStore.setLayoutParams({ gravity: Number((e.target as HTMLInputElement).value) })}
 						/>
@@ -598,7 +598,7 @@
 						{t('graph.numIter')}
 						<input
 							type="number"
-							class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-xs bg-white dark:bg-[#1C2333] text-gray-700 dark:text-gray-300"
+							class="ui-input ui-input-sm"
 							value={layoutParams.numIter}
 							onchange={(e) => graphStore.setLayoutParams({ numIter: Number((e.target as HTMLInputElement).value) })}
 						/>
@@ -609,7 +609,7 @@
 	{/if}
 
 	<div
-		class="flex-1 bg-white dark:bg-[#1C2333] rounded-lg shadow-sm flex overflow-hidden"
+		class="flex-1 ui-card shadow-sm flex overflow-hidden"
 	>
 		<div class="flex-1 relative">
 			{#if graphData}
@@ -706,7 +706,7 @@
 				{#if detailType === 'node' && failedNodes.has(detailData.id)}
 					<div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
 						<button
-							class="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-700 dark:text-gray-300 text-sm rounded cursor-pointer"
+							class="w-full ui-btn ui-btn-ghost"
 							onclick={() => retryExpand(detailData.id)}
 						>
 							Retry Expand

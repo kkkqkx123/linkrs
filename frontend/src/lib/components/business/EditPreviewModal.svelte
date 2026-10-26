@@ -62,7 +62,7 @@
 	<div class="fixed inset-0 z-50 flex items-center justify-center">
 		<div role="presentation" class="absolute inset-0 bg-black/20" onclick={onClose}></div>
 		<div
-			class="relative bg-white dark:bg-[#1C2333] rounded-lg shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
+			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
 		>
 			<div class="flex items-center justify-between mb-4">
 				<h3 class="font-semibold text-gray-800 dark:text-gray-100">{title}</h3>
@@ -94,7 +94,7 @@
 							</div>
 						{/if}
 						<input
-							class="mt-1 w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 font-mono"
+							class="mt-1 w-full ui-input ui-input-sm font-mono"
 							value={formatValue(edited[key])}
 							oninput={(e) => updateValue(key, e.currentTarget.value)}
 						/>
@@ -120,11 +120,11 @@
 
 			<div class="mt-4 flex justify-end gap-2">
 				<button
-					class="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-700 dark:text-gray-300 bg-white dark:bg-[#1C2333] hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+					class="ui-btn ui-btn-ghost"
 					onclick={onClose}>{t('common.cancel')}</button
 				>
 				<button
-					class="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded cursor-pointer disabled:opacity-50"
+					class="ui-btn ui-btn-primary"
 					disabled={busy}
 					onclick={onConfirm}
 				>

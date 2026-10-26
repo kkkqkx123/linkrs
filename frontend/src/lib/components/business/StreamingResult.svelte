@@ -220,7 +220,7 @@
 	{/if}
 	{#if isActive}
 		<button
-			class="ml-2 px-2 py-0.5 text-xs rounded border border-red-300 dark:border-red-700 text-red-500 hover:text-red-700 cursor-pointer"
+			class="ml-2 ui-btn ui-btn-danger-outline ui-btn-sm"
 			onclick={onCancel}
 		>
 			{t('common.cancel')}
@@ -247,12 +247,12 @@
 		{@const only = stream.cards[0]}
 		<div class="h-4 w-px bg-gray-300 dark:bg-gray-600"></div>
 		<button
-			class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+			class="ui-link text-xs"
 			title={t('console.serverExportHint')}
 			onclick={() => void handleServerExport(only.query, 'csv')}>CSV</button
 		>
 		<button
-			class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+			class="ui-link text-xs"
 			title={t('console.serverExportHint')}
 			onclick={() => void handleServerExport(only.query, 'jsonl')}>JSONL</button
 		>
@@ -266,7 +266,7 @@
 		>
 			<p class="flex-1 text-red-600 dark:text-red-300 text-sm">{exportError}</p>
 			<button
-				class="text-red-400 hover:text-red-600 text-sm cursor-pointer"
+				class="ui-link-danger text-sm"
 				onclick={() => {
 					exportError = null;
 				}}
@@ -322,13 +322,13 @@
 						{/if}
 						<span>{formatRowCount(card.receivedCount)}</span>
 						<button
-							class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+							class="ui-link text-xs"
 							title={t('console.serverExportHint')}
 							onclick={() => void handleServerExport(card.query, 'csv')}
 							>CSV</button
 						>
 						<button
-							class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+							class="ui-link text-xs"
 							title={t('console.serverExportHint')}
 							onclick={() => void handleServerExport(card.query, 'jsonl')}
 							>JSONL</button

@@ -104,7 +104,7 @@
 
 	{#if panelOpen}
 		<div
-			class="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-[#1C2333] rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50 animate-fade-in"
+			class="absolute right-0 top-full mt-2 w-72 ui-card shadow-lg border border-gray-200 dark:border-gray-700 z-50 animate-fade-in"
 		>
 			<div class="p-4">
 				<div class="flex items-center justify-between mb-3">
@@ -112,7 +112,7 @@
 						{t('common.healthCheck')}
 					</h3>
 					<button
-						class="px-3 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 cursor-pointer"
+						class="ui-btn ui-btn-primary ui-btn-sm"
 						onclick={handleCheckHealth}
 						disabled={isChecking}
 					>

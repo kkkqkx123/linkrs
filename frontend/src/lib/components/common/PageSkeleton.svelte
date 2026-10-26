@@ -4,12 +4,12 @@
 
 <div class="flex flex-col h-full gap-4 animate-fade-in">
 	<!-- Header skeleton -->
-	<div class="bg-white dark:bg-[#1C2333] rounded-lg shadow-sm px-5 py-3">
+	<div class="ui-card shadow-sm px-5 py-3">
 		<Skeleton width="120px" height="1.25rem" rounded="md" />
 	</div>
 
 	<!-- Content skeleton -->
-	<div class="flex-1 bg-white dark:bg-[#1C2333] rounded-lg shadow-sm p-6">
+	<div class="flex-1 ui-card shadow-sm p-6">
 		<div class="space-y-4">
 			<div class="flex gap-4">
 				<Skeleton width="80px" height="2rem" rounded="md" />

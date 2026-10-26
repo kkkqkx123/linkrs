@@ -64,51 +64,49 @@
 <div
 	class="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-[#0B0F17] transition-colors duration-300"
 >
-	<div
-		class="bg-white dark:bg-[#1C2333] rounded-lg shadow-md p-8 w-full max-w-sm transition-colors duration-300"
-	>
+	<div class="ui-card shadow-md p-10 w-full max-w-md transition-colors duration-300">
 		<h1
-			class="text-2xl font-bold text-center text-gray-800 dark:text-gray-100 mb-6"
+			class="text-3xl font-bold text-center text-gray-800 dark:text-gray-100 mb-8"
 		>
 			{t('app.title')}
 		</h1>
 		<form onsubmit={handleSubmit}>
 			{#if errorMsg}
 				<div
-					class="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-red-600 dark:text-red-400 text-sm"
+					class="mb-5 p-3 bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-md text-red-600 dark:text-red-400 text-sm"
 				>
 					{errorMsg}
 				</div>
 			{/if}
-			<div class="mb-4">
+			<div class="mb-5">
 				<label
-					class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+					class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5"
 					for="username">{t('common.username')}</label
 				>
 				<input
 					id="username"
 					type="text"
 					bind:value={username}
-					class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 rounded text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+					class="ui-input w-full"
 					placeholder={t('login.usernamePlaceholder')}
 					disabled={isLoading}
 				/>
 			</div>
-			<div class="mb-4">
+			<div class="mb-5">
 				<label
-					class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+					class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5"
 					for="password">{t('common.password')}</label
 				>
 				<input
 					id="password"
 					type="password"
 					bind:value={password}
-					class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200 rounded text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+					class="ui-input w-full"
 					placeholder={t('login.passwordPlaceholder')}
 					disabled={isLoading}
 				/>
 			</div>
-			<div class="mb-4">
+			<div class="mb-6">
 				<label
 					class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400"
 				>
@@ -122,7 +120,7 @@
 			</div>
 			<button
 				type="submit"
-				class="w-full py-2 px-4 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+				class="ui-btn ui-btn-primary w-full"
 				disabled={!formValid || isLoading}
 			>
 				{isLoading ? t('common.loading') : t('common.login')}

@@ -64,9 +64,7 @@
 	}
 </script>
 
-<div
-	class="flex-1 bg-white dark:bg-[#1C2333] rounded-lg shadow-sm overflow-hidden flex flex-col"
->
+<div class="flex-1 ui-card shadow-sm overflow-hidden flex flex-col">
 	{#if isExecuting}
 		<div class="flex items-center justify-center flex-1">
 			<div class="text-center">
@@ -90,7 +88,7 @@
 			</p>
 			{#if error.position && onJumpToError}
 				<button
-					class="mt-2 px-3 py-1 text-xs border border-red-300 dark:border-red-700 rounded text-red-600 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 cursor-pointer"
+					class="-btn ui-btn-danger-outline ui-btn-sm"
 					onclick={() => onJumpToError?.(error.position!)}
 				>
 					{t('console.jumpToError', {
@@ -155,7 +153,7 @@
 									.error.message}
 								{#if entry.error.position && onJumpToError}
 									<button
-										class="ml-2 px-2 py-0.5 text-xs border border-red-300 dark:border-red-700 rounded hover:bg-red-100 dark:hover:bg-red-900/40 cursor-pointer"
+										class="-btn ui-btn-danger-outline ui-btn-sm"
 										onclick={() => onJumpToError?.(entry.error!.position!)}
 									>
 										{t('console.jumpToError', {
@@ -168,27 +166,19 @@
 						{:else if entry.result}
 							{#if entry.result.columns.length > 0}
 								<div class="overflow-x-auto">
-									<table class="w-full text-sm border-collapse">
+									<table class="ui-table w-full border-collapse">
 										<thead>
 											<tr class="bg-gray-50 dark:bg-gray-800/50">
 												{#each entry.result.columns as col (col)}
-													<th
-														class="px-3 py-1.5 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap"
-														>{col}</th
-													>
+													<th>{col}</th>
 												{/each}
 											</tr>
 										</thead>
 										<tbody>
 											{#each entry.result.rows as row, i (i)}
-												<tr
-													class="hover:bg-gray-50 dark:hover:bg-gray-800/30 even:bg-gray-50/50 dark:even:bg-gray-800/20"
-												>
+												<tr class="even:bg-gray-50/50 dark:even:bg-gray-800/20">
 													{#each entry.result.columns as col (col)}
-														<td
-															class="px-3 py-1 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 max-w-xs truncate"
-															>{formatCellValue(row[col])}</td
-														>
+														<td>{formatCellValue(row[col])}</td>
 													{/each}
 												</tr>
 											{/each}
@@ -251,38 +241,30 @@
 			</div>
 			<div class="h-4 w-px bg-gray-300 dark:bg-gray-600"></div>
 			<button
-				class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+				class="ui-link text-xs"
 				onclick={() => exportToCSV(currentResult)}>CSV</button
 			>
 			<button
-				class="text-blue-500 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 text-xs cursor-pointer"
+				class="ui-link text-xs"
 				onclick={() => exportToJSON(currentResult)}>JSON</button
 			>
 		</div>
 		<div class="flex-1 overflow-auto p-4">
 			{#if activeView === 'table'}
 				<div class="overflow-x-auto">
-					<table class="w-full text-sm border-collapse">
+					<table class="ui-table w-full border-collapse">
 						<thead>
 							<tr class="bg-gray-50 dark:bg-gray-800/50">
 								{#each currentResult.columns as col (col)}
-									<th
-										class="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap"
-										>{col}</th
-									>
+									<th>{col}</th>
 								{/each}
 							</tr>
 						</thead>
 						<tbody>
 							{#each currentResult.rows as row, i (i)}
-								<tr
-									class="hover:bg-gray-50 dark:hover:bg-gray-800/30 even:bg-gray-50/50 dark:even:bg-gray-800/20"
-								>
+								<tr class="even:bg-gray-50/50 dark:even:bg-gray-800/20">
 									{#each currentResult.columns as col (col)}
-										<td
-											class="px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 text-gray-700 dark:text-gray-300 max-w-xs truncate"
-											>{formatCellValue(row[col])}</td
-										>
+										<td>{formatCellValue(row[col])}</td>
 									{/each}
 								</tr>
 							{/each}

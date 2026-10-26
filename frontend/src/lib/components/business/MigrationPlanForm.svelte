@@ -34,7 +34,7 @@
 	}: Props = $props();
 
 	const inputClass =
-		'px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200';
+		'ui-input ui-input-sm font-mono';
 </script>
 
 <section
@@ -73,21 +73,21 @@
 	</div>
 	<div class="flex flex-wrap gap-2">
 		<button
-			class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={onCreatePlan}
 			disabled={loading}
 		>
 			{t('migration.createPlan')}
 		</button>
 		<button
-			class="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-ghost ui-btn-sm"
 			onclick={onStatus}
 			disabled={loading}
 		>
 			{t('common.status')}
 		</button>
 		<button
-			class="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-ghost ui-btn-sm"
 			onclick={onHistory}
 			disabled={loading}
 		>
@@ -95,14 +95,14 @@
 		</button>
 		{#if streaming}
 			<button
-				class="px-3 py-1 text-xs rounded bg-red-500 hover:bg-red-600 text-white cursor-pointer"
+				class="ui-btn ui-btn-danger ui-btn-sm"
 				onclick={onStopStream}
 			>
 				{t('common.cancel')}
 			</button>
 		{:else}
 			<button
-				class="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-ghost ui-btn-sm"
 				onclick={onStream}
 				disabled={loading}
 			>

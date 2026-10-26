@@ -67,14 +67,14 @@
 				{t('batch.spaceId')}
 				<input
 					type="number"
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={spaceId}
 				/>
 			</label>
 			<label class="flex flex-col gap-1 text-xs text-gray-500">
 				{t('batch.type')}
 				<select
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm"
 					bind:value={batchType}
 				>
 					<option value="vertex">vertex</option>
@@ -86,13 +86,13 @@
 				{t('batch.size')}
 				<input
 					type="number"
-					class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+					class="ui-input ui-input-sm font-mono"
 					bind:value={batchSize}
 				/>
 			</label>
 		</div>
 		<button
-			class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={() =>
 				run(
 					() =>
@@ -118,7 +118,7 @@
 		<label class="flex flex-col gap-1 text-xs text-gray-500 mb-3">
 			{t('batch.id')}
 			<input
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm font-mono"
 				bind:value={batchId}
 			/>
 		</label>
@@ -126,13 +126,13 @@
 			{t('batch.items')}
 			<textarea
 				rows="4"
-				class="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded font-mono bg-white dark:bg-[#1C2333] text-gray-800 dark:text-gray-200"
+				class="ui-input ui-input-sm font-mono"
 				bind:value={itemsText}
 			></textarea>
 		</label>
 		<div class="flex flex-wrap gap-2">
 			<button
-				class="px-3 py-1 text-xs rounded bg-blue-500 hover:bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={() => run(() => batchService.addItems(batchId, parseItems()))}
 				disabled={loading || !batchId}
 			>
@@ -146,7 +146,7 @@
 				{t('batch.execute')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-ghost ui-btn-sm"
 				onclick={() => run(() => batchService.status(batchId))}
 				disabled={loading || !batchId}
 			>
@@ -160,7 +160,7 @@
 				{t('common.cancel')}
 			</button>
 			<button
-				class="px-3 py-1 text-xs rounded bg-red-500 hover:bg-red-600 text-white disabled:opacity-50 cursor-pointer"
+				class="ui-btn ui-btn-danger ui-btn-sm"
 				onclick={() => run(() => batchService.remove(batchId))}
 				disabled={loading || !batchId}
 			>
