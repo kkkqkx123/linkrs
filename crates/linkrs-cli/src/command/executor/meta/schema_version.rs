@@ -12,6 +12,7 @@ pub async fn execute_schema_versions(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\schema versions")?;
     let result = session_mgr
         .client()
         .get_schema_version_history(space, label, is_edge)
@@ -32,6 +33,7 @@ pub async fn execute_schema_changes(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\schema changes")?;
     let result = session_mgr
         .client()
         .get_schema_changes(space, label, from, to, is_edge)
@@ -52,6 +54,7 @@ pub async fn execute_schema_breaking(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\schema breaking")?;
     let result = session_mgr
         .client()
         .detect_schema_breaking_changes(space, label, from, to, is_edge)

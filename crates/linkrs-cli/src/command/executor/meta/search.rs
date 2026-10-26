@@ -13,6 +13,7 @@ pub async fn execute_fulltext(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\fulltext")?;
     let client = session_mgr.client();
     let output = match action {
         FulltextAction::Search {
@@ -92,6 +93,7 @@ pub async fn execute_vector(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\vector")?;
     let client = session_mgr.client();
     let output = match action {
         VectorAction::Create {

@@ -37,6 +37,11 @@ pub async fn execute_import(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    if session_mgr.is_read_only() {
+        return Err(crate::utils::error::CliError::CommandError(
+            "database is read-only: \\import is a write operation".to_string(),
+        ));
+    }
 
     let config = ImportConfig::new(file_path.into(), target)
         .with_format(format)
@@ -110,6 +115,11 @@ pub async fn execute_copy(
 
     match direction {
         CopyDirection::From => {
+            if session_mgr.is_read_only() {
+                return Err(crate::utils::error::CliError::CommandError(
+                    "database is read-only: \\copy from is a write operation".to_string(),
+                ));
+            }
             let import_format = if file_path.ends_with(".json") || file_path.ends_with(".jsonl") {
                 ImportFormat::json_array()
             } else {
@@ -252,6 +262,11 @@ pub async fn execute_import_schema(
 ) -> Result<bool> {
     use crate::io::schema_io::SchemaImporter;
 
+    if session_mgr.is_read_only() {
+        return Err(crate::utils::error::CliError::CommandError(
+            "database is read-only: \\import-schema is a write operation".to_string(),
+        ));
+    }
     let importer = SchemaImporter::new();
     let path = std::path::PathBuf::from(&file_path);
 

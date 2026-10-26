@@ -106,6 +106,18 @@ pub async fn start_service_with_config_path(
     stats_manager.set_histogram_max_samples(m.histogram_max_samples);
 
     let storage_path = PathBuf::from(config.storage_path());
+    // Hold an exclusive advisory lock on <work_dir>/LOCK for the whole
+    // service lifetime so embedded shells (and other servers) cannot open
+    // the same work dir concurrently. Released automatically on exit.
+    let _db_lock = match linkrs_core::lock::acquire_db_lock(config.storage_path(), false) {
+        Ok(guard) => guard,
+        Err(error) => {
+            return Err(linkrs_core::DBError::new(
+                linkrs_core::error::ErrorKind::Io,
+                format!("failed to acquire database lock: {}", error),
+            ));
+        }
+    };
     let pid_file_path = storage_path.join("linkrs.pid");
     let _ = std::fs::write(&pid_file_path, std::process::id().to_string());
     let mut persistence_config = PersistenceConfig::for_work_dir(&storage_path)

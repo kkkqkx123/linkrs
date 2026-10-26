@@ -24,6 +24,7 @@ pub async fn execute_users(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\users")?;
     let client = session_mgr.client();
     match action {
         UsersAction::List => {
@@ -104,6 +105,7 @@ pub async fn execute_sessions(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\sessions")?;
     let client = session_mgr.client();
     match action {
         SessionsAction::List => {

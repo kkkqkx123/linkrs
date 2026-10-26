@@ -1,8 +1,8 @@
-use colored::Colorize;
 use crate::command::executor::CommandExecutor;
 use crate::command::parser::{self};
 use crate::command::script::is_statement_complete;
 use crate::input::handler::InputHandler;
+use colored::Colorize;
 
 use crate::session::SessionManager;
 use crate::utils::error::Result;
@@ -85,14 +85,14 @@ pub async fn run_with(
     run_repl(session_mgr, executor).await
 }
 
-pub async fn run_repl(session_mgr: &mut SessionManager, executor: &mut CommandExecutor) -> Result<()> {
+pub async fn run_repl(
+    session_mgr: &mut SessionManager,
+    executor: &mut CommandExecutor,
+) -> Result<()> {
     let mut input_handler = InputHandler::new()?;
 
     loop {
-        let prompt = session_mgr
-            .session()
-            .map(|s| s.prompt())
-            .unwrap_or_else(|| "linkrs=# ".to_string());
+        let prompt = session_mgr.prompt();
 
         let line = match input_handler.read_line(&prompt)? {
             Some(line) => line,
@@ -106,10 +106,7 @@ pub async fn run_repl(session_mgr: &mut SessionManager, executor: &mut CommandEx
         let mut full_input = line;
 
         while !is_statement_complete(&full_input) {
-            let cont_prompt = session_mgr
-                .session()
-                .map(|s| s.continuation_prompt())
-                .unwrap_or_else(|| "linkrs-# ".to_string());
+            let cont_prompt = session_mgr.continuation_prompt();
 
             let next_line = match input_handler.read_line(&cont_prompt)? {
                 Some(line) => line,

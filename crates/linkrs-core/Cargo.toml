@@ -28,6 +28,7 @@ bitvec.workspace = true
 postcard.workspace = true
 bcrypt.workspace = true
  utoipa = { workspace = true }
+fs4.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

@@ -16,6 +16,7 @@ pub async fn execute_sync(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\sync")?;
     let client = session_mgr.client();
     match action {
         SyncAction::Status => {

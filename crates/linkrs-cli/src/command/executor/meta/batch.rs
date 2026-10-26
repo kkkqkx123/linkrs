@@ -28,6 +28,7 @@ pub async fn execute_batch(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\batch")?;
     match action {
         BatchAction::Create {
             space_id,

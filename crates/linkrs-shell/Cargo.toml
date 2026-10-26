@@ -15,5 +15,6 @@ clap.workspace = true
 colored.workspace = true
 linkrs_cli = { version = "0.1.0", path = "../linkrs-cli" }
 linkrs-api = { version = "0.1.0", path = "../linkrs-api", features = ["embedded", "fulltext", "vector"] }
+linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
 linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
 serde_json.workspace = true

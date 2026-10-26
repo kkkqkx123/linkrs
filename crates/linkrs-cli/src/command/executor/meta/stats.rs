@@ -21,6 +21,7 @@ pub async fn execute_statistics(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\statistics")?;
     let normalized = target.map(|t| {
         if t == "db" {
             "database"

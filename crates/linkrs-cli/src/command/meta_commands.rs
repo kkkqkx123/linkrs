@@ -304,6 +304,12 @@ fn show_general_help() -> String {
     ));
     output.push_str(&format!("  {:25} {}\n", "\\q", "Quit Linkrs CLI"));
 
+    output.push_str("\nEmbedded mode: \\users, \\sessions, \\sync, \\fulltext, \\vector,\n");
+    output.push_str("\\stream, \\cursor, \\statistics, \\status, \\config, \\batch,\n");
+    output.push_str("\\login, \\passwd, \\validate, plan-only \\explain, function\n");
+    output.push_str("management and schema-version commands require a server\n");
+    output.push_str("connection and report `embedded mode does not support`.\n");
+
     output.push('\n');
     output
 }

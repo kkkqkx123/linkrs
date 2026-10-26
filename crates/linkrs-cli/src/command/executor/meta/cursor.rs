@@ -17,6 +17,7 @@ pub async fn execute_stream(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\stream")?;
     let sid = session_id(session_mgr)?;
     let substituted = session_mgr
         .session()
@@ -41,6 +42,7 @@ pub async fn execute_cursor_open(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\cursor open")?;
     let sid = session_id(session_mgr)?;
     let substituted = session_mgr
         .session()
@@ -66,6 +68,7 @@ pub async fn execute_cursor_fetch(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\cursor fetch")?;
     let sid = session_id(session_mgr)?;
     let cid = cursor_id
         .or_else(|| executor.active_cursor())
@@ -97,6 +100,7 @@ pub async fn execute_cursor_close(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\cursor close")?;
     let sid = session_id(session_mgr)?;
     let cid = cursor_id
         .or_else(|| executor.active_cursor())

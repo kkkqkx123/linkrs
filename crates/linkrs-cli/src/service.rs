@@ -70,8 +70,6 @@ fn is_alive(pid: u32) -> bool {
     }
 }
 
-
-
 fn systemctl_available() -> bool {
     Command::new("systemctl")
         .arg("--version")
@@ -113,7 +111,6 @@ fn cleanup_stale_pid() {
         }
     }
 }
-
 
 pub fn start(
     bin: Option<&str>,
@@ -163,7 +160,11 @@ pub fn start(
             .spawn()
             .map_err(|e| e.to_string())?;
         fs::write(pid_file()?, child.id().to_string()).map_err(|e| e.to_string())?;
-        println!("Started linkrs-server (pid {}) log={}", child.id(), log.display());
+        println!(
+            "Started linkrs-server (pid {}) log={}",
+            child.id(),
+            log.display()
+        );
         Ok(())
     }
 }
@@ -171,9 +172,7 @@ pub fn start(
 pub fn stop() -> Result<(), String> {
     cleanup_stale_pid();
     if systemctl_available() && service_active() {
-        let _ = Command::new("systemctl")
-            .args(["stop", "linkrs"])
-            .status();
+        let _ = Command::new("systemctl").args(["stop", "linkrs"]).status();
         for _ in 0..50 {
             if !service_active() {
                 break;
@@ -192,9 +191,7 @@ pub fn stop() -> Result<(), String> {
         Some(pid) if is_alive(pid) => {
             #[cfg(unix)]
             {
-                let _ = Command::new("kill")
-                    .arg(pid.to_string())
-                    .status();
+                let _ = Command::new("kill").arg(pid.to_string()).status();
             }
             #[cfg(windows)]
             {
@@ -235,8 +232,22 @@ pub fn status() -> Result<(), String> {
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_default();
-        println!("systemd active: {}", if active.is_empty() { "unknown" } else { &active });
-        println!("systemd enabled: {}", if enabled.is_empty() { "unknown" } else { &enabled });
+        println!(
+            "systemd active: {}",
+            if active.is_empty() {
+                "unknown"
+            } else {
+                &active
+            }
+        );
+        println!(
+            "systemd enabled: {}",
+            if enabled.is_empty() {
+                "unknown"
+            } else {
+                &enabled
+            }
+        );
 
         if active == "active" {
             // Validate the reported main PID when possible.
@@ -266,7 +277,10 @@ pub fn status() -> Result<(), String> {
             Ok(())
         }
         Some(pid) => {
-            println!("linkrs-server pid file exists but process {} is not running", pid);
+            println!(
+                "linkrs-server pid file exists but process {} is not running",
+                pid
+            );
             let _ = fs::remove_file(pid_file().unwrap_or_default());
             Err("not running".to_string())
         }

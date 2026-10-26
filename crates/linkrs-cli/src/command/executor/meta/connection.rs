@@ -53,6 +53,11 @@ pub async fn execute_whoami(
                 "{} (session {}, role {})",
                 session.username, session.session_id, role
             );
+            if session_mgr.is_embedded() {
+                line.push_str(" [embedded]");
+                executor.write_output(&line)?;
+                return Ok(true);
+            }
             // Refresh identity from the server when possible; fall back to
             // the cached session on failure.
             match session_mgr.client().auth_me().await {
@@ -85,6 +90,7 @@ pub async fn execute_login(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\login")?;
     let password = match password {
         Some(p) => p,
         None => rpassword::prompt_password("Password: ").map_err(|e| {
@@ -107,6 +113,7 @@ pub async fn execute_passwd(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\passwd")?;
     let old_password = rpassword::prompt_password("Old password: ").map_err(|e| {
         crate::utils::error::CliError::auth(format!("Failed to read password: {}", e))
     })?;

@@ -257,7 +257,11 @@ impl SpaceExporter {
         (tags, edge_types)
     }
 
-    async fn fetch_vertices(&self, session: &mut SessionManager, tag: &str) -> Vec<serde_json::Value> {
+    async fn fetch_vertices(
+        &self,
+        session: &mut SessionManager,
+        tag: &str,
+    ) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
         let mut offset = 0usize;
         loop {

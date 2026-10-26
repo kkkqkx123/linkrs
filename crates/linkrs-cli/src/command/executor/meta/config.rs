@@ -23,6 +23,7 @@ pub async fn execute_config(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\config")?;
     match action {
         ConfigAction::Show { section } => {
             let config = session_mgr.client().get_config().await?;

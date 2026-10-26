@@ -123,11 +123,8 @@ async fn run(mut cli: Cli) -> Result<()> {
     run_with(&mut session_mgr, &mut executor, &options).await
 }
 
-
-
 fn read_password() -> Result<String> {
     rpassword::prompt_password("Password: ").map_err(|e| {
         linkrs_cli::utils::error::CliError::auth(format!("Failed to read password: {}", e))
     })
 }
-

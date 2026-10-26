@@ -22,6 +22,7 @@ pub async fn execute_explain(
         executor.write_output(&output)?;
         print_trace_portrait(executor, session_mgr, result.trace_id.as_deref()).await?;
     } else {
+        session_mgr.require_http("\\explain")?;
         let result = session_mgr
             .client()
             .explain_query(query, session_id)
@@ -61,6 +62,9 @@ async fn print_trace_portrait(
     let Some(trace_id) = trace_id else {
         return Ok(());
     };
+    if session_mgr.is_embedded() {
+        return Ok(());
+    }
     let profile = session_mgr
         .client()
         .get_query_profile_detail(trace_id)
@@ -86,6 +90,7 @@ pub async fn execute_validate(
     if !executor.conditional_stack().is_active() {
         return Ok(true);
     }
+    session_mgr.require_http("\\validate")?;
     let session_id = require_session_id(session_mgr)?;
     let response = session_mgr
         .client()

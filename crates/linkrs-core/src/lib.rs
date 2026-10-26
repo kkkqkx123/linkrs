@@ -21,6 +21,7 @@ pub mod bloom_filter;
 pub mod columnar;
 pub mod function;
 pub mod id_gen;
+pub mod lock;
 pub mod null_bitmap;
 pub mod value_conversion;
 
@@ -75,4 +76,5 @@ pub use session_stats::SessionStatistics;
 pub use arena::{Arena, ArenaPool, ArenaStringBuilder, ArenaTokenizer, ArenaVec};
 pub use bloom_filter::{BloomFilter, ScalableBloomFilter};
 pub use id_gen::{generate_id, IdGenerator};
+pub use lock::{acquire_db_lock, lock_path_for_db, DbFileLock};
 pub use null_bitmap::NullBitmap;

@@ -8,7 +8,6 @@ mod backend;
 use backend::EmbeddedBackend;
 use linkrs_cli::session::SessionManager;
 
-
 #[derive(Parser)]
 #[clap(version = "0.1.0", author = "Linkrs Contributors")]
 struct Args {
@@ -19,6 +18,10 @@ struct Args {
     /// Open an in-memory database
     #[arg(long)]
     in_memory: bool,
+
+    /// Open the database in read-only mode (shared lock, writes rejected)
+    #[arg(long)]
+    readonly: bool,
 
     /// Switch to a space after opening
     #[arg(short = 'd', long)]
@@ -44,6 +47,10 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+    let read_only = args.readonly
+        || std::env::var("LINKRS_READONLY")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
 
     let backend = if args.in_memory || args.database == ":memory:" {
         match EmbeddedBackend::open_in_memory() {
@@ -54,7 +61,10 @@ async fn main() {
             }
         }
     } else {
-        match EmbeddedBackend::open(&args.database) {
+        if read_only && !args.quiet {
+            println!("Opening database in read-only mode.");
+        }
+        match EmbeddedBackend::open_with_options(&args.database, read_only) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("{}: {}", "ERROR".red().bold(), e);

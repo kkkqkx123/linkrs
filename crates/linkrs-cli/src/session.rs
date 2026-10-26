@@ -1,7 +1,7 @@
-use linkrs_client::session::SessionManager as HttpClientSessionManager;
-use linkrs_client::session::Session as ClientSession;
-use linkrs_client::http_client::HttpClient;
 use linkrs_client::config::ClientConfig;
+use linkrs_client::http_client::HttpClient;
+use linkrs_client::session::Session as ClientSession;
+use linkrs_client::session::SessionManager as HttpClientSessionManager;
 use linkrs_client::types::QueryResult;
 use linkrs_client::utils::error::Result as ClientResult;
 use linkrs_client::SpaceInfo;
@@ -15,6 +15,22 @@ pub trait EmbeddedOps: Send + Sync {
     fn execute_query(&mut self, query: &str) -> ClientResult<QueryResult>;
     fn list_spaces(&self) -> ClientResult<Vec<String>>;
     fn current_space(&self) -> Option<String>;
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    /// List tags of the current space. Default returns an unsupported error
+    /// so embedded backends can opt in once schema introspection is available.
+    fn list_tags(&self) -> ClientResult<Vec<linkrs_client::TagInfo>> {
+        Err(linkrs_client::utils::error::ClientError::command(
+            "embedded mode does not support: \\show_tags (no embedded schema introspection yet)",
+        ))
+    }
+    /// List edge types of the current space.
+    fn list_edge_types(&self) -> ClientResult<Vec<linkrs_client::EdgeTypeInfo>> {
+        Err(linkrs_client::utils::error::ClientError::command(
+            "embedded mode does not support: \\show_edges (no embedded schema introspection yet)",
+        ))
+    }
 }
 
 /// Handle to an embedded backend stored inside a [`SessionManager`].
@@ -67,7 +83,11 @@ impl SessionManager {
         password: &str,
     ) -> ClientResult<()> {
         match self {
-            Self::Http(inner) => inner.connect_with_host(host, port, username, password).await,
+            Self::Http(inner) => {
+                inner
+                    .connect_with_host(host, port, username, password)
+                    .await
+            }
             Self::Embedded(_) => Ok(()),
         }
     }
@@ -98,21 +118,23 @@ impl SessionManager {
         }
     }
 
-    pub async fn execute_query_raw(&self, query: &str) -> ClientResult<QueryResult> {
+    pub async fn execute_query_raw(&mut self, query: &str) -> ClientResult<QueryResult> {
         match self {
             Self::Http(inner) => inner.execute_query_raw(query).await,
-            Self::Embedded(_) => Err(linkrs_client::utils::error::ClientError::Other(
-                "execute_query_raw requires mutable access".to_string(),
-            )),
+            Self::Embedded(embedded) => embedded.ops.execute_query(query),
         }
     }
 
-    pub async fn execute_batch(&self, statements: &[String]) -> ClientResult<Vec<QueryResult>> {
+    pub async fn execute_batch(&mut self, statements: &[String]) -> ClientResult<Vec<QueryResult>> {
         match self {
             Self::Http(inner) => inner.execute_batch(statements).await,
-            Self::Embedded(_) => Err(linkrs_client::utils::error::ClientError::Other(
-                "execute_batch requires mutable access".to_string(),
-            )),
+            Self::Embedded(embedded) => {
+                let mut outcomes = Vec::with_capacity(statements.len());
+                for statement in statements {
+                    outcomes.push(embedded.ops.execute_query(statement)?);
+                }
+                Ok(outcomes)
+            }
         }
     }
 
@@ -144,21 +166,23 @@ impl SessionManager {
     pub async fn list_tags(&self) -> ClientResult<Vec<linkrs_client::TagInfo>> {
         match self {
             Self::Http(inner) => inner.list_tags().await,
-            Self::Embedded(_) => Ok(Vec::new()),
+            Self::Embedded(embedded) => embedded.ops.list_tags(),
         }
     }
 
     pub async fn list_edge_types(&self) -> ClientResult<Vec<linkrs_client::EdgeTypeInfo>> {
         match self {
             Self::Http(inner) => inner.list_edge_types().await,
-            Self::Embedded(_) => Ok(Vec::new()),
+            Self::Embedded(embedded) => embedded.ops.list_edge_types(),
         }
     }
 
     pub async fn list_functions(&self) -> ClientResult<Vec<String>> {
         match self {
             Self::Http(inner) => inner.list_functions().await,
-            Self::Embedded(_) => Ok(Vec::new()),
+            Self::Embedded(_) => Err(linkrs_client::utils::error::ClientError::command(
+                "embedded mode does not support: \\show_functions (server only)",
+            )),
         }
     }
 
@@ -202,5 +226,44 @@ impl SessionManager {
             Self::Http(inner) => inner.connection_string(),
             Self::Embedded(_) => "embedded:local".to_string(),
         }
+    }
+
+    pub fn is_embedded(&self) -> bool {
+        matches!(self, Self::Embedded(_))
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Self::Http(_) => false,
+            Self::Embedded(embedded) => embedded.ops.is_read_only(),
+        }
+    }
+
+    pub fn require_http(&self, command: &str) -> ClientResult<()> {
+        if self.is_embedded() {
+            return Err(linkrs_client::utils::error::ClientError::command(format!(
+                "embedded mode does not support: {}",
+                command
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn prompt(&self) -> String {
+        let base = self
+            .session()
+            .map(|s| s.prompt())
+            .unwrap_or_else(|| "linkrs=# ".to_string());
+        if self.is_embedded() && self.is_read_only() {
+            base.replacen("# ", "(ro)# ", 1)
+        } else {
+            base
+        }
+    }
+
+    pub fn continuation_prompt(&self) -> String {
+        self.session()
+            .map(|s| s.continuation_prompt())
+            .unwrap_or_else(|| "linkrs-# ".to_string())
     }
 }
