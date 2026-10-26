@@ -1,6 +1,7 @@
 use clap::Parser;
 use colored::Colorize;
 use linkrs_cli::app::{run_with, RunOptions};
+use linkrs_cli::cli::ExecArgs;
 use linkrs_cli::command::executor::CommandExecutor;
 use linkrs_cli::output::formatter::{OutputFormat, OutputFormatter};
 mod backend;
@@ -9,11 +10,16 @@ use backend::EmbeddedBackend;
 use linkrs_cli::session::SessionManager;
 
 #[derive(Parser)]
-#[clap(version = "0.1.0", author = "Linkrs Contributors")]
+#[clap(
+    name = "linkrs",
+    version = "0.1.0",
+    author = "Linkrs Contributors",
+    about = "Linkrs shell - embedded interactive client for a local database"
+)]
 struct Args {
     /// Database file path or :memory:
     #[arg(default_value = ":memory:")]
-    database: String,
+    database_path: String,
 
     /// Open an in-memory database
     #[arg(long)]
@@ -23,25 +29,8 @@ struct Args {
     #[arg(long)]
     readonly: bool,
 
-    /// Switch to a space after opening
-    #[arg(short = 'd', long)]
-    space: Option<String>,
-
-    /// Execute a single command and exit
-    #[arg(short = 'c', long)]
-    command: Option<String>,
-
-    /// Execute commands from a file and exit
-    #[arg(short = 'f', long)]
-    file: Option<String>,
-
-    /// Output format
-    #[arg(long)]
-    format: Option<String>,
-
-    /// Quiet mode
-    #[arg(short, long)]
-    quiet: bool,
+    #[command(flatten)]
+    exec: ExecArgs,
 }
 
 #[tokio::main]
@@ -52,7 +41,7 @@ async fn main() {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
-    let backend = if args.in_memory || args.database == ":memory:" {
+    let backend = if args.in_memory || args.database_path == ":memory:" {
         match EmbeddedBackend::open_in_memory() {
             Ok(b) => b,
             Err(e) => {
@@ -61,10 +50,10 @@ async fn main() {
             }
         }
     } else {
-        if read_only && !args.quiet {
+        if read_only && !args.exec.quiet {
             println!("Opening database in read-only mode.");
         }
-        match EmbeddedBackend::open_with_options(&args.database, read_only) {
+        match EmbeddedBackend::open_with_options(&args.database_path, read_only) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("{}: {}", "ERROR".red().bold(), e);
@@ -79,27 +68,31 @@ async fn main() {
     }
 
     let mut formatter = OutputFormatter::new();
-    if let Some(fmt) = args.format.as_deref().and_then(OutputFormat::parse) {
+    if let Some(fmt) = OutputFormat::parse(&args.exec.format) {
         formatter.set_format(fmt);
     }
 
-    let mut executor = CommandExecutor::with_options(formatter, false, false);
+    let mut executor = CommandExecutor::with_options(formatter, args.exec.force, args.exec.single_transaction);
 
     let options = RunOptions {
-        database: args.space,
-        command: args.command,
-        file: args.file,
-        format: args.format,
+        database: args.exec.database.clone(),
+        command: args.exec.command.clone(),
+        file: args.exec.file.clone(),
+        format: Some(args.exec.format.clone()),
         config_format: None,
-        quiet: args.quiet,
-        variables: Vec::new(),
-        force: false,
-        single_transaction: false,
+        quiet: args.exec.quiet,
+        variables: args.exec.variables.clone(),
+        force: args.exec.force,
+        single_transaction: args.exec.single_transaction,
     };
 
     let run_result = run_with(&mut session_mgr, &mut executor, &options).await;
     drop(executor);
-    let _ = std::thread::spawn(move || drop(session_mgr)).join();
+    // The embedded session owns tokio blocking resources; dropping it inside
+    // the async runtime panics, so release it from a blocking thread.
+    tokio::task::spawn_blocking(move || drop(session_mgr))
+        .await
+        .expect("embedded session drop task panicked");
     if let Err(e) = run_result {
         eprintln!("{}: {}", "ERROR".red().bold(), e);
         std::process::exit(1);

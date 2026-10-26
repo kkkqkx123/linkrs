@@ -71,6 +71,9 @@ pub enum ClientError {
     #[error("Export error: {0}")]
     ExportError(String),
 
+    #[error("Embedded engine error: {0}")]
+    Embedded(String),
+
     #[error("{0}")]
     AnyhowError(String),
 

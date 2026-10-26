@@ -1,32 +1,9 @@
 use clap::{Parser, Subcommand};
 
-#[derive(Parser, Debug)]
-#[clap(
-    name = "linkrs-cli",
-    version = env!("CARGO_PKG_VERSION"),
-    about = "Linkrs CLI - Interactive command-line client for Linkrs",
-    long_about = "Linkrs CLI is an interactive command-line client for Linkrs,\
-                  similar to PostgreSQL's psql. It supports GQL query execution,\
-                  schema inspection, and various output formats."
-)]
-pub struct Cli {
-    #[clap(long, default_value = "127.0.0.1", help = "Server host")]
-    pub host: String,
-
-    #[clap(short, long, default_value_t = 8080, help = "Server port")]
-    pub port: u16,
-
-    #[clap(
-        short,
-        long,
-        default_value = "root",
-        help = "Username for authentication"
-    )]
-    pub user: String,
-
-    #[clap(short = 'W', long, help = "Prompt for password")]
-    pub password: bool,
-
+/// Execution options shared by the remote CLI and the embedded shell so flag
+/// semantics are defined once and cannot drift between the two binaries.
+#[derive(clap::Args, Debug)]
+pub struct ExecArgs {
     #[clap(short, long, help = "Space name to connect to")]
     pub database: Option<String>,
 
@@ -35,9 +12,6 @@ pub struct Cli {
 
     #[clap(short = 'f', long = "file", help = "Execute commands from file")]
     pub file: Option<String>,
-
-    #[clap(short, long, help = "Output file for query results")]
-    pub output: Option<String>,
 
     #[clap(
         long,
@@ -66,6 +40,37 @@ pub struct Cli {
         help = "Set variable before execution"
     )]
     pub variables: Vec<String>,
+}
+
+#[derive(Parser, Debug)]
+#[clap(
+    name = "linkrs-cli",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "Linkrs CLI - Interactive command-line client for Linkrs",
+    long_about = "Linkrs CLI is an interactive command-line client for Linkrs,\
+                  similar to PostgreSQL's psql. It supports GQL query execution,\
+                  schema inspection, and various output formats."
+)]
+pub struct Cli {
+    #[clap(long, default_value = "127.0.0.1", help = "Server host")]
+    pub host: String,
+
+    #[clap(short, long, default_value_t = 8080, help = "Server port")]
+    pub port: u16,
+
+    #[clap(
+        short,
+        long,
+        default_value = "root",
+        help = "Username for authentication"
+    )]
+    pub user: String,
+
+    #[clap(short = 'W', long, help = "Prompt for password")]
+    pub password: bool,
+
+    #[command(flatten)]
+    pub exec: ExecArgs,
 
     #[command(subcommand)]
     pub subcommand: Option<Commands>,

@@ -88,17 +88,17 @@ async fn run(mut cli: Cli) -> Result<()> {
 
     let mut formatter = OutputFormatter::new();
 
-    if let Some(fmt) = OutputFormat::parse(&cli.format) {
+    if let Some(fmt) = OutputFormat::parse(&cli.exec.format) {
         formatter.set_format(fmt);
     } else if let Some(fmt) = OutputFormat::parse(&config.output.format) {
         formatter.set_format(fmt);
     }
 
-    let mut executor = CommandExecutor::with_options(formatter, cli.force, cli.single_transaction);
+    let mut executor = CommandExecutor::with_options(formatter, cli.exec.force, cli.exec.single_transaction);
 
     match session_mgr.connect(&user, &password).await {
         Ok(()) => {
-            if !cli.quiet {
+            if !cli.exec.quiet {
                 println!("Connected to Linkrs at {}:{} as {}", host, port, user);
             }
         }
@@ -109,15 +109,15 @@ async fn run(mut cli: Cli) -> Result<()> {
     }
 
     let options = RunOptions {
-        database: cli.database.clone(),
-        command: cli.command.clone(),
-        file: cli.file.clone(),
+        database: cli.exec.database.clone(),
+        command: cli.exec.command.clone(),
+        file: cli.exec.file.clone(),
         format: None,
         config_format: Some(config.output.format.clone()),
-        quiet: cli.quiet,
-        variables: cli.variables.clone(),
-        force: cli.force,
-        single_transaction: cli.single_transaction,
+        quiet: cli.exec.quiet,
+        variables: cli.exec.variables.clone(),
+        force: cli.exec.force,
+        single_transaction: cli.exec.single_transaction,
     };
 
     run_with(&mut session_mgr, &mut executor, &options).await
