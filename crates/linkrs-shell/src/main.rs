@@ -33,8 +33,7 @@ struct Args {
     exec: ExecArgs,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = Args::parse();
     let read_only = args.readonly
         || std::env::var("LINKRS_READONLY")
@@ -63,16 +62,13 @@ async fn main() {
     };
     let mut session_mgr = SessionManager::new_embedded(Box::new(backend));
 
-    if let Err(e) = session_mgr.connect("embedded", "").await {
-        eprintln!("{}: {}", "WARNING".yellow().bold(), e);
-    }
-
     let mut formatter = OutputFormatter::new();
     if let Some(fmt) = OutputFormat::parse(&args.exec.format) {
         formatter.set_format(fmt);
     }
 
-    let mut executor = CommandExecutor::with_options(formatter, args.exec.force, args.exec.single_transaction);
+    let mut executor =
+        CommandExecutor::with_options(formatter, args.exec.force, args.exec.single_transaction);
 
     let options = RunOptions {
         database: args.exec.database.clone(),
@@ -86,13 +82,33 @@ async fn main() {
         single_transaction: args.exec.single_transaction,
     };
 
-    let run_result = run_with(&mut session_mgr, &mut executor, &options).await;
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!(
+                "{}: failed to start the async runtime: {}",
+                "ERROR".red().bold(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let run_result = runtime.block_on(async {
+        if let Err(e) = session_mgr.connect("embedded", "").await {
+            eprintln!("{}: {}", "WARNING".yellow().bold(), e);
+        }
+        run_with(&mut session_mgr, &mut executor, &options).await
+    });
+
+    // Release the session outside of any async execution context: the embedded
+    // database owns a dedicated tokio runtime, and tokio forbids dropping a
+    // runtime while an async context is active. Sequential teardown keeps the
+    // ownership explicit and avoids moving the session to another thread.
     drop(executor);
-    // The embedded session owns tokio blocking resources; dropping it inside
-    // the async runtime panics, so release it from a blocking thread.
-    tokio::task::spawn_blocking(move || drop(session_mgr))
-        .await
-        .expect("embedded session drop task panicked");
+    drop(session_mgr);
+    drop(runtime);
+
     if let Err(e) = run_result {
         eprintln!("{}: {}", "ERROR".red().bold(), e);
         std::process::exit(1);
