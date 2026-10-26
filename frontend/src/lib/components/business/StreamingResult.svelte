@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { t, type MessageKey } from '$i18n';
 	import VirtualTable from '$components/common/VirtualTable.svelte';
-	import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
+	import LazyCytoscapeCanvas from '$components/common/LazyCytoscapeCanvas.svelte';
 	import GraphPreviewControls from '$components/business/GraphPreviewControls.svelte';
 	import type { StreamCardState, StreamState } from '$stores/stream';
 	import type { QueryResult } from '$types/query';
@@ -181,7 +181,7 @@
 					<div
 						class="h-80 rounded border border-gray-200 dark:border-gray-700 relative overflow-hidden"
 					>
-						<CytoscapeCanvas data={graph} {isDark} />
+						<LazyCytoscapeCanvas data={graph} {isDark} />
 					</div>
 				{/if}
 			</div>

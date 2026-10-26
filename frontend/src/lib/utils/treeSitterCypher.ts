@@ -1,4 +1,21 @@
-import * as monaco from 'monaco-editor/editor/editor.api.js';
+// Type-only import: keeps this module decoupled from the monaco chunk so the
+// tree-sitter grammar/highlight path can load without dragging the editor in.
+type Monaco = typeof import('monaco-editor/editor/editor.api.js');
+// The editor.api.d.ts does not expose these as namespace properties, so the
+// handful of shapes the provider needs are declared structurally.
+interface TextModelLike {
+	id: string;
+	getVersionId(): number;
+	getValue(): string;
+	getPositionAt(offset: number): { lineNumber: number; column: number };
+}
+interface TokensLegend {
+	tokenTypes: string[];
+	tokenModifiers: string[];
+}
+type TokensRegistration = ReturnType<
+	Monaco['languages']['registerDocumentSemanticTokensProvider']
+>;
 import { Parser, Language, Query } from 'web-tree-sitter';
 import highlightsSource from '../../../../crates/linkrs-grammar/queries/highlights.scm?raw';
 import grammarWasmUrl from '../assets/tree-sitter-linkrs.wasm?url';
@@ -56,7 +73,9 @@ async function ensureReady(): Promise<boolean> {
 }
 
 function captureTypeIndex(name: string): number {
-	return TOKEN_TYPES.indexOf(name.replace(/^@/, '') as (typeof TOKEN_TYPES)[number]);
+	return TOKEN_TYPES.indexOf(
+		name.replace(/^@/, '') as (typeof TOKEN_TYPES)[number],
+	);
 }
 
 interface SemanticToken {
@@ -65,7 +84,7 @@ interface SemanticToken {
 	type: number;
 }
 
-function collectTokens(model: monaco.editor.ITextModel): SemanticToken[] {
+function collectTokens(model: TextModelLike): SemanticToken[] {
 	const tree = parser!.parse(model.getValue());
 	if (!tree) return [];
 	try {
@@ -130,10 +149,7 @@ function collectTokens(model: monaco.editor.ITextModel): SemanticToken[] {
 	}
 }
 
-function encodeTokens(
-	model: monaco.editor.ITextModel,
-	items: SemanticToken[],
-): Uint32Array {
+function encodeTokens(model: TextModelLike, items: SemanticToken[]): Uint32Array {
 	const data: number[] = [];
 	let prevLine = 0;
 	let prevChar = 0;
@@ -158,10 +174,10 @@ function encodeTokens(
  * with.
  */
 export function registerTreeSitterHighlighting(
-	monacoInstance: typeof monaco,
+	monacoInstance: Monaco,
 	languageId: string,
-): monaco.IDisposable {
-	const legend: monaco.languages.SemanticTokensLegend = {
+): TokensRegistration {
+	const legend: TokensLegend = {
 		tokenTypes: [...TOKEN_TYPES],
 		tokenModifiers: [],
 	};

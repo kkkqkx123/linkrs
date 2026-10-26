@@ -145,6 +145,19 @@
 		if (item.children) return item.children.some((c) => path.startsWith(c.key));
 		return false;
 	}
+
+	// The graph canvas (cytoscape) is lazily imported on first use; hovering a
+	// graph-using entry prefetches that chunk so the first render does not wait
+	// on an 800 KiB download.
+	const GRAPH_ROUTES = ['/graph', '/schema', '/console'];
+	let prefetchedGraph = false;
+	function prefetchGraphChunk(item: MenuItem): void {
+		if (prefetchedGraph) return;
+		const route = item.route ?? item.key;
+		if (!GRAPH_ROUTES.some((prefix) => route.startsWith(prefix))) return;
+		prefetchedGraph = true;
+		void import('cytoscape');
+	}
 </script>
 
 <aside
@@ -170,6 +183,7 @@
 									<li>
 										<a
 											href={child.route}
+											onpointerenter={() => prefetchGraphChunk(child)}
 											class="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors {isActive(
 												child,
 											)
@@ -188,6 +202,7 @@
 					<li>
 						<a
 							href={item.route}
+							onpointerenter={() => prefetchGraphChunk(item)}
 							class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors {isActive(
 								item,
 							)

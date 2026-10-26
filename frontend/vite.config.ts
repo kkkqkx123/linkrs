@@ -46,13 +46,19 @@ export default defineConfig(({ mode }) => {
 				localStorageKey: 'linkrs_language',
 			}),
 			tailwindcss(),
-			visualizer({
-				template: 'markdown',
-				emitFile: true,
-				filename: 'bundle-report.md',
-				gzipSize: true,
-				brotliSize: true,
-			}),
+			// The bundle report costs several seconds of build time; opt in with
+			// VITE_BUNDLE_REPORT=1 when auditing chunk sizes.
+			...(process.env.VITE_BUNDLE_REPORT
+				? [
+						visualizer({
+							template: 'markdown',
+							emitFile: true,
+							filename: 'bundle-report.md',
+							gzipSize: true,
+							brotliSize: true,
+						}),
+					]
+				: []),
 		],
 		resolve: {
 			alias,
