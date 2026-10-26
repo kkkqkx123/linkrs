@@ -69,14 +69,19 @@ export default defineConfig(({ mode }) => {
 				// that the editor imports, so the dev server has to read them.
 				allow: ['../crates/linkrs-grammar'],
 			},
+			// Listen on all interfaces so Windows browsers can reach the dev
+			// server when running under WSL; override with LINKRS_DEV_HOST.
+			host: process.env.LINKRS_DEV_HOST ?? '0.0.0.0',
 			port: 3011,
 			proxy: {
 				'/v1': {
-					target: 'http://localhost:9758',
+					// Override to test against a remote backend, e.g.
+					// LINKRS_DEV_API_TARGET=http://10.0.0.5:9758
+					target: process.env.LINKRS_DEV_API_TARGET ?? 'http://localhost:9758',
 					changeOrigin: true,
 				},
 				'/api': {
-					target: 'http://localhost:9758',
+					target: process.env.LINKRS_DEV_API_TARGET ?? 'http://localhost:9758',
 					changeOrigin: true,
 				},
 			},
