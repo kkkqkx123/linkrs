@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { t, type MessageKey } from '$i18n';
+	import { Clock, BarChart3, Link2, X, Check, Ban, Braces } from 'lucide-svelte';
+	import IconButton from '$components/common/IconButton.svelte';
 	import VirtualTable from '$components/common/VirtualTable.svelte';
 	import LazyCytoscapeCanvas from '$components/common/LazyCytoscapeCanvas.svelte';
 	import GraphPreviewControls from '$components/business/GraphPreviewControls.svelte';
@@ -210,7 +212,7 @@
 	<span>|</span>
 	{#if stream.executionTime > 0}
 		<span
-			>⏱ {t('console.time')}: {formatExecutionTime(stream.executionTime)}</span
+			><Clock size={12} /> {t('console.time')}: {formatExecutionTime(stream.executionTime)}</span
 		>
 		<span>|</span>
 	{/if}
@@ -234,11 +236,7 @@
 				class="ui-seg {activeView === view ? 'ui-seg-active' : ''}"
 				onclick={() => onViewChange(view as 'table' | 'json' | 'graph')}
 			>
-				{view === 'table'
-					? '📊 ' + t('console.viewTable')
-					: view === 'json'
-						? '{ } ' + t('console.viewJson')
-						: '🔗 ' + t('console.viewGraph')}
+				{#if view === 'table'}<BarChart3 size={14} /> {t('console.viewTable')}{:else if view === 'json'}<Braces size={14} /> {t('console.viewJson')}{:else}<Link2 size={14} /> {t('console.viewGraph')}{/if}
 			</button>
 		{/each}
 	</div>
@@ -264,13 +262,14 @@
 			class="ui-alert ui-alert-error mb-3 flex items-start gap-2"
 		>
 			<p class="flex-1 text-error text-sm">{exportError}</p>
-			<button
+			<IconButton
+				label={t('common.dismiss')}
 				class="ui-link-danger text-sm"
 				onclick={() => {
 					exportError = null;
 				}}
-				aria-label={t('common.dismiss')}>✕</button
-			>
+				size={14}
+			/>
 		</div>
 	{/if}
 	{#if stream.error && !stream.batch}
@@ -302,13 +301,7 @@
 									: card.status === 'completed'
 										? 'text-success'
 										: 'text-info'}
-							>{card.status === 'failed'
-								? '✗'
-								: card.status === 'completed'
-									? '✓'
-									: card.status === 'cancelled'
-										? '⊘'
-										: '…'}</span
+							>{#if card.status === 'failed'}<X size={14} />{:else if card.status === 'completed'}<Check size={14} />{:else if card.status === 'cancelled'}<Ban size={14} />{:else}…{/if}</span
 						>
 						<span class="text-muted">#{card.index + 1}</span>
 						<span

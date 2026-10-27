@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { t } from '$i18n';
+	import { RefreshCw, Search, Package, ArrowLeftRight, X } from 'lucide-svelte';
+	import IconButton from '$components/common/IconButton.svelte';
 	import { get } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -517,14 +519,14 @@
 	<div class="ui-page">
 		<PageHeader title={t('sidebar.dataBrowser')}>
 			<button class="ui-btn ui-btn-ghost ui-btn-sm" onclick={loadStatistics}>
-				🔄 {t('common.refresh')}
+				<RefreshCw size={16} /> {t('common.refresh')}
 			</button>
 			{#if activeTab === 'vertices' || activeTab === 'edges'}
 				<button
 					class="ui-chip {filterPanelVisible ? 'ui-chip-active' : ''}"
 					onclick={() => dataBrowserStore.toggleFilterPanel()}
 				>
-					🔍 {t('dataBrowser.filter')}
+					<Search size={16} /> {t('dataBrowser.filter')}
 				</button>
 			{/if}
 		</PageHeader>
@@ -574,13 +576,13 @@
 						class="ui-tab {activeTab === 'vertices' ? 'ui-tab-active' : ''}"
 						onclick={() => handleTabChange('vertices')}
 					>
-						📦 {t('dataBrowser.vertices')}
+						<Package size={16} /> {t('dataBrowser.vertices')}
 					</button>
 					<button
 						class="ui-tab {activeTab === 'edges' ? 'ui-tab-active' : ''}"
 						onclick={() => handleTabChange('edges')}
 					>
-						↔ {t('sidebar.edges')}
+						<ArrowLeftRight size={16} /> {t('sidebar.edges')}
 					</button>
 					<button
 						class="ui-tab {activeTab === 'vector' ? 'ui-tab-active' : ''}"
@@ -931,10 +933,12 @@
 						: t('sidebar.edges')}
 					{t('common.detail')}
 				</h2>
-				<button
+				<IconButton
+					onclick={() => dataBrowserStore.hideDetail()}
+					label={t('common.close')}
 					class="ui-icon-btn"
-					onclick={() => dataBrowserStore.hideDetail()}>✕</button
-				>
+					size={18}
+				/>
 			</div>
 			<div class="space-y-2">
 				{#each Object.entries(detailData) as [key, value] (key)}

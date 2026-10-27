@@ -3,6 +3,8 @@
 	import { get } from 'svelte/store';
 
 	import { t } from '$i18n';
+	import { Link2, Undo2, AlertTriangle } from 'lucide-svelte';
+	import IconButton from '$components/common/IconButton.svelte';
 	import {
 		graphStore,
 		type EdgeDetail,
@@ -357,7 +359,7 @@
 		<h1
 			class="ui-page-title text-base flex items-center gap-2 whitespace-nowrap"
 		>
-			<span>🔗</span>
+			<span><Link2 size={18} /></span>
 			{t('graph.title')}
 			{#if graphData}
 				<span
@@ -470,7 +472,7 @@
 				title={t('graph.undoExpand')}
 				aria-label={t('graph.undoExpand')}
 			>
-				↩
+				<Undo2 size={16} />
 			</button>
 			<button
 				class="ui-btn ui-btn-ghost ui-btn-sm"
@@ -711,7 +713,7 @@
 			{:else if initError}
 				<div class="absolute inset-0 flex items-center justify-center">
 					<div class="text-center text-error">
-						<p class="text-4xl mb-3">⚠️</p>
+						<p class="text-4xl mb-3"><AlertTriangle size={40} /></p>
 						<p class="font-medium">{t('graph.initError')}</p>
 						<p class="text-sm mt-1">{initError}</p>
 					</div>
@@ -719,7 +721,7 @@
 			{:else}
 				<div class="absolute inset-0 flex items-center justify-center">
 					<div class="text-center text-muted">
-						<p class="text-4xl mb-3">🔗</p>
+						<p class="text-4xl mb-3"><Link2 size={40} /></p>
 						<p class="font-medium">{t('graph.noData')}</p>
 						<p class="text-sm mt-1">{t('graph.noDataHint')}</p>
 					</div>
@@ -737,9 +739,12 @@
 							? t('graph.selectNode')
 							: t('graph.selectEdge')} Detail
 					</h2>
-					<button class="ui-icon-btn" onclick={() => graphStore.hideDetail()}
-						>✕</button
-					>
+					<IconButton
+						onclick={() => graphStore.hideDetail()}
+						label={t('common.close')}
+						class="ui-icon-btn"
+						size={18}
+					/>
 				</div>
 				<div class="space-y-3">
 					{#each Object.entries(detailData) as [key, value] (key)}

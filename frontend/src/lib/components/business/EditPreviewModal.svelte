@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import IconButton from '$components/common/IconButton.svelte';
 
 	/**
 	 * Change-preview modal for data-browser edits. Shows the field-level diff
@@ -66,10 +67,12 @@
 		>
 			<div class="flex items-center justify-between mb-4">
 				<h3 class="text-base font-semibold text-ink">{title}</h3>
-				<button
+				<IconButton
+					onclick={onClose}
+					label={t('common.close')}
 					class="ui-icon-btn"
-					onclick={onClose}>✕</button
-				>
+					size={18}
+				/>
 			</div>
 
 			<div class="space-y-2">

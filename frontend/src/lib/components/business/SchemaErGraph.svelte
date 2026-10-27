@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import IconButton from '$components/common/IconButton.svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { buildSchemaGraph } from '$utils/schemaGraph';
 	import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
@@ -164,11 +165,12 @@
 							{t('schema.alterEdge')}
 						</button>
 					{/if}
-					<button
-						class="ui-icon-btn"
+					<IconButton
 						onclick={() => (selected = null)}
-						aria-label={t('common.close')}>✕</button
-					>
+						label={t('common.close')}
+						class="ui-icon-btn"
+						size={18}
+					/>
 				</div>
 			</div>
 			<div class="text-xs text-muted mt-1 uppercase tracking-wide">

@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { t, type MessageKey } from '$i18n';
 	import PageHeader from '$components/layout/PageHeader.svelte';
+	import { X } from 'lucide-svelte';
 	import { functionsService } from '$services/functions';
 	import { schemaVersionsService } from '$services/schemaVersions';
 	import { schemaStore } from '$stores/schema';
@@ -1053,7 +1054,7 @@
 							</select>
 							<button
 								class="ui-link-danger px-1"
-								onclick={() => removeProp(newTagProps, i)}>✕</button
+								onclick={() => removeProp(newTagProps, i)}><X size={12} /></button
 							>
 						</div>
 					{/each}
@@ -1141,7 +1142,7 @@
 							</select>
 							<button
 								class="ui-link-danger"
-								onclick={() => removeProp(newEdgeProps, i)}>✕</button
+								onclick={() => removeProp(newEdgeProps, i)}><X size={12} /></button
 							>
 						</div>
 					{/each}

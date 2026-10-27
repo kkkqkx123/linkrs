@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import { RotateCw } from 'lucide-svelte';
+	import IconButton from '$components/common/IconButton.svelte';
 	import type { QueryFavoriteItem } from '$stores/console';
 
 	interface Props {
@@ -27,11 +29,12 @@
 			<h3 class="text-base font-semibold text-ink">
 				{t('console.favorites')}
 			</h3>
-			<button
-				class="ui-icon-btn text-lg"
+			<IconButton
+				label={t('common.close')}
+				class="ui-icon-btn"
 				onclick={onClose}
-				aria-label={t('common.close')}>✕</button
-			>
+				size={18}
+			/>
 		</div>
 		<div class="p-4">
 			{#if favorites.length === 0}
@@ -78,7 +81,7 @@
 									onRerun(fav);
 								}}
 							>
-								↻ {t('console.historyRerun')}
+								<RotateCw size={12} /> {t('console.historyRerun')}
 							</button>
 							<button
 								class="mt-1 text-xs ui-link-danger"

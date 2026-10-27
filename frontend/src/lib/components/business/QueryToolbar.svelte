@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import { History, Star, Save } from 'lucide-svelte';
 	import { type ExecutionPreference } from '$utils/autoRoute';
 
 	interface Props {
@@ -161,20 +162,20 @@
 		class="ui-btn ui-btn-ghost"
 		onclick={onToggleHistory}
 	>
-		📋 {t('console.history')} ({historyCount})
+		<History size={16} /> {t('console.history')} ({historyCount})
 	</button>
 	<button
 		class="ui-btn ui-btn-ghost"
 		onclick={onToggleFavorites}
 	>
-		⭐ {t('console.favorites')} ({favoritesCount})
+		<Star size={16} /> {t('console.favorites')} ({favoritesCount})
 	</button>
 	<button
 		class="ui-btn ui-btn-ghost"
 		onclick={onSaveFavorite}
 		disabled={!editorContent.trim()}
 	>
-		💾 {t('common.save')}
+		<Save size={16} /> {t('common.save')}
 	</button>
 </div>
 {#if autoDecision}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { X } from 'lucide-svelte';
 	import { message, t } from '$i18n';
 	import { dataBrowserStore } from '$stores/dataBrowser';
 	import { schemaStore } from '$stores/schema';
@@ -167,7 +168,7 @@
 					/>
 					<button
 						class="ui-link-danger px-1"
-						onclick={() => removeCondition(index)}>✕</button
+						onclick={() => removeCondition(index)}><X size={14} /></button
 					>
 				</div>
 			{/each}

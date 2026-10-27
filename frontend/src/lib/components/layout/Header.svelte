@@ -7,6 +7,7 @@
 	import LanguageSwitcher from '$components/common/LanguageSwitcher.svelte';
 	import ThemeToggle from '$components/common/ThemeToggle.svelte';
 	import HealthMonitor from '$components/common/HealthMonitor.svelte';
+	import { User } from 'lucide-svelte';
 
 	let store = $state({
 		isVerified: false,
@@ -50,9 +51,10 @@
 					{t('login.mustChangePassword')}
 				</span>
 			{/if}
-			<span class="text-sm text-muted"
-				>👤 {store.connectionInfo.username}</span
-			>
+			<span class="flex items-center gap-1.5 text-sm text-muted">
+				<User size={16} />
+				{store.connectionInfo.username}
+			</span>
 			{#if store.role}
 				<span
 					class="ui-badge bg-info-light text-info border-info/40"

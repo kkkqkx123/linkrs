@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import { ChevronDown, ChevronRight, X } from 'lucide-svelte';
 
 	interface ParamRow {
 		id: string;
@@ -55,7 +56,11 @@
 		class="ui-icon-btn"
 		onclick={onToggle}
 	>
-		{open ? '▾' : '▸'}
+		{#if open}
+			<ChevronDown size={16} />
+		{:else}
+			<ChevronRight size={16} />
+		{/if}
 		{t('console.parameters')} ({parameters.length + sessionVariables.length})
 	</button>
 	{#if open}
@@ -81,7 +86,7 @@
 						<button
 							class="px-1.5 ui-link-danger text-xs"
 							onclick={() => removeRow(row.id)}
-							aria-label={t('common.delete')}>✕</button
+							aria-label={t('common.delete')}><X size={12} /></button
 						>
 					</div>
 				{/each}
@@ -113,7 +118,7 @@
 						<button
 							class="px-1.5 ui-link-danger text-xs"
 							onclick={() => removeSessionVariable(row.id)}
-							aria-label={t('common.delete')}>✕</button
+							aria-label={t('common.delete')}><X size={12} /></button
 						>
 					</div>
 				{/each}

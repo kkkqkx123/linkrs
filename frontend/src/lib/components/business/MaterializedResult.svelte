@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import { Clock, Check, X, Database, AlertTriangle, BarChart3, Link2, Braces } from 'lucide-svelte';
 	import {
 		formatExecutionTime,
 		formatRowCount,
@@ -102,7 +103,7 @@
 		<div
 			class="ui-result-head"
 		>
-			<span>⏱ {t('console.time')}: {formatExecutionTime(executionTime)}</span>
+			<span><Clock size={12} /> {t('console.time')}: {formatExecutionTime(executionTime)}</span>
 			<span>|</span>
 			<span
 				>{results.length}
@@ -120,7 +121,7 @@
 						class="px-3 py-2 bg-secondary flex items-center gap-2 text-xs text-muted cursor-pointer"
 					>
 						<span class={entry.success ? 'text-success' : 'text-error'}
-							>{entry.success ? '✓' : '✗'}</span
+							>{#if entry.success}<Check size={14} />{:else}<X size={14} />{/if}</span
 						>
 						<span class="text-muted">#{index + 1}</span>
 						<span
@@ -132,7 +133,7 @@
 						>
 						{#if entry.traceId}
 							<span class="font-mono text-muted" title={entry.traceId}
-								>⛁ {entry.traceId.slice(0, 8)}</span
+								><Database size={12} /> {entry.traceId.slice(0, 8)}</span
 							>
 						{/if}
 						{#if entry.result}
@@ -141,7 +142,7 @@
 								<span
 									class="text-warning"
 									title={t('console.rowLimitHint')}
-									>⚠ {t('console.resultTruncated')}</span
+									><AlertTriangle size={12} /> {t('console.resultTruncated')}</span
 								>
 							{/if}
 						{/if}
@@ -203,13 +204,13 @@
 				title={primaryEntry?.stages
 					? `${t('console.stages')}: ${stageDetail(primaryEntry)}`
 					: undefined}
-				>⏱ {t('console.time')}: {formatExecutionTime(executionTime)}</span
+				><Clock size={12} /> {t('console.time')}: {formatExecutionTime(executionTime)}</span
 			>
 			{#if primaryEntry?.traceId}
 				<span
 					class="font-mono text-xs text-muted"
 					title={primaryEntry.traceId}
-					>⛁ {primaryEntry.traceId.slice(0, 8)}</span
+					><Database size={12} /> {primaryEntry.traceId.slice(0, 8)}</span
 				>
 			{/if}
 			<span>|</span>
@@ -218,7 +219,7 @@
 				<span
 					class="text-warning"
 					title={t('console.rowLimitHint')}
-					>⚠ {t('console.resultTruncated')}</span
+					><AlertTriangle size={12} /> {t('console.resultTruncated')}</span
 				>
 			{/if}
 			<div class="flex-1"></div>
@@ -228,11 +229,7 @@
 						class="ui-seg {activeView === view ? 'ui-seg-active' : ''}"
 						onclick={() => onViewChange(view as 'table' | 'json' | 'graph')}
 					>
-						{view === 'table'
-							? '📊 ' + t('console.viewTable')
-							: view === 'json'
-								? '{ } ' + t('console.viewJson')
-								: '🔗 ' + t('console.viewGraph')}
+						{#if view === 'table'}<BarChart3 size={14} /> {t('console.viewTable')}{:else if view === 'json'}<Braces size={14} /> {t('console.viewJson')}{:else}<Link2 size={14} /> {t('console.viewGraph')}{/if}
 					</button>
 				{/each}
 			</div>

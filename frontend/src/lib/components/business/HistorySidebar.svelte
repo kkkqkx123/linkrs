@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import { Check, X, Database, RotateCw } from 'lucide-svelte';
+	import IconButton from '$components/common/IconButton.svelte';
 	import type { QueryHistoryItem } from '$stores/console';
 
 	interface Props {
@@ -27,11 +29,12 @@
 			<h3 class="text-base font-semibold text-ink">
 				{t('console.history')}
 			</h3>
-			<button
-				class="ui-icon-btn text-lg"
+			<IconButton
+				label={t('common.close')}
+				class="ui-icon-btn"
 				onclick={onClose}
-				aria-label={t('common.close')}>✕</button
-			>
+				size={18}
+			/>
 		</div>
 		<div class="p-4">
 			{#if history.length === 0}
@@ -54,8 +57,8 @@
 							{item.query}
 						</p>
 						<div class="flex items-center gap-2 text-xs text-muted">
-							<span class={item.success ? 'text-success' : 'text-error'}
-								>{item.success ? '✓' : '✗'}</span
+							<span class={item.success ? 'text-success' : 'text-error'}>
+								{#if item.success}<Check size={14} />{:else}<X size={14} />{/if}</span
 							>
 							<span>{item.executionTime}ms</span>
 							<span>{item.rowCount} {t('console.rows')}</span>
@@ -92,8 +95,8 @@
 							{/if}
 							{#if item.traceId}
 								<span class="font-mono" title={item.traceId}
-									>· ⛁ {item.traceId.slice(0, 8)}</span
-								>
+								>· <Database size={12} /> {item.traceId.slice(0, 8)}</span
+							>
 							{/if}
 						</div>
 						<button
@@ -104,7 +107,7 @@
 								onRerun(item);
 							}}
 						>
-							↻ {t('console.historyRerun')}
+							<RotateCw size={12} /> {t('console.historyRerun')}
 						</button>
 					</div>
 				{/each}

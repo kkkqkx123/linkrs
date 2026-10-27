@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { t } from '$i18n';
+	import { History, Star } from 'lucide-svelte';
 	import { get } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import {
@@ -453,13 +454,13 @@
 			class="ui-btn ui-btn-ghost"
 			onclick={() => (historyOpen = !historyOpen)}
 		>
-			📋 {t('console.history')} ({history.length})
+			<History size={16} /> {t('console.history')} ({history.length})
 		</button>
 		<button
 			class="ui-btn ui-btn-ghost"
 			onclick={() => (favoritesOpen = !favoritesOpen)}
 		>
-			⭐ {t('console.favorites')} ({favorites.length})
+			<Star size={16} /> {t('console.favorites')} ({favorites.length})
 		</button>
 	</div>
 	<ParametersPanel

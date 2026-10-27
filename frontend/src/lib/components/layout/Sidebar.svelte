@@ -4,6 +4,19 @@
 	import { t, type MessageKey } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
 	import { fromStore } from 'svelte/store';
+	import type { SvelteComponentTyped } from 'svelte';
+	import {
+		Keyboard,
+		Database,
+		Link2,
+		Table,
+		LineChart,
+		Route,
+		Package,
+		Repeat,
+		Users,
+		PlugZap,
+	} from 'lucide-svelte';
 
 	const path = $derived(page.url.pathname);
 	const managesUsers = fromStore(canManageUsers);
@@ -93,7 +106,7 @@
 
 	interface MenuItem {
 		key: string;
-		icon: string;
+		icon: typeof SvelteComponentTyped<Record<string, any>, Record<string, any>>;
 		label: MessageKey;
 		route?: string;
 		requiresUsers?: boolean;
@@ -102,62 +115,62 @@
 	const menuItems: MenuItem[] = [
 		{
 			key: '/console',
-			icon: '⌨',
+			icon: Keyboard,
 			label: 'sidebar.console',
 			route: '/console',
 		},
 		{
 			key: '/schema',
-			icon: '🗄',
+			icon: Database,
 			label: 'sidebar.schema',
 			route: '/schema',
 		},
 		{
 			key: '/graph',
-			icon: '🔗',
+			icon: Link2,
 			label: 'sidebar.graph',
 			route: '/graph',
 		},
 		{
 			key: '/data-browser',
-			icon: '📋',
+			icon: Table,
 			label: 'sidebar.dataBrowser',
 			route: '/data-browser',
 		},
 		{
 			key: '/monitoring',
-			icon: '📈',
+			icon: LineChart,
 			label: 'sidebar.monitoring',
 			route: '/monitoring',
 		},
 		{
 			key: '/migration',
-			icon: '🚚',
+			icon: Route,
 			label: 'sidebar.migration',
 			route: '/migration',
 		},
 		{
 			key: '/batch',
-			icon: '📦',
+			icon: Package,
 			label: 'sidebar.batch',
 			route: '/batch',
 		},
 		{
 			key: '/transfer',
-			icon: '⇄',
+			icon: Repeat,
 			label: 'sidebar.transfer',
 			route: '/transfer',
 		},
 		{
 			key: '/users',
-			icon: '👥',
+			icon: Users,
 			label: 'sidebar.users',
 			route: '/users',
 			requiresUsers: true,
 		},
 		{
 			key: '/sessions',
-			icon: '🔌',
+			icon: PlugZap,
 			label: 'sidebar.sessions',
 			route: '/sessions',
 			requiresUsers: true,
@@ -221,9 +234,9 @@
 								: ''}"
 						>
 							<!-- 固定宽度图标列,保证各行文字起始位置对齐 -->
-							<span class="flex-shrink-0 w-5 text-center text-base leading-none"
-								>{item.icon}</span
-							>
+							<span class="flex-shrink-0 w-5 text-center flex items-center justify-center">
+								<item.icon size={18} />
+							</span>
 							<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
 						</a>
 					</li>

@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { fromStore } from 'svelte/store';
+	import type { SvelteComponentTyped } from 'svelte';
+	import { Check, X, AlertTriangle, Info } from 'lucide-svelte';
+	import IconButton from '$components/common/IconButton.svelte';
 	import { t } from '$i18n';
 	import {
 		notificationStore,
@@ -8,11 +11,14 @@
 
 	const notifState = fromStore(notificationStore);
 
-	const iconMap: Record<NotificationType, string> = {
-		success: '✓',
-		error: '✕',
-		warning: '⚠',
-		info: 'ℹ',
+	const iconMap: Record<
+		NotificationType,
+		typeof SvelteComponentTyped<Record<string, any>, Record<string, any>>
+	> = {
+		success: Check,
+		error: X,
+		warning: AlertTriangle,
+		info: Info,
 	};
 
 	const colorMap: Record<
@@ -52,14 +58,15 @@
 	>
 		{#each notifState.current as notif (notif.id)}
 			{@const colors = colorMap[notif.type]}
+			{@const Icon = iconMap[notif.type]}
 			<div
 				class="pointer-events-auto {colors.bg} {colors.border} border rounded-lg shadow-lg p-4 flex items-start gap-3 animate-slide-in-right"
 				role="alert"
 			>
 				<span
-					class="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-xs font-bold {colors.icon}"
+					class="flex-shrink-0 w-5 h-5 flex items-center justify-center {colors.icon}"
 				>
-					{iconMap[notif.type]}
+					<Icon size={14} />
 				</span>
 				<div class="flex-1 min-w-0">
 					<p class="text-sm font-medium {colors.text}">
@@ -71,13 +78,11 @@
 						</p>
 					{/if}
 				</div>
-				<button
-					class="flex-shrink-0 {colors.text} opacity-60 hover:opacity-100 transition-opacity cursor-pointer"
-					aria-label={t('common.dismiss')}
+				<IconButton
+					label={t('common.dismiss')}
+					class={colors.text}
 					onclick={() => notificationStore.dismiss(notif.id)}
-				>
-					✕
-				</button>
+				/>
 			</div>
 		{/each}
 	</div>

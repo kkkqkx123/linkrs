@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import { Link2 } from 'lucide-svelte';
 	import type { ParsedGraph } from '$utils/cytoscapeConfig';
 
 	let {
@@ -17,7 +18,7 @@
 
 <div class="flex flex-col items-center gap-2">
 	<p>
-		🔗 {graph.stats.truncated
+		<Link2 size={16} /> {graph.stats.truncated
 			? t('graphPreview.summaryTruncated', {
 					nodes: graph.nodes.length,
 					edges: graph.edges.length,
