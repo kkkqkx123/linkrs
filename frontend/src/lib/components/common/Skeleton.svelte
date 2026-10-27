@@ -21,7 +21,7 @@
 </script>
 
 <div
-	class="animate-pulse bg-gray-200 dark:bg-gray-700 {roundMap[
+	class="animate-pulse bg-line {roundMap[
 		rounded
 	]} {className}"
 	style="width: {width}; height: {height}"

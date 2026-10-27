@@ -131,18 +131,6 @@
 			route: '/monitoring',
 		},
 		{
-			key: '/vector',
-			icon: '🧭',
-			label: 'sidebar.vector',
-			route: '/vector',
-		},
-		{
-			key: '/fulltext',
-			icon: '🔎',
-			label: 'sidebar.fulltext',
-			route: '/fulltext',
-		},
-		{
 			key: '/migration',
 			icon: '🚚',
 			label: 'sidebar.migration',
@@ -203,31 +191,34 @@
 	style="width: {width}px; min-width: {SIDEBAR_MIN}px"
 >
 	<aside
-		class="w-full bg-white dark:bg-[#1C2333] border-r border-gray-200 dark:border-gray-700/50 flex flex-col overflow-y-auto overflow-x-hidden transition-colors duration-300 {resizing
+		class="w-full bg-nav text-nav-text flex flex-col overflow-y-auto overflow-x-hidden transition-colors duration-300 {resizing
 			? 'pointer-events-none select-none'
 			: ''}"
 	>
-		<div class="px-4 py-4 border-b border-gray-200 dark:border-gray-700/50">
+		<div class="px-5 py-5 border-b border-nav-border">
 			<p
-				class="text-lg font-bold text-[var(--color-primary)] truncate whitespace-nowrap overflow-hidden"
+				class="text-base font-bold text-nav-brand truncate whitespace-nowrap overflow-hidden"
 				title="Linkrs"
 			>
 				Linkrs
 			</p>
+			<p class="text-xs mt-1.5 text-nav-muted">
+				{t('app.title')}
+			</p>
 		</div>
-		<nav bind:this={navEl} class="flex-1 p-3">
-			<ul class="space-y-1">
+		<nav bind:this={navEl} class="flex-1 py-2">
+			<ul class="ui-nav">
 				{#each visibleItems as item (item.key)}
 					<li>
 						<a
 							href={item.route}
 							title={t(item.label)}
 							onpointerenter={() => prefetchGraphChunk(item)}
-							class="w-full flex items-center gap-2 px-3 py-2.5 rounded-md text-sm transition-colors overflow-hidden whitespace-nowrap {isActive(
+							class="flex items-center gap-2 overflow-hidden whitespace-nowrap {isActive(
 								item,
 							)
-								? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium'
-								: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
+								? 'active'
+								: ''}"
 						>
 							<!-- 固定宽度图标列,保证各行文字起始位置对齐 -->
 							<span class="flex-shrink-0 w-5 text-center text-base leading-none"
@@ -248,8 +239,8 @@
 		aria-valuemax={SIDEBAR_MAX}
 		title="{t('sidebar.resizeHint')} ({t('sidebar.fitHint')})"
 		class="absolute top-0 right-[-6px] w-3 h-full cursor-col-resize touch-none z-10 flex justify-center {resizing
-			? 'bg-[var(--color-primary)]/40'
-			: 'bg-transparent hover:bg-[var(--color-primary)]/25'} transition-colors"
+			? 'bg-primary/40'
+			: 'bg-transparent hover:bg-primary/25'} transition-colors"
 		onpointerdown={startResize}
 		ondblclick={fitWidth}
 	>

@@ -101,10 +101,10 @@
 >
 	<span
 		class="inline-block w-2 h-2 rounded-full {cursor.status === 'failed'
-			? 'bg-red-500'
+			? 'bg-error'
 			: cursor.status === 'exhausted'
-				? 'bg-green-500'
-				: 'bg-blue-500 animate-pulse'}"
+				? 'bg-success'
+				: 'bg-info animate-pulse'}"
 	></span>
 	<span>{t(statusKey)}</span>
 	<span>|</span>
@@ -138,7 +138,7 @@
 			</button>
 		{/each}
 	</div>
-	<div class="h-4 w-px bg-gray-300 dark:bg-gray-600"></div>
+	<div class="h-4 w-px bg-line"></div>
 	<button
 		class="ui-link text-xs"
 		title={t('console.serverExportHint')}
@@ -156,7 +156,7 @@
 		<div
 			class="ui-alert ui-alert-error mb-3 flex items-start gap-2"
 		>
-			<p class="flex-1 text-red-600 dark:text-red-300 text-sm">{exportError}</p>
+			<p class="flex-1 text-error text-sm">{exportError}</p>
 			<button
 				class="ui-link-danger text-sm"
 				onclick={() => {
@@ -170,10 +170,10 @@
 		<div
 			class="ui-alert ui-alert-error mb-3"
 		>
-			<p class="text-red-700 dark:text-red-400 font-medium text-sm">
+			<p class="text-error font-medium text-sm">
 				{cursor.error.code}
 			</p>
-			<p class="text-red-600 dark:text-red-300 text-sm mt-1">
+			<p class="text-error text-sm mt-1">
 				{cursor.error.message}
 			</p>
 		</div>
@@ -194,7 +194,7 @@
 		{:else}
 			<VirtualTable columns={cursor.columns} rows={indexed} />
 			{#if loading}
-				<p class="mt-2 text-xs text-gray-400">{t('common.loading')}</p>
+				<p class="mt-2 text-xs text-muted">{t('common.loading')}</p>
 			{/if}
 		{/if}
 	{:else if activeView === 'json'}
@@ -206,7 +206,7 @@
 			</div>
 		{:else}
 			{#if cursor.receivedCount > STREAM_JSON_PREVIEW_LIMIT}
-				<p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+				<p class="mb-2 text-xs text-muted">
 					{t('console.streamJsonTruncated', {
 						shown: STREAM_JSON_PREVIEW_LIMIT,
 						total: cursor.receivedCount,
@@ -218,7 +218,7 @@
 		{/if}
 	{:else}
 		{#if graph && (graph.nodes.length > 0 || graph.edges.length > 0)}
-			<div class="flex flex-col gap-2 text-sm text-gray-600 dark:text-gray-300">
+			<div class="flex flex-col gap-2 text-sm text-muted">
 				<GraphPreviewControls
 					{graph}
 					{previewActive}
@@ -227,7 +227,7 @@
 				/>
 				{#if previewActive}
 					<div
-						class="h-80 rounded border border-gray-200 dark:border-gray-700 relative overflow-hidden"
+						class="h-80 rounded border border-line relative overflow-hidden"
 					>
 						<LazyCytoscapeCanvas data={graph} {isDark} />
 					</div>

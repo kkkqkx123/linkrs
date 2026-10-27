@@ -60,12 +60,12 @@
 
 {#if open}
 	<div class="fixed inset-0 z-50 flex items-center justify-center">
-		<div role="presentation" class="absolute inset-0 bg-black/20" onclick={onClose}></div>
+		<div role="presentation" class="absolute inset-0 bg-mask" onclick={onClose}></div>
 		<div
 			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
 		>
 			<div class="flex items-center justify-between mb-4">
-				<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">{title}</h3>
+				<h3 class="text-base font-semibold text-ink">{title}</h3>
 				<button
 					class="ui-icon-btn"
 					onclick={onClose}>✕</button
@@ -77,19 +77,19 @@
 					{@const isChanged = changed(key)}
 					<div
 						class="text-sm rounded px-2 py-1.5 {isChanged
-							? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800'
+							? 'bg-warning-light border border-warning/40'
 							: ''}"
 					>
 						<div class="flex items-center justify-between gap-2">
-							<span class="text-gray-500 dark:text-gray-400 font-mono text-xs">{key}</span>
+							<span class="text-muted font-mono text-xs">{key}</span>
 							{#if isChanged}
-								<span class="text-amber-600 dark:text-amber-400 text-xs"
+								<span class="text-warning text-xs"
 									>{t('dataBrowser.edit.changed')}</span
 								>
 							{/if}
 						</div>
 						{#if isChanged}
-							<div class="text-xs text-gray-400 dark:text-gray-500 line-through mt-1">
+							<div class="text-xs text-muted line-through mt-1">
 								{formatValue(original[key])}
 							</div>
 						{/if}
@@ -103,7 +103,7 @@
 			</div>
 
 			<div class="mt-4">
-				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+				<h4 class="text-sm font-medium text-ink mb-1">
 					{t('dataBrowser.edit.statement')}
 				</h4>
 				<pre

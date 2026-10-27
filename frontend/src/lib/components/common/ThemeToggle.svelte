@@ -7,7 +7,7 @@
 </script>
 
 <button
-	class="relative w-9 h-9 rounded-full flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-all duration-300 cursor-pointer focus:outline-none"
+	class="relative w-9 h-9 rounded-full flex items-center justify-center text-muted hover:bg-hover transition-all duration-300 cursor-pointer focus:outline-none"
 	onclick={toggleTheme}
 	aria-label={t('theme.toggle')}
 	title={themeState.current === 'light'

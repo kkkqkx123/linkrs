@@ -83,6 +83,6 @@
 		{t('graph.queryOpenConsole')}
 	</button>
 	{#if message}
-		<span class="w-full text-xs text-gray-500 dark:text-gray-400">{message}</span>
+		<span class="w-full text-xs text-muted">{message}</span>
 	{/if}
 </div>

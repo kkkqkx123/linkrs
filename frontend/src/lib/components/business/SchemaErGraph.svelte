@@ -97,13 +97,13 @@
 </script>
 
 <div class="flex flex-col gap-3 h-[calc(100vh-280px)] min-h-[400px]">
-	<div class="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
+	<div class="flex items-center gap-4 text-xs text-muted">
 		<span class="flex items-center gap-1.5">
-			<span class="inline-block w-3 h-3 rounded-full bg-blue-500"></span>
+			<span class="inline-block w-3 h-3 rounded-full bg-info"></span>
 			{t('schema.erLegendTag')}
 		</span>
 		<span class="flex items-center gap-1.5">
-			<span class="inline-block w-3 h-3 rounded-full bg-purple-500"></span>
+			<span class="inline-block w-3 h-3 rounded-full bg-alt"></span>
 			{t('schema.erLegendEdge')}
 		</span>
 		<input
@@ -120,11 +120,11 @@
 	</div>
 
 	<div
-		class="flex-1 relative rounded border border-gray-200 dark:border-gray-700 overflow-hidden bg-gray-50 dark:bg-gray-900/30"
+		class="flex-1 relative rounded border border-line overflow-hidden bg-secondary"
 	>
 		{#if isEmpty}
 			<div
-				class="absolute inset-0 flex items-center justify-center text-sm text-gray-400 dark:text-gray-500"
+				class="absolute inset-0 flex items-center justify-center text-sm text-muted"
 			>
 				{t('schema.erNoData')}
 			</div>
@@ -145,7 +145,7 @@
 			class="ui-card px-4 py-3 text-sm"
 		>
 			<div class="flex items-center justify-between">
-				<span class="font-medium text-gray-800 dark:text-gray-100"
+				<span class="font-medium text-ink"
 					>{selected.id}</span
 				>
 				<div class="flex items-center gap-2">
@@ -171,7 +171,7 @@
 					>
 				</div>
 			</div>
-			<div class="text-xs text-gray-500 dark:text-gray-400 mt-1 uppercase tracking-wide">
+			<div class="text-xs text-muted mt-1 uppercase tracking-wide">
 				{selected.kind === 'tag'
 					? t('schema.erLegendTag')
 					: t('schema.erLegendEdge')}
@@ -180,16 +180,16 @@
 				<div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
 					{#each selected.fields as f (f.name)}
 						<div class="text-xs flex gap-1 font-mono">
-							<span class="text-gray-800 dark:text-gray-200">{f.name}</span>
-							<span class="text-gray-400 dark:text-gray-500">{f.type}</span>
+							<span class="text-ink">{f.name}</span>
+							<span class="text-muted">{f.type}</span>
 							{#if !f.nullable}
-								<span class="text-amber-600 dark:text-amber-400">required</span>
+								<span class="text-warning">required</span>
 							{/if}
 						</div>
 					{/each}
 				</div>
 			{:else}
-				<div class="text-xs text-gray-400 dark:text-gray-500 mt-1">
+				<div class="text-xs text-muted mt-1">
 					{t('common.noProperties')}
 				</div>
 			{/if}

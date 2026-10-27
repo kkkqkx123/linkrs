@@ -68,7 +68,7 @@
 
 	<section class="ui-card shadow-sm p-6">
 		{#if sessions.length === 0}
-			<p class="text-sm text-gray-500 dark:text-gray-400">
+			<p class="text-sm text-muted">
 				{t('sessions.empty')}
 			</p>
 		{:else}

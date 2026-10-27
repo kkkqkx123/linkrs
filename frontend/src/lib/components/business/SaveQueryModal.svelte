@@ -19,7 +19,7 @@
 		role="dialog"
 		aria-labelledby="save-modal-title"
 	>
-		<div class="absolute inset-0 bg-black/20" role="presentation" onclick={onClose}></div>
+		<div class="absolute inset-0 bg-mask" role="presentation" onclick={onClose}></div>
 		<div
 			id="save-modal-title"
 			class="relative ui-card shadow-lg p-6 w-96"
@@ -33,7 +33,7 @@
 				</div>
 			{/if}
 			<div class="mb-4">
-				<label for="favorite-name" class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+				<label for="favorite-name" class="block text-sm text-muted mb-1"
 					>{t('common.name')}</label
 				>
 				<input

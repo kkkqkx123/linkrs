@@ -7,11 +7,47 @@ description = "Linkrs native desktop client built on GPUI"
 license.workspace = true
 publish = false
 
+[workspace]
+# Own workspace root: this crate is intentionally NOT a member of the linkrs
+# root workspace. Two independent blockers force the split:
+# 1. Nested-workspace inheritance: Cargo resolves `workspace = true` of an
+#    in-tree path dependency against the consuming workspace root (verified
+#    by probe; `exclude` does not change it for root-package workspaces, and
+#    `[patch]` paths behave the same), so a path from the root workspace into
+#    crates/gpui-kit fails on its private entries (`gpui = gpui-pre`,
+#    edition 2024, lints table). Mirroring those entries into the root
+#    workspace is rejected by design (key/version conflicts, see
+#    docs/plan/gpui_client_implementation_plan.md section 1.1).
+# 2. `links` conflict: gpui-component pins tree-sitter 0.26 while
+#    linkrs-grammar pins tree-sitter 0.27, and both declare
+#    `links = "tree-sitter"`, so no single lockfile can contain both.
+# From here `../gpui-kit` is outside this workspace directory, so gpui-kit
+# keeps resolving against its own workspace root, while `../linkrs-client`
+# and `../linkrs-wire` keep resolving against the linkrs root. All sources
+# are local submodule checkouts: local builds never fetch git.
+# Build with `cargo build --manifest-path crates/linkrs-gpui/Cargo.toml`
+# (or plain `cargo build` inside this directory). The `crates/gpui-kit`
+# submodule must be initialized first:
+# `git submodule update --init crates/gpui-kit`.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Mirrors the linkrs root specs for the crates.io deps used here, so both
+# workspaces resolve compatible versions. Bumps should stay in sync.
+anyhow = "1.0"
+log = "0.4.29"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+futures = "0.3"
+csv = "1.3"
+
 [dependencies]
-# Consumed as a local path dependency: crates/gpui-kit (submodule) is the
-# source of truth, never a remote. gpui-kit has its own workspace root, so its
-# internal `workspace = true` inheritance resolves against crates/gpui-kit,
-# not against the linkrs workspace.
+# Local vendored sources only (see [workspace] above for why).
 # `tree-sitter-sql` adds tree-sitter-based SQL highlighting (folding,
 # syntax-aware editing) on top of the lighter syntect fallback used by
 # `.language("sql")` on the query editor.

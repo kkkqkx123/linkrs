@@ -32,20 +32,22 @@
 	<LoadingScreen />
 {:else if authState.current}
 	<div
-		class="flex h-screen overflow-hidden bg-gray-50 dark:bg-[#0B0F17] transition-colors duration-300"
+		class="flex h-screen overflow-hidden bg-page transition-colors duration-300"
 	>
 		<Sidebar />
 		<div class="flex flex-col flex-1 min-w-0">
 			<Header />
 			<main
-				class="flex-1 overflow-auto px-5 py-4 bg-gray-50 dark:bg-[#0B0F17] transition-colors duration-300"
+				class="flex-1 overflow-auto py-8 px-7 bg-page transition-colors duration-300"
 			>
-				{@render children()}
+				<div class="max-w-[1500px] mx-auto w-full">
+					{@render children()}
+				</div>
 			</main>
 		</div>
 	</div>
 {:else}
-	<p class="p-6 text-sm text-gray-500 dark:text-gray-400">
+	<p class="p-6 text-sm text-muted">
 		{t('common.redirecting')}
 	</p>
 {/if}

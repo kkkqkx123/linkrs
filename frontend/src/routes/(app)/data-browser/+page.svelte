@@ -18,6 +18,9 @@
 	} from '$utils/cypherTemplates';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
 	import FilterPanel from '$components/business/FilterPanel.svelte';
+	import VectorSearchPanel from '$components/business/VectorSearchPanel.svelte';
+	import FulltextSearchPanel from '$components/business/FulltextSearchPanel.svelte';
+	import type { DataBrowserTab } from '$types/dataBrowser';
 	import EditPreviewModal from '$components/business/EditPreviewModal.svelte';
 	import type { VertexData, EdgeData, Statistics } from '$types/dataBrowser';
 	import type { Tag, EdgeType } from '$types/schema';
@@ -27,7 +30,7 @@
 	let tags = $state<Tag[]>([]);
 	let edgeTypes = $state<EdgeType[]>([]);
 
-	let activeTab = $state<'vertices' | 'edges'>('vertices');
+	let activeTab = $state<DataBrowserTab>('vertices');
 	let selectedTag = $state<string | null>(null);
 	let selectedEdgeType = $state<string | null>(null);
 	let vertices = $state<VertexData[]>([]);
@@ -170,7 +173,7 @@
 		if (val && currentSpace) loadEdges();
 	}
 
-	function handleTabChange(tab: 'vertices' | 'edges') {
+	function handleTabChange(tab: DataBrowserTab) {
 		dataBrowserStore.setActiveTab(tab);
 		if (tab === 'vertices' && currentSpace) {
 			schemaStore.fetchTags(currentSpace);
@@ -516,15 +519,17 @@
 			<button class="ui-btn ui-btn-ghost ui-btn-sm" onclick={loadStatistics}>
 				🔄 {t('common.refresh')}
 			</button>
-			<button
-				class="ui-chip {filterPanelVisible ? 'ui-chip-active' : ''}"
-				onclick={() => dataBrowserStore.toggleFilterPanel()}
-			>
-				🔍 {t('dataBrowser.filter')}
-			</button>
+			{#if activeTab === 'vertices' || activeTab === 'edges'}
+				<button
+					class="ui-chip {filterPanelVisible ? 'ui-chip-active' : ''}"
+					onclick={() => dataBrowserStore.toggleFilterPanel()}
+				>
+					🔍 {t('dataBrowser.filter')}
+				</button>
+			{/if}
 		</PageHeader>
 
-		{#if filterPanelVisible}
+		{#if filterPanelVisible && (activeTab === 'vertices' || activeTab === 'edges')}
 			<FilterPanel {activeTab} onApply={applyFilters} />
 		{/if}
 
@@ -534,9 +539,9 @@
 			</div>
 		{/if}
 
-		{#if selectedIds.size > 0}
+		{#if selectedIds.size > 0 && (activeTab === 'vertices' || activeTab === 'edges')}
 			<div class="ui-alert ui-alert-info flex items-center gap-3 text-sm">
-				<span class="text-blue-700 dark:text-blue-300">
+				<span class="text-info">
 					{t('dataBrowser.batch.selected', { count: selectedIds.size })}
 				</span>
 				<button
@@ -555,7 +560,7 @@
 			<div class="ui-alert ui-alert-ok text-sm">
 				{batchMessage}
 				{#if batchError}
-					<div class="mt-1 text-red-600 dark:text-red-400 text-xs">
+					<div class="mt-1 text-error text-xs">
 						{batchError}
 					</div>
 				{/if}
@@ -564,7 +569,7 @@
 
 		<div class="flex-1 ui-card ui-card-flush shadow-sm overflow-hidden flex">
 			<div class="flex-1 flex flex-col overflow-hidden">
-				<div class="flex border-b border-gray-200 dark:border-gray-700">
+				<div class="flex border-b border-line">
 					<button
 						class="ui-tab {activeTab === 'vertices' ? 'ui-tab-active' : ''}"
 						onclick={() => handleTabChange('vertices')}
@@ -577,10 +582,26 @@
 					>
 						↔ {t('sidebar.edges')}
 					</button>
+					<button
+						class="ui-tab {activeTab === 'vector' ? 'ui-tab-active' : ''}"
+						onclick={() => handleTabChange('vector')}
+					>
+						🧭 {t('dataBrowser.vectorTab')}
+					</button>
+					<button
+						class="ui-tab {activeTab === 'fulltext' ? 'ui-tab-active' : ''}"
+						onclick={() => handleTabChange('fulltext')}
+					>
+						🔎 {t('dataBrowser.fulltextTab')}
+					</button>
 				</div>
 
 				<div class="p-5 flex-1 overflow-auto">
-					{#if activeTab === 'vertices'}
+					{#if activeTab === 'vector'}
+						<VectorSearchPanel {currentSpace} />
+					{:else if activeTab === 'fulltext'}
+						<FulltextSearchPanel {currentSpace} />
+					{:else if activeTab === 'vertices'}
 						<div class="mb-4">
 							<select
 								class="ui-input"
@@ -602,7 +623,7 @@
 							<div class="overflow-x-auto">
 								<table class="ui-table w-full border-collapse">
 									<thead>
-										<tr class="bg-gray-50 dark:bg-gray-800/50">
+										<tr class="bg-secondary">
 											<th>{t('dataBrowser.batch.deletedColumn')}</th>
 											<th>ID</th>
 											<th>{t('sidebar.tags')}</th>
@@ -637,17 +658,17 @@
 														>{t('dataBrowser.viewDetail')}</button
 													>
 													<button
-														class="ml-2 text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 text-xs cursor-pointer"
+														class="ml-2 text-success hover:text-success text-xs cursor-pointer"
 														onclick={() => viewInGraph(v, 'vertex')}
 														>{t('graphPreview.openInGraph')}</button
 													>
 													<button
-														class="ml-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xs cursor-pointer"
+														class="ml-2 text-muted hover:text-ink text-xs cursor-pointer"
 														onclick={() => copyText(String(v.id))}
 														>{t('dataBrowser.copyId')}</button
 													>
 													<button
-														class="ml-2 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-xs cursor-pointer"
+														class="ml-2 text-warning hover:text-warning text-xs cursor-pointer"
 														onclick={() => openEdit(v, 'vertex')}
 														>{t('dataBrowser.editUpdate')}</button
 													>
@@ -663,7 +684,7 @@
 								</table>
 							</div>
 							<div
-								class="flex items-center justify-between mt-4 text-sm text-gray-500 dark:text-gray-400"
+								class="flex items-center justify-between mt-4 text-sm text-muted"
 							>
 								<span
 									>{t('dataBrowser.total')}: {vertexTotal}
@@ -678,7 +699,7 @@
 											loadVertices();
 										}}>{t('common.prev')}</button
 									>
-									<span class="px-3 py-1 text-gray-600 dark:text-gray-400"
+									<span class="px-3 py-1 text-muted"
 										>{t('common.page')} {vertexPage}</span
 									>
 									<button
@@ -692,11 +713,11 @@
 								</div>
 							</div>
 						{:else if selectedTag}
-							<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+							<p class="text-muted text-center py-8">
 								{t('schema.noTags')}
 							</p>
 						{:else}
-							<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+							<p class="text-muted text-center py-8">
 								{t('dataBrowser.selectTag')}
 								{t('common.loading')}
 							</p>
@@ -724,7 +745,7 @@
 							<div class="overflow-x-auto">
 								<table class="ui-table w-full border-collapse">
 									<thead>
-										<tr class="bg-gray-50 dark:bg-gray-800/50">
+										<tr class="bg-secondary">
 											<th>{t('dataBrowser.batch.deletedColumn')}</th>
 											<th>ID</th>
 											<th>{t('common.type')}</th>
@@ -765,17 +786,17 @@
 														>{t('dataBrowser.viewDetail')}</button
 													>
 													<button
-														class="ml-2 text-green-600 dark:text-green-400 hover:text-green-700 dark:hover:text-green-300 text-xs cursor-pointer"
+														class="ml-2 text-success hover:text-success text-xs cursor-pointer"
 														onclick={() => viewInGraph(e, 'edge')}
 														>{t('graphPreview.openInGraph')}</button
 													>
 													<button
-														class="ml-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-xs cursor-pointer"
+														class="ml-2 text-muted hover:text-ink text-xs cursor-pointer"
 														onclick={() => copyText(String(e.src))}
 														>{t('dataBrowser.copyId')}</button
 													>
 													<button
-														class="ml-2 text-amber-600 dark:text-amber-400 hover:text-amber-700 text-xs cursor-pointer"
+														class="ml-2 text-warning hover:text-warning text-xs cursor-pointer"
 														onclick={() => openEdit(e, 'edge')}
 														>{t('dataBrowser.editUpdate')}</button
 													>
@@ -791,7 +812,7 @@
 								</table>
 							</div>
 							<div
-								class="flex items-center justify-between mt-4 text-sm text-gray-500 dark:text-gray-400"
+								class="flex items-center justify-between mt-4 text-sm text-muted"
 							>
 								<span
 									>{t('dataBrowser.total')}: {edgeTotal}
@@ -806,7 +827,7 @@
 											loadEdges();
 										}}>{t('common.prev')}</button
 									>
-									<span class="px-3 py-1 text-gray-600 dark:text-gray-400"
+									<span class="px-3 py-1 text-muted"
 										>{t('common.page')} {edgePage}</span
 									>
 									<button
@@ -820,11 +841,11 @@
 								</div>
 							</div>
 						{:else if selectedEdgeType}
-							<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+							<p class="text-muted text-center py-8">
 								{t('schema.noEdges')}
 							</p>
 						{:else}
-							<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+							<p class="text-muted text-center py-8">
 								{t('dataBrowser.selectEdgeType')}
 								{t('common.loading')}
 							</p>
@@ -835,46 +856,46 @@
 
 			<!-- Statistics Panel -->
 			<div
-				class="w-64 border-l border-gray-200 dark:border-gray-700 p-5 bg-gray-50 dark:bg-gray-800/20 overflow-y-auto"
+				class="w-64 border-l border-line p-5 bg-secondary overflow-y-auto"
 			>
 				<h2
-					class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-3"
+					class="text-base font-semibold text-ink mb-3"
 				>
 					{t('dataBrowser.statistics')}
 				</h2>
 				{#if statistics}
 					<div class="space-y-2 text-sm">
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('dataBrowser.vertices')}:</span
-							><span class="font-medium text-gray-800 dark:text-gray-200"
+							><span class="font-medium text-ink"
 								>{statistics.totalVertices ?? '-'}</span
 							>
 						</div>
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('dataBrowser.edges')}:</span
-							><span class="font-medium text-gray-800 dark:text-gray-200"
+							><span class="font-medium text-ink"
 								>{statistics.totalEdges ?? '-'}</span
 							>
 						</div>
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('dataBrowser.tags')}:</span
-							><span class="font-medium text-gray-800 dark:text-gray-200"
+							><span class="font-medium text-ink"
 								>{statistics.tagCount ?? '-'}</span
 							>
 						</div>
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('dataBrowser.edgeTypes')}:</span
-							><span class="font-medium text-gray-800 dark:text-gray-200"
+							><span class="font-medium text-ink"
 								>{statistics.edgeTypeCount ?? '-'}</span
 							>
 						</div>
 					</div>
 				{:else}
-					<p class="text-gray-400 dark:text-gray-500 text-xs">
+					<p class="text-muted text-xs">
 						{t('common.refresh')}
 						{t('common.loading')}
 					</p>
@@ -884,7 +905,7 @@
 	</div>
 {:else}
 	<div class="ui-card shadow-sm p-8 text-center">
-		<p class="text-gray-500 dark:text-gray-400">
+		<p class="text-muted">
 			{t('common.select')}
 			{t('sidebar.spaces')}
 			{t('common.loading')}
@@ -897,14 +918,14 @@
 	<div class="fixed inset-0 z-50 flex items-center justify-center">
 		<div
 			role="presentation"
-			class="absolute inset-0 bg-black/20"
+			class="absolute inset-0 bg-mask"
 			onclick={() => dataBrowserStore.hideDetail()}
 		></div>
 		<div
 			class="relative ui-card shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
 		>
 			<div class="flex items-center justify-between mb-4">
-				<h2 class="text-base font-semibold text-gray-800 dark:text-gray-100">
+				<h2 class="text-base font-semibold text-ink">
 					{detailType === 'vertex'
 						? t('dataBrowser.vertices')
 						: t('sidebar.edges')}
@@ -919,8 +940,8 @@
 				{#each Object.entries(detailData) as [key, value] (key)}
 					{#if key !== 'properties'}
 						<div class="text-sm">
-							<span class="text-gray-500 dark:text-gray-400">{key}:</span>
-							<span class="ml-1 text-gray-800 dark:text-gray-200"
+							<span class="text-muted">{key}:</span>
+							<span class="ml-1 text-ink"
 								>{String(value)}</span
 							>
 						</div>
@@ -929,14 +950,14 @@
 				{#if detailData.properties}
 					<div class="mt-4">
 						<h3
-							class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+							class="text-sm font-medium text-ink mb-2"
 						>
 							{t('common.properties')}
 						</h3>
 						{#each Object.entries(detailData.properties) as [k, v] (k)}
 							<div class="text-sm ml-2">
-								<span class="text-gray-500 dark:text-gray-400">{k}:</span>
-								<span class="ml-1 text-gray-800 dark:text-gray-200"
+								<span class="text-muted">{k}:</span>
+								<span class="ml-1 text-ink"
 									>{String(v)}</span
 								>
 							</div>
@@ -969,28 +990,28 @@
 	<div class="fixed inset-0 z-50 flex items-center justify-center">
 		<div
 			role="presentation"
-			class="absolute inset-0 bg-black/20"
+			class="absolute inset-0 bg-mask"
 			onclick={() => (conflictState = 'none')}
 		></div>
 		<div
 			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
 		>
-			<h2 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-2">
+			<h2 class="text-base font-semibold text-ink mb-2">
 				{t('dataBrowser.edit.changed')}
 			</h2>
-			<p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
+			<p class="text-sm text-muted mb-3">
 				{t('dataBrowser.edit.conflict')}
 			</p>
 			<div class="space-y-1">
 				{#each Object.keys(editOriginalProps) as key (key)}
 					<div class="text-xs flex gap-2 font-mono">
-						<span class="text-gray-500 dark:text-gray-400 w-24 truncate"
+						<span class="text-muted w-24 truncate"
 							>{key}</span
 						>
-						<span class="text-gray-800 dark:text-gray-200 flex-1 truncate"
+						<span class="text-ink flex-1 truncate"
 							>{String(editOriginalProps[key] ?? '')}</span
 						>
-						<span class="text-amber-600 dark:text-amber-400 flex-1 truncate"
+						<span class="text-warning flex-1 truncate"
 							>{String(editedProps[key] ?? '')}</span
 						>
 					</div>
@@ -1017,16 +1038,16 @@
 	<div class="fixed inset-0 z-50 flex items-center justify-center">
 		<div
 			role="presentation"
-			class="absolute inset-0 bg-black/20"
+			class="absolute inset-0 bg-mask"
 			onclick={() => (deleteConfirm = null)}
 		></div>
 		<div
 			class="relative ui-card shadow-lg p-6 w-[26rem] max-h-[85vh] overflow-y-auto"
 		>
-			<h2 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-2">
+			<h2 class="text-base font-semibold text-ink mb-2">
 				{t('common.delete')}
 			</h2>
-			<p class="text-sm text-gray-600 dark:text-gray-300">
+			<p class="text-sm text-muted">
 				{t('dataBrowser.delete.confirm', {
 					kind:
 						deleteConfirm.kind === 'vertex'
@@ -1035,7 +1056,7 @@
 				})}
 			</p>
 			{#if deleteConfirm.kind === 'vertex' && deleteConfirm.edgeCount !== null && deleteConfirm.edgeCount > 0}
-				<p class="text-sm text-amber-600 dark:text-amber-400 mt-2">
+				<p class="text-sm text-warning mt-2">
 					{t('dataBrowser.delete.vertexWithEdges', {
 						count: deleteConfirm.edgeCount,
 					})}

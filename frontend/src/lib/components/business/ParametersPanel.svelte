@@ -61,7 +61,7 @@
 	{#if open}
 		<div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
 			<div class="ui-card p-2">
-				<p class="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+				<p class="text-xs font-medium text-muted mb-1">
 					@ {t('console.parameters')}
 				</p>
 				{#each parameters as row (row.id)}
@@ -93,7 +93,7 @@
 				</button>
 			</div>
 			<div class="ui-card p-2">
-				<p class="text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+				<p class="text-xs font-medium text-muted mb-1">
 					$ {t('console.sessionVariables')}
 				</p>
 				{#each sessionVariables as row (row.id)}
@@ -126,7 +126,7 @@
 			</div>
 		</div>
 		{#if (streamEligibility.mode === 'single' && !streamingActive) || streamingActive}
-			<p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+			<p class="mt-2 text-xs text-warning">
 				{t('console.streamParamsIgnored')}
 			</p>
 		{/if}

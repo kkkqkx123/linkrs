@@ -22,7 +22,7 @@
 </script>
 
 <div class="flex items-center gap-2 text-sm">
-	<span class="text-gray-500">{t('sidebar.spaces')}:</span>
+	<span class="text-muted">{t('sidebar.spaces')}:</span>
 	<select
 		class="ui-input ui-input-sm w-auto"
 		value={currentSpace || ''}

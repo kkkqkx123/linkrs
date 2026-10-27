@@ -412,7 +412,7 @@
 		<!-- Space Selector -->
 		<div class="ui-card shadow-sm px-6 py-4">
 			<div class="flex items-center gap-4">
-				<span class="text-sm font-medium text-gray-600 dark:text-gray-400"
+				<span class="text-sm font-medium text-muted"
 					>{t('sidebar.spaces')}:</span
 				>
 				<select
@@ -440,7 +440,7 @@
 		<div
 			class="ui-card ui-card-flush shadow-sm flex flex-col flex-1 overflow-hidden"
 		>
-			<div class="flex border-b border-gray-200 dark:border-gray-700">
+			<div class="flex border-b border-line">
 				{#each TABS as tab (tab.id)}
 					<a
 						href={`/schema/${tab.id}`}
@@ -459,14 +459,14 @@
 							<div class="ui-spinner"></div>
 						</div>
 					{:else if spaces.length === 0}
-						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+						<p class="text-muted text-center py-8">
 							{t('schema.noSpaces')}
 						</p>
 					{:else}
 						<div class="overflow-x-auto">
 							<table class="ui-table w-full border-collapse">
 								<thead>
-									<tr class="bg-gray-50 dark:bg-gray-800/50">
+									<tr class="bg-secondary">
 										<th>{t('common.name')}</th>
 										<th>{t('schema.vidType')}</th>
 										<th>{t('common.actions')}</th>
@@ -475,9 +475,9 @@
 								<tbody>
 									{#each spaces as space (space.name)}
 										<tr
-											class="hover:bg-gray-50 dark:hover:bg-gray-800/30 {currentSpace ===
+											class="hover:bg-hover {currentSpace ===
 											space.name
-												? 'bg-blue-50 dark:bg-blue-900/20'
+												? 'bg-info-light'
 												: ''}"
 										>
 											<td class="font-medium">{space.name}</td>
@@ -497,7 +497,7 @@
 					{/if}
 				{:else if activeTab === 'tags'}
 					<div class="flex justify-between items-center mb-4">
-						<span class="text-sm text-gray-500 dark:text-gray-400"
+						<span class="text-sm text-muted"
 							>{tags.length} {t('sidebar.tags')}</span
 						>
 						<button
@@ -512,14 +512,14 @@
 							<div class="ui-spinner"></div>
 						</div>
 					{:else if tags.length === 0}
-						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+						<p class="text-muted text-center py-8">
 							{t('schema.noTags')}
 						</p>
 					{:else}
 						<div class="overflow-x-auto">
 							<table class="ui-table w-full border-collapse">
 								<thead>
-									<tr class="bg-gray-50 dark:bg-gray-800/50">
+									<tr class="bg-secondary">
 										<th>{t('common.name')}</th>
 										<th>{t('common.properties')}</th>
 										<th>{t('common.actions')}</th>
@@ -531,13 +531,13 @@
 											<td class="font-medium">{tag.name}</td>
 											<td>
 												{#if tag.properties?.length}
-													<span class="text-xs text-gray-500 dark:text-gray-400"
+													<span class="text-xs text-muted"
 														>{tag.properties
 															.map((p) => p.name)
 															.join(', ')}</span
 													>
 												{:else}
-													<span class="text-xs text-gray-400 dark:text-gray-500"
+													<span class="text-xs text-muted"
 														>{t('common.noProperties')}</span
 													>
 												{/if}
@@ -562,7 +562,7 @@
 					{/if}
 				{:else if activeTab === 'edges'}
 					<div class="flex justify-between items-center mb-4">
-						<span class="text-sm text-gray-500 dark:text-gray-400"
+						<span class="text-sm text-muted"
 							>{edgeTypes.length} {t('sidebar.edges')}</span
 						>
 						<button
@@ -577,14 +577,14 @@
 							<div class="ui-spinner"></div>
 						</div>
 					{:else if edgeTypes.length === 0}
-						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+						<p class="text-muted text-center py-8">
 							{t('schema.noEdges')}
 						</p>
 					{:else}
 						<div class="overflow-x-auto">
 							<table class="ui-table w-full border-collapse">
 								<thead>
-									<tr class="bg-gray-50 dark:bg-gray-800/50">
+									<tr class="bg-secondary">
 										<th>{t('common.name')}</th>
 										<th>{t('common.properties')}</th>
 										<th>{t('common.actions')}</th>
@@ -596,13 +596,13 @@
 											<td class="font-medium">{edge.name}</td>
 											<td>
 												{#if edge.properties?.length}
-													<span class="text-xs text-gray-500 dark:text-gray-400"
+													<span class="text-xs text-muted"
 														>{edge.properties
 															.map((p) => p.name)
 															.join(', ')}</span
 													>
 												{:else}
-													<span class="text-xs text-gray-400 dark:text-gray-500"
+													<span class="text-xs text-muted"
 														>{t('common.noProperties')}</span
 													>
 												{/if}
@@ -627,7 +627,7 @@
 					{/if}
 				{:else if activeTab === 'indexes'}
 					<div class="flex justify-between items-center mb-4">
-						<span class="text-sm text-gray-500 dark:text-gray-400"
+						<span class="text-sm text-muted"
 							>{indexes.length} {t('sidebar.indexes')}</span
 						>
 						<button
@@ -642,14 +642,14 @@
 							<div class="ui-spinner"></div>
 						</div>
 					{:else if indexes.length === 0}
-						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+						<p class="text-muted text-center py-8">
 							{t('schema.noIndexes')}
 						</p>
 					{:else}
 						<div class="overflow-x-auto">
 							<table class="ui-table w-full border-collapse">
 								<thead>
-									<tr class="bg-gray-50 dark:bg-gray-800/50">
+									<tr class="bg-secondary">
 										<th>{t('common.name')}</th>
 										<th>{t('common.type')}</th>
 										<th>{t('common.entity')}</th>
@@ -684,7 +684,7 @@
 					{/if}
 				{:else if activeTab === 'functions'}
 					<div class="flex justify-between items-center mb-4">
-						<span class="text-sm text-gray-500 dark:text-gray-400">
+						<span class="text-sm text-muted">
 							{functions.length}
 							{t('sidebar.functions')}
 						</span>
@@ -697,17 +697,17 @@
 						</button>
 					</div>
 					{#if functionsError}
-						<p class="text-xs text-red-500 mb-2">{functionsError}</p>
+						<p class="text-xs text-error mb-2">{functionsError}</p>
 					{/if}
 					<div class="grid md:grid-cols-2 gap-2 text-sm mb-4">
-						<label class="flex flex-col gap-1 text-xs text-gray-500">
+						<label class="flex flex-col gap-1 text-xs text-muted">
 							{t('common.name')}
 							<input
 								class="ui-input ui-input-sm font-mono"
 								bind:value={newFunctionName}
 							/>
 						</label>
-						<label class="flex flex-col gap-1 text-xs text-gray-500">
+						<label class="flex flex-col gap-1 text-xs text-muted">
 							{t('functions.implementation')}
 							<input
 								class="ui-input ui-input-sm font-mono"
@@ -730,14 +730,14 @@
 							<div class="ui-spinner"></div>
 						</div>
 					{:else if functions.length === 0 && !functionsResult}
-						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+						<p class="text-muted text-center py-8">
 							{t('functions.empty')}
 						</p>
 					{:else}
 						<div class="overflow-x-auto mb-4">
 							<table class="ui-table w-full border-collapse">
 								<thead>
-									<tr class="bg-gray-50 dark:bg-gray-800/50">
+									<tr class="bg-secondary">
 										<th>{t('common.name')}</th>
 										<th>{t('common.actions')}</th>
 									</tr>
@@ -769,21 +769,21 @@
 					{/if}
 				{:else if activeTab === 'versions'}
 					<div class="grid md:grid-cols-5 gap-2 text-sm mb-3">
-						<label class="flex flex-col gap-1 text-xs text-gray-500">
+						<label class="flex flex-col gap-1 text-xs text-muted">
 							{t('migration.space')}
 							<input
 								class="ui-input ui-input-sm font-mono"
 								bind:value={versionSpace}
 							/>
 						</label>
-						<label class="flex flex-col gap-1 text-xs text-gray-500">
+						<label class="flex flex-col gap-1 text-xs text-muted">
 							{t('migration.label')}
 							<input
 								class="ui-input ui-input-sm font-mono"
 								bind:value={versionLabel}
 							/>
 						</label>
-						<label class="flex flex-col gap-1 text-xs text-gray-500">
+						<label class="flex flex-col gap-1 text-xs text-muted">
 							{t('migration.fromVersion')}
 							<input
 								type="number"
@@ -791,7 +791,7 @@
 								bind:value={versionFrom}
 							/>
 						</label>
-						<label class="flex flex-col gap-1 text-xs text-gray-500">
+						<label class="flex flex-col gap-1 text-xs text-muted">
 							{t('migration.toVersion')}
 							<input
 								type="number"
@@ -799,13 +799,13 @@
 								bind:value={versionTo}
 							/>
 						</label>
-						<label class="flex items-center gap-1 text-xs text-gray-500 mt-5">
+						<label class="flex items-center gap-1 text-xs text-muted mt-5">
 							<input type="checkbox" bind:checked={versionIsEdge} />
 							{t('migration.isEdge')}
 						</label>
 					</div>
 					{#if versionsError}
-						<p class="text-xs text-red-500 mb-2">{versionsError}</p>
+						<p class="text-xs text-error mb-2">{versionsError}</p>
 					{/if}
 					<div class="flex flex-wrap gap-2 mb-4">
 						<button
@@ -823,7 +823,7 @@
 							{t('versions.history')}
 						</button>
 						<button
-							class="px-3 py-1.5 bg-gray-100 dark:bg-gray-700/50 text-gray-700 dark:text-gray-200 text-sm rounded cursor-pointer disabled:opacity-50"
+							class="px-3 py-1.5 bg-secondary text-ink text-sm rounded cursor-pointer disabled:opacity-50"
 							onclick={() =>
 								runVersionQuery(() =>
 									schemaVersionsService.changes(
@@ -862,7 +862,7 @@
 					{:else if versionsResult}
 						<pre class="ui-pre">{versionsResult}</pre>
 					{:else}
-						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
+						<p class="text-muted text-center py-8">
 							{t('versions.hint')}
 						</p>
 					{/if}
@@ -894,7 +894,7 @@
 		aria-labelledby="create-space-title"
 	>
 		<div
-			class="absolute inset-0 bg-black/20 cursor-pointer"
+			class="absolute inset-0 bg-mask cursor-pointer"
 			role="button"
 			tabindex="0"
 			aria-label={t('common.close')}
@@ -913,7 +913,7 @@
 		>
 			<h3
 				id="create-space-title"
-				class="font-semibold text-gray-800 dark:text-gray-100 mb-4"
+				class="font-semibold text-ink mb-4"
 			>
 				{t('schema.createSpace')}
 			</h3>
@@ -921,7 +921,7 @@
 				<div>
 					<label
 						for="space-name"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('common.name')}</label
 					>
 					<input
@@ -935,13 +935,13 @@
 				<div>
 					<label
 						for="space-vid-type"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('schema.vidType')}</label
 					>
 					<select
 						id="space-vid-type"
 						bind:value={newSpaceVidType}
-						class="ui-input w-full focus:outline-none focus:border-blue-500"
+						class="ui-input w-full focus:outline-none focus:border-info/40"
 					>
 						<option value="INT64">INT64</option>
 						<option value="FIXED_STRING(32)">FIXED_STRING(32)</option>
@@ -950,7 +950,7 @@
 				<div>
 					<label
 						for="space-partition-num"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('schema.partitionNum')}</label
 					>
 					<input
@@ -963,7 +963,7 @@
 				<div>
 					<label
 						for="space-replica-factor"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('schema.replicaFactor')}</label
 					>
 					<input
@@ -995,7 +995,7 @@
 		aria-labelledby="create-tag-title"
 	>
 		<div
-			class="absolute inset-0 bg-black/20 cursor-pointer"
+			class="absolute inset-0 bg-mask cursor-pointer"
 			role="button"
 			tabindex="0"
 			aria-label={t('common.close')}
@@ -1014,7 +1014,7 @@
 		>
 			<h3
 				id="create-tag-title"
-				class="font-semibold text-gray-800 dark:text-gray-100 mb-4"
+				class="font-semibold text-ink mb-4"
 			>
 				{t('schema.createTag')}
 			</h3>
@@ -1022,7 +1022,7 @@
 				<div>
 					<label
 						for="tag-name"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('common.name')}</label
 					>
 					<input
@@ -1035,7 +1035,7 @@
 				</div>
 				<div>
 					<!-- svelte-ignore a11y_label_has_associated_control -->
-					<label class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+					<label class="block text-sm text-muted mb-1"
 						>{t('common.properties')}</label
 					>
 					{#each newTagProps as prop, i (i)}
@@ -1083,7 +1083,7 @@
 		aria-labelledby="create-edge-title"
 	>
 		<div
-			class="absolute inset-0 bg-black/20 cursor-pointer"
+			class="absolute inset-0 bg-mask cursor-pointer"
 			role="button"
 			tabindex="0"
 			aria-label={t('common.close')}
@@ -1102,7 +1102,7 @@
 		>
 			<h3
 				id="create-edge-title"
-				class="font-semibold text-gray-800 dark:text-gray-100 mb-4"
+				class="font-semibold text-ink mb-4"
 			>
 				{t('schema.createEdge')}
 			</h3>
@@ -1110,7 +1110,7 @@
 				<div>
 					<label
 						for="edge-name"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('common.name')}</label
 					>
 					<input
@@ -1123,7 +1123,7 @@
 				</div>
 				<div>
 					<!-- svelte-ignore a11y_label_has_associated_control -->
-					<label class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+					<label class="block text-sm text-muted mb-1"
 						>{t('common.properties')}</label
 					>
 					{#each newEdgeProps as prop, i (i)}
@@ -1171,20 +1171,20 @@
 		class="fixed inset-0 z-50 flex items-center justify-center"
 		onclick={() => (showCreateIndex = false)}
 	>
-		<div class="absolute inset-0 bg-black/20"></div>
+		<div class="absolute inset-0 bg-mask"></div>
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="relative ui-card shadow-lg p-6 w-96"
 			onclick={(e) => e.stopPropagation()}
 		>
-			<h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
+			<h3 class="text-lg font-semibold text-ink mb-4">
 				{t('schema.createIndex')}
 			</h3>
 			<div class="space-y-3">
 				<div>
 					<label
 						for="index-name"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('common.name')}</label
 					>
 					<input
@@ -1198,7 +1198,7 @@
 				<div>
 					<label
 						for="index-entity-type"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('common.entityType')}</label
 					>
 					<select
@@ -1213,7 +1213,7 @@
 				<div>
 					<label
 						for="index-entity-name"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('common.entityName')}</label
 					>
 					<input
@@ -1227,7 +1227,7 @@
 				<div>
 					<label
 						for="index-fields"
-						class="block text-sm text-gray-600 dark:text-gray-400 mb-1"
+						class="block text-sm text-muted mb-1"
 						>{t('common.fields')}</label
 					>
 					<input

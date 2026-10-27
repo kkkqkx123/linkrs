@@ -14,7 +14,7 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex justify-end">
-	<div class="absolute inset-0 bg-black/20" role="presentation" onclick={onClose}></div>
+	<div class="absolute inset-0 bg-mask" role="presentation" onclick={onClose}></div>
 	<div
 		class="ui-drawer"
 		role="dialog"
@@ -22,9 +22,9 @@
 	>
 		<div
 			id="favorites-panel-title"
-			class="p-5 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between"
+			class="p-5 border-b border-line flex items-center justify-between"
 		>
-			<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">
+			<h3 class="text-base font-semibold text-ink">
 				{t('console.favorites')}
 			</h3>
 			<button
@@ -35,7 +35,7 @@
 		</div>
 		<div class="p-4">
 			{#if favorites.length === 0}
-				<p class="text-gray-400 dark:text-gray-500 text-sm text-center py-4">
+				<p class="text-muted text-sm text-center py-4">
 					{t('console.noResult')}
 				</p>
 			{:else}
@@ -50,14 +50,14 @@
 						}}
 						title={t('console.historyLoadHint')}
 					>
-						<p class="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">
+						<p class="text-sm font-medium text-ink mb-1">
 							{fav.name}
 						</p>
-						<p class="text-xs font-mono text-gray-500 dark:text-gray-400 truncate">
+						<p class="text-xs font-mono text-muted truncate">
 							{fav.query}
 						</p>
 						{#if fav.preferredPath}
-							<p class="text-xs text-gray-400 mt-1">
+							<p class="text-xs text-muted mt-1">
 								{t('console.favoriteSavedPath', {
 									path: t(
 										fav.preferredPath === 'stream'

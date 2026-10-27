@@ -21,10 +21,10 @@
 <section
 	class="ui-card shadow-sm p-6"
 >
-	<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
+	<h2 class="text-lg font-semibold text-ink mb-4">
 		{t('migration.execute')}
 	</h2>
-	<label class="flex flex-col gap-1 text-xs text-gray-500 mb-3">
+	<label class="flex flex-col gap-1 text-xs text-muted mb-3">
 		{t('migration.planJson')}
 		<textarea
 			rows="4"

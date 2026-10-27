@@ -26,14 +26,15 @@
 </script>
 
 <header
-	class="h-12 bg-white dark:bg-[#1C2333] border-b border-gray-200 dark:border-gray-700/50 flex items-center justify-between px-5 flex-shrink-0 transition-colors duration-300"
+	class="bg-surface border-b border-line flex items-center justify-between px-7 flex-shrink-0 transition-colors duration-300"
+	style="height: var(--comp-height-top)"
 >
 	<div class="flex items-center gap-3">
-		<span class="text-base font-semibold text-gray-800 dark:text-gray-100"
+		<span class="text-base font-semibold text-ink"
 			>{t('app.title')}</span
 		>
 		{#if store.isVerified}
-			<div class="h-4 w-px bg-gray-300 dark:bg-gray-600"></div>
+			<div class="h-4 w-px bg-line"></div>
 			<SpaceSelector />
 		{/if}
 	</div>
@@ -44,17 +45,17 @@
 		{#if store.isVerified}
 			{#if store.mustChangePassword}
 				<span
-					class="ui-badge bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-yellow-200 dark:border-yellow-800"
+					class="ui-badge bg-warning-light text-warning border-warning/40"
 				>
 					{t('login.mustChangePassword')}
 				</span>
 			{/if}
-			<span class="text-sm text-gray-600 dark:text-gray-400"
+			<span class="text-sm text-muted"
 				>👤 {store.connectionInfo.username}</span
 			>
 			{#if store.role}
 				<span
-					class="ui-badge bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 border-blue-200 dark:border-blue-800"
+					class="ui-badge bg-info-light text-info border-info/40"
 				>
 					{roleLabel(store.role)}
 				</span>

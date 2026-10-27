@@ -330,3 +330,31 @@ src/
 | 阶段 2 | 数据浏览器分页过滤；图原生渲染邻域扩展与点选；监控图表；批量任务全流程 |
 | 阶段 3 | 用户/会话/迁移/向量/全文管理页可用；流式与游标大结果稳定 |
 | 阶段 4 | 打包产物可安装启动；命令面板与快捷键齐备；性能采样无明显回归 |
+
+## 11. 修订记录：依赖接入方式变更（path → 独立 workspace + 本地 path）
+
+§1.1“git 依赖”决策已废止。实测发现单 workspace 路线存在第二个独立 blocker：
+
+- `gpui-component 0.8.1` 要求 `tree-sitter ^0.26`，`linkrs-grammar` 要求
+  `tree-sitter ^0.27`，且两者都声明 `links = "tree-sitter"`。
+  Cargo 单 lockfile 无法同时容纳，因此无论 gpui-kit 走 path、git 还是
+  crates.io 官方版本，`linkrs-gpui` 都不能作为根 workspace 成员存在
+  （`cargo check -p linkrs-wire` 在解析期即失败，与是否构建 GUI 无关）。
+
+现行方案（已落地）：
+
+- `crates/linkrs-gpui` 拥有自己的 `[workspace]`，不再是根 workspace 成员；
+  其 `[workspace.dependencies]` 镜像根 workspace 对应项的规格。
+- gpui-kit 改回本地 path 依赖（`../gpui-kit/crates/kit`）：从独立 workspace
+  看过去 submodule 在 workspace 目录之外，继承按 gpui-kit 自身 root 解析；
+  本地构建全程零 git 获取（`crates/linkrs-gpui/Cargo.lock` 中无 git 源）。
+- `../linkrs-client`、`../linkrs-wire` 同理落在 linkrs 根 workspace 内，
+  继承继续按根解析，不受影响。
+- 构建命令变为 `cargo build --manifest-path crates/linkrs-gpui/Cargo.toml`
+  （或在该目录内直接构建）；根 workspace 的 `cargo build/test --workspace`
+  不再覆盖 GUI，需在 CI 中单独加一步。
+- `crates/gpui-kit` submodule 保留，仍是唯一源码来源（`git submodule update
+  --init crates/gpui-kit` 仍是构建 GUI 的前置步骤）；工作树必须保持干净，
+  如需改框架能力先推 fork 再更新指针（§1.4 决策五不变）。
+- 本节 §9 中“git 依赖固定分支”“compograph 接口收敛”等条目中与接入方式
+  相关的表述以本节为准，其余风险项不变。

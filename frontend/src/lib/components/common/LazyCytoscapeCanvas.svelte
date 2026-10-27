@@ -23,7 +23,7 @@
 	<Canvas {data} {isDark} />
 {:else}
 	<div
-		class="h-full w-full flex items-center justify-center text-sm text-gray-400"
+		class="h-full w-full flex items-center justify-center text-sm text-muted"
 	>
 		<span class="animate-pulse">Loading graph…</span>
 	</div>

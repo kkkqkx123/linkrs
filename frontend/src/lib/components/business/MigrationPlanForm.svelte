@@ -40,7 +40,7 @@
 <section
 	class="ui-card shadow-sm p-6"
 >
-	<h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">
+	<h2 class="text-lg font-semibold text-ink mb-4">
 		{t('migration.plan')}
 	</h2>
 	<div class="grid md:grid-cols-4 gap-2 text-sm mb-3">
@@ -61,7 +61,7 @@
 			<input type="number" class={inputClass} bind:value={toVersion} />
 		</label>
 	</div>
-	<div class="flex flex-wrap items-center gap-4 text-xs text-gray-500 mb-3">
+	<div class="flex flex-wrap items-center gap-4 text-xs text-muted mb-3">
 		<label class="flex items-center gap-1">
 			<input type="checkbox" bind:checked={isEdge} />
 			{t('migration.isEdge')}

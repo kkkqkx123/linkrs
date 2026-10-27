@@ -21,8 +21,11 @@ members = [
     "crates/linkrs-client",
     "crates/linkrs-shell",
     "crates/linkrs-migration-cli",
-    "crates/linkrs-gpui",
 ]
+# NOTE: `crates/linkrs-gpui` is intentionally not a member (see its manifest):
+# nested-workspace inheritance plus a tree-sitter `links` conflict make a
+# single-workspace setup unresolvable. It builds as its own workspace from
+# local submodule checkouts, without any git fetching.
 
 [patch.crates-io]
 # The fork's only modified crate is the main one (configurable BM25 params,

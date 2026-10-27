@@ -450,6 +450,49 @@ pub struct SearchStatsResponse {
     pub cache: CacheSection,
     #[serde(default)]
     pub by_index: Vec<SearchIndexEntry>,
+    /// Vector engine queries and writes. Scalar-only deployments report zeros.
+    #[serde(default)]
+    pub vector: VectorSearchSection,
+    /// Text-to-vector embedding calls backing vector text queries.
+    #[serde(default)]
+    pub embedding: EmbeddingSection,
+    /// Post-recall rerank provider calls for vector text queries.
+    #[serde(default)]
+    pub rerank: RerankSection,
+}
+
+/// Vector engine search and write counters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VectorSearchSection {
+    pub total_queries: u64,
+    pub total_errors: u64,
+    pub total_latency_ms: u64,
+    pub avg_latency_ms: f64,
+    pub total_upserts: u64,
+    pub upsert_errors: u64,
+    pub total_deletes: u64,
+    pub delete_errors: u64,
+    pub disabled_skips: u64,
+}
+
+/// Text-to-vector embedding call counters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EmbeddingSection {
+    pub total_operations: u64,
+    pub total_errors: u64,
+    pub total_latency_ms: u64,
+    pub avg_latency_ms: f64,
+    pub prompt_tokens: u64,
+    pub total_tokens: u64,
+}
+
+/// Rerank provider call counters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RerankSection {
+    pub total_operations: u64,
+    pub total_errors: u64,
+    pub total_latency_ms: u64,
+    pub avg_latency_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

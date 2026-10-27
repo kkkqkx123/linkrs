@@ -15,9 +15,10 @@ use crate::storage::{
 };
 use linkrs_metrics::MetricType;
 use linkrs_wire::meta::{
-    CacheSection, DeleteSection, ExecutorSummaryEntry, IndexSection, LatencyPercentilesUs,
-    QueryPatternEntry, QueryProfileDetailResponse, QueryProfileExecutor, QueryStatsResponse,
-    SearchIndexEntry, SearchSection, SearchStatsResponse, SlowQueryInfo,
+    CacheSection, DeleteSection, EmbeddingSection, ExecutorSummaryEntry, IndexSection,
+    LatencyPercentilesUs, QueryPatternEntry, QueryProfileDetailResponse, QueryProfileExecutor,
+    QueryStatsResponse, RerankSection, SearchIndexEntry, SearchSection, SearchStatsResponse,
+    SlowQueryInfo, VectorSearchSection,
 };
 use linkrs_wire::query::QueryStageTimings;
 
@@ -285,6 +286,54 @@ pub async fn search<
     let cache_miss_count = stats_manager
         .get_value(MetricType::SearchCacheMissCount)
         .unwrap_or(0);
+    let vector_queries = stats_manager
+        .get_value(MetricType::VectorSearchOps)
+        .unwrap_or(0);
+    let vector_errors = stats_manager
+        .get_value(MetricType::VectorSearchErrors)
+        .unwrap_or(0);
+    let vector_latency_ms = stats_manager
+        .get_value(MetricType::VectorSearchLatencyMs)
+        .unwrap_or(0);
+    let vector_upserts = stats_manager
+        .get_value(MetricType::VectorUpsertOps)
+        .unwrap_or(0);
+    let vector_upsert_errors = stats_manager
+        .get_value(MetricType::VectorUpsertErrors)
+        .unwrap_or(0);
+    let vector_deletes = stats_manager
+        .get_value(MetricType::VectorDeleteOps)
+        .unwrap_or(0);
+    let vector_delete_errors = stats_manager
+        .get_value(MetricType::VectorDeleteErrors)
+        .unwrap_or(0);
+    let vector_disabled_skips = stats_manager
+        .get_value(MetricType::VectorDisabledSkips)
+        .unwrap_or(0);
+    let embedding_ops = stats_manager
+        .get_value(MetricType::VectorEmbeddingOps)
+        .unwrap_or(0);
+    let embedding_errors = stats_manager
+        .get_value(MetricType::VectorEmbeddingErrors)
+        .unwrap_or(0);
+    let embedding_latency_ms = stats_manager
+        .get_value(MetricType::VectorEmbeddingLatencyMs)
+        .unwrap_or(0);
+    let embedding_prompt_tokens = stats_manager
+        .get_value(MetricType::VectorEmbeddingPromptTokens)
+        .unwrap_or(0);
+    let embedding_total_tokens = stats_manager
+        .get_value(MetricType::VectorEmbeddingTotalTokens)
+        .unwrap_or(0);
+    let rerank_ops = stats_manager
+        .get_value(MetricType::VectorRerankOps)
+        .unwrap_or(0);
+    let rerank_errors = stats_manager
+        .get_value(MetricType::VectorRerankErrors)
+        .unwrap_or(0);
+    let rerank_latency_ms = stats_manager
+        .get_value(MetricType::VectorRerankLatencyMs)
+        .unwrap_or(0);
 
     let avg_search_latency_ms = if num_search_queries > 0 {
         search_latency_ms as f64 / num_search_queries as f64
@@ -300,6 +349,22 @@ pub async fn search<
 
     let avg_delete_latency_ms = if num_delete_operations > 0 {
         delete_latency_ms as f64 / num_delete_operations as f64
+    } else {
+        0.0
+    };
+
+    let avg_vector_latency_ms = if vector_queries > 0 {
+        vector_latency_ms as f64 / vector_queries as f64
+    } else {
+        0.0
+    };
+    let avg_embedding_latency_ms = if embedding_ops > 0 {
+        embedding_latency_ms as f64 / embedding_ops as f64
+    } else {
+        0.0
+    };
+    let avg_rerank_latency_ms = if rerank_ops > 0 {
+        rerank_latency_ms as f64 / rerank_ops as f64
     } else {
         0.0
     };
@@ -360,6 +425,31 @@ pub async fn search<
             hit_rate: cache_hit_rate,
         },
         by_index,
+        vector: VectorSearchSection {
+            total_queries: vector_queries,
+            total_errors: vector_errors,
+            total_latency_ms: vector_latency_ms,
+            avg_latency_ms: avg_vector_latency_ms,
+            total_upserts: vector_upserts,
+            upsert_errors: vector_upsert_errors,
+            total_deletes: vector_deletes,
+            delete_errors: vector_delete_errors,
+            disabled_skips: vector_disabled_skips,
+        },
+        embedding: EmbeddingSection {
+            total_operations: embedding_ops,
+            total_errors: embedding_errors,
+            total_latency_ms: embedding_latency_ms,
+            avg_latency_ms: avg_embedding_latency_ms,
+            prompt_tokens: embedding_prompt_tokens,
+            total_tokens: embedding_total_tokens,
+        },
+        rerank: RerankSection {
+            total_operations: rerank_ops,
+            total_errors: rerank_errors,
+            total_latency_ms: rerank_latency_ms,
+            avg_latency_ms: avg_rerank_latency_ms,
+        },
     }))
 }
 

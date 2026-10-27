@@ -14,7 +14,7 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex justify-end">
-	<div class="absolute inset-0 bg-black/20" role="presentation" onclick={onClose}></div>
+	<div class="absolute inset-0 bg-mask" role="presentation" onclick={onClose}></div>
 	<div
 		class="ui-drawer"
 		role="dialog"
@@ -22,9 +22,9 @@
 	>
 		<div
 			id="history-panel-title"
-			class="p-5 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between"
+			class="p-5 border-b border-line flex items-center justify-between"
 		>
-			<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">
+			<h3 class="text-base font-semibold text-ink">
 				{t('console.history')}
 			</h3>
 			<button
@@ -35,7 +35,7 @@
 		</div>
 		<div class="p-4">
 			{#if history.length === 0}
-				<p class="text-gray-400 dark:text-gray-500 text-sm text-center py-4">
+				<p class="text-muted text-sm text-center py-4">
 					{t('console.noResult')}
 				</p>
 			{:else}
@@ -50,11 +50,11 @@
 						}}
 						title={t('console.historyLoadHint')}
 					>
-						<p class="text-xs font-mono text-gray-700 dark:text-gray-300 truncate mb-1">
+						<p class="text-xs font-mono text-ink truncate mb-1">
 							{item.query}
 						</p>
-						<div class="flex items-center gap-2 text-xs text-gray-400">
-							<span class={item.success ? 'text-green-500' : 'text-red-500'}
+						<div class="flex items-center gap-2 text-xs text-muted">
+							<span class={item.success ? 'text-success' : 'text-error'}
 								>{item.success ? '✓' : '✗'}</span
 							>
 							<span>{item.executionTime}ms</span>
@@ -88,7 +88,7 @@
 								>
 							{/if}
 							{#if item.errorCode}
-								<span class="text-red-400">· {item.errorCode}</span>
+								<span class="text-error">· {item.errorCode}</span>
 							{/if}
 							{#if item.traceId}
 								<span class="font-mono" title={item.traceId}

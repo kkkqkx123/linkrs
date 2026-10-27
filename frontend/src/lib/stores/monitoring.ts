@@ -1,5 +1,9 @@
 import { writable, get } from 'svelte/store';
 import { statisticsService, type OverviewResponse } from '$services/statistics';
+import {
+	retrievalService,
+	type RetrievalSnapshot,
+} from '$services/retrieval';
 import { t } from '$i18n';
 import type {
 	DatabaseOverviewResponse,
@@ -19,6 +23,7 @@ export interface MonitoringSnapshots {
 	search: SearchStatsResponse | null;
 	transaction: Record<string, unknown> | null;
 	sync: Record<string, unknown> | null;
+	retrieval: RetrievalSnapshot | null;
 }
 
 interface MonitoringState {
@@ -37,6 +42,7 @@ const emptySnapshots = (): MonitoringSnapshots => ({
 	search: null,
 	transaction: null,
 	sync: null,
+	retrieval: null,
 });
 
 function createMonitoringStore() {
@@ -63,9 +69,18 @@ function createMonitoringStore() {
 			statisticsService.search(),
 			statisticsService.transactionMetrics(),
 			statisticsService.syncStatus(),
+			retrievalService.snapshot(),
 		]);
-		const [overview, system, database, queries, search, transaction, sync] =
-			settled;
+		const [
+			overview,
+			system,
+			database,
+			queries,
+			search,
+			transaction,
+			sync,
+			retrieval,
+		] = settled;
 		const errors = settled
 			.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
 			.map((r) =>
@@ -84,6 +99,7 @@ function createMonitoringStore() {
 				next.transaction = transaction.value as Record<string, unknown>;
 			if (sync.status === 'fulfilled')
 				next.sync = sync.value as Record<string, unknown>;
+			if (retrieval.status === 'fulfilled') next.retrieval = retrieval.value;
 			const failed = errors.length > 0;
 			return {
 				...s,

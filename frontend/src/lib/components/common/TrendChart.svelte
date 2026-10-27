@@ -118,7 +118,7 @@
 				onclick={() => toggle(s.key)}
 			>
 				<span class="w-3 h-2 rounded-sm inline-block" style="background: {s.color}"></span>
-				<span class="text-gray-600 dark:text-gray-300">{s.label}</span>
+				<span class="text-muted">{s.label}</span>
 			</button>
 		{/each}
 		{#if hoverReadout}
@@ -127,14 +127,14 @@
 					<span style="color: {r.color}">{r.label}: {formatNum(r.value)}</span>
 				{/each}
 				{#if xLabels.length > 0 && hoverIndex !== null}
-					<span class="text-gray-400">{xLabels[hoverIndex] ?? ''}</span>
+					<span class="text-muted">{xLabels[hoverIndex] ?? ''}</span>
 				{/if}
 			</span>
 		{/if}
 	</div>
 	<svg
 		viewBox="0 0 {width} {height}"
-		class="w-full bg-gray-50 dark:bg-gray-800/50 rounded"
+		class="w-full bg-secondary rounded"
 		style="height: {height}px"
 		preserveAspectRatio="none"
 		role="img"
@@ -157,7 +157,7 @@
 		{/if}
 	</svg>
 	{#if pointCount === 0}
-		<div class="text-xs text-gray-400 dark:text-gray-500 text-center py-4">
+		<div class="text-xs text-muted text-center py-4">
 			{t('monitoring.noData')}
 		</div>
 	{/if}

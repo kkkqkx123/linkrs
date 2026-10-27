@@ -11,7 +11,7 @@
 <div class="ui-page-head">
 	<svelte:element
 		this={tag}
-		class="ui-page-title text-base flex items-center gap-2 whitespace-nowrap"
+		class="ui-page-title flex items-center gap-2 whitespace-nowrap"
 	>
 		{title}
 	</svelte:element>

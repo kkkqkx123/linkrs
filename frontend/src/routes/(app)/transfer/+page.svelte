@@ -149,7 +149,7 @@
 				{t('transfer.file')}
 				<input
 					type="file"
-					class="text-xs text-gray-600 dark:text-gray-300"
+					class="text-xs text-muted"
 					onchange={(e) => {
 						files = e.currentTarget.files;
 					}}

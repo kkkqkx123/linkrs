@@ -6,7 +6,6 @@ At present, the project is in the development stage and there is no need to spec
 **Document Reference Rule**
 Prohibit the use of any plan identifiers (e.g., P1, P2-3, §4.1, phase3, G2, etc.) in code comments. Comments shall describe code intent only and shall not reference external temp plans.
 
-
 ## Language
 
 Always use English in code, comments, logging, error info. Use Chinese in docs
@@ -46,19 +45,6 @@ Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/linkrs-cli`, `cra
 - `tests/` - integration tests
 - `proto/` - gRPC protobuf definitions
 
-## Building and Running
-
-Prerequisites: rustc 1.97.1, cargo 1.97.1 (recent stable; 1.88-era pins are
-stale) for the whole workspace, including the native GPUI client (`linkrs-gpui`).
-gpui-kit (consumed from the `crates/gpui-kit` git submodule) pins `gpui-pre`
-0.3.10, which dropped the unstable `std::hint::cold_path` gate and uses the
-stabilized API (stable since Rust 1.95.0); the entire gpui-pre 0.3.10 family
-carries no `#![feature(...)]` gates, so the workspace builds on 1.97.1 stable.
-A root `rust-toolchain.toml` locks `1.97.1` to match. The `jitexpr` member inside the `crates/tantivy`
-sub-workspace pins cranelift 0.134.x, which needs this newer toolchain; the
-root workspace never resolves or benches it (patched dependency, feature off,
-root lock carries no cranelift entries), so root builds stay unaffected.
-
 ### Submodules
 
 `crates/gpui-kit` (along with `tantivy`, `simvec`, `llm-suite`) is a git
@@ -74,6 +60,13 @@ git submodule update --init --recursive
 than a crates.io/git dependency so the client can carry in-tree patches on top
 of upstream `gpui-kit`; treat it as the source of truth and keep the pinned
 commit updated.
+
+`crates/linkrs-gpui` is intentionally **not** a member of the root workspace:
+it is its own workspace consuming `../gpui-kit` via local path (nested-workspace
+inheritance plus a tree-sitter `links` conflict make a single-workspace setup
+unresolvable). Root `cargo build/test --workspace` does not cover it; build it
+with `cargo build --manifest-path crates/linkrs-gpui/Cargo.toml`. Local builds
+never fetch git. Details: `docs/archive/gpui-workspace-and-build.md`.
 
 SIMD note (Phase 0): `.cargo/config.toml` sets `-C target-cpu=x86-64-v3`
 (AVX2, Haswell+ 2013) for auto-vectorization. **A v3-built binary requires
@@ -99,6 +92,8 @@ cd frontend && npm run check                   # i18n catalogue + svelte-check
 cd frontend && npm run test                    # frontend unit tests
 cd frontend && npm run lint                    # eslint
 cd frontend && npm run build                   # static bundle
+
+cargo build --manifest-path crates/linkrs-gpui/Cargo.toml   # GUI client (own workspace, see above)
 ```
 
 Test organization: unit tests in same file (`#[cfg(test)]`), separate `test.rs` for large files, integration tests in `tests/`, benchmarks in `benches/`. Frontend pure functions are tested with `node:test` in `src/lib/utils/*.test.ts`.

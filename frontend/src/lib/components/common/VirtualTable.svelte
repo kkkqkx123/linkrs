@@ -66,7 +66,7 @@
 </script>
 
 <div
-	class="overflow-auto border border-gray-200 dark:border-gray-700 rounded"
+	class="overflow-auto border border-line rounded"
 	style="height: {height}px;"
 	bind:this={containerEl}
 	onscroll={onScroll}
@@ -79,14 +79,14 @@
 			{/each}
 		</colgroup>
 		<thead>
-			<tr class="bg-gray-50 dark:bg-gray-800/50">
+			<tr class="bg-secondary">
 				<th
-					class="px-3 py-2 text-left font-medium text-gray-400 border-b border-gray-200 dark:border-gray-700 whitespace-nowrap sticky top-0 bg-gray-50 dark:bg-gray-800 z-10"
+					class="px-3 py-2 text-left font-medium text-muted border-b border-line whitespace-nowrap sticky top-0 bg-secondary z-10"
 					>#</th
 				>
 				{#each columns as column (column)}
 					<th
-						class="sticky top-0 bg-[var(--color-bg)] z-10 overflow-hidden text-ellipsis"
+						class="sticky top-0 bg-page z-10 overflow-hidden text-ellipsis"
 						title={column}>{column}</th
 					>
 				{/each}
@@ -103,10 +103,10 @@
 			{/if}
 			{#each visible as entry (entry.index)}
 				<tr
-					class="even:bg-gray-50/50 dark:even:bg-gray-800/20"
+					class="even:bg-hover"
 					style="height: {rowHeight}px;"
 				>
-					<td class="text-gray-400 whitespace-nowrap overflow-hidden"
+					<td class="text-muted whitespace-nowrap overflow-hidden"
 						>{entry.index + 1}</td
 					>
 					{#each columns as column (column)}

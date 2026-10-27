@@ -62,14 +62,17 @@
 </script>
 
 <div
-	class="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-[#0B0F17] transition-colors duration-300"
+	class="min-h-screen flex items-center justify-center bg-page transition-colors duration-300"
 >
-	<div class="ui-card shadow-md p-10 w-full max-w-md transition-colors duration-300">
+	<div class="ui-card shadow-lg p-8 w-full max-w-[380px] transition-colors duration-300">
 		<h1
-			class="text-3xl font-bold text-center text-gray-800 dark:text-gray-100 mb-8"
+			class="text-xl font-bold text-center text-ink mb-1.5"
 		>
 			{t('app.title')}
 		</h1>
+		<p class="text-xs text-center text-muted mb-8">
+			Linkrs Studio
+		</p>
 		<form onsubmit={handleSubmit}>
 			{#if errorMsg}
 				<div
@@ -80,7 +83,7 @@
 			{/if}
 			<div class="mb-5">
 				<label
-					class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5"
+					class="block text-sm font-medium text-ink mb-1.5"
 					for="username">{t('common.username')}</label
 				>
 				<input
@@ -94,7 +97,7 @@
 			</div>
 			<div class="mb-5">
 				<label
-					class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5"
+					class="block text-sm font-medium text-ink mb-1.5"
 					for="password">{t('common.password')}</label
 				>
 				<input
@@ -108,12 +111,12 @@
 			</div>
 			<div class="mb-6">
 				<label
-					class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400"
+					class="flex items-center gap-2 text-sm text-muted"
 				>
 					<input
 						type="checkbox"
 						bind:checked={rememberMe}
-						class="rounded dark:bg-gray-700"
+						class="rounded bg-surface"
 					/>
 					{t('common.rememberMe')}
 				</label>
@@ -127,17 +130,17 @@
 			</button>
 		</form>
 		<div
-			class="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700/50 text-xs text-gray-500 dark:text-gray-400"
+			class="mt-6 pt-4 border-t border-line text-xs text-muted"
 		>
 			<div class="flex items-center justify-between mb-1">
 				<span>{t('common.healthCheck')}</span>
 				{#if serverUnreachable}
-					<span class="text-red-500">{t('common.disconnected')}</span>
+					<span class="text-error">{t('common.disconnected')}</span>
 				{:else if serverStatus}
 					<span
 						class={serverStatus === 'healthy'
-							? 'text-green-600 dark:text-green-400'
-							: 'text-yellow-600 dark:text-yellow-400'}
+							? 'text-success'
+							: 'text-warning'}
 					>
 						{serverStatus === 'healthy'
 							? t('common.healthy')
@@ -150,13 +153,13 @@
 			{#if serverService || serverVersion}
 				<div class="flex items-center justify-between">
 					<span>{t('common.service')}</span>
-					<span class="font-mono text-gray-700 dark:text-gray-300"
+					<span class="font-mono text-ink"
 						>{serverService ?? '—'}</span
 					>
 				</div>
 				<div class="flex items-center justify-between">
 					<span>{t('common.version')}</span>
-					<span class="font-mono text-gray-700 dark:text-gray-300"
+					<span class="font-mono text-ink"
 						>{serverVersion ?? '—'}</span
 					>
 				</div>

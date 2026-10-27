@@ -5,6 +5,7 @@ import type {
 	FilterGroup,
 	Statistics,
 	DataBrowserState,
+	DataBrowserTab,
 } from '$types/dataBrowser';
 
 const initialState: DataBrowserState = {
@@ -36,7 +37,7 @@ function createDataBrowserStore() {
 
 	return {
 		subscribe,
-		setActiveTab: (tab: 'vertices' | 'edges') =>
+		setActiveTab: (tab: DataBrowserTab) =>
 			update((s) => ({ ...s, activeTab: tab })),
 		setSelectedTag: (tag: string | null) =>
 			update((s) => ({

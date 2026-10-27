@@ -48,6 +48,10 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
+	<div class="ui-alert ui-alert-info text-sm">
+		{t('vector.movedNotice')}
+		<a class="ui-link ml-1" href="/data-browser">{t('sidebar.dataBrowser')}</a>
+	</div>
 	<PageHeader title={t('sidebar.vector')}>
 		<button
 			class="ui-btn ui-btn-primary ui-btn-sm"

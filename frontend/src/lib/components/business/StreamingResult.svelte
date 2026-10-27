@@ -118,14 +118,14 @@
 		<div
 			class="ui-alert ui-alert-error mb-3"
 		>
-			<p class="text-red-700 dark:text-red-400 font-medium text-sm">
+			<p class="text-error font-medium text-sm">
 				{card.error.code}
 			</p>
-			<p class="text-red-600 dark:text-red-300 text-sm mt-1">
+			<p class="text-error text-sm mt-1">
 				{card.error.message}
 			</p>
 			{#if card.error.code === 'ROW_LIMIT_EXCEEDED'}
-				<p class="text-amber-600 dark:text-amber-400 text-xs mt-1">
+				<p class="text-warning text-xs mt-1">
 					{t('console.rowLimitHint')}
 				</p>
 			{/if}
@@ -150,7 +150,7 @@
 			</div>
 		{:else}
 			{#if card.receivedCount > STREAM_JSON_PREVIEW_LIMIT}
-				<p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+				<p class="mb-2 text-xs text-muted">
 					{t('console.streamJsonTruncated', {
 						shown: STREAM_JSON_PREVIEW_LIMIT,
 						total: card.receivedCount,
@@ -170,7 +170,7 @@
 			rowCount: card.receivedCount,
 		})}
 		{#if graph.nodes.length > 0 || graph.edges.length > 0}
-			<div class="flex flex-col gap-2 text-sm text-gray-600 dark:text-gray-300">
+			<div class="flex flex-col gap-2 text-sm text-muted">
 				<GraphPreviewControls
 					{graph}
 					{previewActive}
@@ -179,7 +179,7 @@
 				/>
 				{#if previewActive}
 					<div
-						class="h-80 rounded border border-gray-200 dark:border-gray-700 relative overflow-hidden"
+						class="h-80 rounded border border-line relative overflow-hidden"
 					>
 						<LazyCytoscapeCanvas data={graph} {isDark} />
 					</div>
@@ -199,12 +199,12 @@
 >
 	<span
 		class="inline-block w-2 h-2 rounded-full {stream.status === 'failed'
-			? 'bg-red-500'
+			? 'bg-error'
 			: stream.status === 'cancelled'
-				? 'bg-amber-500'
+				? 'bg-warning'
 				: stream.status === 'completed'
-					? 'bg-green-500'
-					: 'bg-blue-500 animate-pulse'}"
+					? 'bg-success'
+					: 'bg-info animate-pulse'}"
 	></span>
 	<span>{t(statusKey)}</span>
 	<span>|</span>
@@ -244,7 +244,7 @@
 	</div>
 	{#if !stream.batch && stream.cards.length === 1}
 		{@const only = stream.cards[0]}
-		<div class="h-4 w-px bg-gray-300 dark:bg-gray-600"></div>
+		<div class="h-4 w-px bg-line"></div>
 		<button
 			class="ui-link text-xs"
 			title={t('console.serverExportHint')}
@@ -263,7 +263,7 @@
 		<div
 			class="ui-alert ui-alert-error mb-3 flex items-start gap-2"
 		>
-			<p class="flex-1 text-red-600 dark:text-red-300 text-sm">{exportError}</p>
+			<p class="flex-1 text-error text-sm">{exportError}</p>
 			<button
 				class="ui-link-danger text-sm"
 				onclick={() => {
@@ -277,10 +277,10 @@
 		<div
 			class="ui-alert ui-alert-error mb-3"
 		>
-			<p class="text-red-700 dark:text-red-400 font-medium text-sm">
+			<p class="text-error font-medium text-sm">
 				{stream.error.code}
 			</p>
-			<p class="text-red-600 dark:text-red-300 text-sm mt-1">
+			<p class="text-error text-sm mt-1">
 				{stream.error.message}
 			</p>
 		</div>
@@ -289,19 +289,19 @@
 		<div class="flex flex-col gap-3">
 			{#each stream.cards as card (card.index)}
 				<div
-					class="border border-gray-200 dark:border-gray-700 rounded overflow-hidden"
+					class="border border-line rounded overflow-hidden"
 				>
 					<div
-						class="px-3 py-2 bg-gray-50 dark:bg-gray-800/50 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400"
+						class="px-3 py-2 bg-secondary flex items-center gap-2 text-xs text-muted"
 					>
 						<span
 							class={card.status === 'failed'
-								? 'text-red-500'
+								? 'text-error'
 								: card.status === 'cancelled'
-									? 'text-amber-500'
+									? 'text-warning'
 									: card.status === 'completed'
-										? 'text-green-500'
-										: 'text-blue-500'}
+										? 'text-success'
+										: 'text-info'}
 							>{card.status === 'failed'
 								? '✗'
 								: card.status === 'completed'
@@ -310,9 +310,9 @@
 										? '⊘'
 										: '…'}</span
 						>
-						<span class="text-gray-400">#{card.index + 1}</span>
+						<span class="text-muted">#{card.index + 1}</span>
 						<span
-							class="font-mono truncate flex-1 text-gray-700 dark:text-gray-300"
+							class="font-mono truncate flex-1 text-ink"
 							>{card.query}</span
 						>
 						<span>{t(cardStatusKey(card.status))}</span>

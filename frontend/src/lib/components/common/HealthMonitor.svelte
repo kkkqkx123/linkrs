@@ -82,18 +82,18 @@
 
 <div class="relative" bind:this={panelEl}>
 	<button
-		class="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors cursor-pointer text-sm"
+		class="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-hover transition-colors cursor-pointer text-sm"
 		onclick={togglePanel}
 		title={t('common.healthCheck')}
 	>
 		<span
 			class="inline-block w-2 h-2 rounded-full {isChecking
-				? 'bg-yellow-400 animate-pulse'
+				? 'bg-warning animate-pulse'
 				: isConnected
-					? 'bg-green-500'
-					: 'bg-red-500'}"
+					? 'bg-success'
+					: 'bg-error'}"
 		></span>
-		<span class="hidden sm:inline text-gray-500 dark:text-gray-400">
+		<span class="hidden sm:inline text-muted">
 			{isChecking
 				? t('common.loading')
 				: isConnected
@@ -108,7 +108,7 @@
 		>
 			<div class="p-4">
 				<div class="flex items-center justify-between mb-3">
-					<h3 class="font-semibold text-gray-800 dark:text-gray-100 text-sm">
+					<h3 class="font-semibold text-ink text-sm">
 						{t('common.healthCheck')}
 					</h3>
 					<button
@@ -122,19 +122,19 @@
 
 				<div class="space-y-2 text-sm">
 					<div class="flex justify-between items-center">
-						<span class="text-gray-500 dark:text-gray-400"
+						<span class="text-muted"
 							>{t('common.status')}</span
 						>
 						<span class="flex items-center gap-1.5">
 							<span
 								class="inline-block w-1.5 h-1.5 rounded-full {isConnected
-									? 'bg-green-500'
-									: 'bg-red-500'}"
+									? 'bg-success'
+									: 'bg-error'}"
 							></span>
 							<span
 								class="{isConnected
-									? 'text-green-600 dark:text-green-400'
-									: 'text-red-600 dark:text-red-400'} font-medium"
+									? 'text-success'
+									: 'text-error'} font-medium"
 							>
 								{isConnected ? t('common.connected') : t('common.disconnected')}
 							</span>
@@ -143,29 +143,29 @@
 
 					{#if healthData}
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('common.service')}</span
 							>
-							<span class="text-gray-800 dark:text-gray-200 font-mono"
+							<span class="text-ink font-mono"
 								>{healthData.service}</span
 							>
 						</div>
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('common.version')}</span
 							>
-							<span class="text-gray-800 dark:text-gray-200 font-mono"
+							<span class="text-ink font-mono"
 								>{healthData.version}</span
 							>
 						</div>
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('common.healthStatus')}</span
 							>
 							<span
 								class="font-medium {healthData.status === 'healthy'
-									? 'text-green-600 dark:text-green-400'
-									: 'text-yellow-600 dark:text-yellow-400'}"
+									? 'text-success'
+									: 'text-warning'}"
 							>
 								{healthData.status === 'healthy'
 									? t('common.healthy')
@@ -176,15 +176,15 @@
 
 					{#if latency !== null}
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('common.latency')}</span
 							>
 							<span
-								class="text-gray-800 dark:text-gray-200 font-mono {latency >
+								class="text-ink font-mono {latency >
 								1000
-									? 'text-yellow-600 dark:text-yellow-400'
+									? 'text-warning'
 									: latency > 500
-										? 'text-orange-600 dark:text-orange-400'
+										? 'text-warning'
 										: ''}"
 							>
 								{latency}ms
@@ -194,30 +194,30 @@
 
 					{#if systemData}
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('common.processMemory')}</span
 							>
-							<span class="text-gray-800 dark:text-gray-200 font-mono">
+							<span class="text-ink font-mono">
 								{systemData.process_memory_bytes != null
 									? formatBytes(systemData.process_memory_bytes)
 									: '—'}
 							</span>
 						</div>
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('common.diskUsage')}</span
 							>
-							<span class="text-gray-800 dark:text-gray-200 font-mono">
+							<span class="text-ink font-mono">
 								{systemData.data_dir_size_bytes != null
 									? formatBytes(systemData.data_dir_size_bytes)
 									: '—'}
 							</span>
 						</div>
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('common.activeConnections')}</span
 							>
-							<span class="text-gray-800 dark:text-gray-200 font-mono">
+							<span class="text-ink font-mono">
 								{systemData.connections?.active ?? '—'}
 							</span>
 						</div>
@@ -225,10 +225,10 @@
 
 					{#if lastCheckTime}
 						<div class="flex justify-between">
-							<span class="text-gray-500 dark:text-gray-400"
+							<span class="text-muted"
 								>{t('common.lastCheck')}</span
 							>
-							<span class="text-gray-500 dark:text-gray-400 text-xs"
+							<span class="text-muted text-xs"
 								>{lastCheckTime}</span
 							>
 						</div>

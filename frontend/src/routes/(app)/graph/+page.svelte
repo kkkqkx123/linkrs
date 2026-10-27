@@ -361,7 +361,7 @@
 			{t('graph.title')}
 			{#if graphData}
 				<span
-					class="hidden lg:inline text-xs font-normal text-gray-500 dark:text-gray-400"
+					class="hidden lg:inline text-xs font-normal text-muted"
 					>{t('graphPreview.summary', {
 						nodes: graphData.nodes.length,
 						edges: graphData.edges.length,
@@ -369,7 +369,7 @@
 				>
 			{/if}
 			{#if isExpanding}
-				<span class="text-xs font-normal text-blue-500 dark:text-blue-400"
+				<span class="text-xs font-normal text-info"
 					>Expanding…</span
 				>
 			{/if}
@@ -425,7 +425,7 @@
 						class="absolute right-0 top-full mt-1 z-20 min-w-32 ui-card shadow-md py-1"
 					>
 						<button
-							class="w-full text-left px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer whitespace-nowrap"
+							class="w-full text-left px-3 py-1.5 text-sm text-ink hover:bg-hover cursor-pointer whitespace-nowrap"
 							onclick={() => {
 								exportOpen = false;
 								handleExportPng();
@@ -434,7 +434,7 @@
 							PNG
 						</button>
 						<button
-							class="w-full text-left px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer whitespace-nowrap"
+							class="w-full text-left px-3 py-1.5 text-sm text-ink hover:bg-hover cursor-pointer whitespace-nowrap"
 							onclick={() => {
 								exportOpen = false;
 								handleExportJson();
@@ -498,7 +498,7 @@
 			class="ui-card shadow-sm px-6 py-4 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
 		>
 			<div>
-				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-ink mb-2">
 					{t('graph.filterTags')}
 				</h2>
 				<div class="flex flex-wrap gap-2">
@@ -513,7 +513,7 @@
 				</div>
 			</div>
 			<div>
-				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-ink mb-2">
 					{t('graph.filterEdgeTypes')}
 				</h2>
 				<div class="flex flex-wrap gap-2">
@@ -531,7 +531,7 @@
 			</div>
 			<div class="col-span-2 flex items-center gap-3">
 				<label
-					class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer"
+					class="flex items-center gap-2 text-sm text-ink cursor-pointer"
 				>
 					<input
 						type="checkbox"
@@ -544,11 +544,11 @@
 					/>
 					{t('graph.simplifiedMode')}
 				</label>
-				<span class="text-xs text-gray-400"
+				<span class="text-xs text-muted"
 					>{t('graph.simplifiedModeHint')}</span
 				>
 				<button
-					class="ml-auto px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 cursor-pointer"
+					class="ml-auto px-3 py-1 text-xs text-muted hover:text-ink cursor-pointer"
 					onclick={() => graphStore.clearFilters()}
 				>
 					{t('graph.clearFilters')}
@@ -562,7 +562,7 @@
 			class="ui-card shadow-sm px-6 py-4 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
 		>
 			<div>
-				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-ink mb-2">
 					{t('graph.nodes')}
 				</h2>
 				{#each Object.entries(nodeStyles) as [tag, style] (tag)}
@@ -576,7 +576,7 @@
 								})}
 							class="w-8 h-6 cursor-pointer"
 						/>
-						<span class="text-gray-700 dark:text-gray-300 font-mono text-xs"
+						<span class="text-ink font-mono text-xs"
 							>{tag}</span
 						>
 						<select
@@ -596,7 +596,7 @@
 				{/each}
 			</div>
 			<div>
-				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-ink mb-2">
 					{t('graph.edges')}
 				</h2>
 				{#each Object.entries(edgeStyles) as [type, style] (type)}
@@ -610,7 +610,7 @@
 								})}
 							class="w-8 h-6 cursor-pointer"
 						/>
-						<span class="text-gray-700 dark:text-gray-300 font-mono text-xs"
+						<span class="text-ink font-mono text-xs"
 							>{type}</span
 						>
 						<select
@@ -630,14 +630,14 @@
 				{/each}
 			</div>
 			<div
-				class="col-span-2 border-t border-gray-200 dark:border-gray-700 pt-3 mt-2"
+				class="col-span-2 border-t border-line pt-3 mt-2"
 			>
-				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-ink mb-2">
 					{t('graph.layoutLabel')}
 				</h2>
 				<div class="grid grid-cols-3 gap-3">
 					<label
-						class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400"
+						class="flex flex-col gap-1 text-xs text-muted"
 					>
 						{t('graph.nodeRepulsion')}
 						<input
@@ -651,7 +651,7 @@
 						/>
 					</label>
 					<label
-						class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400"
+						class="flex flex-col gap-1 text-xs text-muted"
 					>
 						{t('graph.gravity')}
 						<input
@@ -666,7 +666,7 @@
 						/>
 					</label>
 					<label
-						class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400"
+						class="flex flex-col gap-1 text-xs text-muted"
 					>
 						{t('graph.numIter')}
 						<input
@@ -702,7 +702,7 @@
 					onZoom={(z) => graphStore.setZoom(z)}
 				/>
 				<div
-					class="absolute bottom-2 right-2 text-xs text-gray-400 dark:text-gray-500 bg-white/80 dark:bg-[#1C2333]/80 px-2 py-1 rounded"
+					class="absolute bottom-2 right-2 text-xs text-muted bg-surface/80 px-2 py-1 rounded"
 				>
 					Layout: {layoutDuration.toFixed(0)}ms | Sync: {syncDuration.toFixed(
 						0,
@@ -710,7 +710,7 @@
 				</div>
 			{:else if initError}
 				<div class="absolute inset-0 flex items-center justify-center">
-					<div class="text-center text-red-500 dark:text-red-400">
+					<div class="text-center text-error">
 						<p class="text-4xl mb-3">⚠️</p>
 						<p class="font-medium">{t('graph.initError')}</p>
 						<p class="text-sm mt-1">{initError}</p>
@@ -718,7 +718,7 @@
 				</div>
 			{:else}
 				<div class="absolute inset-0 flex items-center justify-center">
-					<div class="text-center text-gray-400 dark:text-gray-500">
+					<div class="text-center text-muted">
 						<p class="text-4xl mb-3">🔗</p>
 						<p class="font-medium">{t('graph.noData')}</p>
 						<p class="text-sm mt-1">{t('graph.noDataHint')}</p>
@@ -729,10 +729,10 @@
 
 		{#if detailPanelVisible && detailData}
 			<div
-				class="w-80 border-l border-gray-200 dark:border-gray-700 p-5 overflow-y-auto flex-shrink-0"
+				class="w-80 border-l border-line p-5 overflow-y-auto flex-shrink-0"
 			>
 				<div class="flex items-center justify-between mb-4">
-					<h2 class="text-base font-semibold text-gray-800 dark:text-gray-100">
+					<h2 class="text-base font-semibold text-ink">
 						{detailType === 'node'
 							? t('graph.selectNode')
 							: t('graph.selectEdge')} Detail
@@ -746,11 +746,11 @@
 						{#if key !== 'properties'}
 							<div class="text-sm">
 								<span
-									class="text-gray-500 dark:text-gray-400 block text-xs uppercase tracking-wide"
+									class="text-muted block text-xs uppercase tracking-wide"
 									>{key}</span
 								>
 								<span
-									class="text-gray-800 dark:text-gray-200 font-mono text-xs break-all"
+									class="text-ink font-mono text-xs break-all"
 									>{String(value)}</span
 								>
 							</div>
@@ -758,20 +758,20 @@
 					{/each}
 					{#if detailData.properties && Object.keys(detailData.properties).length > 0}
 						<div
-							class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700"
+							class="mt-4 pt-4 border-t border-line"
 						>
 							<h3
-								class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+								class="text-sm font-medium text-ink mb-2"
 							>
 								{t('common.properties')}
 							</h3>
 							{#each Object.entries(detailData.properties) as [k, v] (k)}
 								<div class="text-sm mb-2">
-									<span class="text-gray-500 dark:text-gray-400 block text-xs"
+									<span class="text-muted block text-xs"
 										>{k}</span
 									>
 									<span
-										class="text-gray-800 dark:text-gray-200 font-mono text-xs break-all"
+										class="text-ink font-mono text-xs break-all"
 										>{typeof v === 'object'
 											? JSON.stringify(v)
 											: String(v)}</span
@@ -782,7 +782,7 @@
 					{/if}
 					{#if detailType === 'node' && failedNodes.has(detailData.id)}
 						<div
-							class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700"
+							class="mt-4 pt-4 border-t border-line"
 						>
 							<button
 								class="w-full ui-btn ui-btn-ghost"

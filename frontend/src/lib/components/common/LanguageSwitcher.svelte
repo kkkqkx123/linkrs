@@ -24,8 +24,8 @@
 			aria-pressed={current === code}
 			class="px-2 py-0.5 rounded cursor-pointer transition-colors {current ===
 			code
-				? 'bg-blue-100 text-blue-600 font-medium'
-				: 'text-gray-500 hover:text-gray-700'}"
+				? 'bg-info-light text-info font-medium'
+				: 'text-muted hover:text-ink'}"
 			// Switching the locale reloads the document, which is what re-renders
 			// every message in the active language.
 			onclick={() => setLocale(code)}

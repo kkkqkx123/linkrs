@@ -1,49 +1,147 @@
 @import 'tailwindcss';
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Type scale: base 15px for comfortable Chinese reading; text-xs is 14px
-   so secondary text stays legible. One definition here applies to every text-xs usage. */
+/* Design tokens aligned with the ZLMediaKit admin theme (TDesign-derived
+   values, brand green kept as the primary color). Colors live in @theme so
+   Tailwind generates semantic utilities (bg-brand, text-info, bg-error-light)
+   from this single set of values; .dark below overrides the same variables.
+   Spacing follows the TDesign size ladder (2..72px). */
 @theme {
-	--text-xs: 0.875rem;
-	--text-xs--line-height: 1.5;
+	/* Type scale: text-xs is the 12/20 caption tier; base body text is 14/22
+	   (see --font-size-base) and titles are 16/24. */
+	--text-xs: 0.75rem;
+	--text-xs--line-height: 1.25rem;
+
+	/* Brand + semantic colors (TDesign palette, green brand) */
+	--color-primary: #299c68;
+	--color-primary-hover: #238757;
+	--color-primary-light: #e8f5ee;
+	--color-info: #0052d9;
+	--color-info-light: #ecf2fe;
+	--color-success: #2ba471;
+	--color-success-light: #eaf7f0;
+	--color-warning: #e37318;
+	--color-warning-light: #fff4e3;
+	--color-warning-text: #9b5a0c;
+	--color-error: #d54941;
+	--color-error-light: #fff0f0;
+	--color-error-text: #b13838;
+	/* Category accent (not a semantic state): ER legend and rolled-back
+	   migration rows, kept distinct from the info blue */
+	--color-alt: #7c3aed;
+	--color-alt-light: #f5f0ff;
+
+	/* Surfaces and text */
+	--color-bg: #f4f6f8;
+	--color-bg-white: #ffffff;
+	--color-bg-secondary: #f3f3f3;
+	--color-bg-hover: #f3f3f3;
+	--color-text: rgba(0, 0, 0, 0.9);
+	--color-text-secondary: rgba(0, 0, 0, 0.6);
+	--color-text-placeholder: rgba(0, 0, 0, 0.4);
+	--color-border: #ddd;
+	--color-border-light: #e8e8e8;
+
+	/* Dark navigation rail (shared by light and dark themes) */
+	--color-nav: #26343d;
+	--color-nav-text: #d9e2e6;
+	--color-nav-muted: #94a5ae;
+	--color-nav-hover: #3a4b57;
+	--color-nav-border: #3a4a54;
+	--color-nav-card: #31434e;
+	--color-nav-card-border: #47606b;
+	--color-nav-accent: #5bc28e;
+	--color-nav-brand: #ffffff;
+
+	/* Modal / drawer scrim */
+	--color-mask: rgba(0, 0, 0, 0.2);
+}
+
+/* Short aliases so utilities read semantically: text-ink / text-muted /
+   text-faint, bg-page / bg-surface / bg-secondary / bg-hover,
+   border-line / border-edge. Declared inline so the generated utilities
+   resolve the var() in each element's own scope and follow .dark overrides. */
+@theme inline {
+	--color-ink: var(--color-text);
+	--color-muted: var(--color-text-secondary);
+	--color-faint: var(--color-text-placeholder);
+	--color-page: var(--color-bg);
+	--color-surface: var(--color-bg-white);
+	--color-secondary: var(--color-bg-secondary);
+	--color-hover: var(--color-bg-hover);
+	--color-line: var(--color-border-light);
+	--color-edge: var(--color-border);
 }
 
 :root {
-	--color-primary: #345eda;
-	--color-primary-hover: #2b4fc7;
-	--color-primary-light: #e8edfc;
-	--color-success: #52c41a;
-	--color-warning: #faad14;
-	--color-error: #f5222d;
-	--color-bg: #f5f5f5;
-	--color-bg-white: #ffffff;
-	--color-text: #333333;
-	--color-text-secondary: #666666;
-	--color-border: #c9cfda;
-	--color-border-light: #e4e7ee;
-	--radius-sm: 4px;
+	/* Spacing ladder */
+	--size-1: 2px;
+	--size-2: 4px;
+	--size-3: 6px;
+	--size-4: 8px;
+	--size-5: 12px;
+	--size-6: 16px;
+	--size-7: 20px;
+	--size-8: 24px;
+	--size-9: 28px;
+	--size-10: 32px;
+
+	/* Radii: TDesign 2/3/6/12px ladder */
+	--radius-xs: 2px;
+	--radius-sm: 3px;
 	--radius-md: 6px;
-	--radius-lg: 8px;
-	--radius-card: 8px;
-	--font-size-base: 15px;
-	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+	--radius-lg: 6px;
+	--radius-card: 6px;
+	--radius-xl: 12px;
+
+	/* Type scale: 16/24 titles, 14/22 body, 12/20 captions */
+	--font-size-base: 14px;
+	--font-size-title: 16px;
+	--font-size-headline: 24px;
+	--line-height-body: 22px;
+	--line-height-title: 24px;
+
+	/* Component metrics */
+	--comp-height: 32px;
+	--comp-height-sm: 20px;
+	--comp-height-top: 58px;
+	--nav-width: 220px;
+
+	--shadow-sm: 0 1px 10px rgba(0, 0, 0, 0.05), 0 4px 5px rgba(0, 0, 0, 0.08);
 	--shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
-	--shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
+	--shadow-lg: 0 6px 30px 5px rgba(0, 0, 0, 0.05), 0 16px 24px 2px rgba(0, 0, 0, 0.04),
+		0 8px 10px -5px rgba(0, 0, 0, 0.08);
 }
 
 .dark {
-	--color-primary: #5b7ef0;
-	--color-primary-hover: #7a96f3;
-	--color-primary-light: #1e2a4a;
+	--color-primary: #34b37a;
+	--color-primary-hover: #4cc08d;
+	--color-primary-light: #1d3a2c;
+	--color-info: #6b93f0;
+	--color-info-light: #1a2a4d;
+	--color-success: #3cba85;
+	--color-success-light: #16302a;
+	--color-warning: #ef8c3f;
+	--color-warning-light: #3d2a14;
+	--color-warning-text: #f0b26a;
+	--color-error: #e06059;
+	--color-error-light: #3d1d1b;
+	--color-error-text: #ef9d98;
+	--color-alt: #a78bfa;
+	--color-alt-light: #2e2450;
 	--color-bg: #0b0f17;
 	--color-bg-white: #1c2333;
+	--color-bg-secondary: #232b3f;
+	--color-bg-hover: #232b3f;
 	--color-text: #e5e7eb;
 	--color-text-secondary: #9ca3af;
+	--color-text-placeholder: #6b7280;
 	--color-border: #454f63;
 	--color-border-light: #2d3748;
-	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+	--color-mask: rgba(0, 0, 0, 0.5);
+	--shadow-sm: 0 1px 10px rgba(0, 0, 0, 0.3), 0 4px 5px rgba(0, 0, 0, 0.3);
 	--shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
-	--shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
+	--shadow-lg: 0 6px 30px 5px rgba(0, 0, 0, 0.4), 0 16px 24px 2px rgba(0, 0, 0, 0.35);
 }
 
 /* Tailwind v4 preflight already resets margins, paddings and box-sizing.
@@ -53,13 +151,15 @@
 
 @layer base {
 	body {
+		/* CJK fallback chain aligned with the reference admin theme */
 		font-family:
-			-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+			-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC',
+			'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC', 'Helvetica Neue',
 			Arial, sans-serif;
-		font-size: 15px;
+		font-size: var(--font-size-base);
 		color: var(--color-text);
 		background: var(--color-bg);
-		line-height: 1.5;
+		line-height: var(--line-height-body);
 		-webkit-font-smoothing: antialiased;
 		transition:
 			background-color 0.3s ease,
@@ -99,8 +199,8 @@
 	}
 
 	/* Base form controls: unmigrated pages inherit the unified look.
-	   Keep padding/border here minimal; .ui-input in components and
-	   spacing utilities both override this. */
+	   Metrics follow the reference theme: 32px min height, 8/12px padding,
+	   3px radius, green focus ring. */
 	input[type='text'],
 	input[type='password'],
 	input[type='number'],
@@ -113,16 +213,16 @@
 		color: var(--color-text);
 		background: var(--color-bg-white);
 		border: 1px solid var(--color-border);
-		padding: 0.625rem 0.875rem;
-		border-radius: var(--radius-md);
+		padding: var(--size-4) var(--size-5);
+		border-radius: var(--radius-sm);
+		min-height: var(--comp-height);
 	}
 	input:focus-visible,
 	select:focus-visible,
 	textarea:focus-visible {
 		outline: none;
 		border-color: var(--color-primary);
-		box-shadow: 0 0 0 2px
-			color-mix(in srgb, var(--color-primary) 18%, transparent);
+		box-shadow: 0 0 0 2px rgba(41, 156, 104, 0.2);
 	}
 
 	button {
@@ -142,16 +242,34 @@
    (p-6, px-6 py-4, ...) keep overriding them as authors expect. */
 
 @layer components {
-	/* Card: shared container with 1px border and unified radius.
-	   Shadow is controlled by shadow-* utilities.
-	   Default padding 1.5rem matches p-6 so a bare ui-card never hugs edges.
+	/* Card: shared container with 1px border and unified radius (6px, as the
+	   reference theme). Shadow is controlled by shadow-* utilities.
+	   Default padding 1.25rem matches the reference card body (20px).
 	   Structural cards that need bleeding headers/tables/canvas use
 	   ui-card-flush and provide their own inner spacing. */
 	.ui-card {
 		background: var(--color-bg-white);
-		border: 1px solid var(--color-border);
+		border: 1px solid var(--color-border-light);
 		border-radius: var(--radius-card);
-		padding: 1.5rem;
+		padding: var(--size-7);
+	}
+
+	/* Card head: 16/24 title row with bottom divider, as the reference
+	   card-head (title left, actions right, 16px vertical padding). */
+	.ui-card-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: var(--size-3);
+		min-height: 52px;
+		padding: var(--size-6) var(--size-7);
+		border-bottom: 1px solid var(--color-border-light);
+		font-size: var(--font-size-title);
+		line-height: var(--line-height-title);
+		font-weight: 600;
+	}
+	.ui-card-head + * {
+		padding-top: var(--size-2);
 	}
 
 	/* Structural card: edge-to-edge tab bars, tables, canvas and result
@@ -160,30 +278,32 @@
 		padding: 0;
 	}
 
-	/* Form input: unified height, type size, border and focus ring */
+	/* Form input: unified height, type size, border and focus ring.
+	   Metrics follow the reference theme: 32px min height, 8/12px padding,
+	   3px radius, green focus ring. */
 	.ui-input {
 		width: 100%;
-		padding: 0.625rem 0.875rem;
+		padding: var(--size-4) var(--size-5);
+		min-height: var(--comp-height);
 		font-size: var(--font-size-base);
 		color: var(--color-text);
 		background: var(--color-bg-white);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
+		border-radius: var(--radius-sm);
 		transition:
-			border-color 0.2s ease,
-			box-shadow 0.2s ease;
+			border-color 0.15s ease,
+			box-shadow 0.15s ease;
 	}
 	.ui-input::placeholder {
-		color: var(--color-text-secondary);
-		opacity: 0.7;
+		color: var(--color-text-placeholder);
 	}
 	.ui-input:focus {
 		outline: none;
 		border-color: var(--color-primary);
-		box-shadow: 0 0 0 3px
-			color-mix(in srgb, var(--color-primary) 18%, transparent);
+		box-shadow: 0 0 0 2px rgba(41, 156, 104, 0.2);
 	}
 	.ui-input:disabled {
+		background: var(--color-bg-secondary);
 		opacity: 0.6;
 		cursor: not-allowed;
 	}
@@ -201,52 +321,70 @@
 		border-radius: var(--radius-sm);
 	}
 
-	/* Button: unified height and type size; primary is solid, ghost is outlined */
+	/* Button: unified height and type size; primary is solid, ghost is outlined.
+	   Metrics follow the reference theme: 32px min height, 4/16px padding,
+	   3px radius, solid variants dim via brightness on hover. */
 	.ui-btn {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		gap: 0.375rem;
-		padding: 0.625rem 1.125rem;
+		gap: var(--size-2);
+		min-height: var(--comp-height);
+		padding: var(--size-2) var(--size-6);
 		font-size: var(--font-size-base);
-		font-weight: 500;
-		line-height: 1.25;
-		border-radius: var(--radius-md);
-		border: 1px solid transparent;
+		line-height: var(--line-height-body);
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--color-border);
+		background: var(--color-bg-white);
+		color: var(--color-text);
 		cursor: pointer;
 		transition:
-			background-color 0.2s ease,
-			color 0.2s ease,
-			border-color 0.2s ease;
+			background-color 0.15s ease,
+			color 0.15s ease,
+			border-color 0.15s ease,
+			box-shadow 0.15s ease;
+	}
+	.ui-btn:hover:not(:disabled) {
+		background: var(--color-bg-hover);
+		border-color: var(--color-border);
 	}
 	.ui-btn:disabled {
-		opacity: 0.5;
+		opacity: 0.45;
 		cursor: not-allowed;
 	}
-	/* Compact variant: inline small buttons */
+	/* Compact variant: inline small buttons (20px min height, caption type) */
 	.ui-btn.ui-btn-sm {
-		padding: 0.375rem 0.75rem;
-		font-size: 14px;
+		min-height: var(--comp-height-sm);
+		padding: var(--size-2) var(--size-5);
+		font-size: var(--text-xs);
+		line-height: var(--text-xs--line-height);
 	}
 	/* Tiny variant: view switchers and other miniature actions */
 	.ui-btn.ui-btn-xs {
 		padding: 0.25rem 0.5rem;
 		font-size: var(--text-xs);
 	}
-	/* Solid tones for semantic actions; combine with .ui-btn-sm/.ui-btn-xs */
+	/* Semantic tones. Success/primary are solid and dim via brightness on
+	   hover; warn/danger follow the reference theme's soft style: light
+	   tinted background, matching deep text. */
 	.ui-btn-success {
-		background: #16a34a;
+		background: var(--color-success);
+		border-color: var(--color-success);
 		color: #fff;
 	}
 	.ui-btn-success:hover:not(:disabled) {
-		background: #15803d;
+		filter: brightness(0.94);
 	}
 	.ui-btn-warn {
-		background: #f59e0b;
-		color: #fff;
+		background: var(--color-warning-light);
+		border-color: #edbd71;
+		color: var(--color-warning-text);
 	}
 	.ui-btn-warn:hover:not(:disabled) {
-		background: #d97706;
+		filter: brightness(0.97);
+	}
+	.dark .ui-btn-warn {
+		border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
 	}
 	.ui-btn-muted {
 		background: #6b7280;
@@ -281,11 +419,15 @@
 	}
 	/* Destructive action: solid red, derived from --color-error */
 	.ui-btn-danger {
-		background: var(--color-error);
-		color: #fff;
+		background: var(--color-error-light);
+		border-color: #e49a9a;
+		color: var(--color-error-text);
 	}
 	.ui-btn-danger:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--color-error) 85%, #000);
+		filter: brightness(0.97);
+	}
+	.dark .ui-btn-danger {
+		border-color: color-mix(in srgb, var(--color-error) 45%, transparent);
 	}
 	/* Outlined destructive variant */
 	.ui-btn-danger-outline {
@@ -340,24 +482,39 @@
 		color: color-mix(in srgb, var(--color-error) 80%, #000);
 	}
 
-	/* Data table: unified header/cell density and row hover */
+	/* Data table: unified header/cell density and row hover. Header uses the
+	   secondary surface with regular-weight secondary text, as the reference
+	   table; cells keep 16/8 vertical-horizontal breathing room. */
 	.ui-table th {
-		padding: 0.75rem 1rem;
+		padding: var(--size-6) var(--size-8);
 		text-align: left;
-		font-size: 14px;
-		font-weight: 500;
+		font-size: var(--font-size-base);
+		line-height: var(--line-height-body);
+		font-weight: 400;
 		color: var(--color-text-secondary);
-		border-bottom: 1px solid var(--color-border);
+		background: var(--color-bg-secondary);
+		border-bottom: 1px solid var(--color-border-light);
 		white-space: nowrap;
 	}
 	.ui-table td {
-		padding: 0.625rem 1rem;
-		font-size: 14px;
+		padding: var(--size-6) var(--size-8);
+		font-size: var(--font-size-base);
+		line-height: var(--line-height-body);
 		color: var(--color-text);
 		border-bottom: 1px solid var(--color-border-light);
+		vertical-align: middle;
 	}
 	.ui-table tbody tr:hover {
-		background: color-mix(in srgb, var(--color-primary-light) 40%, transparent);
+		background: var(--color-bg-hover);
+	}
+	.ui-table tbody tr:last-child td {
+		border-bottom: 1px solid var(--color-border-light);
+	}
+	/* In-table action buttons shrink to the compact 20px metric */
+	.ui-table .ui-btn {
+		min-height: var(--comp-height-sm);
+		padding: var(--size-2) var(--size-4);
+		font-size: var(--text-xs);
 	}
 
 	/* Dense variant: compact monitoring/detail tables with small type */
@@ -520,19 +677,20 @@
 		color: #d1d5db;
 	}
 
-	/* Tab: text tab inside a structural card tab bar */
+	/* Tab: text tab inside a structural card tab bar. Active tab uses the
+	   brand green underline, as the reference tabs. */
 	.ui-tab {
-		padding: 1rem 1.5rem;
-		font-size: var(--text-xs);
-		font-weight: 500;
+		padding: var(--size-5) var(--size-6);
+		font-size: var(--font-size-base);
+		line-height: var(--line-height-body);
 		color: var(--color-text-secondary);
 		background: transparent;
 		border-bottom: 2px solid transparent;
 		cursor: pointer;
 		white-space: nowrap;
 		transition:
-			color 0.2s ease,
-			border-color 0.2s ease;
+			color 0.15s ease,
+			border-color 0.15s ease;
 	}
 	.ui-tab:hover {
 		color: var(--color-text);
@@ -590,12 +748,13 @@
 		flex-wrap: wrap;
 		gap: 0.5rem;
 	}
-	/* Page title and card section title */
+	/* Page title and card section title: 24px headline, as the reference
+	   page-head h1 */
 	.ui-page-title {
 		margin: 0;
-		font-size: 1.25rem;
-		font-weight: 700;
-		line-height: 1.4;
+		font-size: var(--font-size-headline);
+		line-height: 36px;
+		font-weight: 600;
 		color: var(--color-text);
 	}
 	.ui-section-title {
@@ -662,6 +821,119 @@
 	}
 	.ui-list-item:hover {
 		background: color-mix(in srgb, var(--color-primary-light) 40%, transparent);
+	}
+
+	/* Status: colored-dot prefix status label, as the reference status chips */
+	.ui-status {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--size-3);
+		font-size: var(--text-xs);
+		line-height: var(--text-xs--line-height);
+		color: var(--color-text-secondary);
+	}
+	.ui-status::before {
+		content: '';
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: #91a0a8;
+		flex: none;
+	}
+	.ui-status-ok {
+		color: var(--color-primary);
+	}
+	.ui-status-ok::before {
+		background: var(--color-primary);
+	}
+	.ui-status-warn {
+		color: var(--color-warning);
+	}
+	.ui-status-warn::before {
+		background: var(--color-warning);
+	}
+	.ui-status-bad {
+		color: var(--color-error);
+	}
+	.ui-status-bad::before {
+		background: var(--color-error);
+	}
+
+	/* Toolbar: filter/search/action row above tables */
+	.ui-toolbar {
+		display: flex;
+		gap: var(--size-5);
+		align-items: center;
+		flex-wrap: wrap;
+		margin-bottom: var(--size-6);
+	}
+	.ui-toolbar .ui-btn {
+		margin: 0;
+	}
+
+	/* KPI cards: 4-column stat grid with caption label and headline number */
+	.ui-kpis {
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		gap: var(--size-5);
+	}
+	.ui-kpi {
+		background: var(--color-bg-white);
+		border: 1px solid var(--color-border-light);
+		padding: var(--size-6);
+		border-radius: var(--radius-card);
+	}
+	.ui-kpi > span {
+		display: block;
+		color: var(--color-text-secondary);
+		font-size: var(--text-xs);
+		line-height: var(--text-xs--line-height);
+	}
+	.ui-kpi > strong {
+		display: block;
+		margin-top: var(--size-6);
+		font-size: var(--font-size-headline);
+		line-height: 36px;
+		font-weight: 600;
+	}
+
+	/* Sidebar navigation (dark rail): full-width item, hover/active gets the
+	   lighter surface plus the 3px green accent bar on the left edge; the
+	   padding compensates so text does not shift. */
+	.ui-nav {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+	.ui-nav a,
+	.ui-nav button {
+		display: block;
+		width: 100%;
+		border: 0;
+		background: transparent;
+		color: var(--color-nav-text);
+		text-align: left;
+		padding: var(--size-4) var(--size-5);
+		text-decoration: none;
+		font-size: var(--font-size-base);
+		line-height: var(--line-height-body);
+		cursor: pointer;
+		border-left: 3px solid transparent;
+	}
+	.ui-nav a:hover,
+	.ui-nav a.active,
+	.ui-nav button:hover,
+	.ui-nav button.active {
+		background: var(--color-nav-hover);
+		color: #fff;
+		border-left-color: var(--color-nav-accent);
+	}
+	/* Section caption inside the dark rail */
+	.ui-nav-title {
+		padding: var(--size-7) var(--size-7) var(--size-3);
+		color: var(--color-nav-muted);
+		font-size: var(--text-xs);
+		line-height: var(--text-xs--line-height);
 	}
 
 	/* Drawer: floating side panel for history and favorites */

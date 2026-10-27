@@ -276,9 +276,9 @@
 	></div>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
-		class="h-2 cursor-row-resize bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 flex items-center justify-center"
+		class="h-2 cursor-row-resize bg-secondary hover:bg-hover flex items-center justify-center"
 		onmousedown={onResizeStart}
 	>
-		<div class="w-8 h-0.5 bg-gray-400 dark:bg-gray-500 rounded"></div>
+		<div class="w-8 h-0.5 bg-edge rounded"></div>
 	</div>
 </div>

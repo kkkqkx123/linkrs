@@ -28,7 +28,7 @@
 				})}
 	</p>
 	{#if graph.stats.skipped > 0}
-		<p class="text-xs text-gray-400">
+		<p class="text-xs text-muted">
 			{t('graphPreview.scalarCellsIgnored', { count: graph.stats.skipped })}
 		</p>
 	{/if}

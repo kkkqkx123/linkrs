@@ -3,14 +3,18 @@
 	import { message, t } from '$i18n';
 	import { dataBrowserStore } from '$stores/dataBrowser';
 	import { schemaStore } from '$stores/schema';
-	import type { FilterOperator, FilterCondition } from '$types/dataBrowser';
+	import type {
+		FilterOperator,
+		FilterCondition,
+		DataBrowserTab,
+	} from '$types/dataBrowser';
 	import type { Tag, EdgeType } from '$types/schema';
 
 	let {
 		activeTab,
 		onApply,
 	}: {
-		activeTab: 'vertices' | 'edges';
+		activeTab: DataBrowserTab;
 		onApply: () => void;
 	} = $props();
 
@@ -98,7 +102,7 @@
 	class="ui-card p-4 flex flex-col gap-3"
 >
 	<div class="flex items-center justify-between">
-		<h3 class="text-sm font-semibold text-gray-800 dark:text-gray-100">
+		<h3 class="text-sm font-semibold text-ink">
 			{t('dataBrowser.filterPanel.title')}
 		</h3>
 		<div class="flex items-center gap-1 text-xs">
@@ -116,7 +120,7 @@
 	</div>
 
 	{#if conditions.length === 0}
-		<p class="text-xs text-gray-400 dark:text-gray-500">
+		<p class="text-xs text-muted">
 			{t('dataBrowser.filterPanel.empty')}
 		</p>
 	{:else}

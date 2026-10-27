@@ -276,7 +276,7 @@
 			/>
 		</div>
 		{#if filtered.length === 0}
-			<p class="text-sm text-gray-500 dark:text-gray-400">{t('users.empty')}</p>
+			<p class="text-sm text-muted">{t('users.empty')}</p>
 		{:else}
 			<div class="overflow-x-auto">
 				<table class="ui-table w-full">

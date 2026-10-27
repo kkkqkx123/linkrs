@@ -8,10 +8,10 @@
 </svelte:head>
 
 <div class="flex flex-col items-center justify-center gap-3 py-24 text-center">
-	<p class="text-5xl font-semibold text-gray-300 dark:text-gray-600">
+	<p class="text-5xl font-semibold text-faint">
 		{page.status}
 	</p>
-	<p class="text-sm text-gray-600 dark:text-gray-400">
+	<p class="text-sm text-muted">
 		{page.error?.message ?? t('common.notFound')}
 	</p>
 	<a

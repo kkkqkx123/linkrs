@@ -50,7 +50,7 @@
 {#if open}
 	<div class="fixed inset-0 z-50 flex items-center justify-center" role="dialog">
 		<div
-			class="absolute inset-0 bg-black/20 cursor-pointer"
+			class="absolute inset-0 bg-mask cursor-pointer"
 			role="button"
 			tabindex="0"
 			aria-label={t('common.close')}
@@ -60,11 +60,11 @@
 			}}
 		></div>
 		<div class="relative ui-card shadow-lg p-6 w-96">
-			<h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">{title}</h3>
+			<h3 class="text-lg font-semibold text-ink mb-4">{title}</h3>
 			<div class="space-y-2 max-h-48 overflow-y-auto mb-3">
 				{#each properties as prop (prop.name)}
 					<label
-						class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer"
+						class="flex items-center gap-2 text-sm text-ink cursor-pointer"
 					>
 						<input
 							type="checkbox"
@@ -73,11 +73,11 @@
 							class="cursor-pointer"
 						/>
 						<span class="font-mono text-xs">{prop.name}</span>
-						<span class="text-xs text-gray-400">{prop.data_type}</span>
+						<span class="text-xs text-muted">{prop.data_type}</span>
 					</label>
 				{/each}
 				{#if properties.length === 0}
-					<p class="text-xs text-gray-400">{t('common.noProperties')}</p>
+					<p class="text-xs text-muted">{t('common.noProperties')}</p>
 				{/if}
 			</div>
 			<div class="flex gap-2 mb-2">
@@ -98,7 +98,7 @@
 					{/each}
 				</select>
 			</div>
-			<p class="text-xs text-gray-400 mb-3">{t('schema.alterHint')}</p>
+			<p class="text-xs text-muted mb-3">{t('schema.alterHint')}</p>
 			<div class="flex justify-end gap-2">
 				<button
 					class="ui-btn ui-btn-ghost"

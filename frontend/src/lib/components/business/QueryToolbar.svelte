@@ -96,11 +96,11 @@
 		{t('console.cursorExecute')}
 	</button>
 	{#if editorContent.trim() && !streamEligibility.eligible && streamEligibility.reason !== 'empty'}
-		<span class="text-xs text-gray-400 dark:text-gray-500">
+		<span class="text-xs text-muted">
 			{t('console.streamReasonCommand')}
 		</span>
 	{:else if streamEligibility.mode === 'batch'}
-		<span class="text-xs text-gray-400 dark:text-gray-500">
+		<span class="text-xs text-muted">
 			{t('console.streamBatchHint', { count: streamEligibility.count })}
 		</span>
 	{/if}
@@ -137,7 +137,7 @@
 		<option value="auto">{t('console.execAuto')}</option>
 	</select>
 	{#if executionPreference === 'auto'}
-		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+		<label class="flex items-center gap-1 text-xs text-muted">
 			{t('console.autoThreshold')}
 			<input
 				type="number"

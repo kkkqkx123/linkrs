@@ -107,6 +107,37 @@
 		return used / total;
 	});
 
+	const retrieval = $derived(monitor.snapshots.retrieval);
+
+	function probeLabel(probe: string | undefined): string {
+		switch (probe) {
+			case 'reachable':
+				return t('monitoring.retrievalReachable');
+			case 'unreachable':
+				return t('monitoring.retrievalUnreachable');
+			case 'disabled':
+				return t('monitoring.retrievalDisabled');
+			default:
+				return t('monitoring.retrievalUnknown');
+		}
+	}
+
+	function probeClass(probe: string | undefined): string {
+		if (probe === 'reachable') return 'text-success';
+		if (probe === 'unreachable') return 'text-error font-semibold';
+		return 'text-muted';
+	}
+
+	function textOrDash(value: string | null | undefined): string {
+		return value && value.length > 0 ? value : '—';
+	}
+
+	function configuredLabel(value: boolean | null | undefined): string {
+		if (value === true) return t('common.connected');
+		if (value === false) return t('monitoring.retrievalNotConfigured');
+		return t('monitoring.retrievalUnknown');
+	}
+
 	const slowRows = $derived(queries?.slow_queries ?? []);
 	const patterns = $derived(queries?.top_patterns ?? []);
 	const executors = $derived(queries?.executor_summary ?? []);
@@ -495,7 +526,7 @@
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.monitoring')}>
 		{#if monitor.lastRefreshAt}
-			<span class="text-sm text-gray-500 dark:text-gray-400">
+			<span class="text-sm text-muted">
 				{t('monitoring.lastRefresh')}: {new Date(
 					monitor.lastRefreshAt,
 				).toLocaleTimeString()}
@@ -516,11 +547,11 @@
 	<section
 		class="ui-card shadow-sm px-6 py-4 flex items-center gap-4 flex-wrap text-sm"
 	>
-		<span class="font-medium text-gray-700 dark:text-gray-300"
+		<span class="font-medium text-ink"
 			>{t('monitoring.thresholds')}</span
 		>
 		<label
-			class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+			class="flex items-center gap-1 text-xs text-muted"
 		>
 			{t('monitoring.cpu')} &gt;
 			<input
@@ -532,7 +563,7 @@
 			/>%
 		</label>
 		<label
-			class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+			class="flex items-center gap-1 text-xs text-muted"
 		>
 			{t('monitoring.memory')} &gt;
 			<input
@@ -544,7 +575,7 @@
 			/>%
 		</label>
 		<label
-			class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+			class="flex items-center gap-1 text-xs text-muted"
 		>
 			{t('monitoring.slowQueries')} &gt;
 			<input
@@ -555,7 +586,7 @@
 			/>ms
 		</label>
 		{#if cpuExceeded || memExceeded}
-			<span class="text-xs font-medium text-red-500 dark:text-red-400">
+			<span class="text-xs font-medium text-error">
 				{t('monitoring.thresholdExceeded')}
 			</span>
 		{/if}
@@ -574,72 +605,72 @@
 		</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('common.status')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{system ? t('common.statusHealthy') : t('monitoring.noData')}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.connections')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatCount(system?.connections?.active)} / {formatCount(
 						system?.connections?.max,
 					)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.uptime')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatUptimeSecs(system?.uptime_secs)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.qps')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatQps(database?.performance?.queries_per_second)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.avgLatency')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatLatencyMs(database?.performance?.avg_latency_ms)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					p50 / p95 / p99
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatLatencyUs(overview?.query_latency_us?.p50)} /
 					{formatLatencyUs(overview?.query_latency_us?.p95)} /
 					{formatLatencyUs(overview?.query_latency_us?.p99)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.errors')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatCount(
 						overview?.errors?.total ?? database?.performance?.error_total,
 					)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.totalQueries')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatCount(
 						database?.performance?.total_queries ?? queries?.total_queries,
 					)}
@@ -648,7 +679,7 @@
 		</div>
 		{#if trendPoints.length > 0}
 			<div class="mt-4">
-				<div class="text-xs text-gray-500 dark:text-gray-400 mb-1">
+				<div class="text-xs text-muted mb-1">
 					{t('monitoring.trend')}: {formatCount(
 						trendPoints.reduce((a, p) => a + (Number(p.queries) || 0), 0),
 					)}
@@ -672,25 +703,25 @@
 		</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.cpu')}
 				</div>
 				<div
 					class="font-mono {cpuExceeded
-						? 'text-red-500 dark:text-red-400 font-semibold'
-						: 'text-gray-800 dark:text-gray-200'}"
+						? 'text-error font-semibold'
+						: 'text-ink'}"
 				>
 					{cpuRatio !== null ? formatPercent(cpuRatio) : '—'}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.memory')}
 				</div>
 				<div
 					class="font-mono {memExceeded
-						? 'text-red-500 dark:text-red-400 font-semibold'
-						: 'text-gray-800 dark:text-gray-200'}"
+						? 'text-error font-semibold'
+						: 'text-ink'}"
 				>
 					{formatBytes(system?.memory_usage?.used_bytes)} / {formatBytes(
 						system?.memory_usage?.total_bytes,
@@ -699,44 +730,44 @@
 				</div>
 				{#if memRatio !== null}
 					<div
-						class="h-1.5 mt-1 bg-gray-100 dark:bg-gray-700 rounded overflow-hidden"
+						class="h-1.5 mt-1 bg-secondary rounded overflow-hidden"
 					>
 						<div
-							class="h-full bg-blue-500"
+							class="h-full bg-info"
 							style="width: {Math.min(100, memRatio * 100)}%"
 						></div>
 					</div>
 				{/if}
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('common.processMemory')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatBytes(system?.process_memory_bytes)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.dataDir')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatBytes(system?.data_dir_size_bytes)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.walDir')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatBytes(system?.wal_dir_size_bytes)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.maxFds')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatCount(system?.max_file_descriptors)}
 				</div>
 			</div>
@@ -750,34 +781,34 @@
 		</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.totalQueries')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatCount(queries?.total_queries)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.active')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatCount(database?.performance?.active_queries)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.avgLatency')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatLatencyUs(queries?.latency_percentiles_us?.avg)}
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.errors')}
 				</div>
-				<div class="font-mono text-gray-800 dark:text-gray-200">
+				<div class="font-mono text-ink">
 					{formatCount(queries?.error_total)}
 				</div>
 			</div>
@@ -786,17 +817,17 @@
 		{#if queries}
 			<div class="grid md:grid-cols-2 gap-4 mb-4 text-sm">
 				<div>
-					<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+					<h3 class="text-xs font-medium text-muted mb-1">
 						{t('monitoring.errorsByType')}
 					</h3>
 					{#if Object.keys(queries.errors_by_type ?? {}).length === 0}
-						<p class="text-gray-400">{t('monitoring.noData')}</p>
+						<p class="text-muted">{t('monitoring.noData')}</p>
 					{:else}
 						<ul class="space-y-1">
 							{#each Object.entries(queries.errors_by_type ?? {}) as [kind, count] (kind)}
 								<li class="flex justify-between font-mono">
-									<span class="text-gray-600 dark:text-gray-300">{kind}</span>
-									<span class="text-gray-800 dark:text-gray-200"
+									<span class="text-muted">{kind}</span>
+									<span class="text-ink"
 										>{formatCount(count)}</span
 									>
 								</li>
@@ -805,17 +836,17 @@
 					{/if}
 				</div>
 				<div>
-					<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+					<h3 class="text-xs font-medium text-muted mb-1">
 						{t('monitoring.errorsByPhase')}
 					</h3>
 					{#if Object.keys(queries.errors_by_phase ?? {}).length === 0}
-						<p class="text-gray-400">{t('monitoring.noData')}</p>
+						<p class="text-muted">{t('monitoring.noData')}</p>
 					{:else}
 						<ul class="space-y-1">
 							{#each Object.entries(queries.errors_by_phase ?? {}) as [phase, count] (phase)}
 								<li class="flex justify-between font-mono">
-									<span class="text-gray-600 dark:text-gray-300">{phase}</span>
-									<span class="text-gray-800 dark:text-gray-200"
+									<span class="text-muted">{phase}</span>
+									<span class="text-ink"
 										>{formatCount(count)}</span
 									>
 								</li>
@@ -826,12 +857,12 @@
 			</div>
 		{/if}
 
-		<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+		<h3 class="text-xs font-medium text-muted mb-1">
 			{t('monitoring.topPatterns')}
 		</h3>
 		<div class="overflow-x-auto mb-4">
 			{#if patterns.length === 0}
-				<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
+				<p class="text-sm text-muted">{t('monitoring.noData')}</p>
 			{:else}
 				<table class="ui-table ui-table-dense min-w-full">
 					<thead>
@@ -862,12 +893,12 @@
 			{/if}
 		</div>
 
-		<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+		<h3 class="text-xs font-medium text-muted mb-1">
 			{t('monitoring.executors')}
 		</h3>
 		<div class="overflow-x-auto mb-4">
 			{#if executors.length === 0}
-				<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
+				<p class="text-sm text-muted">{t('monitoring.noData')}</p>
 			{:else}
 				<table class="ui-table ui-table-dense min-w-full">
 					<thead>
@@ -892,12 +923,12 @@
 			{/if}
 		</div>
 
-		<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+		<h3 class="text-xs font-medium text-muted mb-1">
 			{t('monitoring.slowQueries')}
 		</h3>
 		<div class="overflow-x-auto">
 			{#if slowRows.length === 0}
-				<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
+				<p class="text-sm text-muted">{t('monitoring.noData')}</p>
 			{:else}
 				<table class="ui-table ui-table-dense min-w-full">
 					<thead>
@@ -911,7 +942,7 @@
 						{#each slowRows as row (row.trace_id)}
 							<tr
 								class={Number(row.duration_ms) > thresholds.slowMs
-									? 'bg-red-50 dark:bg-red-900/10'
+									? 'bg-error-light'
 									: ''}
 							>
 								<td class="max-w-80 truncate font-mono">
@@ -923,7 +954,7 @@
 									</button>
 								</td>
 								<td class="font-mono">{formatLatencyMs(row.duration_ms)}</td>
-								<td class="font-mono text-gray-500 dark:text-gray-400"
+								<td class="font-mono text-muted"
 									>{row.trace_id}</td
 								>
 							</tr>
@@ -941,13 +972,13 @@
 		</h2>
 		<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.spaces')}
 				</div>
 				<div class="font-mono">{formatCount(database?.spaces?.count)}</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.vertices')}
 				</div>
 				<div class="font-mono">
@@ -955,7 +986,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.edges')}
 				</div>
 				<div class="font-mono">
@@ -963,7 +994,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.totalSize')}
 				</div>
 				<div class="font-mono">
@@ -971,7 +1002,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.indexSize')}
 				</div>
 				<div class="font-mono">
@@ -979,7 +1010,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.dataSize')}
 				</div>
 				<div class="font-mono">
@@ -987,7 +1018,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.fragmentation')}
 				</div>
 				<div class="font-mono">
@@ -997,7 +1028,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.tombstones')}
 				</div>
 				<div class="font-mono">
@@ -1007,7 +1038,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.dirtyPages')}
 				</div>
 				<div class="font-mono">
@@ -1017,7 +1048,7 @@
 				</div>
 			</div>
 			<div>
-				<div class="text-gray-500 dark:text-gray-400 text-xs">
+				<div class="text-muted text-xs">
 					{t('monitoring.checkpointSuccess')}
 				</div>
 				<div class="font-mono">
@@ -1037,7 +1068,7 @@
 			</h2>
 			<div class="space-y-1 text-sm font-mono">
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('monitoring.begun')}</span>
+					<span class="text-muted">{t('monitoring.begun')}</span>
 					<span
 						>{formatCount(
 							overview?.transaction?.begun ??
@@ -1046,7 +1077,7 @@
 					>
 				</div>
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('monitoring.committed')}</span>
+					<span class="text-muted">{t('monitoring.committed')}</span>
 					<span
 						>{formatCount(
 							overview?.transaction?.committed ??
@@ -1055,7 +1086,7 @@
 					>
 				</div>
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('monitoring.rolledBack')}</span>
+					<span class="text-muted">{t('monitoring.rolledBack')}</span>
 					<span
 						>{formatCount(
 							overview?.transaction?.rolled_back ??
@@ -1064,7 +1095,7 @@
 					>
 				</div>
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('monitoring.active')}</span>
+					<span class="text-muted">{t('monitoring.active')}</span>
 					<span
 						>{formatCount(
 							overview?.transaction?.active ??
@@ -1089,7 +1120,7 @@
 			</div>
 			<div class="space-y-1 text-sm font-mono mb-3">
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('common.status')}</span>
+					<span class="text-muted">{t('common.status')}</span>
 					<span
 						>{(overview?.sync?.is_running ??
 						num(monitor.snapshots.sync, 'is_running'))
@@ -1101,7 +1132,7 @@
 					<pre class="ui-pre ui-pre-sm max-h-32">{syncStatusText}</pre>
 				{/if}
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('monitoring.outbox')}</span>
+					<span class="text-muted">{t('monitoring.outbox')}</span>
 					<span>
 						{formatCount(
 							overview?.sync?.outbox_pending ??
@@ -1151,23 +1182,23 @@
 			</div>
 			<div class="grid md:grid-cols-2 gap-3 text-xs">
 				<div>
-					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">
+					<h3 class="font-medium text-muted mb-1">
 						{t('monitoring.deadLetters')}
 					</h3>
 					{#if deadLettersText}
 						<pre class="ui-pre ui-pre-sm">{deadLettersText}</pre>
 					{:else}
-						<p class="text-gray-400">{t('monitoring.noData')}</p>
+						<p class="text-muted">{t('monitoring.noData')}</p>
 					{/if}
 				</div>
 				<div>
-					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">
+					<h3 class="font-medium text-muted mb-1">
 						{t('monitoring.degradedRanges')}
 					</h3>
 					{#if degradedText}
 						<pre class="ui-pre ui-pre-sm">{degradedText}</pre>
 					{:else}
-						<p class="text-gray-400">{t('monitoring.noData')}</p>
+						<p class="text-muted">{t('monitoring.noData')}</p>
 					{/if}
 					<div class="grid grid-cols-2 gap-1 mt-2">
 						<input
@@ -1209,23 +1240,23 @@
 					</button>
 				</div>
 				<div>
-					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">
+					<h3 class="font-medium text-muted mb-1">
 						{t('monitoring.diagnostics')}
 					</h3>
 					{#if syncDiagnostics}
 						<pre class="ui-pre ui-pre-sm">{syncDiagnostics}</pre>
 					{:else}
-						<p class="text-gray-400">{t('monitoring.noData')}</p>
+						<p class="text-muted">{t('monitoring.noData')}</p>
 					{/if}
 				</div>
 				<div>
-					<h3 class="font-medium text-gray-500 dark:text-gray-400 mb-1">
+					<h3 class="font-medium text-muted mb-1">
 						{t('monitoring.retention')}
 					</h3>
 					{#if retentionText}
 						<pre class="ui-pre ui-pre-sm">{retentionText}</pre>
 					{:else}
-						<p class="text-gray-400">{t('monitoring.noData')}</p>
+						<p class="text-muted">{t('monitoring.noData')}</p>
 					{/if}
 				</div>
 			</div>
@@ -1234,23 +1265,24 @@
 			<h2 class="ui-section-title">
 				{t('common.search')}
 			</h2>
+			<p class="text-xs text-muted mb-2">{t('monitoring.retrievalSearchNote')}</p>
 			<div class="space-y-1 text-sm font-mono">
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('monitoring.totalQueries')}</span>
+					<span class="text-muted">{t('monitoring.totalQueries')}</span>
 					<span>{formatCount(search?.search?.total_queries)}</span>
 				</div>
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('monitoring.avgLatency')}</span>
+					<span class="text-muted">{t('monitoring.avgLatency')}</span>
 					<span>{formatLatencyMs(search?.search?.avg_latency_ms)}</span>
 				</div>
 				<div class="flex justify-between">
-					<span class="text-gray-500">{t('monitoring.cacheHitRate')}</span>
+					<span class="text-muted">{t('monitoring.cacheHitRate')}</span>
 					<span>{formatPercent(search?.cache?.hit_rate)}</span>
 				</div>
 			</div>
 			{#if byIndex.length > 0}
 				<h3
-					class="text-xs font-medium text-gray-500 dark:text-gray-400 mt-3 mb-1"
+					class="text-xs font-medium text-muted mt-3 mb-1"
 				>
 					{t('monitoring.byIndex')}
 				</h3>
@@ -1271,6 +1303,99 @@
 		</section>
 	</div>
 
+	<!-- Retrieval services -->
+	<section class="ui-card shadow-sm p-6">
+		<h2 class="ui-section-title">
+			{t('monitoring.retrieval')}
+		</h2>
+		{#if retrieval}
+			<div class="grid md:grid-cols-2 gap-4 text-sm">
+				<div>
+					<h3 class="text-xs font-medium text-muted mb-1">
+						{t('monitoring.retrievalVector')}
+					</h3>
+					<div class="space-y-1 font-mono">
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalEngine')}</span
+							>
+							<span>{textOrDash(retrieval.vector.engine)}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalEndpoint')}</span
+							>
+							<span
+								>{textOrDash(retrieval.vector.endpoint)}{#if retrieval.vector.tls}
+									(TLS)
+								{/if}</span
+							>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalProbe')}</span
+							>
+							<span class={probeClass(retrieval.vector.probe)}
+								>{probeLabel(retrieval.vector.probe)}</span
+							>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalIndexes')}</span
+							>
+							<span>{formatCount(retrieval.vector.indexCount)}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalEmbedding')}</span
+							>
+							<span>{configuredLabel(retrieval.embeddingConfigured)}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalRerank')}</span
+							>
+							<span>{configuredLabel(retrieval.rerankConfigured)}</span>
+						</div>
+					</div>
+				</div>
+				<div>
+					<h3 class="text-xs font-medium text-muted mb-1">
+						{t('monitoring.retrievalFulltext')}
+					</h3>
+					<div class="space-y-1 font-mono">
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalEngine')}</span
+							>
+							<span>{textOrDash(retrieval.fulltext.engine)}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalProbe')}</span
+							>
+							<span class={probeClass(retrieval.fulltext.probe)}
+								>{probeLabel(retrieval.fulltext.probe)}</span
+							>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-muted"
+								>{t('monitoring.retrievalInconsistent')}</span
+							>
+							<span
+								class={(retrieval.fulltext.inconsistentCount ?? 0) > 0
+									? 'text-warning font-semibold'
+									: ''}>{formatCount(retrieval.fulltext.inconsistentCount)}</span
+							>
+						</div>
+					</div>
+				</div>
+			</div>
+		{:else}
+			<p class="text-sm text-muted">{t('monitoring.noData')}</p>
+		{/if}
+	</section>
+
 	<!-- Operations -->
 	<section class="ui-card shadow-sm p-6">
 		<div class="flex items-center justify-between mb-3">
@@ -1290,11 +1415,11 @@
 		{/if}
 		<div class="grid md:grid-cols-2 gap-4">
 			<div>
-				<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+				<h3 class="text-xs font-medium text-muted mb-1">
 					{t('monitoring.activeTransactions')} ({activeTransactions.length})
 				</h3>
 				{#if activeTransactions.length === 0}
-					<p class="text-sm text-gray-400">{t('monitoring.noData')}</p>
+					<p class="text-sm text-muted">{t('monitoring.noData')}</p>
 				{:else}
 					<div class="overflow-x-auto">
 						<table class="ui-table ui-table-dense min-w-full font-mono">
@@ -1328,11 +1453,11 @@
 				{/if}
 			</div>
 			<div>
-				<h3 class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+				<h3 class="text-xs font-medium text-muted mb-1">
 					{t('monitoring.config')}
 				</h3>
 				{#if configMessage}
-					<p class="text-xs text-green-600 dark:text-green-400 mb-2">
+					<p class="text-xs text-success mb-2">
 						{configMessage}
 					</p>
 				{/if}
@@ -1340,11 +1465,11 @@
 					<div class="space-y-3 max-h-96 overflow-auto">
 						{#each Object.entries(configSections) as [section, values] (section)}
 							<details
-								class="border border-gray-200 dark:border-gray-700 rounded"
+								class="border border-line rounded"
 								open={section === 'monitoring'}
 							>
 								<summary
-									class="px-3 py-1.5 text-xs font-medium bg-gray-50 dark:bg-gray-800/50 cursor-pointer text-gray-700 dark:text-gray-300"
+									class="px-3 py-1.5 text-xs font-medium bg-secondary cursor-pointer text-ink"
 								>
 									{section}
 								</summary>
@@ -1382,7 +1507,7 @@
 				{:else if configText}
 					<pre class="ui-pre max-h-64">{configText}</pre>
 				{:else}
-					<p class="text-sm text-gray-400">{t('monitoring.configHint')}</p>
+					<p class="text-sm text-muted">{t('monitoring.configHint')}</p>
 				{/if}
 			</div>
 		</div>
@@ -1392,12 +1517,12 @@
 	{#if selectedTrace}
 		<div class="fixed inset-0 z-50 flex justify-end">
 			<button
-				class="absolute inset-0 bg-black/30 cursor-pointer"
+				class="absolute inset-0 bg-mask cursor-pointer"
 				onclick={closePortrait}
 				aria-label={t('common.close')}
 			></button>
 			<div
-				class="relative w-full max-w-md h-full bg-white dark:bg-[#1C2333] shadow-xl border-l border-gray-200 dark:border-gray-700 p-5 overflow-y-auto"
+				class="relative w-full max-w-md h-full bg-surface shadow-xl border-l border-line p-5 overflow-y-auto"
 			>
 				<div class="flex items-center justify-between mb-3">
 					<h2 class="ui-section-title mb-0">
@@ -1408,13 +1533,13 @@
 					</button>
 				</div>
 				{#if portraitLoading}
-					<p class="text-sm text-gray-500">{t('monitoring.loading')}</p>
+					<p class="text-sm text-muted">{t('monitoring.loading')}</p>
 				{:else if portraitError}
-					<p class="text-sm text-red-500">{portraitError}</p>
+					<p class="text-sm text-error">{portraitError}</p>
 				{:else if portrait}
 					<div class="space-y-3 text-sm">
 						<div
-							class="font-mono text-xs break-all bg-gray-50 dark:bg-gray-800/50 rounded p-2"
+							class="font-mono text-xs break-all bg-secondary rounded p-2"
 						>
 							{portrait.trace_id}
 						</div>
@@ -1430,33 +1555,33 @@
 							</button>
 						</div>
 						<div
-							class="font-mono text-xs break-words bg-gray-50 dark:bg-gray-800/50 rounded p-2"
+							class="font-mono text-xs break-words bg-secondary rounded p-2"
 						>
 							{portrait.query}
 						</div>
 						<div class="grid grid-cols-2 gap-2 font-mono">
 							<div>
-								<span class="text-gray-500"
+								<span class="text-muted"
 									>{t('monitoring.duration')}:
 								</span>{formatLatencyMs(portrait.duration_ms)}
 							</div>
 							<div>
-								<span class="text-gray-500">status: </span>{portrait.status}
+								<span class="text-muted">status: </span>{portrait.status}
 							</div>
 							<div>
-								<span class="text-gray-500"
+								<span class="text-muted"
 									>{t('monitoring.resultCount')}:
 								</span>{formatCount(portrait.result_count)}
 							</div>
 							<div>
-								<span class="text-gray-500"
+								<span class="text-muted"
 									>{t('monitoring.planNodes')}:
 								</span>{formatCount(portrait.plan_node_count)}
 							</div>
 						</div>
 						{#if portrait.stages}
 							<div>
-								<h3 class="text-xs font-medium text-gray-500 mb-1">
+								<h3 class="text-xs font-medium text-muted mb-1">
 									{t('monitoring.stages')}
 								</h3>
 								<ul class="font-mono space-y-1">
@@ -1490,7 +1615,7 @@
 						{/if}
 						{#if portrait.executors && portrait.executors.length > 0}
 							<div>
-								<h3 class="text-xs font-medium text-gray-500 mb-1">
+								<h3 class="text-xs font-medium text-muted mb-1">
 									{t('monitoring.stageExecutors')}
 								</h3>
 								<ul class="font-mono space-y-1">
@@ -1509,11 +1634,11 @@
 						{/if}
 						{#if portrait.error}
 							<div>
-								<h3 class="text-xs font-medium text-gray-500 mb-1">
+								<h3 class="text-xs font-medium text-muted mb-1">
 									{t('monitoring.errorDetail')}
 								</h3>
 								<p
-									class="font-mono text-xs text-red-600 dark:text-red-400 break-words bg-red-50 dark:bg-red-900/20 rounded p-2"
+									class="font-mono text-xs text-error break-words bg-error-light rounded p-2"
 								>
 									{portrait.error}
 								</p>

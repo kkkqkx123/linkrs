@@ -479,10 +479,10 @@
 	{/if}
 	{#if planOpen}
 		<div
-			class="mx-4 mb-3 rounded border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20 overflow-hidden"
+			class="mx-4 mb-3 rounded border border-alt/40 bg-alt-light overflow-hidden"
 		>
 			<div
-				class="px-3 py-2 flex items-center gap-2 text-sm text-purple-700 dark:text-purple-300"
+				class="px-3 py-2 flex items-center gap-2 text-sm text-alt"
 			>
 				<span class="font-medium">{t('console.planTitle')}</span>
 				<div class="flex-1"></div>
@@ -495,7 +495,7 @@
 			</div>
 			<div class="px-3 pb-3">
 				{#if planError}
-					<div class="text-red-600 dark:text-red-400 text-xs">
+					<div class="text-error text-xs">
 						<span class="font-medium">{planError.code}</span>: {planError.message}
 						{#if planError.position}
 							<button
@@ -512,11 +512,11 @@
 				{:else if planResult}
 					{#if planResult.columns.length > 0}
 						<div
-							class="overflow-x-auto bg-white dark:bg-[#1C2333] rounded border border-purple-200 dark:border-purple-800"
+							class="overflow-x-auto bg-surface rounded border border-alt/40"
 						>
 							<table class="ui-table w-full border-collapse">
 								<thead>
-									<tr class="bg-purple-100/50 dark:bg-purple-900/30">
+									<tr class="bg-alt-light/50">
 										{#each planResult.columns as col (col)}
 											<th>{col}</th>
 										{/each}
@@ -524,7 +524,7 @@
 								</thead>
 								<tbody>
 									{#each planResult.rows as row, i (i)}
-										<tr class="even:bg-purple-50/50 dark:even:bg-purple-900/10">
+										<tr class="even:bg-alt-light/50">
 											{#each planResult.columns as col (col)}
 												<td class="font-mono max-w-md truncate"
 													>{String(row[col] ?? '')}</td
@@ -536,7 +536,7 @@
 							</table>
 						</div>
 					{:else}
-						<div class="text-xs text-green-600 dark:text-green-400">
+						<div class="text-xs text-success">
 							{t('common.ok')}
 						</div>
 					{/if}

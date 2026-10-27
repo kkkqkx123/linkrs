@@ -20,28 +20,28 @@
 		{ bg: string; border: string; icon: string; text: string }
 	> = {
 		success: {
-			bg: 'bg-green-50 dark:bg-green-900/20',
-			border: 'border-green-200 dark:border-green-800',
-			icon: 'text-green-500 dark:text-green-400',
-			text: 'text-green-800 dark:text-green-200',
+			bg: 'bg-success-light',
+			border: 'border-success/40',
+			icon: 'text-success',
+			text: 'text-success',
 		},
 		error: {
-			bg: 'bg-red-50 dark:bg-red-900/20',
-			border: 'border-red-200 dark:border-red-800',
-			icon: 'text-red-500 dark:text-red-400',
-			text: 'text-red-800 dark:text-red-200',
+			bg: 'bg-error-light',
+			border: 'border-error/40',
+			icon: 'text-error',
+			text: 'text-error',
 		},
 		warning: {
-			bg: 'bg-yellow-50 dark:bg-yellow-900/20',
-			border: 'border-yellow-200 dark:border-yellow-800',
-			icon: 'text-yellow-500 dark:text-yellow-400',
-			text: 'text-yellow-800 dark:text-yellow-200',
+			bg: 'bg-warning-light',
+			border: 'border-warning/40',
+			icon: 'text-warning',
+			text: 'text-warning',
 		},
 		info: {
-			bg: 'bg-blue-50 dark:bg-blue-900/20',
-			border: 'border-blue-200 dark:border-blue-800',
-			icon: 'text-blue-500 dark:text-blue-400',
-			text: 'text-blue-800 dark:text-blue-200',
+			bg: 'bg-info-light',
+			border: 'border-info/40',
+			icon: 'text-info',
+			text: 'text-info',
 		},
 	};
 </script>

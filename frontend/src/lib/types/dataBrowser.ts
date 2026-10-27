@@ -58,8 +58,10 @@ export interface EdgeListResponse {
 	pageSize: number;
 }
 
+export type DataBrowserTab = 'vertices' | 'edges' | 'vector' | 'fulltext';
+
 export interface DataBrowserState {
-	activeTab: 'vertices' | 'edges';
+	activeTab: DataBrowserTab;
 	selectedTag: string | null;
 	selectedEdgeType: string | null;
 	vertices: VertexData[];
