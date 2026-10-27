@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { batchService } from '$services/batch';
 
 	let spaceId = $state(1);
@@ -31,7 +32,8 @@
 				if (typeof id === 'string' && id) batchId = id;
 			}
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.requestFailed');
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			loading = false;
 		}
@@ -48,17 +50,13 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
-	<h1 class="ui-page-title">
-		{t('sidebar.batch')}
-	</h1>
+	<PageHeader title={t('sidebar.batch')} />
 
 	{#if error}
 		<p class="ui-error-text">{error}</p>
 	{/if}
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('batch.create')}
 		</h2>
@@ -73,10 +71,7 @@
 			</label>
 			<label class="ui-field">
 				{t('batch.type')}
-				<select
-					class="ui-input ui-input-sm"
-					bind:value={batchType}
-				>
+				<select class="ui-input ui-input-sm" bind:value={batchType}>
 					<option value="vertex">vertex</option>
 					<option value="edge">edge</option>
 					<option value="mixed">mixed</option>
@@ -109,26 +104,20 @@
 		</button>
 	</section>
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('batch.manage')}
 		</h2>
 		<label class="ui-field mb-3">
 			{t('batch.id')}
-			<input
-				class="ui-input ui-input-sm font-mono"
-				bind:value={batchId}
-			/>
+			<input class="ui-input ui-input-sm font-mono" bind:value={batchId} />
 		</label>
 		<label class="ui-field mb-3">
 			{t('batch.items')}
 			<textarea
 				rows="4"
 				class="ui-input ui-input-sm font-mono"
-				bind:value={itemsText}
-			></textarea>
+				bind:value={itemsText}></textarea>
 		</label>
 		<div class="flex flex-wrap gap-2">
 			<button
@@ -170,12 +159,8 @@
 	</section>
 
 	{#if resultText}
-		<section
-			class="ui-card shadow-sm p-6"
-		>
-			<pre
-				class="ui-pre">{resultText}</pre
-			>
+		<section class="ui-card shadow-sm p-6">
+			<pre class="ui-pre">{resultText}</pre>
 		</section>
 	{/if}
 </div>

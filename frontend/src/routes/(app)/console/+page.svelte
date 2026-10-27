@@ -19,6 +19,7 @@
 	} from '$utils/autoRoute';
 	import { graphStore } from '$stores/graph';
 	import { historyStore } from '$stores/history';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { streamStore } from '$stores/stream';
 	import { cursorStore } from '$stores/cursor';
 	import { theme } from '$stores/theme';
@@ -65,7 +66,9 @@
 	let planResult = $state<QueryResult | null>(null);
 	let planError = $state<QueryError | null>(null);
 	let planOpen = $state(false);
-	let editorRef = $state<{ jumpToPosition: (line: number, column: number) => void } | null>(null);
+	let editorRef = $state<{
+		jumpToPosition: (line: number, column: number) => void;
+	} | null>(null);
 
 	interface ParamRow {
 		id: string;
@@ -395,15 +398,7 @@
 </script>
 
 <div class="ui-page animate-fade-in">
-	<!-- Header -->
-	<div class="ui-card shadow-sm px-6 py-4">
-		<h2
-			class="ui-page-title flex items-center gap-2"
-		>
-			<span>⌨</span>
-			{t('console.title')}
-		</h2>
-	</div>
+	<PageHeader title={t('console.title')} />
 
 	<!-- Editor Section -->
 	<div class="ui-card ui-card-flush shadow-sm flex flex-col">
@@ -454,129 +449,137 @@
 			onThresholdChange={(val) =>
 				consoleStore.setAutoStreamThreshold(clampAutoThreshold(val))}
 		/>
-			<button
-				class="ui-btn ui-btn-ghost"
-				onclick={() => (historyOpen = !historyOpen)}
-			>
-				📋 {t('console.history')} ({history.length})
-			</button>
-			<button
-				class="ui-btn ui-btn-ghost"
-				onclick={() => (favoritesOpen = !favoritesOpen)}
-			>
-				⭐ {t('console.favorites')} ({favorites.length})
-			</button>
+		<button
+			class="ui-btn ui-btn-ghost"
+			onclick={() => (historyOpen = !historyOpen)}
+		>
+			📋 {t('console.history')} ({history.length})
+		</button>
+		<button
+			class="ui-btn ui-btn-ghost"
+			onclick={() => (favoritesOpen = !favoritesOpen)}
+		>
+			⭐ {t('console.favorites')} ({favorites.length})
+		</button>
+	</div>
+	<ParametersPanel
+		{parameters}
+		{sessionVariables}
+		open={paramsOpen}
+		{streamEligibility}
+		{streamingActive}
+		onToggle={() => (paramsOpen = !paramsOpen)}
+		onParametersChange={(rows) => (parameters = rows)}
+		onSessionVariablesChange={(rows) => (sessionVariables = rows)}
+	/>
+	{#if validateMessage}
+		<div class="ui-alert ui-alert-neutral mx-4 mb-3">
+			{validateMessage}
 		</div>
-		<ParametersPanel
-			{parameters}
-			{sessionVariables}
-			open={paramsOpen}
-			{streamEligibility}
-			{streamingActive}
-			onToggle={() => (paramsOpen = !paramsOpen)}
-			onParametersChange={(rows) => (parameters = rows)}
-			onSessionVariablesChange={(rows) => (sessionVariables = rows)}
-		/>
-		{#if validateMessage}
+	{/if}
+	{#if planOpen}
+		<div
+			class="mx-4 mb-3 rounded border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20 overflow-hidden"
+		>
 			<div
-				class="ui-alert ui-alert-neutral mx-4 mb-3"
+				class="px-3 py-2 flex items-center gap-2 text-sm text-purple-700 dark:text-purple-300"
 			>
-				{validateMessage}
+				<span class="font-medium">{t('console.planTitle')}</span>
+				<div class="flex-1"></div>
+				<button
+					class="ui-btn ui-btn-ghost ui-btn-xs"
+					onclick={() => (planOpen = false)}
+				>
+					{t('common.close')}
+				</button>
 			</div>
-		{/if}
-		{#if planOpen}
-			<div class="mx-4 mb-3 rounded border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20 overflow-hidden">
-				<div class="px-3 py-2 flex items-center gap-2 text-sm text-purple-700 dark:text-purple-300">
-					<span class="font-medium">{t('console.planTitle')}</span>
-					<div class="flex-1"></div>
-					<button
-						class="ui-btn ui-btn-ghost ui-btn-xs"
-						onclick={() => (planOpen = false)}
-					>
-						{t('common.close')}
-					</button>
-				</div>
-				<div class="px-3 pb-3">
-					{#if planError}
-						<div class="text-red-600 dark:text-red-400 text-xs">
-							<span class="font-medium">{planError.code}</span>: {planError.message}
-							{#if planError.position}
-								<button
-									class="ui-btn ui-btn-danger-outline ui-btn-sm"
-									onclick={() => handleJumpToError(planError!.position!)}
-								>
-									{t('console.jumpToError', {
-										line: planError!.position!.line,
-										column: planError!.position!.column,
-									})}
-								</button>
-							{/if}
-						</div>
-					{:else if planResult}
-						{#if planResult.columns.length > 0}
-							<div class="overflow-x-auto bg-white dark:bg-[#1C2333] rounded border border-purple-200 dark:border-purple-800">
-								<table class="ui-table w-full border-collapse">
-									<thead>
-										<tr class="bg-purple-100/50 dark:bg-purple-900/30">
+			<div class="px-3 pb-3">
+				{#if planError}
+					<div class="text-red-600 dark:text-red-400 text-xs">
+						<span class="font-medium">{planError.code}</span>: {planError.message}
+						{#if planError.position}
+							<button
+								class="ui-btn ui-btn-danger-outline ui-btn-sm"
+								onclick={() => handleJumpToError(planError!.position!)}
+							>
+								{t('console.jumpToError', {
+									line: planError!.position!.line,
+									column: planError!.position!.column,
+								})}
+							</button>
+						{/if}
+					</div>
+				{:else if planResult}
+					{#if planResult.columns.length > 0}
+						<div
+							class="overflow-x-auto bg-white dark:bg-[#1C2333] rounded border border-purple-200 dark:border-purple-800"
+						>
+							<table class="ui-table w-full border-collapse">
+								<thead>
+									<tr class="bg-purple-100/50 dark:bg-purple-900/30">
+										{#each planResult.columns as col (col)}
+											<th>{col}</th>
+										{/each}
+									</tr>
+								</thead>
+								<tbody>
+									{#each planResult.rows as row, i (i)}
+										<tr class="even:bg-purple-50/50 dark:even:bg-purple-900/10">
 											{#each planResult.columns as col (col)}
-												<th>{col}</th>
+												<td class="font-mono max-w-md truncate"
+													>{String(row[col] ?? '')}</td
+												>
 											{/each}
 										</tr>
-									</thead>
-									<tbody>
-										{#each planResult.rows as row, i (i)}
-											<tr class="even:bg-purple-50/50 dark:even:bg-purple-900/10">
-												{#each planResult.columns as col (col)}
-													<td class="font-mono max-w-md truncate">{String(row[col] ?? '')}</td>
-												{/each}
-											</tr>
-										{/each}
-									</tbody>
-								</table>
-							</div>
-						{:else}
-							<div class="text-xs text-green-600 dark:text-green-400">{t('common.ok')}</div>
-						{/if}
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{:else}
+						<div class="text-xs text-green-600 dark:text-green-400">
+							{t('common.ok')}
+						</div>
 					{/if}
-				</div>
+				{/if}
 			</div>
-		{/if}
-	</div>
-
-	<!-- Result Section -->
-	{#if resultMode === 'stream' && stream}
-		<StreamingResult
-			{stream}
-			{activeView}
-			{isDark}
-			onViewChange={handleStreamViewChange}
-			onCancel={handleCancelStream}
-			onOpenInGraph={handleStreamOpenInGraph}
-		/>
-	{:else if resultMode === 'cursor' && cursor}
-		<CursorResult
-			{cursor}
-			{activeView}
-			{isDark}
-			onViewChange={handleCursorViewChange}
-			onLoadMore={handleCursorLoadMore}
-			onClose={handleCursorClose}
-			onOpenInGraph={handleCursorOpenInGraph}
-		/>
-	{:else}
-		<MaterializedResult
-			{isExecuting}
-			{currentResult}
-			{results}
-			{executionTime}
-			{error}
-			{activeView}
-			{isDark}
-			onViewChange={handleMaterializedViewChange}
-			onOpenInGraph={handleOpenInGraph}
-			onJumpToError={handleJumpToError}
-		/>
+		</div>
 	{/if}
+</div>
+
+<!-- Result Section -->
+{#if resultMode === 'stream' && stream}
+	<StreamingResult
+		{stream}
+		{activeView}
+		{isDark}
+		onViewChange={handleStreamViewChange}
+		onCancel={handleCancelStream}
+		onOpenInGraph={handleStreamOpenInGraph}
+	/>
+{:else if resultMode === 'cursor' && cursor}
+	<CursorResult
+		{cursor}
+		{activeView}
+		{isDark}
+		onViewChange={handleCursorViewChange}
+		onLoadMore={handleCursorLoadMore}
+		onClose={handleCursorClose}
+		onOpenInGraph={handleCursorOpenInGraph}
+	/>
+{:else}
+	<MaterializedResult
+		{isExecuting}
+		{currentResult}
+		{results}
+		{executionTime}
+		{error}
+		{activeView}
+		{isDark}
+		onViewChange={handleMaterializedViewChange}
+		onOpenInGraph={handleOpenInGraph}
+		onJumpToError={handleJumpToError}
+	/>
+{/if}
 
 <!-- History Panel -->
 {#if historyOpen}

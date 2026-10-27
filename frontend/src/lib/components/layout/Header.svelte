@@ -26,10 +26,10 @@
 </script>
 
 <header
-	class="h-16 bg-white dark:bg-[#1C2333] border-b border-gray-200 dark:border-gray-700/50 flex items-center justify-between px-6 flex-shrink-0 transition-colors duration-300"
+	class="h-12 bg-white dark:bg-[#1C2333] border-b border-gray-200 dark:border-gray-700/50 flex items-center justify-between px-5 flex-shrink-0 transition-colors duration-300"
 >
-	<div class="flex items-center gap-4">
-		<span class="text-xl font-semibold text-gray-800 dark:text-gray-100"
+	<div class="flex items-center gap-3">
+		<span class="text-base font-semibold text-gray-800 dark:text-gray-100"
 			>{t('app.title')}</span
 		>
 		{#if store.isVerified}
@@ -37,7 +37,7 @@
 			<SpaceSelector />
 		{/if}
 	</div>
-	<div class="flex items-center gap-4">
+	<div class="flex items-center gap-3">
 		<LanguageSwitcher />
 		<ThemeToggle />
 		<HealthMonitor />

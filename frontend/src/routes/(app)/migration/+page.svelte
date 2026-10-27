@@ -1,9 +1,13 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import MigrationPlanForm from '$components/business/MigrationPlanForm.svelte';
 	import MigrationExecutePanel from '$components/business/MigrationExecutePanel.svelte';
 	import MigrationProgressList from '$components/business/MigrationProgressList.svelte';
-	import { migrationService, type MigrationProgressEvent } from '$services/migration';
+	import {
+		migrationService,
+		type MigrationProgressEvent,
+	} from '$services/migration';
 
 	let space = $state('');
 	let label = $state('');
@@ -39,7 +43,8 @@
 				if (typeof plan === 'string' && plan) planJson = plan;
 			}
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.requestFailed');
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			loading = false;
 		}
@@ -61,7 +66,8 @@
 			});
 			if (outcome.streamError) error = outcome.streamError;
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.requestFailed');
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			streaming = false;
 		}
@@ -73,9 +79,7 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
-	<h1 class="ui-page-title">
-		{t('sidebar.migration')}
-	</h1>
+	<PageHeader title={t('sidebar.migration')} />
 
 	{#if error}
 		<p class="ui-error-text">{error}</p>
@@ -116,12 +120,8 @@
 	/>
 
 	{#if resultText}
-		<section
-			class="ui-card shadow-sm p-6"
-		>
-			<pre
-				class="ui-pre">{resultText}</pre
-			>
+		<section class="ui-card shadow-sm p-6">
+			<pre class="ui-pre">{resultText}</pre>
 		</section>
 	{/if}
 

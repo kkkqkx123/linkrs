@@ -1,72 +1,109 @@
 /**
  * Mock handlers for monitoring endpoints (`/v1/statistics/**`,
- * `/v1/transactions**`, `/v1/sync/status`).
+ * `/v1/transactions**`, `/v1/sync/status`, `/v1/config`).
+ *
+ * Static payloads are typed against the generated OpenAPI contract
+ * (`components["schemas"]`) so field drift is caught at compile time
+ * instead of surfacing as blank panels or keyed-each crashes at runtime.
  */
 
+import type { components } from '$lib/api/schema';
 import type { MockEntry, MockRegistry } from '../index';
 import { demoEdges, demoVertices } from '../fixtures';
 
-const memory = { total_bytes: 34359738368, used_bytes: 12345678901 };
+type OverviewResponse = components['schemas']['OverviewResponse'];
+type SystemResourceResponse = components['schemas']['SystemResourceResponse'];
+type DatabaseOverviewResponse =
+	components['schemas']['DatabaseOverviewResponse'];
+type QueryStatsResponse = components['schemas']['QueryStatsResponse'];
+type SearchStatsResponse = components['schemas']['SearchStatsResponse'];
+type QueryProfileDetailResponse =
+	components['schemas']['QueryProfileDetailResponse'];
+type SyncStatusResponse = components['schemas']['SyncStatusResponse'];
+
+const memoryUsage = {
+	total_bytes: 34359738368,
+	used_bytes: 12345678901,
+};
 
 const latencyPercentiles = {
+	avg: 1450,
 	p50: 950,
-	p90: 2100,
 	p95: 3400,
 	p99: 7800,
-	p999: 15000,
-	max: 22000,
 };
 
-const timeseries = Array.from({ length: 24 }, (_, i) => ({
-	timestamp: 1735689600 + i * 3600,
-	queries: 120 + ((i * 37) % 60),
-	latency_us: 900 + ((i * 53) % 400),
-}));
+const timeseries: OverviewResponse['timeseries'] = Array.from(
+	{ length: 24 },
+	(_, i) => ({
+		second: 1735689600 + i * 3600,
+		queries: 120 + ((i * 37) % 60),
+		avg_latency_ms: 0.9 + ((i * 53) % 400) / 1000,
+		errors: i % 6 === 0 ? 1 : 0,
+	}),
+);
 
-const system = {
-	cpu: { usage_percent: 32.5, cores: 8 },
-	memory,
-	disk: { total_bytes: 1099511627776, used_bytes: 429496729600 },
+const system: SystemResourceResponse = {
+	connections: { active: 12, max: 256, total: 148 },
+	cpu_usage_percent: 32.5,
+	data_dir_size_bytes: 429496729600,
+	max_file_descriptors: 65535,
+	memory_usage: memoryUsage,
+	process_memory_bytes: 2147483648,
+	uptime_secs: 863_100,
+	wal_dir_size_bytes: 67108864,
 };
 
-const databasePerformance = {
-	active_queries: 2,
-	avg_latency_ms: 1.8,
-	cache_hit_rate: 0.93,
-	cache_hit_rate_source: 'query_cache',
-	error_total: 4,
-	latency_percentiles_us: latencyPercentiles,
-	queries_per_second: 142.6,
-	query_cache_size: 512,
-	total_queries: 918273,
-};
-
-const databaseOverview = {
-	performance: databasePerformance,
+const databaseOverview: DatabaseOverviewResponse = {
+	performance: {
+		active_queries: 2,
+		avg_latency_ms: 1.8,
+		cache_hit_rate: 0.93,
+		cache_hit_rate_source: 'query_cache',
+		error_total: 4,
+		latency_percentiles_us: latencyPercentiles,
+		queries_per_second: 142.6,
+		query_cache_size: 512,
+		total_queries: 918273,
+	},
 	search: {
 		avg_latency_ms: 4.2,
-		total_searches: 45021,
+		cache_hit_count: 36480,
 		cache_hit_rate: 0.81,
+		cache_miss_count: 8541,
+		total_delete_operations: 42,
+		total_errors: 0,
+		total_index_operations: 1210,
+		total_queries: 45021,
 	},
 	spaces: {
-		total: 1,
-		vertices: demoVertices.length,
-		edges: demoEdges.length,
+		count: 1,
+		total_vertices: demoVertices.length,
+		total_edges: demoEdges.length,
 	},
 	storage: {
-		sst_count: 4,
-		wal_size_bytes: 67108864,
-		compaction_pending: 0,
+		checkpoint: {
+			success_count: 128,
+			failure_count: 0,
+			trigger_count: 128,
+			avg_duration_us: 8200,
+		},
+		data_size_bytes: 214748364800,
+		dirty_pages: 6,
+		dirty_pages_total: 1024,
+		fragmentation_permille: 31,
+		index_size_bytes: 1073741824,
+		tombstone_count: 12,
+		tombstone_memory_bytes: 4096,
+		total_size_bytes: 1099511627776,
+		wasted_bytes: 33554432,
 	},
 };
 
 export const monitoringHandlers: MockRegistry = {
 	'GET /v1/statistics/overview': {
 		database: databaseOverview,
-		errors: {
-			total: 4,
-			by_type: { PARSE_ERROR: 2, TIMEOUT: 1, AUTH: 1 },
-		},
+		errors: { total: 4 },
 		query_latency_us: latencyPercentiles,
 		storage: {
 			checkpoint_failure: 0,
@@ -86,10 +123,11 @@ export const monitoringHandlers: MockRegistry = {
 		timeseries,
 		transaction: {
 			active: 1,
-			committed_total: 20487,
-			rolled_back_total: 9,
+			begun: 20496,
+			committed: 20487,
+			rolled_back: 9,
 		},
-	} satisfies MockEntry,
+	} satisfies OverviewResponse satisfies MockEntry,
 
 	'GET /v1/statistics/system': system satisfies MockEntry,
 
@@ -107,20 +145,69 @@ export const monitoringHandlers: MockRegistry = {
 			insert_queries: 51200,
 			match_queries: 866600,
 			update_queries: 43,
+			fetch_queries: 500,
+			go_queries: 100,
+			lookup_queries: 300,
+			show_queries: 100,
 		},
+		executor_summary: [
+			{
+				executor_type: 'GraphScan',
+				count: 82100,
+				total_time_ms: 9120,
+				avg_time_ms: 0.11,
+				total_rows: 1048576,
+			},
+			{
+				executor_type: 'VarLengthExpand',
+				count: 12400,
+				total_time_ms: 48200,
+				avg_time_ms: 3.89,
+				total_rows: 512000,
+			},
+			{
+				executor_type: 'Project',
+				count: 91800,
+				total_time_ms: 2210,
+				avg_time_ms: 0.02,
+				total_rows: 918273,
+			},
+		],
 		slow_queries: [
 			{
 				trace_id: 'trace-slow-001',
 				query: 'MATCH (a:person)-[e:knows*1..5]->(b) RETURN a, b',
 				duration_ms: 7800,
-				timestamp: 1735773600,
+				session_id: 424242,
+				status: 'finished',
+				started_at_secs: 1735773600,
+				plan_node_count: 14,
+				stages: { parse_ms: 1.2, plan_ms: 4.5, optimize_ms: 2.1, execute_ms: 7780 },
 			},
 		],
 		top_patterns: [
-			{ pattern: 'MATCH (x:person) WHERE x.name = $1 RETURN x', count: 40211 },
-			{ pattern: 'MATCH (a)-[e:knows]->(b) RETURN a, b', count: 18204 },
+			{
+				normalized_query: 'MATCH (x:person) WHERE x.name = $1 RETURN x',
+				execution_count: 40211,
+				avg_duration_ms: 0.6,
+				p95_duration_ms: 2.1,
+				p99_duration_ms: 5.4,
+				error_rate: 0.001,
+				error_count: 40,
+				query_type: 'MATCH',
+			},
+			{
+				normalized_query: 'MATCH (a)-[e:knows]->(b) RETURN a, b',
+				execution_count: 18204,
+				avg_duration_ms: 1.2,
+				p95_duration_ms: 4.8,
+				p99_duration_ms: 9.9,
+				error_rate: 0.003,
+				error_count: 55,
+				query_type: 'MATCH',
+			},
 		],
-	} satisfies MockEntry,
+	} satisfies QueryStatsResponse satisfies MockEntry,
 
 	'GET /v1/statistics/queries/{trace_id}': {
 		trace_id: 'trace-slow-001',
@@ -151,20 +238,52 @@ export const monitoringHandlers: MockRegistry = {
 				memory_bytes: 262144,
 			},
 		],
-	} satisfies MockEntry,
+	} satisfies QueryProfileDetailResponse satisfies MockEntry,
 
 	'GET /v1/statistics/search': {
-		search: { total: 45021, avg_latency_ms: 4.2, qps: 12.7 },
-		index: { documents: 8123, terms: 21000, segments: 2 },
-		cache: { hits: 36480, misses: 8541, hit_rate: 0.81 },
-		delete: { tombstones: 42, pending: 0 },
-		by_index: [{ index: 'bm25-default', searches: 45021, avg_latency_ms: 4.2 }],
-	} satisfies MockEntry,
+		search: {
+			total_queries: 45021,
+			avg_latency_ms: 4.2,
+			total_latency_ms: 189088,
+			total_errors: 0,
+			total_results: 450210,
+			latency_percentiles_us: latencyPercentiles,
+		},
+		index: {
+			avg_latency_ms: 0.8,
+			total_operations: 1210,
+			total_latency_ms: 968,
+			total_errors: 0,
+		},
+		cache: { hit_count: 36480, hit_rate: 0.81, miss_count: 8541 },
+		delete: {
+			avg_latency_ms: 0.4,
+			total_operations: 42,
+			total_latency_ms: 17,
+			total_errors: 0,
+		},
+		by_index: [
+			{
+				index: 'bm25-default',
+				search_queries: 45021,
+				avg_search_latency_ms: 4.2,
+				search_latency_ms: 189088,
+				search_errors: 0,
+				index_operations: 1210,
+				index_latency_ms: 968,
+				index_errors: 0,
+			},
+		],
+	} satisfies SearchStatsResponse satisfies MockEntry,
 
+	// Transaction metrics are untyped in the contract; the monitoring page
+	// reads begun/committed/rolled_back/active through the overview snapshot,
+	// so mirror those keys here.
 	'GET /v1/transactions/metrics': {
-		active_transactions: 1,
-		committed_total: 20487,
-		rolled_back_total: 9,
+		active: 1,
+		begun: 20496,
+		committed: 20487,
+		rolled_back: 9,
 		avg_commit_latency_ms: 2.4,
 		conflicts_total: 3,
 	} satisfies MockEntry,
@@ -189,6 +308,7 @@ export const monitoringHandlers: MockRegistry = {
 
 	'GET /v1/config': {
 		server: { bind: '127.0.0.1:9758', log_level: 'info' },
+		monitoring: { poll_interval_ms: 10000 },
 		query: { timeout_secs: 30, row_limit: 10000 },
 	} satisfies MockEntry,
 
@@ -199,6 +319,7 @@ export const monitoringHandlers: MockRegistry = {
 	'GET /v1/sync/status': {
 		is_running: true,
 		dlq_size: 0,
+		unrecovered_dlq_size: 0,
 		outbox_pending: 3,
 		outbox_leased: 1,
 		outbox_retries: 1,
@@ -207,5 +328,5 @@ export const monitoringHandlers: MockRegistry = {
 		outbox_lock_wait_nanos: 142000,
 		outbox_oldest_event_age_ms: 210,
 		outbox_write_amplification_bytes: 536870912,
-	} satisfies MockEntry,
+	} satisfies SyncStatusResponse satisfies MockEntry,
 };

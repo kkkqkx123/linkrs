@@ -16,6 +16,7 @@
 		type ActiveTransaction,
 	} from '$services/operations';
 	import { syncService } from '$services/sync';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import TrendChart from '$components/common/TrendChart.svelte';
 	import {
 		formatBytes,
@@ -228,7 +229,9 @@
 						for (const [key, value] of Object.entries(entries)) {
 							const entry = configEntryKey(section, key);
 							drafts[entry] =
-								typeof value === 'string' ? value : JSON.stringify(value ?? null);
+								typeof value === 'string'
+									? value
+									: JSON.stringify(value ?? null);
 						}
 					}
 				}
@@ -240,7 +243,8 @@
 			}
 			activeTransactions = txns;
 		} catch (err) {
-			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
+			opsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			opsLoading = false;
 		}
@@ -256,7 +260,8 @@
 			configMessage = t('monitoring.configSaved', { id: entry });
 			await loadOps();
 		} catch (err) {
-			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
+			opsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			configBusy = { ...configBusy, [entry]: false };
 		}
@@ -272,7 +277,8 @@
 			configMessage = t('monitoring.configReset', { id: entry });
 			await loadOps();
 		} catch (err) {
-			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
+			opsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			configBusy = { ...configBusy, [entry]: false };
 		}
@@ -305,7 +311,8 @@
 			degradedText = stringifyPayload(degraded);
 			retentionText = stringifyPayload(retention);
 		} catch (err) {
-			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+			syncError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			syncLoading = false;
 		}
@@ -319,7 +326,8 @@
 			syncMessage = stringifyPayload(result);
 			await loadSyncDiagnostics();
 		} catch (err) {
-			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+			syncError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			syncLoading = false;
 		}
@@ -334,7 +342,8 @@
 			syncMessage = stringifyPayload(result);
 			await loadSyncDiagnostics();
 		} catch (err) {
-			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+			syncError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			syncLoading = false;
 		}
@@ -348,7 +357,8 @@
 			syncMessage = stringifyPayload(result);
 			await loadSyncDiagnostics();
 		} catch (err) {
-			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+			syncError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			syncLoading = false;
 		}
@@ -383,7 +393,8 @@
 			syncMessage = stringifyPayload(result);
 			await loadSyncDiagnostics();
 		} catch (err) {
-			syncError = err instanceof Error ? err.message : t('notification.requestFailed');
+			syncError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			syncLoading = false;
 		}
@@ -395,7 +406,8 @@
 			await operationsService.killTransaction(id);
 			await loadOps();
 		} catch (err) {
-			opsError = err instanceof Error ? err.message : t('notification.requestFailed');
+			opsError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		}
 	}
 
@@ -406,30 +418,46 @@
 	}
 
 	function loadThresholds(): Thresholds {
-		const fallback: Thresholds = { cpuPercent: 80, memPercent: 80, slowMs: 500 };
+		const fallback: Thresholds = {
+			cpuPercent: 80,
+			memPercent: 80,
+			slowMs: 500,
+		};
 		try {
 			const raw = localStorage.getItem('linkrs_monitor_thresholds');
 			if (!raw) return fallback;
 			const parsed = JSON.parse(raw) as Partial<Thresholds>;
 			return {
 				cpuPercent:
-					typeof parsed.cpuPercent === 'number' ? parsed.cpuPercent : fallback.cpuPercent,
+					typeof parsed.cpuPercent === 'number'
+						? parsed.cpuPercent
+						: fallback.cpuPercent,
 				memPercent:
-					typeof parsed.memPercent === 'number' ? parsed.memPercent : fallback.memPercent,
-				slowMs: typeof parsed.slowMs === 'number' ? parsed.slowMs : fallback.slowMs,
+					typeof parsed.memPercent === 'number'
+						? parsed.memPercent
+						: fallback.memPercent,
+				slowMs:
+					typeof parsed.slowMs === 'number' ? parsed.slowMs : fallback.slowMs,
 			};
 		} catch {
 			return fallback;
 		}
 	}
 
-	let thresholds = $state<Thresholds>({ cpuPercent: 80, memPercent: 80, slowMs: 500 });
+	let thresholds = $state<Thresholds>({
+		cpuPercent: 80,
+		memPercent: 80,
+		slowMs: 500,
+	});
 	let thresholdsReady = $state(false);
 
 	$effect(() => {
 		if (!thresholdsReady) return;
 		try {
-			localStorage.setItem('linkrs_monitor_thresholds', JSON.stringify(thresholds));
+			localStorage.setItem(
+				'linkrs_monitor_thresholds',
+				JSON.stringify(thresholds),
+			);
 		} catch {
 			/* storage unavailable */
 		}
@@ -465,39 +493,35 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
-	<div class="ui-page-head">
-		<h1 class="ui-page-title">
-			{t('sidebar.monitoring')}
-		</h1>
-		<div class="flex items-center gap-2 text-sm">
-			{#if monitor.lastRefreshAt}
-				<span class="text-gray-500 dark:text-gray-400">
-					{t('monitoring.lastRefresh')}: {new Date(
-						monitor.lastRefreshAt,
-					).toLocaleTimeString()}
-				</span>
-			{/if}
-			<button
-				class="ui-btn ui-btn-soft ui-btn-sm"
-				onclick={togglePaused}
-			>
-				{monitor.paused ? t('monitoring.resume') : t('monitoring.pause')}
-			</button>
-			<button
-				class="ui-btn ui-btn-primary ui-btn-sm"
-				onclick={() => monitoringStore.refresh()}
-				disabled={monitor.loading}
-			>
-				{monitor.loading ? t('monitoring.loading') : t('common.refresh')}
-			</button>
-		</div>
-	</div>
+	<PageHeader title={t('sidebar.monitoring')}>
+		{#if monitor.lastRefreshAt}
+			<span class="text-sm text-gray-500 dark:text-gray-400">
+				{t('monitoring.lastRefresh')}: {new Date(
+					monitor.lastRefreshAt,
+				).toLocaleTimeString()}
+			</span>
+		{/if}
+		<button class="ui-btn ui-btn-soft ui-btn-sm" onclick={togglePaused}>
+			{monitor.paused ? t('monitoring.resume') : t('monitoring.pause')}
+		</button>
+		<button
+			class="ui-btn ui-btn-primary ui-btn-sm"
+			onclick={() => monitoringStore.refresh()}
+			disabled={monitor.loading}
+		>
+			{monitor.loading ? t('monitoring.loading') : t('common.refresh')}
+		</button>
+	</PageHeader>
 
 	<section
 		class="ui-card shadow-sm px-6 py-4 flex items-center gap-4 flex-wrap text-sm"
 	>
-		<span class="font-medium text-gray-700 dark:text-gray-300">{t('monitoring.thresholds')}</span>
-		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+		<span class="font-medium text-gray-700 dark:text-gray-300"
+			>{t('monitoring.thresholds')}</span
+		>
+		<label
+			class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+		>
 			{t('monitoring.cpu')} &gt;
 			<input
 				type="number"
@@ -507,7 +531,9 @@
 				bind:value={thresholds.cpuPercent}
 			/>%
 		</label>
-		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+		<label
+			class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+		>
 			{t('monitoring.memory')} &gt;
 			<input
 				type="number"
@@ -517,7 +543,9 @@
 				bind:value={thresholds.memPercent}
 			/>%
 		</label>
-		<label class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+		<label
+			class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+		>
 			{t('monitoring.slowQueries')} &gt;
 			<input
 				type="number"
@@ -540,9 +568,7 @@
 	{/if}
 
 	<!-- Overview -->
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('monitoring.overview')}
 		</h2>
@@ -621,28 +647,26 @@
 			</div>
 		</div>
 		{#if trendPoints.length > 0}
-		 <div class="mt-4">
-		  <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">
-		   {t('monitoring.trend')}: {formatCount(
-		    trendPoints.reduce((a, p) => a + (Number(p.queries) || 0), 0),
-		   )}
-		   {t('monitoring.queriesAvg')}
-		   {formatLatencyMs(
-		    trendPoints.reduce(
-		     (a, p) => a + (Number(p.avg_latency_ms) || 0),
-		     0,
-		    ) / Math.max(1, trendPoints.length),
-		   )}
-		  </div>
-		  <TrendChart series={trendSeries} xLabels={trendXLabels} height={120} />
-		 </div>
+			<div class="mt-4">
+				<div class="text-xs text-gray-500 dark:text-gray-400 mb-1">
+					{t('monitoring.trend')}: {formatCount(
+						trendPoints.reduce((a, p) => a + (Number(p.queries) || 0), 0),
+					)}
+					{t('monitoring.queriesAvg')}
+					{formatLatencyMs(
+						trendPoints.reduce(
+							(a, p) => a + (Number(p.avg_latency_ms) || 0),
+							0,
+						) / Math.max(1, trendPoints.length),
+					)}
+				</div>
+				<TrendChart series={trendSeries} xLabels={trendXLabels} height={120} />
+			</div>
 		{/if}
 	</section>
 
 	<!-- Resources -->
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('monitoring.resources')}
 		</h2>
@@ -720,9 +744,7 @@
 	</section>
 
 	<!-- Queries -->
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('monitoring.queries')}
 		</h2>
@@ -824,12 +846,8 @@
 					</thead>
 					<tbody>
 						{#each patterns as p (p.normalized_query)}
-							<tr
-								class="font-mono"
-							>
-								<td
-									class="max-w-72 truncate"
-								>
+							<tr class="font-mono">
+								<td class="max-w-72 truncate">
 									{p.normalized_query}
 								</td>
 								<td>{formatCount(p.execution_count)}</td>
@@ -862,12 +880,8 @@
 					</thead>
 					<tbody>
 						{#each executors as e (e.executor_type)}
-							<tr
-								class="font-mono"
-							>
-								<td>
-									>{e.executor_type}</td
-								>
+							<tr class="font-mono">
+								<td>{e.executor_type}</td>
 								<td>{formatCount(e.count)}</td>
 								<td>{formatLatencyMs(e.total_time_ms)}</td>
 								<td>{formatCount(e.total_rows)}</td>
@@ -896,15 +910,11 @@
 					<tbody>
 						{#each slowRows as row (row.trace_id)}
 							<tr
-								class="{Number(
-									row.duration_ms,
-								) > thresholds.slowMs
+								class={Number(row.duration_ms) > thresholds.slowMs
 									? 'bg-red-50 dark:bg-red-900/10'
-									: ''}"
+									: ''}
 							>
-								<td
-									class="max-w-80 truncate font-mono"
-								>
+								<td class="max-w-80 truncate font-mono">
 									<button
 										class="hover:underline cursor-pointer text-left"
 										onclick={() => openPortrait(row.trace_id)}
@@ -912,9 +922,7 @@
 										{row.query}
 									</button>
 								</td>
-								<td class="font-mono"
-									>{formatLatencyMs(row.duration_ms)}</td
-								>
+								<td class="font-mono">{formatLatencyMs(row.duration_ms)}</td>
 								<td class="font-mono text-gray-500 dark:text-gray-400"
 									>{row.trace_id}</td
 								>
@@ -927,9 +935,7 @@
 	</section>
 
 	<!-- Storage -->
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('monitoring.storage')}
 		</h2>
@@ -1025,9 +1031,7 @@
 
 	<!-- Transactions + sync + search -->
 	<div class="grid md:grid-cols-3 gap-4">
-		<section
-			class="ui-card shadow-sm p-6"
-		>
+		<section class="ui-card shadow-sm p-6">
 			<h2 class="ui-section-title">
 				{t('monitoring.transactions')}
 			</h2>
@@ -1070,9 +1074,7 @@
 				</div>
 			</div>
 		</section>
-		<section
-			class="ui-card shadow-sm p-6"
-		>
+		<section class="ui-card shadow-sm p-6">
 			<div class="flex items-center justify-between mb-3">
 				<h2 class="ui-section-title mb-0">
 					{t('monitoring.sync')}
@@ -1096,9 +1098,7 @@
 					>
 				</div>
 				{#if syncStatusText}
-					<pre
-						class="ui-pre ui-pre-sm max-h-32">{syncStatusText}</pre
-					>
+					<pre class="ui-pre ui-pre-sm max-h-32">{syncStatusText}</pre>
 				{/if}
 				<div class="flex justify-between">
 					<span class="text-gray-500">{t('monitoring.outbox')}</span>
@@ -1124,9 +1124,7 @@
 				<p class="ui-error-text mb-2">{syncError}</p>
 			{/if}
 			{#if syncMessage}
-				<pre
-					class="ui-pre ui-pre-sm max-h-32 mb-2">{syncMessage}</pre
-				>
+				<pre class="ui-pre ui-pre-sm max-h-32 mb-2">{syncMessage}</pre>
 			{/if}
 			<div class="flex flex-wrap gap-2 mb-3">
 				<button
@@ -1157,9 +1155,7 @@
 						{t('monitoring.deadLetters')}
 					</h3>
 					{#if deadLettersText}
-						<pre
-							class="ui-pre ui-pre-sm">{deadLettersText}</pre
-						>
+						<pre class="ui-pre ui-pre-sm">{deadLettersText}</pre>
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
 					{/if}
@@ -1169,9 +1165,7 @@
 						{t('monitoring.degradedRanges')}
 					</h3>
 					{#if degradedText}
-						<pre
-							class="ui-pre ui-pre-sm">{degradedText}</pre
-						>
+						<pre class="ui-pre ui-pre-sm">{degradedText}</pre>
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
 					{/if}
@@ -1219,9 +1213,7 @@
 						{t('monitoring.diagnostics')}
 					</h3>
 					{#if syncDiagnostics}
-						<pre
-							class="ui-pre ui-pre-sm">{syncDiagnostics}</pre
-						>
+						<pre class="ui-pre ui-pre-sm">{syncDiagnostics}</pre>
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
 					{/if}
@@ -1231,18 +1223,14 @@
 						{t('monitoring.retention')}
 					</h3>
 					{#if retentionText}
-						<pre
-							class="ui-pre ui-pre-sm">{retentionText}</pre
-						>
+						<pre class="ui-pre ui-pre-sm">{retentionText}</pre>
 					{:else}
 						<p class="text-gray-400">{t('monitoring.noData')}</p>
 					{/if}
 				</div>
 			</div>
 		</section>
-		<section
-			class="ui-card shadow-sm p-6"
-		>
+		<section class="ui-card shadow-sm p-6">
 			<h2 class="ui-section-title">
 				{t('common.search')}
 			</h2>
@@ -1273,9 +1261,7 @@
 								<tr>
 									<td class="max-w-40 truncate">{entry.index}</td>
 									<td>{formatCount(entry.search_queries)}</td>
-									<td
-										>{formatLatencyMs(entry.avg_search_latency_ms)}</td
-									>
+									<td>{formatLatencyMs(entry.avg_search_latency_ms)}</td>
 								</tr>
 							{/each}
 						</tbody>
@@ -1286,9 +1272,7 @@
 	</div>
 
 	<!-- Operations -->
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<div class="flex items-center justify-between mb-3">
 			<h2 class="ui-section-title mb-0">
 				{t('monitoring.operations')}
@@ -1348,7 +1332,9 @@
 					{t('monitoring.config')}
 				</h3>
 				{#if configMessage}
-					<p class="text-xs text-green-600 dark:text-green-400 mb-2">{configMessage}</p>
+					<p class="text-xs text-green-600 dark:text-green-400 mb-2">
+						{configMessage}
+					</p>
 				{/if}
 				{#if Object.keys(configSections).length > 0}
 					<div class="space-y-3 max-h-96 overflow-auto">
@@ -1366,7 +1352,9 @@
 									{#each Object.keys(values) as key (key)}
 										{@const entry = configEntryKey(section, key)}
 										<div class="flex items-center gap-2 text-xs">
-											<span class="font-mono w-40 shrink-0 truncate" title={key}>{key}</span>
+											<span class="font-mono w-40 shrink-0 truncate" title={key}
+												>{key}</span
+											>
 											<input
 												class="flex-1 ui-input ui-input-sm font-mono"
 												bind:value={configDrafts[entry]}
@@ -1392,9 +1380,7 @@
 						{/each}
 					</div>
 				{:else if configText}
-					<pre
-						class="ui-pre max-h-64">{configText}</pre
-					>
+					<pre class="ui-pre max-h-64">{configText}</pre>
 				{:else}
 					<p class="text-sm text-gray-400">{t('monitoring.configHint')}</p>
 				{/if}
@@ -1417,10 +1403,7 @@
 					<h2 class="ui-section-title mb-0">
 						{t('monitoring.portrait')}
 					</h2>
-					<button
-						class="ui-icon-btn"
-						onclick={closePortrait}
-					>
+					<button class="ui-icon-btn" onclick={closePortrait}>
 						{t('common.close')}
 					</button>
 				</div>
@@ -1436,10 +1419,7 @@
 							{portrait.trace_id}
 						</div>
 						<div class="flex gap-2">
-							<button
-								class="ui-btn ui-btn-soft ui-btn-xs"
-								onclick={copyTrace}
-							>
+							<button class="ui-btn ui-btn-soft ui-btn-xs" onclick={copyTrace}>
 								{copied ? t('monitoring.copied') : t('monitoring.copyTrace')}
 							</button>
 							<button

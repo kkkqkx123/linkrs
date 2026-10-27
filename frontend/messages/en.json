@@ -228,6 +228,7 @@
 	"graph.queryMode": "Write mode",
 	"graph.queryNoGraph": "No graph elements parsed, {skipped} scalar cells ignored",
 	"graph.queryOpenConsole": "Open console",
+	"graph.export": "Export",
 	"graphPreview.hidePreview": "Hide Preview",
 	"graphPreview.openInGraph": "Open in Graph",
 	"graphPreview.preview": "Preview",

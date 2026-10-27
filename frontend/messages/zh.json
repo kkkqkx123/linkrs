@@ -228,6 +228,7 @@
 	"graph.queryMode": "写入模式",
 	"graph.queryNoGraph": "未解析出图元素，已忽略 {skipped} 个标量单元格",
 	"graph.queryOpenConsole": "去控制台",
+	"graph.export": "导出",
 	"graphPreview.hidePreview": "收起预览",
 	"graphPreview.openInGraph": "在图视图中打开",
 	"graphPreview.preview": "预览",

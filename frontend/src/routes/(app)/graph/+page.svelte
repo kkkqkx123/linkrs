@@ -3,7 +3,12 @@
 	import { get } from 'svelte/store';
 
 	import { t } from '$i18n';
-	import { graphStore, type EdgeDetail, type GraphState, type NodeDetail } from '$stores/graph';
+	import {
+		graphStore,
+		type EdgeDetail,
+		type GraphState,
+		type NodeDetail,
+	} from '$stores/graph';
 	import { schemaStore } from '$stores/schema';
 	import { notificationStore } from '$stores/notification';
 	import { graphService } from '$services/graph';
@@ -19,6 +24,15 @@
 	let edgeLabelFields = $state<Record<string, string[]>>({});
 	let stylePanelOpen = $state(false);
 	let filterPanelOpen = $state(false);
+	let exportOpen = $state(false);
+	let exportMenuEl = $state<HTMLDivElement | null>(null);
+
+	/** Close the export dropdown when focus leaves its container. */
+	function handleExportFocusOut(e: FocusEvent) {
+		if (exportMenuEl && !exportMenuEl.contains(e.relatedTarget as Node)) {
+			exportOpen = false;
+		}
+	}
 	let cyInstance = $state<cytoscape.Core | null>(null);
 	let relayoutToken = $state(0);
 	let isExpanding = $state(false);
@@ -29,10 +43,16 @@
 	const failedNodes = new SvelteSet<string>();
 	// Explore stack: one entry per successful expansion, holding the element ids
 	// that step added, so undo can remove exactly that step's contribution.
-	const exploreStack = $state<{ nodeId: string; nodeIds: string[]; edgeIds: string[] }[]>([]);
+	const exploreStack = $state<
+		{ nodeId: string; nodeIds: string[]; edgeIds: string[] }[]
+	>([]);
 
 	let storeState = $state<GraphState>(get(graphStore));
-	$effect(() => graphStore.subscribe((s) => { storeState = s; }));
+	$effect(() =>
+		graphStore.subscribe((s) => {
+			storeState = s;
+		}),
+	);
 
 	let layout = $derived(storeState.layout);
 	let graphData = $derived(storeState.graphData);
@@ -102,7 +122,9 @@
 		const hasSearch = query.length > 0;
 
 		cy.batch(() => {
-			cy.elements().removeClass('search-match search-dimmed filter-hidden simplified-hidden');
+			cy.elements().removeClass(
+				'search-match search-dimmed filter-hidden simplified-hidden',
+			);
 
 			if (!hasSearch && !hasFilter && !simplifiedMode) return;
 
@@ -305,7 +327,10 @@
 
 	function handleExportPng() {
 		if (!cyInstance) return;
-		const png = cyInstance.png({ full: true, bg: isDark ? '#111827' : '#ffffff' });
+		const png = cyInstance.png({
+			full: true,
+			bg: isDark ? '#111827' : '#ffffff',
+		});
 		if (!png) return;
 		const link = document.createElement('a');
 		link.href = png;
@@ -328,16 +353,15 @@
 </script>
 
 <div class="ui-page">
-	<div
-		class="ui-card shadow-sm px-6 py-4 flex items-center justify-between"
-	>
-		<h2
-			class="ui-page-title flex items-center gap-2"
+	<div class="ui-card shadow-sm px-5 py-3 flex items-center gap-3 flex-wrap">
+		<h1
+			class="ui-page-title text-base flex items-center gap-2 whitespace-nowrap"
 		>
 			<span>🔗</span>
 			{t('graph.title')}
 			{#if graphData}
-				<span class="text-xs font-normal text-gray-500 dark:text-gray-400"
+				<span
+					class="hidden lg:inline text-xs font-normal text-gray-500 dark:text-gray-400"
 					>{t('graphPreview.summary', {
 						nodes: graphData.nodes.length,
 						edges: graphData.edges.length,
@@ -349,76 +373,33 @@
 					>Expanding…</span
 				>
 			{/if}
-		</h2>
-		<div class="flex items-center gap-3">
+		</h1>
+		<div class="flex items-center gap-2 ml-auto flex-wrap">
 			<input
 				type="text"
-				class="ui-input"
+				class="ui-input ui-input-sm w-44 md:w-56 shrink-0"
 				placeholder={t('graph.search')}
 				value={searchQuery}
-				oninput={(e) => graphStore.setSearchQuery((e.target as HTMLInputElement).value)}
+				oninput={(e) =>
+					graphStore.setSearchQuery((e.target as HTMLInputElement).value)}
 				disabled={!graphData}
 			/>
 			<button
-				class="ui-btn ui-btn-ghost"
+				class="ui-btn ui-btn-ghost ui-btn-sm whitespace-nowrap"
 				onclick={() => (filterPanelOpen = !filterPanelOpen)}
 				disabled={!graphData}
 			>
 				{t('dataBrowser.filter')}
 			</button>
 			<button
-				class="ui-btn ui-btn-ghost"
-				onclick={handleFitToScreen}
-				disabled={!graphData}
-			>
-				{t('graph.fit')}
-			</button>
-			<button
-				class="ui-btn ui-btn-ghost"
-				onclick={handleResetZoom}
-				disabled={!graphData}
-			>
-				{t('graph.reset')}
-			</button>
-			<button
-				class="ui-btn ui-btn-ghost"
+				class="ui-btn ui-btn-ghost ui-btn-sm whitespace-nowrap"
 				onclick={() => (stylePanelOpen = !stylePanelOpen)}
 				disabled={!graphData}
 			>
 				{t('graph.style')}
 			</button>
-			<button
-				class="ui-btn ui-btn-ghost"
-				onclick={handleExportPng}
-				disabled={!graphData}
-			>
-				PNG
-			</button>
-			<button
-				class="ui-btn ui-btn-ghost"
-				onclick={handleExportJson}
-				disabled={!graphData}
-			>
-				JSON
-			</button>
-			<button
-				class="ui-btn ui-btn-ghost"
-				onclick={undoExploreStep}
-				disabled={!graphData || exploreStack.length === 0}
-				title={t('graph.undoExpand')}
-			>
-				↩ {t('graph.undoExpand')}
-			</button>
-			<button
-				class="ui-btn ui-btn-ghost"
-				onclick={resetExplore}
-				disabled={!graphData || exploreStack.length === 0}
-				title={t('graph.resetExplore')}
-			>
-				{t('graph.resetExplore')}
-			</button>
 			<select
-				class="ui-input"
+				class="ui-input ui-input-sm w-32 shrink-0"
 				aria-label={t('graph.layoutLabel')}
 				value={layout}
 				onchange={handleLayoutChange}
@@ -427,8 +408,81 @@
 					<option value={opt.value}>{opt.label()}</option>
 				{/each}
 			</select>
+			<div
+				class="relative shrink-0"
+				bind:this={exportMenuEl}
+				onfocusout={handleExportFocusOut}
+			>
+				<button
+					class="ui-btn ui-btn-ghost ui-btn-sm whitespace-nowrap"
+					onclick={() => (exportOpen = !exportOpen)}
+					disabled={!graphData}
+				>
+					{t('graph.export')} ▾
+				</button>
+				{#if exportOpen}
+					<div
+						class="absolute right-0 top-full mt-1 z-20 min-w-32 ui-card shadow-md py-1"
+					>
+						<button
+							class="w-full text-left px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer whitespace-nowrap"
+							onclick={() => {
+								exportOpen = false;
+								handleExportPng();
+							}}
+						>
+							PNG
+						</button>
+						<button
+							class="w-full text-left px-3 py-1.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer whitespace-nowrap"
+							onclick={() => {
+								exportOpen = false;
+								handleExportJson();
+							}}
+						>
+							JSON
+						</button>
+					</div>
+				{/if}
+			</div>
 			<button
-				class="ui-btn ui-btn-ghost"
+				class="ui-btn ui-btn-ghost ui-btn-sm"
+				onclick={handleFitToScreen}
+				disabled={!graphData}
+				title={t('graph.fit')}
+				aria-label={t('graph.fit')}
+			>
+				⛶
+			</button>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm"
+				onclick={handleResetZoom}
+				disabled={!graphData}
+				title={t('graph.reset')}
+				aria-label={t('graph.reset')}
+			>
+				⟲
+			</button>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm"
+				onclick={undoExploreStep}
+				disabled={!graphData || exploreStack.length === 0}
+				title={t('graph.undoExpand')}
+				aria-label={t('graph.undoExpand')}
+			>
+				↩
+			</button>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm"
+				onclick={resetExplore}
+				disabled={!graphData || exploreStack.length === 0}
+				title={t('graph.resetExplore')}
+				aria-label={t('graph.resetExplore')}
+			>
+				⌂
+			</button>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm whitespace-nowrap"
 				onclick={handleClearGraph}
 				disabled={!graphData}
 			>
@@ -465,7 +519,9 @@
 				<div class="flex flex-wrap gap-2">
 					{#each Object.keys(edgeStyles) as type (type)}
 						<button
-							class="ui-chip {filterEdgeTypes.has(type) ? 'ui-chip-active' : ''}"
+							class="ui-chip {filterEdgeTypes.has(type)
+								? 'ui-chip-active'
+								: ''}"
 							onclick={() => graphStore.toggleFilterEdgeType(type)}
 						>
 							{type}
@@ -474,16 +530,23 @@
 				</div>
 			</div>
 			<div class="col-span-2 flex items-center gap-3">
-				<label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+				<label
+					class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer"
+				>
 					<input
 						type="checkbox"
 						checked={simplifiedMode}
-						onchange={(e) => graphStore.setSimplifiedMode((e.target as HTMLInputElement).checked)}
+						onchange={(e) =>
+							graphStore.setSimplifiedMode(
+								(e.target as HTMLInputElement).checked,
+							)}
 						class="cursor-pointer"
 					/>
 					{t('graph.simplifiedMode')}
 				</label>
-				<span class="text-xs text-gray-400">{t('graph.simplifiedModeHint')}</span>
+				<span class="text-xs text-gray-400"
+					>{t('graph.simplifiedModeHint')}</span
+				>
 				<button
 					class="ml-auto px-3 py-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 cursor-pointer"
 					onclick={() => graphStore.clearFilters()}
@@ -566,37 +629,54 @@
 					</div>
 				{/each}
 			</div>
-			<div class="col-span-2 border-t border-gray-200 dark:border-gray-700 pt-3 mt-2">
+			<div
+				class="col-span-2 border-t border-gray-200 dark:border-gray-700 pt-3 mt-2"
+			>
 				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
 					{t('graph.layoutLabel')}
 				</h4>
 				<div class="grid grid-cols-3 gap-3">
-					<label class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
+					<label
+						class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400"
+					>
 						{t('graph.nodeRepulsion')}
 						<input
 							type="number"
 							class="ui-input ui-input-sm"
 							value={layoutParams.nodeRepulsion}
-							onchange={(e) => graphStore.setLayoutParams({ nodeRepulsion: Number((e.target as HTMLInputElement).value) })}
+							onchange={(e) =>
+								graphStore.setLayoutParams({
+									nodeRepulsion: Number((e.target as HTMLInputElement).value),
+								})}
 						/>
 					</label>
-					<label class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
+					<label
+						class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400"
+					>
 						{t('graph.gravity')}
 						<input
 							type="number"
 							step="0.01"
 							class="ui-input ui-input-sm"
 							value={layoutParams.gravity}
-							onchange={(e) => graphStore.setLayoutParams({ gravity: Number((e.target as HTMLInputElement).value) })}
+							onchange={(e) =>
+								graphStore.setLayoutParams({
+									gravity: Number((e.target as HTMLInputElement).value),
+								})}
 						/>
 					</label>
-					<label class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
+					<label
+						class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400"
+					>
 						{t('graph.numIter')}
 						<input
 							type="number"
 							class="ui-input ui-input-sm"
 							value={layoutParams.numIter}
-							onchange={(e) => graphStore.setLayoutParams({ numIter: Number((e.target as HTMLInputElement).value) })}
+							onchange={(e) =>
+								graphStore.setLayoutParams({
+									numIter: Number((e.target as HTMLInputElement).value),
+								})}
 						/>
 					</label>
 				</div>
@@ -604,28 +684,30 @@
 		</div>
 	{/if}
 
-	<div
-		class="flex-1 ui-card ui-card-flush shadow-sm flex overflow-hidden"
-	>
+	<div class="flex-1 ui-card ui-card-flush shadow-sm flex overflow-hidden">
 		<div class="flex-1 relative">
 			{#if graphData}
-			<CytoscapeCanvas
-				bind:cyInstance
-				data={graphData}
-				{styleConfig}
-				{layout}
-				{isDark}
-				zoom={storeZoom}
-				{relayoutToken}
-				{layoutParams}
-				onNodeTap={handleNodeTap}
-				onEdgeTap={handleEdgeTap}
-				onBackgroundTap={handleBackgroundTap}
-				onZoom={(z) => graphStore.setZoom(z)}
-			/>
-			<div class="absolute bottom-2 right-2 text-xs text-gray-400 dark:text-gray-500 bg-white/80 dark:bg-[#1C2333]/80 px-2 py-1 rounded">
-				Layout: {layoutDuration.toFixed(0)}ms | Sync: {syncDuration.toFixed(0)}ms
-			</div>
+				<CytoscapeCanvas
+					bind:cyInstance
+					data={graphData}
+					{styleConfig}
+					{layout}
+					{isDark}
+					zoom={storeZoom}
+					{relayoutToken}
+					{layoutParams}
+					onNodeTap={handleNodeTap}
+					onEdgeTap={handleEdgeTap}
+					onBackgroundTap={handleBackgroundTap}
+					onZoom={(z) => graphStore.setZoom(z)}
+				/>
+				<div
+					class="absolute bottom-2 right-2 text-xs text-gray-400 dark:text-gray-500 bg-white/80 dark:bg-[#1C2333]/80 px-2 py-1 rounded"
+				>
+					Layout: {layoutDuration.toFixed(0)}ms | Sync: {syncDuration.toFixed(
+						0,
+					)}ms
+				</div>
 			{:else if initError}
 				<div class="absolute inset-0 flex items-center justify-center">
 					<div class="text-center text-red-500 dark:text-red-400">
@@ -655,9 +737,8 @@
 							? t('graph.selectNode')
 							: t('graph.selectEdge')} Detail
 					</h3>
-					<button
-						class="ui-icon-btn"
-						onclick={() => graphStore.hideDetail()}>✕</button
+					<button class="ui-icon-btn" onclick={() => graphStore.hideDetail()}
+						>✕</button
 					>
 				</div>
 				<div class="space-y-3">
@@ -675,40 +756,42 @@
 							</div>
 						{/if}
 					{/each}
-				{#if detailData.properties && Object.keys(detailData.properties).length > 0}
-					<div
-						class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700"
-					>
-						<h4
-							class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+					{#if detailData.properties && Object.keys(detailData.properties).length > 0}
+						<div
+							class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700"
 						>
-							{t('common.properties')}
-						</h4>
-						{#each Object.entries(detailData.properties) as [k, v] (k)}
-							<div class="text-sm mb-2">
-								<span class="text-gray-500 dark:text-gray-400 block text-xs"
-									>{k}</span
-								>
-								<span
-									class="text-gray-800 dark:text-gray-200 font-mono text-xs break-all"
-									>{typeof v === 'object'
-										? JSON.stringify(v)
-										: String(v)}</span
-								>
-							</div>
-						{/each}
-					</div>
-				{/if}
-				{#if detailType === 'node' && failedNodes.has(detailData.id)}
-					<div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-						<button
-							class="w-full ui-btn ui-btn-ghost"
-							onclick={() => retryExpand(detailData.id)}
+							<h4
+								class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+							>
+								{t('common.properties')}
+							</h4>
+							{#each Object.entries(detailData.properties) as [k, v] (k)}
+								<div class="text-sm mb-2">
+									<span class="text-gray-500 dark:text-gray-400 block text-xs"
+										>{k}</span
+									>
+									<span
+										class="text-gray-800 dark:text-gray-200 font-mono text-xs break-all"
+										>{typeof v === 'object'
+											? JSON.stringify(v)
+											: String(v)}</span
+									>
+								</div>
+							{/each}
+						</div>
+					{/if}
+					{#if detailType === 'node' && failedNodes.has(detailData.id)}
+						<div
+							class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700"
 						>
-							Retry Expand
-						</button>
-					</div>
-				{/if}
+							<button
+								class="w-full ui-btn ui-btn-ghost"
+								onclick={() => retryExpand(detailData.id)}
+							>
+								Retry Expand
+							</button>
+						</div>
+					{/if}
 				</div>
 			</div>
 		{/if}

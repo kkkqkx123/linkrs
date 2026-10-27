@@ -7,6 +7,7 @@
 	import { dataBrowserStore } from '$stores/dataBrowser';
 	import { graphStore } from '$stores/graph';
 	import { schemaStore } from '$stores/schema';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { dataBrowserService } from '$services/dataBrowser';
 	import { formatCellValue } from '$utils/parseData';
 	import {
@@ -511,39 +512,30 @@
 	<PageSkeleton />
 {:else if currentSpace}
 	<div class="ui-page">
-		<div class="ui-card shadow-sm px-6 py-4 flex items-center justify-between">
-			<h2 class="ui-page-title">
-				📋 {t('sidebar.dataBrowser')}
-			</h2>
-			<div class="flex gap-2">
-				<button class="ui-btn ui-btn-ghost" onclick={loadStatistics}>
-					🔄 {t('common.refresh')}
-				</button>
-				<button
-					class="ui-chip {filterPanelVisible ? 'ui-chip-active' : ''}"
-					onclick={() => dataBrowserStore.toggleFilterPanel()}
-				>
-					🔍 {t('dataBrowser.filter')}
-				</button>
-			</div>
-		</div>
+		<PageHeader title={t('sidebar.dataBrowser')}>
+			<button class="ui-btn ui-btn-ghost ui-btn-sm" onclick={loadStatistics}>
+				🔄 {t('common.refresh')}
+			</button>
+			<button
+				class="ui-chip {filterPanelVisible ? 'ui-chip-active' : ''}"
+				onclick={() => dataBrowserStore.toggleFilterPanel()}
+			>
+				🔍 {t('dataBrowser.filter')}
+			</button>
+		</PageHeader>
 
 		{#if filterPanelVisible}
 			<FilterPanel {activeTab} onApply={applyFilters} />
 		{/if}
 
 		{#if error}
-			<div
-				class="ui-alert ui-alert-error text-sm"
-			>
+			<div class="ui-alert ui-alert-error text-sm">
 				{error}
 			</div>
 		{/if}
 
 		{#if selectedIds.size > 0}
-			<div
-				class="ui-alert ui-alert-info flex items-center gap-3 text-sm"
-			>
+			<div class="ui-alert ui-alert-info flex items-center gap-3 text-sm">
 				<span class="text-blue-700 dark:text-blue-300">
 					{t('dataBrowser.batch.selected', { count: selectedIds.size })}
 				</span>
@@ -560,9 +552,7 @@
 			</div>
 		{/if}
 		{#if batchMessage}
-			<div
-				class="ui-alert ui-alert-ok text-sm"
-			>
+			<div class="ui-alert ui-alert-ok text-sm">
 				{batchMessage}
 				{#if batchError}
 					<div class="mt-1 text-red-600 dark:text-red-400 text-xs">
@@ -606,9 +596,7 @@
 
 						{#if loading}
 							<div class="ui-empty">
-								<div
-									class="ui-spinner"
-								></div>
+								<div class="ui-spinner"></div>
 							</div>
 						{:else if vertices.length > 0}
 							<div class="overflow-x-auto">
@@ -730,9 +718,7 @@
 
 						{#if loading}
 							<div class="ui-empty">
-								<div
-									class="ui-spinner"
-								></div>
+								<div class="ui-spinner"></div>
 							</div>
 						{:else if edges.length > 0}
 							<div class="overflow-x-auto">
@@ -851,7 +837,9 @@
 			<div
 				class="w-64 border-l border-gray-200 dark:border-gray-700 p-5 bg-gray-50 dark:bg-gray-800/20 overflow-y-auto"
 			>
-				<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-3">
+				<h3
+					class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-3"
+				>
 					{t('dataBrowser.statistics')}
 				</h3>
 				{#if statistics}
@@ -1056,9 +1044,7 @@
 			<pre
 				class="ui-pre ui-pre-sm whitespace-pre-wrap mt-3">{deleteConfirm.statement}</pre>
 			{#if deleteError}
-				<div
-					class="ui-alert ui-alert-error mt-3"
-				>
+				<div class="ui-alert ui-alert-error mt-3">
 					{deleteError}
 				</div>
 			{/if}

@@ -48,11 +48,11 @@
 </script>
 
 <div
-	class="ui-card shadow-sm px-5 py-4 flex items-center gap-2 flex-wrap"
+	class="ui-card shadow-sm px-5 py-3 flex items-center gap-2 flex-wrap"
 >
 	<input
 		type="text"
-		class="flex-1 min-w-52 ui-input"
+		class="flex-1 min-w-52 ui-input ui-input-sm"
 		placeholder={t('graph.queryPlaceholder')}
 		bind:value={query}
 		onkeydown={(e) => {

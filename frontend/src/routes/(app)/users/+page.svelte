@@ -4,6 +4,7 @@
 	import { get } from 'svelte/store';
 	import { t } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { usersService, type ManagedUser } from '$services/users';
 
 	let users = $state<ManagedUser[]>([]);
@@ -109,7 +110,11 @@
 		loading = true;
 		error = null;
 		try {
-			await usersService.grant(user.username, roleName.trim(), roleSpace.trim());
+			await usersService.grant(
+				user.username,
+				roleName.trim(),
+				roleSpace.trim(),
+			);
 			roleTarget = null;
 			await loadUsers();
 		} catch (err) {
@@ -178,10 +183,7 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
-	<div class="ui-page-head">
-		<h1 class="ui-page-title">
-			{t('users.title')}
-		</h1>
+	<PageHeader title={t('users.title')}>
 		<button
 			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={loadUsers}
@@ -189,12 +191,10 @@
 		>
 			{loading ? t('common.loading') : t('common.refresh')}
 		</button>
-	</div>
+	</PageHeader>
 
 	{#if fallback}
-		<p
-			class="ui-alert ui-alert-warn"
-		>
+		<p class="ui-alert ui-alert-warn">
 			{t('users.queryFallback')}
 		</p>
 	{/if}
@@ -203,9 +203,7 @@
 		<p class="ui-error-text">{error}</p>
 	{/if}
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('users.create')}
 		</h2>
@@ -233,9 +231,7 @@
 		</div>
 	</section>
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('users.changeOwnPassword')}
 		</h2>
@@ -271,9 +267,7 @@
 		</div>
 	</section>
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<div class="mb-3">
 			<input
 				class="ui-input w-full"

@@ -4,6 +4,7 @@
 	import { get } from 'svelte/store';
 	import { t } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import {
 		connectionService,
 		type SessionListItem,
@@ -51,10 +52,7 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
-	<div class="ui-page-head">
-		<h1 class="ui-page-title">
-			{t('sessions.title')}
-		</h1>
+	<PageHeader title={t('sessions.title')}>
 		<button
 			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={loadSessions}
@@ -62,17 +60,17 @@
 		>
 			{loading ? t('common.loading') : t('common.refresh')}
 		</button>
-	</div>
+	</PageHeader>
 
 	{#if error}
 		<p class="ui-error-text">{error}</p>
 	{/if}
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		{#if sessions.length === 0}
-			<p class="text-sm text-gray-500 dark:text-gray-400">{t('sessions.empty')}</p>
+			<p class="text-sm text-gray-500 dark:text-gray-400">
+				{t('sessions.empty')}
+			</p>
 		{:else}
 			<div class="overflow-x-auto">
 				<table class="ui-table w-full">

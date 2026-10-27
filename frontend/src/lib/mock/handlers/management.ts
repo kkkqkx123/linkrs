@@ -200,17 +200,5 @@ export const managementHandlers: MockRegistry = {
 			recommendation: '',
 		} satisfies MockEntry,
 
-	'POST /v1/query/cursor/open': {
-		cursor_id: 9001,
-		columns: ['n'],
-	} satisfies MockEntry,
-
-	'POST /v1/query/cursor/fetch': {
-		columns: ['n'],
-		rows: [],
-		has_more: false,
-		returned: 0,
-	} satisfies MockEntry,
-
-	'POST /v1/query/cursor/close': { success: true, closed: true } satisfies MockEntry,
+	// Cursor endpoints (`/v1/query/cursor/**`) are registered by query.ts.
 };

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { t } from '$i18n';
 	import { vectorService } from '$services/vector';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 
 	let spaceId = $state(1);
 	let tagName = $state('');
@@ -29,7 +30,8 @@
 		try {
 			resultText = stringify(await fn());
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.requestFailed');
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			loading = false;
 		}
@@ -46,26 +48,21 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
-	<div class="ui-page-head">
-		<h1 class="ui-page-title">
-			{t('sidebar.vector')}
-		</h1>
+	<PageHeader title={t('sidebar.vector')}>
 		<button
-			class="ui-btn ui-btn-primary"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={() => run(() => vectorService.list())}
 			disabled={loading}
 		>
 			{loading ? t('common.loading') : t('vector.list')}
 		</button>
-	</div>
+	</PageHeader>
 
 	{#if error}
 		<p class="ui-error-text">{error}</p>
 	{/if}
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('vector.manage')}
 		</h2>
@@ -80,17 +77,11 @@
 			</label>
 			<label class="ui-field">
 				{t('vector.tag')}
-				<input
-					class="ui-input ui-input-sm font-mono"
-					bind:value={tagName}
-				/>
+				<input class="ui-input ui-input-sm font-mono" bind:value={tagName} />
 			</label>
 			<label class="ui-field">
 				{t('vector.field')}
-				<input
-					class="ui-input ui-input-sm font-mono"
-					bind:value={fieldName}
-				/>
+				<input class="ui-input ui-input-sm font-mono" bind:value={fieldName} />
 			</label>
 			<label class="ui-field">
 				{t('vector.size')}
@@ -104,10 +95,7 @@
 		<div class="grid md:grid-cols-2 gap-2 text-sm mb-3">
 			<label class="ui-field">
 				{t('vector.distance')}
-				<select
-					class="ui-input ui-input-sm"
-					bind:value={distance}
-				>
+				<select class="ui-input ui-input-sm" bind:value={distance}>
 					<option value="Cosine">Cosine</option>
 					<option value="Euclidean">Euclidean</option>
 					<option value="DotProduct">DotProduct</option>
@@ -115,10 +103,7 @@
 			</label>
 			<label class="ui-field">
 				{t('vector.rebuildId')}
-				<input
-					class="ui-input ui-input-sm font-mono"
-					bind:value={rebuildId}
-				/>
+				<input class="ui-input ui-input-sm font-mono" bind:value={rebuildId} />
 			</label>
 		</div>
 		<div class="flex flex-wrap gap-2">
@@ -140,14 +125,16 @@
 			</button>
 			<button
 				class="ui-btn ui-btn-ghost ui-btn-sm"
-				onclick={() => run(() => vectorService.info(spaceId, tagName, fieldName))}
+				onclick={() =>
+					run(() => vectorService.info(spaceId, tagName, fieldName))}
 				disabled={loading}
 			>
 				{t('common.detail')}
 			</button>
 			<button
 				class="ui-btn ui-btn-danger ui-btn-sm"
-				onclick={() => run(() => vectorService.drop(spaceId, tagName, fieldName))}
+				onclick={() =>
+					run(() => vectorService.drop(spaceId, tagName, fieldName))}
 				disabled={loading}
 			>
 				{t('common.delete')}
@@ -190,9 +177,7 @@
 		</div>
 	</section>
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('vector.search')}
 		</h2>
@@ -233,12 +218,8 @@
 	</section>
 
 	{#if resultText}
-		<section
-			class="ui-card shadow-sm p-6"
-		>
-			<pre
-				class="ui-pre">{resultText}</pre
-			>
+		<section class="ui-card shadow-sm p-6">
+			<pre class="ui-pre">{resultText}</pre>
 		</section>
 	{/if}
 </div>

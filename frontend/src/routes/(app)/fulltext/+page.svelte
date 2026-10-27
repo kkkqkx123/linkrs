@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { t } from '$i18n';
 	import { fulltextService } from '$services/fulltext';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 
 	let spaceId = $state(1);
 	let tagName = $state('');
@@ -25,7 +26,8 @@
 		try {
 			resultText = stringify(await fn());
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.requestFailed');
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			loading = false;
 		}
@@ -33,26 +35,21 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
-	<div class="ui-page-head">
-		<h1 class="ui-page-title">
-			{t('sidebar.fulltext')}
-		</h1>
+	<PageHeader title={t('sidebar.fulltext')}>
 		<button
-			class="ui-btn ui-btn-primary"
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={() => run(() => fulltextService.inconsistent())}
 			disabled={loading}
 		>
 			{loading ? t('common.loading') : t('fulltext.inconsistent')}
 		</button>
-	</div>
+	</PageHeader>
 
 	{#if error}
 		<p class="ui-error-text">{error}</p>
 	{/if}
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('fulltext.manage')}
 		</h2>
@@ -67,25 +64,16 @@
 			</label>
 			<label class="ui-field">
 				{t('vector.tag')}
-				<input
-					class="ui-input ui-input-sm font-mono"
-					bind:value={tagName}
-				/>
+				<input class="ui-input ui-input-sm font-mono" bind:value={tagName} />
 			</label>
 			<label class="ui-field">
 				{t('vector.field')}
-				<input
-					class="ui-input ui-input-sm font-mono"
-					bind:value={fieldName}
-				/>
+				<input class="ui-input ui-input-sm font-mono" bind:value={fieldName} />
 			</label>
 		</div>
 		<label class="ui-field mb-3">
 			{t('vector.rebuildId')}
-			<input
-				class="ui-input ui-input-sm font-mono"
-				bind:value={rebuildId}
-			/>
+			<input class="ui-input ui-input-sm font-mono" bind:value={rebuildId} />
 		</label>
 		<div class="flex flex-wrap gap-2">
 			<button
@@ -127,12 +115,8 @@
 	</section>
 
 	{#if resultText}
-		<section
-			class="ui-card shadow-sm p-6"
-		>
-			<pre
-				class="ui-pre">{resultText}</pre
-			>
+		<section class="ui-card shadow-sm p-6">
+			<pre class="ui-pre">{resultText}</pre>
 		</section>
 	{/if}
 </div>

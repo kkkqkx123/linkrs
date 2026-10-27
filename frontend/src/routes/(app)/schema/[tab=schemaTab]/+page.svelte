@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { t, type MessageKey } from '$i18n';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { functionsService } from '$services/functions';
 	import { schemaVersionsService } from '$services/schemaVersions';
 	import { schemaStore } from '$stores/schema';
@@ -406,11 +407,7 @@
 	<PageSkeleton />
 {:else}
 	<div class="ui-page">
-		<div class="ui-card shadow-sm px-6 py-4">
-			<h2 class="ui-page-title">
-				{t('schema.title')}
-			</h2>
-		</div>
+		<PageHeader title={t('schema.title')} />
 
 		<!-- Space Selector -->
 		<div class="ui-card shadow-sm px-6 py-4">
@@ -440,7 +437,9 @@
 		</div>
 
 		<!-- Tabs -->
-		<div class="ui-card ui-card-flush shadow-sm flex flex-col flex-1 overflow-hidden">
+		<div
+			class="ui-card ui-card-flush shadow-sm flex flex-col flex-1 overflow-hidden"
+		>
 			<div class="flex border-b border-gray-200 dark:border-gray-700">
 				{#each TABS as tab (tab.id)}
 					<a
@@ -457,9 +456,7 @@
 				{#if activeTab === 'spaces'}
 					{#if isLoadingSpaces}
 						<div class="ui-empty">
-							<div
-								class="ui-spinner"
-							></div>
+							<div class="ui-spinner"></div>
 						</div>
 					{:else if spaces.length === 0}
 						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
@@ -512,9 +509,7 @@
 					</div>
 					{#if isLoadingTags}
 						<div class="ui-empty">
-							<div
-								class="ui-spinner"
-							></div>
+							<div class="ui-spinner"></div>
 						</div>
 					{:else if tags.length === 0}
 						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
@@ -579,9 +574,7 @@
 					</div>
 					{#if isLoadingEdgeTypes}
 						<div class="ui-empty">
-							<div
-								class="ui-spinner"
-							></div>
+							<div class="ui-spinner"></div>
 						</div>
 					{:else if edgeTypes.length === 0}
 						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
@@ -646,9 +639,7 @@
 					</div>
 					{#if isLoadingIndexes}
 						<div class="ui-empty">
-							<div
-								class="ui-spinner"
-							></div>
+							<div class="ui-spinner"></div>
 						</div>
 					{:else if indexes.length === 0}
 						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
@@ -736,9 +727,7 @@
 					</button>
 					{#if isLoadingFunctions}
 						<div class="ui-empty">
-							<div
-								class="ui-spinner"
-							></div>
+							<div class="ui-spinner"></div>
 						</div>
 					{:else if functions.length === 0 && !functionsResult}
 						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
@@ -776,8 +765,7 @@
 						</div>
 					{/if}
 					{#if functionsResult}
-						<pre
-							class="ui-pre max-h-64">{functionsResult}</pre>
+						<pre class="ui-pre max-h-64">{functionsResult}</pre>
 					{/if}
 				{:else if activeTab === 'versions'}
 					<div class="grid md:grid-cols-5 gap-2 text-sm mb-3">
@@ -869,13 +857,10 @@
 					</div>
 					{#if isLoadingVersions}
 						<div class="ui-empty">
-							<div
-								class="ui-spinner"
-							></div>
+							<div class="ui-spinner"></div>
 						</div>
 					{:else if versionsResult}
-						<pre
-							class="ui-pre">{versionsResult}</pre>
+						<pre class="ui-pre">{versionsResult}</pre>
 					{:else}
 						<p class="text-gray-400 dark:text-gray-500 text-center py-8">
 							{t('versions.hint')}
@@ -884,9 +869,7 @@
 				{:else if activeTab === 'visualization'}
 					{#await import('$components/business/SchemaErGraph.svelte')}
 						<div class="ui-empty">
-							<div
-								class="ui-spinner"
-							></div>
+							<div class="ui-spinner"></div>
 						</div>
 					{:then { default: SchemaErGraph }}
 						<SchemaErGraph
@@ -1074,9 +1057,7 @@
 							>
 						</div>
 					{/each}
-					<button
-						class="ui-link text-xs"
-						onclick={() => addProp(newTagProps)}
+					<button class="ui-link text-xs" onclick={() => addProp(newTagProps)}
 						>+ {t('common.addProperty')}</button
 					>
 				</div>
@@ -1164,9 +1145,7 @@
 							>
 						</div>
 					{/each}
-					<button
-						class="ui-link text-xs"
-						onclick={() => addProp(newEdgeProps)}
+					<button class="ui-link text-xs" onclick={() => addProp(newEdgeProps)}
 						>+ {t('common.addProperty')}</button
 					>
 				</div>

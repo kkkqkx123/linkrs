@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { transferService } from '$services/transfer';
 	import { resolveSessionId } from '$utils/http';
 
@@ -44,7 +45,8 @@
 			});
 			resultText = stringify(payload);
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.requestFailed');
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			loading = false;
 		}
@@ -56,7 +58,8 @@
 		try {
 			resultText = stringify(await transferService.importStatus(importId));
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.requestFailed');
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			loading = false;
 		}
@@ -86,7 +89,10 @@
 			URL.revokeObjectURL(url);
 			resultText = t('transfer.exported');
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.serverExportFailed');
+			error =
+				err instanceof Error
+					? err.message
+					: t('notification.serverExportFailed');
 		} finally {
 			loading = false;
 		}
@@ -94,34 +100,24 @@
 </script>
 
 <div class="ui-page-doc animate-fade-in">
-	<h1 class="ui-page-title">
-		{t('sidebar.transfer')}
-	</h1>
+	<PageHeader title={t('sidebar.transfer')} />
 
 	{#if error}
 		<p class="ui-error-text">{error}</p>
 	{/if}
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('transfer.import')}
 		</h2>
 		<div class="grid md:grid-cols-4 gap-2 text-sm mb-3">
 			<label class="ui-field">
 				{t('transfer.space')}
-				<input
-					class="ui-input ui-input-sm font-mono"
-					bind:value={space}
-				/>
+				<input class="ui-input ui-input-sm font-mono" bind:value={space} />
 			</label>
 			<label class="ui-field">
 				{t('transfer.format')}
-				<select
-					class="ui-input ui-input-sm"
-					bind:value={format}
-				>
+				<select class="ui-input ui-input-sm" bind:value={format}>
 					<option value="csv">csv</option>
 					<option value="json">json</option>
 					<option value="jsonl">jsonl</option>
@@ -129,10 +125,7 @@
 			</label>
 			<label class="ui-field">
 				{t('transfer.targetType')}
-				<select
-					class="ui-input ui-input-sm"
-					bind:value={targetType}
-				>
+				<select class="ui-input ui-input-sm" bind:value={targetType}>
 					<option value="tag">tag</option>
 					<option value="vertex">vertex</option>
 					<option value="edge">edge</option>
@@ -140,10 +133,7 @@
 			</label>
 			<label class="ui-field">
 				{t('transfer.targetName')}
-				<input
-					class="ui-input ui-input-sm font-mono"
-					bind:value={targetName}
-				/>
+				<input class="ui-input ui-input-sm font-mono" bind:value={targetName} />
 			</label>
 		</div>
 		<div class="grid md:grid-cols-2 gap-2 text-sm mb-3">
@@ -189,9 +179,7 @@
 		</div>
 	</section>
 
-	<section
-		class="ui-card shadow-sm p-6"
-	>
+	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
 			{t('transfer.export')}
 		</h2>
@@ -200,14 +188,10 @@
 			<textarea
 				rows="3"
 				class="ui-input ui-input-sm font-mono"
-				bind:value={exportQuery}
-			></textarea>
+				bind:value={exportQuery}></textarea>
 		</label>
 		<div class="flex flex-wrap items-center gap-2">
-			<select
-				class="ui-input ui-input-sm"
-				bind:value={exportFormat}
-			>
+			<select class="ui-input ui-input-sm" bind:value={exportFormat}>
 				<option value="csv">csv</option>
 				<option value="jsonl">jsonl</option>
 			</select>
@@ -222,12 +206,8 @@
 	</section>
 
 	{#if resultText}
-		<section
-			class="ui-card shadow-sm p-6"
-		>
-			<pre
-				class="ui-pre">{resultText}</pre
-			>
+		<section class="ui-card shadow-sm p-6">
+			<pre class="ui-pre">{resultText}</pre>
 		</section>
 	{/if}
 </div>

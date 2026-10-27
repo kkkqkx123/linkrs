@@ -208,12 +208,12 @@
 			: ''}"
 	>
 		<div class="px-4 py-4 border-b border-gray-200 dark:border-gray-700/50">
-			<h1
+			<p
 				class="text-lg font-bold text-[var(--color-primary)] truncate whitespace-nowrap overflow-hidden"
 				title="Linkrs"
 			>
 				Linkrs
-			</h1>
+			</p>
 		</div>
 		<nav bind:this={navEl} class="flex-1 p-3">
 			<ul class="space-y-1">
@@ -230,8 +230,7 @@
 								: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
 						>
 							<!-- 固定宽度图标列,保证各行文字起始位置对齐 -->
-							<span
-								class="flex-shrink-0 w-5 text-center text-base leading-none"
+							<span class="flex-shrink-0 w-5 text-center text-base leading-none"
 								>{item.icon}</span
 							>
 							<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
