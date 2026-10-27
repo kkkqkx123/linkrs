@@ -16,7 +16,7 @@
 	const SIDEBAR_MIN = 76;
 	const SIDEBAR_MAX = 300;
 	const SNAP_PX = 6;
-	const WIDTH_KEY = 'linkrs.sidebar-width';
+	const WIDTH_KEY = 'linkrs.sidebar-width.v2';
 
 	function loadWidth(): number {
 		const saved = Number(localStorage.getItem(WIDTH_KEY));
@@ -35,20 +35,13 @@
 	}
 
 	// 边缘贴合文字:最宽一行的完整内容宽度 + 导航内边距.
-	// 标签始终保留在 DOM 中只做省略裁剪,因此 scrollWidth 就是文字全宽,
-	// 测量时临时展开 details,避免收起的子菜单被低估.
+	// 标签始终保留在 DOM 中只做省略裁剪,因此 scrollWidth 就是文字全宽.
 	function measureFitWidth(): number {
 		if (!navEl) return SIDEBAR_DEFAULT;
-		const details = [
-			...navEl.querySelectorAll('details'),
-		] as HTMLDetailsElement[];
-		const wasOpen = details.map((d) => d.open);
-		details.forEach((d) => (d.open = true));
 		let maxRow = 0;
-		navEl.querySelectorAll('a, summary').forEach((row) => {
+		navEl.querySelectorAll('a').forEach((row) => {
 			maxRow = Math.max(maxRow, (row as HTMLElement).scrollWidth);
 		});
-		details.forEach((d, i) => (d.open = wasOpen[i]));
 		const cs = getComputedStyle(navEl);
 		const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
 		return Math.min(
@@ -64,8 +57,11 @@
 
 	onMount(() => {
 		// 无存档时不使用拍脑袋的默认值,直接贴合当前语言下的内容宽度.
+		// 必须等字体就绪再测量,否则按回退字体量出的宽度偏小,标签会被截断.
 		if (localStorage.getItem(WIDTH_KEY) === null) {
-			width = measureFitWidth();
+			document.fonts.ready.then(() => {
+				width = measureFitWidth();
+			});
 		}
 	});
 
@@ -101,7 +97,6 @@
 		label: MessageKey;
 		route?: string;
 		requiresUsers?: boolean;
-		children?: MenuItem[];
 	}
 
 	const menuItems: MenuItem[] = [
@@ -112,53 +107,10 @@
 			route: '/console',
 		},
 		{
-			key: 'schema',
+			key: '/schema',
 			icon: '🗄',
 			label: 'sidebar.schema',
-			children: [
-				{
-					key: '/schema/spaces',
-					icon: '◈',
-					label: 'sidebar.spaces',
-					route: '/schema/spaces',
-				},
-				{
-					key: '/schema/tags',
-					icon: '🏷',
-					label: 'sidebar.tags',
-					route: '/schema/tags',
-				},
-				{
-					key: '/schema/edges',
-					icon: '↔',
-					label: 'sidebar.edges',
-					route: '/schema/edges',
-				},
-				{
-					key: '/schema/indexes',
-					icon: '🔍',
-					label: 'sidebar.indexes',
-					route: '/schema/indexes',
-				},
-				{
-					key: '/schema/visualization',
-					icon: '👁',
-					label: 'sidebar.visualization',
-					route: '/schema/visualization',
-				},
-				{
-					key: '/schema/functions',
-					icon: 'ƒ',
-					label: 'sidebar.functions',
-					route: '/schema/functions',
-				},
-				{
-					key: '/schema/versions',
-					icon: '🕘',
-					label: 'sidebar.versions',
-					route: '/schema/versions',
-				},
-			],
+			route: '/schema',
 		},
 		{
 			key: '/graph',
@@ -229,9 +181,7 @@
 	);
 
 	function isActive(item: MenuItem): boolean {
-		if (item.route && path.startsWith(item.route)) return true;
-		if (item.children) return item.children.some((c) => path.startsWith(c.key));
-		return false;
+		return Boolean(item.route) && path.startsWith(item.route!);
 	}
 
 	// The graph canvas (cytoscape) is lazily imported on first use; hovering a
@@ -268,60 +218,25 @@
 		<nav bind:this={navEl} class="flex-1 p-3">
 			<ul class="space-y-1">
 				{#each visibleItems as item (item.key)}
-					{#if item.children}
-						<li>
-							<details open={item.children.some((c) => path.startsWith(c.key))}>
-								<summary
-									class="flex items-center gap-2 px-3 py-2.5 rounded-md cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50 overflow-hidden whitespace-nowrap"
-									title={t(item.label)}
-								>
-									<span class="flex-shrink-0 text-base leading-none"
-										>{item.icon}</span
-									>
-									<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
-								</summary>
-								<ul class="ml-4 mt-1 space-y-1">
-									{#each item.children as child (child.key)}
-										<li>
-											<a
-												href={child.route}
-												title={t(child.label)}
-												onpointerenter={() => prefetchGraphChunk(child)}
-												class="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors overflow-hidden whitespace-nowrap {isActive(
-													child,
-												)
-													? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium'
-													: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
-											>
-												<span class="flex-shrink-0">{child.icon}</span>
-												<span class="min-w-0 flex-1 truncate"
-													>{t(child.label)}</span
-												>
-											</a>
-										</li>
-									{/each}
-								</ul>
-							</details>
-						</li>
-					{:else}
-						<li>
-							<a
-								href={item.route}
-								title={t(item.label)}
-								onpointerenter={() => prefetchGraphChunk(item)}
-								class="w-full flex items-center gap-2 px-3 py-2.5 rounded-md text-sm transition-colors overflow-hidden whitespace-nowrap {isActive(
-									item,
-								)
-									? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium'
-									: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
+					<li>
+						<a
+							href={item.route}
+							title={t(item.label)}
+							onpointerenter={() => prefetchGraphChunk(item)}
+							class="w-full flex items-center gap-2 px-3 py-2.5 rounded-md text-sm transition-colors overflow-hidden whitespace-nowrap {isActive(
+								item,
+							)
+								? 'bg-blue-50 dark:bg-blue-900/30 text-[var(--color-primary)] font-medium'
+								: 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/50'}"
+						>
+							<!-- 固定宽度图标列,保证各行文字起始位置对齐 -->
+							<span
+								class="flex-shrink-0 w-5 text-center text-base leading-none"
+								>{item.icon}</span
 							>
-								<span class="flex-shrink-0 text-base leading-none"
-									>{item.icon}</span
-								>
-								<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
-							</a>
-						</li>
-					{/if}
+							<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
+						</a>
+					</li>
 				{/each}
 			</ul>
 		</nav>

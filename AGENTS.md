@@ -49,11 +49,30 @@ Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/linkrs-cli`, `cra
 ## Building and Running
 
 Prerequisites: rustc 1.97.1, cargo 1.97.1 (recent stable; 1.88-era pins are
-stale). The `jitexpr` member inside the `crates/tantivy` sub-workspace pins
-cranelift 0.134.x, which needs this newer toolchain; the root workspace
-never resolves or benches it (patched dependency, feature off, root lock
-carries no cranelift entries), so root builds stay unaffected. The planned
-gpui client has the same recent-stable requirement.
+stale) for the core database crates. **The native GPUI client (`linkrs-gpui`)
+requires the `beta` toolchain**, because its `gpui-kit` dependency (consumed
+from the `crates/gpui-kit` git submodule) pins beta. A root `rust-toolchain.toml`
+locks `beta` so the unified workspace build succeeds; the non-gpui crates
+compile cleanly on beta. The `jitexpr` member inside the `crates/tantivy`
+sub-workspace pins cranelift 0.134.x, which needs this newer toolchain; the
+root workspace never resolves or benches it (patched dependency, feature off,
+root lock carries no cranelift entries), so root builds stay unaffected.
+
+### Submodules
+
+`crates/gpui-kit` (along with `tantivy`, `simvec`, `llm-suite`) is a git
+submodule. After cloning, initialize it before building the GPUI client:
+
+```shell
+git submodule update --init crates/gpui-kit
+# or initialize every submodule at once:
+git submodule update --init --recursive
+```
+
+`crates/gpui-kit` is vendored as a submodule (fork `kkkqkx123/gpui-kit`) rather
+than a crates.io/git dependency so the client can carry in-tree patches on top
+of upstream `gpui-kit`; treat it as the source of truth and keep the pinned
+commit updated.
 
 SIMD note (Phase 0): `.cargo/config.toml` sets `-C target-cpu=x86-64-v3`
 (AVX2, Haswell+ 2013) for auto-vectorization. **A v3-built binary requires

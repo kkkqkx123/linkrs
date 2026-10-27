@@ -12,7 +12,10 @@ publish = false
 # source of truth, never a remote. gpui-kit has its own workspace root, so its
 # internal `workspace = true` inheritance resolves against crates/gpui-kit,
 # not against the linkrs workspace.
-gpui-kit = { path = "../gpui-kit/crates/kit", default-features = false, features = ["component", "assets", "syntect"] }
+# `tree-sitter-sql` adds tree-sitter-based SQL highlighting (folding,
+# syntax-aware editing) on top of the lighter syntect fallback used by
+# `.language("sql")` on the query editor.
+gpui-kit = { path = "../gpui-kit/crates/kit", default-features = false, features = ["component", "assets", "syntect", "tree-sitter-sql"] }
 linkrs-client = { path = "../linkrs-client" }
 linkrs-wire = { path = "../linkrs-wire" }
 anyhow.workspace = true

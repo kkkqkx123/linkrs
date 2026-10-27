@@ -6,8 +6,9 @@
 <div class="max-w-5xl mx-auto space-y-6 animate-fade-in">
 	<!-- Stats Cards Row -->
 	<div class="grid grid-cols-4 gap-5">
-		<div
-			class="ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02]"
+		<button
+			class="text-left ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
+			onclick={() => goto('/console')}
 		>
 			<div class="space-y-2.5">
 				<p class="text-base font-medium text-gray-500 dark:text-gray-400">
@@ -18,9 +19,10 @@
 					{t('mainPage.consoleDesc')}
 				</div>
 			</div>
-		</div>
-		<div
-			class="ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02]"
+		</button>
+		<button
+			class="text-left ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
+			onclick={() => goto('/schema')}
 		>
 			<div class="space-y-2.5">
 				<p class="text-base font-medium text-gray-500 dark:text-gray-400">
@@ -31,9 +33,10 @@
 					{t('mainPage.schemaDesc')}
 				</div>
 			</div>
-		</div>
-		<div
-			class="ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02]"
+		</button>
+		<button
+			class="text-left ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
+			onclick={() => goto('/graph')}
 		>
 			<div class="space-y-2.5">
 				<p class="text-base font-medium text-gray-500 dark:text-gray-400">
@@ -44,9 +47,10 @@
 					{t('mainPage.graphDesc')}
 				</div>
 			</div>
-		</div>
-		<div
-			class="ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02]"
+		</button>
+		<button
+			class="text-left ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
+			onclick={() => goto('/data-browser')}
 		>
 			<div class="space-y-2.5">
 				<p class="text-base font-medium text-gray-500 dark:text-gray-400">
@@ -57,7 +61,7 @@
 					{t('mainPage.dataBrowserDesc')}
 				</div>
 			</div>
-		</div>
+		</button>
 		<button
 			class="text-left ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
 			onclick={() => goto('/monitoring')}
@@ -86,30 +90,55 @@
 			{t('mainPage.availableModules')}
 		</p>
 		<ul class="space-y-2.5 text-gray-600 dark:text-gray-400 text-base">
-			<li class="flex items-center gap-2">
-				<span class="text-blue-500">⌨</span>
-				<strong>{t('sidebar.console')}:</strong>
-				{t('mainPage.consoleDesc')}
+			<li>
+				<button
+					class="w-full text-left flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+					onclick={() => goto('/console')}
+				>
+					<span class="text-blue-500">⌨</span>
+					<strong>{t('sidebar.console')}:</strong>
+					{t('mainPage.consoleDesc')}
+				</button>
 			</li>
-			<li class="flex items-center gap-2">
-				<span class="text-blue-500">🗄</span>
-				<strong>{t('sidebar.schema')}:</strong>
-				{t('mainPage.schemaDesc')}
+			<li>
+				<button
+					class="w-full text-left flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+					onclick={() => goto('/schema')}
+				>
+					<span class="text-blue-500">🗄</span>
+					<strong>{t('sidebar.schema')}:</strong>
+					{t('mainPage.schemaDesc')}
+				</button>
 			</li>
-			<li class="flex items-center gap-2">
-				<span class="text-blue-500">🔗</span>
-				<strong>{t('sidebar.graph')}:</strong>
-				{t('mainPage.graphDesc')}
+			<li>
+				<button
+					class="w-full text-left flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+					onclick={() => goto('/graph')}
+				>
+					<span class="text-blue-500">🔗</span>
+					<strong>{t('sidebar.graph')}:</strong>
+					{t('mainPage.graphDesc')}
+				</button>
 			</li>
-			<li class="flex items-center gap-2">
-				<span class="text-blue-500">📋</span>
-				<strong>{t('sidebar.dataBrowser')}:</strong>
-				{t('mainPage.dataBrowserDesc')}
+			<li>
+				<button
+					class="w-full text-left flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+					onclick={() => goto('/data-browser')}
+				>
+					<span class="text-blue-500">📋</span>
+					<strong>{t('sidebar.dataBrowser')}:</strong>
+					{t('mainPage.dataBrowserDesc')}
+				</button>
 			</li>
-			<li class="flex items-center gap-2">
-				<span class="text-blue-500">📈</span>
-				<strong>{t('sidebar.monitoring')}:</strong>
-				{t('mainPage.monitoringDesc')}
+			<li>
+				<button
+					class="w-full text-left flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+					onclick={() => goto('/monitoring')}
+				>
+					<span class="text-blue-500">📈</span>
+					<strong>{t('sidebar.monitoring')}:</strong>
+					{t('mainPage.monitoringDesc')}
+				</button>
 			</li>
 		</ul>
 	</div>
