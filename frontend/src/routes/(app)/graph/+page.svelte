@@ -498,9 +498,9 @@
 			class="ui-card shadow-sm px-6 py-4 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
 		>
 			<div>
-				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
 					{t('graph.filterTags')}
-				</h4>
+				</h2>
 				<div class="flex flex-wrap gap-2">
 					{#each Object.keys(nodeStyles) as tag (tag)}
 						<button
@@ -513,9 +513,9 @@
 				</div>
 			</div>
 			<div>
-				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
 					{t('graph.filterEdgeTypes')}
-				</h4>
+				</h2>
 				<div class="flex flex-wrap gap-2">
 					{#each Object.keys(edgeStyles) as type (type)}
 						<button
@@ -562,9 +562,9 @@
 			class="ui-card shadow-sm px-6 py-4 grid grid-cols-2 gap-4 max-h-48 overflow-y-auto"
 		>
 			<div>
-				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
 					{t('graph.nodes')}
-				</h4>
+				</h2>
 				{#each Object.entries(nodeStyles) as [tag, style] (tag)}
 					<div class="flex items-center gap-2 mb-1 text-sm">
 						<input
@@ -596,9 +596,9 @@
 				{/each}
 			</div>
 			<div>
-				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
 					{t('graph.edges')}
-				</h4>
+				</h2>
 				{#each Object.entries(edgeStyles) as [type, style] (type)}
 					<div class="flex items-center gap-2 mb-1 text-sm">
 						<input
@@ -632,9 +632,9 @@
 			<div
 				class="col-span-2 border-t border-gray-200 dark:border-gray-700 pt-3 mt-2"
 			>
-				<h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+				<h2 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
 					{t('graph.layoutLabel')}
-				</h4>
+				</h2>
 				<div class="grid grid-cols-3 gap-3">
 					<label
 						class="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400"
@@ -732,11 +732,11 @@
 				class="w-80 border-l border-gray-200 dark:border-gray-700 p-5 overflow-y-auto flex-shrink-0"
 			>
 				<div class="flex items-center justify-between mb-4">
-					<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">
+					<h2 class="text-base font-semibold text-gray-800 dark:text-gray-100">
 						{detailType === 'node'
 							? t('graph.selectNode')
 							: t('graph.selectEdge')} Detail
-					</h3>
+					</h2>
 					<button class="ui-icon-btn" onclick={() => graphStore.hideDetail()}
 						>✕</button
 					>
@@ -760,11 +760,11 @@
 						<div
 							class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700"
 						>
-							<h4
+							<h3
 								class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
 							>
 								{t('common.properties')}
-							</h4>
+							</h3>
 							{#each Object.entries(detailData.properties) as [k, v] (k)}
 								<div class="text-sm mb-2">
 									<span class="text-gray-500 dark:text-gray-400 block text-xs"

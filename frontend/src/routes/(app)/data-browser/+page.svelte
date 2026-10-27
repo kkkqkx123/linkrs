@@ -837,11 +837,11 @@
 			<div
 				class="w-64 border-l border-gray-200 dark:border-gray-700 p-5 bg-gray-50 dark:bg-gray-800/20 overflow-y-auto"
 			>
-				<h3
+				<h2
 					class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-3"
 				>
 					{t('dataBrowser.statistics')}
-				</h3>
+				</h2>
 				{#if statistics}
 					<div class="space-y-2 text-sm">
 						<div class="flex justify-between">
@@ -904,12 +904,12 @@
 			class="relative ui-card shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
 		>
 			<div class="flex items-center justify-between mb-4">
-				<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100">
+				<h2 class="text-base font-semibold text-gray-800 dark:text-gray-100">
 					{detailType === 'vertex'
 						? t('dataBrowser.vertices')
 						: t('sidebar.edges')}
 					{t('common.detail')}
-				</h3>
+				</h2>
 				<button
 					class="ui-icon-btn"
 					onclick={() => dataBrowserStore.hideDetail()}>✕</button
@@ -928,11 +928,11 @@
 				{/each}
 				{#if detailData.properties}
 					<div class="mt-4">
-						<h4
+						<h3
 							class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
 						>
 							{t('common.properties')}
-						</h4>
+						</h3>
 						{#each Object.entries(detailData.properties) as [k, v] (k)}
 							<div class="text-sm ml-2">
 								<span class="text-gray-500 dark:text-gray-400">{k}:</span>
@@ -975,9 +975,9 @@
 		<div
 			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
 		>
-			<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-2">
+			<h2 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-2">
 				{t('dataBrowser.edit.changed')}
-			</h3>
+			</h2>
 			<p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
 				{t('dataBrowser.edit.conflict')}
 			</p>
@@ -1023,9 +1023,9 @@
 		<div
 			class="relative ui-card shadow-lg p-6 w-[26rem] max-h-[85vh] overflow-y-auto"
 		>
-			<h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-2">
+			<h2 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-2">
 				{t('common.delete')}
-			</h3>
+			</h2>
 			<p class="text-sm text-gray-600 dark:text-gray-300">
 				{t('dataBrowser.delete.confirm', {
 					kind:
