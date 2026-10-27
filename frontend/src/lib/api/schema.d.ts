@@ -572,6 +572,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/fulltext/indexes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List all fulltext indexes. */
+        get: operations["list_fulltext_indexes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/fulltext/indexes/clear": {
         parameters: {
             query?: never;
@@ -645,6 +662,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/fulltext/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Search a fulltext index. */
+        post: operations["post_v1_fulltext_search"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/functions": {
         parameters: {
             query?: never;
@@ -697,6 +731,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/health/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Liveness probe: the process is alive and its main loop is not blocked. */
+        get: operations["live"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness probe: storage, transaction manager, and listeners are available. */
+        get: operations["ready"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/import": {
         parameters: {
             query?: never;
@@ -721,6 +789,23 @@ export interface paths {
             cookie?: never;
         };
         get: operations["import_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Serve all collected metrics in the Prometheus text format. */
+        get: operations["get_v1_metrics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2582,6 +2667,21 @@ export interface components {
             name: string;
             properties: components["schemas"]["PropertyDef"][];
         };
+        /** @description Text-to-vector embedding call counters. */
+        EmbeddingSection: {
+            /** Format: double */
+            avg_latency_ms: number;
+            /** Format: int64 */
+            prompt_tokens: number;
+            /** Format: int64 */
+            total_errors: number;
+            /** Format: int64 */
+            total_latency_ms: number;
+            /** Format: int64 */
+            total_operations: number;
+            /** Format: int64 */
+            total_tokens: number;
+        };
         /** @description Error position within the query text (1-based line and column). */
         ErrorPosition: {
             column: number;
@@ -2691,6 +2791,27 @@ export interface components {
             rebuild_id: string;
             /** @description Task status (`running`, `completed`, `failed`) */
             status: string;
+        };
+        /** @description One fulltext search hit. */
+        FulltextSearchHit: {
+            doc_id: string;
+            highlights?: string[] | null;
+            /** Format: float */
+            score: number;
+        };
+        /** @description Fulltext search request body. */
+        FulltextSearchRequestBody: {
+            field_name: string;
+            limit?: number;
+            query: string;
+            /** Format: int64 */
+            space_id: number;
+            tag_name: string;
+        };
+        /** @description Fulltext search response body. */
+        FulltextSearchResponse: {
+            results: components["schemas"]["FulltextSearchHit"][];
+            total_hits: number;
         };
         /** @description Lat/lon bounding-box filter. */
         GeoBoundingBox: {
@@ -3189,6 +3310,17 @@ export interface components {
             limit?: number | null;
             target?: string | null;
         };
+        /** @description Rerank provider call counters. */
+        RerankSection: {
+            /** Format: double */
+            avg_latency_ms: number;
+            /** Format: int64 */
+            total_errors: number;
+            /** Format: int64 */
+            total_latency_ms: number;
+            /** Format: int64 */
+            total_operations: number;
+        };
         /** @description Reset password request for the admin channel. */
         ResetPasswordRequest: {
             password: string;
@@ -3262,8 +3394,14 @@ export interface components {
             by_index?: components["schemas"]["SearchIndexEntry"][];
             cache: components["schemas"]["CacheSection"];
             delete: components["schemas"]["DeleteSection"];
+            /** @description Text-to-vector embedding calls backing vector text queries. */
+            embedding?: components["schemas"]["EmbeddingSection"];
             index: components["schemas"]["IndexSection"];
+            /** @description Post-recall rerank provider calls for vector text queries. */
+            rerank?: components["schemas"]["RerankSection"];
             search: components["schemas"]["SearchSection"];
+            /** @description Vector engine queries and writes. Scalar-only deployments report zeros. */
+            vector?: components["schemas"]["VectorSearchSection"];
         };
         /** @description Session response */
         SessionResponse: {
@@ -3578,13 +3716,34 @@ export interface components {
         };
         /** @description Single vector search result */
         VectorSearchResult: {
-            id: string;
+            doc_id: string;
             payload?: {
                 [key: string]: unknown;
             } | null;
             /** Format: float */
             score: number;
             vector?: number[] | null;
+        };
+        /** @description Vector engine search and write counters. */
+        VectorSearchSection: {
+            /** Format: double */
+            avg_latency_ms: number;
+            /** Format: int64 */
+            delete_errors: number;
+            /** Format: int64 */
+            disabled_skips: number;
+            /** Format: int64 */
+            total_deletes: number;
+            /** Format: int64 */
+            total_errors: number;
+            /** Format: int64 */
+            total_latency_ms: number;
+            /** Format: int64 */
+            total_queries: number;
+            /** Format: int64 */
+            total_upserts: number;
+            /** Format: int64 */
+            upsert_errors: number;
         };
         /** @description Vertex data */
         VertexData: {
@@ -5330,6 +5489,33 @@ export interface operations {
             };
         };
     };
+    list_fulltext_indexes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Fulltext indexes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     clear_fulltext: {
         parameters: {
             query?: never;
@@ -5453,6 +5639,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    post_v1_fulltext_search: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FulltextSearchRequestBody"];
+            };
+        };
+        responses: {
+            /** @description Fulltext search results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulltextSearchResponse"];
+                };
             };
             /** @description Internal error */
             500: {
@@ -5622,6 +5839,60 @@ export interface operations {
             };
         };
     };
+    live: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Process is alive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ready: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Service readiness status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     import_file: {
         parameters: {
             query?: never;
@@ -5669,6 +5940,31 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ImportStatusResponse"];
                 };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_v1_metrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Prometheus metrics in the text exposition format */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Internal error */
             500: {

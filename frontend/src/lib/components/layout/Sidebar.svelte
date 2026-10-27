@@ -4,7 +4,7 @@
 	import { t, type MessageKey } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
 	import { fromStore } from 'svelte/store';
-	import type { SvelteComponentTyped } from 'svelte';
+	import type { Icon } from 'lucide-svelte';
 	import {
 		Keyboard,
 		Database,
@@ -106,7 +106,7 @@
 
 	interface MenuItem {
 		key: string;
-		icon: typeof SvelteComponentTyped<Record<string, any>, Record<string, any>>;
+		icon: typeof Icon;
 		label: MessageKey;
 		route?: string;
 		requiresUsers?: boolean;

@@ -35,7 +35,7 @@
 		error = null;
 		if (!currentSpace) return;
 		if (!indexName.trim()) return;
-		let statement = '';
+		let statement: string;
 		if (mode === 'vector') {
 			const vector = parseVector(vectorText);
 			if (!vector) {

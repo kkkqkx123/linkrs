@@ -47,7 +47,11 @@ fn optional_components() -> serde_json::Value {
 )]
 pub async fn check() -> (StatusCode, Json<serde_json::Value>) {
     let ready = is_ready();
-    let status = if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (
         status,
         Json(json!({
@@ -63,6 +67,15 @@ pub async fn check() -> (StatusCode, Json<serde_json::Value>) {
 }
 
 /// Liveness probe: the process is alive and its main loop is not blocked.
+#[utoipa::path(
+    get,
+    path = "/v1/health/live",
+    tag = "Health",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Process is alive"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn live() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::OK,
@@ -76,9 +89,22 @@ pub async fn live() -> (StatusCode, Json<serde_json::Value>) {
 }
 
 /// Readiness probe: storage, transaction manager, and listeners are available.
+#[utoipa::path(
+    get,
+    path = "/v1/health/ready",
+    tag = "Health",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Service readiness status"),
+        (status = 500, description = "Internal error")
+    )
+)]
 pub async fn ready() -> (StatusCode, Json<serde_json::Value>) {
     let ready = is_ready();
-    let status = if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (
         status,
         Json(json!({

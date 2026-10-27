@@ -14,8 +14,7 @@
 import { goto } from '$app/navigation';
 import { page } from '$app/state';
 import { t } from '$i18n';
-import createClient from 'openapi-fetch';
-import JSONBigint from 'json-bigint';
+import type { Client } from 'openapi-fetch';
 import type { paths } from './schema';
 import { API_BASE_URL } from '$app/env/public';
 import {
@@ -39,8 +38,6 @@ export const BASE_URL = API_BASE_URL;
 /** Preview mode always serves from the mock layer. */
 export const isMockMode = true;
 
-const JSONBig = JSONBigint({ storeAsString: true });
-
 /** Backend auth failure codes that invalidate the local session. */
 const SESSION_DEAD_CODES = new Set(['unauthenticated', 'account_locked']);
 
@@ -51,29 +48,6 @@ function handleUnauthorized() {
 		/* storage unavailable */
 	}
 	if (page.url.pathname !== '/login') void goto('/login');
-}
-
-/** fetch wrapper that parses JSON with json-bigint (large ints stay strings). */
-async function bigintFetch(
-	input: RequestInfo | URL,
-	init?: RequestInit,
-): Promise<Response> {
-	const response = await fetch(input, init);
-	if (response.status === 401) handleUnauthorized();
-	const contentType = response.headers.get('content-type') ?? '';
-	if (!contentType.includes('application/json')) return response;
-	const text = await response.text();
-	let parsed: unknown;
-	try {
-		parsed = text ? JSONBig.parse(text) : null;
-	} catch {
-		parsed = text;
-	}
-	return new Response(JSON.stringify(parsed), {
-		status: response.status,
-		statusText: response.statusText,
-		headers: response.headers,
-	});
 }
 
 export class ApiError extends Error {
@@ -253,4 +227,4 @@ register({
 	...usersHandlers,
 });
 
-export const client = mockClient as any;
+export const client = mockClient as unknown as Client<paths>;

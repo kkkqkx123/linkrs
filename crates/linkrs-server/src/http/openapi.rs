@@ -27,6 +27,8 @@ use utoipa::OpenApi;
     info(title = "Linkrs API", version = "1.0.0"),
     paths(
         crate::http::handlers::health::check,
+        crate::http::handlers::health::live,
+        crate::http::handlers::health::ready,
         crate::http::handlers::metrics::metrics,
         crate::http::handlers::auth::login,
         crate::http::handlers::auth::logout,
@@ -219,6 +221,7 @@ struct VectorDoc;
         crate::http::handlers::rebuild::clear_fulltext,
         crate::http::handlers::rebuild::inconsistent_fulltext,
         crate::http::handlers::rebuild::list_fulltext_indexes,
+        crate::http::handlers::fulltext::search,
     ),
     tags((name = "Fulltext", description = "Fulltext index management"))
 )]
@@ -276,9 +279,14 @@ mod tests {
         }
     }
 
-    /// Debug-only documentation endpoint, not part of the contract.
+    /// Paths excluded from the routed-vs-annotated contract check:
+    /// debug-only documentation, and k8s probe aliases that duplicate the
+    /// documented `/v1/health/{live,ready}` endpoints.
     fn is_ignored_path(path: &str) -> bool {
         path.contains("/api-docs")
+            || path == "/v1/healthz"
+            || path == "/v1/livez"
+            || path == "/v1/readyz"
     }
 
     fn feature_enabled(name: &str) -> bool {
@@ -527,8 +535,10 @@ mod tests {
                     || trimmed.starts_with("pub async fn ")
                     || trimmed.starts_with("pub(crate) async fn ");
                 if is_fn {
+                    // A function tail expression may still hold an unflushed
+                    // route entry — flush it before switching to the next fn.
+                    flush(&mut out, &mut entry);
                     fn_active = pending_attr.take().map_or(true, |expr| eval_cfg(&expr));
-                    entry = None;
                     continue;
                 }
                 pending_attr = None;

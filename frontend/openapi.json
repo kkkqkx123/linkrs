@@ -2036,6 +2036,28 @@
         }
       }
     },
+    "/v1/fulltext/indexes": {
+      "get": {
+        "tags": [
+          "Fulltext"
+        ],
+        "summary": "List all fulltext indexes.",
+        "operationId": "list_fulltext_indexes",
+        "responses": {
+          "200": {
+            "description": "Fulltext indexes",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
     "/v1/fulltext/indexes/clear": {
       "post": {
         "tags": [
@@ -2161,6 +2183,40 @@
           },
           "404": {
             "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/fulltext/search": {
+      "post": {
+        "tags": [
+          "Fulltext"
+        ],
+        "summary": "Search a fulltext index.",
+        "operationId": "post_v1_fulltext_search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FulltextSearchRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Fulltext search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulltextSearchResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "Internal error"
@@ -2299,6 +2355,50 @@
         "responses": {
           "200": {
             "description": "Service health status",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/health/live": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Liveness probe: the process is alive and its main loop is not blocked.",
+        "operationId": "live",
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/health/ready": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Readiness probe: storage, transaction manager, and listeners are available.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "description": "Service readiness status",
             "content": {
               "application/json": {
                 "schema": {}
@@ -7539,6 +7639,49 @@
           }
         }
       },
+      "EmbeddingSection": {
+        "type": "object",
+        "description": "Text-to-vector embedding call counters.",
+        "required": [
+          "total_operations",
+          "total_errors",
+          "total_latency_ms",
+          "avg_latency_ms",
+          "prompt_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_operations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "ErrorPosition": {
         "type": "object",
         "description": "Error position within the query text (1-based line and column).",
@@ -7848,6 +7991,82 @@
           "status": {
             "type": "string",
             "description": "Task status (`running`, `completed`, `failed`)"
+          }
+        }
+      },
+      "FulltextSearchHit": {
+        "type": "object",
+        "description": "One fulltext search hit.",
+        "required": [
+          "doc_id",
+          "score"
+        ],
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "highlights": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "score": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "FulltextSearchRequestBody": {
+        "type": "object",
+        "description": "Fulltext search request body.",
+        "required": [
+          "space_id",
+          "tag_name",
+          "field_name",
+          "query"
+        ],
+        "properties": {
+          "field_name": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "query": {
+            "type": "string"
+          },
+          "space_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tag_name": {
+            "type": "string"
+          }
+        }
+      },
+      "FulltextSearchResponse": {
+        "type": "object",
+        "description": "Fulltext search response body.",
+        "required": [
+          "results",
+          "total_hits"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FulltextSearchHit"
+            }
+          },
+          "total_hits": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -9436,6 +9655,37 @@
           }
         }
       },
+      "RerankSection": {
+        "type": "object",
+        "description": "Rerank provider call counters.",
+        "required": [
+          "total_operations",
+          "total_errors",
+          "total_latency_ms",
+          "avg_latency_ms"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "total_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_operations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "ResetPasswordRequest": {
         "type": "object",
         "description": "Reset password request for the admin channel.",
@@ -9686,11 +9936,23 @@
           "delete": {
             "$ref": "#/components/schemas/DeleteSection"
           },
+          "embedding": {
+            "$ref": "#/components/schemas/EmbeddingSection",
+            "description": "Text-to-vector embedding calls backing vector text queries."
+          },
           "index": {
             "$ref": "#/components/schemas/IndexSection"
           },
+          "rerank": {
+            "$ref": "#/components/schemas/RerankSection",
+            "description": "Post-recall rerank provider calls for vector text queries."
+          },
           "search": {
             "$ref": "#/components/schemas/SearchSection"
+          },
+          "vector": {
+            "$ref": "#/components/schemas/VectorSearchSection",
+            "description": "Vector engine queries and writes. Scalar-only deployments report zeros."
           }
         }
       },
@@ -10607,11 +10869,11 @@
         "type": "object",
         "description": "Single vector search result",
         "required": [
-          "id",
+          "doc_id",
           "score"
         ],
         "properties": {
-          "id": {
+          "doc_id": {
             "type": "string"
           },
           "payload": {
@@ -10637,6 +10899,67 @@
               "type": "number",
               "format": "float"
             }
+          }
+        }
+      },
+      "VectorSearchSection": {
+        "type": "object",
+        "description": "Vector engine search and write counters.",
+        "required": [
+          "total_queries",
+          "total_errors",
+          "total_latency_ms",
+          "avg_latency_ms",
+          "total_upserts",
+          "upsert_errors",
+          "total_deletes",
+          "delete_errors",
+          "disabled_skips"
+        ],
+        "properties": {
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "delete_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "disabled_skips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_deletes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_latency_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_upserts": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "upsert_errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

@@ -154,7 +154,8 @@ pub async fn start_http_and_grpc_servers<
         crate::http::handlers::health::set_ready(true);
         crate::systemd::notify_ready();
         let shutdown_timeout = std::time::Duration::from_secs(config.shutdown_timeout_secs());
-        let serve_future = serve(http_listener, http_app).with_graceful_shutdown(async_shutdown_signal());
+        let serve_future =
+            serve(http_listener, http_app).with_graceful_shutdown(async_shutdown_signal());
         tokio::select! {
             result = serve_future => result?,
             _ = tokio::time::sleep(shutdown_timeout) => {

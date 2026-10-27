@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t, type MessageKey } from '$i18n';
-	import { BarChart3, Link2, X, Braces } from 'lucide-svelte';
+	import { BarChart3, Link2, Braces } from 'lucide-svelte';
 	import IconButton from '$components/common/IconButton.svelte';
 	import VirtualTable from '$components/common/VirtualTable.svelte';
 	import LazyCytoscapeCanvas from '$components/common/LazyCytoscapeCanvas.svelte';
