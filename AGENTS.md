@@ -49,11 +49,12 @@ Outside crates: `crates/bm25`, `crates/qdrant-client`, `crates/linkrs-cli`, `cra
 ## Building and Running
 
 Prerequisites: rustc 1.97.1, cargo 1.97.1 (recent stable; 1.88-era pins are
-stale) for the core database crates. **The native GPUI client (`linkrs-gpui`)
-requires the `beta` toolchain**, because its `gpui-kit` dependency (consumed
-from the `crates/gpui-kit` git submodule) pins beta. A root `rust-toolchain.toml`
-locks `beta` so the unified workspace build succeeds; the non-gpui crates
-compile cleanly on beta. The `jitexpr` member inside the `crates/tantivy`
+stale) for the whole workspace, including the native GPUI client (`linkrs-gpui`).
+gpui-kit (consumed from the `crates/gpui-kit` git submodule) pins `gpui-pre`
+0.3.10, which dropped the unstable `std::hint::cold_path` gate and uses the
+stabilized API (stable since Rust 1.95.0); the entire gpui-pre 0.3.10 family
+carries no `#![feature(...)]` gates, so the workspace builds on 1.97.1 stable.
+A root `rust-toolchain.toml` locks `1.97.1` to match. The `jitexpr` member inside the `crates/tantivy`
 sub-workspace pins cranelift 0.134.x, which needs this newer toolchain; the
 root workspace never resolves or benches it (patched dependency, feature off,
 root lock carries no cranelift entries), so root builds stay unaffected.

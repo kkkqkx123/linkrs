@@ -34,7 +34,7 @@ kkkqkx-tantivy = { path = "crates/tantivy" }
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.94"
+rust-version = "1.97"
 authors = ["Linkrs Contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/kkkqkx123/linkrs"

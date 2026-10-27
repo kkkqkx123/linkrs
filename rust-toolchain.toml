@@ -1,8 +1,0 @@
-# gpui-kit (vendored from the crates/gpui-kit git submodule) pins the beta
-# toolchain because its gpui-pre dependency relies on an unstable std feature.
-# Building linkrs-gpui therefore requires beta for the whole workspace. A root
-# rust-toolchain.toml locks beta so the unified build succeeds; the remaining
-# crates compile cleanly on beta, which is a superset of the 1.97.1 stable
-# target used by the core database crates.
-[toolchain]
-channel = "beta"
