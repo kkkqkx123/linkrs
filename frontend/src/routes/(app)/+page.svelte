@@ -37,7 +37,7 @@
 		</button>
 		<button
 			class="text-left ui-card shadow-sm p-6 hover:shadow transition-all duration-300 hover:scale-[1.02] cursor-pointer"
-			onclick={() => goto('/graph')}
+			onclick={() => goto('/console')}
 		>
 			<div class="space-y-2.5">
 				<p class="text-base font-medium text-muted">
@@ -114,7 +114,7 @@
 			<li>
 				<button
 					class="w-full text-left flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-hover cursor-pointer transition-colors"
-					onclick={() => goto('/graph')}
+					onclick={() => goto('/console')}
 				>
 					<span class="text-info"><Link2 size={18} /></span>
 					<strong>{t('sidebar.graph')}:</strong>

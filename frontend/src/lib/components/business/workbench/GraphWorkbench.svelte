@@ -18,7 +18,6 @@
 	import { getLayoutOptions } from '$utils/graphLayout';
 	import { makeEdgeId } from '$utils/cytoscapeConfig';
 	import CytoscapeCanvas from '$components/common/CytoscapeCanvas.svelte';
-	import GraphQueryBar from '$components/business/GraphQueryBar.svelte';
 	import type { GraphStyleConfig, LayoutType } from '$types/graph';
 	import type cytoscape from 'cytoscape';
 
@@ -492,8 +491,6 @@
 			</button>
 		</div>
 	</div>
-
-	<GraphQueryBar />
 
 	{#if filterPanelOpen && graphData}
 		<div

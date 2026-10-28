@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { t } from '$i18n';
-	import { History, Star } from 'lucide-svelte';
 	import { get } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import {
@@ -25,18 +24,16 @@
 	import { cursorStore } from '$stores/cursor';
 	import { theme } from '$stores/theme';
 	import { queryResultToGraph } from '$utils/cytoscapeConfig';
-	import CypherEditor from '$components/common/CypherEditor.svelte';
-	import StreamingResult from '$components/business/StreamingResult.svelte';
-	import CursorResult from '$components/business/CursorResult.svelte';
-	import QueryToolbar from '$components/business/QueryToolbar.svelte';
-	import ParametersPanel from '$components/business/ParametersPanel.svelte';
-	import MaterializedResult from '$components/business/MaterializedResult.svelte';
+	import EditorPanel from '$components/business/workbench/EditorPanel.svelte';
+	import ResultPanel from '$components/business/workbench/ResultPanel.svelte';
 	import HistorySidebar from '$components/business/HistorySidebar.svelte';
 	import FavoritesSidebar from '$components/business/FavoritesSidebar.svelte';
 	import SaveQueryModal from '$components/business/SaveQueryModal.svelte';
 	import { queryService } from '$services/query';
 	import { formatQuery, getStreamEligibility, splitQueries } from '$utils/gql';
+	import { installKeymap } from '$utils/keymap';
 	import type { QueryResult, QueryError } from '$types/query';
+	import type { ParamRow } from '$components/business/workbench/EditorPanel.svelte';
 
 	let editorContent = $state('');
 	let isExecuting = $state(false);
@@ -67,45 +64,14 @@
 	let planResult = $state<QueryResult | null>(null);
 	let planError = $state<QueryError | null>(null);
 	let planOpen = $state(false);
-	let editorRef = $state<{
+	// Graph workbench replaces the result area; fed from graphStore so the
+	// exploration context survives view switches. Other pages (e.g. data
+	// browser) open it by pushing data into graphStore from anywhere.
+	let workbenchOpen = $state(false);
+	let editorPanelRef = $state<{
+		focusEditor: () => void;
 		jumpToPosition: (line: number, column: number) => void;
 	} | null>(null);
-
-	interface ParamRow {
-		id: string;
-		name: string;
-		text: string;
-	}
-
-	let rowSeq = 0;
-	const nextRowId = () => `param-${Date.now()}-${rowSeq++}`;
-
-	function parseParamValue(text: string): unknown {
-		const trimmed = text.trim();
-		if (!trimmed) return '';
-		try {
-			return JSON.parse(trimmed);
-		} catch {
-			return text;
-		}
-	}
-
-	function rowsFromRecord(record: Record<string, unknown>): ParamRow[] {
-		return Object.entries(record).map(([name, value]) => ({
-			id: nextRowId(),
-			name,
-			text: typeof value === 'string' ? value : JSON.stringify(value),
-		}));
-	}
-
-	function rowsToRecord(rows: ParamRow[]): Record<string, unknown> {
-		const out: Record<string, unknown> = {};
-		for (const row of rows) {
-			if (!row.name.trim()) continue;
-			out[row.name.trim()] = parseParamValue(row.text);
-		}
-		return out;
-	}
 
 	let parameters = $state<ParamRow[]>([]);
 	let sessionVariables = $state<ParamRow[]>([]);
@@ -157,6 +123,21 @@
 		const unsubCursor = cursorStore.subscribe((s) => {
 			cursor = s;
 		});
+		const unsubGraph = graphStore.subscribe((s) => {
+			workbenchOpen = s.workbenchOpen;
+		});
+		const uninstallKeymap = installKeymap({
+			execute: () => handleExecute(),
+			focusEditor: () => editorPanelRef?.focusEditor(),
+			openHistory: () => (historyOpen = true),
+			setView: (view) => consoleStore.setActiveView(view),
+			isEditorFocused: () =>
+				Boolean(
+					document.activeElement &&
+						document.activeElement.closest('.monaco-editor'),
+				),
+			isBusy: () => isBusy,
+		});
 		const unsubTheme = theme.subscribe((v) => {
 			isDark = v === 'dark';
 		});
@@ -165,7 +146,9 @@
 			unsubHistory();
 			unsubStream();
 			unsubCursor();
+			unsubGraph();
 			unsubTheme();
+			uninstallKeymap();
 			if (saveTimer) clearTimeout(saveTimer);
 			if (validateTimer) clearTimeout(validateTimer);
 		};
@@ -208,6 +191,36 @@
 	$effect(() => {
 		consoleStore.setSessionVariables(rowsToRecord(sessionVariables));
 	});
+
+	function parseParamValue(text: string): unknown {
+		const trimmed = text.trim();
+		if (!trimmed) return '';
+		try {
+			return JSON.parse(trimmed);
+		} catch {
+			return text;
+		}
+	}
+
+	let rowSeq = 0;
+	const nextRowId = () => `param-${Date.now()}-${rowSeq++}`;
+
+	function rowsFromRecord(record: Record<string, unknown>): ParamRow[] {
+		return Object.entries(record).map(([name, value]) => ({
+			id: nextRowId(),
+			name,
+			text: typeof value === 'string' ? value : JSON.stringify(value),
+		}));
+	}
+
+	function rowsToRecord(rows: ParamRow[]): Record<string, unknown> {
+		const out: Record<string, unknown> = {};
+		for (const row of rows) {
+			if (!row.name.trim()) continue;
+			out[row.name.trim()] = parseParamValue(row.text);
+		}
+		return out;
+	}
 
 	/**
 	 * Execute the text handed over by the editor, which is either the current
@@ -255,7 +268,7 @@
 	function handleCursorOpenInGraph(result: QueryResult) {
 		const parsed = queryResultToGraph(result);
 		graphStore.setGraphData({ nodes: parsed.nodes, edges: parsed.edges });
-		goto('/graph');
+		graphStore.openWorkbench();
 	}
 
 	function handleCancelStream() {
@@ -270,7 +283,7 @@
 	function handleStreamOpenInGraph(result: QueryResult) {
 		const parsed = queryResultToGraph(result);
 		graphStore.setGraphData({ nodes: parsed.nodes, edges: parsed.edges });
-		goto('/graph');
+		graphStore.openWorkbench();
 	}
 
 	/** Parse-and-bind each statement without executing it, reporting the first problem. */
@@ -319,7 +332,7 @@
 
 	/** Jump the editor caret to a server-reported error position. */
 	function handleJumpToError(position: { line: number; column: number }) {
-		editorRef?.jumpToPosition(position.line, position.column);
+		editorPanelRef?.jumpToPosition(position.line, position.column);
 	}
 
 	function handleFormat() {
@@ -365,7 +378,7 @@
 		if (!currentResult) return;
 		const parsed = queryResultToGraph(currentResult);
 		graphStore.setGraphData({ nodes: parsed.nodes, edges: parsed.edges });
-		goto('/graph');
+		graphStore.openWorkbench();
 	}
 
 	/** Load a history entry into the editor without executing it. */
@@ -402,173 +415,63 @@
 	<PageHeader title={t('console.title')} />
 
 	<!-- Editor Section -->
-	<div class="ui-card ui-card-flush shadow-sm flex flex-col">
-		<div class="p-5 pb-3">
-			<CypherEditor
-				bind:this={editorRef}
-				bind:value={editorContent}
-				{isDark}
-				placeholder="{t('console.queryPlaceholder')} {t('console.executeHint')}"
-				onExecute={handleExecute}
-				onCursorStatement={(text) => (cursorStatement = text)}
-				historyProvider={() => history.map((item) => item.query)}
-			/>
-		</div>
-		<QueryToolbar
-			{isExecuting}
-			{isBusy}
-			{isValidating}
-			{isExplaining}
-			{editorContent}
-			{resultMode}
-			{executionPreference}
-			{autoStreamThreshold}
-			{autoDecision}
-			{streamEligibility}
-			parametersCount={parameters.length}
-			{historyCount}
-			{favoritesCount}
-			onExecute={handleExecute}
-			onCancel={() => consoleStore.cancelMaterialized()}
-			onStreamExecute={handleStreamExecute}
-			onCursorExecute={handleCursorExecute}
-			onValidate={handleValidate}
-			onExplain={handleExplain}
-			onFormat={handleFormat}
-			onClear={() => {
-				consoleStore.setEditorContent('');
-				consoleStore.clearResult();
-			}}
-			onToggleHistory={() => (historyOpen = !historyOpen)}
-			onToggleFavorites={() => (favoritesOpen = !favoritesOpen)}
-			onSaveFavorite={() => {
-				favoriteName = '';
-				saveModalError = '';
-				saveModalOpen = true;
-			}}
-			onPreferenceChange={(pref) => consoleStore.setExecutionPreference(pref)}
-			onThresholdChange={(val) =>
-				consoleStore.setAutoStreamThreshold(clampAutoThreshold(val))}
-		/>
-		<button
-			class="ui-btn ui-btn-ghost"
-			onclick={() => (historyOpen = !historyOpen)}
-		>
-			<History size={16} /> {t('console.history')} ({history.length})
-		</button>
-		<button
-			class="ui-btn ui-btn-ghost"
-			onclick={() => (favoritesOpen = !favoritesOpen)}
-		>
-			<Star size={16} /> {t('console.favorites')} ({favorites.length})
-		</button>
-	</div>
-	<ParametersPanel
-		{parameters}
-		{sessionVariables}
-		open={paramsOpen}
+	<EditorPanel
+		bind:this={editorPanelRef}
+		bind:editorContent
+		{isDark}
+		{isExecuting}
+		{isBusy}
+		{isValidating}
+		{isExplaining}
+		{resultMode}
+		{executionPreference}
+		{autoStreamThreshold}
+		{autoDecision}
 		{streamEligibility}
 		{streamingActive}
-		onToggle={() => (paramsOpen = !paramsOpen)}
+		{parameters}
+		{sessionVariables}
+		{paramsOpen}
+		{history}
+		{favoritesCount}
+		{validateMessage}
+		{planOpen}
+		{planResult}
+		{planError}
+		onExecute={handleExecute}
+		onCancel={() => consoleStore.cancelMaterialized()}
+		onStreamExecute={handleStreamExecute}
+		onCursorExecute={handleCursorExecute}
+		onValidate={handleValidate}
+		onExplain={handleExplain}
+		onFormat={handleFormat}
+		onClear={() => {
+			consoleStore.setEditorContent('');
+			consoleStore.clearResult();
+		}}
+		onToggleHistory={() => (historyOpen = !historyOpen)}
+		onToggleFavorites={() => (favoritesOpen = !favoritesOpen)}
+		onSaveFavorite={() => {
+			favoriteName = '';
+			saveModalError = '';
+			saveModalOpen = true;
+		}}
+		onPreferenceChange={(pref) => consoleStore.setExecutionPreference(pref)}
+		onThresholdChange={(val) =>
+			consoleStore.setAutoStreamThreshold(clampAutoThreshold(val))}
+		onToggleParams={() => (paramsOpen = !paramsOpen)}
 		onParametersChange={(rows) => (parameters = rows)}
 		onSessionVariablesChange={(rows) => (sessionVariables = rows)}
+		onCursorStatement={(text) => (cursorStatement = text)}
+		onClosePlan={() => (planOpen = false)}
+		onJumpToError={handleJumpToError}
 	/>
-	{#if validateMessage}
-		<div class="ui-alert ui-alert-neutral mx-4 mb-3">
-			{validateMessage}
-		</div>
-	{/if}
-	{#if planOpen}
-		<div
-			class="mx-4 mb-3 rounded border border-alt/40 bg-alt-light overflow-hidden"
-		>
-			<div
-				class="px-3 py-2 flex items-center gap-2 text-sm text-alt"
-			>
-				<span class="font-medium">{t('console.planTitle')}</span>
-				<div class="flex-1"></div>
-				<button
-					class="ui-btn ui-btn-ghost ui-btn-xs"
-					onclick={() => (planOpen = false)}
-				>
-					{t('common.close')}
-				</button>
-			</div>
-			<div class="px-3 pb-3">
-				{#if planError}
-					<div class="text-error text-xs">
-						<span class="font-medium">{planError.code}</span>: {planError.message}
-						{#if planError.position}
-							<button
-								class="ui-btn ui-btn-danger-outline ui-btn-sm"
-								onclick={() => handleJumpToError(planError!.position!)}
-							>
-								{t('console.jumpToError', {
-									line: planError!.position!.line,
-									column: planError!.position!.column,
-								})}
-							</button>
-						{/if}
-					</div>
-				{:else if planResult}
-					{#if planResult.columns.length > 0}
-						<div
-							class="overflow-x-auto bg-surface rounded border border-alt/40"
-						>
-							<table class="ui-table w-full border-collapse">
-								<thead>
-									<tr class="bg-alt-light/50">
-										{#each planResult.columns as col (col)}
-											<th>{col}</th>
-										{/each}
-									</tr>
-								</thead>
-								<tbody>
-									{#each planResult.rows as row, i (i)}
-										<tr class="even:bg-alt-light/50">
-											{#each planResult.columns as col (col)}
-												<td class="font-mono max-w-md truncate"
-													>{String(row[col] ?? '')}</td
-												>
-											{/each}
-										</tr>
-									{/each}
-								</tbody>
-							</table>
-						</div>
-					{:else}
-						<div class="text-xs text-success">
-							{t('common.ok')}
-						</div>
-					{/if}
-				{/if}
-			</div>
-		</div>
-	{/if}
-</div>
 
-<!-- Result Section -->
-{#if resultMode === 'stream' && stream}
-	<StreamingResult
+	<ResultPanel
+		{workbenchOpen}
+		{resultMode}
 		{stream}
-		{activeView}
-		{isDark}
-		onViewChange={handleStreamViewChange}
-		onCancel={handleCancelStream}
-		onOpenInGraph={handleStreamOpenInGraph}
-	/>
-{:else if resultMode === 'cursor' && cursor}
-	<CursorResult
 		{cursor}
-		{activeView}
-		{isDark}
-		onViewChange={handleCursorViewChange}
-		onLoadMore={handleCursorLoadMore}
-		onClose={handleCursorClose}
-		onOpenInGraph={handleCursorOpenInGraph}
-	/>
-{:else}
-	<MaterializedResult
 		{isExecuting}
 		{currentResult}
 		{results}
@@ -576,40 +479,48 @@
 		{error}
 		{activeView}
 		{isDark}
-		onViewChange={handleMaterializedViewChange}
+		onCloseWorkbench={() => graphStore.closeWorkbench()}
+		onStreamViewChange={handleStreamViewChange}
+		onCancelStream={handleCancelStream}
+		onStreamOpenInGraph={handleStreamOpenInGraph}
+		onCursorViewChange={handleCursorViewChange}
+		onCursorLoadMore={handleCursorLoadMore}
+		onCursorClose={handleCursorClose}
+		onCursorOpenInGraph={handleCursorOpenInGraph}
+		onMaterializedViewChange={handleMaterializedViewChange}
 		onOpenInGraph={handleOpenInGraph}
 		onJumpToError={handleJumpToError}
 	/>
-{/if}
 
-<!-- History Panel -->
-{#if historyOpen}
-	<HistorySidebar
-		{history}
-		onClose={() => (historyOpen = false)}
-		onLoad={handleLoadHistory}
-		onRerun={handleRerunHistory}
-		onClear={() => consoleStore.clearHistory()}
+	<!-- History Panel -->
+	{#if historyOpen}
+		<HistorySidebar
+			{history}
+			onClose={() => (historyOpen = false)}
+			onLoad={handleLoadHistory}
+			onRerun={handleRerunHistory}
+			onClear={() => consoleStore.clearHistory()}
+		/>
+	{/if}
+
+	<!-- Favorites Panel -->
+	{#if favoritesOpen}
+		<FavoritesSidebar
+			{favorites}
+			onClose={() => (favoritesOpen = false)}
+			onLoad={handleLoadFavorite}
+			onRerun={handleRerunFavorite}
+			onDelete={(id) => consoleStore.removeFromFavorites(id)}
+		/>
+	{/if}
+
+	<!-- Save Favorite Modal -->
+	<SaveQueryModal
+		open={saveModalOpen}
+		name={favoriteName}
+		error={saveModalError}
+		onClose={() => (saveModalOpen = false)}
+		onSave={handleSaveFavorite}
+		onNameChange={(name) => (favoriteName = name)}
 	/>
-{/if}
-
-<!-- Favorites Panel -->
-{#if favoritesOpen}
-	<FavoritesSidebar
-		{favorites}
-		onClose={() => (favoritesOpen = false)}
-		onLoad={handleLoadFavorite}
-		onRerun={handleRerunFavorite}
-		onDelete={(id) => consoleStore.removeFromFavorites(id)}
-	/>
-{/if}
-
-<!-- Save Favorite Modal -->
-<SaveQueryModal
-	open={saveModalOpen}
-	name={favoriteName}
-	error={saveModalError}
-	onClose={() => (saveModalOpen = false)}
-	onSave={handleSaveFavorite}
-	onNameChange={(name) => (favoriteName = name)}
-/>
+</div>

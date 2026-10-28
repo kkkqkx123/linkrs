@@ -111,6 +111,16 @@
 	--shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
 	--shadow-lg: 0 6px 30px 5px rgba(0, 0, 0, 0.05), 0 16px 24px 2px rgba(0, 0, 0, 0.04),
 		0 8px 10px -5px rgba(0, 0, 0, 0.08);
+
+	/* Data table cell padding; overridden by the dense density mode */
+	--table-cell-pad-y: var(--size-6);
+	--table-cell-pad-x: var(--size-8);
+}
+
+/* Dense UI density: compact table rows for ops-heavy pages */
+:root[data-density='dense'] {
+	--table-cell-pad-y: var(--size-2);
+	--table-cell-pad-x: var(--size-4);
 }
 
 .dark {
@@ -184,18 +194,11 @@
 		background: transparent;
 	}
 	::-webkit-scrollbar-thumb {
-		background: #d9d9d9;
+		background: var(--color-border);
 		border-radius: 3px;
 	}
 	::-webkit-scrollbar-thumb:hover {
-		background: #bbb;
-	}
-
-	.dark ::-webkit-scrollbar-thumb {
-		background: #4a5568;
-	}
-	.dark ::-webkit-scrollbar-thumb:hover {
-		background: #5a6578;
+		background: color-mix(in srgb, var(--color-border) 70%, #888);
 	}
 
 	/* Base form controls: unmigrated pages inherit the unified look.
@@ -387,35 +390,27 @@
 		border-color: color-mix(in srgb, var(--color-warning) 45%, transparent);
 	}
 	.ui-btn-muted {
-		background: #6b7280;
+		background: var(--color-text-secondary);
 		color: #fff;
 	}
 	.ui-btn-muted:hover:not(:disabled) {
-		background: #4b5563;
+		background: var(--color-text);
 	}
 	.ui-btn-info {
-		background: #3b82f6;
+		background: var(--color-info);
 		color: #fff;
 	}
 	.ui-btn-info:hover:not(:disabled) {
-		background: #2563eb;
+		background: color-mix(in srgb, var(--color-info) 85%, #000);
 	}
 	/* Soft secondary action: neutral filled button for toolbar toggles */
 	.ui-btn-soft {
-		background: #f3f4f6;
-		color: #374151;
+		background: var(--color-bg-secondary);
+		color: var(--color-text);
 		border-color: transparent;
 	}
 	.ui-btn-soft:hover:not(:disabled) {
-		background: #e5e7eb;
-		color: #111827;
-	}
-	.dark .ui-btn-soft {
-		background: rgba(55, 65, 81, 0.5);
-		color: #e5e7eb;
-	}
-	.dark .ui-btn-soft:hover:not(:disabled) {
-		background: rgba(55, 65, 81, 0.8);
+		background: var(--color-bg-hover);
 	}
 	/* Destructive action: solid red, derived from --color-error */
 	.ui-btn-danger {
@@ -486,7 +481,7 @@
 	   secondary surface with regular-weight secondary text, as the reference
 	   table; cells keep 16/8 vertical-horizontal breathing room. */
 	.ui-table th {
-		padding: var(--size-6) var(--size-8);
+		padding: var(--table-cell-pad-y) var(--table-cell-pad-x);
 		text-align: left;
 		font-size: var(--font-size-base);
 		line-height: var(--line-height-body);
@@ -497,7 +492,7 @@
 		white-space: nowrap;
 	}
 	.ui-table td {
-		padding: var(--size-6) var(--size-8);
+		padding: var(--table-cell-pad-y) var(--table-cell-pad-x);
 		font-size: var(--font-size-base);
 		line-height: var(--line-height-body);
 		color: var(--color-text);
@@ -602,15 +597,12 @@
 		font-size: var(--text-xs);
 		line-height: 1.5;
 		color: var(--color-text);
-		background: #f9fafb;
+		background: var(--color-bg-secondary);
 		border: 1px solid var(--color-border-light);
 		border-radius: var(--radius-sm);
 		overflow: auto;
 		max-height: 24rem;
 		overflow-wrap: break-word;
-	}
-	.dark .ui-pre {
-		background: rgba(31, 41, 55, 0.5);
 	}
 	.ui-pre-sm {
 		padding: 0.5rem;
@@ -628,11 +620,8 @@
 		padding: 0.75rem 1.25rem;
 		font-size: var(--text-xs);
 		color: var(--color-text-secondary);
-		background: #f9fafb;
+		background: var(--color-bg-secondary);
 		border-bottom: 1px solid var(--color-border-light);
-	}
-	.dark .ui-result-head {
-		background: rgba(31, 41, 55, 0.5);
 	}
 
 	/* Segmented view switcher: table/json/graph toggles inside result heads */
@@ -650,12 +639,8 @@
 		color: var(--color-text);
 	}
 	.ui-seg-active {
-		background: #dbeafe;
-		color: #2563eb;
-	}
-	.dark .ui-seg-active {
-		background: rgba(30, 58, 138, 0.3);
-		color: #93c5fd;
+		background: var(--color-info-light);
+		color: var(--color-info);
 	}
 
 	/* Icon button: chromeless dismiss/close action */
@@ -665,16 +650,13 @@
 		justify-content: center;
 		padding: 0.25rem;
 		line-height: 1;
-		color: #9ca3af;
+		color: var(--color-text-placeholder);
 		background: transparent;
 		border-radius: var(--radius-sm);
 		cursor: pointer;
 	}
 	.ui-icon-btn:hover {
-		color: #4b5563;
-	}
-	.dark .ui-icon-btn:hover {
-		color: #d1d5db;
+		color: var(--color-text-secondary);
 	}
 
 	/* Tab: text tab inside a structural card tab bar. Active tab uses the
@@ -791,7 +773,7 @@
 		display: inline-block;
 		width: 1.5rem;
 		height: 1.5rem;
-		border: 2px solid #3b82f6;
+		border: 2px solid var(--color-info);
 		border-top-color: transparent;
 		border-radius: 9999px;
 		animation: ui-spin 1s linear infinite;
@@ -837,7 +819,7 @@
 		width: 7px;
 		height: 7px;
 		border-radius: 50%;
-		background: #91a0a8;
+		background: var(--color-text-placeholder);
 		flex: none;
 	}
 	.ui-status-ok {
@@ -928,12 +910,18 @@
 		color: #fff;
 		border-left-color: var(--color-nav-accent);
 	}
-	/* Section caption inside the dark rail */
+	/* Section caption inside the dark rail. Left padding adds the 3px accent
+	   border width so captions align with the item labels. */
 	.ui-nav-title {
-		padding: var(--size-7) var(--size-7) var(--size-3);
+		padding: var(--size-7) var(--size-5) var(--size-3) calc(var(--size-5) + 3px);
 		color: var(--color-nav-muted);
 		font-size: var(--text-xs);
 		line-height: var(--text-xs--line-height);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	/* Drawer: floating side panel for history and favorites */

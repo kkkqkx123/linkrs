@@ -11,7 +11,6 @@
 	import { schemaStore } from '$stores/schema';
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { dataBrowserService } from '$services/dataBrowser';
-	import { formatCellValue } from '$utils/parseData';
 	import {
 		buildEdgeDelete,
 		buildEdgeUpdate,
@@ -19,6 +18,10 @@
 		buildVertexUpdate,
 	} from '$utils/cypherTemplates';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
+	import StatisticsPanel from '$components/business/dataBrowser/StatisticsPanel.svelte';
+	import DetailModal from '$components/business/dataBrowser/DetailModal.svelte';
+	import VertexTable from '$components/business/dataBrowser/VertexTable.svelte';
+	import EdgeTable from '$components/business/dataBrowser/EdgeTable.svelte';
 	import FilterPanel from '$components/business/FilterPanel.svelte';
 	import VectorSearchPanel from '$components/business/VectorSearchPanel.svelte';
 	import FulltextSearchPanel from '$components/business/FulltextSearchPanel.svelte';
@@ -509,7 +512,8 @@
 				],
 			});
 		}
-		goto('/graph');
+		graphStore.openWorkbench();
+		goto('/console');
 	}
 </script>
 
@@ -604,305 +608,65 @@
 					{:else if activeTab === 'fulltext'}
 						<FulltextSearchPanel {currentSpace} />
 					{:else if activeTab === 'vertices'}
-						<div class="mb-4">
-							<select
-								class="ui-input"
-								value={selectedTag || ''}
-								onchange={handleTagChange}
-							>
-								<option value="">-- {t('dataBrowser.selectTag')} --</option>
-								{#each tags as tag (tag.name)}
-									<option value={tag.name}>{tag.name}</option>
-								{/each}
-							</select>
-						</div>
-
-						{#if loading}
-							<div class="ui-empty">
-								<div class="ui-spinner"></div>
-							</div>
-						{:else if vertices.length > 0}
-							<div class="overflow-x-auto">
-								<table class="ui-table w-full border-collapse">
-									<thead>
-										<tr class="bg-secondary">
-											<th>{t('dataBrowser.batch.deletedColumn')}</th>
-											<th>ID</th>
-											<th>{t('sidebar.tags')}</th>
-											{#each vertexProperties as prop (prop)}
-												<th>{prop}</th>
-											{/each}
-											<th>{t('common.actions')}</th>
-										</tr>
-									</thead>
-									<tbody>
-										{#each vertices as v (v.id)}
-											<tr>
-												<td>
-													<input
-														type="checkbox"
-														class="cursor-pointer"
-														checked={selectedIds.has(String(v.id))}
-														onchange={() => toggleSelect(String(v.id))}
-													/>
-												</td>
-												<td class="font-mono">{v.id}</td>
-												<td>{v.tag}</td>
-												{#each vertexProperties as prop (prop)}
-													<td class="max-w-40 truncate"
-														>{formatCellValue(v.properties[prop])}</td
-													>
-												{/each}
-												<td>
-													<button
-														class="ui-link text-xs"
-														onclick={() => showDetail(v, 'vertex')}
-														>{t('dataBrowser.viewDetail')}</button
-													>
-													<button
-														class="ml-2 text-success hover:text-success text-xs cursor-pointer"
-														onclick={() => viewInGraph(v, 'vertex')}
-														>{t('graphPreview.openInGraph')}</button
-													>
-													<button
-														class="ml-2 text-muted hover:text-ink text-xs cursor-pointer"
-														onclick={() => copyText(String(v.id))}
-														>{t('dataBrowser.copyId')}</button
-													>
-													<button
-														class="ml-2 text-warning hover:text-warning text-xs cursor-pointer"
-														onclick={() => openEdit(v, 'vertex')}
-														>{t('dataBrowser.editUpdate')}</button
-													>
-													<button
-														class="ml-2 ui-link-danger text-xs"
-														onclick={() => requestDelete(v, 'vertex')}
-														>{t('dataBrowser.editDelete')}</button
-													>
-												</td>
-											</tr>
-										{/each}
-									</tbody>
-								</table>
-							</div>
-							<div
-								class="flex items-center justify-between mt-4 text-sm text-muted"
-							>
-								<span
-									>{t('dataBrowser.total')}: {vertexTotal}
-									{t('dataBrowser.items')}</span
-								>
-								<div class="flex gap-2">
-									<button
-										class="ui-btn ui-btn-ghost ui-btn-sm"
-										disabled={vertexPage <= 1}
-										onclick={() => {
-											dataBrowserStore.setVertexPage(vertexPage - 1);
-											loadVertices();
-										}}>{t('common.prev')}</button
-									>
-									<span class="px-3 py-1 text-muted"
-										>{t('common.page')} {vertexPage}</span
-									>
-									<button
-										class="ui-btn ui-btn-ghost ui-btn-sm"
-										disabled={vertexPage * vertexPageSize >= vertexTotal}
-										onclick={() => {
-											dataBrowserStore.setVertexPage(vertexPage + 1);
-											loadVertices();
-										}}>{t('common.next')}</button
-									>
-								</div>
-							</div>
-						{:else if selectedTag}
-							<p class="text-muted text-center py-8">
-								{t('schema.noTags')}
-							</p>
-						{:else}
-							<p class="text-muted text-center py-8">
-								{t('dataBrowser.selectTag')}
-								{t('common.loading')}
-							</p>
-						{/if}
+						<VertexTable
+							{tags}
+							{selectedTag}
+							{loading}
+							{vertices}
+							properties={vertexProperties}
+							total={vertexTotal}
+							page={vertexPage}
+							pageSize={vertexPageSize}
+							selectedIds={selectedIds}
+							onTagChange={handleTagChange}
+							onToggleSelect={toggleSelect}
+							onViewDetail={(v) => showDetail(v, 'vertex')}
+							onViewInGraph={(v) => viewInGraph(v, 'vertex')}
+							onCopyId={copyText}
+							onEdit={(v) => openEdit(v, 'vertex')}
+							onDelete={(v) => requestDelete(v, 'vertex')}
+							onPrevPage={() => {
+								dataBrowserStore.setVertexPage(vertexPage - 1);
+								loadVertices();
+							}}
+							onNextPage={() => {
+								dataBrowserStore.setVertexPage(vertexPage + 1);
+								loadVertices();
+							}}
+						/>
 					{:else}
-						<div class="mb-4">
-							<select
-								class="ui-input"
-								value={selectedEdgeType || ''}
-								onchange={handleEdgeTypeChange}
-							>
-								<option value="">-- {t('dataBrowser.selectEdgeType')} --</option
-								>
-								{#each edgeTypes as et (et.name)}
-									<option value={et.name}>{et.name}</option>
-								{/each}
-							</select>
-						</div>
-
-						{#if loading}
-							<div class="ui-empty">
-								<div class="ui-spinner"></div>
-							</div>
-						{:else if edges.length > 0}
-							<div class="overflow-x-auto">
-								<table class="ui-table w-full border-collapse">
-									<thead>
-										<tr class="bg-secondary">
-											<th>{t('dataBrowser.batch.deletedColumn')}</th>
-											<th>ID</th>
-											<th>{t('common.type')}</th>
-											<th>{t('dataBrowser.source')}</th>
-											<th>{t('dataBrowser.target')}</th>
-											<th>{t('dataBrowser.rank')}</th>
-											{#each edgeProperties as prop (prop)}
-												<th>{prop}</th>
-											{/each}
-											<th>{t('common.actions')}</th>
-										</tr>
-									</thead>
-									<tbody>
-										{#each edges as e (e.id)}
-											<tr>
-												<td>
-													<input
-														type="checkbox"
-														class="cursor-pointer"
-														checked={selectedIds.has(String(e.id))}
-														onchange={() => toggleSelect(String(e.id))}
-													/>
-												</td>
-												<td class="font-mono">{e.id}</td>
-												<td>{e.type}</td>
-												<td class="font-mono">{e.src}</td>
-												<td class="font-mono">{e.dst}</td>
-												<td>{e.rank}</td>
-												{#each edgeProperties as prop (prop)}
-													<td class="max-w-40 truncate"
-														>{formatCellValue(e.properties[prop])}</td
-													>
-												{/each}
-												<td>
-													<button
-														class="ui-link text-xs"
-														onclick={() => showDetail(e, 'edge')}
-														>{t('dataBrowser.viewDetail')}</button
-													>
-													<button
-														class="ml-2 text-success hover:text-success text-xs cursor-pointer"
-														onclick={() => viewInGraph(e, 'edge')}
-														>{t('graphPreview.openInGraph')}</button
-													>
-													<button
-														class="ml-2 text-muted hover:text-ink text-xs cursor-pointer"
-														onclick={() => copyText(String(e.src))}
-														>{t('dataBrowser.copyId')}</button
-													>
-													<button
-														class="ml-2 text-warning hover:text-warning text-xs cursor-pointer"
-														onclick={() => openEdit(e, 'edge')}
-														>{t('dataBrowser.editUpdate')}</button
-													>
-													<button
-														class="ml-2 ui-link-danger text-xs"
-														onclick={() => requestDelete(e, 'edge')}
-														>{t('dataBrowser.editDelete')}</button
-													>
-												</td>
-											</tr>
-										{/each}
-									</tbody>
-								</table>
-							</div>
-							<div
-								class="flex items-center justify-between mt-4 text-sm text-muted"
-							>
-								<span
-									>{t('dataBrowser.total')}: {edgeTotal}
-									{t('dataBrowser.items')}</span
-								>
-								<div class="flex gap-2">
-									<button
-										class="ui-btn ui-btn-ghost ui-btn-sm"
-										disabled={edgePage <= 1}
-										onclick={() => {
-											dataBrowserStore.setEdgePage(edgePage - 1);
-											loadEdges();
-										}}>{t('common.prev')}</button
-									>
-									<span class="px-3 py-1 text-muted"
-										>{t('common.page')} {edgePage}</span
-									>
-									<button
-										class="ui-btn ui-btn-ghost ui-btn-sm"
-										disabled={edgePage * edgePageSize >= edgeTotal}
-										onclick={() => {
-											dataBrowserStore.setEdgePage(edgePage + 1);
-											loadEdges();
-										}}>{t('common.next')}</button
-									>
-								</div>
-							</div>
-						{:else if selectedEdgeType}
-							<p class="text-muted text-center py-8">
-								{t('schema.noEdges')}
-							</p>
-						{:else}
-							<p class="text-muted text-center py-8">
-								{t('dataBrowser.selectEdgeType')}
-								{t('common.loading')}
-							</p>
-						{/if}
+						<EdgeTable
+							{edgeTypes}
+							{selectedEdgeType}
+							{loading}
+							{edges}
+							properties={edgeProperties}
+							total={edgeTotal}
+							page={edgePage}
+							pageSize={edgePageSize}
+							selectedIds={selectedIds}
+							onEdgeTypeChange={handleEdgeTypeChange}
+							onToggleSelect={toggleSelect}
+							onViewDetail={(e) => showDetail(e, 'edge')}
+							onViewInGraph={(e) => viewInGraph(e, 'edge')}
+							onCopyId={(id) => copyText(id)}
+							onEdit={(e) => openEdit(e, 'edge')}
+							onDelete={(e) => requestDelete(e, 'edge')}
+							onPrevPage={() => {
+								dataBrowserStore.setEdgePage(edgePage - 1);
+								loadEdges();
+							}}
+							onNextPage={() => {
+								dataBrowserStore.setEdgePage(edgePage + 1);
+								loadEdges();
+							}}
+						/>
 					{/if}
 				</div>
 			</div>
 
 			<!-- Statistics Panel -->
-			<div
-				class="w-64 border-l border-line p-5 bg-secondary overflow-y-auto"
-			>
-				<h2
-					class="text-base font-semibold text-ink mb-3"
-				>
-					{t('dataBrowser.statistics')}
-				</h2>
-				{#if statistics}
-					<div class="space-y-2 text-sm">
-						<div class="flex justify-between">
-							<span class="text-muted"
-								>{t('dataBrowser.vertices')}:</span
-							><span class="font-medium text-ink"
-								>{statistics.totalVertices ?? '-'}</span
-							>
-						</div>
-						<div class="flex justify-between">
-							<span class="text-muted"
-								>{t('dataBrowser.edges')}:</span
-							><span class="font-medium text-ink"
-								>{statistics.totalEdges ?? '-'}</span
-							>
-						</div>
-						<div class="flex justify-between">
-							<span class="text-muted"
-								>{t('dataBrowser.tags')}:</span
-							><span class="font-medium text-ink"
-								>{statistics.tagCount ?? '-'}</span
-							>
-						</div>
-						<div class="flex justify-between">
-							<span class="text-muted"
-								>{t('dataBrowser.edgeTypes')}:</span
-							><span class="font-medium text-ink"
-								>{statistics.edgeTypeCount ?? '-'}</span
-							>
-						</div>
-					</div>
-				{:else}
-					<p class="text-muted text-xs">
-						{t('common.refresh')}
-						{t('common.loading')}
-					</p>
-				{/if}
-			</div>
+			<StatisticsPanel statistics={statistics} />
 		</div>
 	</div>
 {:else}
@@ -917,60 +681,7 @@
 
 <!-- Detail Modal -->
 {#if detailModalVisible && detailData}
-	<div class="fixed inset-0 z-50 flex items-center justify-center">
-		<div
-			role="presentation"
-			class="absolute inset-0 bg-mask"
-			onclick={() => dataBrowserStore.hideDetail()}
-		></div>
-		<div
-			class="relative ui-card shadow-lg p-6 w-96 max-h-[80vh] overflow-y-auto"
-		>
-			<div class="flex items-center justify-between mb-4">
-				<h2 class="text-base font-semibold text-ink">
-					{detailType === 'vertex'
-						? t('dataBrowser.vertices')
-						: t('sidebar.edges')}
-					{t('common.detail')}
-				</h2>
-				<IconButton
-					onclick={() => dataBrowserStore.hideDetail()}
-					label={t('common.close')}
-					class="ui-icon-btn"
-					size={18}
-				/>
-			</div>
-			<div class="space-y-2">
-				{#each Object.entries(detailData) as [key, value] (key)}
-					{#if key !== 'properties'}
-						<div class="text-sm">
-							<span class="text-muted">{key}:</span>
-							<span class="ml-1 text-ink"
-								>{String(value)}</span
-							>
-						</div>
-					{/if}
-				{/each}
-				{#if detailData.properties}
-					<div class="mt-4">
-						<h3
-							class="text-sm font-medium text-ink mb-2"
-						>
-							{t('common.properties')}
-						</h3>
-						{#each Object.entries(detailData.properties) as [k, v] (k)}
-							<div class="text-sm ml-2">
-								<span class="text-muted">{k}:</span>
-								<span class="ml-1 text-ink"
-									>{String(v)}</span
-								>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		</div>
-	</div>
+	<DetailModal detailData={detailData} detailType={detailType} />
 {/if}
 
 <!-- Edit Preview Modal -->

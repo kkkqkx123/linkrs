@@ -8,7 +8,6 @@
 	import {
 		Keyboard,
 		Database,
-		Link2,
 		Table,
 		LineChart,
 		Route,
@@ -16,6 +15,8 @@
 		Repeat,
 		Users,
 		PlugZap,
+		FileSearch,
+		ScanSearch,
 	} from 'lucide-svelte';
 
 	const path = $derived(page.url.pathname);
@@ -110,7 +111,18 @@
 		label: MessageKey;
 		route?: string;
 		requiresUsers?: boolean;
+		group: GroupKey;
 	}
+
+	// Group order drives the rendered section order.
+	const GROUP_ORDER = ['explore', 'data', 'ops'] as const;
+	type GroupKey = (typeof GROUP_ORDER)[number];
+
+	const groupLabels: Record<GroupKey, MessageKey> = {
+		explore: 'sidebar.group.explore',
+		data: 'sidebar.group.data',
+		ops: 'sidebar.group.ops',
+	};
 
 	const menuItems: MenuItem[] = [
 		{
@@ -118,48 +130,63 @@
 			icon: Keyboard,
 			label: 'sidebar.console',
 			route: '/console',
-		},
-		{
-			key: '/schema',
-			icon: Database,
-			label: 'sidebar.schema',
-			route: '/schema',
-		},
-		{
-			key: '/graph',
-			icon: Link2,
-			label: 'sidebar.graph',
-			route: '/graph',
+			group: 'explore',
 		},
 		{
 			key: '/data-browser',
 			icon: Table,
 			label: 'sidebar.dataBrowser',
 			route: '/data-browser',
+			group: 'explore',
 		},
 		{
-			key: '/monitoring',
-			icon: LineChart,
-			label: 'sidebar.monitoring',
-			route: '/monitoring',
+			key: '/schema',
+			icon: Database,
+			label: 'sidebar.schema',
+			route: '/schema',
+			group: 'data',
 		},
 		{
-			key: '/migration',
-			icon: Route,
-			label: 'sidebar.migration',
-			route: '/migration',
+			key: '/fulltext',
+			icon: FileSearch,
+			label: 'sidebar.fulltext',
+			route: '/fulltext',
+			group: 'data',
+		},
+		{
+			key: '/vector',
+			icon: ScanSearch,
+			label: 'sidebar.vector',
+			route: '/vector',
+			group: 'data',
 		},
 		{
 			key: '/batch',
 			icon: Package,
 			label: 'sidebar.batch',
 			route: '/batch',
+			group: 'data',
 		},
 		{
 			key: '/transfer',
 			icon: Repeat,
 			label: 'sidebar.transfer',
 			route: '/transfer',
+			group: 'data',
+		},
+		{
+			key: '/monitoring',
+			icon: LineChart,
+			label: 'sidebar.monitoring',
+			route: '/monitoring',
+			group: 'ops',
+		},
+		{
+			key: '/migration',
+			icon: Route,
+			label: 'sidebar.migration',
+			route: '/migration',
+			group: 'ops',
 		},
 		{
 			key: '/users',
@@ -167,6 +194,7 @@
 			label: 'sidebar.users',
 			route: '/users',
 			requiresUsers: true,
+			group: 'ops',
 		},
 		{
 			key: '/sessions',
@@ -174,11 +202,20 @@
 			label: 'sidebar.sessions',
 			route: '/sessions',
 			requiresUsers: true,
+			group: 'ops',
 		},
 	];
 
 	const visibleItems = $derived(
 		menuItems.filter((item) => !item.requiresUsers || managesUsers.current),
+	);
+
+	const groupedItems = $derived(
+		GROUP_ORDER.map((group) => ({
+			group,
+			label: groupLabels[group],
+			items: visibleItems.filter((item) => item.group === group),
+		})).filter((section) => section.items.length > 0),
 	);
 
 	function isActive(item: MenuItem): boolean {
@@ -188,7 +225,7 @@
 	// The graph canvas (cytoscape) is lazily imported on first use; hovering a
 	// graph-using entry prefetches that chunk so the first render does not wait
 	// on an 800 KiB download.
-	const GRAPH_ROUTES = ['/graph', '/schema', '/console'];
+	const GRAPH_ROUTES = ['/schema', '/console'];
 	let prefetchedGraph = false;
 	function prefetchGraphChunk(item: MenuItem): void {
 		if (prefetchedGraph) return;
@@ -221,25 +258,28 @@
 		</div>
 		<nav bind:this={navEl} class="flex-1 py-2">
 			<ul class="ui-nav">
-				{#each visibleItems as item (item.key)}
-					<li>
-						<a
-							href={item.route}
-							title={t(item.label)}
-							onpointerenter={() => prefetchGraphChunk(item)}
-							class="flex items-center gap-2 overflow-hidden whitespace-nowrap {isActive(
-								item,
-							)
-								? 'active'
-								: ''}"
-						>
-							<!-- 固定宽度图标列,保证各行文字起始位置对齐 -->
-							<span class="flex-shrink-0 w-5 text-center flex items-center justify-center">
-								<item.icon size={18} />
-							</span>
-							<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
-						</a>
-					</li>
+				{#each groupedItems as section (section.group)}
+					<li class="ui-nav-title" aria-hidden="true">{t(section.label)}</li>
+					{#each section.items as item (item.key)}
+						<li>
+							<a
+								href={item.route}
+								title={t(item.label)}
+								onpointerenter={() => prefetchGraphChunk(item)}
+								class="flex items-center gap-2 overflow-hidden whitespace-nowrap {isActive(
+									item,
+								)
+									? 'active'
+									: ''}"
+							>
+								<!-- 固定宽度图标列,保证各行文字起始位置对齐 -->
+								<span class="flex-shrink-0 w-5 text-center flex items-center justify-center">
+									<item.icon size={18} />
+								</span>
+								<span class="min-w-0 flex-1 truncate">{t(item.label)}</span>
+							</a>
+						</li>
+					{/each}
 				{/each}
 			</ul>
 		</nav>

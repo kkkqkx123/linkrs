@@ -22,6 +22,8 @@ export interface EdgeStyle {
 
 export interface GraphState {
 	graphData: GraphData | null;
+	/** Whether the console workbench view is open; set by any page pushing data in. */
+	workbenchOpen: boolean;
 	layout: LayoutType;
 	zoom: number;
 	selectedNodes: string[];
@@ -131,6 +133,7 @@ function ensureStylesForData(
 function createGraphStore() {
 	const { subscribe, update } = writable<GraphState>({
 		graphData: null,
+		workbenchOpen: false,
 		layout: (persisted.layout as LayoutType) || 'force',
 		zoom: 1,
 		selectedNodes: [],
@@ -226,6 +229,9 @@ function createGraphStore() {
 				persistStyles(newState);
 				return newState;
 			}),
+		openWorkbench: () => update((s) => ({ ...s, workbenchOpen: true })),
+		closeWorkbench: () =>
+			update((s) => ({ ...s, workbenchOpen: false, selectedNodes: [], selectedEdges: [] })),
 		hasNode: (id: string): boolean => get({ subscribe }).nodeIndex.has(id),
 		hasEdge: (id: string): boolean => get({ subscribe }).edgeIndex.has(id),
 		setLayout: (layout: LayoutType) => update((s) => ({ ...s, layout })),

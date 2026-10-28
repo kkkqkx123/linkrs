@@ -7,7 +7,16 @@
 	import LanguageSwitcher from '$components/common/LanguageSwitcher.svelte';
 	import ThemeToggle from '$components/common/ThemeToggle.svelte';
 	import HealthMonitor from '$components/common/HealthMonitor.svelte';
-	import { User } from 'lucide-svelte';
+	import { toggleDensity, density } from '$stores/ui';
+	import { fromStore } from 'svelte/store';
+	import { Rows3, User } from 'lucide-svelte';
+
+	const densityState = fromStore(density);
+	function densityLabel(d: 'comfortable' | 'dense'): string {
+		return d === 'dense'
+			? t('ui.density.dense')
+			: t('ui.density.comfortable');
+	}
 
 	let store = $state({
 		isVerified: false,
@@ -43,6 +52,15 @@
 		<LanguageSwitcher />
 		<ThemeToggle />
 		<HealthMonitor />
+		<button
+			type="button"
+			class="ui-icon-btn"
+			title={densityLabel(densityState.current)}
+			aria-label={densityLabel(densityState.current)}
+			onclick={toggleDensity}
+		>
+			<Rows3 size={16} />
+		</button>
 		{#if store.isVerified}
 			{#if store.mustChangePassword}
 				<span

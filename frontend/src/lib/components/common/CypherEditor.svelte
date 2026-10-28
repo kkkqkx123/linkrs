@@ -72,6 +72,13 @@
 	}
 
 	/**
+	 * Focus the editor without moving the caret.
+	 */
+	export function focus(): void {
+		editor?.focus();
+	}
+
+	/**
 	 * Move the caret to a 1-based line and column, reveal the line, and focus
 	 * the editor. Used for jumping to query error positions reported by the server.
 	 */

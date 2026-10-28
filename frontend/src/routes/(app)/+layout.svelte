@@ -2,8 +2,10 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { fromStore, get } from 'svelte/store';
+	import { page } from '$app/state';
 	import { t } from '$i18n';
 	import { isAuthenticated, connectionStore } from '$stores/connection';
+	import { applyRouteDensity } from '$stores/ui';
 	import LoadingScreen from '$components/common/LoadingScreen.svelte';
 	import Header from '$components/layout/Header.svelte';
 	import Sidebar from '$components/layout/Sidebar.svelte';
@@ -12,6 +14,15 @@
 
 	let checking = $state(true);
 	const authState = fromStore(isAuthenticated);
+
+	// Canvas-like pages (graph, data browser) use the full working area;
+	// form/config pages stay centered with a readable max width.
+	const WIDE_ROUTES = ['/data-browser'];
+	const wide = $derived(WIDE_ROUTES.some((r) => page.url.pathname.startsWith(r)));
+
+	$effect(() => {
+		applyRouteDensity(page.url.pathname);
+	});
 
 	onMount(async () => {
 		if (!get(isAuthenticated)) {
@@ -40,7 +51,7 @@
 			<main
 				class="flex-1 overflow-auto py-8 px-7 bg-page transition-colors duration-300"
 			>
-				<div class="max-w-[1500px] mx-auto w-full">
+				<div class={wide ? 'w-full' : 'max-w-[1500px] mx-auto w-full'}>
 					{@render children()}
 				</div>
 			</main>
