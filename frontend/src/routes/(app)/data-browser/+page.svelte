@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import { t } from '$i18n';
 	import { RefreshCw, Search, Package, ArrowLeftRight } from 'lucide-svelte';
-	import IconButton from '$components/common/IconButton.svelte';
 	import { get } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import { SvelteSet } from 'svelte/reactivity';

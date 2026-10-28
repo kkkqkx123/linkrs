@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { formatCount, formatLatencyMs } from '$utils/metricsFormat';
+	import { formatCount } from '$utils/metricsFormat';
 	import type { RetrievalSnapshot } from '$services/retrieval';
 
 	let { retrieval }: { retrieval: RetrievalSnapshot | null } = $props();

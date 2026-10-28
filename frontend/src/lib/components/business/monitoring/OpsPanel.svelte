@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { t } from '$i18n';
 	import { operationsService, type ActiveTransaction } from '$services/operations';
-	import { formatCount, formatLatencyMs } from '$utils/metricsFormat';
+	import { formatLatencyMs } from '$utils/metricsFormat';
 
 	let opsLoading = $state(false);
 	let opsError = $state<string | null>(null);

@@ -39,7 +39,7 @@
 	const sortedRows = $derived.by(() => {
 		const sorted = [...rows];
 		sorted.sort((a, b) => {
-			let cmp = 0;
+			let cmp: number;
 			if (sortField === 'duration') {
 				cmp = (Number(a.duration_ms) || 0) - (Number(b.duration_ms) || 0);
 			} else if (sortField === 'query') {

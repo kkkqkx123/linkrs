@@ -2,7 +2,6 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { t } from '$i18n';
 	import { get } from 'svelte/store';
-	import { goto } from '$app/navigation';
 	import {
 		consoleStore,
 		type QueryHistoryItem,
@@ -51,7 +50,6 @@
 	let isDark = $state(false);
 	let history = $state<QueryHistoryItem[]>([]);
 	let favorites = $state<QueryFavoriteItem[]>([]);
-	let historyCount = $derived(history.length);
 	let favoritesCount = $derived(favorites.length);
 	let historyOpen = $state(false);
 	let favoritesOpen = $state(false);
