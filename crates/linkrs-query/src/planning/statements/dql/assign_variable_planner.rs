@@ -66,11 +66,11 @@ impl Planner for AssignVariablePlanner {
             current_node.col_names().to_vec(),
         );
 
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(PlanNodeEnum::Start(start_node)),
-            logical_root: Some(logical_root),
-        };
+        let sub_plan = SubPlan::from_dual(
+            Some(current_node),
+            Some(PlanNodeEnum::Start(start_node)),
+            Some(logical_root),
+        );
         Ok(sub_plan)
     }
 }

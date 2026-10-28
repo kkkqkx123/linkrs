@@ -98,6 +98,45 @@ impl JoinHint {
             }
         }
     }
+
+    /// Lower a bound `USING JOIN` hint to a hint tree.
+    ///
+    /// The binder already checked that every named variable is in scope;
+    /// unknown variables are still reported later by [`JoinTreeConstructor`].
+    /// Returns `None` for degenerate inputs (empty build list).
+    pub fn from_bound(hint: &crate::binder::bound::BoundJoinHint) -> Option<Self> {
+        use crate::binder::bound::BoundJoinHint as Bound;
+        match hint {
+            Bound::Binary { left, right } => Some(Self {
+                root: JoinHintNode::Binary {
+                    left: Box::new(JoinHintNode::Scan {
+                        variable: left.clone(),
+                    }),
+                    right: Box::new(JoinHintNode::Scan {
+                        variable: right.clone(),
+                    }),
+                },
+            }),
+            Bound::Multiway { probe, builds } => {
+                if builds.is_empty() {
+                    return None;
+                }
+                Some(Self {
+                    root: JoinHintNode::Multiway {
+                        probe: Box::new(JoinHintNode::Scan {
+                            variable: probe.clone(),
+                        }),
+                        builds: builds
+                            .iter()
+                            .map(|var| JoinHintNode::Scan {
+                                variable: var.clone(),
+                            })
+                            .collect(),
+                    },
+                })
+            }
+        }
+    }
 }
 
 /// Extra join metadata carried by inner hint tree nodes.

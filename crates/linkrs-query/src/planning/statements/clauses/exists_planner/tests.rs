@@ -18,11 +18,11 @@ fn logical_start_subplan() -> SubPlan {
     use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
-    SubPlan {
-        root: Some(PlanNodeEnum::Start(StartNode::new())),
-        tail: None,
-        logical_root: Some(LogicalNodeEnum::Start(LogicalStartNode::new())),
-    }
+    SubPlan::from_dual(
+        Some(PlanNodeEnum::Start(StartNode::new())),
+        None,
+        Some(LogicalNodeEnum::Start(LogicalStartNode::new())),
+    )
 }
 
 #[test]

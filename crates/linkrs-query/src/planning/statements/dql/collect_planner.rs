@@ -107,13 +107,14 @@ impl Planner for CollectPlanner {
             PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
         })?;
         aggregate_node.set_aggregation_args(aggregation_args);
+        aggregate_node.set_group_key_exprs(Vec::new());
 
         let logical_root = Self::aggregate_mirror(&aggregate_node);
-        let sub_plan = SubPlan {
-            root: Some(PlanNodeEnum::Aggregate(aggregate_node)),
-            tail: Some(start_enum),
-            logical_root: Some(logical_root),
-        };
+        let sub_plan = SubPlan::from_dual(
+            Some(PlanNodeEnum::Aggregate(aggregate_node)),
+            Some(start_enum),
+            Some(logical_root),
+        );
         Ok(sub_plan)
     }
 }

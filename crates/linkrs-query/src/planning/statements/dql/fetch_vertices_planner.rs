@@ -100,11 +100,7 @@ impl Planner for FetchVerticesPlanner {
 
         let root = PlanNodeEnum::GetVertices(get_vertices_node);
 
-        let sub_plan = SubPlan {
-            root: Some(root),
-            tail: Some(arg_node_enum),
-            logical_root: Some(current_logical),
-        };
+        let sub_plan = SubPlan::from_dual(Some(root), Some(arg_node_enum), Some(current_logical));
         Ok(sub_plan)
     }
 }

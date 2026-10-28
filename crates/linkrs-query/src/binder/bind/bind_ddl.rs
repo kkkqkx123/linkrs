@@ -1,3 +1,8 @@
+//! Schema and space definition binding (DDL plus space introspection).
+//!
+//! Transaction control lives in [`super::bind_txn`], diagnostic wrappers in
+//! [`super::bind_diagnostic`], pipe-stage clauses in [`super::bind_dml`],
+//! and scripting assignments in [`super::bind_script`].
 use linkrs_core::DBResult;
 
 use crate::binder::bound::*;
@@ -83,15 +88,6 @@ impl Binder {
         }))
     }
 
-    pub(crate) fn bind_use(
-        &mut self,
-        stmt: &crate::parser::ast::UseStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Use(BoundUse {
-            space: stmt.space.clone(),
-        }))
-    }
-
     pub(crate) fn bind_show(
         &mut self,
         stmt: &crate::parser::ast::ShowStmt,
@@ -128,167 +124,5 @@ impl Binder {
             config: stmt.config.clone(),
             if_not_exists: stmt.if_not_exists,
         }))
-    }
-
-    pub(crate) fn bind_explain(
-        &mut self,
-        stmt: &crate::parser::ast::ExplainStmt,
-    ) -> DBResult<BoundStatement> {
-        let inner = self.bind_stmt(&stmt.statement)?;
-        Ok(BoundStatement::Explain(BoundExplain {
-            statement: Box::new(inner),
-            format: stmt.format.clone(),
-            analyze: stmt.analyze,
-        }))
-    }
-
-    pub(crate) fn bind_profile(
-        &mut self,
-        stmt: &crate::parser::ast::ProfileStmt,
-    ) -> DBResult<BoundStatement> {
-        let inner = self.bind_stmt(&stmt.statement)?;
-        Ok(BoundStatement::Profile(BoundProfile {
-            statement: Box::new(inner),
-            format: stmt.format.clone(),
-        }))
-    }
-
-    pub(crate) fn bind_begin_transaction(
-        &mut self,
-        stmt: &crate::parser::ast::BeginTransactionStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::BeginTransaction(BoundBeginTransaction {
-            read_only: stmt.read_only,
-        }))
-    }
-
-    pub(crate) fn bind_commit(
-        &mut self,
-        _stmt: &crate::parser::ast::CommitTransactionStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Commit(BoundCommit))
-    }
-
-    pub(crate) fn bind_rollback(
-        &mut self,
-        stmt: &crate::parser::ast::RollbackTransactionStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Rollback(BoundRollback {
-            savepoint_name: stmt.savepoint_name.clone(),
-        }))
-    }
-
-    pub(crate) fn bind_savepoint(
-        &mut self,
-        stmt: &crate::parser::ast::SavepointStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::Savepoint(BoundSavepoint {
-            name: stmt.name.clone(),
-        }))
-    }
-
-    pub(crate) fn bind_release_savepoint(
-        &mut self,
-        stmt: &crate::parser::ast::ReleaseSavepointStmt,
-    ) -> DBResult<BoundStatement> {
-        Ok(BoundStatement::ReleaseSavepoint(BoundReleaseSavepoint {
-            name: stmt.name.clone(),
-        }))
-    }
-
-    pub(crate) fn bind_assignment_statement(
-        &mut self,
-        stmt: &crate::parser::ast::AssignmentStmt,
-    ) -> DBResult<BoundStatement> {
-        let inner = self.bind_stmt(&stmt.statement)?;
-        Ok(BoundStatement::Assignment(BoundAssignmentStatement {
-            variable: stmt.variable.clone(),
-            statement: Box::new(inner),
-        }))
-    }
-
-    pub(crate) fn bind_assign_variable(
-        &mut self,
-        stmt: &crate::parser::ast::AssignVariableStmt,
-    ) -> DBResult<BoundStatement> {
-        let bound_expr = self.bind_expr(&stmt.expression)?;
-        Ok(BoundStatement::AssignVariable(BoundAssignVariable {
-            name: stmt.name.clone(),
-            expression: bound_expr,
-        }))
-    }
-
-    pub(crate) fn bind_filter(
-        &mut self,
-        stmt: &crate::parser::ast::FilterStmt,
-    ) -> DBResult<BoundStatement> {
-        let condition = self.bind_expr(&stmt.expression)?;
-        Ok(BoundStatement::Filter(BoundFilter { condition }))
-    }
-
-    pub(crate) fn bind_yield(
-        &mut self,
-        stmt: &crate::parser::ast::YieldStmt,
-    ) -> DBResult<BoundStatement> {
-        let items = stmt
-            .items
-            .iter()
-            .map(|item| {
-                self.bind_expr(&item.expression)
-                    .map(|be| BoundProjectionItem {
-                        expression: be,
-                        alias: item.alias.clone(),
-                    })
-            })
-            .collect::<DBResult<Vec<_>>>()?;
-
-        let where_clause = stmt
-            .where_clause
-            .as_ref()
-            .map(|w| self.bind_expr(w))
-            .transpose()?;
-
-        let order_by = stmt
-            .order_by
-            .as_ref()
-            .map(|ob| {
-                ob.items
-                    .iter()
-                    .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
-                            expression: be,
-                            direction: item.direction,
-                        })
-                    })
-                    .collect::<DBResult<Vec<_>>>()
-            })
-            .transpose()?;
-
-        Ok(BoundStatement::Yield(BoundYield {
-            items,
-            where_clause,
-            distinct: stmt.distinct,
-            order_by,
-            skip: stmt.skip.clone(),
-            limit: stmt.limit.clone(),
-        }))
-    }
-
-    pub(crate) fn bind_collect(
-        &mut self,
-        stmt: &crate::parser::ast::CollectStmt,
-    ) -> DBResult<BoundStatement> {
-        let items = stmt
-            .items
-            .iter()
-            .map(|item| {
-                self.bind_expr(&item.expression)
-                    .map(|be| BoundProjectionItem {
-                        expression: be,
-                        alias: item.alias.clone(),
-                    })
-            })
-            .collect::<DBResult<Vec<_>>>()?;
-        Ok(BoundStatement::Collect(BoundCollect { items }))
     }
 }

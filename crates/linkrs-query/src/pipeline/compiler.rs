@@ -74,11 +74,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .space_name()
             .or_else(|| query_context.request_context().space_name.clone());
         let optimized = self.optimize_execution_plan(execution_plan, space_name.as_deref())?;
-        // Experimental mapper extensions get a rewrite shot at the optimized plan.
-        match self.extensions.try_map(&optimized) {
-            Some(mapped) => mapped,
-            None => Ok(optimized),
-        }
+        Ok(optimized)
     }
 
     pub(crate) fn generate_execution_plan_from_bound(
@@ -89,38 +85,42 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<crate::planning::plan::ExecutionPlan> {
         use crate::planning::planner::PlannerError;
 
-        // Experimental planner extensions get first shot at the bound statement.
-        let sub_plan = match self.extensions.try_plan(bound) {
-            Some(claimed) => claimed.map_err(|e| {
+        let sub_plan = {
+            let mut planner_enum = crate::planning::planner::PlannerEnum::from_bound_statement(
+                bound,
+            )
+            .ok_or_else(|| {
                 DBError::from(QueryError::pipeline_planning_error(
-                    PlannerError::PlanGenerationFailed(e.to_string()),
+                    PlannerError::NoSuitablePlanner(format!(
+                        "No planner for bound statement: {}",
+                        bound.kind()
+                    )),
                 ))
-            })?,
-            None => {
-                let mut planner_enum = crate::planning::planner::PlannerEnum::from_bound_statement(
-                    bound,
-                )
-                .ok_or_else(|| {
-                    DBError::from(QueryError::pipeline_planning_error(
-                        PlannerError::NoSuitablePlanner(format!(
-                            "No planner for bound statement: {}",
-                            bound.kind()
-                        )),
-                    ))
-                })?;
+            })?;
 
-                let metadata = self.build_metadata_context(&query_context, bound);
+            let metadata = self.build_metadata_context(&query_context, bound);
 
-                let ctx = crate::planning::context::PlanContext::new(
-                    bound,
-                    query_context.clone(),
-                    metadata.as_ref(),
+            let space_for_stats = query_context
+                .space_name()
+                .or_else(|| query_context.request_context().space_name.clone());
+            let join_stats = space_for_stats.as_deref().map(|space| {
+                crate::planning::join_order::JoinOrderStats::from_manager(
+                    self.optimizer_engine.stats_manager(),
+                    space,
                 )
-                .with_ast(std::sync::Arc::clone(ast));
-                planner_enum
-                    .plan_bound(&ctx)
-                    .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
+            });
+            let mut ctx = crate::planning::context::PlanContext::new(
+                bound,
+                query_context.clone(),
+                metadata.as_ref(),
+            )
+            .with_ast(std::sync::Arc::clone(ast));
+            if let Some(stats) = join_stats {
+                ctx = ctx.with_join_order_stats(stats);
             }
+            planner_enum
+                .plan_bound(&ctx)
+                .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
         };
 
         let root = sub_plan.root().clone();
@@ -135,10 +135,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let mut logical = crate::planning::plan::logical_plan::LogicalPlan::new(logical_root);
             // A user join hint pins the join shape: flag the logical plan so
             // the cost-based reviewer skips it instead of overturning the
-            // requested order.
+            // requested order. A statistics-backed planning enumeration
+            // skips re-enumeration the same way; default-statistics products
+            // stay unflagged and always go through review.
             if let crate::binder::BoundStatement::Match(match_stmt) = bound {
                 logical.join_order_hinted = match_stmt.join_hint.is_some();
             }
+            logical.stats_backed = sub_plan.join_order_stats_backed;
             execution_plan.set_logical_plan(logical);
         } else {
             log::warn!(

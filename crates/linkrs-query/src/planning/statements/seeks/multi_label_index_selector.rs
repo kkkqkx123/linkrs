@@ -39,13 +39,9 @@ pub enum MultiLabelStrategy {
 }
 
 impl MultiLabelStrategy {
+    /// Shared index-seek cost (see `CostModelConfig::index_seek_cost`).
     fn shared_index_cost(cost_model: &CostModelConfig, matching_rows: u64) -> f64 {
-        use crate::optimizer::cost::config::ROWS_PER_PAGE;
-        let pages = (matching_rows / ROWS_PER_PAGE).max(1);
-        pages as f64 * cost_model.seq_page_cost
-            + matching_rows as f64 * cost_model.cpu_index_tuple_cost
-            + matching_rows as f64 * cost_model.random_page_cost
-            + matching_rows as f64 * cost_model.cpu_tuple_cost
+        cost_model.index_seek_cost(matching_rows)
     }
 
     pub fn estimate_cost(&self, cost_model: &CostModelConfig, total_vertices: usize) -> f64 {

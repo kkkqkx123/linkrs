@@ -9,7 +9,7 @@ use crate::planning::plan::core::{
 };
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::{PlanNodeEnum, SubPlan};
-use crate::planning::planner::{Planner, PlannerError};
+use crate::planning::planner::{Planner, PlannerEnum, PlannerError};
 use crate::planning::statements::clauses::exists_planner;
 use crate::planning::statements::plan_combiner::{
     logical_start_root, wrap_logical_filter, wrap_logical_project_with,
@@ -137,17 +137,17 @@ impl Planner for WithPlanner {
                 wrap_logical_filter(current_logical, ctx_expr, current_node.col_names().to_vec());
         }
 
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(seed_node),
-            // Fixpoint plans stay physical-only: no logical mirror exists
-            // for the iteration, so none is attached here.
-            logical_root: if physical_only {
+        // Fixpoint plans stay physical-only: no logical mirror exists
+        // for the iteration, so none is attached here.
+        let sub_plan = SubPlan::from_dual(
+            Some(current_node),
+            Some(seed_node),
+            if physical_only {
                 None
             } else {
                 Some(current_logical)
             },
-        };
+        );
         Ok(sub_plan)
     }
 }
@@ -192,24 +192,14 @@ impl WithPlanner {
     }
 
     /// Plan an arbitrary bound sub-statement (CTE anchor/step) through the
-    /// same planner dispatch as top-level statements.
+    /// same unified routing as top-level statements, detached from the
+    /// enclosing query's parsed AST (see
+    /// [`PlannerEnum::plan_detached_substatement`]).
     fn plan_bound_substatement(
         bound_stmt: &BoundStatement,
         ctx: &crate::planning::context::PlanContext<'_>,
     ) -> Result<SubPlan, PlannerError> {
-        let mut planner = crate::planning::planner::PlannerEnum::from_bound_statement(bound_stmt)
-            .ok_or_else(|| {
-            PlannerError::NoSuitablePlanner(format!(
-                "No planner for CTE branch bound statement: {}",
-                bound_stmt.kind()
-            ))
-        })?;
-        // PlanContext::new leaves ast empty on purpose: the CTE branch is a
-        // sub-statement with its own text, while ctx.ast parses the whole
-        // WITH statement, so it must not leak into the branch planner.
-        let sub_ctx =
-            crate::planning::context::PlanContext::new(bound_stmt, ctx.qctx.clone(), ctx.metadata);
-        planner.plan_bound(&sub_ctx)
+        PlannerEnum::plan_detached_substatement(ctx.qctx.clone(), ctx.metadata, bound_stmt)
     }
 
     /// Assemble a [`RecursiveCteNode`] from planned anchor/step roots.

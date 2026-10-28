@@ -1,10 +1,10 @@
 use crate::binder::query_graph::QueryGraph;
-use crate::parser::ast::{LimitClause, SkipClause, Steps};
+use crate::parser::ast::{LimitClause, SampleClause, SkipClause, Steps};
 
 use linkrs_core::types::EdgeDirection;
 
 use super::clause::{
-    BoundOrderByItem, BoundProjectionItem, BoundReturnClause, BoundWhereClause, BoundYieldClause,
+    BoundOrderByItem, BoundProjectionClause, BoundProjectionItem, BoundWhereClause,
 };
 use super::expr::{BoundAggregateCall, BoundExpression};
 use super::stmt::BoundStatement;
@@ -14,7 +14,7 @@ pub struct BoundMatchStatement {
     pub query_graph: QueryGraph,
     pub join_hint: Option<BoundJoinHint>,
     pub where_clause: Option<BoundWhereClause>,
-    pub return_clause: Option<BoundReturnClause>,
+    pub return_clause: Option<BoundProjectionClause>,
     pub order_by: Option<Vec<BoundOrderByItem>>,
     pub limit: Option<LimitClause>,
     pub skip: Option<SkipClause>,
@@ -53,14 +53,14 @@ pub struct BoundGoStatement {
     pub over: Option<Vec<String>>,
     pub direction: EdgeDirection,
     pub where_clause: Option<BoundWhereClause>,
-    pub yield_clause: Option<BoundYieldClause>,
+    pub yield_clause: Option<BoundProjectionClause>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundLookupStatement {
     pub target: BoundLookupTarget,
     pub where_clause: Option<BoundWhereClause>,
-    pub yield_clause: Option<BoundYieldClause>,
+    pub yield_clause: Option<BoundProjectionClause>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,7 +95,7 @@ pub struct BoundFindPathStatement {
     pub max_steps: Option<usize>,
     pub limit: Option<LimitClause>,
     pub skip: Option<SkipClause>,
-    pub yield_clause: Option<BoundYieldClause>,
+    pub yield_clause: Option<BoundProjectionClause>,
     /// WEIGHT clause: property name used as the edge weight (validated at
     /// bind time to only appear on FIND SHORTEST PATH).
     pub weight_expression: Option<String>,
@@ -113,7 +113,7 @@ pub struct BoundSubgraphStatement {
     pub from: Vec<BoundExpression>,
     pub over: Option<(Vec<String>, EdgeDirection)>,
     pub where_clause: Option<BoundWhereClause>,
-    pub yield_clause: Option<BoundYieldClause>,
+    pub yield_clause: Option<BoundProjectionClause>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +189,7 @@ pub struct BoundYield {
     pub order_by: Option<Vec<BoundOrderByItem>>,
     pub skip: Option<SkipClause>,
     pub limit: Option<LimitClause>,
+    pub sample: Option<SampleClause>,
 }
 
 #[derive(Debug, Clone)]

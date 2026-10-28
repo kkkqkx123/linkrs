@@ -64,11 +64,11 @@ pub fn wrap_pattern_apply(
         _ => None,
     };
 
-    Ok(SubPlan {
-        root: Some(apply.into_enum()),
-        tail: left.tail,
+    Ok(SubPlan::from_dual(
+        Some(apply.into_enum()),
+        left.tail,
         logical_root,
-    })
+    ))
 }
 
 pub fn wrap_correlated_apply(
@@ -102,11 +102,11 @@ pub fn wrap_correlated_apply(
         _ => None,
     };
 
-    Ok(SubPlan {
-        root: Some(apply.into_enum()),
-        tail: left.tail,
+    Ok(SubPlan::from_dual(
+        Some(apply.into_enum()),
+        left.tail,
         logical_root,
-    })
+    ))
 }
 
 pub fn wrap_mark_join(
@@ -149,11 +149,11 @@ pub fn wrap_mark_join(
         _ => None,
     };
 
-    Ok(SubPlan {
-        root: Some(join.into_enum()),
-        tail: left.tail,
+    Ok(SubPlan::from_dual(
+        Some(join.into_enum()),
+        left.tail,
         logical_root,
-    })
+    ))
 }
 
 pub fn build_group_join_right_subtree(
@@ -219,11 +219,11 @@ pub fn build_group_join_right_subtree(
         })
     });
 
-    Ok(SubPlan {
-        root: Some(aggregate.into_enum()),
-        tail: sub_plan.tail,
+    Ok(SubPlan::from_dual(
+        Some(aggregate.into_enum()),
+        sub_plan.tail,
         logical_root,
-    })
+    ))
 }
 
 pub fn build_correlated_right_subtree(
@@ -244,11 +244,7 @@ pub fn build_correlated_right_subtree(
     argument.set_col_names(outer_col_names.to_vec());
     let cross = CrossJoinNode::new(argument.into_enum(), sub_root)?;
     let filter = FilterNode::new(cross.into_enum(), correlated_condition.clone())?;
-    let mut plan = SubPlan {
-        root: Some(filter.into_enum()),
-        tail: sub_tail,
-        logical_root: None,
-    };
+    let mut plan = SubPlan::from_dual(Some(filter.into_enum()), sub_tail, None);
 
     if let Some(sub_logical) = sub_logical {
         let logical_argument = LogicalNodeEnum::Argument(LogicalArgumentNode {

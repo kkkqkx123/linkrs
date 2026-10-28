@@ -44,11 +44,11 @@ pub fn plan_pattern_node(
                 node.labels.first().map(|s| s.as_str()),
                 &var_name,
             );
-            return Ok(SubPlan {
-                root: index_plan.root,
-                tail: index_plan.tail,
-                logical_root: Some(logical_root),
-            });
+            return Ok(SubPlan::from_dual(
+                index_plan.root,
+                index_plan.tail,
+                Some(logical_root),
+            ));
         }
     }
 
@@ -67,11 +67,11 @@ pub fn plan_pattern_node(
         node.labels.first().map(|s| s.as_str()),
         &var_name,
     );
-    let mut plan = SubPlan {
-        root: Some(scan_root.clone()),
-        tail: Some(scan_root),
-        logical_root: Some(logical_root.clone()),
-    };
+    let mut plan = SubPlan::from_dual(
+        Some(scan_root.clone()),
+        Some(scan_root),
+        Some(logical_root.clone()),
+    );
 
     if !node.labels.is_empty() {
         let expr_ctx = expr_context.as_ref().expect("expr_context should be set");
@@ -84,11 +84,11 @@ pub fn plan_pattern_node(
         let filter_node = FilterNode::new(root_node.clone(), label_filter.clone())
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
         logical_root = logical_filter(logical_root, label_filter);
-        plan = SubPlan {
-            root: Some(filter_node.into_enum()),
-            tail: plan.tail,
-            logical_root: Some(logical_root.clone()),
-        };
+        plan = SubPlan::from_dual(
+            Some(filter_node.into_enum()),
+            plan.tail,
+            Some(logical_root.clone()),
+        );
     }
 
     if let Some(ref props) = node.properties {
@@ -112,11 +112,11 @@ pub fn plan_pattern_node(
         )
         .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
         logical_root = logical_filter(logical_root, filter_expr);
-        plan = SubPlan {
-            root: Some(filter_node.into_enum()),
-            tail: plan.tail,
-            logical_root: Some(logical_root.clone()),
-        };
+        plan = SubPlan::from_dual(
+            Some(filter_node.into_enum()),
+            plan.tail,
+            Some(logical_root.clone()),
+        );
     }
 
     if !node.predicates.is_empty() {
@@ -130,11 +130,11 @@ pub fn plan_pattern_node(
             )
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
             logical_root = logical_filter(logical_root, pred.clone());
-            plan = SubPlan {
-                root: Some(filter_node.into_enum()),
-                tail: plan.tail,
-                logical_root: Some(logical_root.clone()),
-            };
+            plan = SubPlan::from_dual(
+                Some(filter_node.into_enum()),
+                plan.tail,
+                Some(logical_root.clone()),
+            );
         }
     }
 
@@ -144,9 +144,9 @@ pub fn plan_node_pattern(space_id: u64, space_name: &str) -> Result<SubPlan, Pla
     let scan_node = ScanVerticesNode::new(space_id, space_name);
     let scan_root = scan_node.into_enum();
     let logical_root = logical_scan_vertices(space_id, space_name, None, "n");
-    Ok(SubPlan {
-        root: Some(scan_root.clone()),
-        tail: Some(scan_root),
-        logical_root: Some(logical_root),
-    })
+    Ok(SubPlan::from_dual(
+        Some(scan_root.clone()),
+        Some(scan_root),
+        Some(logical_root),
+    ))
 }

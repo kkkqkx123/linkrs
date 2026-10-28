@@ -3,7 +3,6 @@
 //! Query planning for statements that involve the GROUP BY clause
 
 use crate::binder::BoundStatement;
-use crate::binder::ValidatedStatement;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::{AggregateNode, ProjectNode, ScanVerticesNode};
 use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
@@ -48,18 +47,26 @@ impl Planner for GroupByPlanner {
             }
         };
 
-        let group_keys: Vec<String> = group_by
-            .keys
-            .iter()
-            .map(|k| {
-                let expr_ctx = Arc::new(
-                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                );
-                crate::binder::expr_converter::bound_expr_to_contextual(k, &expr_ctx)
-                    .map(|ctx| ctx.to_expression_string())
-                    .unwrap_or_else(|_| "_".to_string())
-            })
-            .collect();
+        let expr_ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
+        let mut group_keys = Vec::new();
+        let mut group_key_exprs = Vec::new();
+        for k in &group_by.keys {
+            match crate::binder::expr_converter::bound_expr_to_contextual(k, &expr_ctx) {
+                Ok(ctx_expr) => {
+                    group_keys.push(ctx_expr.to_expression_string());
+                    group_key_exprs.push(ctx_expr);
+                }
+                Err(_) => {
+                    group_keys.push("_".to_string());
+                    group_key_exprs.push(to_contextual(
+                        Expression::Variable("_".to_string()),
+                        &expr_ctx,
+                    ));
+                }
+            }
+        }
 
         let mut aggregation_functions = Vec::new();
         let mut aggregation_args = Vec::new();
@@ -111,7 +118,6 @@ impl Planner for GroupByPlanner {
         // legacy transform path. When the GROUP BY is a pipe stage,
         // PipePlanner replaces this adapter with the piped rows.
         let (input_enum, input_tail, input_logical) = self.build_standalone_input(
-            None,
             &group_keys,
             &aggregation_functions,
             &aggregation_args,
@@ -128,22 +134,14 @@ impl Planner for GroupByPlanner {
             PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
         })?;
         aggregate_node.set_aggregation_args(aggregation_args);
+        aggregate_node.set_group_key_exprs(group_key_exprs.clone());
 
-        let logical_root = {
-            let expr_ctx = Arc::new(
-                linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-            );
-            let group_key_exprs = group_keys
-                .iter()
-                .map(|key| to_contextual(Expression::Variable(key.clone()), &expr_ctx))
-                .collect();
-            aggregate_mirror(&aggregate_node, input_logical, group_key_exprs)
-        };
-        let sub_plan = SubPlan {
-            root: Some(PlanNodeEnum::Aggregate(aggregate_node)),
-            tail: Some(input_tail),
-            logical_root: Some(logical_root),
-        };
+        let logical_root = aggregate_mirror(&aggregate_node, input_logical, group_key_exprs);
+        let sub_plan = SubPlan::from_dual(
+            Some(PlanNodeEnum::Aggregate(aggregate_node)),
+            Some(input_tail),
+            Some(logical_root),
+        );
         Ok(sub_plan)
     }
 }
@@ -160,15 +158,12 @@ impl GroupByPlanner {
     /// logical mirror of the adapter.
     fn build_standalone_input(
         &self,
-        validated: Option<&ValidatedStatement>,
         group_keys: &[String],
         aggregation_functions: &[AggregateFunction],
         aggregation_args: &[Vec<Expression>],
         qctx: Arc<QueryContext>,
     ) -> Result<(PlanNodeEnum, PlanNodeEnum, LogicalNodeEnum), PlannerError> {
-        let validated_space =
-            validated.and_then(|v| v.validation_info.semantic_info.space_name.clone());
-        let space_name = qctx.space_name().or(validated_space).unwrap_or_default();
+        let space_name = qctx.space_name().unwrap_or_default();
 
         // Collect the property names referenced by the group keys and the
         // aggregate function fields.
@@ -190,13 +185,9 @@ impl GroupByPlanner {
         let scan_enum = PlanNodeEnum::ScanVertices(scan_node);
 
         // Project the needed vertex properties into flat columns.
-        let expr_ctx = validated
-            .map(|v| v.expr_context().clone())
-            .unwrap_or_else(|| {
-                Arc::new(
-                    linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
-                )
-            });
+        let expr_ctx = Arc::new(
+            linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),
+        );
         let mut yield_columns = Vec::new();
         for property in &properties {
             let expression = Expression::Property {

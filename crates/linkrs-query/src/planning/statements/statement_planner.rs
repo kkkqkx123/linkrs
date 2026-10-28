@@ -79,11 +79,11 @@ mod tests {
         ) -> Result<SubPlan, crate::planning::planner::PlannerError> {
             let start_node = StartNode::new();
             let start_node_enum = PlanNodeEnum::Start(start_node);
-            Ok(SubPlan {
-                root: Some(start_node_enum.clone()),
-                tail: Some(start_node_enum),
-                logical_root: None,
-            })
+            Ok(SubPlan::from_dual(
+                Some(start_node_enum.clone()),
+                Some(start_node_enum),
+                None,
+            ))
         }
     }
 
@@ -198,11 +198,8 @@ mod tests {
 
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node.clone());
-        let input_plan = SubPlan {
-            root: Some(start_node_enum.clone()),
-            tail: Some(start_node_enum),
-            logical_root: None,
-        };
+        let input_plan =
+            SubPlan::from_dual(Some(start_node_enum.clone()), Some(start_node_enum), None);
 
         let result = planner.transform_clause(qctx, &ast.stmt, input_plan);
         assert!(result.is_ok());

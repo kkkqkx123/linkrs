@@ -76,11 +76,8 @@ impl YieldClausePlanner {
                     column_types: vec![],
                 })
             });
-            current_plan = SubPlan {
-                root: Some(project_node),
-                tail: current_plan.tail.clone(),
-                logical_root,
-            };
+            current_plan =
+                SubPlan::from_dual(Some(project_node), current_plan.tail.clone(), logical_root);
         }
 
         // 2. If there are WHERE conditions, add a Filter node.
@@ -96,11 +93,8 @@ impl YieldClausePlanner {
                     column_types: vec![],
                 })
             });
-            current_plan = SubPlan {
-                root: Some(filter_node),
-                tail: current_plan.tail.clone(),
-                logical_root,
-            };
+            current_plan =
+                SubPlan::from_dual(Some(filter_node), current_plan.tail.clone(), logical_root);
         }
 
         // 2.5 Apply DISTINCT if requested.
@@ -118,11 +112,11 @@ impl YieldClausePlanner {
                         column_types: vec![],
                     })
                 });
-                current_plan = SubPlan {
-                    root: Some(PlanNodeEnum::Dedup(dedup_node)),
-                    tail: current_plan.tail.clone(),
+                current_plan = SubPlan::from_dual(
+                    Some(PlanNodeEnum::Dedup(dedup_node)),
+                    current_plan.tail.clone(),
                     logical_root,
-                };
+                );
             }
         }
 
@@ -148,11 +142,11 @@ impl YieldClausePlanner {
                     column_types: vec![],
                 })
             });
-            current_plan = SubPlan {
-                root: Some(PlanNodeEnum::Sample(sample_node)),
-                tail: current_plan.tail.clone(),
+            current_plan = SubPlan::from_dual(
+                Some(PlanNodeEnum::Sample(sample_node)),
+                current_plan.tail.clone(),
                 logical_root,
-            };
+            );
         }
 
         // 4. Handling pagination (LIMIT/SKIP)
@@ -229,11 +223,11 @@ impl YieldClausePlanner {
             })
         });
 
-        Ok(SubPlan {
-            root: Some(PlanNodeEnum::Limit(limit_node)),
-            tail: input_plan.tail.clone(),
+        Ok(SubPlan::from_dual(
+            Some(PlanNodeEnum::Limit(limit_node)),
+            input_plan.tail.clone(),
             logical_root,
-        })
+        ))
     }
 }
 
@@ -517,11 +511,8 @@ mod tests {
 
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node.clone());
-        let input_plan = SubPlan {
-            root: Some(start_node_enum.clone()),
-            tail: Some(start_node_enum),
-            logical_root: None,
-        };
+        let input_plan =
+            SubPlan::from_dual(Some(start_node_enum.clone()), Some(start_node_enum), None);
 
         let planner = YieldClausePlanner::new();
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(
@@ -571,11 +562,7 @@ mod tests {
             sample: None,
         });
 
-        let input_plan = SubPlan {
-            root: None,
-            tail: None,
-            logical_root: None,
-        };
+        let input_plan = SubPlan::from_dual(None, None, None);
 
         let planner = YieldClausePlanner::new();
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(

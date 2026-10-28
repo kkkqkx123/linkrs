@@ -315,8 +315,9 @@ fn plan_type_sizes_stay_stack_friendly() {
     // Caps were recalibrated to the current baseline after the inline growth
     // landed: `PlanNodeEnum` picked up the `#[cfg(feature = "vector")]`
     // `VectorSearch`/`VectorLookup`/`VectorMatch` variants (~+16 B on the
-    // largest variant), and `SubPlan` grew a small inline field (~+8 B).
-    // Both are legitimate feature additions, not leaks. The guard still
+    // largest variant), and `SubPlan` grew small inline fields (~+8 B each:
+    // the native logical mirror and the join-order statistics-backed flag).
+    // All are legitimate feature additions, not leaks. The guard still
     // catches *new* growth beyond these values. Follow-up: box the largest
     // `PlanNodeEnum` variant payload and pass `SubPlan`/`ExecutionPlan` by
     // `&mut` to restore a safety margin.
@@ -329,8 +330,8 @@ fn plan_type_sizes_stay_stack_friendly() {
         "LogicalNodeEnum grew past 448 bytes; box the new large variant/field"
     );
     assert!(
-        std::mem::size_of::<crate::planning::plan::SubPlan>() <= 1224,
-        "SubPlan grew past 1224 bytes; pass by &mut instead of by value"
+        std::mem::size_of::<crate::planning::plan::SubPlan>() <= 1232,
+        "SubPlan grew past 1232 bytes; pass by &mut instead of by value"
     );
     assert!(
         std::mem::size_of::<crate::planning::plan::ExecutionPlan>() <= 1216,

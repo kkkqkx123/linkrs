@@ -169,11 +169,11 @@ impl Planner for ReturnPlanner {
             );
         }
 
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(PlanNodeEnum::Start(start_node)),
-            logical_root: Some(current_logical),
-        };
+        let sub_plan = SubPlan::from_dual(
+            Some(current_node),
+            Some(PlanNodeEnum::Start(start_node)),
+            Some(current_logical),
+        );
         Ok(sub_plan)
     }
 }

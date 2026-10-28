@@ -151,11 +151,11 @@ impl Planner for SubgraphPlanner {
             };
             current_node = project_node;
 
-            let sub_plan = SubPlan {
-                root: Some(current_node),
-                tail: Some(PlanNodeEnum::Argument(arg_node)),
-                logical_root: Some(current_logical),
-            };
+            let sub_plan = SubPlan::from_dual(
+                Some(current_node),
+                Some(PlanNodeEnum::Argument(arg_node)),
+                Some(current_logical),
+            );
             return Ok(sub_plan);
         }
 
@@ -238,11 +238,11 @@ impl Planner for SubgraphPlanner {
         };
         current_node = project_node;
 
-        let sub_plan = SubPlan {
-            root: Some(current_node),
-            tail: Some(PlanNodeEnum::Argument(arg_node)),
-            logical_root: Some(current_logical),
-        };
+        let sub_plan = SubPlan::from_dual(
+            Some(current_node),
+            Some(PlanNodeEnum::Argument(arg_node)),
+            Some(current_logical),
+        );
         Ok(sub_plan)
     }
 }

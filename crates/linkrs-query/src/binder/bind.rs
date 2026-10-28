@@ -1,5 +1,6 @@
 mod bind_dcl;
 mod bind_ddl;
+mod bind_diagnostic;
 mod bind_dml;
 mod bind_expressions;
 mod bind_fetch;
@@ -8,7 +9,9 @@ mod bind_lookup;
 mod bind_match;
 mod bind_path;
 mod bind_return;
+mod bind_script;
 mod bind_subgraph;
+mod bind_txn;
 
 use std::sync::Arc;
 

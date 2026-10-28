@@ -10,9 +10,7 @@
 //!   - Selection of intelligent scanning strategies (index scanning, attribute scanning, full table scanning)
 
 use crate::binder::validation::CypherClauseKind;
-use crate::binder::validation::ValidationInfo;
 use crate::binder::BoundStatement;
-use crate::binder::ValidatedStatement;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::Stmt;
 use crate::parser::Parser;
@@ -49,7 +47,6 @@ pub struct MatchStatementPlanner {
     config: MatchPlannerConfig,
     expr_context: Option<Arc<ExpressionAnalysisContext>>,
     metadata_context: Option<MetadataContext>,
-    join_order_stats: Option<JoinOrderStats>,
     where_planner: WhereClausePlanner,
     return_planner: ReturnClausePlanner,
     order_by_planner: OrderByClausePlanner,
@@ -85,7 +82,6 @@ impl MatchStatementPlanner {
             config: MatchPlannerConfig::default(),
             expr_context: None,
             metadata_context: None,
-            join_order_stats: None,
             where_planner: WhereClausePlanner::new(),
             return_planner: ReturnClausePlanner::new(),
             order_by_planner: OrderByClausePlanner::new(),
@@ -98,19 +94,11 @@ impl MatchStatementPlanner {
             config,
             expr_context: None,
             metadata_context: None,
-            join_order_stats: None,
             where_planner: WhereClausePlanner::new(),
             return_planner: ReturnClausePlanner::new(),
             order_by_planner: OrderByClausePlanner::new(),
             pagination_planner: PaginationPlanner::new(),
         }
-    }
-
-    /// Attach real cardinality statistics for the join-order path.
-    /// Without statistics the enumerator falls back to default constants.
-    pub fn with_join_order_stats(mut self, stats: JoinOrderStats) -> Self {
-        self.join_order_stats = Some(stats);
-        self
     }
 }
 
@@ -122,14 +110,15 @@ impl Planner for MatchStatementPlanner {
         let bound = ctx.bound;
         let qctx = ctx.qctx.clone();
         let metadata = ctx.metadata;
-        let bound_delete = match bound {
-            BoundStatement::Match(m) => m.delete_clause.clone(),
+        let bound_match = match bound {
+            BoundStatement::Match(m) => m,
             _ => {
                 return Err(PlannerError::UnsupportedOperation(
                     "Expected a MATCH bound statement".to_string(),
                 ));
             }
         };
+        let bound_delete = bound_match.delete_clause.clone();
 
         let space_id = qctx.space_id().unwrap_or(1);
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
@@ -181,22 +170,35 @@ impl Planner for MatchStatementPlanner {
         } else {
             source_ast
         };
-        let validated = ValidatedStatement::new(ast, ValidationInfo::new());
-        self.expr_context = Some(validated.ast.expr_context().clone());
+        self.expr_context = Some(ast.expr_context().clone());
 
-        let validation_info = &validated.validation_info;
-
-        for hint in &validation_info.optimization_hints {
-            log::debug!("Optimization Tip: {:?}", hint);
-        }
+        // Variable existence comes from the bound query graph, not from a
+        // synthesized validation wrapper: the planner consumes the resolved
+        // statement and never rebuilds binder output.
+        let known_variables = bound_match
+            .query_graph
+            .nodes
+            .iter()
+            .map(|node| node.variable.clone())
+            .chain(bound_match.query_graph.edges.iter().flat_map(|edge| {
+                [
+                    edge.variable.clone(),
+                    edge.src_variable.clone(),
+                    edge.dst_variable.clone(),
+                ]
+            }))
+            .filter(|name| !name.is_empty())
+            .collect::<std::collections::HashSet<_>>();
 
         self.plan_match_pattern(
-            &validated,
+            &ast,
             space_id,
             &space_name,
-            validation_info,
+            &known_variables,
             &qctx,
+            bound_match,
             bound_delete,
+            ctx.join_order_stats.as_ref(),
         )
     }
 }
@@ -221,25 +223,22 @@ impl StatementPlanner for MatchStatementPlanner {
 impl MatchStatementPlanner {
     fn plan_match_pattern(
         &mut self,
-        validated: &ValidatedStatement,
+        ast: &Arc<crate::parser::ast::stmt::Ast>,
         space_id: u64,
         space_name: &str,
-        validation_info: &ValidationInfo,
+        known_variables: &std::collections::HashSet<String>,
         qctx: &Arc<QueryContext>,
+        bound_match: &crate::binder::bound::BoundMatchStatement,
         bound_delete: Option<crate::binder::bound::BoundMatchDeleteClause>,
+        join_stats: Option<&JoinOrderStats>,
     ) -> Result<SubPlan, PlannerError> {
-        let stmt = validated.stmt();
+        let stmt = ast.stmt();
         match stmt {
             Stmt::Match(match_stmt) => {
-                let referenced_tags = &validation_info.semantic_info.referenced_tags;
-                if !referenced_tags.is_empty() {
-                    log::debug!("Quoted tags: {:?}", referenced_tags);
-                }
-
                 let planning_ctx = PlanningContext {
                     space_id,
                     space_name,
-                    validation_info,
+                    known_variables,
                     qctx,
                     enable_index_optimization: self.config.enable_index_optimization,
                     metadata_context: &self.metadata_context,
@@ -251,14 +250,20 @@ impl MatchStatementPlanner {
                 // The join-order path covers every pattern at once; the
                 // legacy path plans the first pattern here and cross joins
                 // the rest below.
+                let stats_backed = join_stats.map(|s| !s.is_empty()).unwrap_or(false);
                 let (mut plan, joined_by_optimizer) = if match_stmt.patterns.is_empty() {
                     (
                         pattern_planner::plan_node_pattern(space_id, space_name)?,
                         false,
                     )
-                } else if let Some(join_plan) =
-                    self.try_join_order_plan(match_stmt, space_id, space_name)
-                {
+                } else if let Some(mut join_plan) = self.try_join_order_plan(
+                    match_stmt,
+                    bound_match,
+                    space_id,
+                    space_name,
+                    join_stats,
+                ) {
+                    join_plan.join_order_stats_backed = stats_backed;
                     (join_plan, true)
                 } else {
                     let first_pattern = &match_stmt.patterns[0];
@@ -343,8 +348,10 @@ impl MatchStatementPlanner {
     fn try_join_order_plan(
         &self,
         match_stmt: &crate::parser::ast::MatchStmt,
+        bound_match: &crate::binder::bound::BoundMatchStatement,
         space_id: u64,
         space_name: &str,
+        join_stats: Option<&JoinOrderStats>,
     ) -> Option<SubPlan> {
         if match_stmt.optional || match_stmt.delete_clause.is_some() {
             return None;
@@ -356,26 +363,40 @@ impl MatchStatementPlanner {
         if match_stmt.patterns.len() <= 1 {
             return None;
         }
+        // Prefer the bound query graph; fall back to the AST converter for
+        // shapes the binder does not represent.
         let graph =
-            crate::planning::join_order::query_graph_from_match_patterns(&match_stmt.patterns)?;
+            crate::planning::join_order::query_graph_from_bound_graph(&bound_match.query_graph)
+                .or_else(|| {
+                    crate::planning::join_order::query_graph_from_match_patterns(
+                        &match_stmt.patterns,
+                    )
+                })?;
         if graph.num_rels() == 0 {
             return None;
         }
         let graph = std::sync::Arc::new(graph);
         let mut enumerator = crate::planning::join_order::JoinOrderEnumerator::new()
             .with_space(space_id, space_name);
-        if let Some(stats) = &self.join_order_stats {
+        if let Some(stats) = join_stats {
             enumerator = enumerator.with_stats(stats.clone());
         }
-        // A user join hint (parsed `USING JOIN ...`) takes precedence over
-        // automatic enumeration; an unresolvable hint falls back to the
-        // legacy path rather than failing the query.
-        let logical = match &match_stmt.join_hint {
+        // A user join hint takes precedence over automatic enumeration; an
+        // unresolvable hint falls back to the legacy path rather than
+        // failing the query. The bound hint (already scope-checked by the
+        // binder) wins over the parsed AST hint.
+        let logical = match &bound_match.join_hint {
             Some(hint) => {
-                let join_hint = crate::planning::join_order::JoinHint::from_ast(hint)?;
+                let join_hint = crate::planning::join_order::JoinHint::from_bound(hint)?;
                 enumerator.plan_with_hint(&graph, &join_hint).ok()?
             }
-            None => enumerator.plan_query_graph(&graph)?,
+            None => match &match_stmt.join_hint {
+                Some(hint) => {
+                    let join_hint = crate::planning::join_order::JoinHint::from_ast(hint)?;
+                    enumerator.plan_with_hint(&graph, &join_hint).ok()?
+                }
+                None => enumerator.plan_query_graph(&graph)?,
+            },
         };
         Some(SubPlan::from_logical_root(logical))
     }
@@ -465,10 +486,26 @@ mod tests {
         ]
     }
 
+    fn empty_bound() -> crate::binder::bound::BoundMatchStatement {
+        crate::binder::bound::BoundMatchStatement {
+            query_graph: crate::binder::QueryGraph::new(),
+            join_hint: None,
+            where_clause: None,
+            return_clause: None,
+            order_by: None,
+            limit: None,
+            skip: None,
+            optional: false,
+            delete_clause: None,
+        }
+    }
+
     #[test]
     fn conjunctive_match_uses_join_order() {
         let planner = MatchStatementPlanner::new();
-        let plan = planner.try_join_order_plan(&stmt(two_hop(), None, false), 1, "default");
+        let bound = empty_bound();
+        let plan =
+            planner.try_join_order_plan(&stmt(two_hop(), None, false), &bound, 1, "default", None);
         assert!(plan.is_some(), "two-hop MATCH should take the join path");
     }
 
@@ -479,14 +516,23 @@ mod tests {
             left: "e1".to_string(),
             right: "e2".to_string(),
         };
-        let plan = planner.try_join_order_plan(&stmt(two_hop(), Some(hint), false), 1, "default");
+        let bound = empty_bound();
+        let plan = planner.try_join_order_plan(
+            &stmt(two_hop(), Some(hint), false),
+            &bound,
+            1,
+            "default",
+            None,
+        );
         assert!(plan.is_some(), "hinted MATCH should plan");
     }
 
     #[test]
     fn optional_match_falls_back() {
         let planner = MatchStatementPlanner::new();
-        let plan = planner.try_join_order_plan(&stmt(two_hop(), None, true), 1, "default");
+        let bound = empty_bound();
+        let plan =
+            planner.try_join_order_plan(&stmt(two_hop(), None, true), &bound, 1, "default", None);
         assert!(plan.is_none(), "OPTIONAL MATCH keeps the legacy path");
     }
 
@@ -497,7 +543,14 @@ mod tests {
             left: "e1".to_string(),
             right: "zzz".to_string(),
         };
-        let plan = planner.try_join_order_plan(&stmt(two_hop(), Some(hint), false), 1, "default");
+        let bound = empty_bound();
+        let plan = planner.try_join_order_plan(
+            &stmt(two_hop(), Some(hint), false),
+            &bound,
+            1,
+            "default",
+            None,
+        );
         assert!(plan.is_none(), "bad hint falls back instead of failing");
     }
 
@@ -505,7 +558,9 @@ mod tests {
     fn single_pattern_falls_back() {
         let planner = MatchStatementPlanner::new();
         let patterns = vec![path(vec![node("a"), edge("e1"), node("b")])];
-        let plan = planner.try_join_order_plan(&stmt(patterns, None, false), 1, "default");
+        let bound = empty_bound();
+        let plan =
+            planner.try_join_order_plan(&stmt(patterns, None, false), &bound, 1, "default", None);
         assert!(
             plan.is_none(),
             "single-pattern MATCH uses the legacy ExpandAll path"

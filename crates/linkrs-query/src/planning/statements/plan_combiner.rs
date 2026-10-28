@@ -231,11 +231,11 @@ pub fn cross_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planne
         }
     };
 
-    Ok(SubPlan {
-        root: Some(join_node.into_enum()),
-        tail: left.tail.or(right.tail),
+    Ok(SubPlan::from_dual(
+        Some(join_node.into_enum()),
+        left.tail.or(right.tail),
         logical_root,
-    })
+    ))
 }
 
 /// Combine two pattern sides that no relationship connects.
@@ -315,11 +315,11 @@ fn inner_join_plans(
         _ => None,
     };
 
-    Ok(SubPlan {
-        root: Some(join_node),
-        tail: left.tail.or(right.tail),
+    Ok(SubPlan::from_dual(
+        Some(join_node),
+        left.tail.or(right.tail),
         logical_root,
-    })
+    ))
 }
 
 pub fn connect_node_to_edge_expansion(
@@ -449,11 +449,11 @@ pub fn left_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planner
         _ => None,
     };
 
-    Ok(SubPlan {
-        root: Some(join_node.into_enum()),
-        tail: left.tail.or(right.tail),
+    Ok(SubPlan::from_dual(
+        Some(join_node.into_enum()),
+        left.tail.or(right.tail),
         logical_root,
-    })
+    ))
 }
 
 pub fn union_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerError> {
@@ -485,9 +485,9 @@ pub fn union_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerErro
         _ => None,
     };
 
-    Ok(SubPlan {
-        root: Some(union_node.into_enum()),
-        tail: left.tail.or(right.tail),
+    Ok(SubPlan::from_dual(
+        Some(union_node.into_enum()),
+        left.tail.or(right.tail),
         logical_root,
-    })
+    ))
 }

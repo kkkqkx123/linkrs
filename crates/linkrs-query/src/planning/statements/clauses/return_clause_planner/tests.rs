@@ -185,11 +185,7 @@ fn test_transform_clause() {
 
     let start_node = StartNode::new();
     let start_node_enum = PlanNodeEnum::Start(start_node.clone());
-    let input_plan = SubPlan {
-        root: Some(start_node_enum.clone()),
-        tail: Some(start_node_enum),
-        logical_root: None,
-    };
+    let input_plan = SubPlan::from_dual(Some(start_node_enum.clone()), Some(start_node_enum), None);
 
     let planner = ReturnClausePlanner::new();
     let qctx = Arc::new(crate::QueryContext::new(Arc::new(
@@ -251,11 +247,7 @@ fn test_transform_clause_with_distinct() {
 
     let start_node = StartNode::new();
     let start_node_enum = PlanNodeEnum::Start(start_node.clone());
-    let input_plan = SubPlan {
-        root: Some(start_node_enum.clone()),
-        tail: Some(start_node_enum),
-        logical_root: None,
-    };
+    let input_plan = SubPlan::from_dual(Some(start_node_enum.clone()), Some(start_node_enum), None);
 
     let planner = ReturnClausePlanner::with_distinct(true);
     let qctx = Arc::new(crate::QueryContext::new(Arc::new(
@@ -314,11 +306,7 @@ fn test_transform_clause_empty_input_plan() {
         delete_clause: None,
     });
 
-    let input_plan = SubPlan {
-        root: None,
-        tail: None,
-        logical_root: None,
-    };
+    let input_plan = SubPlan::from_dual(None, None, None);
 
     let planner = ReturnClausePlanner::new();
     let qctx = Arc::new(crate::QueryContext::new(Arc::new(

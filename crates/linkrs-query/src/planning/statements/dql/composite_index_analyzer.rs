@@ -2,6 +2,15 @@
 //!
 //! Optimizes composite index selection for LOOKUP queries with multiple conditions.
 //!
+//! ## Scope
+//!
+//! LOOKUP multi-predicate prefix matching and selectivity ranking only; it
+//! reuses the canonical `super::seeks::IndexInfo` descriptor and the shared
+//! `optimizer::cost::CostModelConfig` costs. Single-label MATCH scans stay
+//! in `super::index_scan_planner` and never route through this analyzer.
+//! Wiring into the LOOKUP planner is deferred; the analyzer is exercised by
+//! its unit tests until that lands.
+//!
 //! ## Features
 //!
 //! - Prefix matching for composite indexes

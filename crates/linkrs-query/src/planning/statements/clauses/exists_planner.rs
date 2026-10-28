@@ -19,7 +19,6 @@ mod wrap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::binder::validation::ValidationInfo;
 use crate::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
 use crate::parser::ast::pattern::PatternUtils;
 use crate::planning::planner::PlannerError;
@@ -207,11 +206,11 @@ fn plan_scalar_subquery(
     let mut correlated_residual = correlated_residual;
 
     let expr_context = Arc::new(ExpressionAnalysisContext::new());
-    let validation_info = ValidationInfo::new();
+    let known_variables = HashSet::new();
     let planning_ctx = PlanningContext {
         space_id,
         space_name,
-        validation_info: &validation_info,
+        known_variables: &known_variables,
         qctx,
         enable_index_optimization: false,
         metadata_context: &None,
@@ -398,11 +397,11 @@ pub fn plan_subquery(
     let (inner_residual, correlated_residual) = split_correlated(&residual_conditions, &inner_vars);
 
     let expr_context = Arc::new(ExpressionAnalysisContext::new());
-    let validation_info = ValidationInfo::new();
+    let known_variables = HashSet::new();
     let planning_ctx = PlanningContext {
         space_id,
         space_name,
-        validation_info: &validation_info,
+        known_variables: &known_variables,
         qctx,
         enable_index_optimization: false,
         metadata_context: &None,

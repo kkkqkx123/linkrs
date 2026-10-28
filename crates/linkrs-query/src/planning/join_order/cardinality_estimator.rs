@@ -59,6 +59,14 @@ impl JoinOrderStats {
         self.vertex_counts.values().copied().max().unwrap_or(0)
     }
 
+    /// Whether the snapshot carries any real statistics.
+    ///
+    /// Empty snapshots reproduce legacy constant pricing; only non-empty
+    /// snapshots mark plans as statistics-backed.
+    pub fn is_empty(&self) -> bool {
+        self.vertex_counts.is_empty() && self.edge_counts.is_empty()
+    }
+
     /// Copy tag/edge counts and average degrees for `space` out of the
     /// optimizer statistics manager.
     pub fn from_manager(manager: &crate::optimizer::stats::StatisticsManager, space: &str) -> Self {

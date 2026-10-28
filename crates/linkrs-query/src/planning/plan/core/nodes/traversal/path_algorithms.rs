@@ -322,6 +322,10 @@ impl AllPathsNode {
         self.direction = direction;
     }
 
+    pub fn has_step_limit(&self) -> bool {
+        self.has_step_limit
+    }
+
     pub fn limit(&self) -> i64 {
         self.limit
     }

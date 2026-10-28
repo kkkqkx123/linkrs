@@ -9,7 +9,6 @@
 //! Use IndexSelector to automatically select the optimal index.
 
 use crate::binder::BoundStatement;
-use crate::binder::ValidatedStatement;
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::core::nodes::access::{IndexLimit, ScanType};
@@ -100,14 +99,7 @@ impl Planner for LookupPlanner {
         };
 
         // Build the plan using bound data
-        self.plan_lookup_bound(
-            lookup,
-            qctx,
-            None,
-            selected_index.as_ref(),
-            tag_id,
-            where_ctx,
-        )
+        self.plan_lookup_bound(lookup, qctx, selected_index.as_ref(), tag_id, where_ctx)
     }
 }
 
@@ -153,7 +145,6 @@ impl LookupPlanner {
         &self,
         lookup: &crate::binder::bound::BoundLookupStatement,
         qctx: Arc<QueryContext>,
-        validated: Option<&ValidatedStatement>,
         selected_index: Option<&IndexMetadata>,
         tag_id: i32,
         where_ctx: Option<ContextualExpression>,
@@ -255,7 +246,7 @@ impl LookupPlanner {
 
         // Add project node if YIELD clause present
         if lookup.yield_clause.is_some() {
-            let yield_columns = self.build_yield_columns_from_bound(lookup, validated)?;
+            let yield_columns = self.build_yield_columns_from_bound(lookup)?;
             let column_types = projection_util::project_column_types(&yield_columns);
             let logical_project = LogicalProjectNode {
                 id: next_node_id(),
@@ -277,7 +268,6 @@ impl LookupPlanner {
     fn build_yield_columns_from_bound(
         &self,
         lookup: &crate::binder::bound::BoundLookupStatement,
-        _validated: Option<&ValidatedStatement>,
     ) -> Result<Vec<linkrs_core::YieldColumn>, PlannerError> {
         let expr_ctx = Arc::new(
             linkrs_core::types::expr::expression_context::ExpressionAnalysisContext::new(),

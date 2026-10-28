@@ -14,7 +14,6 @@ pub mod context;
 pub mod cte;
 pub mod dml_events;
 pub mod executor;
-pub mod extensions;
 pub mod fusion;
 pub mod metadata;
 pub mod optimizer;
@@ -45,10 +44,6 @@ pub use query_manager::{
 // Unstable experimental API: the extension surface may evolve while the
 // pipeline integration matures.
 pub use dml_events::{DmlOp, DmlStatementCallback, DmlStatementEvent};
-pub use extensions::{
-    BinderExtension, BinderExtensionContext, ExtensionRegistry, MapperExtension, ParserExtension,
-    PlannerExtension,
-};
 pub use pipeline::prepared::{dml_op_from_stmt, OwnedOperationGuard, StatementClass};
 pub use session_events::{SessionEvent, SessionEventCallback};
 // Re-export OptimizerEngine

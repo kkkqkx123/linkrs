@@ -459,6 +459,23 @@ impl CostModelConfig {
         self
     }
 
+    /// Shared index-seek cost for a known matching-row count.
+    ///
+    /// Single entry for the no-statistics index path: sequential index
+    /// pages plus per-tuple index and table costs. Both MATCH seek
+    /// selection (`planning::statements::seeks`) and the multi-label
+    /// selector share this formula instead of private copies; the
+    /// statistics-aware [`CostCalculator::calculate_index_scan_cost`]
+    /// in `optimizer::cost::calculator` stays the entry for paths with
+    /// live table statistics (hole-rate adjusted).
+    pub fn index_seek_cost(&self, matching_rows: u64) -> f64 {
+        let pages = (matching_rows / ROWS_PER_PAGE).max(1);
+        pages as f64 * self.seq_page_cost
+            + matching_rows as f64 * self.cpu_index_tuple_cost
+            + matching_rows as f64 * self.random_page_cost
+            + matching_rows as f64 * self.cpu_tuple_cost
+    }
+
     /// Setting the cost of operator calculations
     pub fn with_cpu_operator_cost(mut self, cost: f64) -> Self {
         self.cpu_operator_cost = cost;

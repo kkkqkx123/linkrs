@@ -189,6 +189,12 @@ pub struct SubPlan {
     /// [`crate::planning::plan::logical_plan::LogicalPlan`] natively
     /// instead of stripping it back out of the physical tree.
     pub logical_root: Option<crate::planning::plan::logical::LogicalNodeEnum>,
+    /// The join order was priced with real statistics during planning.
+    ///
+    /// Set by the match planner when its enumerator ran against a non-empty
+    /// statistics snapshot. The compiler copies this into the logical plan
+    /// so the optimizer can skip redundant re-enumeration.
+    pub join_order_stats_backed: bool,
 }
 
 impl SubPlan {
@@ -197,13 +203,38 @@ impl SubPlan {
     /// Reserved for planners whose operators stay physical-only by design
     /// (data modifications, administrative statements, search operators)
     /// where no `LogicalNodeEnum` counterpart exists. DQL planners build a
-    /// native logical tree instead and attach it via the `SubPlan` struct
-    /// literal or the `plan_combiner` mirror helpers.
+    /// native logical tree instead and attach it through
+    /// [`SubPlan::from_dual`] or the `plan_combiner` mirror helpers.
     pub fn new(root: Option<PlanNodeEnum>, tail: Option<PlanNodeEnum>) -> Self {
         Self {
             root,
             tail,
             logical_root: None,
+            join_order_stats_backed: false,
+        }
+    }
+
+    /// Dual-tree exit for statement and clause planners.
+    ///
+    /// This is the single construction entry for every plan that carries
+    /// both a physical tree (`root`/`tail`) and its native logical mirror
+    /// (`logical_root`). Statement planners produce fresh dual trees here;
+    /// clause planners wrap an input plan and preserve its tail through
+    /// the same entry. Physical-only exits keep using [`SubPlan::new`] /
+    /// [`SubPlan::from_root`] with an explicit justification; migrating a
+    /// dual-tree planner to the single-conversion
+    /// [`SubPlan::from_logical_root`] entry only ever touches this
+    /// constructor's callers.
+    pub fn from_dual(
+        root: Option<PlanNodeEnum>,
+        tail: Option<PlanNodeEnum>,
+        logical_root: Option<crate::planning::plan::logical::LogicalNodeEnum>,
+    ) -> Self {
+        Self {
+            root,
+            tail,
+            logical_root,
+            join_order_stats_backed: false,
         }
     }
 
@@ -221,6 +252,7 @@ impl SubPlan {
             root: Some(physical_root),
             tail: None,
             logical_root: Some(logical_root),
+            join_order_stats_backed: false,
         }
     }
 
@@ -239,6 +271,7 @@ impl SubPlan {
             root: Some(root.clone()),
             tail: Some(root),
             logical_root: None,
+            join_order_stats_backed: false,
         }
     }
 
@@ -252,6 +285,7 @@ impl SubPlan {
             root: Some(node.clone()),
             tail: Some(node),
             logical_root: None,
+            join_order_stats_backed: false,
         }
     }
 

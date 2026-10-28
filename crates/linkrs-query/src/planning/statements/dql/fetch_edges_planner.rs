@@ -78,11 +78,7 @@ impl Planner for FetchEdgesPlanner {
             _ => unreachable!("fetch edges root is always a GetEdges node"),
         };
 
-        let sub_plan = SubPlan {
-            root: Some(get_edges_node),
-            tail: None,
-            logical_root: Some(current_logical),
-        };
+        let sub_plan = SubPlan::from_dual(Some(get_edges_node), None, Some(current_logical));
         Ok(sub_plan)
     }
 }

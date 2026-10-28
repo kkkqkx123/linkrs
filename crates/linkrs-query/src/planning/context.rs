@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::binder::BoundStatement;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::stmt::Ast;
+use crate::planning::join_order::JoinOrderStats;
 use crate::QueryContext;
 
 /// Unified context for the plan_bound phase.
@@ -22,6 +23,10 @@ pub struct PlanContext<'a> {
     /// Already parsed statement for this query, when the caller has one.
     /// Planners prefer this over re-parsing query text.
     pub ast: Option<Arc<Ast>>,
+    /// Optional join-order statistics snapshot, filled by the compiler from
+    /// the same statistics manager the optimizer reviews against.
+    /// The match planner reads this instead of an external setter.
+    pub join_order_stats: Option<JoinOrderStats>,
 }
 
 impl<'a> PlanContext<'a> {
@@ -36,12 +41,19 @@ impl<'a> PlanContext<'a> {
             qctx,
             metadata,
             ast: None,
+            join_order_stats: None,
         }
     }
 
     /// Attach the already parsed statement for this query.
     pub fn with_ast(mut self, ast: Arc<Ast>) -> Self {
         self.ast = Some(ast);
+        self
+    }
+
+    /// Attach the join-order statistics snapshot for this query.
+    pub fn with_join_order_stats(mut self, stats: JoinOrderStats) -> Self {
+        self.join_order_stats = Some(stats);
         self
     }
 
@@ -52,6 +64,7 @@ impl<'a> PlanContext<'a> {
             qctx,
             metadata: None,
             ast: None,
+            join_order_stats: None,
         }
     }
 
@@ -63,6 +76,7 @@ impl<'a> PlanContext<'a> {
             qctx: self.qctx.clone(),
             metadata: self.metadata,
             ast: self.ast.clone(),
+            join_order_stats: self.join_order_stats.clone(),
         }
     }
 
@@ -73,6 +87,7 @@ impl<'a> PlanContext<'a> {
             qctx: self.qctx.clone(),
             metadata: self.metadata,
             ast: self.ast.clone(),
+            join_order_stats: self.join_order_stats.clone(),
         }
     }
 }

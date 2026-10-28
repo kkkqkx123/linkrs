@@ -10,7 +10,6 @@ use crate::executor::streaming::plan::PhysicalPlan;
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::executor::streaming::query_registry::QueryRegistry;
 use crate::executor::streaming::SessionTransactionController;
-use crate::extensions::ExtensionRegistry;
 use crate::optimizer::OptimizerEngine;
 use crate::query_manager::QueryManager;
 use crate::storage::QueryStorage;
@@ -107,9 +106,6 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) dml_template_ast_parse_count: std::sync::atomic::AtomicU64,
     pub(crate) dml_template_ast_hit_count: std::sync::atomic::AtomicU64,
     pub(crate) dml_bind_skipped_count: std::sync::atomic::AtomicU64,
-    /// Experimental pipeline extensions. Empty by default,
-    /// leaving the builtin pipeline untouched.
-    pub(crate) extensions: Arc<ExtensionRegistry>,
     /// Retained password-history depth threaded into every query context so
     /// user-management plans rotate history uniformly across channels.
     pub(crate) password_history_depth: usize,
@@ -212,7 +208,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
             dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
-            extensions: Arc::new(ExtensionRegistry::new()),
             password_history_depth: 0,
         }
     }
@@ -514,27 +509,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
             dml_bind_skipped_count: std::sync::atomic::AtomicU64::new(0),
-            extensions: Arc::new(ExtensionRegistry::new()),
             password_history_depth: 0,
         }
-    }
-
-    /// Attach a shared pipeline-extension registry (experimental).
-    pub fn with_extensions(mut self, extensions: Arc<ExtensionRegistry>) -> Self {
-        self.extensions = extensions;
-        self
-    }
-
-    /// Replace the pipeline-extension registry on an existing manager
-    /// (experimental). Used when the manager was built by another
-    /// constructor and the caller only has `&mut` access.
-    pub fn set_extensions(&mut self, extensions: Arc<ExtensionRegistry>) {
-        self.extensions = extensions;
-    }
-
-    /// Pipeline-extension registry backing this manager.
-    pub fn extensions(&self) -> Arc<ExtensionRegistry> {
-        Arc::clone(&self.extensions)
     }
 
     pub fn optimizer_engine(&self) -> &OptimizerEngine {

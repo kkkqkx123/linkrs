@@ -252,6 +252,49 @@ impl PlannerEnum {
         }
     }
 
+    /// Plan a sub-statement through the unified route table.
+    ///
+    /// Single entry for every recursive planner (Pipe, SetOperation,
+    /// Explain/Profile, Assignment): resolves the planner from the bound
+    /// statement and plans it under a sub-context carrying the same query
+    /// context and metadata. Sub-statement variants are routed in exactly
+    /// one place, so adding a variant only touches
+    /// [`PlannerEnum::from_bound_statement`].
+    pub fn plan_substatement(
+        ctx: &PlanContext<'_>,
+        stmt: &BoundStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let mut planner = PlannerEnum::from_bound_statement(stmt).ok_or_else(|| {
+            PlannerError::NoSuitablePlanner(format!(
+                "No suitable planner for sub-statement: {}",
+                stmt.kind()
+            ))
+        })?;
+        let sub_ctx = ctx.with_bound(stmt);
+        planner.plan_bound(&sub_ctx)
+    }
+
+    /// Plan a sub-statement detached from the caller's parsed AST.
+    ///
+    /// Same routing as [`PlannerEnum::plan_substatement`] but the
+    /// sub-context carries no parsed statement, for branches whose text
+    /// differs from the enclosing query (CTE anchor/step). The caller's
+    /// AST must not leak into the branch planner.
+    pub fn plan_detached_substatement(
+        qctx: std::sync::Arc<crate::QueryContext>,
+        metadata: Option<&crate::metadata::MetadataContext>,
+        stmt: &BoundStatement,
+    ) -> Result<SubPlan, PlannerError> {
+        let mut planner = PlannerEnum::from_bound_statement(stmt).ok_or_else(|| {
+            PlannerError::NoSuitablePlanner(format!(
+                "No planner for detached sub-statement: {}",
+                stmt.kind()
+            ))
+        })?;
+        let sub_ctx = PlanContext::new(stmt, qctx, metadata);
+        planner.plan_bound(&sub_ctx)
+    }
+
     /// Obtain the name of the planner.
     pub fn name(&self) -> &'static str {
         match self {

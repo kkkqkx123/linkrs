@@ -159,11 +159,11 @@ fn plan_simple_filter(
             column_types: vec![],
         })
     });
-    Ok(SubPlan {
-        root: Some(filter_node.into_enum()),
-        tail: input_plan.tail,
+    Ok(SubPlan::from_dual(
+        Some(filter_node.into_enum()),
+        input_plan.tail,
         logical_root,
-    })
+    ))
 }
 
 /// Apply a prepared filter condition on top of a plan, carrying any
@@ -189,11 +189,11 @@ fn plan_simple_filter_with(
             column_types: vec![],
         })
     });
-    Ok(SubPlan {
-        root: Some(filter_node.into_enum()),
-        tail: input_plan.tail,
+    Ok(SubPlan::from_dual(
+        Some(filter_node.into_enum()),
+        input_plan.tail,
         logical_root,
-    })
+    ))
 }
 
 fn extract_where_condition(stmt: &Stmt) -> Result<ContextualExpression, PlannerError> {
@@ -291,11 +291,8 @@ mod tests {
 
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node.clone());
-        let input_plan = SubPlan {
-            root: Some(start_node_enum.clone()),
-            tail: Some(start_node_enum),
-            logical_root: None,
-        };
+        let input_plan =
+            SubPlan::from_dual(Some(start_node_enum.clone()), Some(start_node_enum), None);
 
         let planner = WhereClausePlanner::new();
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(
@@ -338,11 +335,8 @@ mod tests {
 
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node.clone());
-        let input_plan = SubPlan {
-            root: Some(start_node_enum.clone()),
-            tail: Some(start_node_enum),
-            logical_root: None,
-        };
+        let input_plan =
+            SubPlan::from_dual(Some(start_node_enum.clone()), Some(start_node_enum), None);
 
         let planner = WhereClausePlanner::new();
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(

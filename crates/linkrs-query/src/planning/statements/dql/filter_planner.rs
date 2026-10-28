@@ -54,11 +54,11 @@ impl Planner for FilterPlanner {
             filter_node.condition().clone(),
             filter_node.col_names().to_vec(),
         );
-        let sub_plan = SubPlan {
-            root: Some(PlanNodeEnum::Filter(filter_node)),
-            tail: Some(start_enum),
-            logical_root: Some(logical_root),
-        };
+        let sub_plan = SubPlan::from_dual(
+            Some(PlanNodeEnum::Filter(filter_node)),
+            Some(start_enum),
+            Some(logical_root),
+        );
         Ok(sub_plan)
     }
 }

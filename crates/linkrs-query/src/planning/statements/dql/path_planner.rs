@@ -196,11 +196,8 @@ impl Planner for PathPlanner {
             root_node = PlanNodeEnum::Filter(filter_node);
         }
 
-        let sub_plan = SubPlan {
-            root: Some(root_node),
-            tail: Some(start_node_enum),
-            logical_root: Some(logical_root),
-        };
+        let sub_plan =
+            SubPlan::from_dual(Some(root_node), Some(start_node_enum), Some(logical_root));
 
         Ok(sub_plan)
     }

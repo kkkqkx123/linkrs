@@ -28,7 +28,7 @@ pub mod subquery_graph;
 
 pub use cardinality_estimator::{CardinalityEstimator, JoinOrderStats};
 pub use cost_model::CostModel;
-pub use from_pattern::query_graph_from_match_patterns;
+pub use from_pattern::{query_graph_from_bound_graph, query_graph_from_match_patterns};
 pub use join_tree::{
     JoinHint, JoinHintError, JoinHintNode, JoinTree, JoinTreeConstructor, JoinTreeExtraInfo,
     JoinTreeNode, TreeNodeType,

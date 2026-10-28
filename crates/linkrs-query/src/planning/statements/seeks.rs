@@ -2,6 +2,20 @@
 //!
 //! Define vertex search strategies and selectors to determine the method for finding the starting vertex in MATCH queries.
 //!
+//! ## Index and cost model scope
+//!
+//! - `IndexInfo` (here) is the canonical planning-side index descriptor,
+//!   reused by the LOOKUP composite analyzer. It is a snapshot built from
+//!   metadata, not the metadata record itself.
+//! - Single-label MATCH scans use `metadata::IndexMetadata` directly through
+//!   `super::index_scan_planner` (first-hit heuristic, no cost comparison)
+//!   by design; that path does not go through `IndexInfo`.
+//! - All no-statistics index costs flow through
+//!   `optimizer::cost::CostModelConfig::index_seek_cost`; the
+//!   statistics-aware calculator entry stays in `optimizer::cost::calculator`.
+//! - The integer `join_order::CostModel` prices MATCH graph DP splits only
+//!   and is intentionally separate from the floating-point optimizer costs.
+//!
 //! ## Modules
 //!
 //! - `seek_strategy_base`: Core strategy types and cost-based selector

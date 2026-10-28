@@ -262,9 +262,9 @@ impl Binder {
         let return_clause = body
             .return_expr
             .as_ref()
-            .map(|ret| -> DBResult<BoundReturnClause> {
+            .map(|ret| -> DBResult<BoundProjectionClause> {
                 let bound = self.bind_expr(&Self::plain_expression(ret.as_ref().clone()))?;
-                Ok(BoundReturnClause {
+                Ok(BoundProjectionClause {
                     items: vec![BoundProjectionItem {
                         expression: bound,
                         alias: None,

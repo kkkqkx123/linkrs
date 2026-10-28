@@ -52,11 +52,11 @@ pub fn plan_path_pattern(
                             )?;
                             plan = if let Some(existing_root) = plan.root.take() {
                                 plan_combiner::cross_join_plans(
-                                    SubPlan {
-                                        root: Some(existing_root),
-                                        tail: plan.tail,
-                                        logical_root: plan.logical_root.take(),
-                                    },
+                                    SubPlan::from_dual(
+                                        Some(existing_root),
+                                        plan.tail,
+                                        plan.logical_root.take(),
+                                    ),
                                     node_plan,
                                 )?
                             } else {
@@ -105,21 +105,21 @@ pub fn plan_path_pattern(
                         plan = if let Some(existing_root) = plan.root.take() {
                             if is_first_edge {
                                 plan_combiner::connect_node_to_edge_expansion(
-                                    SubPlan {
-                                        root: Some(existing_root),
-                                        tail: plan.tail,
-                                        logical_root: plan.logical_root.take(),
-                                    },
+                                    SubPlan::from_dual(
+                                        Some(existing_root),
+                                        plan.tail,
+                                        plan.logical_root.take(),
+                                    ),
                                     edge_plan,
                                     input_alias,
                                 )?
                             } else {
                                 plan_combiner::join_edge_expansions(
-                                    SubPlan {
-                                        root: Some(existing_root),
-                                        tail: plan.tail,
-                                        logical_root: plan.logical_root.take(),
-                                    },
+                                    SubPlan::from_dual(
+                                        Some(existing_root),
+                                        plan.tail,
+                                        plan.logical_root.take(),
+                                    ),
                                     edge_plan,
                                     input_alias,
                                 )?
@@ -137,11 +137,11 @@ pub fn plan_path_pattern(
                         let alt_plan = plan_alternative_patterns(patterns, ctx)?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::cross_join_plans(
-                                SubPlan {
-                                    root: Some(existing_root),
-                                    tail: plan.tail,
-                                    logical_root: plan.logical_root.take(),
-                                },
+                                SubPlan::from_dual(
+                                    Some(existing_root),
+                                    plan.tail,
+                                    plan.logical_root.take(),
+                                ),
                                 alt_plan,
                             )?
                         } else {
@@ -153,11 +153,11 @@ pub fn plan_path_pattern(
                         let opt_plan = plan_optional_element(elem, ctx)?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::left_join_plans(
-                                SubPlan {
-                                    root: Some(existing_root),
-                                    tail: plan.tail,
-                                    logical_root: plan.logical_root.take(),
-                                },
+                                SubPlan::from_dual(
+                                    Some(existing_root),
+                                    plan.tail,
+                                    plan.logical_root.take(),
+                                ),
                                 opt_plan,
                             )?
                         } else {
@@ -177,11 +177,11 @@ pub fn plan_path_pattern(
                         )?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::cross_join_plans(
-                                SubPlan {
-                                    root: Some(existing_root),
-                                    tail: plan.tail,
-                                    logical_root: plan.logical_root.take(),
-                                },
+                                SubPlan::from_dual(
+                                    Some(existing_root),
+                                    plan.tail,
+                                    plan.logical_root.take(),
+                                ),
                                 rep_plan,
                             )?
                         } else {
@@ -314,9 +314,9 @@ pub fn plan_repeated_element(
         .cloned()
         .map(|body| LogicalNodeEnum::Loop(LogicalLoopNode::new_with_body(ctx_expr, body)));
 
-    Ok(SubPlan {
-        root: Some(loop_node.into_enum()),
-        tail: base_plan.tail,
+    Ok(SubPlan::from_dual(
+        Some(loop_node.into_enum()),
+        base_plan.tail,
         logical_root,
-    })
+    ))
 }

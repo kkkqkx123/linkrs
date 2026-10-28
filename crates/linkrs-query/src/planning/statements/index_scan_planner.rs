@@ -1,3 +1,13 @@
+//! Single-label index scan planner for MATCH node patterns.
+//!
+//! ## Scope
+//!
+//! First-hit heuristic for `MATCH (v:Label) WHERE <single-field predicate>`
+//! using `metadata::IndexMetadata` directly: no cost comparison, composite
+//! indexes unsupported here (see the LOOKUP `composite_index_analyzer` for
+//! multi-predicate selection). Gated by `enable_index_optimization` plus
+//! available metadata; returns `None` when no suitable index exists and the
+//! caller falls back to a full scan.
 use crate::metadata::{IndexMetadata, MetadataContext};
 use crate::parser::ast::pattern::NodePattern;
 use crate::planning::plan::core::nodes::access::index_scan::{IndexLimit, IndexScanNode, ScanType};

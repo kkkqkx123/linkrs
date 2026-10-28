@@ -14,7 +14,6 @@ use linkrs_core::metadata::SchemaManager;
 use linkrs_metrics::StatsManager;
 use linkrs_query::executor::streaming::pool::SharedScheduler;
 use linkrs_query::executor::streaming::query_registry::QueryRegistry;
-use linkrs_query::extensions::ExtensionRegistry;
 use linkrs_query::optimizer::CostModelConfig;
 use linkrs_query::query_manager::QueryManager;
 use linkrs_query::OptimizerEngine;
@@ -181,17 +180,6 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// [`install_shared_scheduler`]: called once at server startup.
     pub fn install_query_manager(&mut self, query_manager: Arc<QueryManager>) {
         self.pipeline_manager.set_query_manager(Some(query_manager));
-    }
-
-    /// Install a shared pipeline-extension registry (unstable experimental
-    /// API) into an existing pipeline.
-    pub fn set_extensions(&mut self, extensions: Arc<ExtensionRegistry>) {
-        self.pipeline_manager.set_extensions(extensions);
-    }
-
-    /// Pipeline-extension registry backing this API.
-    pub fn extensions(&self) -> Arc<ExtensionRegistry> {
-        self.pipeline_manager.extensions()
     }
 
     /// Collect (or serve cached) optimizer statistics for a space.

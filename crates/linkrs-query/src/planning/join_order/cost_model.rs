@@ -8,8 +8,10 @@
 //!
 //! Division of labor: this integer model prices MATCH query-graph DP splits;
 //! the generic join-tree DP in `optimizer::cost_based::join_order` uses the
-//! floating-point `CostCalculator`. Both share the no-statistics row/degree
-//! constants from `optimizer::cost::config`; keep new constants there.
+//! floating-point `CostCalculator`. No-statistics index costs on the
+//! floating-point side share `CostModelConfig::index_seek_cost`. Both share
+//! the no-statistics row/degree constants from `optimizer::cost::config`;
+//! keep new constants there.
 
 /// Penalty multiplier applied to build-side key cardinalities.
 pub const BUILD_PENALTY: u64 = 2;

@@ -134,11 +134,11 @@ pub(crate) fn wrap_filter(
         })
     });
 
-    Ok(SubPlan {
-        root: Some(filter_node.into_enum()),
-        tail: plan.tail,
+    Ok(SubPlan::from_dual(
+        Some(filter_node.into_enum()),
+        plan.tail,
         logical_root,
-    })
+    ))
 }
 
 /// Wrap `plan` with a filter node carrying expression-level subqueries
@@ -164,11 +164,11 @@ pub(crate) fn wrap_filter_with_subqueries(
         })
     });
 
-    Ok(SubPlan {
-        root: Some(filter_node.into_enum()),
-        tail: plan.tail,
+    Ok(SubPlan::from_dual(
+        Some(filter_node.into_enum()),
+        plan.tail,
         logical_root,
-    })
+    ))
 }
 
 /// Wrap `plan` with a projection of a single expression column, carrying any
@@ -199,9 +199,9 @@ pub(crate) fn wrap_project_with_subqueries(
         })
     });
 
-    Ok(SubPlan {
-        root: Some(project_node.into_enum()),
-        tail: plan.tail,
+    Ok(SubPlan::from_dual(
+        Some(project_node.into_enum()),
+        plan.tail,
         logical_root,
-    })
+    ))
 }

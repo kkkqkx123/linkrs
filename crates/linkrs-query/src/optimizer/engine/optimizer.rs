@@ -439,6 +439,13 @@ impl OptimizerEngine {
             return;
         }
 
+        if logical.stats_backed {
+            plan.cbo_notes.push(
+                "join_order: kept planning order (statistics-backed, reviewer skipped)".to_string(),
+            );
+            return;
+        }
+
         let calculator = self.cost_calculator_for(space);
         let mut notes = Vec::new();
         let rewritten_logical =

@@ -49,15 +49,7 @@ impl Planner for PipePlanner {
         let mut combined_plan: Option<SubPlan> = None;
 
         for stmt in &pipe.statements {
-            let mut planner = PlannerEnum::from_bound_statement(stmt).ok_or_else(|| {
-                PlannerError::NoSuitablePlanner(format!(
-                    "No suitable planner for pipe sub-statement: {}",
-                    stmt.kind()
-                ))
-            })?;
-
-            let sub_ctx = ctx.with_bound(stmt);
-            let sub_plan = planner.plan_bound(&sub_ctx)?;
+            let sub_plan = PlannerEnum::plan_substatement(ctx, stmt)?;
 
             combined_plan = match combined_plan {
                 None => Some(sub_plan),
@@ -95,11 +87,11 @@ impl Planner for PipePlanner {
                         }
                         _ => None,
                     };
-                    Some(SubPlan {
-                        root: Some(combined_root),
-                        tail: None,
-                        logical_root: combined_logical,
-                    })
+                    Some(SubPlan::from_dual(
+                        Some(combined_root),
+                        None,
+                        combined_logical,
+                    ))
                 }
             };
         }

@@ -112,11 +112,11 @@ pub fn plan_pattern_edge(
         step_limits,
         optional,
     );
-    let mut plan = SubPlan {
-        root: Some(expand_root.clone()),
-        tail: Some(expand_root),
-        logical_root: Some(logical_root.clone()),
-    };
+    let mut plan = SubPlan::from_dual(
+        Some(expand_root.clone()),
+        Some(expand_root),
+        Some(logical_root.clone()),
+    );
 
     if let Some(ref props) = edge.properties {
         let filter_expr = if let Some(ref expr_ctx) = expr_context {
@@ -139,11 +139,11 @@ pub fn plan_pattern_edge(
         )
         .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
         logical_root = logical_filter(logical_root, filter_expr);
-        plan = SubPlan {
-            root: Some(filter_node.into_enum()),
-            tail: plan.tail,
-            logical_root: Some(logical_root.clone()),
-        };
+        plan = SubPlan::from_dual(
+            Some(filter_node.into_enum()),
+            plan.tail,
+            Some(logical_root.clone()),
+        );
     }
 
     if !edge.predicates.is_empty() {
@@ -157,11 +157,11 @@ pub fn plan_pattern_edge(
             )
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
             logical_root = logical_filter(logical_root, pred.clone());
-            plan = SubPlan {
-                root: Some(filter_node.into_enum()),
-                tail: plan.tail,
-                logical_root: Some(logical_root.clone()),
-            };
+            plan = SubPlan::from_dual(
+                Some(filter_node.into_enum()),
+                plan.tail,
+                Some(logical_root.clone()),
+            );
         }
     }
 
@@ -233,11 +233,11 @@ pub fn plan_pattern_edge_with_input(
         step_limits,
         optional,
     );
-    let mut plan = SubPlan {
-        root: Some(expand_root.clone()),
-        tail: Some(expand_root),
-        logical_root: Some(logical_root.clone()),
-    };
+    let mut plan = SubPlan::from_dual(
+        Some(expand_root.clone()),
+        Some(expand_root),
+        Some(logical_root.clone()),
+    );
 
     if let Some(ref props) = edge.properties {
         let edge_var = edge.variable.clone().unwrap_or_else(|| "e".to_string());
@@ -261,11 +261,11 @@ pub fn plan_pattern_edge_with_input(
         )
         .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
         logical_root = logical_filter(logical_root, filter_expr);
-        plan = SubPlan {
-            root: Some(filter_node.into_enum()),
-            tail: plan.tail,
-            logical_root: Some(logical_root.clone()),
-        };
+        plan = SubPlan::from_dual(
+            Some(filter_node.into_enum()),
+            plan.tail,
+            Some(logical_root.clone()),
+        );
     }
 
     if !edge.predicates.is_empty() {
@@ -279,11 +279,11 @@ pub fn plan_pattern_edge_with_input(
             )
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
             logical_root = logical_filter(logical_root, pred.clone());
-            plan = SubPlan {
-                root: Some(filter_node.into_enum()),
-                tail: plan.tail,
-                logical_root: Some(logical_root.clone()),
-            };
+            plan = SubPlan::from_dual(
+                Some(filter_node.into_enum()),
+                plan.tail,
+                Some(logical_root.clone()),
+            );
         }
     }
 

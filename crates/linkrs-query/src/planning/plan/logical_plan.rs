@@ -38,6 +38,12 @@ pub struct LogicalPlan {
     /// cost-based reviewer must never overturn it, so the engine skips
     /// join-order review for flagged plans.
     pub join_order_hinted: bool,
+    /// The planning enumerator priced the join order with real statistics.
+    ///
+    /// Set only when a non-empty statistics snapshot backed the planning
+    /// enumeration. Default-statistics products stay false and always go
+    /// through reviewer re-check.
+    pub stats_backed: bool,
 }
 
 impl LogicalPlan {
@@ -48,6 +54,7 @@ impl LogicalPlan {
             kind: StatementKind::Other,
             output_column_names,
             join_order_hinted: false,
+            stats_backed: false,
         }
     }
 

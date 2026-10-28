@@ -127,11 +127,11 @@ impl ClausePlanner for OrderByClausePlanner {
                 column_types: vec![],
             })
         });
-        Ok(SubPlan {
-            root: Some(sort_node.into_enum()),
-            tail: input_plan.tail,
+        Ok(SubPlan::from_dual(
+            Some(sort_node.into_enum()),
+            input_plan.tail,
             logical_root,
-        })
+        ))
     }
 }
 
@@ -279,11 +279,8 @@ mod tests {
 
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node.clone());
-        let input_plan = SubPlan {
-            root: Some(start_node_enum.clone()),
-            tail: Some(start_node_enum),
-            logical_root: None,
-        };
+        let input_plan =
+            SubPlan::from_dual(Some(start_node_enum.clone()), Some(start_node_enum), None);
 
         let planner = OrderByClausePlanner::new();
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(
@@ -326,11 +323,8 @@ mod tests {
 
         let start_node = StartNode::new();
         let start_node_enum = PlanNodeEnum::Start(start_node.clone());
-        let input_plan = SubPlan {
-            root: Some(start_node_enum.clone()),
-            tail: Some(start_node_enum),
-            logical_root: None,
-        };
+        let input_plan =
+            SubPlan::from_dual(Some(start_node_enum.clone()), Some(start_node_enum), None);
 
         let planner = OrderByClausePlanner::new();
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(
@@ -378,11 +372,7 @@ mod tests {
             delete_clause: None,
         });
 
-        let input_plan = SubPlan {
-            root: None,
-            tail: None,
-            logical_root: None,
-        };
+        let input_plan = SubPlan::from_dual(None, None, None);
 
         let planner = OrderByClausePlanner::new();
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(

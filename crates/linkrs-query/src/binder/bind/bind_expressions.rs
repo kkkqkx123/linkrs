@@ -747,49 +747,75 @@ impl Binder {
     pub(crate) fn bind_return_clause(
         &mut self,
         rc: &crate::parser::ast::ReturnClause,
-    ) -> DBResult<BoundReturnClause> {
-        let items = rc
-            .items
-            .iter()
-            .map(|item| match item {
-                ReturnItem::Expression { expression, alias } => {
-                    self.bind_projection_expression(expression, alias.clone(), true)
-                }
-            })
-            .collect::<DBResult<Vec<_>>>()?;
-
-        let order_by = self.bind_order_by_clause(rc.order_by.as_ref())?;
-
-        Ok(BoundReturnClause {
-            items,
-            distinct: rc.distinct,
-            order_by,
-            limit: rc.limit.clone(),
-            skip: rc.skip.clone(),
-            sample: rc.sample.clone(),
-        })
+    ) -> DBResult<BoundProjectionClause> {
+        self.bind_projection_clause(
+            &rc.items
+                .iter()
+                .map(|item| match item {
+                    ReturnItem::Expression { expression, alias } => {
+                        (expression.clone(), alias.clone())
+                    }
+                })
+                .collect::<Vec<_>>(),
+            rc.distinct,
+            rc.order_by.as_ref(),
+            rc.limit.clone(),
+            rc.skip.clone(),
+            rc.sample.clone(),
+            true,
+        )
     }
 
     pub(crate) fn bind_yield_clause(
         &mut self,
         yc: &crate::parser::ast::YieldClause,
-    ) -> DBResult<BoundYieldClause> {
-        let items = yc
-            .items
+    ) -> DBResult<BoundProjectionClause> {
+        self.bind_projection_clause(
+            &yc.items
+                .iter()
+                .map(|item| (item.expression.clone(), item.alias.clone()))
+                .collect::<Vec<_>>(),
+            yc.distinct,
+            yc.order_by.as_ref(),
+            yc.limit.clone(),
+            yc.skip.clone(),
+            yc.sample.clone(),
+            false,
+        )
+    }
+
+    /// Shared RETURN / YIELD clause binding path.
+    ///
+    /// Both clauses bind items, ordering, pagination, and sampling
+    /// identically; only the undefined-variable check differs (RETURN
+    /// rejects eagerly, YIELD defers it to later stages).
+    #[allow(clippy::too_many_arguments)]
+    fn bind_projection_clause(
+        &mut self,
+        items: &[(ContextualExpression, Option<String>)],
+        distinct: bool,
+        order_by: Option<&crate::parser::ast::OrderByClause>,
+        limit: Option<crate::parser::ast::LimitClause>,
+        skip: Option<crate::parser::ast::SkipClause>,
+        sample: Option<crate::parser::ast::SampleClause>,
+        check_defined: bool,
+    ) -> DBResult<BoundProjectionClause> {
+        let items = items
             .iter()
-            .map(|item| {
-                self.bind_projection_expression(&item.expression, item.alias.clone(), false)
+            .map(|(expression, alias)| {
+                self.bind_projection_expression(expression, alias.clone(), check_defined)
             })
             .collect::<DBResult<Vec<_>>>()?;
 
-        let order_by = self.bind_order_by_clause(yc.order_by.as_ref())?;
+        let order_by = self.bind_order_by_clause(order_by)?;
 
-        Ok(BoundYieldClause {
+        Ok(BoundProjectionClause {
             items,
-            distinct: yc.distinct,
+            distinct,
             order_by,
-            limit: yc.limit.clone(),
-            skip: yc.skip.clone(),
+            limit,
+            skip,
+            sample,
         })
     }
 }

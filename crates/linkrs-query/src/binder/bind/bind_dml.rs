@@ -497,6 +497,81 @@ impl Binder {
         binder.space_name = self.space_name.clone();
         binder.bind_expr(&contextual)
     }
+
+    pub(crate) fn bind_filter(
+        &mut self,
+        stmt: &crate::parser::ast::FilterStmt,
+    ) -> DBResult<BoundStatement> {
+        let condition = self.bind_expr(&stmt.expression)?;
+        Ok(BoundStatement::Filter(BoundFilter { condition }))
+    }
+
+    pub(crate) fn bind_yield(
+        &mut self,
+        stmt: &crate::parser::ast::YieldStmt,
+    ) -> DBResult<BoundStatement> {
+        let items = stmt
+            .items
+            .iter()
+            .map(|item| {
+                self.bind_expr(&item.expression)
+                    .map(|be| BoundProjectionItem {
+                        expression: be,
+                        alias: item.alias.clone(),
+                    })
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+
+        let where_clause = stmt
+            .where_clause
+            .as_ref()
+            .map(|w| self.bind_expr(w))
+            .transpose()?;
+
+        let order_by = stmt
+            .order_by
+            .as_ref()
+            .map(|ob| {
+                ob.items
+                    .iter()
+                    .map(|item| {
+                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
+                            expression: be,
+                            direction: item.direction,
+                        })
+                    })
+                    .collect::<DBResult<Vec<_>>>()
+            })
+            .transpose()?;
+
+        Ok(BoundStatement::Yield(BoundYield {
+            items,
+            where_clause,
+            distinct: stmt.distinct,
+            order_by,
+            skip: stmt.skip.clone(),
+            limit: stmt.limit.clone(),
+            sample: stmt.sample.clone(),
+        }))
+    }
+
+    pub(crate) fn bind_collect(
+        &mut self,
+        stmt: &crate::parser::ast::CollectStmt,
+    ) -> DBResult<BoundStatement> {
+        let items = stmt
+            .items
+            .iter()
+            .map(|item| {
+                self.bind_expr(&item.expression)
+                    .map(|be| BoundProjectionItem {
+                        expression: be,
+                        alias: item.alias.clone(),
+                    })
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+        Ok(BoundStatement::Collect(BoundCollect { items }))
+    }
 }
 
 /// The variable alias naming an update target, when the target carries one.

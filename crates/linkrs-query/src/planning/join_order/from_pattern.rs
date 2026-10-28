@@ -40,6 +40,55 @@ pub fn query_graph_from_match_patterns(patterns: &[Pattern]) -> Option<QueryGrap
     Some(graph)
 }
 
+/// Convert a bound query graph into the planning query graph.
+///
+/// The binder already resolved pattern variables, tags, edge types, and
+/// endpoints, so this mapping copies names directly without re-parsing
+/// pattern syntax. Returns `None` for empty graphs or duplicated rel
+/// variables, mirroring the AST converter's rejection rules.
+pub fn query_graph_from_bound_graph(bound: &crate::binder::QueryGraph) -> Option<QueryGraph> {
+    if bound.nodes.is_empty() {
+        return None;
+    }
+    let mut graph = QueryGraph::new();
+    for node in &bound.nodes {
+        let labels: Vec<String> = node
+            .tags
+            .iter()
+            .map(|tag| tag.tag_name.to_string())
+            .collect();
+        graph.add_node(QueryNode::new(&node.variable, &node.variable).with_labels(labels));
+    }
+    for edge in &bound.edges {
+        if graph.rel_pos(&edge.variable).is_some() {
+            return None;
+        }
+        let edge_types: Vec<String> = edge
+            .edge_types
+            .iter()
+            .map(|edge_type| edge_type.edge_type_name.to_string())
+            .collect();
+        graph.add_rel(
+            QueryRel::new(
+                &edge.variable,
+                &edge.variable,
+                &edge.src_variable,
+                &edge.dst_variable,
+            )
+            .with_direction(ExtendDirection::from(edge.direction))
+            .with_edge_types(edge_types),
+        );
+    }
+    for rel in &graph.query_rels {
+        if graph.node_pos(&rel.src_node_name).is_none()
+            || graph.node_pos(&rel.dst_node_name).is_none()
+        {
+            return None;
+        }
+    }
+    Some(graph)
+}
+
 #[derive(Debug, Default)]
 struct QueryGraphBuilder {
     graph: QueryGraph,

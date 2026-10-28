@@ -1051,6 +1051,75 @@ fn hinted_logical_plan_skips_join_order_review() {
 }
 
 #[test]
+fn stats_backed_logical_plan_skips_join_order_review() {
+    use crate::optimizer::stats::StatsView;
+    use crate::optimizer::stats::TagStatistics;
+    use crate::planning::plan::core::node_id_generator::next_node_id;
+    use crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode;
+    use crate::planning::plan::logical::logical_nodes::join::LogicalInnerJoinNode;
+    use crate::planning::plan::logical::LogicalNodeEnum as LogicalEnum;
+    use crate::planning::plan::logical_plan::LogicalPlan;
+
+    fn logical_scan(tag: &str) -> LogicalEnum {
+        LogicalEnum::ScanVertices(LogicalScanVerticesNode {
+            id: next_node_id(),
+            space_id: 1,
+            space_name: "test".to_string(),
+            tag: Some(tag.to_string()),
+            expression: None,
+            limit: None,
+            projected_properties: Vec::new(),
+            index_hint: None,
+            estimated_cardinality: None,
+            output_var: None,
+            col_names: Vec::new(),
+            column_types: Vec::new(),
+        })
+    }
+
+    let stats_manager = StatisticsManager::new();
+    for (tag, rows) in [("big", 1000u64), ("small", 10u64)] {
+        let mut tag_stats = TagStatistics::new(tag.to_string());
+        tag_stats.vertex_count = rows;
+        stats_manager.update_tag_stats("test", tag_stats);
+    }
+    let stats_view = StatsView::new(&stats_manager, Some("test"));
+    let engine = OptimizerEngine::default();
+
+    let mut backed = ExecutionPlan::new(None);
+    let mut logical = LogicalPlan::new(LogicalEnum::InnerJoin(LogicalInnerJoinNode {
+        id: next_node_id(),
+        left: Box::new(logical_scan("big")),
+        right: Box::new(logical_scan("small")),
+        hash_keys: Vec::new(),
+        probe_keys: Vec::new(),
+        recommended_algorithm: None,
+        output_var: None,
+        col_names: Vec::new(),
+        column_types: Vec::new(),
+    }));
+    logical.stats_backed = true;
+    backed.set_logical_plan(logical);
+    engine.apply_join_order_logical(&stats_view, None, &mut backed);
+    assert!(
+        backed
+            .cbo_notes
+            .iter()
+            .any(|note| note.contains("statistics-backed")),
+        "expected stats-backed note, got: {:?}",
+        backed.cbo_notes
+    );
+    assert!(
+        !backed
+            .cbo_notes
+            .iter()
+            .any(|note| note.contains("(reviewer)")),
+        "reviewer must not touch stats-backed plans: {:?}",
+        backed.cbo_notes
+    );
+}
+
+#[test]
 fn test_space_calculator_falls_back_to_base() {
     let engine = OptimizerEngine::new(CostModelConfig::for_ssd());
     assert_eq!(

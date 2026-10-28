@@ -61,11 +61,11 @@ impl ClausePlanner for UnwindClausePlanner {
                 column_types: vec![],
             })
         });
-        Ok(SubPlan {
-            root: Some(unwind_node.into_enum()),
-            tail: input_plan.tail.clone(),
+        Ok(SubPlan::from_dual(
+            Some(unwind_node.into_enum()),
+            input_plan.tail.clone(),
             logical_root,
-        })
+        ))
     }
 }
 
@@ -167,11 +167,11 @@ mod tests {
             skip: None,
         });
         let start = PlanNodeEnum::Start(StartNode::new());
-        let input = SubPlan {
-            root: Some(start.clone()),
-            tail: Some(start),
-            logical_root: Some(LogicalNodeEnum::Start(LogicalStartNode::new())),
-        };
+        let input = SubPlan::from_dual(
+            Some(start.clone()),
+            Some(start),
+            Some(LogicalNodeEnum::Start(LogicalStartNode::new())),
+        );
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(
             crate::QueryRequestContext {
                 session_id: None,
@@ -214,11 +214,7 @@ mod tests {
             skip: None,
         });
         let start = PlanNodeEnum::Start(StartNode::new());
-        let input = SubPlan {
-            root: Some(start.clone()),
-            tail: Some(start),
-            logical_root: None,
-        };
+        let input = SubPlan::from_dual(Some(start.clone()), Some(start), None);
         let qctx = Arc::new(crate::QueryContext::new(Arc::new(
             crate::QueryRequestContext {
                 session_id: None,

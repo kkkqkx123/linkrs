@@ -4,19 +4,11 @@ use crate::parser::ast::{LimitClause, SampleClause, SkipClause};
 use linkrs_core::types::OrderDirection;
 
 /// A unified projection item used by RETURN, YIELD, WITH, and COLLECT clauses.
-///
-/// Previously `BoundReturnItem` and `BoundYieldItem` existed as identical
-/// separate structs; they have been merged into this single type.
 #[derive(Debug, Clone)]
 pub struct BoundProjectionItem {
     pub expression: BoundExpression,
     pub alias: Option<String>,
 }
-
-/// Backward-compatible alias for [`BoundProjectionItem`].
-pub type BoundReturnItem = BoundProjectionItem;
-/// Backward-compatible alias for [`BoundProjectionItem`].
-pub type BoundYieldItem = BoundProjectionItem;
 
 #[derive(Debug, Clone)]
 pub struct BoundOrderByItem {
@@ -24,23 +16,19 @@ pub struct BoundOrderByItem {
     pub direction: OrderDirection,
 }
 
+/// Bound projection shared by RETURN and YIELD clauses.
+///
+/// The two clauses bind through the same path and differ only in whether
+/// undefined variables are rejected eagerly (RETURN) or deferred (YIELD);
+/// the bound shape, including the optional sampling clause, is identical.
 #[derive(Debug, Clone)]
-pub struct BoundReturnClause {
+pub struct BoundProjectionClause {
     pub items: Vec<BoundProjectionItem>,
     pub distinct: bool,
     pub order_by: Option<Vec<BoundOrderByItem>>,
     pub limit: Option<LimitClause>,
     pub skip: Option<SkipClause>,
     pub sample: Option<SampleClause>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BoundYieldClause {
-    pub items: Vec<BoundProjectionItem>,
-    pub distinct: bool,
-    pub order_by: Option<Vec<BoundOrderByItem>>,
-    pub limit: Option<LimitClause>,
-    pub skip: Option<SkipClause>,
 }
 
 #[derive(Debug, Clone)]

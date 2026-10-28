@@ -6,7 +6,9 @@
 //! solely for statements that stay physical-only by design.
 //! - Physical operators (IndexScan, InnerJoin, LeftJoin)
 //!   are mapped to their logical equivalents.
-//! - All other operators are recursively converted.
+//! - Algorithm, search, and transaction operators are mapped field for field.
+//! - Management, statistics, system, and direct control-flow nodes return
+//!   an explicit exemption and keep flat execution without factorization.
 
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
@@ -16,6 +18,15 @@ use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
 pub enum ConversionError {
     /// The plan contains a node type not yet supported in conversion.
     NotYetImplemented(String),
+    /// The plan node stays physical-only by design and needs no logical mirror.
+    Exempt(String),
+}
+
+impl ConversionError {
+    /// Whether the failure is an explicit physical-only exemption.
+    pub fn is_exempt(&self) -> bool {
+        matches!(self, Self::Exempt(_))
+    }
 }
 
 impl std::fmt::Display for ConversionError {
@@ -23,6 +34,9 @@ impl std::fmt::Display for ConversionError {
         match self {
             Self::NotYetImplemented(name) => {
                 write!(f, "conversion not yet implemented for: {}", name)
+            }
+            Self::Exempt(name) => {
+                write!(f, "physical-only by design, no logical mirror: {}", name)
             }
         }
     }
@@ -39,8 +53,9 @@ impl std::error::Error for ConversionError {}
 /// - All other logical operators are preserved with recursive child conversion.
 ///
 /// # Limitations
-/// Statements that remain physical-only by design return `NotYetImplemented`
-/// and keep flat execution without factorization.
+/// Statements that remain physical-only by design return `Exempt`
+/// and keep flat execution without factorization. Only legacy aggregate
+/// nodes without expression group keys return `NotYetImplemented`.
 pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionError> {
     match node {
         // === Access nodes ===
@@ -80,6 +95,9 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         PlanNodeEnum::Loop(n) => control_flow::convert_loop(n),
         PlanNodeEnum::Argument(n) => control_flow::convert_argument(n),
         PlanNodeEnum::PassThrough(n) => control_flow::convert_pass_through(n),
+        PlanNodeEnum::BeginTransaction(n) => control_flow::convert_begin_transaction(n),
+        PlanNodeEnum::Commit(n) => control_flow::convert_commit(n),
+        PlanNodeEnum::Rollback(n) => control_flow::convert_rollback(n),
         // === Pipeline nodes ===
         PlanNodeEnum::Assign(n) => pipeline::convert_assign(n),
         PlanNodeEnum::DataCollect(n) => pipeline::convert_data_collect(n),
@@ -95,6 +113,21 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         PlanNodeEnum::RollUpApply(n) => apply::convert_roll_up_apply(n),
         PlanNodeEnum::CorrelatedApply(n) => apply::convert_correlated_apply(n),
         PlanNodeEnum::WcoIntersect(n) => apply::convert_wco_intersect(n),
+        // === Algorithm nodes ===
+        PlanNodeEnum::MultiShortestPath(n) => traversal::convert_multi_shortest_path(n),
+        PlanNodeEnum::BFSShortest(n) => traversal::convert_bfs_shortest(n),
+        PlanNodeEnum::AllPaths(n) => traversal::convert_all_paths(n),
+        PlanNodeEnum::ShortestPath(n) => traversal::convert_shortest_path(n),
+        // === Search nodes ===
+        PlanNodeEnum::FulltextSearch(n) => access::convert_fulltext_search(n),
+        PlanNodeEnum::FulltextLookup(n) => access::convert_fulltext_lookup(n),
+        PlanNodeEnum::MatchFulltext(n) => access::convert_match_fulltext(n),
+        #[cfg(feature = "vector")]
+        PlanNodeEnum::VectorSearch(n) => access::convert_vector_search(n),
+        #[cfg(feature = "vector")]
+        PlanNodeEnum::VectorLookup(n) => access::convert_vector_lookup(n),
+        #[cfg(feature = "vector")]
+        PlanNodeEnum::VectorMatch(n) => access::convert_vector_match(n),
         // === Write nodes ===
         PlanNodeEnum::GetEdges(n) => write::convert_get_edges(n),
         PlanNodeEnum::InsertVertices(n) => write::convert_insert_vertices(n),
@@ -107,15 +140,36 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
         PlanNodeEnum::PipeDeleteEdges(n) => write::convert_pipe_delete_edges(n),
         PlanNodeEnum::CopyFrom(n) => write::convert_copy_from(n),
         PlanNodeEnum::CopyTo(n) => write::convert_copy_to(n),
-        // === Fallback for unsupported nodes ===
-        // Intentionally not mapped: Algorithm nodes (MultiShortestPath/BFSShortest/AllPaths/ShortestPath)
-        // and Fulltext/Vector search remain `NotYetImplemented`.
-        // They are non-factorized operators not on the factorization / partitioning chain,
-        // so reverse mapping is optional; `ensure_logical_plan` will record the failure in
-        // `cbo_notes` and fall back to flat execution without factorization.
-        _ => Err(ConversionError::NotYetImplemented(
-            node.type_name().to_string(),
-        )),
+        // === Physical-only exemptions ===
+        // Management, statistics, system, and direct control-flow nodes carry
+        // no logical mirror by design. New operators must add an explicit arm
+        // above (bridge) or here (exempt); the wildcard below stays unreachable.
+        PlanNodeEnum::RecursiveCte(_)
+        | PlanNodeEnum::Savepoint(_)
+        | PlanNodeEnum::ReleaseSavepoint(_)
+        | PlanNodeEnum::SpaceManage(_)
+        | PlanNodeEnum::TagManage(_)
+        | PlanNodeEnum::EdgeManage(_)
+        | PlanNodeEnum::IndexManage(_)
+        | PlanNodeEnum::UserManage(_)
+        | PlanNodeEnum::FulltextManage(_)
+        | PlanNodeEnum::VectorManage(_)
+        | PlanNodeEnum::ShowStats(_)
+        | PlanNodeEnum::ShowConfigs(_)
+        | PlanNodeEnum::ShowQueries(_)
+        | PlanNodeEnum::ShowSessions(_)
+        | PlanNodeEnum::ShowFunctions(_)
+        | PlanNodeEnum::ShowGraphs(_)
+        | PlanNodeEnum::ShowMacros(_)
+        | PlanNodeEnum::ShowAttachedDatabases(_)
+        | PlanNodeEnum::ShowExtensions(_)
+        | PlanNodeEnum::LoadFrom(_)
+        | PlanNodeEnum::InQueryCall(_)
+        | PlanNodeEnum::MacroManage(_)
+        | PlanNodeEnum::TypeManage(_)
+        | PlanNodeEnum::SequenceManage(_) => {
+            Err(ConversionError::Exempt(node.type_name().to_string()))
+        }
     }
 }
 
@@ -170,8 +224,6 @@ mod tests {
 
     #[test]
     fn test_convert_unsupported() {
-        // Argument is now supported; use a management node that remains unsupported
-        // as the negative case (e.g., Tag management not yet bridged).
         let arg =
             crate::planning::plan::core::nodes::control_flow::control_flow_node::ArgumentNode::new(
                 -1, "x",
@@ -180,5 +232,45 @@ mod tests {
         let result = convert_plan(&plan_enum);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().type_name(), "Argument");
+    }
+
+    #[test]
+    fn test_convert_exempt_management() {
+        let node =
+            crate::planning::plan::core::nodes::control_flow::control_flow_node::SavepointNode::new(
+                1,
+                "sp1".to_string(),
+            );
+        let plan_enum = PlanNodeEnum::Savepoint(node);
+        let result = convert_plan(&plan_enum);
+        let err = result.expect_err("savepoint stays exempt");
+        assert!(err.is_exempt());
+    }
+
+    #[test]
+    fn test_convert_transaction_round_trip() {
+        use crate::planning::plan::core::nodes::control_flow::control_flow_node::BeginTransactionNode;
+        let node = BeginTransactionNode::new(1).with_read_only(true);
+        let plan_enum = PlanNodeEnum::BeginTransaction(node);
+        let logical = convert_plan(&plan_enum).expect("txn bridges");
+        assert!(matches!(
+            logical,
+            crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum::BeginTransaction(_)
+        ));
+    }
+
+    #[test]
+    fn test_convert_legacy_aggregate_guard() {
+        use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+        let start = crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new();
+        let node = AggregateNode::new(
+            PlanNodeEnum::Start(start),
+            vec!["a".to_string()],
+            vec![linkrs_core::types::operators::AggregateFunction::Count],
+        )
+        .expect("aggregate builds");
+        let plan_enum = PlanNodeEnum::Aggregate(node);
+        let err = convert_plan(&plan_enum).expect_err("legacy aggregate without exprs errors");
+        assert!(!err.is_exempt());
     }
 }

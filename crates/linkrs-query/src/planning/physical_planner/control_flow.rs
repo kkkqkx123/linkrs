@@ -74,7 +74,9 @@ pub(super) fn convert_select(
 pub(super) fn convert_begin_transaction(
     n: crate::planning::plan::logical::logical_nodes::control_flow::LogicalBeginTransactionNode,
 ) -> PlanNodeEnum {
-    let mut node = crate::planning::plan::core::nodes::control_flow::control_flow_node::BeginTransactionNode::new(next_node_id());
+    let mut node = crate::planning::plan::core::nodes::control_flow::control_flow_node::BeginTransactionNode::new(next_node_id())
+        .with_isolation_level(n.isolation_level)
+        .with_read_only(n.read_only);
     if let Some(var) = n.output_var {
         node.set_output_var(var);
     }
@@ -103,6 +105,9 @@ pub(super) fn convert_rollback(
         crate::planning::plan::core::nodes::control_flow::control_flow_node::RollbackNode::new(
             next_node_id(),
         );
+    if let Some(savepoint) = n.savepoint {
+        node = node.with_savepoint(savepoint);
+    }
     if let Some(var) = n.output_var {
         node.set_output_var(var);
     }

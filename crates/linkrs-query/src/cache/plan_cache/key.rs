@@ -1,3 +1,50 @@
+//! Plan cache key dimensions and two-level invalidation contract.
+//!
+//! Two levels share one identity construction but never share storage:
+//!
+//! - Level 1 (plan cache): keyed by query text plus catalog and runtime
+//!   identity. Read queries and DML both use it. Partitioned plans append a
+//!   layout fingerprint computed from partition ranges, source, and storage
+//!   layout version.
+//! - Level 2 (DML memo): keyed by shape-normalized template text through
+//!   `fingerprint_less_from_context`. The partition fingerprint is absent by
+//!   construction because layout is unknown before binding. Layout
+//!   correctness relies on the single serve-time compatibility check
+//!   (`QueryPlanCache::serve_compatible`), not on the key.
+//!
+//! Dimension table (any change here must update memo and plan paths together):
+//!
+//! | Dimension             | Level 1 plan key | Level 2 memo key | Notes |
+//! |-----------------------|------------------|------------------|-------|
+//! | Normalized text       | whitespace-folded query | shape template (`@__dml_N` placeholders) | Memo text is always a template; whitespace folding differs from slow-query `?` grouping which must keep literals distinct |
+//! | Space name            | part of hash, mismatch misses | same | Blocks cross-space reuse |
+//! | Schema generation     | part of hash, DDL bump misses | same | Bumped on any DDL via `invalidate_after_ddl` |
+//! | Index generation      | part of hash, DDL bump misses | same | Bumped conservatively on any DDL alongside schema generation |
+//! | Parameter type signature | part of hash | same | Types only, values excluded, so same-type re-execution reuses plans |
+//! | Optimizer version     | `cost_epoch` snapshot | same | Any cost config change retires cached plans |
+//! | Planning config hash  | partitioning config hash | same | Partitioning policy change retires cached plans |
+//! | Partition fingerprint | range start/end plus source plus layout version, `None` misses `Some` | always absent | Memo never carries it; compatibility check covers layout |
+//!
+//! Invalidation semantics:
+//!
+//! - Generation mismatch is the primary DDL path. `invalidate_after_ddl`
+//!   bumps schema and index generations, so memo and plan keys built before
+//!   the DDL naturally miss. No entry is rewritten in place.
+//! - Per-space invalidation removes plan-cache entries for one space.
+//!   Global catalog changes (attach/detach) clear the whole plan cache.
+//!   The DML memo is cleared as a linear-table drain on the same path.
+//! - `clear_plan_cache` drains plan cache, memo, and template AST together.
+//!   The DDL path intentionally keeps the template AST because templates are
+//!   schema-independent; the full clear path does not keep it.
+//! - Template AST retention after DDL is safe because templates contain no
+//!   schema references, only shape placeholders.
+//! - The memo stays a linear table capped at 16 entries. Lookup is a linear
+//!   scan with move-to-front approximation. Stale keys age out through the
+//!   cap; no TTL or weight bookkeeping is used because bind-skip hot-path
+//!   cost is negligible at this size.
+//! - Memo hits must pass the single compatibility exit before serving.
+//!   Failures fall through to replan and bump the compat-failure counter.
+//!   Layout correctness never depends on key equality alone.
 use crate::planning::plan::execution_plan::PartitionSpec;
 use std::hash::Hasher;
 

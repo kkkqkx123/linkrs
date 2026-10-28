@@ -35,16 +35,7 @@ impl Planner for AssignmentPlanner {
             }
         };
 
-        let mut inner_planner = PlannerEnum::from_bound_statement(&assignment.statement)
-            .ok_or_else(|| {
-                PlannerError::NoSuitablePlanner(format!(
-                    "assignment inner statement: {}",
-                    assignment.statement.kind()
-                ))
-            })?;
-
-        let inner_ctx = ctx.with_bound(&assignment.statement);
-        let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
+        let inner_plan = PlannerEnum::plan_substatement(ctx, &assignment.statement)?;
 
         log::debug!(
             "AssignmentPlanner: variable '{}' bound to inner plan",

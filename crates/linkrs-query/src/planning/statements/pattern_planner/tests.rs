@@ -2,19 +2,18 @@ use super::*;
 use crate::parser::ast::pattern::{EdgePattern, NodePattern, RepetitionType};
 use crate::planning::plan::logical::LogicalNodeEnum;
 
-use crate::binder::validation::ValidationInfo;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::pattern::PathPattern;
 use crate::QueryRequestContext;
 use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
 use linkrs_core::types::graph_schema::EdgeDirection;
 use linkrs_core::types::Span;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[allow(clippy::arc_with_non_send_sync)]
 fn create_test_components() -> (
     Arc<QueryContext>,
-    ValidationInfo,
+    HashSet<String>,
     Option<MetadataContext>,
     Option<Arc<ExpressionAnalysisContext>>,
 ) {
@@ -27,23 +26,23 @@ fn create_test_components() -> (
         ..Default::default()
     });
     let qctx = Arc::new(QueryContext::new(rctx));
-    let validation_info = ValidationInfo::default();
+    let known_variables = HashSet::new();
     let metadata_context: Option<MetadataContext> = None;
     let expr_context: Option<Arc<ExpressionAnalysisContext>> =
         Some(Arc::new(ExpressionAnalysisContext::new()));
-    (qctx, validation_info, metadata_context, expr_context)
+    (qctx, known_variables, metadata_context, expr_context)
 }
 
 fn create_test_ctx<'a>(
     qctx: &'a Arc<QueryContext>,
-    validation_info: &'a ValidationInfo,
+    known_variables: &'a HashSet<String>,
     metadata_context: &'a Option<MetadataContext>,
     expr_context: &'a Option<Arc<ExpressionAnalysisContext>>,
 ) -> PlanningContext<'a> {
     PlanningContext {
         space_id: 1,
         space_name: "test",
-        validation_info,
+        known_variables,
         qctx,
         enable_index_optimization: false,
         metadata_context,
@@ -81,8 +80,8 @@ fn node_path(var: &str) -> Pattern {
 
 #[test]
 fn test_plan_path_pattern_keeps_logical_root() {
-    let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
-    let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+    let (qctx, known_variables, metadata_context, expr_context) = create_test_components();
+    let ctx = create_test_ctx(&qctx, &known_variables, &metadata_context, &expr_context);
     let pattern = Pattern::Path(PathPattern::new(
         vec![
             node_pattern("a"),
@@ -121,8 +120,8 @@ fn test_plan_path_pattern_keeps_logical_root() {
 
 #[test]
 fn test_plan_path_pattern_multi_edge_logical_chain() {
-    let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
-    let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+    let (qctx, known_variables, metadata_context, expr_context) = create_test_components();
+    let ctx = create_test_ctx(&qctx, &known_variables, &metadata_context, &expr_context);
     let pattern = Pattern::Path(PathPattern::new(
         vec![
             node_pattern("a"),
@@ -172,8 +171,8 @@ fn test_plan_path_pattern_multi_edge_logical_chain() {
 
 #[test]
 fn test_plan_path_pattern_optional_keeps_logical_root() {
-    let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
-    let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+    let (qctx, known_variables, metadata_context, expr_context) = create_test_components();
+    let ctx = create_test_ctx(&qctx, &known_variables, &metadata_context, &expr_context);
     let pattern = Pattern::Path(PathPattern::new(
         vec![
             node_pattern("a"),
@@ -192,8 +191,8 @@ fn test_plan_path_pattern_optional_keeps_logical_root() {
 
 #[test]
 fn test_plan_path_pattern_alternative_keeps_logical_root() {
-    let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
-    let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+    let (qctx, known_variables, metadata_context, expr_context) = create_test_components();
+    let ctx = create_test_ctx(&qctx, &known_variables, &metadata_context, &expr_context);
     let pattern = Pattern::Path(PathPattern::new(
         vec![
             node_pattern("a"),
@@ -219,8 +218,8 @@ fn test_plan_path_pattern_alternative_keeps_logical_root() {
 
 #[test]
 fn test_plan_path_pattern_repeated_keeps_logical_root() {
-    let (qctx, validation_info, metadata_context, expr_context) = create_test_components();
-    let ctx = create_test_ctx(&qctx, &validation_info, &metadata_context, &expr_context);
+    let (qctx, known_variables, metadata_context, expr_context) = create_test_components();
+    let ctx = create_test_ctx(&qctx, &known_variables, &metadata_context, &expr_context);
     let pattern = Pattern::Path(PathPattern::new(
         vec![
             node_pattern("a"),

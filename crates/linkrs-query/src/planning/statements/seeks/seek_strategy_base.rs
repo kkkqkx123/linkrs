@@ -319,15 +319,9 @@ impl SeekStrategySelector {
         })
     }
 
-    /// Shared index-seek cost matching the optimizer calculator:
-    /// sequential index pages plus per-tuple index and table costs.
+    /// Shared index-seek cost (see `CostModelConfig::index_seek_cost`).
     fn shared_index_seek_cost(cost_config: &CostModelConfig, matching_rows: u64) -> f64 {
-        use crate::optimizer::cost::config::ROWS_PER_PAGE;
-        let pages = (matching_rows / ROWS_PER_PAGE).max(1);
-        pages as f64 * cost_config.seq_page_cost
-            + matching_rows as f64 * cost_config.cpu_index_tuple_cost
-            + matching_rows as f64 * cost_config.random_page_cost
-            + matching_rows as f64 * cost_config.cpu_tuple_cost
+        cost_config.index_seek_cost(matching_rows)
     }
 
     fn evaluate_prop_index_seek(

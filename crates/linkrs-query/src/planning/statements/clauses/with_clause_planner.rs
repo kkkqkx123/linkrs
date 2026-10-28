@@ -72,11 +72,8 @@ impl WithClausePlanner {
                     column_types: vec![],
                 })
             });
-            current_plan = SubPlan {
-                root: Some(project_node),
-                tail: current_plan.tail.clone(),
-                logical_root,
-            };
+            current_plan =
+                SubPlan::from_dual(Some(project_node), current_plan.tail.clone(), logical_root);
         }
 
         // 2. Processing the WHERE clause for filtering data
@@ -93,11 +90,8 @@ impl WithClausePlanner {
                         column_types: vec![],
                     })
                 });
-                current_plan = SubPlan {
-                    root: Some(filter_node),
-                    tail: current_plan.tail.clone(),
-                    logical_root,
-                };
+                current_plan =
+                    SubPlan::from_dual(Some(filter_node), current_plan.tail.clone(), logical_root);
             }
         }
 
@@ -211,11 +205,11 @@ impl WithClausePlanner {
             })
         });
 
-        Ok(SubPlan {
-            root: Some(PlanNodeEnum::Sort(sort_node)),
-            tail: input_plan.tail.clone(),
+        Ok(SubPlan::from_dual(
+            Some(PlanNodeEnum::Sort(sort_node)),
+            input_plan.tail.clone(),
             logical_root,
-        })
+        ))
     }
 
     /// Application pagination
@@ -244,11 +238,11 @@ impl WithClausePlanner {
             })
         });
 
-        Ok(SubPlan {
-            root: Some(PlanNodeEnum::Limit(limit_node)),
-            tail: input_plan.tail.clone(),
+        Ok(SubPlan::from_dual(
+            Some(PlanNodeEnum::Limit(limit_node)),
+            input_plan.tail.clone(),
             logical_root,
-        })
+        ))
     }
 
     /// Using the DISTINCT keyword (to remove duplicates)
@@ -275,11 +269,11 @@ impl WithClausePlanner {
             })
         });
 
-        Ok(SubPlan {
-            root: Some(PlanNodeEnum::Dedup(dedup_node)),
-            tail: input_plan.tail.clone(),
+        Ok(SubPlan::from_dual(
+            Some(PlanNodeEnum::Dedup(dedup_node)),
+            input_plan.tail.clone(),
             logical_root,
-        })
+        ))
     }
 }
 

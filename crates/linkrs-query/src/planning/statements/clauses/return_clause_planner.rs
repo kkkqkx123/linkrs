@@ -275,27 +275,12 @@ impl ClausePlanner for ReturnClausePlanner {
                         ),
                 })
             });
-            let project_plan = SubPlan {
-                root: Some(project_node.into_enum()),
-                tail: input_plan.tail,
-                logical_root: project_logical,
-            };
+            let project_plan = SubPlan::from_dual(
+                Some(project_node.into_enum()),
+                input_plan.tail,
+                project_logical,
+            );
 
-            let mut aggregate_node = AggregateNode::with_agg_aliases(
-                project_plan.root.clone().unwrap(),
-                group_keys.clone(),
-                agg_functions.clone(),
-                agg_aliases,
-            )?;
-            aggregate_node.set_aggregation_args(agg_args);
-            aggregate_node.set_aggregation_distinct(agg_distinct.clone());
-            aggregate_node.set_aggregation_filters(agg_filters.clone());
-            let logical_agg_args = aggregate_node.aggregation_args().to_vec();
-
-            let mut final_node: PlanNodeEnum = aggregate_node.into_enum();
-
-            // Logical mirror: project → aggregate → [having filter] →
-            // [dedup] → [sample].
             let group_key_exprs = yield_columns
                 .iter()
                 .filter(|col| {
@@ -307,6 +292,22 @@ impl ClausePlanner for ReturnClausePlanner {
                 })
                 .map(|col| col.expression.clone())
                 .collect::<Vec<_>>();
+            let mut aggregate_node = AggregateNode::with_agg_aliases(
+                project_plan.root.clone().unwrap(),
+                group_keys.clone(),
+                agg_functions.clone(),
+                agg_aliases,
+            )?;
+            aggregate_node.set_aggregation_args(agg_args);
+            aggregate_node.set_aggregation_distinct(agg_distinct.clone());
+            aggregate_node.set_aggregation_filters(agg_filters.clone());
+            aggregate_node.set_group_key_exprs(group_key_exprs.clone());
+            let logical_agg_args = aggregate_node.aggregation_args().to_vec();
+
+            let mut final_node: PlanNodeEnum = aggregate_node.into_enum();
+
+            // Logical mirror: project → aggregate → [having filter] →
+            // [dedup] → [sample].
             let mut logical_root = wrap_logical(&project_plan, |input| {
                 LogicalNodeEnum::Aggregate(LogicalAggregateNode {
                     id: next_node_id(),
@@ -378,11 +379,11 @@ impl ClausePlanner for ReturnClausePlanner {
                 });
             }
 
-            Ok(SubPlan {
-                root: Some(final_node),
-                tail: project_plan.tail,
+            Ok(SubPlan::from_dual(
+                Some(final_node),
+                project_plan.tail,
                 logical_root,
-            })
+            ))
         } else if has_window {
             let window_specs = extract_window_function_info(&yield_columns)?;
 
@@ -494,11 +495,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 });
             }
 
-            Ok(SubPlan {
-                root: Some(final_node),
-                tail: None,
-                logical_root,
-            })
+            Ok(SubPlan::from_dual(Some(final_node), None, logical_root))
         } else {
             let project_node = ProjectNode::new(input_node.clone(), yield_columns.clone())?
                 .with_subqueries(yield_subqueries.clone());
@@ -558,11 +555,11 @@ impl ClausePlanner for ReturnClausePlanner {
                 });
             }
 
-            Ok(SubPlan {
-                root: Some(final_node),
-                tail: input_plan.tail,
+            Ok(SubPlan::from_dual(
+                Some(final_node),
+                input_plan.tail,
                 logical_root,
-            })
+            ))
         }
     }
 }

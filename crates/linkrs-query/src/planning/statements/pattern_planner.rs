@@ -7,9 +7,9 @@
 //! - `edge` - edge pattern planning
 //! - `path` - path pattern planning (alternatives, optional, repeated)
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::binder::validation::ValidationInfo;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::pattern::{PathElement, Pattern, VariablePattern};
 use crate::parser::ast::stmt::{MatchDeleteClause, MatchStmt};
@@ -44,7 +44,14 @@ use logical_mirror::logical_argument;
 pub struct PlanningContext<'a> {
     pub space_id: u64,
     pub space_name: &'a str,
-    pub validation_info: &'a ValidationInfo,
+    /// Variables known to be bound by the enclosing scope.
+    ///
+    /// Derived from the bound query graph by statement planners; subquery
+    /// planners that re-plan from AST patterns pass an empty set, which
+    /// preserves the previous behavior of rejecting bare variable patterns
+    /// there. Planners must not synthesize a validation wrapper anymore: the
+    /// bound statement is the only planning input.
+    pub known_variables: &'a HashSet<String>,
     pub qctx: &'a Arc<QueryContext>,
     pub enable_index_optimization: bool,
     pub metadata_context: &'a Option<MetadataContext>,
@@ -190,16 +197,15 @@ pub fn plan_pattern(pattern: &Pattern, ctx: &PlanningContext) -> Result<SubPlan,
             ctx.optional,
         ),
         Pattern::Path(_) => plan_path_pattern(pattern, ctx),
-        Pattern::Variable(var) => plan_variable_pattern(var, ctx.space_id, ctx.validation_info),
+        Pattern::Variable(var) => plan_variable_pattern(var, ctx.known_variables),
     }
 }
 
 pub fn plan_variable_pattern(
     var: &VariablePattern,
-    _space_id: u64,
-    validation_info: &ValidationInfo,
+    known_variables: &HashSet<String>,
 ) -> Result<SubPlan, PlannerError> {
-    if !validation_info.alias_map.contains_key(&var.name) {
+    if !known_variables.contains(&var.name) {
         return Err(PlannerError::PlanGenerationFailed(format!(
             "Variable '{}' undefined",
             var.name
@@ -209,11 +215,7 @@ pub fn plan_variable_pattern(
     let argument_node = ArgumentNode::new(0, &var.name);
     let arg_root = argument_node.into_enum();
     let logical_root = logical_argument(&var.name);
-    let sub_plan = SubPlan {
-        root: Some(arg_root.clone()),
-        tail: Some(arg_root),
-        logical_root: Some(logical_root),
-    };
+    let sub_plan = SubPlan::from_dual(Some(arg_root.clone()), Some(arg_root), Some(logical_root));
     Ok(sub_plan)
 }
 

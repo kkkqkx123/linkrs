@@ -41,16 +41,7 @@ impl Planner for ExplainPlanner {
             }
         };
 
-        let mut inner_planner =
-            PlannerEnum::from_bound_statement(inner_bound).ok_or_else(|| {
-                PlannerError::NoSuitablePlanner(format!(
-                    "explain inner statement: {}",
-                    inner_bound.kind()
-                ))
-            })?;
-
-        let inner_ctx = ctx.with_bound(inner_bound);
-        let inner_plan = inner_planner.plan_bound(&inner_ctx)?;
+        let inner_plan = PlannerEnum::plan_substatement(ctx, inner_bound)?;
 
         let mode = if is_profile { "PROFILE" } else { "EXPLAIN" };
         log::debug!(

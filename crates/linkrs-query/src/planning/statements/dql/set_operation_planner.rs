@@ -54,6 +54,7 @@ impl SetOperationPlanner {
             qctx: std::sync::Arc::new(qctx),
             metadata: ctx.metadata,
             ast: None,
+            join_order_stats: ctx.join_order_stats.clone(),
         }
     }
 
@@ -254,11 +255,11 @@ impl SetOperationPlanner {
         };
 
         let tail = left_plan.tail().clone().unwrap_or(final_node.clone());
-        Ok(SubPlan {
-            root: Some(final_node),
-            tail: Some(tail),
+        Ok(SubPlan::from_dual(
+            Some(final_node),
+            Some(tail),
             logical_root,
-        })
+        ))
     }
 }
 
@@ -305,15 +306,7 @@ impl SetOperationPlanner {
             BoundStatement::SetOperation(set_op_stmt) => {
                 self.plan_bound_set_op(set_op_stmt, ctx, depth + 1)
             }
-            _ => {
-                let Some(mut planner) = PlannerEnum::from_bound_statement(ctx.bound) else {
-                    return Err(PlannerError::InvalidOperation(format!(
-                        "Unsupported subquery type in set operation: {}",
-                        ctx.bound.kind()
-                    )));
-                };
-                planner.plan_bound(ctx)
-            }
+            _ => PlannerEnum::plan_substatement(ctx, ctx.bound),
         }
     }
 

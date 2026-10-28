@@ -4,6 +4,9 @@ use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
 
 use super::{convert_plan, ConversionError};
 
+use crate::planning::plan::core::nodes::traversal::path_algorithms::{
+    AllPathsNode, BFSShortestNode, MultiShortestPathNode, ShortestPathNode,
+};
 use crate::planning::plan::core::nodes::traversal::traversal_node::{
     AppendVerticesNode, BiExpandNode, BiTraverseNode, ExpandAllNode, ExpandNode, TraverseNode,
 };
@@ -185,4 +188,105 @@ pub(super) fn convert_bi_traverse(n: &BiTraverseNode) -> Result<LogicalNodeEnum,
             },
         ))
     }
+}
+
+pub(super) fn convert_multi_shortest_path(
+    n: &MultiShortestPathNode,
+) -> Result<LogicalNodeEnum, ConversionError> {
+    let logical_left = convert_plan(n.left_input())?;
+    let logical_right = convert_plan(n.right_input())?;
+    Ok(LogicalNodeEnum::MultiShortestPath(
+        crate::planning::plan::logical::logical_nodes::algorithm::LogicalMultiShortestPathNode {
+            id: n.id(),
+            left: Box::new(logical_left),
+            right: Box::new(logical_right),
+            steps: n.steps(),
+            left_vid_var: n.left_vid_var().to_string(),
+            right_vid_var: n.right_vid_var().to_string(),
+            termination_var: n.termination_var().to_string(),
+            single_shortest: n.single_shortest(),
+            edge_types: n.edge_types().to_vec(),
+            direction: n.direction(),
+            target_vertex_ids: n.target_vertex_ids().to_vec(),
+            output_var: n.output_var().map(|s| s.to_string()),
+            col_names: n.col_names().to_vec(),
+            column_types: n.column_types().to_vec(),
+        },
+    ))
+}
+
+pub(super) fn convert_bfs_shortest(
+    n: &BFSShortestNode,
+) -> Result<LogicalNodeEnum, ConversionError> {
+    let logical_left = convert_plan(n.left_input())?;
+    let logical_right = convert_plan(n.right_input())?;
+    Ok(LogicalNodeEnum::BFSShortest(
+        crate::planning::plan::logical::logical_nodes::algorithm::LogicalBFSShortestNode {
+            id: n.id(),
+            left: Box::new(logical_left),
+            right: Box::new(logical_right),
+            space_id: n.space_id(),
+            steps: n.steps(),
+            edge_types: n.edge_types().to_vec(),
+            with_walk: n.with_walk(),
+            with_loop: n.with_loop(),
+            reverse: n.reverse(),
+            output_var: n.output_var().map(|s| s.to_string()),
+            col_names: n.col_names().to_vec(),
+            column_types: n.column_types().to_vec(),
+        },
+    ))
+}
+
+pub(super) fn convert_all_paths(n: &AllPathsNode) -> Result<LogicalNodeEnum, ConversionError> {
+    let logical_left = convert_plan(n.left_input())?;
+    let logical_right = convert_plan(n.right_input())?;
+    Ok(LogicalNodeEnum::AllPaths(
+        crate::planning::plan::logical::logical_nodes::algorithm::LogicalAllPathsNode {
+            id: n.id(),
+            left: Box::new(logical_left),
+            right: Box::new(logical_right),
+            space_id: n.space_id(),
+            steps: n.steps(),
+            edge_types: n.edge_types().to_vec(),
+            min_hop: n.min_hop(),
+            max_hop: n.max_hop(),
+            path_uniqueness: n.path_uniqueness(),
+            direction: n.direction(),
+            has_step_limit: n.has_step_limit(),
+            limit: n.limit(),
+            offset: n.offset(),
+            filter: n.filter().cloned(),
+            start_vertex_ids: n.start_vertex_ids().to_vec(),
+            end_vertex_ids: n.end_vertex_ids().to_vec(),
+            output_var: n.output_var().map(|s| s.to_string()),
+            col_names: n.col_names().to_vec(),
+            column_types: n.column_types().to_vec(),
+        },
+    ))
+}
+
+pub(super) fn convert_shortest_path(
+    n: &ShortestPathNode,
+) -> Result<LogicalNodeEnum, ConversionError> {
+    let logical_left = convert_plan(n.left_input())?;
+    let logical_right = convert_plan(n.right_input())?;
+    Ok(LogicalNodeEnum::ShortestPath(
+        crate::planning::plan::logical::logical_nodes::algorithm::LogicalShortestPathNode {
+            id: n.id(),
+            left: Box::new(logical_left),
+            right: Box::new(logical_right),
+            space_id: n.space_id(),
+            edge_types: n.edge_types().to_vec(),
+            max_step: n.max_step(),
+            weight_expression: n.weight_expression().clone(),
+            heuristic_expression: n.heuristic_expression().clone(),
+            no_reverse: n.no_reverse(),
+            start_vertex_ids: n.start_vertex_ids().to_vec(),
+            end_vertex_ids: n.end_vertex_ids().to_vec(),
+            output_var: n.output_var().map(|s| s.to_string()),
+            col_names: n.col_names().to_vec(),
+            column_types: n.column_types().to_vec(),
+        },
+    ))
 }
