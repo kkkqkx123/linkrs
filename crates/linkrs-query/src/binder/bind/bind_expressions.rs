@@ -762,6 +762,7 @@ impl Binder {
             rc.limit.clone(),
             rc.skip.clone(),
             rc.sample.clone(),
+            rc.having_clause.clone(),
             true,
         )
     }
@@ -780,6 +781,7 @@ impl Binder {
             yc.limit.clone(),
             yc.skip.clone(),
             yc.sample.clone(),
+            None,
             false,
         )
     }
@@ -788,7 +790,9 @@ impl Binder {
     ///
     /// Both clauses bind items, ordering, pagination, and sampling
     /// identically; only the undefined-variable check differs (RETURN
-    /// rejects eagerly, YIELD defers it to later stages).
+    /// rejects eagerly, YIELD defers it to later stages). HAVING is bound
+    /// without the definedness check: it may reference SELECT aliases that
+    /// never enter the binder scope, mirroring the deferred YIELD rule.
     #[allow(clippy::too_many_arguments)]
     fn bind_projection_clause(
         &mut self,
@@ -798,6 +802,7 @@ impl Binder {
         limit: Option<crate::parser::ast::LimitClause>,
         skip: Option<crate::parser::ast::SkipClause>,
         sample: Option<crate::parser::ast::SampleClause>,
+        having: Option<ContextualExpression>,
         check_defined: bool,
     ) -> DBResult<BoundProjectionClause> {
         let items = items
@@ -809,6 +814,8 @@ impl Binder {
 
         let order_by = self.bind_order_by_clause(order_by)?;
 
+        let having = having.as_ref().map(|h| self.bind_expr(h)).transpose()?;
+
         Ok(BoundProjectionClause {
             items,
             distinct,
@@ -816,6 +823,7 @@ impl Binder {
             limit,
             skip,
             sample,
+            having,
         })
     }
 }

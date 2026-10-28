@@ -29,6 +29,9 @@ pub struct BoundProjectionClause {
     pub limit: Option<LimitClause>,
     pub skip: Option<SkipClause>,
     pub sample: Option<SampleClause>,
+    /// Bound HAVING filter. Only RETURN binds one (YIELD has no HAVING
+    /// syntax); planners consume it exactly like the AST having clause.
+    pub having: Option<BoundExpression>,
 }
 
 #[derive(Debug, Clone)]

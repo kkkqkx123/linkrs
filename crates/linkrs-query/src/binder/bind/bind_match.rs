@@ -274,6 +274,7 @@ impl Binder {
                     limit: None,
                     skip: None,
                     sample: None,
+                    having: None,
                 })
             })
             .transpose()?;

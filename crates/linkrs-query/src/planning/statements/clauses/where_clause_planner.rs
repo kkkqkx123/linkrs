@@ -49,7 +49,22 @@ impl ClausePlanner for WhereClausePlanner {
         input_plan: SubPlan,
     ) -> Result<SubPlan, PlannerError> {
         let condition = extract_where_condition(stmt)?;
+        self.plan_condition(qctx, condition, input_plan)
+    }
+}
 
+impl WhereClausePlanner {
+    /// Bound-statement entry: plan a filter from an already resolved
+    /// condition instead of reading the syntax tree.
+    ///
+    /// The MATCH planner prefers this path; the `Stmt` entry above remains
+    /// for direct invocations until pattern topology is bound as well.
+    pub fn plan_condition(
+        &self,
+        qctx: Arc<QueryContext>,
+        condition: ContextualExpression,
+        input_plan: SubPlan,
+    ) -> Result<SubPlan, PlannerError> {
         // Extract conjunctive EXISTS / IN subqueries. When none are present
         // the classic filter-only path is unchanged.
         let condition_expr = condition.expression().map(|e| e.inner().clone());

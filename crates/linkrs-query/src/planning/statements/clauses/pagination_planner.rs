@@ -53,6 +53,23 @@ impl ClausePlanner for PaginationPlanner {
         input_plan: SubPlan,
     ) -> Result<SubPlan, PlannerError> {
         let pagination = extract_pagination_info(stmt);
+        self.plan_pagination(pagination.skip, pagination.limit, input_plan)
+    }
+}
+
+impl PaginationPlanner {
+    /// Bound-statement entry: plan pagination from resolved counts.
+    ///
+    /// The MATCH planner prefers this path; the `Stmt` entry above remains
+    /// for direct invocations until pattern topology is bound as well.
+    /// Callers replicate the AST default (`limit` 100 when absent).
+    pub fn plan_pagination(
+        &self,
+        skip: usize,
+        limit: usize,
+        input_plan: SubPlan,
+    ) -> Result<SubPlan, PlannerError> {
+        let pagination = PaginationInfo { skip, limit };
 
         let input_node = input_plan.root().as_ref().ok_or_else(|| {
             PlannerError::PlanGenerationFailed(

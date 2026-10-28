@@ -9,10 +9,12 @@
 //!   - LIMIT/SKIP – Pagination options
 //!   - Selection of intelligent scanning strategies (index scanning, attribute scanning, full table scanning)
 
+use crate::binder::expr_converter::{bound_expr_to_contextual, bound_projection_to_yield_column};
 use crate::binder::validation::CypherClauseKind;
 use crate::binder::BoundStatement;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::Stmt;
+use crate::parser::OrderByItem;
 use crate::parser::Parser;
 use crate::planning::join_order::JoinOrderStats;
 use crate::planning::plan::SubPlan;
@@ -127,10 +129,12 @@ impl Planner for MatchStatementPlanner {
             self.metadata_context = Some(metadata_context.clone());
         }
 
-        // Prefer the parsed statement carried by the planning context so
-        // normal queries plan without parsing the text a second time.
-        // Direct planner invocations without that context fall back to
-        // parsing the query text.
+        // The parsed statement still supplies pattern topology (patterns,
+        // optional flag) because the bound query graph only represents
+        // conjunctive single-hop shapes. Clause inputs (WHERE / RETURN /
+        // ORDER BY / LIMIT / SKIP) come from the bound statement; see
+        // `plan_match_pattern`. Direct planner invocations without that
+        // context fall back to parsing the query text for topology.
         let source_ast = match ctx.ast.clone() {
             Some(ast) => ast,
             None => {
@@ -235,6 +239,29 @@ impl MatchStatementPlanner {
         let stmt = ast.stmt();
         match stmt {
             Stmt::Match(match_stmt) => {
+                // Resolved-clause conversions share the statement expression
+                // context. Pattern topology still comes from the AST (the
+                // bound query graph only represents conjunctive single-hop
+                // shapes), so this context stays syntax-derived until
+                // patterns bind fully.
+                let expr_ctx = self
+                    .expr_context
+                    .as_ref()
+                    .ok_or_else(|| {
+                        PlannerError::PlanGenerationFailed(
+                            "Expression context is unavailable".to_string(),
+                        )
+                    })?
+                    .clone();
+                // The bound WHERE condition is converted once and shared by
+                // index selection (via the planning context) and the filter
+                // step below, so both observe the resolved expression.
+                let bound_where_ctx = bound_match
+                    .where_clause
+                    .as_ref()
+                    .map(|w| bound_expr_to_contextual(&w.condition, &expr_ctx))
+                    .transpose()
+                    .map_err(PlannerError::PlanGenerationFailed)?;
                 let planning_ctx = PlanningContext {
                     space_id,
                     space_name,
@@ -243,7 +270,9 @@ impl MatchStatementPlanner {
                     enable_index_optimization: self.config.enable_index_optimization,
                     metadata_context: &self.metadata_context,
                     expr_context: &self.expr_context,
-                    where_expression: match_stmt.where_clause.as_ref(),
+                    where_expression: bound_where_ctx
+                        .as_ref()
+                        .or(match_stmt.where_clause.as_ref()),
                     optional: match_stmt.optional,
                 };
 
@@ -274,23 +303,57 @@ impl MatchStatementPlanner {
                 };
 
                 if !joined_by_optimizer {
+                    // Equi-join keys come from the same resolved condition
+                    // the filter step plans below.
+                    let join_condition = bound_where_ctx
+                        .as_ref()
+                        .or(match_stmt.where_clause.as_ref());
                     for pattern in match_stmt.patterns.iter().skip(1) {
                         let path_plan = pattern_planner::plan_path_pattern(pattern, &planning_ctx)?;
-                        plan = plan_combiner::join_plans(
-                            plan,
-                            path_plan,
-                            match_stmt.where_clause.as_ref(),
-                        )?;
+                        plan = plan_combiner::join_plans(plan, path_plan, join_condition)?;
                     }
                 }
 
-                if has_where_clause(stmt) {
+                // Clause convergence: the bound statement is the
+                // authoritative clause source. Each clause prefers its bound
+                // form and falls back to the syntax tree only when the
+                // binder produced nothing, which only happens for direct
+                // planner invocations that bypass binding. Pattern topology
+                // (`patterns`, `optional`) still reads the AST: the bound
+                // query graph only represents conjunctive single-hop shapes.
+                if let Some(condition) = bound_where_ctx {
+                    plan = self
+                        .where_planner
+                        .plan_condition(qctx.clone(), condition, plan)?;
+                } else if has_where_clause(stmt) {
                     plan = self
                         .where_planner
                         .transform_clause(qctx.clone(), stmt, plan)?;
                 }
 
-                if has_return_clause(stmt) {
+                if let Some(bound_return) = bound_match.return_clause.as_ref() {
+                    let columns = bound_return
+                        .items
+                        .iter()
+                        .map(|item| bound_projection_to_yield_column(item, &expr_ctx))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+                    let having = bound_return
+                        .having
+                        .as_ref()
+                        .map(|h| bound_expr_to_contextual(h, &expr_ctx))
+                        .transpose()
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+                    let sample = bound_return.sample.as_ref().map(|s| s.count);
+                    plan = self.return_planner.plan_projection(
+                        qctx.clone(),
+                        columns,
+                        bound_return.distinct,
+                        having,
+                        sample,
+                        plan,
+                    )?;
+                } else if has_return_clause(stmt) {
                     let distinct = extract_distinct_flag_from_stmt(stmt);
                     self.return_planner.set_distinct(distinct);
                     plan = self
@@ -298,13 +361,36 @@ impl MatchStatementPlanner {
                         .transform_clause(qctx.clone(), stmt, plan)?;
                 }
 
-                if has_order_by_clause(stmt) {
+                if let Some(bound_order) = bound_match.order_by.as_ref() {
+                    let items = bound_order
+                        .iter()
+                        .map(|item| {
+                            bound_expr_to_contextual(&item.expression, &expr_ctx).map(
+                                |expression| OrderByItem {
+                                    expression,
+                                    direction: item.direction,
+                                },
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(PlannerError::PlanGenerationFailed)?;
+                    plan = self
+                        .order_by_planner
+                        .plan_items(qctx.clone(), items, plan)?;
+                } else if has_order_by_clause(stmt) {
                     plan = self
                         .order_by_planner
                         .transform_clause(qctx.clone(), stmt, plan)?;
                 }
 
-                if has_pagination(stmt) {
+                // The parser clones RETURN's LIMIT/SKIP onto the MATCH
+                // statement, and the binder clones them again onto the bound
+                // statement, so bound presence mirrors the AST check.
+                if bound_match.limit.is_some() || bound_match.skip.is_some() {
+                    let skip = bound_match.skip.as_ref().map(|s| s.count).unwrap_or(0);
+                    let limit = bound_match.limit.as_ref().map(|l| l.count).unwrap_or(100);
+                    plan = self.pagination_planner.plan_pagination(skip, limit, plan)?;
+                } else if has_pagination(stmt) {
                     plan = self
                         .pagination_planner
                         .transform_clause(qctx.clone(), stmt, plan)?;
@@ -430,13 +516,23 @@ fn extract_distinct_flag_from_stmt(stmt: &Stmt) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binder::bound::{
+        BoundAggregateCall, BoundExpression, BoundMatchStatement, BoundOrderByItem,
+        BoundProjectionClause, BoundProjectionItem, BoundWhereClause,
+    };
     use crate::parser::ast::hint::JoinHintAst;
     use crate::parser::ast::pattern::{
         EdgePattern, NodePattern, PathElement, PathPattern, Pattern,
     };
+    use crate::parser::ast::types::{LimitClause, SkipClause};
     use crate::parser::ast::MatchStmt;
+    use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
     use linkrs_core::types::graph_schema::EdgeDirection;
+    use linkrs_core::types::operators::BinaryOperator;
+    use linkrs_core::types::semantic::ValueType;
+    use linkrs_core::types::OrderDirection;
     use linkrs_core::types::Span;
+    use linkrs_core::{DataType, Value};
 
     fn node(var: &str) -> PathElement {
         PathElement::Node(NodePattern::new(
@@ -564,6 +660,215 @@ mod tests {
         assert!(
             plan.is_none(),
             "single-pattern MATCH uses the legacy ExpandAll path"
+        );
+    }
+
+    // ── Bound-clause convergence ─────────────────────────────────────
+    //
+    // Clauses must come from the bound statement even when the syntax tree
+    // carries nothing; the AST entries below only cover direct invocations
+    // that bypass binding.
+
+    fn bound_var(name: &str) -> BoundExpression {
+        BoundExpression::Variable(name.to_string(), DataType::Unknown)
+    }
+
+    fn plan_with_clauses(match_stmt: MatchStmt, bound: BoundMatchStatement) -> SubPlan {
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let ast = Arc::new(crate::parser::ast::stmt::Ast::new(
+            Stmt::Match(match_stmt),
+            expr_ctx,
+        ));
+        let qctx = Arc::new(QueryContext::new(Arc::new(crate::QueryRequestContext {
+            session_id: None,
+            user_name: None,
+            space_name: None,
+            query: String::new(),
+            parameters: std::collections::HashMap::new(),
+            ..Default::default()
+        })));
+        let owned = crate::binder::BoundStatement::Match(bound);
+        let ctx =
+            crate::planning::context::PlanContext::without_metadata(&owned, qctx).with_ast(ast);
+        let mut planner = MatchStatementPlanner::new();
+        planner
+            .plan_bound(&ctx)
+            .expect("bound planning should succeed")
+    }
+
+    fn bound_with_clauses(
+        where_clause: Option<BoundWhereClause>,
+        return_clause: Option<BoundProjectionClause>,
+        order_by: Option<Vec<BoundOrderByItem>>,
+        limit: Option<LimitClause>,
+        skip: Option<SkipClause>,
+    ) -> BoundMatchStatement {
+        BoundMatchStatement {
+            query_graph: crate::binder::QueryGraph::new(),
+            join_hint: None,
+            where_clause,
+            return_clause,
+            order_by,
+            limit,
+            skip,
+            optional: false,
+            delete_clause: None,
+        }
+    }
+
+    fn plan_root_name(plan: &SubPlan) -> &'static str {
+        match plan.root.as_ref().expect("plan should have a root") {
+            crate::planning::plan::PlanNodeEnum::Filter(_) => "Filter",
+            crate::planning::plan::PlanNodeEnum::Project(_) => "Project",
+            crate::planning::plan::PlanNodeEnum::Sort(_) => "Sort",
+            crate::planning::plan::PlanNodeEnum::Limit(_) => "Limit",
+            crate::planning::plan::PlanNodeEnum::Aggregate(_) => "Aggregate",
+            _ => "other",
+        }
+    }
+
+    #[test]
+    fn bound_where_applies_filter_without_ast_clause() {
+        let bound = bound_with_clauses(
+            Some(BoundWhereClause {
+                condition: bound_var("a"),
+            }),
+            None,
+            None,
+            None,
+            None,
+        );
+        let plan = plan_with_clauses(stmt(two_hop(), None, false), bound);
+        assert_eq!(plan_root_name(&plan), "Filter");
+    }
+
+    #[test]
+    fn bound_return_applies_projection_without_ast_clause() {
+        let bound = bound_with_clauses(
+            None,
+            Some(BoundProjectionClause {
+                items: vec![BoundProjectionItem {
+                    expression: bound_var("a"),
+                    alias: Some("n".to_string()),
+                }],
+                distinct: false,
+                order_by: None,
+                limit: None,
+                skip: None,
+                sample: None,
+                having: None,
+            }),
+            None,
+            None,
+            None,
+        );
+        let plan = plan_with_clauses(stmt(two_hop(), None, false), bound);
+        assert_eq!(plan_root_name(&plan), "Project");
+    }
+
+    #[test]
+    fn bound_order_by_applies_sort_without_ast_clause() {
+        let bound = bound_with_clauses(
+            None,
+            None,
+            Some(vec![BoundOrderByItem {
+                expression: bound_var("a"),
+                direction: OrderDirection::Desc,
+            }]),
+            None,
+            None,
+        );
+        let plan = plan_with_clauses(stmt(two_hop(), None, false), bound);
+        assert_eq!(plan_root_name(&plan), "Sort");
+    }
+
+    #[test]
+    fn bound_pagination_applies_limit_without_ast_clause() {
+        let bound = bound_with_clauses(
+            None,
+            None,
+            None,
+            Some(LimitClause {
+                count: 10,
+                span: Span::default(),
+            }),
+            None,
+        );
+        let plan = plan_with_clauses(stmt(two_hop(), None, false), bound);
+        assert_eq!(plan_root_name(&plan), "Limit");
+    }
+
+    #[test]
+    fn bound_having_applies_filter_over_aggregate() {
+        let bound = bound_with_clauses(
+            None,
+            Some(BoundProjectionClause {
+                items: vec![
+                    BoundProjectionItem {
+                        expression: bound_var("a"),
+                        alias: Some("a".to_string()),
+                    },
+                    BoundProjectionItem {
+                        expression: BoundExpression::Aggregate(BoundAggregateCall {
+                            function_name: "COUNT".to_string(),
+                            arguments: vec![bound_var("a")],
+                            distinct: false,
+                            alias: None,
+                            return_type: ValueType::Int,
+                        }),
+                        alias: Some("c".to_string()),
+                    },
+                ],
+                distinct: false,
+                order_by: None,
+                limit: None,
+                skip: None,
+                sample: None,
+                having: Some(BoundExpression::BinaryOp {
+                    left: Box::new(bound_var("c")),
+                    op: BinaryOperator::GreaterThan,
+                    right: Box::new(BoundExpression::Literal(Value::Int(1), DataType::Int)),
+                    return_type: DataType::Bool,
+                }),
+            }),
+            None,
+            None,
+            None,
+        );
+        let plan = plan_with_clauses(stmt(two_hop(), None, false), bound);
+        assert_eq!(
+            plan_root_name(&plan),
+            "Filter",
+            "bound HAVING must wrap the aggregate"
+        );
+    }
+
+    #[test]
+    fn ast_clause_fallback_preserved_when_bound_absent() {
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let expr_meta = linkrs_core::types::expr::ExpressionMeta::new(
+            linkrs_core::Expression::Variable("a".to_string()),
+        );
+        let id = expr_ctx.register_expression(expr_meta);
+        let ctx_expr = linkrs_core::types::ContextualExpression::new(id, expr_ctx.clone());
+        let mut match_stmt = stmt(two_hop(), None, false);
+        match_stmt.where_clause = Some(ctx_expr);
+        let plan = plan_with_clauses(match_stmt, empty_bound());
+        assert_eq!(plan_root_name(&plan), "Filter");
+    }
+
+    #[test]
+    fn no_clauses_yields_no_clause_nodes() {
+        let plan = plan_with_clauses(stmt(two_hop(), None, false), empty_bound());
+        assert!(
+            !matches!(
+                plan.root.as_ref().expect("plan should have a root"),
+                crate::planning::plan::PlanNodeEnum::Filter(_)
+                    | crate::planning::plan::PlanNodeEnum::Project(_)
+                    | crate::planning::plan::PlanNodeEnum::Sort(_)
+                    | crate::planning::plan::PlanNodeEnum::Limit(_)
+            ),
+            "clauseless plan must not grow clause nodes"
         );
     }
 }

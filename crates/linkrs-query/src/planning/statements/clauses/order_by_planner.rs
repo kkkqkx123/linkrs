@@ -75,7 +75,22 @@ impl ClausePlanner for OrderByClausePlanner {
         input_plan: SubPlan,
     ) -> Result<SubPlan, PlannerError> {
         let order_by_items = extract_order_by_items(stmt);
+        self.plan_items(qctx, order_by_items, input_plan)
+    }
+}
 
+impl OrderByClausePlanner {
+    /// Bound-statement entry: plan a sort from already resolved items
+    /// instead of reading the syntax tree.
+    ///
+    /// The MATCH planner prefers this path; the `Stmt` entry above remains
+    /// for direct invocations until pattern topology is bound as well.
+    pub fn plan_items(
+        &self,
+        qctx: Arc<QueryContext>,
+        order_by_items: Vec<OrderByItem>,
+        input_plan: SubPlan,
+    ) -> Result<SubPlan, PlannerError> {
         if order_by_items.is_empty() {
             return Ok(input_plan);
         }

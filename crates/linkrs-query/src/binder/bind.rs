@@ -365,6 +365,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_bind_return_having_clause() {
+        let bound = bind_query("MATCH (n:person) RETURN n.name, count(n) AS c HAVING c > 1")
+            .expect("HAVING query should bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let return_clause = stmt.return_clause.expect("return clause expected");
+        let having = return_clause.having.expect("HAVING must be bound");
+        assert!(
+            matches!(having, BoundExpression::BinaryOp { .. }),
+            "HAVING condition must bind, got {having:?}"
+        );
+    }
+
+    #[test]
+    fn test_bind_return_without_having_has_none() {
+        let bound = bind_query("MATCH (n:person) RETURN n.name").expect("must bind");
+        let stmt = match bound {
+            BoundStatement::Match(s) => s,
+            other => panic!("expected Match, got {:?}", other.kind()),
+        };
+        let return_clause = stmt.return_clause.expect("return clause expected");
+        assert!(return_clause.having.is_none());
+    }
+
     fn bind_query_with_macros(
         query: &str,
         manager: Arc<linkrs_core::metadata::MacroManager>,

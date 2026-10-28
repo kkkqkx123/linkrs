@@ -128,7 +128,41 @@ impl ClausePlanner for ReturnClausePlanner {
         stmt: &Stmt,
         input_plan: SubPlan,
     ) -> Result<SubPlan, PlannerError> {
-        let mut yield_columns = extract_return_columns(stmt)?;
+        let yield_columns = extract_return_columns(stmt)?;
+        let having_expr = extract_having_clause(stmt);
+        let sample = extract_sample_clause(stmt);
+        self.plan_projection(
+            qctx,
+            yield_columns,
+            self.distinct,
+            having_expr,
+            sample,
+            input_plan,
+        )
+    }
+}
+
+impl ReturnClausePlanner {
+    /// Bound-statement entry: plan a projection from already resolved
+    /// columns instead of reading the syntax tree.
+    ///
+    /// The MATCH planner prefers this path; the `Stmt` entry above remains
+    /// for direct invocations until pattern topology is bound as well.
+    /// `sample` carries the SAMPLE count exactly like the AST extractor.
+    pub fn plan_projection(
+        &self,
+        qctx: Arc<QueryContext>,
+        mut yield_columns: Vec<YieldColumn>,
+        distinct: bool,
+        having_clause: Option<ContextualExpression>,
+        sample: Option<usize>,
+        input_plan: SubPlan,
+    ) -> Result<SubPlan, PlannerError> {
+        if yield_columns.is_empty() {
+            return Err(PlannerError::PlanGenerationFailed(
+                "RETURN clause missing return item".to_string(),
+            ));
+        }
 
         let input_node = input_plan.root().as_ref().ok_or_else(|| {
             PlannerError::PlanGenerationFailed(
@@ -195,7 +229,7 @@ impl ClausePlanner for ReturnClausePlanner {
             }
         }
         let mut having_subqueries: Vec<exists_planner::PlannedSubquery> = Vec::new();
-        let having_expr = extract_having_clause(stmt)
+        let having_expr = having_clause
             .map(|mut expr| {
                 let subqueries = exists_planner::plan_contextual_subqueries(
                     &mut expr,
@@ -347,7 +381,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 });
             }
 
-            if self.distinct {
+            if distinct {
                 if let Ok(dedup) = DedupNode::new(final_node.clone()) {
                     final_node = dedup.into_enum();
                 }
@@ -363,7 +397,7 @@ impl ClausePlanner for ReturnClausePlanner {
             }
 
             // Apply SAMPLE clause if present
-            if let Some(sample_count) = extract_sample_clause(stmt) {
+            if let Some(sample_count) = sample {
                 if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
                     final_node = PlanNodeEnum::Sample(sample_node);
                 }
@@ -464,7 +498,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 })
             });
 
-            if self.distinct {
+            if distinct {
                 if let Ok(dedup) = DedupNode::new(final_node.clone()) {
                     final_node = dedup.into_enum();
                 }
@@ -479,7 +513,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 });
             }
 
-            if let Some(sample_count) = extract_sample_clause(stmt) {
+            if let Some(sample_count) = sample {
                 if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
                     final_node = PlanNodeEnum::Sample(sample_node);
                 }
@@ -500,7 +534,7 @@ impl ClausePlanner for ReturnClausePlanner {
             let project_node = ProjectNode::new(input_node.clone(), yield_columns.clone())?
                 .with_subqueries(yield_subqueries.clone());
 
-            let mut final_node = if self.distinct {
+            let mut final_node = if distinct {
                 match DedupNode::new(project_node.clone().into_enum()) {
                     Ok(dedup) => dedup.into_enum(),
                     Err(_) => project_node.into_enum(),
@@ -526,7 +560,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 })
             });
 
-            if self.distinct {
+            if distinct {
                 logical_root = logical_root.map(|input| {
                     LogicalNodeEnum::Dedup(LogicalDedupNode {
                         id: next_node_id(),
@@ -539,7 +573,7 @@ impl ClausePlanner for ReturnClausePlanner {
             }
 
             // Apply SAMPLE clause if present
-            if let Some(sample_count) = extract_sample_clause(stmt) {
+            if let Some(sample_count) = sample {
                 if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
                     final_node = PlanNodeEnum::Sample(sample_node);
                 }
