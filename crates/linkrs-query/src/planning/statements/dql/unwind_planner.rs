@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use crate::binder::BoundStatement;
-use crate::planning::physical_mapper::PhysicalMapper;
 use crate::planning::plan::core::node_id_generator::next_node_id;
 use crate::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
 use crate::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
@@ -91,12 +90,7 @@ impl Planner for UnwindPlanner {
         };
 
         let logical_root = LogicalNodeEnum::Unwind(unwind_node);
-        let physical_root = PhysicalMapper::map(logical_root.clone());
-        Ok(SubPlan {
-            root: Some(physical_root),
-            tail: None,
-            logical_root: Some(logical_root),
-        })
+        Ok(SubPlan::from_logical_root(logical_root))
     }
 }
 

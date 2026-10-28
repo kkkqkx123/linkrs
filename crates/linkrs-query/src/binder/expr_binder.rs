@@ -323,12 +323,7 @@ impl<'a> ExpressionBinder<'a> {
             return return_type.clone();
         }
 
-        match lower.as_str() {
-            "head" => arg_types.first().cloned().unwrap_or(DataType::Unknown),
-            "last" => arg_types.first().cloned().unwrap_or(DataType::Unknown),
-            "coalesce" => arg_types.first().cloned().unwrap_or(DataType::Unknown),
-            _ => DataType::Unknown,
-        }
+        DataType::Unknown
     }
 
     /// Deduce aggregate function return type.

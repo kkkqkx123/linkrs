@@ -35,10 +35,9 @@ use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
 use crate::optimizer::heuristic::rule::RewriteRule;
 use crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-use crate::planning::scan_predicate::and_of;
+use crate::planning::scan_predicate::{and_of, split_conjuncts};
 use linkrs_core::types::expr::ContextualExpression;
 use linkrs_core::types::expr::ExpressionMeta;
-use linkrs_core::types::operators::BinaryOperator;
 use linkrs_core::types::Expression;
 use linkrs_core::Value;
 
@@ -170,27 +169,6 @@ impl crate::optimizer::heuristic::rule::PushDownRule for EliminateRedundantTagFi
     }
 }
 
-/// Split an expression into top-level `AND` conjuncts.
-fn split_conjuncts(expr: &Expression) -> Vec<&Expression> {
-    let mut conjuncts = Vec::new();
-    collect_conjuncts(expr, &mut conjuncts);
-    conjuncts
-}
-
-fn collect_conjuncts<'a>(expr: &'a Expression, out: &mut Vec<&'a Expression>) {
-    if let Expression::Binary {
-        left,
-        op: BinaryOperator::And,
-        right,
-    } = expr
-    {
-        collect_conjuncts(left, out);
-        collect_conjuncts(right, out);
-    } else {
-        out.push(expr);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +176,7 @@ mod tests {
     use crate::planning::plan::core::nodes::ScanVerticesNode;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
     use linkrs_core::types::expr::FunctionArg;
+    use linkrs_core::types::operators::BinaryOperator;
     use linkrs_core::types::ContextualExpression;
     use std::sync::Arc;
 

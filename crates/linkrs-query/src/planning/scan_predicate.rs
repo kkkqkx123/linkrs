@@ -76,7 +76,7 @@ pub fn and_of(conjuncts: Vec<Expression>) -> Option<Expression> {
 }
 
 /// Split an expression into top-level `AND` conjuncts.
-fn split_conjuncts(expr: &Expression) -> Vec<&Expression> {
+pub(crate) fn split_conjuncts(expr: &Expression) -> Vec<&Expression> {
     let mut conjuncts = Vec::new();
     collect_conjuncts(expr, &mut conjuncts);
     conjuncts

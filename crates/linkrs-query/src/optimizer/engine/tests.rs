@@ -594,29 +594,17 @@ mod factorization_fallback_tests {
     }
 
     #[test]
-    fn connector_propagates_logical_joins() {
-        use crate::planning::connector::SegmentsConnector;
+    fn combiner_propagates_logical_joins() {
         use crate::planning::plan::SubPlan;
-        use std::collections::HashSet;
+        use crate::planning::statements::plan_combiner;
 
         let left = SubPlan::from_logical_root(scan_logical("a"));
         let right = SubPlan::from_logical_root(scan_logical("b"));
-        let qctx = Arc::new(crate::QueryContext::new(Arc::new(
-            crate::QueryRequestContext {
-                session_id: None,
-                user_name: None,
-                space_name: None,
-                query: String::new(),
-                parameters: std::collections::HashMap::new(),
-                ..Default::default()
-            },
-        )));
-        let joined = SegmentsConnector::inner_join(&qctx, left, right, HashSet::new())
-            .expect("join should build");
-        assert!(matches!(joined.root, Some(PlanNodeEnum::InnerJoin(_))));
+        let joined = plan_combiner::cross_join_plans(left, right).expect("join should build");
+        assert!(matches!(joined.root, Some(PlanNodeEnum::CrossJoin(_))));
         assert!(
-            matches!(joined.logical_root, Some(LogicalNodeEnum::InnerJoin(_))),
-            "connector must propagate the logical join"
+            matches!(joined.logical_root, Some(LogicalNodeEnum::CrossJoin(_))),
+            "combiner must propagate the logical join"
         );
     }
 

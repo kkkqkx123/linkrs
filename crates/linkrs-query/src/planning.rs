@@ -22,13 +22,11 @@
 //! add one-way conversion plus single-side visitors only.
 
 // Core modules
-pub mod connector;
 pub mod context;
 pub mod physical_mapper;
 pub mod physical_planner;
 pub mod plan;
 pub mod planner;
-pub mod template_extractor;
 
 // Planner modules
 pub mod fulltext_planner;
@@ -45,10 +43,8 @@ pub mod statements;
 pub mod dml_shape;
 
 // Re-export the main types.
-pub use connector::SegmentsConnector;
 pub use plan::execution_plan::{ExecutionPlan, SubPlan};
 pub use planner::{Planner, PlannerConfig, PlannerError};
-pub use template_extractor::{ParameterizedResult, ParameterizingTransformer, TemplateExtractor};
 
 // Re-export the JoinType from the core module.
 pub use linkrs_core::types::JoinType;

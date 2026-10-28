@@ -1,5 +1,4 @@
 use crate::parser::ast::ReturnItem;
-use linkrs_core::error::DBError;
 use linkrs_core::types::expr::contextual::ContextualExpression;
 use linkrs_core::types::expr::Expression;
 use linkrs_core::types::semantic::{AliasType, ValueType};
@@ -21,10 +20,8 @@ impl Binder {
         super::super::semantic_checker::validate_expression(expr)?;
         let type_hint = expr.data_type();
         let Some(inner) = expr.get_expression() else {
-            return Err(DBError::from(
-                linkrs_core::error::QueryError::invalid_query(
-                    "Expression not found in context".to_string(),
-                ),
+            return Err(super::super::error::invalid_query(
+                "Expression not found in context".to_string(),
             ));
         };
         self.bind_inner_expr(&inner, type_hint.as_ref())
@@ -41,12 +38,10 @@ impl Binder {
             match e {
                 Expression::Variable(name) => {
                     if !scope.contains(name) {
-                        return Err(DBError::from(
-                            linkrs_core::error::QueryError::invalid_query(format!(
-                                "Undefined variable: {}",
-                                name
-                            )),
-                        ));
+                        return Err(super::super::error::invalid_query(format!(
+                            "Undefined variable: {}",
+                            name
+                        )));
                     }
                     Ok(())
                 }
@@ -173,11 +168,55 @@ impl Binder {
                     check(&inner, mapping)
                 }
                 Expression::PathBuild(items) => items.iter().try_for_each(|i| check(scope, i)),
-                Expression::WindowFunction { args, .. } => {
-                    args.iter().try_for_each(|a| check(scope, a))
+                Expression::WindowFunction {
+                    args,
+                    over_partition_by,
+                    over_order_by,
+                    ..
+                } => {
+                    args.iter().try_for_each(|a| check(scope, a))?;
+                    over_partition_by.iter().try_for_each(|a| check(scope, a))?;
+                    over_order_by.iter().try_for_each(|a| check(scope, a))
                 }
-                _ => Ok(()),
+                Expression::StructField { base, .. } => check(scope, base),
+                Expression::Exists { body } => check_subquery_body(scope, body),
+                Expression::CountSubquery { body } => check_subquery_body(scope, body),
+                Expression::ScalarSubquery { body } => check_subquery_body(scope, body),
+                Expression::In {
+                    expr: inner_expr,
+                    subquery,
+                    ..
+                } => {
+                    check(scope, inner_expr)?;
+                    check_subquery_body(scope, subquery)
+                }
+                Expression::Lambda { params, body } => {
+                    let mut inner = BinderScope::with_parent(scope.clone());
+                    for param in params {
+                        inner.define_variable(local_variable(param));
+                    }
+                    check(&inner, body)
+                }
+                Expression::Label(_)
+                | Expression::TagProperty { .. }
+                | Expression::EdgeProperty { .. }
+                | Expression::Parameter(_)
+                | Expression::SessionVariable(_)
+                | Expression::Vector(_)
+                | Expression::Literal(_) => Ok(()),
             }
+        }
+        fn check_subquery_body(
+            scope: &BinderScope,
+            body: &linkrs_core::types::expr::SubqueryBody,
+        ) -> DBResult<()> {
+            if let Some(where_clause) = body.where_clause.as_ref() {
+                check(scope, where_clause)?;
+            }
+            if let Some(return_expr) = body.return_expr.as_ref() {
+                check(scope, return_expr)?;
+            }
+            Ok(())
         }
         let Some(inner) = expr.get_expression() else {
             return Ok(());
@@ -629,10 +668,12 @@ impl Binder {
     }
 
     fn resolve_property_type(&self, var_name: &str, property: &str) -> DataType {
+        let scope_type =
+            ExpressionBinder::new(&self.scope).resolve_property_type(var_name, property);
+        if scope_type != DataType::Unknown {
+            return scope_type;
+        }
         if let Some(var_info) = self.scope.lookup(var_name) {
-            if let Some(vt) = var_info.properties.get(property) {
-                return vt.to_data_type();
-            }
             if let Some(ref sm) = self.schema_manager {
                 if let Some(ref space_name) = self.space_name {
                     for tag_name in &var_info.tags {
@@ -667,29 +708,28 @@ impl Binder {
 
     // ── Clause helpers ─────────────────────────────────────────────────────
 
-    pub(crate) fn bind_return_clause(
+    fn bind_projection_expression(
         &mut self,
-        rc: &crate::parser::ast::ReturnClause,
-    ) -> DBResult<BoundReturnClause> {
-        let items = rc
-            .items
-            .iter()
-            .map(|item| match item {
-                ReturnItem::Expression { expression, alias } => {
-                    // Reject references to variables that are not defined in
-                    // the current binding scope (e.g. `RETURN undefined_var`).
-                    self.ensure_variables_defined(expression)?;
-                    self.bind_expr(expression).map(|be| BoundProjectionItem {
-                        expression: be,
-                        alias: alias.clone(),
-                    })
-                }
-            })
-            .collect::<DBResult<Vec<_>>>()?;
+        expression: &ContextualExpression,
+        alias: Option<String>,
+        check_defined: bool,
+    ) -> DBResult<BoundProjectionItem> {
+        // Return clauses reject undefined variables eagerly while yield
+        // clauses leave the check to later stages.
+        if check_defined {
+            self.ensure_variables_defined(expression)?;
+        }
+        self.bind_expr(expression).map(|be| BoundProjectionItem {
+            expression: be,
+            alias,
+        })
+    }
 
-        let order_by = rc
-            .order_by
-            .as_ref()
+    fn bind_order_by_clause(
+        &mut self,
+        order_by: Option<&crate::parser::ast::OrderByClause>,
+    ) -> DBResult<Option<Vec<BoundOrderByItem>>> {
+        order_by
             .map(|ob| {
                 ob.items
                     .iter()
@@ -701,7 +741,24 @@ impl Binder {
                     })
                     .collect::<DBResult<Vec<_>>>()
             })
-            .transpose()?;
+            .transpose()
+    }
+
+    pub(crate) fn bind_return_clause(
+        &mut self,
+        rc: &crate::parser::ast::ReturnClause,
+    ) -> DBResult<BoundReturnClause> {
+        let items = rc
+            .items
+            .iter()
+            .map(|item| match item {
+                ReturnItem::Expression { expression, alias } => {
+                    self.bind_projection_expression(expression, alias.clone(), true)
+                }
+            })
+            .collect::<DBResult<Vec<_>>>()?;
+
+        let order_by = self.bind_order_by_clause(rc.order_by.as_ref())?;
 
         Ok(BoundReturnClause {
             items,
@@ -721,29 +778,11 @@ impl Binder {
             .items
             .iter()
             .map(|item| {
-                self.bind_expr(&item.expression)
-                    .map(|be| BoundProjectionItem {
-                        expression: be,
-                        alias: item.alias.clone(),
-                    })
+                self.bind_projection_expression(&item.expression, item.alias.clone(), false)
             })
             .collect::<DBResult<Vec<_>>>()?;
 
-        let order_by = yc
-            .order_by
-            .as_ref()
-            .map(|ob| {
-                ob.items
-                    .iter()
-                    .map(|item| {
-                        self.bind_expr(&item.expression).map(|be| BoundOrderByItem {
-                            expression: be,
-                            direction: item.direction,
-                        })
-                    })
-                    .collect::<DBResult<Vec<_>>>()
-            })
-            .transpose()?;
+        let order_by = self.bind_order_by_clause(yc.order_by.as_ref())?;
 
         Ok(BoundYieldClause {
             items,

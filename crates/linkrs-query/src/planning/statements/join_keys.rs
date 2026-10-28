@@ -15,20 +15,7 @@ use linkrs_core::types::expr::ExpressionMeta;
 use linkrs_core::types::operators::BinaryOperator;
 use linkrs_core::types::Expression;
 
-/// Split an AND-tree into its conjuncts.
-fn collect_conjuncts(expr: &Expression, out: &mut Vec<Expression>) {
-    match expr {
-        Expression::Binary {
-            left,
-            op: BinaryOperator::And,
-            right,
-        } => {
-            collect_conjuncts(left, out);
-            collect_conjuncts(right, out);
-        }
-        _ => out.push(expr.clone()),
-    }
-}
+use crate::planning::scan_predicate::split_conjuncts;
 
 /// Whether the expression reads only variables bound by `vars`.
 ///
@@ -79,8 +66,7 @@ pub fn equi_join_keys(
     let clause = where_clause?;
     let expr = clause.expression()?;
 
-    let mut conjuncts = Vec::new();
-    collect_conjuncts(expr.inner(), &mut conjuncts);
+    let conjuncts: Vec<Expression> = split_conjuncts(expr.inner()).into_iter().cloned().collect();
 
     let context = clause.context().clone();
     let mut build_keys = Vec::new();
