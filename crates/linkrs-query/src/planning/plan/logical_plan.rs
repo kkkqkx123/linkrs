@@ -92,6 +92,15 @@ impl LogicalPlan {
         &self.root
     }
 
+    /// Central skip gate for the cost-based join-order reviewer.
+    /// A user hint pins the shape and a statistics-backed planning
+    /// enumeration already priced the order, so the reviewer must not
+    /// overturn either. Default-statistics products stay false and always
+    /// go through review.
+    pub fn should_skip_join_order_review(&self) -> bool {
+        self.join_order_hinted || self.stats_backed
+    }
+
     pub fn into_root(self) -> LogicalNodeEnum {
         self.root
     }

@@ -205,3 +205,223 @@ fn test_optimizer_result_equivalence_with_content() {
         }
     }
 }
+
+/// Wiring: per-space cost overrides installed through the pipeline reach the
+/// engine calculator for that space while other spaces keep the base config.
+#[test]
+fn test_space_cost_config_wiring_reaches_calculator() {
+    use linkrs_query::optimizer::CostModelConfig;
+    use std::collections::HashMap;
+
+    let test_storage = crate::common::TestStorage::new().expect("Failed to create test storage");
+    let storage = test_storage.storage();
+    let schema_manager = test_storage.schema_manager();
+
+    let stats = Arc::new(StatsManager::new());
+    let engine = Arc::new(OptimizerEngine::default());
+    let mut pipeline = QueryPipelineManager::with_optimizer(storage.clone(), stats, engine)
+        .with_schema_manager(schema_manager.clone());
+
+    let base_cost = pipeline
+        .optimizer_engine()
+        .cost_calculator_for(None)
+        .config()
+        .seq_page_cost;
+    let mut wired = CostModelConfig::default();
+    wired.seq_page_cost = base_cost + 5.0;
+    let epoch_before = pipeline.optimizer_engine().cost_epoch();
+    pipeline.set_space_cost_configs(
+        HashMap::from([("wired_space".to_string(), wired)]),
+        HashMap::from([("wired_space".to_string(), "wired".to_string())]),
+    );
+    assert_eq!(
+        pipeline.optimizer_engine().cost_epoch(),
+        epoch_before + 1,
+        "installing space overrides must bump the cost epoch"
+    );
+    assert_eq!(
+        pipeline
+            .optimizer_engine()
+            .cost_calculator_for(Some("wired_space"))
+            .config()
+            .seq_page_cost,
+        wired.seq_page_cost,
+        "wired space must use the override config"
+    );
+    assert_eq!(
+        pipeline
+            .optimizer_engine()
+            .cost_calculator_for(Some("other_space"))
+            .config()
+            .seq_page_cost,
+        base_cost,
+        "unwired spaces must keep the base config"
+    );
+
+    pipeline
+        .execute_query("CREATE SPACE wired_space (vid_type=INT64)")
+        .expect("CREATE SPACE");
+    let space_info = linkrs_core::types::SpaceInfo {
+        space_id: 1,
+        space_name: "wired_space".to_string(),
+        vid_type: linkrs_core::DataType::BigInt,
+        ..Default::default()
+    };
+    pipeline
+        .execute_query_with_space(
+            "CREATE TAG Item(id INT, name STRING)",
+            Some(space_info.clone()),
+        )
+        .expect("CREATE TAG");
+    pipeline
+        .execute_query_with_space(
+            "INSERT VERTEX Item(name) VALUES 1:('A')",
+            Some(space_info.clone()),
+        )
+        .expect("INSERT");
+    let result = pipeline
+        .execute_query_with_space("MATCH (i:Item) RETURN i.name", Some(space_info))
+        .expect("MATCH with space override must succeed");
+    assert_eq!(result.count(), 1);
+}
+
+/// Wiring: rule selection applied at assembly reaches the physical heuristic
+/// batch while the pipeline still executes filtered queries end to end.
+#[test]
+fn test_rule_selection_wiring_reaches_physical_heuristic() {
+    use linkrs_query::optimizer::heuristic::batch::OptimizationBatch;
+
+    const BATCHES: [OptimizationBatch; 6] = [
+        OptimizationBatch::Normalize,
+        OptimizationBatch::PredicatePushdown,
+        OptimizationBatch::PropertyPruning,
+        OptimizationBatch::ExpandPushdown,
+        OptimizationBatch::Decorrelation,
+        OptimizationBatch::Cleanup,
+    ];
+    fn total_rules(engine: &OptimizerEngine) -> usize {
+        BATCHES
+            .iter()
+            .map(|b| {
+                engine
+                    .heuristic_batch()
+                    .batch_rules(*b)
+                    .map(|rules| rules.len())
+                    .unwrap_or(0)
+            })
+            .sum()
+    }
+    fn has_rule(engine: &OptimizerEngine, name: &str) -> bool {
+        BATCHES.iter().any(|b| {
+            engine
+                .heuristic_batch()
+                .batch_rules(*b)
+                .is_some_and(|rules| rules.iter().any(|rule| rule.name() == name))
+        })
+    }
+
+    let mut engine = OptimizerEngine::default();
+    let before = total_rules(&engine);
+    assert!(before > 0, "default registry must not be empty");
+    assert!(has_rule(&engine, "EliminateFilterRule"));
+    engine.set_rule_selection(&["EliminateFilter".to_string()], &[]);
+    assert_eq!(
+        total_rules(&engine),
+        before - 1,
+        "disabling one rule must shrink the physical batch by exactly one rule"
+    );
+    assert!(
+        !has_rule(&engine, "EliminateFilterRule"),
+        "disabled rule must be gone from every batch"
+    );
+
+    let test_storage = crate::common::TestStorage::new().expect("Failed to create test storage");
+    let storage = test_storage.storage();
+    let schema_manager = test_storage.schema_manager();
+    let stats = Arc::new(StatsManager::new());
+    let mut pipeline =
+        QueryPipelineManager::with_optimizer(storage.clone(), stats, Arc::new(engine))
+            .with_schema_manager(schema_manager.clone());
+    pipeline
+        .execute_query("CREATE SPACE rule_space (vid_type=INT64)")
+        .expect("CREATE SPACE");
+    let space_info = linkrs_core::types::SpaceInfo {
+        space_id: 1,
+        space_name: "rule_space".to_string(),
+        vid_type: linkrs_core::DataType::BigInt,
+        ..Default::default()
+    };
+    pipeline
+        .execute_query_with_space(
+            "CREATE TAG Item(id INT, price DOUBLE)",
+            Some(space_info.clone()),
+        )
+        .expect("CREATE TAG");
+    pipeline
+        .execute_query_with_space(
+            "INSERT VERTEX Item(id, price) VALUES 1:(1, 10.0), 2:(2, 20.0)",
+            Some(space_info.clone()),
+        )
+        .expect("INSERT");
+    let result = pipeline
+        .execute_query_with_space(
+            "MATCH (i:Item) WHERE i.price > 15.0 RETURN i.id",
+            Some(space_info),
+        )
+        .expect("filtered query must succeed with one rule disabled");
+    assert_eq!(result.count(), 1);
+}
+
+/// Wiring: the feedback switch on the engine is visible through the pipeline
+/// and disabling it does not break end-to-end execution.
+#[test]
+fn test_feedback_switch_wiring_through_pipeline() {
+    let mut engine = OptimizerEngine::default();
+    assert!(
+        engine.feedback_enabled(),
+        "feedback must be enabled by default"
+    );
+    engine.set_enable_feedback(false);
+    assert!(
+        !engine.feedback_enabled(),
+        "disabling feedback must be observable on the engine"
+    );
+
+    let test_storage = crate::common::TestStorage::new().expect("Failed to create test storage");
+    let storage = test_storage.storage();
+    let schema_manager = test_storage.schema_manager();
+    let stats = Arc::new(StatsManager::new());
+    let mut pipeline =
+        QueryPipelineManager::with_optimizer(storage.clone(), stats, Arc::new(engine))
+            .with_schema_manager(schema_manager.clone());
+    assert!(
+        !pipeline.optimizer_engine().feedback_enabled(),
+        "pipeline must expose the configured feedback switch"
+    );
+
+    pipeline
+        .execute_query("CREATE SPACE fb_space (vid_type=INT64)")
+        .expect("CREATE SPACE");
+    let space_info = linkrs_core::types::SpaceInfo {
+        space_id: 1,
+        space_name: "fb_space".to_string(),
+        vid_type: linkrs_core::DataType::BigInt,
+        ..Default::default()
+    };
+    pipeline
+        .execute_query_with_space(
+            "CREATE TAG Item(id INT, name STRING)",
+            Some(space_info.clone()),
+        )
+        .expect("CREATE TAG");
+    pipeline
+        .execute_query_with_space(
+            "INSERT VERTEX Item(name) VALUES 1:('A')",
+            Some(space_info.clone()),
+        )
+        .expect("INSERT");
+    let result = pipeline
+        .execute_query_with_space("MATCH (i:Item) RETURN i.name", Some(space_info))
+        .expect("MATCH must succeed with feedback disabled");
+    assert_eq!(result.count(), 1);
+}

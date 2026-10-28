@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::optimizer::cost::CostCalculator;
 use crate::optimizer::cost_based::ndv::DEFAULT_JOIN_SELECTIVITY;
-use crate::optimizer::decision::{JoinAlgorithm, JoinOrderDecision};
+use crate::optimizer::decision::JoinAlgorithm;
 
 use super::condition::JoinCondition;
 use super::result::{JoinOrderResult, OptimizationMethod};
@@ -611,27 +611,6 @@ impl JoinOrderOptimizer {
 
         algorithms
     }
-
-    /// Generate a `JoinOrderDecision`
-    pub fn to_decision(&self, result: &JoinOrderResult) -> JoinOrderDecision {
-        let mut decision = JoinOrderDecision::empty();
-
-        for (i, table) in result.order.iter().enumerate() {
-            if i < result.algorithms.len() {
-                decision.add_join_step(table.clone(), result.algorithms[i].clone());
-            } else {
-                decision.add_join_step(
-                    table.clone(),
-                    JoinAlgorithm::HashJoin {
-                        build_side: "default".to_string(),
-                        probe_side: "default".to_string(),
-                    },
-                );
-            }
-        }
-
-        decision
-    }
 }
 
 #[cfg(test)]
@@ -810,17 +789,5 @@ mod tests {
         let condition = JoinCondition::new("A".into(), "B".to_string()).with_selectivity(0.25);
 
         assert_eq!(condition.selectivity, 0.25);
-    }
-
-    #[test]
-    fn test_to_decision() {
-        let optimizer = create_test_optimizer();
-        let tables = create_test_tables();
-        let conditions = vec![JoinCondition::new("A".into(), "B".to_string())];
-
-        let result = optimizer.optimize_join_order(&tables, &conditions);
-        let decision = optimizer.to_decision(&result);
-
-        assert_eq!(decision.join_order.len(), result.order.len());
     }
 }

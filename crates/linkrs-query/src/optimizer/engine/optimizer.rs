@@ -189,10 +189,14 @@ impl OptimizerEngine {
 
     fn apply_logical_heuristic(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
         // Logical layer runs before cost decisions on the logical tree and
-        // currently holds no built-in rules by design. Rule injection stays
-        // closed: tuning goes through configuration filtering, not through
+        // currently holds no built-in rules by design. Skip the call entirely
+        // when the registry is empty so queries do not pay a no-op pass.
+        // Rule injection stays closed: tuning goes through configuration filtering, not through
         // added rules. The active built-in rules live in the physical layer
         // below, so the two calls are not overlapping passes to be merged.
+        if self.logical_heuristic.is_empty() {
+            return Ok(plan);
+        }
         self.logical_heuristic
             .set_max_iterations(self.max_heuristic_iterations);
         if let Some(logical) = plan.logical_plan.as_mut() {
@@ -337,20 +341,10 @@ impl OptimizerEngine {
         node: &PlanNodeEnum,
         notes: &mut Vec<String>,
     ) -> PlanNodeEnum {
-        use crate::optimizer::analysis::BatchPlanAnalyzer;
         use crate::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
-        use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-        use PlanNodeEnum::*;
 
-        if let PatternApply(apply) = node {
-            let right = apply.right_input();
-            let shape_ok = SubqueryUnnestingOptimizer::is_simple_subquery_shape(right);
-            let no_agg = !SubqueryUnnestingOptimizer::contains_aggregation(right);
-            let deterministic = BatchPlanAnalyzer::new()
-                .analyze(right)
-                .expression_summary
-                .is_fully_deterministic;
-            if shape_ok && no_agg && deterministic {
+        if let PlanNodeEnum::PatternApply(apply) = node {
+            if SubqueryUnnestingOptimizer::is_stat_free_fallback_eligible(apply.right_input()) {
                 if let Ok(joined) =
                     SubqueryUnnestingOptimizer::build_semi_join_from_pattern_apply(apply.clone())
                 {
@@ -363,49 +357,9 @@ impl OptimizerEngine {
             }
         }
 
-        macro_rules! rewrite_single {
-            ($n:expr) => {{
-                let mut cloned = $n.clone();
-                let new_input = Self::apply_unnesting_heuristic_fallback(cloned.input(), notes);
-                cloned.set_input(new_input);
-                cloned
-            }};
-        }
-        macro_rules! rewrite_binary {
-            ($n:expr) => {{
-                let mut cloned = $n.clone();
-                let new_left = Self::apply_unnesting_heuristic_fallback(cloned.left_input(), notes);
-                let new_right =
-                    Self::apply_unnesting_heuristic_fallback(cloned.right_input(), notes);
-                cloned.set_left_input(new_left);
-                cloned.set_right_input(new_right);
-                cloned
-            }};
-        }
-
-        match node {
-            Project(n) => Project(rewrite_single!(n)),
-            Filter(n) => Filter(rewrite_single!(n)),
-            Sort(n) => Sort(rewrite_single!(n)),
-            Limit(n) => Limit(rewrite_single!(n)),
-            TopN(n) => TopN(rewrite_single!(n)),
-            Sample(n) => Sample(rewrite_single!(n)),
-            Dedup(n) => Dedup(rewrite_single!(n)),
-            Aggregate(n) => Aggregate(rewrite_single!(n)),
-            Window(n) => Window(rewrite_single!(n)),
-
-            InnerJoin(n) => InnerJoin(rewrite_binary!(n)),
-            LeftJoin(n) => LeftJoin(rewrite_binary!(n)),
-            RightJoin(n) => RightJoin(rewrite_binary!(n)),
-            CrossJoin(n) => CrossJoin(rewrite_binary!(n)),
-            FullOuterJoin(n) => FullOuterJoin(rewrite_binary!(n)),
-            SemiJoin(n) => SemiJoin(rewrite_binary!(n)),
-
-            PatternApply(n) => PatternApply(rewrite_single!(n)),
-            CorrelatedApply(n) => CorrelatedApply(rewrite_single!(n)),
-
-            _ => node.clone(),
-        }
+        let mut closure =
+            |child: &PlanNodeEnum| Self::apply_unnesting_heuristic_fallback(child, notes);
+        crate::optimizer::cost_based::traversal::rewrite_children(node, &mut closure)
     }
 
     fn apply_unnesting_logical(&self, plan: &mut ExecutionPlan) {
@@ -434,16 +388,17 @@ impl OptimizerEngine {
             return;
         };
 
-        if logical.join_order_hinted {
-            plan.cbo_notes
-                .push("join_order: kept planning order (user hint, reviewer skipped)".to_string());
-            return;
-        }
-
-        if logical.stats_backed {
-            plan.cbo_notes.push(
-                "join_order: kept planning order (statistics-backed, reviewer skipped)".to_string(),
-            );
+        if logical.should_skip_join_order_review() {
+            if logical.join_order_hinted {
+                plan.cbo_notes.push(
+                    "join_order: kept planning order (user hint, reviewer skipped)".to_string(),
+                );
+            } else {
+                plan.cbo_notes.push(
+                    "join_order: kept planning order (statistics-backed, reviewer skipped)"
+                        .to_string(),
+                );
+            }
             return;
         }
 
@@ -672,48 +627,7 @@ impl OptimizerEngine {
             }
         }
 
-        use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-        macro_rules! rewrite_single {
-            ($n:expr) => {{
-                let mut cloned = $n.clone();
-                let new_input = self.unnest_subqueries(cloned.input(), stats, notes);
-                cloned.set_input(new_input);
-                cloned
-            }};
-        }
-        macro_rules! rewrite_binary {
-            ($n:expr) => {{
-                let mut cloned = $n.clone();
-                let new_left = self.unnest_subqueries(cloned.left_input(), stats, notes);
-                let new_right = self.unnest_subqueries(cloned.right_input(), stats, notes);
-                cloned.set_left_input(new_left);
-                cloned.set_right_input(new_right);
-                cloned
-            }};
-        }
-
-        match node {
-            Project(n) => Project(rewrite_single!(n)),
-            Filter(n) => Filter(rewrite_single!(n)),
-            Sort(n) => Sort(rewrite_single!(n)),
-            Limit(n) => Limit(rewrite_single!(n)),
-            TopN(n) => TopN(rewrite_single!(n)),
-            Sample(n) => Sample(rewrite_single!(n)),
-            Dedup(n) => Dedup(rewrite_single!(n)),
-            Aggregate(n) => Aggregate(rewrite_single!(n)),
-            Window(n) => Window(rewrite_single!(n)),
-
-            InnerJoin(n) => InnerJoin(rewrite_binary!(n)),
-            LeftJoin(n) => LeftJoin(rewrite_binary!(n)),
-            RightJoin(n) => RightJoin(rewrite_binary!(n)),
-            CrossJoin(n) => CrossJoin(rewrite_binary!(n)),
-            FullOuterJoin(n) => FullOuterJoin(rewrite_binary!(n)),
-            SemiJoin(n) => SemiJoin(rewrite_binary!(n)),
-
-            PatternApply(n) => PatternApply(rewrite_single!(n)),
-            CorrelatedApply(n) => CorrelatedApply(rewrite_single!(n)),
-
-            _ => node.clone(),
-        }
+        let mut closure = |child: &PlanNodeEnum| self.unnest_subqueries(child, stats, notes);
+        crate::optimizer::cost_based::traversal::rewrite_children(node, &mut closure)
     }
 }

@@ -288,6 +288,22 @@ impl SubqueryUnnestingOptimizer {
         }
     }
 
+    /// Stat-free fallback eligibility shared by the heuristic rule and the
+    /// engine post-CBO fallback. Combines the bounded shape gate, the
+    /// aggregation gate, and the determinism gate in one place.
+    pub fn is_stat_free_fallback_eligible(node: &PlanNodeEnum) -> bool {
+        if !Self::is_simple_subquery_shape(node) {
+            return false;
+        }
+        if Self::contains_aggregation(node) {
+            return false;
+        }
+        crate::optimizer::analysis::BatchPlanAnalyzer::new()
+            .analyze(node)
+            .expression_summary
+            .is_fully_deterministic
+    }
+
     /// Check whether the condition is a simple equality comparison, an AND
     /// chain of such comparisons, or a disjunction (OR) of them — i.e. the
     /// correlated condition is expressible as a DNF of equality conjuncts.

@@ -1236,3 +1236,44 @@ fn test_feedback_fold_consumes_each_execution_once() {
         "refold must be a no-op: {once} vs {twice}"
     );
 }
+
+#[test]
+fn skip_gate_covers_hint_and_stats_combinations() {
+    use crate::planning::plan::logical::logical_nodes::access::LogicalStartNode;
+    use crate::planning::plan::logical::LogicalNodeEnum as LogicalEnum;
+    use crate::planning::plan::logical_plan::LogicalPlan;
+
+    fn plan_with(hinted: bool, backed: bool) -> LogicalPlan {
+        let mut plan = LogicalPlan::new(LogicalEnum::Start(LogicalStartNode::new()));
+        plan.join_order_hinted = hinted;
+        plan.stats_backed = backed;
+        plan
+    }
+
+    assert!(!plan_with(false, false).should_skip_join_order_review());
+    assert!(plan_with(true, false).should_skip_join_order_review());
+    assert!(plan_with(false, true).should_skip_join_order_review());
+    assert!(plan_with(true, true).should_skip_join_order_review());
+}
+
+#[test]
+fn stat_free_fallback_gate_matches_heuristic_rule() {
+    use crate::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
+    use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
+
+    let scan = PlanNodeEnum::ScanVertices(ScanVerticesNode::new(1, "test"));
+    assert!(SubqueryUnnestingOptimizer::is_stat_free_fallback_eligible(
+        &scan
+    ));
+    let agg = PlanNodeEnum::Aggregate(
+        crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode::new(
+            scan.clone(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("aggregate builds"),
+    );
+    assert!(!SubqueryUnnestingOptimizer::is_stat_free_fallback_eligible(
+        &agg
+    ));
+}

@@ -5,8 +5,5 @@
 mod execution_state;
 mod node_type;
 
-pub use execution_state::{
-    ExecutorState, LoopExecutionState, OptimizationPhase, OptimizationState, QueryExecutionState,
-    RowStatus,
-};
+pub use execution_state::{ExecutorState, LoopExecutionState, QueryExecutionState, RowStatus};
 pub use node_type::{NodeCategory, NodeType, NodeTypeMapping};

@@ -11,7 +11,4 @@
 pub mod types;
 
 // Re-export the main types
-pub use types::{
-    AccessPath, EntityIndexChoice, EntityType, IndexChoice, IndexSelectionDecision, JoinAlgorithm,
-    JoinOrderDecision, OptimizationDecision, RewriteRuleId, TraversalStartDecision,
-};
+pub use types::JoinAlgorithm;

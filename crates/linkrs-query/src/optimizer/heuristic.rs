@@ -44,9 +44,8 @@
 //! The rules in this module are **heuristic rules** that do not rely on cost calculations and are always executed.
 //! Cost-based optimization is implemented in the `cost_based` module, which includes:
 //! - `SortEliminationOptimizer`: Decides whether to convert Sort+Limit to TopN based on cost
-//! - `AggregateStrategySelector`: Selects optimal aggregation strategy
+//! - `AggregateStrategySelector`: Advises on aggregation strategy (notes only)
 //! - `JoinOrderOptimizer`: Optimizes join order using dynamic programming
-//! - `TraversalDirectionOptimizer`: Selects optimal traversal direction
 //! - `SubqueryUnnestingOptimizer`: Transforms correlated subqueries
 //!
 //! Heuristic rules are executed first, followed by cost-based optimization.

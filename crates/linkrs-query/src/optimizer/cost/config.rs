@@ -279,11 +279,6 @@ pub struct StrategyThresholds {
     // ==================== Traversal Strategy ====================
     // Super-node threshold is the single `CostModelConfig::super_node_threshold`
     // (`SUPER_NODE_THRESHOLD`); no separate traversal copy is kept.
-    /// Bidirectional traversal savings threshold
-    ///
-    /// Bidirectional traversal savings threshold above which bidirectional traversal is used. Default value 0.3
-    pub bidirectional_savings_threshold: f64,
-
     /// Default branching factor for traversal
     ///
     /// Traverses the default branching factor for cost estimation. Default value 2.0
@@ -334,7 +329,6 @@ impl Default for StrategyThresholds {
             low_cardinality_threshold: 100,
             high_cardinality_ratio: 0.1,
             // Traversal strategy: super-node uses CostModelConfig::super_node_threshold.
-            bidirectional_savings_threshold: 0.3,
             default_branching_factor: DEFAULT_DEGREE_FALLBACK,
             // TopN strategy: threshold derives from the sort-to-TopN ratio so
             // the two spellings cannot drift apart.

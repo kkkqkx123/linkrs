@@ -5,8 +5,13 @@
 //! Decision ownership (heuristic vs cost overlap eliminated):
 //! - Sort-to-TopN: cost wiring (`cost_based::topn_wiring`) is the sole
 //!   decision maker; no heuristic equivalent exists.
-//! - Join order: cost DP (`cost_based::join_order`) is the sole order
-//!   decision; heuristic join rules are shape normalization only.
+//! - Join order: planning enumerates the initial order from the MATCH
+//!   query graph with the integer model (`planning::join_order`); the
+//!   cost reviewer (`cost_based::join_order` via `join_order_rewriter`)
+//!   only re-checks eligible plans. Heuristic join rules are shape
+//!   normalization only. The integer model prices graph splits; the
+//!   floating-point `CostCalculator` prices the already planned join
+//!   chain. The two formulas are intentionally not unified.
 //! - Subquery unnesting: cost (`SubqueryUnnestingOptimizer`) decides
 //!   pre-CBO; the heuristic rule runs only as a post-CBO fallback over
 //!   cost-kept patterns. Cost model tuning itself is out of scope.
@@ -31,16 +36,15 @@
 //! Statistics-driven optimizations that use cost models:
 //! - Join Order Optimization
 //! - Index Selection
-//! - Traversal Start/Direction Selection
-//! - Aggregate Strategy Selection
-//! - Materialization Decision
+//! - Aggregate Strategy Advice (notes only)
+//! - Expression Precomputation Advice (notes only)
 //!
 //! ### Supporting Modules
 //! - `engine` – The globally unique optimizer engine instance with unified optimization interface
 //! - `stats` – Statistical information management
 //! - `cost` – Cost calculation and estimation
 //! - `analysis` – Plan analysis utilities
-//! - `decision` – Optimization decision types
+//! - `decision` – Executed plan decision types (join algorithm choices)
 //!
 //! ## Usage Examples
 //!
@@ -95,13 +99,10 @@ pub use context::OptimizationContext;
 // Re-export cost_based types (formerly strategy)
 pub use cost_based::{
     AggregateContext, AggregateSelectionReason, AggregateStrategy, AggregateStrategyDecision,
-    AggregateStrategySelector, CandidateStart, DegreeInfo, DirectionContext,
-    DirectionSelectionReason, IndexSelection, IndexSelector, JoinCondition, JoinOrderOptimizer,
+    AggregateStrategySelector, IndexSelection, IndexSelector, JoinCondition, JoinOrderOptimizer,
     JoinOrderResult, KeepReason, OptimizationMethod, PredicateOperator, PropertyPredicate,
     SortContext, SortEliminationDecision, SortEliminationOptimizer, SortKeepReason,
-    SubqueryUnnestingOptimizer, TableInfo, TopNConversionReason, TraversalDirection,
-    TraversalDirectionDecision, TraversalDirectionOptimizer, TraversalSelectionReason,
-    TraversalStartSelector, UnnestDecision, UnnestReason,
+    SubqueryUnnestingOptimizer, TableInfo, TopNConversionReason, UnnestDecision, UnnestReason,
 };
 
 // Re-export the CTE cache types from the cache module.
@@ -116,7 +117,4 @@ pub use heuristic::{
     RewriteContext, RewriteError, RewriteRule, RuleWrapper, TransformResult,
 };
 
-pub use decision::{
-    AccessPath, EntityIndexChoice, EntityType, IndexChoice, IndexSelectionDecision, JoinAlgorithm,
-    JoinOrderDecision, OptimizationDecision, RewriteRuleId, TraversalStartDecision,
-};
+pub use decision::JoinAlgorithm;

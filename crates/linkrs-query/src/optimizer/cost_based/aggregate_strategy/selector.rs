@@ -7,7 +7,6 @@ use crate::optimizer::cost::SelectivityEstimator;
 use crate::optimizer::cost_based::ndv::estimate_group_count;
 use crate::optimizer::cost_based::row_estimates::estimate_node_output_rows_logical;
 use crate::optimizer::cost_based::traversal_logical::rewrite_children_logical;
-use crate::optimizer::decision::OptimizationDecision;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
@@ -356,34 +355,6 @@ impl AggregateStrategySelector {
             estimated_cost,
             estimated_memory_bytes: self.estimate_streaming_memory_usage(context),
             reason: SelectionReason::InputAlreadySorted,
-        }
-    }
-
-    /// Update and optimize the information on the aggregation strategies used in decision-making processes.
-    pub fn update_decision(
-        &self,
-        space: &str,
-        decision: &mut OptimizationDecision,
-        context: &AggregateContext,
-    ) {
-        let strategy_decision = self.select_strategy(space, context);
-
-        // Encode the aggregation policy information into the `rewrite_rules` used for decision-making.
-        // Use a specific rule ID to indicate the selection of the aggregation policy.
-        let rule_id = match strategy_decision.strategy {
-            AggregateStrategy::HashAggregate => {
-                crate::optimizer::decision::RewriteRuleId::AggregateOptimization
-            }
-            AggregateStrategy::SortAggregate => {
-                crate::optimizer::decision::RewriteRuleId::AggregateOptimization
-            }
-            AggregateStrategy::StreamingAggregate => {
-                crate::optimizer::decision::RewriteRuleId::AggregateOptimization
-            }
-        };
-
-        if !decision.rewrite_rules.contains(&rule_id) {
-            decision.rewrite_rules.push(rule_id);
         }
     }
 

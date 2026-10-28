@@ -16,7 +16,6 @@
 //!    are not equi semi joins).
 //! 3. Determinism: all expressions in the subquery must be deterministic.
 
-use crate::optimizer::analysis::BatchPlanAnalyzer;
 use crate::optimizer::cost_based::subquery_unnesting::SubqueryUnnestingOptimizer;
 use crate::optimizer::heuristic::pattern::Pattern;
 use crate::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -61,22 +60,10 @@ impl RewriteRule for UnnestSimplePatternApplyRule {
             _ => return Ok(None),
         };
 
-        // Shape gate: single-table scan wrapped in equality filters and
-        // projections, optionally capped by a constant limit.
+        // Shared stat-free gates: bounded shape, no aggregation, deterministic.
+        // The same helper backs the engine post-CBO fallback.
         let right = apply.right_input();
-        if !SubqueryUnnestingOptimizer::is_simple_subquery_shape(right) {
-            return Ok(None);
-        }
-
-        // Aggregated subqueries are not equi semi joins.
-        if SubqueryUnnestingOptimizer::contains_aggregation(right) {
-            return Ok(None);
-        }
-
-        // Determinism gate: non-deterministic expressions (e.g. random
-        // functions) must not be unnest-ed by the heuristic path.
-        let analysis = BatchPlanAnalyzer::new().analyze(right);
-        if !analysis.expression_summary.is_fully_deterministic {
+        if !SubqueryUnnestingOptimizer::is_stat_free_fallback_eligible(right) {
             return Ok(None);
         }
 
