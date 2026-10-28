@@ -610,7 +610,7 @@ impl ArenaPlanAssembler {
                 }
             }
 
-            // ── Write/sink nodes ────────────────────────────────────────────────
+            // ── Data-modification sinks ─────────────────────────────────────────
             PlanNodeEnum::InsertVertices(_)
             | PlanNodeEnum::InsertEdges(_)
             | PlanNodeEnum::DeleteVertices(_)
@@ -619,8 +619,12 @@ impl ArenaPlanAssembler {
             | PlanNodeEnum::PipeDeleteEdges(_)
             | PlanNodeEnum::Update(_)
             | PlanNodeEnum::CopyFrom(_)
-            | PlanNodeEnum::CopyTo(_)
-            | PlanNodeEnum::SpaceManage(_)
+            | PlanNodeEnum::CopyTo(_) => {
+                Self::convert_dml_node(node, operators, fragments, op_alloc, frag_alloc, exec_ctx)
+            }
+
+            // ── Schema management and system inspection ───────────────────────
+            PlanNodeEnum::SpaceManage(_)
             | PlanNodeEnum::TagManage(_)
             | PlanNodeEnum::EdgeManage(_)
             | PlanNodeEnum::IndexManage(_)
@@ -639,23 +643,35 @@ impl ArenaPlanAssembler {
             | PlanNodeEnum::TypeManage(_)
             | PlanNodeEnum::SequenceManage(_)
             | PlanNodeEnum::LoadFrom(_)
-            | PlanNodeEnum::InQueryCall(_)
-            | PlanNodeEnum::FulltextManage(_)
+            | PlanNodeEnum::InQueryCall(_) => {
+                Self::convert_ddl_node(node, operators, fragments, op_alloc, frag_alloc, exec_ctx)
+            }
+
+            // ── Fulltext and vector retrieval ─────────────────────────────────
+            PlanNodeEnum::FulltextManage(_)
             | PlanNodeEnum::FulltextSearch(_)
             | PlanNodeEnum::FulltextLookup(_)
             | PlanNodeEnum::MatchFulltext(_)
-            | PlanNodeEnum::VectorManage(_)
-            | PlanNodeEnum::BeginTransaction(_)
+            | PlanNodeEnum::VectorManage(_) => Self::convert_retrieval_node(
+                node, operators, fragments, op_alloc, frag_alloc, exec_ctx,
+            ),
+
+            // ── Transaction control ───────────────────────────────────────────
+            PlanNodeEnum::BeginTransaction(_)
             | PlanNodeEnum::Commit(_)
             | PlanNodeEnum::Rollback(_)
             | PlanNodeEnum::Savepoint(_)
-            | PlanNodeEnum::ReleaseSavepoint(_)
-            | PlanNodeEnum::Loop(_)
+            | PlanNodeEnum::ReleaseSavepoint(_) => {
+                Self::convert_txn_node(node, operators, fragments, op_alloc, frag_alloc, exec_ctx)
+            }
+
+            // ── Explicitly unsupported control operators ──────────────────────
+            PlanNodeEnum::Loop(_)
             | PlanNodeEnum::PassThrough(_)
             | PlanNodeEnum::Select(_)
-            | PlanNodeEnum::AppendVertices(_) => {
-                Self::convert_write_node(node, operators, fragments, op_alloc, frag_alloc, exec_ctx)
-            }
+            | PlanNodeEnum::AppendVertices(_) => Self::convert_control_node(
+                node, operators, fragments, op_alloc, frag_alloc, exec_ctx,
+            ),
             #[cfg(feature = "vector")]
             PlanNodeEnum::VectorSearch(_)
             | PlanNodeEnum::VectorLookup(_)

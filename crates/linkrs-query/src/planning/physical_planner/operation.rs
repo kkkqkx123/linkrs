@@ -77,10 +77,8 @@ pub(super) fn convert_skip(
     n: crate::planning::plan::logical::logical_nodes::operation::LogicalSkipNode,
 ) -> PlanNodeEnum {
     let input = convert_logical_to_physical(*n.input.expect("SkipNode missing input"));
-    let mut node = crate::planning::plan::core::nodes::operation::sort_node::LimitNode::new(
-        input,
-        n.offset,
-        i64::MAX,
+    let mut node = crate::planning::plan::core::nodes::operation::sort_node::LimitNode::new_skip(
+        input, n.offset,
     )
     .expect("Failed to construct LimitNode");
     if let Some(var) = n.output_var {

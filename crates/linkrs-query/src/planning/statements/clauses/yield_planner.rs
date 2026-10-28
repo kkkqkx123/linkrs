@@ -206,7 +206,7 @@ impl YieldClausePlanner {
         })?;
 
         let offset = skip.unwrap_or(0) as i64;
-        let count = limit.map(|l| l as i64).unwrap_or(i64::MAX);
+        let count = limit.map(|l| l as i64).unwrap_or(LimitNode::UNBOUNDED);
 
         let limit_node = LimitNode::new(input_node.clone(), offset, count).map_err(|e| {
             PlannerError::PlanGenerationFailed(format!("Failed to create paging node: {}", e))

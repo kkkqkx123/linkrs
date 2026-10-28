@@ -19,9 +19,7 @@ use crate::optimizer::cost_based::row_estimates::{
 };
 use crate::optimizer::cost_based::traversal::rewrite_children;
 use crate::optimizer::cost_based::traversal_logical::rewrite_children_logical;
-use crate::optimizer::cost_based::{
-    SortContext, SortEliminationDecision, SortEliminationOptimizer,
-};
+use crate::optimizer::cost_based::SortEliminationOptimizer;
 use crate::optimizer::stats::feedback::cardinality::CardinalityFeedbackManager;
 use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
@@ -44,6 +42,12 @@ pub fn rewrite_sort_with_limits(
 
     // Try the Limit -> Sort pattern at this level first.
     if let Limit(limit) = node {
+        if limit.is_unbounded() {
+            let mut closure = |child: &PlanNodeEnum| {
+                rewrite_sort_with_limits(child, optimizer, stats, selectivity, cardinality, notes)
+            };
+            return rewrite_children(node, &mut closure);
+        }
         if let Sort(sort) = limit.input() {
             let offset = limit.offset();
             let count = limit.count();
@@ -54,32 +58,27 @@ pub fn rewrite_sort_with_limits(
                     selectivity,
                     cardinality,
                 );
-                let context =
-                    SortContext::new(sort.clone(), input_rows).with_limit(count + offset.max(0));
-                match optimizer.optimize_with_memory(&context, None) {
-                    SortEliminationDecision::ConvertToTopN { reason, .. } => {
-                        let topn = TopNNode::new(
-                            sort.input().clone(),
-                            sort.sort_items().to_vec(),
-                            count + offset.max(0),
-                        );
-                        if let Ok(topn) = topn {
-                            notes.push(format!(
-                                "sort: convert sort+limit -> topn (limit={}, offset={}, reason={:?})",
-                                count, offset, reason
-                            ));
-                            let mut new_limit = limit.clone();
-                            new_limit.set_input(PlanNodeEnum::TopN(topn));
-                            return Limit(new_limit);
-                        }
-                    }
-                    SortEliminationDecision::KeepSort { reason, .. } => {
+                let total = count.saturating_add(offset.max(0));
+                if optimizer
+                    .check_topn_conversion_cost(sort.sort_items(), total, input_rows)
+                    .is_some()
+                {
+                    let topn =
+                        TopNNode::new(sort.input().clone(), sort.sort_items().to_vec(), total);
+                    if let Ok(topn) = topn {
                         notes.push(format!(
-                            "sort: keep sort+limit (limit={}, offset={}, reason={:?})",
-                            count, offset, reason
+                            "sort: convert sort+limit -> topn (limit={}, offset={})",
+                            count, offset
                         ));
+                        let mut new_limit = limit.clone();
+                        new_limit.set_input(PlanNodeEnum::TopN(topn));
+                        return Limit(new_limit);
                     }
                 }
+                notes.push(format!(
+                    "sort: keep sort+limit (limit={}, offset={})",
+                    count, offset
+                ));
             }
         }
     }
@@ -108,13 +107,21 @@ pub fn rewrite_sort_with_limits_logical(
 
     // Try the Limit -> Sort pattern at this level first.
     if let Limit(limit) = node {
+        if limit.count
+            == crate::planning::plan::core::nodes::operation::sort_node::LimitNode::UNBOUNDED
+        {
+            let mut closure = |child: &LogicalNodeEnum| {
+                rewrite_sort_with_limits_logical(child, optimizer, stats, selectivity, notes)
+            };
+            return rewrite_children_logical(node, &mut closure);
+        }
         if let Sort(sort) = limit.input() {
             let offset = limit.offset;
             let count = limit.count;
             if offset >= 0 && count > 0 {
                 let input_rows =
                     estimate_node_output_rows_logical(sort.input(), stats, selectivity);
-                let total = count + offset.max(0);
+                let total = count.saturating_add(offset.max(0));
                 if optimizer
                     .check_topn_conversion_cost(&sort.sort_items, total, input_rows)
                     .is_some()

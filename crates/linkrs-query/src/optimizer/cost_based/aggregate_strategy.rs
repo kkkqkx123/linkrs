@@ -22,5 +22,7 @@ mod selector;
 mod strategy;
 
 pub use context::AggregateContext;
-pub use selector::{walk_aggregate_strategies_logical, AggregateStrategySelector};
+pub use selector::{
+    describe_aggregate_strategy, walk_aggregate_strategies_logical, AggregateStrategySelector,
+};
 pub use strategy::{AggregateStrategy, AggregateStrategyDecision, SelectionReason};

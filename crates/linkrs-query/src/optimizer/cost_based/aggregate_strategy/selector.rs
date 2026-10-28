@@ -429,14 +429,37 @@ impl AggregateStrategySelector {
     }
 }
 
-// =====================================================================
-// Logical-plan variant (PlanNodeEnum logic/physical separation).
-//
-// The aggregation strategy decision is taken on the pure logical tree
-// (`LogicalNodeEnum`) and emits the same `aggregate:` note as the physical
-// walker in the engine. The tree is returned unchanged — the strategy is a
-// decision note consumed by the physical planner.
-// =====================================================================
+/// Shared aggregate-strategy decision core: plain inputs in, CBO note out.
+///
+/// Both the physical walker (`OptimizerEngine::select_aggregate_strategies`)
+/// and the logical walker (`walk_aggregate_strategies_logical`) resolve the
+/// strategy through this single core, so the decision and the note format
+/// cannot drift between the two trees. Callers only supply the already
+/// extracted group keys, function count, and input row estimate.
+pub fn describe_aggregate_strategy(
+    space: &str,
+    group_keys: Vec<String>,
+    agg_function_count: usize,
+    input_rows: u64,
+    selector: &AggregateStrategySelector,
+) -> String {
+    let context = AggregateContext {
+        input_rows,
+        group_keys,
+        agg_function_count,
+        memory_limit: 0,
+        input_is_sorted: false,
+        sort_keys_match_group_keys: false,
+        is_deterministic: true,
+        complexity_score: 0,
+        table_name: None,
+    };
+    let decision = selector.select_strategy(space, &context);
+    format!(
+        "aggregate: strategy={:?} (reason={:?}, est_rows={})",
+        decision.strategy, decision.reason, decision.estimated_output_rows
+    )
+}
 
 /// Walk a logical plan tree and record the aggregation strategy decision
 /// for every aggregate node as a CBO note (cost-driven, observable in
@@ -452,25 +475,16 @@ pub fn walk_aggregate_strategies_logical(
 
     if let Aggregate(aggregate) = node {
         let input_rows = estimate_node_output_rows_logical(aggregate.input(), stats, selectivity);
-        let context = AggregateContext {
-            input_rows,
-            group_keys: aggregate
+        notes.push(describe_aggregate_strategy(
+            stats.space().unwrap_or(""),
+            aggregate
                 .group_key_exprs
                 .iter()
                 .map(|e| e.to_expression_string())
                 .collect(),
-            agg_function_count: aggregate.aggregation_functions.len(),
-            memory_limit: 0,
-            input_is_sorted: false,
-            sort_keys_match_group_keys: false,
-            is_deterministic: true,
-            complexity_score: 0,
-            table_name: None,
-        };
-        let decision = selector.select_strategy(stats.space().unwrap_or(""), &context);
-        notes.push(format!(
-            "aggregate: strategy={:?} (reason={:?}, est_rows={})",
-            decision.strategy, decision.reason, decision.estimated_output_rows
+            aggregate.aggregation_functions.len(),
+            input_rows,
+            selector,
         ));
     }
 

@@ -1,5 +1,4 @@
 use crate::optimizer::cost_based::subquery_unnesting::UnnestDecision;
-use crate::optimizer::cost_based::AggregateContext;
 use crate::optimizer::cost_based::{
     AggregateStrategySelector, IndexSelector, SortEliminationOptimizer,
 };
@@ -48,7 +47,7 @@ impl OptimizerEngine {
 
         current_plan = self.apply_intersect_to_join_rewrite(current_plan, space);
 
-        current_plan = self.apply_physical_mapping(current_plan);
+        current_plan = self.apply_physical_mapping(current_plan)?;
 
         if self.enable_heuristic {
             log::debug!("Starting physical heuristic optimization");
@@ -117,44 +116,31 @@ impl OptimizerEngine {
         plan
     }
 
-    fn apply_physical_mapping(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+    fn apply_physical_mapping(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
         let needs_mapping = plan.logical_plan.as_ref().is_some_and(|logical| {
             crate::planning::physical_mapper::PhysicalMapper::needs_physical_mapping(&logical.root)
         });
         if !needs_mapping {
-            return plan;
+            return Ok(plan);
         }
         if let Some(logical) = plan.logical_plan.as_ref() {
             if let Some(root) = plan.root.take() {
                 let mapped =
                     crate::planning::physical_mapper::PhysicalMapper::map(logical.root.clone());
-                let (merged, notes) =
-                    crate::planning::physical_mapper::PhysicalMapper::merge_physical_hints(
-                        mapped, root,
-                    );
-                if notes.is_empty() {
-                    log::debug!("PhysicalMapping: merged logical mapping into physical plan");
-                } else {
-                    let fallback_count = notes.len();
-                    for note in &notes {
-                        log::warn!("{note}");
+                match crate::planning::physical_mapper::PhysicalMapper::merge_physical_hints(
+                    mapped, root,
+                ) {
+                    Ok(merged) => {
+                        log::debug!("PhysicalMapping: merged logical mapping into physical plan");
+                        plan.set_root(merged);
                     }
-                    plan.cbo_notes.extend(notes);
-                    plan.cbo_notes.push(format!(
-                        "factorization: physical_mapping_fallback_total={}",
-                        fallback_count
-                    ));
-                    if let Some(ref ms) = self.metrics_stats {
-                        ms.add_value_with_amount(
-                            linkrs_metrics::MetricType::FactorizationPhysicalMappingFallbackTotal,
-                            fallback_count as u64,
-                        );
+                    Err(err) => {
+                        return Err(OptimizeError::PlanOptimizationError(err.to_string()));
                     }
                 }
-                plan.set_root(merged);
             }
         }
-        plan
+        Ok(plan)
     }
 
     fn apply_partitioning_selection(
@@ -575,21 +561,12 @@ impl OptimizerEngine {
         if let Aggregate(aggregate) = node {
             let input_rows =
                 estimate_node_output_rows(aggregate.input(), stats, &self.selectivity_estimator);
-            let context = AggregateContext {
+            notes.push(crate::optimizer::cost_based::describe_aggregate_strategy(
+                stats.space().unwrap_or(""),
+                aggregate.group_keys().to_vec(),
+                aggregate.aggregation_functions().len(),
                 input_rows,
-                group_keys: aggregate.group_keys().to_vec(),
-                agg_function_count: aggregate.aggregation_functions().len(),
-                memory_limit: 0,
-                input_is_sorted: false,
-                sort_keys_match_group_keys: false,
-                is_deterministic: true,
-                complexity_score: 0,
-                table_name: None,
-            };
-            let decision = selector.select_strategy(stats.space().unwrap_or(""), &context);
-            notes.push(format!(
-                "aggregate: strategy={:?} (reason={:?}, est_rows={})",
-                decision.strategy, decision.reason, decision.estimated_output_rows
+                selector,
             ));
         }
 

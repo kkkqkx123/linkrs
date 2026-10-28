@@ -167,9 +167,18 @@ pub(in crate::executor::streaming::plan::arena_builder) fn build_limit_spec(
     let offset = u32::try_from(node.offset()).map_err(|_| {
         PlanBuildError::missing_value("Limit", node.id(), "offset", "Limit offset must fit in u32")
     })?;
-    let limit = u32::try_from(node.count()).map_err(|_| {
-        PlanBuildError::missing_value("Limit", node.id(), "count", "Limit count must fit in u32")
-    })?;
+    let limit = if node.is_unbounded() {
+        u32::MAX
+    } else {
+        u32::try_from(node.count()).map_err(|_| {
+            PlanBuildError::missing_value(
+                "Limit",
+                node.id(),
+                "count",
+                "Limit count must fit in u32",
+            )
+        })?
+    };
     Ok(UnarySpec::Limit { offset, limit })
 }
 

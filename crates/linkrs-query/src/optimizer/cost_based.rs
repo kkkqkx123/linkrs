@@ -48,8 +48,8 @@ pub mod traversal_logical;
 pub use index::{IndexSelection, IndexSelector, PredicateOperator, PropertyPredicate};
 
 pub use aggregate_strategy::{
-    AggregateContext, AggregateStrategy, AggregateStrategyDecision, AggregateStrategySelector,
-    SelectionReason as AggregateSelectionReason,
+    describe_aggregate_strategy, AggregateContext, AggregateStrategy, AggregateStrategyDecision,
+    AggregateStrategySelector, SelectionReason as AggregateSelectionReason,
 };
 
 pub use join_order::{

@@ -104,70 +104,23 @@ fn try_rewrite_scan(
         return None;
     }
 
-    let Some((tag_id, available_indexes)) = stats_manager.get_tag_indexes(&space, &tag) else {
-        notes.push(format!(
-            "index: no catalog for tag '{tag}' in space '{space}', full scan fallback"
-        ));
-        return None;
-    };
-    if available_indexes.is_empty() {
-        notes.push(format!(
-            "index: empty catalog for tag '{tag}' in space '{space}', full scan fallback"
-        ));
-        return None;
-    }
-    let _ = tag_id;
-
-    let selection = selector.select_index(&space, &tag, &predicates, &available_indexes);
-    let (index_name, selectivity, estimated_cost) = match selection {
-        IndexSelection::PropertyIndex {
-            index_name,
-            selectivity,
-            estimated_cost,
-            ..
-        } => (index_name, selectivity, estimated_cost),
-        IndexSelection::FullScan { .. } | IndexSelection::TagIndex { .. } => return None,
-    };
-
-    let index = available_indexes
-        .iter()
-        .find(|candidate| candidate.name == index_name)?;
-    let scan_limits = build_scan_limits(&predicates, &index.properties);
-    if scan_limits.is_empty() {
-        return None;
-    }
-
-    let scan_type = if scan_limits.len() == 1 && scan_limits[0].scan_type == ScanType::Unique {
-        ScanType::Unique
-    } else {
-        ScanType::Range
-    };
-
-    let full_scan = full_scan_cost(selector, &space, &tag, &available_indexes, &predicates);
-    let note = format!(
-        "index: tag '{}' -> index_scan('{}') (sel={:.3}, cost {:.2} vs full_scan {:.2})",
-        tag,
-        index_name,
-        selectivity,
-        estimated_cost,
-        full_scan.unwrap_or(estimated_cost)
-    );
+    let decision = decide_index_scan(&space, &tag, &predicates, selector, stats_manager, notes)?;
 
     let mut index_scan = IndexScanNode::new(
         scan.space_id(),
-        tag_id,
-        index.id,
-        index_name,
+        decision.tag_id,
+        decision.index_id,
+        decision.index_name,
         tag,
-        scan_type,
+        decision.scan_type,
     );
-    index_scan.set_scan_limits(scan_limits);
+    index_scan.set_scan_limits(decision.scan_limits);
     index_scan.set_col_names(scan.col_names().to_vec());
     if let Some(output_var) = scan.output_var() {
         index_scan.set_output_var(output_var.to_string());
     }
 
-    Some((PlanNodeEnum::IndexScan(index_scan), note))
+    Some((PlanNodeEnum::IndexScan(index_scan), decision.note))
 }
 
 /// Extract property predicates from a conjunctive filter expression.
@@ -341,25 +294,103 @@ fn full_scan_cost(
     }
 }
 
-// =====================================================================
-// Logical-plan variant (PlanNodeEnum logic/physical separation).
-//
-// The index selection decision is taken on the pure logical tree
-// (`LogicalNodeEnum`) and emits the same `index:` note as the physical
-// walker. The logical tree stays pure — the IndexScan rewrite is applied
-// by the physical walker on the executable root.
-// =====================================================================
+/// Shared index-selection decision: plain inputs in, winning index out.
+///
+/// Both the physical rewriter (`try_rewrite_scan`, which builds the
+/// `IndexScan` node) and the logical marker (`try_decide_index_scan_logical`,
+/// which stamps the `IndexHint`) resolve tag, space, predicates, and catalog
+/// through this single core, so threshold and scan-type choices cannot drift
+/// between the two trees. Adapters only translate the decision into their own
+/// node type.
+struct IndexDecision {
+    index_name: String,
+    tag_id: i32,
+    index_id: u64,
+    scan_type: ScanType,
+    scan_limits: Vec<IndexLimit>,
+    selectivity: f64,
+    note: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decide_index_scan(
+    space: &str,
+    tag: &str,
+    predicates: &[PropertyPredicate],
+    selector: &IndexSelector,
+    stats_manager: &Arc<StatisticsManager>,
+    notes: &mut Vec<String>,
+) -> Option<IndexDecision> {
+    let Some((tag_id, available_indexes)) = stats_manager.get_tag_indexes(space, tag) else {
+        notes.push(format!(
+            "index: no catalog for tag '{tag}' in space '{space}', full scan fallback"
+        ));
+        return None;
+    };
+    if available_indexes.is_empty() {
+        notes.push(format!(
+            "index: empty catalog for tag '{tag}' in space '{space}', full scan fallback"
+        ));
+        return None;
+    }
+
+    let selection = selector.select_index(space, tag, predicates, &available_indexes);
+    let (index_name, selectivity, estimated_cost) = match selection {
+        IndexSelection::PropertyIndex {
+            index_name,
+            selectivity,
+            estimated_cost,
+            ..
+        } => (index_name, selectivity, estimated_cost),
+        IndexSelection::FullScan { .. } | IndexSelection::TagIndex { .. } => return None,
+    };
+
+    let index = available_indexes
+        .iter()
+        .find(|candidate| candidate.name == index_name)?;
+    let scan_limits = build_scan_limits(predicates, &index.properties);
+    if scan_limits.is_empty() {
+        return None;
+    }
+
+    let scan_type = if scan_limits.len() == 1 && scan_limits[0].scan_type == ScanType::Unique {
+        ScanType::Unique
+    } else {
+        ScanType::Range
+    };
+
+    let full_scan = full_scan_cost(selector, space, tag, &available_indexes, predicates);
+    let note = format!(
+        "index: tag '{}' -> index_scan('{}') (sel={:.3}, cost {:.2} vs full_scan {:.2})",
+        tag,
+        index_name,
+        selectivity,
+        estimated_cost,
+        full_scan.unwrap_or(estimated_cost)
+    );
+
+    Some(IndexDecision {
+        index_name,
+        tag_id,
+        index_id: index.id,
+        scan_type,
+        scan_limits,
+        selectivity,
+        note,
+    })
+}
 
 // =====================================================================
 // Logical-plan variant (PlanNodeEnum logic/physical separation).
 //
 // The index selection decision is taken on the pure logical tree
-// (`LogicalNodeEnum`) and emits the same `index:` note as the physical
-// walker. The winning decision is additionally stamped onto the logical
-// scan as an index hint plus estimated cardinality, so the full
-// logical-to-physical mapping rebuilds the index access without
-// consulting the diverged physical tree. The physical walker still
-// applies the structural rewrite on the executable root.
+// (`LogicalNodeEnum`) through the shared `decide_index_scan` core above and
+// emits the same `index:` note as the physical walker. The logical tree
+// stays pure — the IndexScan rewrite is applied by the physical walker on
+// the executable root. The winning decision is additionally stamped onto the
+// logical scan as an index hint plus estimated cardinality, so the full
+// logical-to-physical mapping rebuilds the index access without consulting
+// the diverged physical tree.
 // =====================================================================
 
 /// Walk a logical plan tree and record the cost-based index selection
@@ -438,66 +469,19 @@ fn try_decide_index_scan_logical(
         return None;
     }
 
-    let Some((tag_id, available_indexes)) = stats_manager.get_tag_indexes(&space, &tag) else {
-        notes.push(format!(
-            "index: no catalog for tag '{tag}' in space '{space}', full scan fallback"
-        ));
-        return None;
-    };
-    if available_indexes.is_empty() {
-        notes.push(format!(
-            "index: empty catalog for tag '{tag}' in space '{space}', full scan fallback"
-        ));
-        return None;
-    }
+    let decision = decide_index_scan(&space, &tag, &predicates, selector, stats_manager, notes)?;
 
-    let selection = selector.select_index(&space, &tag, &predicates, &available_indexes);
-    let (index_name, selectivity, estimated_cost) = match selection {
-        IndexSelection::PropertyIndex {
-            index_name,
-            selectivity,
-            estimated_cost,
-            ..
-        } => (index_name, selectivity, estimated_cost),
-        IndexSelection::FullScan { .. } | IndexSelection::TagIndex { .. } => return None,
-    };
-
-    let index = available_indexes
-        .iter()
-        .find(|candidate| candidate.name == index_name)?;
-    let scan_limits = build_scan_limits(&predicates, &index.properties);
-    if scan_limits.is_empty() {
-        return None;
-    }
-
-    let scan_type = if scan_limits.len() == 1 && scan_limits[0].scan_type == ScanType::Unique {
-        ScanType::Unique
-    } else {
-        ScanType::Range
-    };
     let rows = stats_manager.get_vertex_count(&space, &tag);
-    let estimated = (selectivity * rows as f64).round() as u64;
+    let estimated = (decision.selectivity * rows as f64).round() as u64;
     let hint = IndexHint::new(
-        index_name.clone(),
+        decision.index_name,
         tag.clone(),
-        tag_id,
-        index.id,
-        scan_type.as_str().to_string(),
+        decision.tag_id,
+        decision.index_id,
+        decision.scan_type.as_str().to_string(),
     );
 
-    let full_scan = full_scan_cost(selector, &space, &tag, &available_indexes, &predicates);
-    Some((
-        hint,
-        estimated,
-        format!(
-            "index: tag '{}' -> index_scan('{}') (sel={:.3}, cost {:.2} vs full_scan {:.2})",
-            tag,
-            index_name,
-            selectivity,
-            estimated_cost,
-            full_scan.unwrap_or(estimated_cost)
-        ),
-    ))
+    Some((hint, estimated, decision.note))
 }
 
 #[cfg(test)]

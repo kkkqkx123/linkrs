@@ -35,27 +35,36 @@ impl SetOperationPlanner {
     }
 
     /// Build the sub-context for one side of a set operation.
+    ///
+    /// The side text is parsed into its own AST and attached: the side
+    /// planner (e.g. MATCH) reads pattern topology from the parsed
+    /// statement, while the enclosing set-operation AST must not leak
+    /// into the side planner.
     fn side_context<'b>(
         ctx: &'b crate::planning::context::PlanContext<'b>,
         side: &'b BoundStatement,
         query_text: &str,
-    ) -> crate::planning::context::PlanContext<'b> {
+    ) -> Result<crate::planning::context::PlanContext<'b>, PlannerError> {
         let mut rctx = (*ctx.qctx.request_context_arc()).clone();
         rctx.query = query_text.to_string();
         let mut qctx = crate::QueryContext::new(std::sync::Arc::new(rctx));
         if let Some(space) = ctx.qctx.space_info() {
             qctx.set_space_info(space.clone());
         }
-        // ast stays None on purpose: this side carries its own query text
-        // (`rctx.query` above), while `ctx.ast` parses the whole set
-        // operation, so it must not leak into the side planner.
-        crate::planning::context::PlanContext {
+        let mut parser = crate::parser::Parser::new(query_text);
+        let parsed = parser.parse().map_err(|e| {
+            PlannerError::InvalidAstContext(format!(
+                "failed to parse set-operation side query: {}",
+                e
+            ))
+        })?;
+        Ok(crate::planning::context::PlanContext {
             bound: side,
             qctx: std::sync::Arc::new(qctx),
             metadata: ctx.metadata,
-            ast: None,
+            ast: Some(parsed.ast),
             join_order_stats: ctx.join_order_stats.clone(),
-        }
+        })
     }
 
     fn side_query_texts(source: &str) -> (String, String) {
@@ -280,8 +289,8 @@ impl Planner for SetOperationPlanner {
         };
 
         let (left_text, right_text) = Self::side_query_texts(ctx.qctx.query());
-        let left_ctx = Self::side_context(ctx, &set_op.left, &left_text);
-        let right_ctx = Self::side_context(ctx, &set_op.right, &right_text);
+        let left_ctx = Self::side_context(ctx, &set_op.left, &left_text)?;
+        let right_ctx = Self::side_context(ctx, &set_op.right, &right_text)?;
         let left_plan = self.plan_bound_subquery(&left_ctx, 1)?;
         let right_plan = self.plan_bound_subquery(&right_ctx, 1)?;
 
@@ -317,8 +326,8 @@ impl SetOperationPlanner {
         depth: usize,
     ) -> Result<SubPlan, PlannerError> {
         let (left_text, right_text) = Self::side_query_texts(ctx.qctx.query());
-        let left_ctx = Self::side_context(ctx, &set_op.left, &left_text);
-        let right_ctx = Self::side_context(ctx, &set_op.right, &right_text);
+        let left_ctx = Self::side_context(ctx, &set_op.left, &left_text)?;
+        let right_ctx = Self::side_context(ctx, &set_op.right, &right_text)?;
         let left_plan = self.plan_bound_subquery(&left_ctx, depth)?;
         let right_plan = self.plan_bound_subquery(&right_ctx, depth)?;
 

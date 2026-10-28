@@ -133,6 +133,13 @@ define_plan_node_with_deps! {
 }
 
 impl LimitNode {
+    /// Unbounded row count used for offset-only pagination.
+    ///
+    /// The single named location for the skip semantic; converters test
+    /// membership through `is_unbounded` instead of comparing against a
+    /// magic integer at each call site.
+    pub const UNBOUNDED: i64 = i64::MAX;
+
     /// Create a new restriction node.
     pub fn new(
         input: crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
@@ -152,6 +159,14 @@ impl LimitNode {
         })
     }
 
+    /// Create an offset-only node without an upper bound.
+    pub fn new_skip(
+        input: crate::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum,
+        offset: i64,
+    ) -> Result<Self, crate::planning::planner::PlannerError> {
+        Self::new(input, offset, Self::UNBOUNDED)
+    }
+
     /// Obtain the offset value.
     pub fn offset(&self) -> i64 {
         self.offset
@@ -160,6 +175,11 @@ impl LimitNode {
     /// Obtain the count.
     pub fn count(&self) -> i64 {
         self.count
+    }
+
+    /// Whether this node carries no upper bound.
+    pub fn is_unbounded(&self) -> bool {
+        self.count == Self::UNBOUNDED
     }
 }
 

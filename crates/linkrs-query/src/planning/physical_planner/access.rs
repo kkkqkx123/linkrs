@@ -109,6 +109,9 @@ pub(super) fn convert_get_neighbors(
 pub(super) fn convert_scan_vertices(
     n: crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode,
 ) -> PlanNodeEnum {
+    if let Some(hint) = n.index_hint.clone() {
+        return index_scan_from_vertices_hint(&n, &hint);
+    }
     let mut node =
         crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode::new(
             n.space_id,
@@ -135,6 +138,9 @@ pub(super) fn convert_scan_vertices(
 pub(super) fn convert_scan_edges(
     n: crate::planning::plan::logical::logical_nodes::access::LogicalScanEdgesNode,
 ) -> PlanNodeEnum {
+    if let Some(hint) = n.index_hint.clone() {
+        return index_scan_from_edges_hint(&n, &hint);
+    }
     let edge_type = n.edge_type.unwrap_or_default();
     let mut node = crate::planning::plan::core::nodes::access::graph_scan_node::ScanEdgesNode::new(
         n.space_id, &edge_type,
@@ -152,4 +158,60 @@ pub(super) fn convert_scan_edges(
     node.set_col_names(n.col_names);
     node.set_column_types(n.column_types);
     PlanNodeEnum::ScanEdges(node)
+}
+
+fn index_scan_from_vertices_hint(
+    scan: &crate::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode,
+    hint: &crate::planning::plan::logical::logical_nodes::access::IndexHint,
+) -> PlanNodeEnum {
+    let mut node =
+        crate::planning::plan::core::nodes::access::index_scan::IndexScanNode::new_with_str(
+            scan.space_id,
+            hint.tag_id,
+            hint.index_id,
+            &hint.index_name,
+            &hint.schema_name,
+            &hint.scan_type,
+        );
+    if let Some(expression) = &scan.expression {
+        node.set_filter(expression.clone());
+    }
+    node.set_return_columns(scan.projected_properties.clone());
+    if let Some(limit) = scan.limit {
+        node.set_limit(limit);
+    }
+    if let Some(output_var) = &scan.output_var {
+        node.set_output_var(output_var.clone());
+    }
+    node.set_col_names(scan.col_names.clone());
+    node.set_column_types(scan.column_types.clone());
+    PlanNodeEnum::IndexScan(node)
+}
+
+fn index_scan_from_edges_hint(
+    scan: &crate::planning::plan::logical::logical_nodes::access::LogicalScanEdgesNode,
+    hint: &crate::planning::plan::logical::logical_nodes::access::IndexHint,
+) -> PlanNodeEnum {
+    let mut node =
+        crate::planning::plan::core::nodes::access::index_scan::IndexScanNode::new_with_str(
+            scan.space_id,
+            hint.tag_id,
+            hint.index_id,
+            &hint.index_name,
+            &hint.schema_name,
+            &hint.scan_type,
+        );
+    if let Some(expression) = &scan.expression {
+        node.set_filter(expression.clone());
+    }
+    node.set_return_columns(scan.projected_properties.clone());
+    if let Some(limit) = scan.limit {
+        node.set_limit(limit);
+    }
+    if let Some(output_var) = &scan.output_var {
+        node.set_output_var(output_var.clone());
+    }
+    node.set_col_names(scan.col_names.clone());
+    node.set_column_types(scan.column_types.clone());
+    PlanNodeEnum::IndexScan(node)
 }

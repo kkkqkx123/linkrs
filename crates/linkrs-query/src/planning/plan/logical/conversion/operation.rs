@@ -68,7 +68,7 @@ pub(super) fn convert_sort(n: &SortNode) -> Result<LogicalNodeEnum, ConversionEr
 pub(super) fn convert_limit(n: &LimitNode) -> Result<LogicalNodeEnum, ConversionError> {
     {
         let logical_input = convert_plan(n.input())?;
-        if n.count() == i64::MAX {
+        if n.is_unbounded() {
             return Ok(LogicalNodeEnum::Skip(
                 crate::planning::plan::logical::logical_nodes::operation::LogicalSkipNode {
                     id: n.id(),

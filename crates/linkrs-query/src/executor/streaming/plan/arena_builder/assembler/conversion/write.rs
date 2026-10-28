@@ -21,6 +21,79 @@ impl ArenaPlanAssembler {
         exec_ctx: &ExecutionContext,
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         match node {
+            PlanNodeEnum::InsertVertices(_)
+            | PlanNodeEnum::InsertEdges(_)
+            | PlanNodeEnum::DeleteVertices(_)
+            | PlanNodeEnum::DeleteEdges(_)
+            | PlanNodeEnum::PipeDeleteVertices(_)
+            | PlanNodeEnum::PipeDeleteEdges(_)
+            | PlanNodeEnum::Update(_)
+            | PlanNodeEnum::CopyFrom(_)
+            | PlanNodeEnum::CopyTo(_) => {
+                Self::convert_dml_node(node, operators, fragments, op_alloc, frag_alloc, exec_ctx)
+            }
+            PlanNodeEnum::SpaceManage(_)
+            | PlanNodeEnum::TagManage(_)
+            | PlanNodeEnum::EdgeManage(_)
+            | PlanNodeEnum::IndexManage(_)
+            | PlanNodeEnum::DeleteIndex(_)
+            | PlanNodeEnum::UserManage(_)
+            | PlanNodeEnum::MacroManage(_)
+            | PlanNodeEnum::TypeManage(_)
+            | PlanNodeEnum::SequenceManage(_)
+            | PlanNodeEnum::ShowStats(_)
+            | PlanNodeEnum::ShowConfigs(_)
+            | PlanNodeEnum::ShowQueries(_)
+            | PlanNodeEnum::ShowSessions(_)
+            | PlanNodeEnum::ShowFunctions(_)
+            | PlanNodeEnum::ShowGraphs(_)
+            | PlanNodeEnum::ShowMacros(_)
+            | PlanNodeEnum::ShowAttachedDatabases(_)
+            | PlanNodeEnum::ShowExtensions(_)
+            | PlanNodeEnum::LoadFrom(_)
+            | PlanNodeEnum::InQueryCall(_) => {
+                Self::convert_ddl_node(node, operators, fragments, op_alloc, frag_alloc, exec_ctx)
+            }
+            PlanNodeEnum::FulltextManage(_)
+            | PlanNodeEnum::FulltextSearch(_)
+            | PlanNodeEnum::FulltextLookup(_)
+            | PlanNodeEnum::MatchFulltext(_)
+            | PlanNodeEnum::VectorManage(_) => Self::convert_retrieval_node(
+                node, operators, fragments, op_alloc, frag_alloc, exec_ctx,
+            ),
+            #[cfg(feature = "vector")]
+            PlanNodeEnum::VectorSearch(_)
+            | PlanNodeEnum::VectorLookup(_)
+            | PlanNodeEnum::VectorMatch(_) => Self::convert_retrieval_node(
+                node, operators, fragments, op_alloc, frag_alloc, exec_ctx,
+            ),
+            PlanNodeEnum::BeginTransaction(_)
+            | PlanNodeEnum::Commit(_)
+            | PlanNodeEnum::Rollback(_)
+            | PlanNodeEnum::Savepoint(_)
+            | PlanNodeEnum::ReleaseSavepoint(_) => {
+                Self::convert_txn_node(node, operators, fragments, op_alloc, frag_alloc, exec_ctx)
+            }
+            PlanNodeEnum::Loop(_)
+            | PlanNodeEnum::PassThrough(_)
+            | PlanNodeEnum::Select(_)
+            | PlanNodeEnum::AppendVertices(_) => Self::convert_control_node(
+                node, operators, fragments, op_alloc, frag_alloc, exec_ctx,
+            ),
+            _ => unreachable!("convert_write_node called with non-write node"),
+        }
+    }
+
+    /// Data-modification sinks: graph writes, pipe deletes, copies.
+    pub(crate) fn convert_dml_node(
+        node: &PlanNodeEnum,
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        exec_ctx: &ExecutionContext,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        match node {
             PlanNodeEnum::InsertVertices(iv_node) => {
                 let (child_fid, _) = Self::push_source_op(
                     operators,
@@ -201,8 +274,20 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
+            _ => unreachable!("convert_write_node dispatcher routes only group members here"),
+        }
+    }
 
-            // ── DDL nodes ───────────────────────────────────────────────────────
+    /// Schema and catalog management plus system inspection statements.
+    pub(crate) fn convert_ddl_node(
+        node: &PlanNodeEnum,
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        exec_ctx: &ExecutionContext,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        match node {
             PlanNodeEnum::SpaceManage(sm_node) => {
                 let spec = build_space_manage_spec(sm_node, exec_ctx)?;
                 Self::push_ddl_op(operators, fragments, op_alloc, frag_alloc, node.id(), spec)
@@ -360,8 +445,20 @@ impl ArenaPlanAssembler {
                     col_names: iqc.col_names().to_vec(),
                 },
             ),
+            _ => unreachable!("convert_write_node dispatcher routes only group members here"),
+        }
+    }
 
-            // ── Fulltext nodes ──────────────────────────────────────────────────
+    /// Fulltext and vector retrieval operators.
+    pub(crate) fn convert_retrieval_node(
+        node: &PlanNodeEnum,
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        exec_ctx: &ExecutionContext,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        match node {
             PlanNodeEnum::FulltextManage(fm_node) => {
                 let (child_fid, _) = Self::push_source_op(
                     operators,
@@ -443,7 +540,6 @@ impl ArenaPlanAssembler {
                 )
             }
 
-            // ── Vector nodes ────────────────────────────────────────────────────
             PlanNodeEnum::VectorManage(vm_node) => {
                 let (child_fid, _) = Self::push_source_op(
                     operators,
@@ -527,8 +623,20 @@ impl ArenaPlanAssembler {
                     spec,
                 )
             }
+            _ => unreachable!("convert_write_node dispatcher routes only group members here"),
+        }
+    }
 
-            // ── Transaction nodes ───────────────────────────────────────────────
+    /// Transaction control operators.
+    pub(crate) fn convert_txn_node(
+        node: &PlanNodeEnum,
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        exec_ctx: &ExecutionContext,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        match node {
             PlanNodeEnum::BeginTransaction(_) => Self::push_txn_op(
                 operators,
                 fragments,
@@ -574,8 +682,20 @@ impl ArenaPlanAssembler {
                     name: release_node.savepoint().to_string(),
                 },
             ),
+            _ => unreachable!("convert_write_node dispatcher routes only group members here"),
+        }
+    }
 
-            // ── Unsupported ─────────────────────────────────────────────────────
+    /// Explicitly unsupported control operators and the unary vertex-append operator.
+    pub(crate) fn convert_control_node(
+        node: &PlanNodeEnum,
+        operators: &mut Vec<PhysicalOperatorSpec>,
+        fragments: &mut Vec<FragmentSpec>,
+        op_alloc: &mut PhysicalOperatorIdAllocator,
+        frag_alloc: &mut ArenaFragmentAllocator,
+        exec_ctx: &ExecutionContext,
+    ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
+        match node {
             PlanNodeEnum::Loop(_) => Err(PlanBuildError::unsupported(
                 node.name(),
                 node.id(),

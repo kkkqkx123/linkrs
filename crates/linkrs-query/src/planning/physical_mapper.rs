@@ -6,13 +6,64 @@
 //! mapped tree with the cost-based physical tree so physical choices made
 //! directly on the physical root (index scans with limits, TopN) survive.
 
-use crate::planning::plan::core::nodes::access::index_scan::IndexScanNode;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-use crate::planning::plan::logical::logical_nodes::access::{
-    IndexHint, LogicalScanEdgesNode, LogicalScanVerticesNode,
-};
 use crate::planning::plan::logical::LogicalNodeEnum;
 use crate::planning::plan::PlanNodeEnum;
+
+/// Failure to overlay a mapped logical tree onto the cost-based physical tree.
+///
+/// Carries both operator names plus the child-index path from the root so the
+/// caller can locate the divergence without guessing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhysicalMappingError {
+    /// Mapped and physical nodes share a discriminant but differ in arity.
+    ChildCountDiverged {
+        path: String,
+        mapped: String,
+        physical: String,
+    },
+    /// Same-discriminant children merged but the parent could not be rebuilt.
+    RebuildFailed {
+        path: String,
+        node: String,
+        reason: String,
+    },
+    /// Mapped and physical nodes differ in operator kind.
+    StructureDiverged {
+        path: String,
+        mapped: String,
+        physical: String,
+    },
+}
+
+impl std::fmt::Display for PhysicalMappingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ChildCountDiverged {
+                path,
+                mapped,
+                physical,
+            } => write!(
+                f,
+                "physical mapping child count diverged at {path} (mapped {mapped} vs physical {physical})"
+            ),
+            Self::RebuildFailed { path, node, reason } => write!(
+                f,
+                "physical mapping rebuild failed at {path} for {node}: {reason}"
+            ),
+            Self::StructureDiverged {
+                path,
+                mapped,
+                physical,
+            } => write!(
+                f,
+                "physical mapping structure diverged at {path} (mapped {mapped} vs physical {physical})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PhysicalMappingError {}
 
 /// Full logical-to-physical mapper.
 ///
@@ -29,22 +80,20 @@ pub struct PhysicalMapper;
 impl PhysicalMapper {
     /// Convert a logical plan tree into a physical plan tree.
     ///
-    /// The structure mirrors the shared logical-to-physical converter;
-    /// scan nodes carrying an index hint become index scans instead.
+    /// Index hints travel with the conversion itself: the shared converter
+    /// emits an index scan directly for hinted scans, so no post-pass overlay
+    /// is needed.
     pub fn map(logical: LogicalNodeEnum) -> PlanNodeEnum {
-        // Collect index hints by reference first so the converter below can
-        // consume the logical tree by value: only hinted leaf scans are
-        // cloned instead of the whole tree.
-        let hints = collect_index_hints(&logical);
-        let physical = crate::planning::physical_planner::convert_logical_to_physical(logical);
-        apply_collected_hints(physical, &hints)
+        crate::planning::physical_planner::convert_logical_to_physical(logical)
     }
 
     /// Report whether a logical tree needs the full mapping path.
     ///
     /// Trees without factorization operators or index hints map to the
     /// same structure the physical root already has, so the engine keeps
-    /// the physical root untouched in that case.
+    /// the physical root untouched in that case. Only scan variants that the
+    /// converter can turn into index scans participate; neighbor expansion
+    /// carries no index overlay and never triggers a remap.
     pub(crate) fn needs_physical_mapping(logical: &LogicalNodeEnum) -> bool {
         if matches!(logical, LogicalNodeEnum::Flatten(_)) {
             return true;
@@ -59,11 +108,6 @@ impl PhysicalMapper {
                 return true;
             }
         }
-        if let LogicalNodeEnum::GetNeighbors(node) = logical {
-            if node.index_hint.is_some() {
-                return true;
-            }
-        }
         logical
             .children_ref()
             .iter()
@@ -74,17 +118,16 @@ impl PhysicalMapper {
     ///
     /// The mapped tree supplies structure (notably factorization operator
     /// positions); the physical tree supplies cost-based access choices.
-    /// Returns the merged tree plus notes for every position where the
-    /// trees diverged and the physical choice won, so no fallback is
-    /// silent.
+    /// Intentional overlays (factorization preserved, cost-based index scan
+    /// or wired TopN winning) succeed. Any other structural divergence is an
+    /// explicit error carrying both operator names and the tree path.
     pub fn merge_physical_hints(
         mapped: PlanNodeEnum,
         physical: PlanNodeEnum,
-    ) -> (PlanNodeEnum, Vec<String>) {
-        let mut notes = Vec::new();
+    ) -> Result<PlanNodeEnum, PhysicalMappingError> {
         let mut mapped = mapped;
-        merge_inner(&mut mapped, physical, &mut notes);
-        (mapped, notes)
+        merge_inner(&mut mapped, physical, &mut Vec::new(), "root")?;
+        Ok(mapped)
     }
 
     /// Collect factorization operator positions for plan diagnostics.
@@ -98,168 +141,27 @@ impl PhysicalMapper {
     }
 }
 
-/// A hinted leaf scan collected from the logical tree with its position.
-///
-/// Only the scan node itself is cloned (it carries no subtree); the path
-/// records child indices from the root following `LogicalNodeEnum::children_ref` order,
-/// which the shared converter preserves one-to-one.
-struct IndexHintTarget {
-    path: Vec<usize>,
-    scan: HintedScan,
-}
-
-/// A logical scan node carrying an index hint.
-enum HintedScan {
-    Vertices(LogicalScanVerticesNode),
-    Edges(LogicalScanEdgesNode),
-}
-
-/// Walk the logical tree by reference and collect every hinted scan.
-fn collect_index_hints(logical: &LogicalNodeEnum) -> Vec<IndexHintTarget> {
-    fn walk(node: &LogicalNodeEnum, path: &mut Vec<usize>, out: &mut Vec<IndexHintTarget>) {
-        match node {
-            LogicalNodeEnum::ScanVertices(scan) if scan.index_hint.is_some() => {
-                out.push(IndexHintTarget {
-                    path: path.clone(),
-                    scan: HintedScan::Vertices(scan.clone()),
-                });
-            }
-            LogicalNodeEnum::ScanEdges(scan) if scan.index_hint.is_some() => {
-                out.push(IndexHintTarget {
-                    path: path.clone(),
-                    scan: HintedScan::Edges(scan.clone()),
-                });
-            }
-            _ => {}
-        }
-        for (index, child) in node.children_ref().iter().enumerate() {
-            path.push(index);
-            walk(child, path, out);
-            path.pop();
-        }
-    }
-
-    let mut out = Vec::new();
-    walk(logical, &mut Vec::new(), &mut out);
-    out
-}
-
-/// Overlay collected index hints onto a converted physical tree.
-///
-/// Each hint descends by its recorded child-index path; hints whose path no
-/// longer resolves (or whose target is not the matching scan) are skipped,
-/// keeping the converted node unchanged.
-fn apply_collected_hints(mut physical: PlanNodeEnum, hints: &[IndexHintTarget]) -> PlanNodeEnum {
-    for hint in hints {
-        let Some(target) = descend_to_path(&mut physical, &hint.path) else {
-            continue;
-        };
-        let replacement = match (&hint.scan, &*target) {
-            (HintedScan::Vertices(scan), PlanNodeEnum::ScanVertices(_)) => scan
-                .index_hint
-                .as_ref()
-                .map(|hint| index_scan_from_hint(scan, hint)),
-            (HintedScan::Edges(scan), PlanNodeEnum::ScanEdges(_)) => scan
-                .index_hint
-                .as_ref()
-                .map(|hint| index_scan_from_edge_hint(scan, hint)),
-            _ => None,
-        };
-        if let Some(node) = replacement {
-            *target = node;
-        }
-    }
-    physical
-}
-
-/// Descend a physical tree by child-index path, returning the target slot.
-///
-/// Returns `None` when any step does not resolve, mirroring the previous
-/// parallel walk's shape-divergence fallback.
-fn descend_to_path<'a>(
-    mut node: &'a mut PlanNodeEnum,
-    path: &[usize],
-) -> Option<&'a mut PlanNodeEnum> {
-    use crate::optimizer::cost::child_accessor::ChildAccessor;
-
-    for &index in path {
-        node = node.get_child_mut(index)?;
-    }
-    Some(node)
-}
-
-/// Build an index scan from a hinted logical scan.
-///
-/// Column bindings, the residual filter, the projection list and the
-/// limit travel with the node; scan limits stay with the cost-based
-/// physical choice and win during the merge when present.
-fn index_scan_from_hint(scan: &LogicalScanVerticesNode, hint: &IndexHint) -> PlanNodeEnum {
-    let mut node = IndexScanNode::new_with_str(
-        scan.space_id,
-        hint.tag_id,
-        hint.index_id,
-        &hint.index_name,
-        &hint.schema_name,
-        &hint.scan_type,
-    );
-    if let Some(expression) = &scan.expression {
-        node.set_filter(expression.clone());
-    }
-    node.set_return_columns(scan.projected_properties.clone());
-    if let Some(limit) = scan.limit {
-        node.set_limit(limit);
-    }
-    if let Some(output_var) = &scan.output_var {
-        node.set_output_var(output_var.clone());
-    }
-    node.set_col_names(scan.col_names.clone());
-    node.set_column_types(scan.column_types.clone());
-    PlanNodeEnum::IndexScan(node)
-}
-
-/// Build an index scan from a hinted logical edge scan.
-///
-/// Mirrors [`index_scan_from_hint`] for edge lookups: the edge type name
-/// travels as the schema name and the tag id is 0 (edges have no tag id).
-fn index_scan_from_edge_hint(scan: &LogicalScanEdgesNode, hint: &IndexHint) -> PlanNodeEnum {
-    let mut node = IndexScanNode::new_with_str(
-        scan.space_id,
-        hint.tag_id,
-        hint.index_id,
-        &hint.index_name,
-        &hint.schema_name,
-        &hint.scan_type,
-    );
-    if let Some(expression) = &scan.expression {
-        node.set_filter(expression.clone());
-    }
-    node.set_return_columns(scan.projected_properties.clone());
-    if let Some(limit) = scan.limit {
-        node.set_limit(limit);
-    }
-    if let Some(output_var) = &scan.output_var {
-        node.set_output_var(output_var.clone());
-    }
-    node.set_col_names(scan.col_names.clone());
-    node.set_column_types(scan.column_types.clone());
-    PlanNodeEnum::IndexScan(node)
-}
-
-/// Merge one mapped/physical node pair; collects divergence notes.
+/// Merge one mapped/physical node pair.
 ///
 /// The mapped tree is rewritten in place while the physical tree is consumed
 /// by value, so each recursion level holds one pointer plus one owned node
-/// instead of two owned trees.
-fn merge_inner(mapped: &mut PlanNodeEnum, physical: PlanNodeEnum, notes: &mut Vec<String>) {
+/// instead of two owned trees. `path` tracks the child-index route from the
+/// root for error reports.
+fn merge_inner(
+    mapped: &mut PlanNodeEnum,
+    physical: PlanNodeEnum,
+    child_path: &mut Vec<usize>,
+    path: &str,
+) -> Result<(), PhysicalMappingError> {
     // Factorization operators live only on the mapped side and are always
     // preserved; the merge continues below them against the same physical
     // node.
     if let PlanNodeEnum::Flatten(flatten) = mapped {
         let placeholder = PlanNodeEnum::Start(crate::planning::plan::core::nodes::StartNode::new());
         let mut child = std::mem::replace(flatten.input_mut(), placeholder);
-        merge_inner(&mut child, physical, notes);
+        let result = merge_inner(&mut child, physical, child_path, path);
         flatten.set_input(child);
-        return;
+        return result;
     }
     // A cost-based index scan (with limits) always wins over a mapped
     // full scan or a limit-less mapped index scan.
@@ -269,7 +171,7 @@ fn merge_inner(mapped: &mut PlanNodeEnum, physical: PlanNodeEnum, notes: &mut Ve
             PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::IndexScan(_)
         ) {
             *mapped = physical;
-            return;
+            return Ok(());
         }
     }
     // A mapped index scan wins over a physical full scan: the logical
@@ -279,7 +181,7 @@ fn merge_inner(mapped: &mut PlanNodeEnum, physical: PlanNodeEnum, notes: &mut Ve
             &physical,
             PlanNodeEnum::ScanVertices(_) | PlanNodeEnum::ScanEdges(_)
         ) {
-            return;
+            return Ok(());
         }
     }
     // A wired TopN wins over the Sort+Limit shape it was built from.
@@ -289,52 +191,52 @@ fn merge_inner(mapped: &mut PlanNodeEnum, physical: PlanNodeEnum, notes: &mut Ve
             PlanNodeEnum::TopN(_) | PlanNodeEnum::Sort(_) | PlanNodeEnum::Limit(_)
         ) {
             *mapped = physical;
-            return;
+            return Ok(());
         }
     }
     if std::mem::discriminant(&*mapped) == std::mem::discriminant(&physical) {
         use crate::optimizer::cost::child_accessor::ChildAccessor;
 
-        // Compare child counts before detaching either side so the
-        // divergence fallback below returns the untouched physical subtree.
         if mapped.child_count() != physical.child_count() {
-            notes.push(format!(
-                "PhysicalMapping: child count diverged (mapped {} vs physical {}); kept physical subtree",
-                mapped.type_name(),
-                physical.type_name()
-            ));
-            *mapped = physical;
-            return;
+            return Err(PhysicalMappingError::ChildCountDiverged {
+                path: path.to_string(),
+                mapped: mapped.type_name().to_string(),
+                physical: physical.type_name().to_string(),
+            });
         }
         let mut physical = physical;
         let mut mapped_children = mapped.take_children();
         let physical_children = physical.take_children();
         let mut new_children = Vec::with_capacity(mapped_children.len());
-        for (mapped_child, physical_child) in mapped_children.drain(..).zip(physical_children) {
+        for (index, (mapped_child, physical_child)) in
+            mapped_children.drain(..).zip(physical_children).enumerate()
+        {
             let mut merged_child = mapped_child;
-            merge_inner(&mut merged_child, physical_child, notes);
+            child_path.push(index);
+            let child_label = format!("{path}.{index}");
+            merge_inner(&mut merged_child, physical_child, child_path, &child_label)?;
+            child_path.pop();
             new_children.push(merged_child);
         }
         match physical.set_children(new_children) {
             Ok(()) => {
                 *mapped = physical;
+                return Ok(());
             }
             Err(message) => {
-                notes.push(format!(
-                    "PhysicalMapping: rebuild failed for {} ({message}); kept physical subtree",
-                    physical.type_name()
-                ));
-                *mapped = physical;
+                return Err(PhysicalMappingError::RebuildFailed {
+                    path: path.to_string(),
+                    node: physical.type_name().to_string(),
+                    reason: message,
+                });
             }
         }
-        return;
     }
-    notes.push(format!(
-        "PhysicalMapping: structure diverged (mapped {} vs physical {}); kept physical subtree",
-        mapped.type_name(),
-        physical.type_name()
-    ));
-    *mapped = physical;
+    Err(PhysicalMappingError::StructureDiverged {
+        path: path.to_string(),
+        mapped: mapped.type_name().to_string(),
+        physical: physical.type_name().to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -345,6 +247,9 @@ mod tests {
     use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
     use crate::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::planning::plan::core::nodes::operation::flatten_node::FlattenNode;
+    use crate::planning::plan::logical::logical_nodes::access::{
+        IndexHint, LogicalScanVerticesNode,
+    };
     use crate::planning::plan::logical::logical_nodes::flatten::LogicalFlattenNode;
     use crate::planning::plan::logical::logical_nodes::operation::LogicalFilterNode;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -465,8 +370,8 @@ mod tests {
         );
         physical_scan.set_col_names(vec!["n".to_string()]);
         let physical = PlanNodeEnum::IndexScan(physical_scan);
-        let (merged, notes) = PhysicalMapper::merge_physical_hints(mapped, physical);
-        assert!(notes.is_empty());
+        let merged = PhysicalMapper::merge_physical_hints(mapped, physical)
+            .expect("flatten plus index scan merges");
         let flatten = match &merged {
             PlanNodeEnum::Flatten(f) => f,
             other => panic!("expected flatten, got {}", other.type_name()),
@@ -475,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_divergence_keeps_physical_with_note() {
+    fn merge_divergence_reports_explicit_error() {
         let mapped = PhysicalMapper::map(hinted_scan());
         let mut scan = ScanVerticesNode::new(1, "test");
         scan.set_col_names(vec!["n".to_string()]);
@@ -489,10 +394,12 @@ mod tests {
             )
             .expect("filter"),
         );
-        let (merged, notes) = PhysicalMapper::merge_physical_hints(mapped, physical);
-        assert!(matches!(merged, PlanNodeEnum::Filter(_)));
-        assert_eq!(notes.len(), 1);
-        assert!(notes[0].contains("diverged"));
+        let err = PhysicalMapper::merge_physical_hints(mapped, physical)
+            .expect_err("structure divergence must fail explicitly");
+        match err {
+            PhysicalMappingError::StructureDiverged { .. } => {}
+            other => panic!("expected structure divergence, got {other:?}"),
+        }
     }
 
     #[test]
