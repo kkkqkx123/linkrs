@@ -348,9 +348,11 @@ pub fn connect_node_to_edge_expansion(
 
         // Structurally close the plan: the node root becomes the expand
         // node's input inside the SubPlan itself.
+        let upper = new_expand.into_enum();
+        let seed = node_root.clone();
         let mut connected = SubPlan::connect_upstream(
-            SubPlan::from_single_node(new_expand.into_enum()),
-            SubPlan::from_single_node(node_root.clone()),
+            SubPlan::new(Some(upper.clone()), Some(upper)),
+            SubPlan::new(Some(seed.clone()), Some(seed)),
         )?;
         connected.tail = node_plan.tail.or(edge_plan.tail);
 
@@ -398,9 +400,11 @@ pub fn join_edge_expansions(
 
         // Structurally close the plan: the left root becomes the expand
         // node's input inside the SubPlan itself.
+        let upper = new_expand.into_enum();
+        let seed = left_root.clone();
         let mut connected = SubPlan::connect_upstream(
-            SubPlan::from_single_node(new_expand.into_enum()),
-            SubPlan::from_single_node(left_root.clone()),
+            SubPlan::new(Some(upper.clone()), Some(upper)),
+            SubPlan::new(Some(seed.clone()), Some(seed)),
         )?;
         connected.tail = left_plan.tail.or(right_plan.tail);
 

@@ -114,8 +114,7 @@ impl Planner for GroupByPlanner {
         }
 
         // Build the standalone ScanVertices -> Project adapter so a
-        // top-level GROUP BY aggregates over every vertex, mirroring the
-        // legacy transform path. When the GROUP BY is a pipe stage,
+        // top-level GROUP BY aggregates over every vertex. When the GROUP BY is a pipe stage,
         // PipePlanner replaces this adapter with the piped rows.
         let (input_enum, input_tail, input_logical) = self.build_standalone_input(
             &group_keys,

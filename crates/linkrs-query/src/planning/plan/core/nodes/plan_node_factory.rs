@@ -8,7 +8,6 @@ use crate::planning::plan::core::nodes::access::graph_scan_node::{
 use crate::planning::plan::core::nodes::control_flow::control_flow_node::{
     ArgumentNode, LoopNode, PassThroughNode, SelectNode,
 };
-use crate::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
 use crate::planning::plan::core::nodes::graph_operations::graph_operations_node::{
     DataCollectNode, DedupNode, PatternApplyNode, RollUpApplyNode, UnionNode, UnwindNode,
 };
@@ -19,7 +18,6 @@ use crate::planning::plan::core::nodes::traversal::traversal_node::{
     AppendVerticesNode, ExpandAllNode, ExpandNode, TraverseNode,
 };
 use crate::planning::plan::PlanNodeEnum;
-use linkrs_core::types::operators::AggregateFunction;
 use linkrs_core::types::ContextualExpression;
 use linkrs_core::types::EdgeDirection;
 use linkrs_core::YieldColumn;
@@ -72,16 +70,6 @@ impl PlanNodeFactory {
     pub fn create_placeholder_node() -> Result<PlanNodeEnum, crate::planning::planner::PlannerError>
     {
         Ok(PlanNodeEnum::Argument(ArgumentNode::new(-1, "placeholder")))
-    }
-
-    /// Create an aggregate node.
-    pub fn create_aggregate(
-        input: PlanNodeEnum,
-        group_keys: Vec<String>,
-        aggregation_functions: Vec<AggregateFunction>,
-    ) -> Result<PlanNodeEnum, crate::planning::planner::PlannerError> {
-        let aggregate_node = AggregateNode::new(input, group_keys, aggregation_functions)?;
-        Ok(PlanNodeEnum::Aggregate(aggregate_node))
     }
 
     /// Create a sorting node.

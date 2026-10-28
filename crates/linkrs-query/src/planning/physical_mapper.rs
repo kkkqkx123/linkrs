@@ -64,7 +64,8 @@ impl PhysicalMapper {
                 return true;
             }
         }
-        logical_children(logical)
+        logical
+            .children_ref()
             .iter()
             .any(|child| Self::needs_physical_mapping(child))
     }
@@ -91,7 +92,7 @@ impl PhysicalMapper {
         if let LogicalNodeEnum::Flatten(flatten) = node {
             out.push(flatten.group_pos);
         }
-        for child in logical_children(node) {
+        for child in node.children_ref() {
             Self::collect_flatten_positions(child, out);
         }
     }
@@ -100,7 +101,7 @@ impl PhysicalMapper {
 /// A hinted leaf scan collected from the logical tree with its position.
 ///
 /// Only the scan node itself is cloned (it carries no subtree); the path
-/// records child indices from the root following [`logical_children`] order,
+/// records child indices from the root following `LogicalNodeEnum::children_ref` order,
 /// which the shared converter preserves one-to-one.
 struct IndexHintTarget {
     path: Vec<usize>,
@@ -131,7 +132,7 @@ fn collect_index_hints(logical: &LogicalNodeEnum) -> Vec<IndexHintTarget> {
             }
             _ => {}
         }
-        for (index, child) in logical_children(node).iter().enumerate() {
+        for (index, child) in node.children_ref().iter().enumerate() {
             path.push(index);
             walk(child, path, out);
             path.pop();
@@ -334,96 +335,6 @@ fn merge_inner(mapped: &mut PlanNodeEnum, physical: PlanNodeEnum, notes: &mut Ve
         physical.type_name()
     ));
     *mapped = physical;
-}
-
-pub(crate) fn logical_children(
-    node: &crate::planning::plan::logical::LogicalNodeEnum,
-) -> Vec<&crate::planning::plan::logical::LogicalNodeEnum> {
-    use crate::planning::plan::logical::LogicalNodeEnum;
-    match node {
-        LogicalNodeEnum::Flatten(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Project(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Filter(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Sort(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Limit(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Skip(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::TopN(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Sample(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Dedup(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Aggregate(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Window(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Traverse(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Assign(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::PipeDeleteVertices(n) => {
-            n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-        }
-        LogicalNodeEnum::PipeDeleteEdges(n) => {
-            n.input.as_deref().map(|c| vec![c]).unwrap_or_default()
-        }
-        LogicalNodeEnum::DataCollect(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Materialize(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::RollUpApply(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Unwind(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
-        LogicalNodeEnum::Select(n) => {
-            let mut v = Vec::new();
-            if let Some(b) = n.if_branch() {
-                v.push(b);
-            }
-            if let Some(b) = n.else_branch() {
-                v.push(b);
-            }
-            v
-        }
-        LogicalNodeEnum::Loop(n) => n.body().map(|b| vec![b]).unwrap_or_default(),
-        LogicalNodeEnum::InnerJoin(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::LeftJoin(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::RightJoin(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::CrossJoin(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::FullOuterJoin(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::SemiJoin(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::PatternApply(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::CorrelatedApply(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::Apply(n) => vec![n.left_input(), n.right_input()],
-        LogicalNodeEnum::BiExpand(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::BiTraverse(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::MultiShortestPath(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::BFSShortest(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::AllPaths(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::ShortestPath(n) => vec![&n.left, &n.right],
-        LogicalNodeEnum::Expand(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::ExpandAll(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::AppendVertices(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::GetVertices(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::GetNeighbors(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::Union(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::Minus(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::Intersect(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::WcoIntersect(n) => n.deps.iter().collect(),
-        LogicalNodeEnum::Start(_)
-        | LogicalNodeEnum::ScanVertices(_)
-        | LogicalNodeEnum::ScanEdges(_)
-        | LogicalNodeEnum::GetEdges(_)
-        | LogicalNodeEnum::Argument(_)
-        | LogicalNodeEnum::PassThrough(_)
-        | LogicalNodeEnum::BeginTransaction(_)
-        | LogicalNodeEnum::Commit(_)
-        | LogicalNodeEnum::Rollback(_)
-        | LogicalNodeEnum::InsertVertices(_)
-        | LogicalNodeEnum::InsertEdges(_)
-        | LogicalNodeEnum::Update(_)
-        | LogicalNodeEnum::DeleteVertices(_)
-        | LogicalNodeEnum::DeleteEdges(_)
-        | LogicalNodeEnum::DeleteIndex(_)
-        | LogicalNodeEnum::CopyFrom(_)
-        | LogicalNodeEnum::CopyTo(_)
-        | LogicalNodeEnum::FulltextSearch(_)
-        | LogicalNodeEnum::FulltextLookup(_)
-        | LogicalNodeEnum::MatchFulltext(_) => vec![],
-        #[cfg(feature = "vector")]
-        LogicalNodeEnum::VectorSearch(_)
-        | LogicalNodeEnum::VectorLookup(_)
-        | LogicalNodeEnum::VectorMatch(_) => vec![],
-    }
 }
 
 #[cfg(test)]

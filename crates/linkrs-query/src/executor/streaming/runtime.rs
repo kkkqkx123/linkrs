@@ -115,8 +115,7 @@ pub struct ExecutionRuntime {
     /// Behind a `parking_lot::Mutex` because it's written via `&self` (internal
     /// mutability pattern used throughout [`ExecutionRuntime`]).
     shared_scheduler: parking_lot::Mutex<Option<Arc<super::pool::SharedScheduler>>>,
-    /// Query-level morsel worker pool for dynamic partition execution
-    /// Kept for backward compatibility.
+    /// Query-level morsel worker pool for dynamic partition execution.
     /// Created when `max_workers > 1` and no `shared_scheduler` is set;
     /// `None` means serial fallback.
     /// Behind a Mutex so the engine can set the pool after construction.
@@ -494,7 +493,7 @@ impl ExecutionRuntime {
         }
     }
 
-    /// Legacy cancel (no typed reason).  Delegates to [`cancel_with_reason`]
+    /// Direct cancel (no typed reason). Delegates to [`cancel_with_reason`]
     /// with [`CancelReason::UserKill`].
     pub fn cancel(&self) {
         self.cancel_with_reason(CancelReason::UserKill);

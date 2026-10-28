@@ -220,11 +220,13 @@ impl SubPlan {
     /// both a physical tree (`root`/`tail`) and its native logical mirror
     /// (`logical_root`). Statement planners produce fresh dual trees here;
     /// clause planners wrap an input plan and preserve its tail through
-    /// the same entry. Physical-only exits keep using [`SubPlan::new`] /
-    /// [`SubPlan::from_root`] with an explicit justification; migrating a
-    /// dual-tree planner to the single-conversion
+    /// the same entry. Physical-only exits keep using [`SubPlan::new`];
+    /// migrating a dual-tree planner to the single-conversion
     /// [`SubPlan::from_logical_root`] entry only ever touches this
-    /// constructor's callers.
+    /// constructor's callers. Query operators must not gain new
+    /// physical-only construction paths; `new` stays reserved for
+    /// management, system, administrative, and search leaves plus
+    /// transient wiring seeds.
     pub fn from_dual(
         root: Option<PlanNodeEnum>,
         tail: Option<PlanNodeEnum>,
@@ -259,34 +261,6 @@ impl SubPlan {
     /// Obtain the native logical tree, if the planner produced one.
     pub fn logical_root(&self) -> Option<&crate::planning::plan::logical::LogicalNodeEnum> {
         self.logical_root.as_ref()
-    }
-
-    /// Create a SubPlan that contains only the root node.
-    ///
-    /// Like [`SubPlan::new`], the plan carries no logical mirror and is
-    /// reserved for physical-only operators and transient physical wiring
-    /// seeds.
-    pub fn from_root(root: PlanNodeEnum) -> Self {
-        Self {
-            root: Some(root.clone()),
-            tail: Some(root),
-            logical_root: None,
-            join_order_stats_backed: false,
-        }
-    }
-
-    /// Create a SubPlan that contains only a single node.
-    ///
-    /// Like [`SubPlan::new`], the plan carries no logical mirror and is
-    /// reserved for physical-only operators and transient physical wiring
-    /// seeds.
-    pub fn from_single_node(node: PlanNodeEnum) -> Self {
-        Self {
-            root: Some(node.clone()),
-            tail: Some(node),
-            logical_root: None,
-            join_order_stats_backed: false,
-        }
     }
 
     /// Obtain a reference to the root node.
@@ -427,12 +401,10 @@ mod tests {
     fn connect_upstream_attaches_input_structurally() {
         use crate::planning::plan::core::nodes::{ExpandAllNode, StartNode};
 
-        let downstream = SubPlan::from_single_node(PlanNodeEnum::ExpandAll(ExpandAllNode::new(
-            1,
-            vec![],
-            "out",
-        )));
-        let upstream = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+        let downstream_seed = PlanNodeEnum::ExpandAll(ExpandAllNode::new(1, vec![], "out"));
+        let downstream = SubPlan::new(Some(downstream_seed.clone()), Some(downstream_seed));
+        let upstream_seed = PlanNodeEnum::Start(StartNode::new());
+        let upstream = SubPlan::new(Some(upstream_seed.clone()), Some(upstream_seed));
 
         let connected = SubPlan::connect_upstream(downstream, upstream)
             .expect("connect_upstream should succeed");
@@ -454,7 +426,8 @@ mod tests {
         use crate::planning::plan::core::nodes::StartNode;
 
         let empty = SubPlan::new(None, None);
-        let populated = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+        let populated_seed = PlanNodeEnum::Start(StartNode::new());
+        let populated = SubPlan::new(Some(populated_seed.clone()), Some(populated_seed));
 
         assert!(SubPlan::connect_upstream(empty.clone(), populated.clone()).is_err());
         assert!(SubPlan::connect_upstream(populated, empty).is_err());
@@ -464,8 +437,10 @@ mod tests {
     fn connect_upstream_rejects_leaf_downstream() {
         use crate::planning::plan::core::nodes::StartNode;
 
-        let downstream = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
-        let upstream = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+        let downstream_seed = PlanNodeEnum::Start(StartNode::new());
+        let downstream = SubPlan::new(Some(downstream_seed.clone()), Some(downstream_seed));
+        let upstream_seed = PlanNodeEnum::Start(StartNode::new());
+        let upstream = SubPlan::new(Some(upstream_seed.clone()), Some(upstream_seed));
 
         assert!(
             SubPlan::connect_upstream(downstream, upstream).is_err(),

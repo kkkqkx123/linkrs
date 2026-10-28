@@ -393,4 +393,168 @@ impl LogicalNodeEnum {
             Self::WcoIntersect(n) => n.col_names(),
         }
     }
+
+    pub fn children_ref(&self) -> Vec<&LogicalNodeEnum> {
+        match self {
+            Self::Flatten(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Project(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Filter(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Sort(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Limit(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Skip(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::TopN(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Sample(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Dedup(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Aggregate(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Window(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Traverse(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Assign(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::PipeDeleteVertices(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::PipeDeleteEdges(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::DataCollect(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Materialize(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::RollUpApply(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Unwind(n) => n.input.as_deref().map(|c| vec![c]).unwrap_or_default(),
+            Self::Select(n) => {
+                let mut out = Vec::new();
+                if let Some(b) = n.if_branch() {
+                    out.push(b);
+                }
+                if let Some(b) = n.else_branch() {
+                    out.push(b);
+                }
+                out
+            }
+            Self::Loop(n) => n.body().map(|b| vec![b]).unwrap_or_default(),
+            Self::InnerJoin(n) => vec![&n.left, &n.right],
+            Self::LeftJoin(n) => vec![&n.left, &n.right],
+            Self::RightJoin(n) => vec![&n.left, &n.right],
+            Self::CrossJoin(n) => vec![&n.left, &n.right],
+            Self::FullOuterJoin(n) => vec![&n.left, &n.right],
+            Self::SemiJoin(n) => vec![&n.left, &n.right],
+            Self::PatternApply(n) => vec![&n.left, &n.right],
+            Self::CorrelatedApply(n) => vec![&n.left, &n.right],
+            Self::Apply(n) => vec![n.left_input(), n.right_input()],
+            Self::BiExpand(n) => vec![&n.left, &n.right],
+            Self::BiTraverse(n) => vec![&n.left, &n.right],
+            Self::MultiShortestPath(n) => vec![&n.left, &n.right],
+            Self::BFSShortest(n) => vec![&n.left, &n.right],
+            Self::AllPaths(n) => vec![&n.left, &n.right],
+            Self::ShortestPath(n) => vec![&n.left, &n.right],
+            Self::Expand(n) => n.deps.iter().collect(),
+            Self::ExpandAll(n) => n.deps.iter().collect(),
+            Self::AppendVertices(n) => n.deps.iter().collect(),
+            Self::GetVertices(n) => n.deps.iter().collect(),
+            Self::GetNeighbors(n) => n.deps.iter().collect(),
+            Self::Union(n) => n.deps.iter().collect(),
+            Self::Minus(n) => n.deps.iter().collect(),
+            Self::Intersect(n) => n.deps.iter().collect(),
+            Self::WcoIntersect(n) => n.deps.iter().collect(),
+            Self::Start(_)
+            | Self::ScanVertices(_)
+            | Self::ScanEdges(_)
+            | Self::GetEdges(_)
+            | Self::Argument(_)
+            | Self::PassThrough(_)
+            | Self::BeginTransaction(_)
+            | Self::Commit(_)
+            | Self::Rollback(_)
+            | Self::InsertVertices(_)
+            | Self::InsertEdges(_)
+            | Self::Update(_)
+            | Self::DeleteVertices(_)
+            | Self::DeleteEdges(_)
+            | Self::DeleteIndex(_)
+            | Self::CopyFrom(_)
+            | Self::CopyTo(_)
+            | Self::FulltextSearch(_)
+            | Self::FulltextLookup(_)
+            | Self::MatchFulltext(_) => vec![],
+            #[cfg(feature = "vector")]
+            Self::VectorSearch(_) | Self::VectorLookup(_) | Self::VectorMatch(_) => vec![],
+        }
+    }
+
+    pub fn children_mut(&mut self) -> Vec<&mut LogicalNodeEnum> {
+        match self {
+            Self::Flatten(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Project(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Filter(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Sort(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Limit(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Skip(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::TopN(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Sample(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Dedup(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Aggregate(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Window(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Traverse(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Unwind(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::PipeDeleteVertices(n) => {
+                n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default()
+            }
+            Self::PipeDeleteEdges(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::DataCollect(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Materialize(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::RollUpApply(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Assign(n) => n.input.as_deref_mut().map(|c| vec![c]).unwrap_or_default(),
+            Self::Select(n) => {
+                let mut out = Vec::new();
+                if let Some(b) = n.if_branch.as_deref_mut() {
+                    out.push(b);
+                }
+                if let Some(b) = n.else_branch.as_deref_mut() {
+                    out.push(b);
+                }
+                out
+            }
+            Self::Loop(n) => n.body.as_deref_mut().map(|b| vec![b]).unwrap_or_default(),
+            Self::InnerJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::LeftJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::RightJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::CrossJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::FullOuterJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::SemiJoin(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::PatternApply(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::CorrelatedApply(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::Apply(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::BiExpand(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::BiTraverse(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::MultiShortestPath(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::BFSShortest(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::AllPaths(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::ShortestPath(n) => vec![n.left.as_mut(), n.right.as_mut()],
+            Self::Expand(n) => n.deps.iter_mut().collect(),
+            Self::ExpandAll(n) => n.deps.iter_mut().collect(),
+            Self::AppendVertices(n) => n.deps.iter_mut().collect(),
+            Self::GetVertices(n) => n.deps.iter_mut().collect(),
+            Self::GetNeighbors(n) => n.deps.iter_mut().collect(),
+            Self::Union(n) => n.deps.iter_mut().collect(),
+            Self::Minus(n) => n.deps.iter_mut().collect(),
+            Self::Intersect(n) => n.deps.iter_mut().collect(),
+            Self::WcoIntersect(n) => n.deps.iter_mut().collect(),
+            Self::Start(_)
+            | Self::ScanVertices(_)
+            | Self::ScanEdges(_)
+            | Self::GetEdges(_)
+            | Self::Argument(_)
+            | Self::PassThrough(_)
+            | Self::BeginTransaction(_)
+            | Self::Commit(_)
+            | Self::Rollback(_)
+            | Self::InsertVertices(_)
+            | Self::InsertEdges(_)
+            | Self::Update(_)
+            | Self::DeleteVertices(_)
+            | Self::DeleteEdges(_)
+            | Self::DeleteIndex(_)
+            | Self::CopyFrom(_)
+            | Self::CopyTo(_)
+            | Self::FulltextSearch(_)
+            | Self::FulltextLookup(_)
+            | Self::MatchFulltext(_) => vec![],
+            #[cfg(feature = "vector")]
+            Self::VectorSearch(_) | Self::VectorLookup(_) | Self::VectorMatch(_) => vec![],
+        }
+    }
 }

@@ -24,8 +24,8 @@ pub const DEFAULT_AVG_DEGREE: u64 = crate::optimizer::cost::config::DEFAULT_FANO
 ///
 /// This is intentionally decoupled from `optimizer::stats::StatisticsManager`
 /// (which depends on the logical plan types): callers that own both sides
-/// copy the needed counts into this snapshot. An empty snapshot reproduces
-/// the legacy constant behavior.
+/// copy the needed counts into this snapshot. An empty snapshot uses
+/// the default constant behavior.
 #[derive(Debug, Default, Clone)]
 pub struct JoinOrderStats {
     /// Tag name -> vertex count.
@@ -61,7 +61,7 @@ impl JoinOrderStats {
 
     /// Whether the snapshot carries any real statistics.
     ///
-    /// Empty snapshots reproduce legacy constant pricing; only non-empty
+    /// Empty snapshots use default constant pricing; only non-empty
     /// snapshots mark plans as statistics-backed.
     pub fn is_empty(&self) -> bool {
         self.vertex_counts.is_empty() && self.edge_counts.is_empty()
@@ -167,7 +167,7 @@ impl CardinalityEstimator {
     }
 
     /// Average out-degree hint for extend pricing: statistics maximum,
-    /// otherwise the legacy default.
+    /// otherwise the default.
     pub fn avg_degree_hint(&self) -> u64 {
         let hint = self.stats.avg_degree_hint();
         if hint > 0 {

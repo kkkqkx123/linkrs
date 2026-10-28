@@ -114,7 +114,7 @@ impl Planner for MaintainPlanner {
             }
         };
 
-        Ok(SubPlan::from_single_node(final_node))
+        Ok(SubPlan::new(Some(final_node.clone()), Some(final_node)))
     }
 }
 

@@ -5,7 +5,7 @@
 //! [`JoinOrderEnumerator`](super::plan_join_order::JoinOrderEnumerator).
 //! Anything the graph cannot represent (optional branches, alternatives,
 //! variable-length edges, standalone variables) yields `None` and the
-//! caller falls back to the legacy `ExpandAll` chain.
+//! caller falls back to the `ExpandAll` chain.
 
 use super::query_graph::{ExtendDirection, QueryGraph, QueryNode, QueryRel};
 use crate::parser::ast::pattern::{EdgePattern, NodePattern, PathElement, Pattern};

@@ -21,7 +21,6 @@ pub use query_graph::{BoundEdgePattern, BoundEdgeTypeRef, BoundNodePattern, Quer
 pub use scope::{BinderScope, BinderVariable};
 pub use semantic_checker::validate_expression;
 pub use validation::{
-    AggregateCallInfo, ClauseKind, CypherClauseKind, HintSeverity, OptimizationHint,
-    OrderByClauseContext, PaginationContext, PathAnalysis, SemanticInfo, ValidatedStatement,
-    ValidationInfo, WhereClauseContext, WithClauseContext, YieldClauseContext,
+    CypherClauseKind, OrderByClauseContext, PaginationContext, WhereClauseContext,
+    WithClauseContext, YieldClauseContext,
 };

@@ -262,9 +262,10 @@ impl SubgraphPlanner {
 
         // Structurally close the plan: the input becomes the expand node's
         // input inside the SubPlan itself.
+        let upper = PlanNodeEnum::ExpandAll(expand_node);
         let connected = SubPlan::connect_upstream(
-            SubPlan::from_single_node(PlanNodeEnum::ExpandAll(expand_node)),
-            SubPlan::from_single_node(input),
+            SubPlan::new(Some(upper.clone()), Some(upper)),
+            SubPlan::new(Some(input.clone()), Some(input)),
         )?;
         connected.root.ok_or_else(|| {
             PlannerError::PlanGenerationFailed(

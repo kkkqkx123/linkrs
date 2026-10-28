@@ -13,6 +13,8 @@
 //! contract below), not through parser syntax or app-layer helpers. The
 //! wired caller is the embedded `Session::hybrid_search` on `linkrs-api`,
 //! which runs both secondary-index branches and fuses them here.
+//! A dedicated syntax is deferred until both retrieval paths are stable
+//! and call volume justifies it; until then no new syntax is added.
 
 use linkrs_core::fusion::{normalize_vector_hits, rrf_fuse, weighted_fuse};
 use linkrs_core::types::search::SearchHit;

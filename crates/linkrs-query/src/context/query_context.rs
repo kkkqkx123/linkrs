@@ -163,7 +163,7 @@ impl QueryContext {
         self.rctx.clone()
     }
 
-    /// Obtain the context of the query request (compatible with old code)
+    /// Obtain the context of the query request.
     pub fn rctx(&self) -> &QueryRequestContext {
         &self.rctx
     }

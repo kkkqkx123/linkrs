@@ -6,14 +6,12 @@
 //! ## Module Structure
 //!
 //! “Fingerprint” – Refers to the process of generating and normalizing fingerprints (digital representations of unique patterns).
-//! “Collector” – The component responsible for executing the feedback collection process.
 //! “Trigger” – A mechanism for automatically triggering feedback.
 //! “Selectivity” refers to the process of carefully selecting and applying appropriate corrections or measures in a targeted manner. In other words, it involves managing various factors or elements in a way that is tailored to achieve specific goals or outcomes.
 //! `query` – The structure that contains feedback regarding the execution of the query.
 //! “History” – Querying the feedback history management system.
 
 pub mod cardinality;
-pub mod collector;
 pub mod decision;
 pub mod factor;
 pub mod fingerprint;

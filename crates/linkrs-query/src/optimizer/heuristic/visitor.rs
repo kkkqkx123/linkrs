@@ -8,7 +8,7 @@
 //! Remove duplicate code: Unify the logic for rewriting child nodes.
 //! Maintain type safety: Use static distribution to avoid the overhead associated with dynamic distribution.
 //! Easy to expand: When adding new node types, you only need to implement the corresponding methods.
-//! – Compatible with the existing architecture: Make use of the existing PlanNodeVisitor.
+//! Reuses the existing PlanNodeVisitor.
 
 use crate::optimizer::heuristic::context::RewriteContext;
 use crate::optimizer::heuristic::plan_rewriter::NodeRewriter;

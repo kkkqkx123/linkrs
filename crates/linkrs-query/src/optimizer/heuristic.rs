@@ -12,7 +12,6 @@
 //! - `result`: Rewrite result types
 //! - `rule`: Rewrite rule trait definitions
 //! - `macros`: Macro definitions for rewriting rules
-//! - `rewrite_rule`: Rewrite rule trait and adapters
 //! - `plan_rewriter`: Plan rewriter implementation
 //! - `visitor`: Node visitor for tree traversal
 //!
@@ -77,7 +76,6 @@ pub mod macros;
 
 // Core trait and implementation
 pub mod plan_rewriter;
-pub mod rewrite_rule;
 
 // Enumeration of static distribution rules
 pub mod rule_enum;
@@ -118,9 +116,6 @@ pub use rule::{
     RuleWrapper,
 };
 pub use visitor::ChildRewriteVisitor;
-
-// Export from the compatibility layer
-pub use rewrite_rule::{HeuristicRule, HeuristicRuleAdapter, IntoOptRule};
 
 pub use plan_rewriter::NodeRewriter;
 

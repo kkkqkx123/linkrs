@@ -213,7 +213,7 @@ impl RowStatus {
         matches!(self, RowStatus::Valid)
     }
 
-    /// Convert to an integer representation (for compatibility with old code)
+    /// Convert to an integer representation.
     pub fn to_i32(&self) -> i32 {
         match self {
             RowStatus::Valid => 0,

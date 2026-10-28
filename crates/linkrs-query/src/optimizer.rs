@@ -112,9 +112,8 @@ pub use crate::cache::{
 
 // Re-export heuristic types
 pub use heuristic::{
-    BaseRewriteRule, EliminationRule, HeuristicRule, HeuristicRuleAdapter, IntoOptRule,
-    MatchedResult, MergeRule, NodeRewriter, PushDownRule, RewriteContext, RewriteError,
-    RewriteRule, RuleWrapper, TransformResult,
+    BaseRewriteRule, EliminationRule, MatchedResult, MergeRule, NodeRewriter, PushDownRule,
+    RewriteContext, RewriteError, RewriteRule, RuleWrapper, TransformResult,
 };
 
 pub use decision::{

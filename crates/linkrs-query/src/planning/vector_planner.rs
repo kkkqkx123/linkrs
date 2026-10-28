@@ -26,7 +26,7 @@ use simvec::types::{ConditionType, FilterCondition, RangeCondition, VectorFilter
 /// Vector search planner
 #[derive(Debug, Clone, Default)]
 pub struct VectorSearchPlanner {
-    /// Metadata context for pre-resolved metadata (optional for backward compatibility)
+    /// Metadata context for pre-resolved metadata (optional override)
     metadata_context: Option<Arc<MetadataContext>>,
 }
 

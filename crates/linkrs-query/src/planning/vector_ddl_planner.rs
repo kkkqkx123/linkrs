@@ -73,51 +73,18 @@ impl Planner for VectorDdlPlanner {
 
         let space_name = qctx.space_name().unwrap_or_else(|| "default".to_string());
         let space_id = qctx.space_id().unwrap_or(0);
-        let schema_name = if create.schema_name.is_empty() {
-            space_name
-        } else {
-            create.schema_name.clone()
-        };
-
-        // Vector indexes are vertex-only: point IDs, payloads, and rebuild
-        // sources are all modeled per vertex. Reject edge type names up
-        // front instead of creating an index that can never receive data.
         let planner_metadata = self.metadata_context.clone();
         let metadata = ctx.metadata.or(planner_metadata.as_deref());
-        if let Some(metadata) = metadata {
-            if !create.schema_name.is_empty()
-                && metadata.has_edge_type_metadata(&create.schema_name)
-            {
-                return Err(PlannerError::InvalidOperation(format!(
-                    "Vector indexes are vertex-only: '{}' is an edge type, create the index on a vertex tag instead",
-                    create.schema_name
-                )));
-            }
-        }
-
-        let mut params = CreateVectorIndexParams::new(
-            create.index_name.clone(),
-            schema_name,
-            create.schema_name.clone(),
-            create.field_name.clone(),
-            create.config.vector_size,
-            create.config.distance,
+        Self::build_create_node(
+            &create.index_name,
+            &create.schema_name,
+            &create.field_name,
+            &create.config,
+            create.if_not_exists,
+            &space_name,
             space_id,
+            metadata,
         )
-        .with_hnsw_m(create.config.hnsw_m)
-        .with_hnsw_ef_construct(create.config.hnsw_ef_construct)
-        .with_quantization(
-            create.config.quantization,
-            create.config.quantile,
-            create.config.compression,
-            create.config.always_ram,
-        );
-        if create.if_not_exists {
-            params = params.with_if_not_exists();
-        }
-        let node = CreateVectorIndexNode::new(params);
-
-        Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 }
 
@@ -171,46 +138,64 @@ impl VectorDdlPlanner {
         space_id: u64,
         metadata_context: Option<&MetadataContext>,
     ) -> Result<SubPlan, PlannerError> {
-        // Vector indexes are vertex-only (see plan_bound): reject edge type
-        // names instead of creating an index that can never receive data.
-        if let Some(metadata) = metadata_context {
-            if !create.schema_name.is_empty()
-                && metadata.has_edge_type_metadata(&create.schema_name)
-            {
+        Self::build_create_node(
+            &create.index_name,
+            &create.schema_name,
+            &create.field_name,
+            &create.config,
+            create.if_not_exists,
+            space_name,
+            space_id,
+            metadata_context,
+        )
+    }
+
+    fn build_create_node(
+        index_name: &str,
+        schema_name: &str,
+        field_name: &str,
+        config: &crate::parser::ast::vector::VectorIndexConfig,
+        if_not_exists: bool,
+        space_name: &str,
+        space_id: u64,
+        metadata: Option<&MetadataContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        // Vector indexes are vertex-only: point IDs, payloads, and rebuild
+        // sources are all modeled per vertex. Reject edge type names up
+        // front instead of creating an index that can never receive data.
+        if let Some(metadata) = metadata {
+            if !schema_name.is_empty() && metadata.has_edge_type_metadata(schema_name) {
                 return Err(PlannerError::InvalidOperation(format!(
-                    "Vector indexes are vertex-only: '{}' is an edge type, create the index on a vertex tag instead",
-                    create.schema_name
+                    "Vector indexes are vertex-only: '{schema_name}' is an edge type, create the index on a vertex tag instead"
                 )));
             }
         }
-        let schema_name = if create.schema_name.is_empty() {
+        let resolved_schema = if schema_name.is_empty() {
             space_name.to_string()
         } else {
-            create.schema_name.clone()
+            schema_name.to_string()
         };
-
         let mut params = CreateVectorIndexParams::new(
-            create.index_name.clone(),
-            schema_name,
-            create.schema_name.clone(),
-            create.field_name.clone(),
-            create.config.vector_size,
-            create.config.distance,
+            index_name.to_string(),
+            resolved_schema,
+            schema_name.to_string(),
+            field_name.to_string(),
+            config.vector_size,
+            config.distance,
             space_id,
         )
-        .with_hnsw_m(create.config.hnsw_m)
-        .with_hnsw_ef_construct(create.config.hnsw_ef_construct)
+        .with_hnsw_m(config.hnsw_m)
+        .with_hnsw_ef_construct(config.hnsw_ef_construct)
         .with_quantization(
-            create.config.quantization,
-            create.config.quantile,
-            create.config.compression,
-            create.config.always_ram,
+            config.quantization,
+            config.quantile,
+            config.compression,
+            config.always_ram,
         );
-        if create.if_not_exists {
+        if if_not_exists {
             params = params.with_if_not_exists();
         }
         let node = CreateVectorIndexNode::new(params);
-
         Ok(SubPlan::new(Some(node.into_enum()), None))
     }
 

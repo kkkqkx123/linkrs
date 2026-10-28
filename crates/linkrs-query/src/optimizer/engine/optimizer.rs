@@ -188,10 +188,11 @@ impl OptimizerEngine {
     }
 
     fn apply_logical_heuristic(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
-        // Logical layer is the pre-CBO extension point on the logical tree;
-        // it currently holds no built-in rules. The active built-in rules
-        // live in the physical layer below, so the two calls are not
-        // overlapping passes to be merged.
+        // Logical layer runs before cost decisions on the logical tree and
+        // currently holds no built-in rules by design. Rule injection stays
+        // closed: tuning goes through configuration filtering, not through
+        // added rules. The active built-in rules live in the physical layer
+        // below, so the two calls are not overlapping passes to be merged.
         self.logical_heuristic
             .set_max_iterations(self.max_heuristic_iterations);
         if let Some(logical) = plan.logical_plan.as_mut() {

@@ -240,36 +240,6 @@ pub fn aggregate_groups_to_flatten(
     (leading, to_flatten)
 }
 
-/// Legacy wrapper providing the Ladybug-style static API.
-pub struct FlattenResolver;
-
-impl FlattenResolver {
-    pub fn flatten_all_but_one(
-        dependent_groups: &[FGroupPos],
-        schema: &FactorizedSchema,
-    ) -> (FGroupPos, Vec<FGroupPos>) {
-        let set: HashSet<FGroupPos> = dependent_groups.iter().copied().collect();
-        let (leading, to_flatten) =
-            FlattenAllButOne::get_groups_pos_to_flatten_for_groups_with_leading(&set, schema);
-        let mut vec: Vec<FGroupPos> = to_flatten.into_iter().collect();
-        vec.sort_unstable();
-        (leading, vec)
-    }
-
-    pub fn flatten_all(
-        dependent_groups: &[FGroupPos],
-        schema: &FactorizedSchema,
-    ) -> Vec<FGroupPos> {
-        let set: HashSet<FGroupPos> = dependent_groups.iter().copied().collect();
-        let mut vec: Vec<FGroupPos> =
-            FlattenAll::get_groups_pos_to_flatten_for_groups(&set, schema)
-                .into_iter()
-                .collect();
-        vec.sort_unstable();
-        vec
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,16 +290,20 @@ mod tests {
     }
 
     #[test]
-    fn flatten_resolver_api() {
+    fn flatten_all_groups_two_unflats() {
         let mut schema = FactorizedSchema::new();
         let g0 = schema.create_group();
         let g1 = schema.create_group();
         schema.insert_to_group_and_scope(expr(10), g0).unwrap();
         schema.insert_to_group_and_scope(expr(20), g1).unwrap();
-        let (leading, to_flatten) = FlattenResolver::flatten_all_but_one(&[g0, g1], &schema);
+        let mut set = HashSet::new();
+        set.insert(g0);
+        set.insert(g1);
+        let (leading, to_flatten) =
+            FlattenAllButOne::get_groups_pos_to_flatten_for_groups_with_leading(&set, &schema);
         assert_ne!(leading, INVALID_F_GROUP_POS);
         assert_eq!(to_flatten.len(), 1);
-        let all = FlattenResolver::flatten_all(&[g0, g1], &schema);
+        let all = FlattenAll::get_groups_pos_to_flatten_for_groups(&set, &schema);
         assert_eq!(all.len(), 2);
     }
 

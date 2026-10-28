@@ -181,7 +181,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // Memo key: fingerprint-less plan key over the normalized text,
         // built from the shared plan-cache identity context. The partition
         // fingerprint is not computable before binding; memo hits use the
-        // single compatibility exit before being served.
+        // single checked exit before being served.
         let cache_context = self.plan_cache_context(space_name.clone(), param_signature);
         let dml_memo_key = if dml_shape_cacheable {
             Some(super::DmlPlanMemoKey::from_context(
@@ -225,7 +225,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             {
                 if self
                     .plan_cache
-                    .serve_compatible(&cached.plan, schema_version)
+                    .serve_checked(&cached.plan, schema_version)
                     .is_ok()
                 {
                     if let Some(key) = dml_memo_key.clone() {
@@ -233,9 +233,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     }
                     return Ok(cached.plan.clone());
                 }
-                log::debug!(
-                    "Partitioned plan failed compatibility check, falling through to rebuild"
-                );
+                self.dml_memo_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                log::debug!("Partitioned plan failed checked serve, falling through to rebuild");
             }
         }
 
@@ -277,11 +277,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Ok(plan)
     }
 
-    /// Serve a DML memo hit through the single compatibility exit.
+    /// Serve a DML memo hit through the single checked exit.
     ///
     /// Single resolver for the memo probe shared by the prepare-time
     /// bind-skip check and the compile-time serve path. Returns the plan
-    /// only after `serve_compatible` validates the layout version; compat
+    /// only after `serve_checked` validates the layout version; check
     /// failures fall through to replan and bump the failure counter.
     pub(crate) fn serve_dml_memo(
         &self,
@@ -290,18 +290,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> Option<Arc<PhysicalPlan>> {
         let key = key?;
         let plan = self.find_dml_plan(key)?;
-        if self
-            .plan_cache
-            .serve_compatible(&plan, schema_version)
-            .is_ok()
-        {
+        if self.plan_cache.serve_checked(&plan, schema_version).is_ok() {
             self.last_dml_plan_hits
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Some(plan);
         }
-        self.dml_memo_compat_failures
+        self.dml_memo_failures
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        log::debug!("DML memo plan failed compatibility check, falling through to replan");
+        log::debug!("DML memo plan failed checked serve, falling through to replan");
         None
     }
 
@@ -310,6 +306,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     /// Memo backfill keeps the bind-skip fast path warm when the plan cache
     /// serves a shape-normalized entry first. Partitioned entries are
     /// resolved separately after optimization when the partition spec exists.
+    /// Checked-serve failures share the unified failure counter with the
+    /// memo and partitioned paths and fall through to replan.
     pub(crate) fn serve_plain_cache(
         &self,
         query_text: &str,
@@ -322,7 +320,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .get_with_context(query_text, cache_context.clone())?;
         if self
             .plan_cache
-            .serve_compatible(&cached.plan, schema_version)
+            .serve_checked(&cached.plan, schema_version)
             .is_ok()
         {
             if let Some(key) = dml_memo_key {
@@ -330,13 +328,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
             return Some(cached.plan.clone());
         }
+        self.dml_memo_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        log::debug!("Plain plan cache hit failed checked serve, falling through to replan");
         None
     }
 
     /// Deterministic hash of the live partitioning configuration used to
     /// scope plan-cache entries.  Toggling/enabling partitioning, changing
     /// worker count, thresholds, or the trusted vertex-id range produces a
-    /// different hash so cached single-tree plans cannot be reused under a
+    /// different hash so cached plans cannot be reused under a
     /// different layout policy.
     pub(crate) fn partitioning_config_hash(config: &PartitioningConfig) -> u64 {
         use std::hash::{Hash, Hasher};

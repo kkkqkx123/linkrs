@@ -76,48 +76,6 @@ pub use crate::planning::plan::core::nodes::management::manage_node_enums::{
     SpaceManageNode as SpaceManageNodeEnum, TagManageNode as TagManageNodeEnum,
     UserManageNode as UserManageNodeEnum, VectorManageNode as VectorManageNodeEnum,
 };
-// Re-export individual management node types for backward compatibility
-pub use crate::planning::plan::core::nodes::management::edge_nodes::{
-    AlterEdgeNode, CreateEdgeNode, DescEdgeNode, DropEdgeNode, EdgeAlterInfo, EdgeManageInfo,
-    RenameEdgeNode, ShowCreateEdgeNode, ShowEdgesNode, UpdateEdgeEndpointsNode,
-};
-pub use crate::planning::plan::core::nodes::management::index_nodes::{
-    CreateEdgeIndexNode, CreateTagIndexNode, DescEdgeIndexNode, DescTagIndexNode,
-    DropEdgeIndexNode, DropTagIndexNode, IndexManageInfo, RebuildEdgeIndexNode,
-    RebuildTagIndexNode, ShowCreateIndexNode, ShowEdgeIndexesNode, ShowIndexesNode,
-    ShowTagIndexesNode,
-};
-pub use crate::planning::plan::core::nodes::management::space_nodes::{
-    ClearSpaceNode, CreateSpaceNode, DescSpaceNode, DropSpaceNode, ShowCreateSpaceNode,
-    ShowSpacesNode, SpaceManageInfo, SwitchSpaceNode,
-};
-pub use crate::planning::plan::core::nodes::management::stats_nodes::{
-    ShowStatsNode as ShowStatsNodeType, ShowStatsType,
-};
-pub use crate::planning::plan::core::nodes::management::system_nodes::{
-    InQueryCallNode as InQueryCallNodeType, LoadFromNode as LoadFromNodeType,
-    ShowAttachedDatabasesNode as ShowAttachedDatabasesNodeType,
-    ShowConfigsNode as ShowConfigsNodeType, ShowExtensionsNode as ShowExtensionsNodeType,
-    ShowFunctionsNode as ShowFunctionsNodeType, ShowGraphsNode as ShowGraphsNodeType,
-    ShowMacrosNode as ShowMacrosNodeType, ShowQueriesNode as ShowQueriesNodeType,
-    ShowSessionsNode as ShowSessionsNodeType,
-};
-pub use crate::planning::plan::core::nodes::management::tag_nodes::{
-    AlterTagNode, CreateTagNode, DescTagNode, DropTagNode, RenameTagNode, ShowCreateTagNode,
-    ShowTagsNode, TagAlterInfo, TagManageInfo,
-};
-pub use crate::planning::plan::core::nodes::management::user_nodes::{
-    AlterUserNode, ChangePasswordNode, CreateUserNode, DropUserNode, GrantRoleNode, RevokeRoleNode,
-    ShowRolesNode, ShowUsersNode,
-};
-pub use crate::planning::plan::core::nodes::search::fulltext::management::{
-    AlterFulltextIndexNode, CreateFulltextIndexNode, DescribeFulltextIndexNode,
-    DropFulltextIndexNode, ShowFulltextIndexNode,
-};
-pub use crate::planning::plan::core::nodes::search::vector::management::{
-    CreateVectorIndexNode, DescribeVectorIndexNode, DropVectorIndexNode, ShowVectorIndexNode,
-};
-
 /// The PlanNode enumeration includes all possible node types.
 ///
 /// This enumeration avoids the performance overhead associated with dynamic distribution.
@@ -757,6 +715,8 @@ impl PlanNodeEnum {
                 | PlanNodeEnum::ShowExtensions(_)
                 | PlanNodeEnum::LoadFrom(_)
                 | PlanNodeEnum::InQueryCall(_)
+                | PlanNodeEnum::MacroManage(_)
+                | PlanNodeEnum::TypeManage(_)
                 | PlanNodeEnum::SequenceManage(_)
         )
     }

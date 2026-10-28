@@ -251,7 +251,10 @@ impl RewriteRule for PushFilterDownAggregateRule {
         })?;
 
         // Create a new Aggregate node; the input for this new node will be the new Filter node.
-        let new_aggregate = AggregateNode::new(
+        // Group-key expressions pass through untouched: the rebuilt node
+        // keeps the original ExpressionIds so the reverse logical
+        // reconstruction stays lossless.
+        let mut new_aggregate = AggregateNode::new(
             PlanNodeEnum::Filter(new_filter),
             group_keys.to_vec(),
             agg_funcs.to_vec(),
@@ -262,6 +265,9 @@ impl RewriteRule for PushFilterDownAggregateRule {
                 e
             ))
         })?;
+        if let Some(exprs) = agg_node.group_key_exprs() {
+            new_aggregate.set_group_key_exprs(exprs.to_vec());
+        }
 
         // Construct the translation result.
         let mut result = TransformResult::new();

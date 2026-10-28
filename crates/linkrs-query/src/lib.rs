@@ -42,7 +42,9 @@ pub use query_manager::{
 // Re-export pipeline extensions.
 //
 // Unstable experimental API: the extension surface may evolve while the
-// pipeline integration matures.
+// pipeline integration matures. Graduation requires stable callback
+// signatures plus production consumers; until then no new hook kinds
+// are added.
 pub use dml_events::{DmlOp, DmlStatementCallback, DmlStatementEvent};
 pub use pipeline::prepared::{dml_op_from_stmt, OwnedOperationGuard, StatementClass};
 pub use session_events::{SessionEvent, SessionEventCallback};

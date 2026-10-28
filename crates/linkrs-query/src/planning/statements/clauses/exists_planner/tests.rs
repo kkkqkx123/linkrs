@@ -54,7 +54,8 @@ fn group_join_subtree_stays_physical_without_upstream_logical() {
     use crate::planning::plan::core::nodes::control_flow::start_node::StartNode;
 
     let context = Arc::new(ExpressionAnalysisContext::new());
-    let sub_plan = SubPlan::from_single_node(PlanNodeEnum::Start(StartNode::new()));
+    let seed = PlanNodeEnum::Start(StartNode::new());
+    let sub_plan = SubPlan::new(Some(seed.clone()), Some(seed));
     let out = build_group_join_right_subtree(
         sub_plan,
         &[Expression::variable("a")],

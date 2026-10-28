@@ -2,6 +2,10 @@
 //!
 //! Provide functions for registration, lookup, and execution.
 //! The specific implementation of the function is located in the builtin submodule.
+//!
+//! Disposition: this registry is the single user-pluggable surface.
+//! Scalar customs, dynamic library plugins, and table functions all
+//! register here; no planner depends on it as a fallback.
 
 mod builtin;
 mod custom;

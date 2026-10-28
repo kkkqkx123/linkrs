@@ -9,8 +9,8 @@
 //! - Level 2 (DML memo): keyed by shape-normalized template text through
 //!   `fingerprint_less_from_context`. The partition fingerprint is absent by
 //!   construction because layout is unknown before binding. Layout
-//!   correctness relies on the single serve-time compatibility check
-//!   (`QueryPlanCache::serve_compatible`), not on the key.
+//!   correctness relies on the single serve-time check
+//!   (`QueryPlanCache::serve_checked`), not on the key.
 //!
 //! Dimension table (any change here must update memo and plan paths together):
 //!
@@ -33,6 +33,10 @@
 //! - Per-space invalidation removes plan-cache entries for one space.
 //!   Global catalog changes (attach/detach) clear the whole plan cache.
 //!   The DML memo is cleared as a linear-table drain on the same path.
+//!   Per-entry table lists stay diagnostic metadata only: generation
+//!   retirement plus space/global clearing is the invalidation mechanism,
+//!   per-table plan invalidation is intentionally not implemented
+//!   (the CTE result cache is the only per-table tracker).
 //! - `clear_plan_cache` drains plan cache, memo, and template AST together.
 //!   The DDL path intentionally keeps the template AST because templates are
 //!   schema-independent; the full clear path does not keep it.
@@ -42,9 +46,9 @@
 //!   scan with move-to-front approximation. Stale keys age out through the
 //!   cap; no TTL or weight bookkeeping is used because bind-skip hot-path
 //!   cost is negligible at this size.
-//! - Memo hits must pass the single compatibility exit before serving.
-//!   Failures fall through to replan and bump the compat-failure counter.
-//!   Layout correctness never depends on key equality alone.
+//! - Memo hits must pass the single checked exit before serving.
+//!   Failures fall through to replan and bump the unified checked-serve
+//!   failure counter. Layout correctness never depends on key equality alone.
 use crate::planning::plan::execution_plan::PartitionSpec;
 use std::hash::Hasher;
 

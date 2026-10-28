@@ -70,7 +70,7 @@ impl Planner for PipePlanner {
                         )
                     })?;
 
-                    // Mirror the legacy transform path: a leading GO without
+                    // Mirror the direct transform path: a leading GO without
                     // an explicit YIELD carries a default Project(dst, edge)
                     // adapter that drops the ExpandAll `target` alias. Elide
                     // it so downstream stages resolve `target` directly.
@@ -109,7 +109,7 @@ impl Default for PipePlanner {
 }
 
 /// Strip the default projection (dst, edge) that the GoPlanner attaches to
-/// a standalone GO plan. Handles both the legacy shape with a trivial
+/// a standalone GO plan. Handles both the shape with a trivial
 /// filter (Project -> Filter(true) -> ExpandAll) and the bound shape without
 /// it (Project -> ExpandAll). Returns the plan unchanged when its shape does
 /// not match the GO default adapter.
@@ -265,7 +265,7 @@ fn replace_logical_argument(plan: &mut LogicalNodeEnum, replacement: &LogicalNod
 /// Mirror of [`elide_go_default_adapter`] on the native logical tree: strip
 /// the default projection of a standalone GO plan when it feeds a pipe, so
 /// downstream stages resolve against the expand output. Handles both the
-/// legacy Project -> Filter(true) -> ExpandAll shape and the bound
+/// Project -> Filter(true) -> ExpandAll shape and the bound
 /// Project -> ExpandAll shape.
 fn elide_go_default_adapter_logical(plan: LogicalNodeEnum) -> LogicalNodeEnum {
     let LogicalNodeEnum::Project(mut project) = plan else {

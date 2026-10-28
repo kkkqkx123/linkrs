@@ -15,7 +15,6 @@ use crate::binder::BoundStatement;
 use crate::metadata::MetadataContext;
 use crate::parser::ast::Stmt;
 use crate::parser::OrderByItem;
-use crate::parser::Parser;
 use crate::planning::join_order::JoinOrderStats;
 use crate::planning::plan::SubPlan;
 use crate::planning::planner::{Planner, PlannerError};
@@ -129,22 +128,15 @@ impl Planner for MatchStatementPlanner {
             self.metadata_context = Some(metadata_context.clone());
         }
 
-        // The parsed statement still supplies pattern topology (patterns,
-        // optional flag) because the bound query graph only represents
-        // conjunctive single-hop shapes. Clause inputs (WHERE / RETURN /
-        // ORDER BY / LIMIT / SKIP) come from the bound statement; see
-        // `plan_match_pattern`. Direct planner invocations without that
-        // context fall back to parsing the query text for topology.
-        let source_ast = match ctx.ast.clone() {
-            Some(ast) => ast,
-            None => {
-                let mut parser = Parser::new(qctx.query());
-                let parsed = parser
-                    .parse()
-                    .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
-                parsed.ast
-            }
-        };
+        // Pattern topology still comes from the parsed statement supplied
+        // by the caller; clause inputs (WHERE / RETURN / ORDER BY /
+        // LIMIT / SKIP) come from the bound statement. The caller must
+        // attach the AST; there is no query-text re-parse here.
+        let source_ast = ctx.ast.clone().ok_or_else(|| {
+            PlannerError::MissingInput(
+                "MatchStatementPlanner requires PlanContext with AST".to_string(),
+            )
+        })?;
         // A piped query carries the whole statement in the parsed form; when planning
         // one of its stages, unwrap the pipe and plan its first MATCH stage.
         let mut stmt = source_ast.stmt().clone();
@@ -277,7 +269,7 @@ impl MatchStatementPlanner {
                 };
 
                 // The join-order path covers every pattern at once; the
-                // legacy path plans the first pattern here and cross joins
+                // fallback path plans the first pattern here and cross joins
                 // the rest below.
                 let stats_backed = join_stats.map(|s| !s.is_empty()).unwrap_or(false);
                 let (mut plan, joined_by_optimizer) = if match_stmt.patterns.is_empty() {
@@ -426,7 +418,7 @@ impl MatchStatementPlanner {
 
     /// Try the join-order path for conjunctive MATCH patterns.
     ///
-    /// Returns `None` (caller falls back to the legacy `ExpandAll` chain)
+    /// Returns `None` (caller falls back to the `ExpandAll` chain)
     /// when the patterns are ineligible: optional matches, deletes,
     /// patterns the graph converter rejected, graphs without rels
     /// (single-node lookups plan better as direct scans), or single
@@ -442,7 +434,7 @@ impl MatchStatementPlanner {
         if match_stmt.optional || match_stmt.delete_clause.is_some() {
             return None;
         }
-        // Single-pattern queries use the legacy ExpandAll chain because
+        // Single-pattern queries use the ExpandAll chain because
         // the join-order enumerator's extend joins cannot correlate
         // node-rel pairs (rel-only base scans don't include endpoint
         // nodes, leading to cross products).
@@ -468,7 +460,7 @@ impl MatchStatementPlanner {
             enumerator = enumerator.with_stats(stats.clone());
         }
         // A user join hint takes precedence over automatic enumeration; an
-        // unresolvable hint falls back to the legacy path rather than
+        // unresolvable hint falls back to the ExpandAll path rather than
         // failing the query. The bound hint (already scope-checked by the
         // binder) wins over the parsed AST hint.
         let logical = match &bound_match.join_hint {
@@ -629,7 +621,7 @@ mod tests {
         let bound = empty_bound();
         let plan =
             planner.try_join_order_plan(&stmt(two_hop(), None, true), &bound, 1, "default", None);
-        assert!(plan.is_none(), "OPTIONAL MATCH keeps the legacy path");
+        assert!(plan.is_none(), "OPTIONAL MATCH keeps the fallback path");
     }
 
     #[test]
@@ -659,7 +651,7 @@ mod tests {
             planner.try_join_order_plan(&stmt(patterns, None, false), &bound, 1, "default", None);
         assert!(
             plan.is_none(),
-            "single-pattern MATCH uses the legacy ExpandAll path"
+            "single-pattern MATCH uses the fallback ExpandAll path"
         );
     }
 

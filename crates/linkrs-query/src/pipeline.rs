@@ -97,7 +97,11 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     /// [`DmlPlanMemoKey`]; see that struct for the key dimensions.
     pub(crate) dml_plan_memo: parking_lot::Mutex<Vec<DmlPlanMemoEntry>>,
     pub last_dml_plan_hits: std::sync::atomic::AtomicU64,
-    pub(crate) dml_memo_compat_failures: std::sync::atomic::AtomicU64,
+    /// Unified checked-serve failure counter across the memo, plain
+    /// plan-cache, and partitioned paths. Every `serve_checked` rejection
+    /// bumps this counter and falls through to replan; no hit is served
+    /// without passing the single checked exit.
+    pub(crate) dml_memo_failures: std::sync::atomic::AtomicU64,
     /// Parsed ASTs of normalized DML templates (`INSERT ... VALUES
     /// (@__dml_0, ...)`), avoiding a re-parse per execution. Bounded
     /// multi-entry map keyed by exact normalized text.
@@ -127,8 +131,8 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
 /// Dimensions are the unified invalidation set (space, schema generation,
 /// index generation, optimizer/cost version, planning config hash, parameter
 /// type signature); the partition fingerprint is absent by construction and
-/// covered post-hoc by the single compatibility exit
-/// (`QueryPlanCache::serve_compatible`).
+/// covered post-hoc by the single checked exit
+/// (`QueryPlanCache::serve_checked`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DmlPlanMemoKey {
     pub inner: crate::cache::PlanCacheKey,
@@ -203,7 +207,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_shape_cache_enabled: true,
             dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
-            dml_memo_compat_failures: std::sync::atomic::AtomicU64::new(0),
+            dml_memo_failures: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast: parking_lot::Mutex::new(Vec::new()),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
@@ -504,7 +508,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             dml_shape_cache_enabled: true,
             dml_plan_memo: parking_lot::Mutex::new(Vec::new()),
             last_dml_plan_hits: std::sync::atomic::AtomicU64::new(0),
-            dml_memo_compat_failures: std::sync::atomic::AtomicU64::new(0),
+            dml_memo_failures: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast: parking_lot::Mutex::new(Vec::new()),
             dml_template_ast_parse_count: std::sync::atomic::AtomicU64::new(0),
             dml_template_ast_hit_count: std::sync::atomic::AtomicU64::new(0),
@@ -611,8 +615,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn dml_memo_compat_failure_count(&self) -> u64 {
-        self.dml_memo_compat_failures
+    /// Unified checked-serve failure count across the memo, plain
+    /// plan-cache, and partitioned paths. Every `serve_checked` rejection
+    /// lands here before falling through to replan.
+    pub fn dml_memo_failure_count(&self) -> u64 {
+        self.dml_memo_failures
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 

@@ -646,14 +646,14 @@ impl QueryPlanCache {
         }
     }
 
-    /// Single compatibility exit for cached plans (memo, plan cache, and
+    /// Single checked exit for cached plans (memo, plan cache, and
     /// partitioned entries alike).
     ///
     /// Wraps `PhysicalPlanValidator::check_compatibility` so success and
     /// failure accounting stays aligned: success records a memo hit, failure
-    /// is reported to the caller for the compat-failure counter. Callers must
+    /// is reported to the caller for the memo-failure counter. Callers must
     /// not duplicate the check inline.
-    pub fn serve_compatible(
+    pub fn serve_checked(
         &self,
         plan: &Arc<crate::executor::streaming::plan::PhysicalPlan>,
         schema_version: Option<u64>,

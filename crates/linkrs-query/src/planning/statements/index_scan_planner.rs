@@ -64,7 +64,8 @@ pub fn try_create_index_scan_plan(
             index_scan_node.set_col_names(vec![var_name.to_string()]);
             index_scan_node.set_output_var(var_name.to_string());
 
-            let plan = SubPlan::from_root(index_scan_node.into_enum());
+            let node = index_scan_node.into_enum();
+            let plan = SubPlan::new(Some(node.clone()), Some(node));
             log::debug!(
                 "Created IndexScanNode for tag '{}' using index '{}'",
                 tag_name,
