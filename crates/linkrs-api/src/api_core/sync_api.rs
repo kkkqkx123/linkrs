@@ -27,12 +27,16 @@ impl SyncApi {
         self.sync_manager.is_running()
     }
 
-    /// Get dead letter queue size
+    /// Durable dead-letter count (persistent outbox `dead_letters` table).
+    ///
+    /// Compatibility alias for the removed in-memory queue: always equals
+    /// `outbox_stats().dead_lettered`.
     pub fn get_dlq_size(&self) -> usize {
         self.sync_manager.get_dlq_size()
     }
 
-    /// Get unrecovered dead letter queue size
+    /// Alias of [`SyncApi::get_dlq_size`]: every durable dead letter is
+    /// unrecovered until explicitly requeued.
     pub fn get_unrecovered_dlq_size(&self) -> usize {
         self.sync_manager.get_unrecovered_dlq_size()
     }

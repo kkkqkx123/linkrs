@@ -1,16 +1,16 @@
-//! Sync Module Dead Letter Queue Recovery Tests (TC-310 ~ TC-315)
+//! Sync Module Durable Dead Letter Tests (TC-310 ~ TC-315)
 //!
-//! Tests for DLQ recovery, retry, and the RecoveryResult struct
+//! Tests for durable outbox dead letters, requeue, degraded ranges and the
+//! RecoveryResult struct. The in-memory dead-letter queue was removed; the
+//! SQLite outbox `dead_letters` table is the single source of truth.
 
 use linkrs::core::types::DataType;
-use linkrs::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-use linkrs::sync::types::{ChangeType, IndexData, IndexOpKey, IndexOperation, IndexType};
 use linkrs::test_utils::sync_helpers::SyncTestHarness;
 
-/// TC-310: Dead letter queue recovery flow
+/// TC-310: Fresh outbox exposes no dead letters.
 ///
-/// Verifies that entries can be added to DLQ and the recover_dead_letter
-/// method processes them correctly.
+/// Verifies that a newly created harness reports zero durable dead letters
+/// through both the list API and the stats counters.
 #[test]
 fn test_dlq_recovery_flow() {
     let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
@@ -27,48 +27,22 @@ fn test_dlq_recovery_flow() {
         )
         .expect("Failed to create tag");
 
-    let dlq = harness
+    let rows = harness
         .sync_manager
-        .sync_coordinator()
-        .expect("fulltext sync coordinator is configured")
-        .dead_letter_queue()
-        .clone();
+        .list_dead_letters(None, None, None, 100, 0)
+        .expect("Listing dead letters should succeed");
+    assert!(rows.is_empty(), "Fresh outbox should have no dead letters");
 
-    // Add entries to DLQ directly (simulating failed sync operations)
-    for i in 0..3 {
-        let entry = DeadLetterEntry::new(
-            IndexOperation {
-                key: IndexOpKey::new(1, "Person".to_string(), "name".to_string()),
-                index_type: IndexType::Fulltext,
-                change_type: ChangeType::Insert,
-                id: format!("doc_{}", i),
-                data: Some(IndexData::Fulltext(format!("RecoveryTest{}", i))),
-            },
-            "Simulated failure".to_string(),
-            3,
-        );
-        dlq.add(entry);
-    }
-
-    assert_eq!(dlq.len(), 3, "DLQ should have 3 entries");
-
-    // Try recovery through the coordinator
-    let rt = &harness.rt;
-    let result = rt
-        .block_on(async { harness.sync_coordinator.recover_dead_letter().await })
-        .expect("Recovery should complete");
-
-    // Recovery should have attempted all entries
-    assert_eq!(
-        result.total(),
-        3,
-        "Should have attempted recovery for 3 entries"
-    );
+    let stats = harness.sync_manager.outbox_stats();
+    assert_eq!(stats.dead_lettered, 0);
+    assert_eq!(harness.sync_manager.get_dlq_size(), 0);
+    assert_eq!(harness.sync_manager.get_unrecovered_dlq_size(), 0);
 }
 
-/// TC-311: Dead letter queue retry flow
+/// TC-311: Requeue of an unknown event is a no-op.
 ///
-/// Verifies that retry_dead_letter processes unrecovered entries correctly.
+/// Verifies that single and batch requeue calls succeed without requeueing
+/// anything when no dead letters exist.
 #[test]
 fn test_dlq_retry_flow() {
     let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
@@ -85,52 +59,20 @@ fn test_dlq_retry_flow() {
         )
         .expect("Failed to create tag");
 
-    let dlq = harness
+    let requeued = harness
         .sync_manager
-        .sync_coordinator()
-        .expect("fulltext sync coordinator is configured")
-        .dead_letter_queue()
-        .clone();
+        .requeue_dead_letter(42)
+        .expect("Requeue of unknown event should succeed");
+    assert!(!requeued, "Unknown event id must not be reported as requeued");
 
-    // Add entries with mixed types
-    dlq.add(DeadLetterEntry::new(
-        IndexOperation {
-            key: IndexOpKey::new(1, "Person", "name"),
-            index_type: IndexType::Fulltext,
-            change_type: ChangeType::Insert,
-            id: "retry_1".to_string(),
-            data: Some(IndexData::Fulltext("RetryTest1".to_string())),
-        },
-        "Insert failed".to_string(),
-        2,
-    ));
-    dlq.add(DeadLetterEntry::new(
-        IndexOperation {
-            key: IndexOpKey::new(1, "Person", "name"),
-            index_type: IndexType::Fulltext,
-            change_type: ChangeType::Delete,
-            id: "retry_2".to_string(),
-            data: None,
-        },
-        "Delete failed".to_string(),
-        2,
-    ));
-
-    assert_eq!(dlq.len(), 2, "DLQ should have 2 entries");
-
-    // Mark one as recovered to test filtering
-    dlq.mark_recovered(0);
-
-    let rt = &harness.rt;
-    let result = rt
-        .block_on(async { harness.sync_coordinator.retry_dead_letter(None).await })
-        .expect("Retry should complete");
-
-    // Only 1 unrecovered entry should be retried
-    assert_eq!(result.total(), 1, "Should retry only 1 unrecovered entry");
+    let batch = harness
+        .sync_manager
+        .requeue_dead_letters_batch(None, None, None, 100)
+        .expect("Batch requeue should succeed");
+    assert_eq!(batch, 0, "Empty dead letters should requeue nothing");
 }
 
-/// TC-312: DLQ recovery with max_entries limit
+/// TC-312: Dead letter listing honors limit and offset.
 #[test]
 fn test_dlq_recovery_with_limit() {
     let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
@@ -147,38 +89,24 @@ fn test_dlq_recovery_with_limit() {
         )
         .expect("Failed to create tag");
 
-    let dlq = harness
+    let rows = harness
         .sync_manager
-        .sync_coordinator()
-        .expect("fulltext sync coordinator is configured")
-        .dead_letter_queue()
-        .clone();
+        .list_dead_letters(None, None, None, 2, 0)
+        .expect("Listing with limit should succeed");
+    assert!(rows.len() <= 2, "Should return at most 2 entries");
 
-    for i in 0..5 {
-        dlq.add(DeadLetterEntry::new(
-            IndexOperation {
-                key: IndexOpKey::new(1, "Person", "name"),
-                index_type: IndexType::Fulltext,
-                change_type: ChangeType::Insert,
-                id: format!("limit_{}", i),
-                data: Some(IndexData::Fulltext(format!("LimitTest{}", i))),
-            },
-            "Failure".to_string(),
-            2,
-        ));
-    }
-
-    let rt = &harness.rt;
-    let result = rt
-        .block_on(async { harness.sync_coordinator.retry_dead_letter(Some(2)).await })
-        .expect("Retry with limit should complete");
-
-    assert!(result.total() <= 2, "Should retry at most 2 entries");
+    let skipped = harness
+        .sync_manager
+        .list_dead_letters(None, None, None, 100, 10_000)
+        .expect("Listing with large offset should succeed");
+    assert!(skipped.is_empty(), "Large offset should return no entries");
 }
 
-/// TC-313: recover_operations_for_indexes with specific filter
+/// TC-313: Degraded ranges start empty and clearing unknown ranges is a no-op.
 #[test]
 fn test_recover_operations_for_specific_index() {
+    use linkrs::core::types::{CommitLsn, TargetId};
+
     let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
 
     harness
@@ -193,52 +121,18 @@ fn test_recover_operations_for_specific_index() {
         )
         .expect("Failed to create tag");
 
-    let dlq = harness
+    let ranges = harness
         .sync_manager
-        .sync_coordinator()
-        .expect("fulltext sync coordinator is configured")
-        .dead_letter_queue()
-        .clone();
+        .list_degraded_ranges(None, None, None)
+        .expect("Listing degraded ranges should succeed");
+    assert!(ranges.is_empty(), "Fresh outbox should have no degraded ranges");
 
-    // Add entries for different indexes
-    dlq.add(DeadLetterEntry::new(
-        IndexOperation {
-            key: IndexOpKey::new(1, "Person", "name"),
-            index_type: IndexType::Fulltext,
-            change_type: ChangeType::Insert,
-            id: "p1".to_string(),
-            data: Some(IndexData::Fulltext("Alice".to_string())),
-        },
-        "Fail".to_string(),
-        2,
-    ));
-    dlq.add(DeadLetterEntry::new(
-        IndexOperation {
-            key: IndexOpKey::new(1, "Person", "email"),
-            index_type: IndexType::Fulltext,
-            change_type: ChangeType::Insert,
-            id: "e1".to_string(),
-            data: Some(IndexData::Fulltext("alice@test.com".to_string())),
-        },
-        "Fail".to_string(),
-        2,
-    ));
-
-    let rt = &harness.rt;
-    let result = rt
-        .block_on(async {
-            harness
-                .sync_coordinator
-                .recover_operations_for_indexes(1, "Person", "name")
-                .await
-        })
-        .expect("Recovery for specific index should complete");
-
-    assert_eq!(
-        result.total(),
-        1,
-        "Should recover only 1 entry for Person.name"
-    );
+    let target = TargetId::new("fulltext".to_string()).expect("valid target");
+    let cleared = harness
+        .sync_manager
+        .clear_degraded_range(&target, 1, 1, CommitLsn::new(1), CommitLsn::new(2))
+        .expect("Clearing unknown range should succeed");
+    assert!(!cleared, "Unknown range must not be reported as cleared");
 }
 
 /// TC-314: RecoveryResult complete check
@@ -252,41 +146,37 @@ fn test_recovery_result_complete_check() {
     let failed = RecoveryResult::default();
     assert!(failed.is_complete());
 
-    // Test the RecoveryResult accessors
     assert_eq!(result.total(), 0);
     assert_eq!(result.recovered(), 0);
     assert_eq!(result.failed(), 0);
 }
 
-/// TC-315: Standalone DLQ with stats verification
+/// TC-315: Status aliases stay consistent with durable stats.
 #[test]
 fn test_dlq_stats_verification() {
-    let config = DeadLetterQueueConfig::default();
-    let dlq = DeadLetterQueue::new(config);
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
 
-    for i in 0..5 {
-        dlq.add(DeadLetterEntry::new(
-            IndexOperation {
-                key: IndexOpKey::new(1, "Test", "field"),
-                index_type: IndexType::Fulltext,
-                change_type: ChangeType::Insert,
-                id: format!("doc_{}", i),
-                data: Some(IndexData::Fulltext(format!("content_{}", i))),
-            },
-            "test error".to_string(),
-            3,
-        ));
-    }
+    harness
+        .create_space("test_space")
+        .expect("Failed to create space");
+    harness
+        .create_tag_with_fulltext(
+            "test_space",
+            "Person",
+            vec![("name", DataType::String)],
+            vec!["name"],
+        )
+        .expect("Failed to create tag");
 
-    dlq.mark_recovered(0);
-    dlq.mark_recovered(2);
-
-    let stats = dlq.get_stats();
-    assert_eq!(stats.total_entries, 5);
-    assert_eq!(stats.recovered_entries, 2);
-    assert_eq!(stats.unrecovered_entries, 3);
-    assert!(
-        stats.oldest_entry_age > std::time::Duration::from_secs(0),
-        "Oldest entry age should be positive"
+    let stats = harness.sync_manager.outbox_stats();
+    assert_eq!(
+        harness.sync_manager.get_dlq_size(),
+        stats.dead_lettered,
+        "dlq_size alias must equal durable dead_lettered"
+    );
+    assert_eq!(
+        harness.sync_manager.get_unrecovered_dlq_size(),
+        stats.dead_lettered,
+        "unrecovered alias must equal durable dead_lettered"
     );
 }

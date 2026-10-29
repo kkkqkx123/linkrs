@@ -48,8 +48,8 @@ impl<
         let outbox = sync_api.outbox_stats();
         let status_json = serde_json::to_string(&serde_json::json!({
             "is_running": sync_api.is_running(),
-            "dlq_size": sync_api.get_dlq_size(),
-            "unrecovered_dlq_size": sync_api.get_unrecovered_dlq_size(),
+            "dlq_size": outbox.dead_lettered,
+            "unrecovered_dlq_size": outbox.dead_lettered,
             "outbox_pending": outbox.pending,
             "outbox_retries": outbox.retries,
             "outbox_dead_lettered": outbox.dead_lettered,

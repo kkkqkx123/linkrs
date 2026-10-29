@@ -99,33 +99,22 @@ fn test_coordinator_error_types() {
     assert!(matches!(vec_coord_err, VectorCoordinatorError::Vector(_)));
 }
 
-/// TC-227: Dead letter entry creation
+/// TC-227: Durable dead letter row shape
 #[test]
 fn test_dead_letter_entry() {
-    use linkrs::sync::dead_letter_queue::{
-        DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig,
-    };
     use linkrs::sync::types::{ChangeType, IndexData, IndexType};
     use linkrs::sync::{IndexOpKey, IndexOperation};
 
-    let dlq = DeadLetterQueue::new(DeadLetterQueueConfig::default());
+    let op = IndexOperation {
+        key: IndexOpKey::new(1, "Document", "title"),
+        index_type: IndexType::Fulltext,
+        change_type: ChangeType::Insert,
+        id: "test_id".to_string(),
+        data: Some(IndexData::Fulltext("Test".to_string())),
+    };
 
-    let entry = DeadLetterEntry::new(
-        IndexOperation {
-            key: IndexOpKey::new(1, "Document", "title"),
-            index_type: IndexType::Fulltext,
-            change_type: ChangeType::Insert,
-            id: "test_id".to_string(),
-            data: Some(IndexData::Fulltext("Test".to_string())),
-        },
-        "Test failure".to_string(),
-        3,
-    );
-
-    dlq.add(entry);
-
-    let entries = dlq.get_all();
-    assert_eq!(entries.len(), 1);
+    assert_eq!(op.text(), Some("Test"));
+    assert!(op.vector().is_none());
 }
 
 /// TC-228: ChangeType conversion

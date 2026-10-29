@@ -121,10 +121,19 @@ impl SyncTestHarness {
         properties: Vec<(&str, DataType)>,
         fulltext_fields: Vec<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let props: Vec<PropertyDef> = properties
+        let mut props: Vec<PropertyDef> = properties
             .iter()
             .map(|(name, dtype)| PropertyDef::new(name.to_string(), dtype.clone()))
             .collect();
+        // Storage takes the first tag property as the primary key mirroring
+        // the vertex id. Sync tests focus on index behavior, so declare an
+        // explicit `id` key column unless the caller already provides one;
+        // otherwise a leading searchable field such as `name` would become
+        // the key and every insert would fail mirror validation. Inserts omit
+        // the key column and let storage fill the mirror automatically.
+        if props.first().map(|p| p.name.as_str()) != Some("id") {
+            props.insert(0, PropertyDef::new("id".to_string(), DataType::BigInt));
+        }
 
         let tag_info = TagInfo::new(tag_name.to_string()).with_properties(props);
 

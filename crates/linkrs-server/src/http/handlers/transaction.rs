@@ -612,11 +612,16 @@ pub async fn kill_transaction<
     tag = "Transaction",
     params(("id" = u64, Path, description = "Transaction id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Outbox projection retried"),
+        (status = 200, body = serde_json::Value, description = "Outbox projection retried (global replay)"),
         (status = 500, description = "Internal error")
     )
 )]
-/// Retry outbox projection for a specific transaction's pending intents.
+/// Retry outbox projection scoped to a transaction id.
+///
+/// The `{id}` path only validates that the transaction exists and that the
+/// caller owns it; the engine replays the global durable outbox queue, so the
+/// `delivered` count may include other transactions' entries. The response
+/// carries `scope: "global"` to make this explicit.
 pub async fn retry_transaction_outbox<
     S: StorageClient
         + StorageSchemaContextOps
@@ -657,6 +662,7 @@ pub async fn retry_transaction_outbox<
     Ok(JsonResponse(serde_json::json!({
         "transaction_id": txn_id,
         "delivered": delivered,
+        "scope": "global",
         "status": "completed",
     })))
 }

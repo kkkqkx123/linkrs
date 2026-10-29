@@ -203,55 +203,18 @@ impl super::SyncManager {
         self.execute_sync(|| async { self.recover_stale_rebuilds().await })
     }
 
-    pub fn get_dead_letter_entries(&self) -> Vec<crate::DeadLetterEntry> {
-        if let Some(ref dlq) = self.dead_letter_queue {
-            dlq.get_all()
-        } else {
-            vec![]
-        }
-    }
-
-    pub fn get_unrecovered_entries(&self) -> Vec<crate::DeadLetterEntry> {
-        if let Some(ref dlq) = self.dead_letter_queue {
-            dlq.get_unrecovered()
-        } else {
-            vec![]
-        }
-    }
-
-    pub fn get_old_dead_letter_entries(
-        &self,
-        age: std::time::Duration,
-    ) -> Vec<crate::DeadLetterEntry> {
-        if let Some(ref dlq) = self.dead_letter_queue {
-            dlq.get_old_entries(age)
-        } else {
-            vec![]
-        }
-    }
-
-    pub fn remove_dead_letter_entry(&self, index: usize) -> Option<crate::DeadLetterEntry> {
-        if let Some(ref dlq) = self.dead_letter_queue {
-            dlq.remove(index)
-        } else {
-            None
-        }
-    }
-
+    /// Durable outbox dead-letter count (persistent `dead_letters` table).
+    ///
+    /// This replaces the removed in-memory dead-letter queue: there is a single
+    /// source of truth, so both size accessors report the same durable count.
     pub fn get_dlq_size(&self) -> usize {
-        if let Some(ref dlq) = self.dead_letter_queue {
-            dlq.get_all().len()
-        } else {
-            0
-        }
+        self.outbox_stats().dead_lettered
     }
 
+    /// Alias of [`SyncManager::get_dlq_size`]: every durable dead letter is
+    /// unrecovered until explicitly requeued.
     pub fn get_unrecovered_dlq_size(&self) -> usize {
-        if let Some(ref dlq) = self.dead_letter_queue {
-            dlq.get_unrecovered().len()
-        } else {
-            0
-        }
+        self.outbox_stats().dead_lettered
     }
 
     #[cfg(feature = "vector")]

@@ -84,9 +84,10 @@ async fn staged_vector_intent_is_delivered_to_local_backend() {
         1,
         "the vector point must land in the local engine instead of being retried into the dead-letter queue"
     );
-    assert!(
-        manager.get_dead_letter_entries().is_empty(),
-        "no entry may reach the dead-letter queue"
+    assert_eq!(
+        manager.outbox_stats().dead_lettered,
+        0,
+        "no entry may reach the durable dead letters"
     );
 }
 
@@ -130,8 +131,9 @@ async fn staged_vector_schema_intents_are_consumed_without_dead_letters() {
         !engine.collection_exists("space_vec_1"),
         "a delete without registered indexes must not create collections"
     );
-    assert!(
-        manager.get_dead_letter_entries().is_empty(),
+    assert_eq!(
+        manager.outbox_stats().dead_lettered,
+        0,
         "schema-only deliveries must not dead-letter"
     );
 }

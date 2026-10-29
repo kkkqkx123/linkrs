@@ -6,7 +6,6 @@
 
 use linkrs::core::{types::DataType, Value};
 use linkrs::storage::StorageWriter;
-use linkrs::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 use linkrs::sync::types::{ChangeType, IndexData, IndexType};
 use linkrs::test_utils::sync_helpers::SyncTestHarness;
 
@@ -137,30 +136,29 @@ fn test_transaction_rollback_and_verify() {
     // The test verifies rollback completes without error.
 }
 
-/// TC-263: Dead letter queue basic operations
+/// TC-263: Durable dead letter listing is empty on a fresh harness
 #[test]
 fn test_dead_letter_queue_operations() {
-    let dlq = DeadLetterQueue::new(DeadLetterQueueConfig::default());
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
+    harness
+        .create_space("test_space")
+        .expect("Failed to create space");
+    harness
+        .create_tag_with_fulltext(
+            "test_space",
+            "Document",
+            vec![("title", DataType::String)],
+            vec!["title"],
+        )
+        .expect("Failed to create tag");
 
-    for i in 0..15 {
-        let entry = DeadLetterEntry::new(
-            linkrs::sync::IndexOperation {
-                key: linkrs::sync::IndexOpKey::new(1, "Document", "title"),
-                index_type: IndexType::Fulltext,
-                change_type: ChangeType::Insert,
-                id: format!("test_id_{}", i),
-                data: Some(IndexData::Fulltext(format!("Test{}", i))),
-            },
-            "Test failure".to_string(),
-            3,
-        );
-        dlq.add(entry);
-    }
-
-    let entries = dlq.get_all();
+    let entries = harness
+        .sync_manager
+        .list_dead_letters(None, None, None, 100, 0)
+        .expect("Listing dead letters should succeed");
     assert!(
-        entries.len() <= 15,
-        "DLQ should respect size limit (or handle overflow gracefully)"
+        entries.is_empty(),
+        "Fresh outbox should expose no durable dead letters"
     );
 }
 

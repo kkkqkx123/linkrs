@@ -16,7 +16,6 @@ impl super::SyncManager {
             vector_coordinator: None,
             pending_intents: DashMap::new(),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            dead_letter_queue: None,
             sqlite_outbox: None,
             #[cfg(feature = "vector")]
             vector_receiver: None,
@@ -64,14 +63,6 @@ impl super::SyncManager {
         _sync_config: SyncConfig,
     ) -> Self {
         Self::new(sync_coordinator)
-    }
-
-    pub fn with_dead_letter_queue(
-        mut self,
-        dead_letter_queue: Arc<crate::DeadLetterQueue>,
-    ) -> Self {
-        self.dead_letter_queue = Some(dead_letter_queue);
-        self
     }
 
     pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {

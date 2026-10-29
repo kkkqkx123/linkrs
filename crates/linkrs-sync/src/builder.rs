@@ -1,10 +1,10 @@
+#[cfg(any(feature = "fulltext", feature = "vector"))]
 use std::sync::Arc;
 
 #[cfg(feature = "fulltext")]
 use crate::fulltext_sync::FulltextSyncCoordinator;
 #[cfg(feature = "vector")]
 use crate::vector_sync::VectorSyncCoordinator;
-use crate::DeadLetterQueue;
 use crate::SyncManager;
 
 pub struct SyncManagerBuilder {
@@ -12,7 +12,6 @@ pub struct SyncManagerBuilder {
     sync_coordinator: Option<Arc<FulltextSyncCoordinator>>,
     #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
-    dead_letter_queue: Option<Arc<DeadLetterQueue>>,
     outbox_path: Option<std::path::PathBuf>,
     #[cfg(feature = "vector")]
     auto_embed_text: bool,
@@ -31,7 +30,6 @@ impl SyncManagerBuilder {
             sync_coordinator: None,
             #[cfg(feature = "vector")]
             vector_coordinator: None,
-            dead_letter_queue: None,
             outbox_path: None,
             #[cfg(feature = "vector")]
             auto_embed_text: false,
@@ -47,11 +45,6 @@ impl SyncManagerBuilder {
     #[cfg(feature = "vector")]
     pub fn with_vector_coordinator(mut self, coordinator: Arc<VectorSyncCoordinator>) -> Self {
         self.vector_coordinator = Some(coordinator);
-        self
-    }
-
-    pub fn with_dead_letter_queue(mut self, dlq: Arc<DeadLetterQueue>) -> Self {
-        self.dead_letter_queue = Some(dlq);
         self
     }
 
@@ -77,10 +70,6 @@ impl SyncManagerBuilder {
         #[cfg(feature = "vector")]
         if let Some(vector_coordinator) = self.vector_coordinator {
             manager = manager.with_vector_coordinator(vector_coordinator);
-        }
-
-        if let Some(dlq) = self.dead_letter_queue {
-            manager = manager.with_dead_letter_queue(dlq);
         }
 
         if let Some(path) = self.outbox_path {

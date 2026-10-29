@@ -14,7 +14,10 @@ use crate::storage::{
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct SyncStatusResponse {
     pub is_running: bool,
+    /// Compatibility alias of `outbox_dead_lettered` (durable dead letters).
+    /// Kept so existing clients keep working after the in-memory queue removal.
     pub dlq_size: usize,
+    /// Compatibility alias of `outbox_dead_lettered`.
     pub unrecovered_dlq_size: usize,
     pub outbox_pending: usize,
     pub outbox_retries: u64,
@@ -58,8 +61,8 @@ pub async fn status<
         let outbox = sync_api.outbox_stats();
         Ok(JsonResponse(SyncStatusResponse {
             is_running: sync_api.is_running(),
-            dlq_size: sync_api.get_dlq_size(),
-            unrecovered_dlq_size: sync_api.get_unrecovered_dlq_size(),
+            dlq_size: outbox.dead_lettered,
+            unrecovered_dlq_size: outbox.dead_lettered,
             outbox_pending: outbox.pending,
             outbox_retries: outbox.retries,
             outbox_dead_lettered: outbox.dead_lettered,

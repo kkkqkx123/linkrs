@@ -6,7 +6,6 @@ use linkrs::core::types::DataType;
 use linkrs::core::Value;
 use linkrs::search::SyncFailurePolicy;
 use linkrs::sync::batch::BatchConfig;
-use linkrs::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 use linkrs::sync::fulltext_sync::FulltextSyncCoordinator;
 use linkrs::sync::types::{ChangeType, IndexData, IndexType};
 use linkrs::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
@@ -41,14 +40,6 @@ fn test_failed_sync_to_dead_letter_queue() {
             .expect("Commit all should succeed");
     });
 
-    // Get sync coordinator's dead letter queue
-    let dlq = harness
-        .sync_manager
-        .sync_coordinator()
-        .expect("fulltext sync coordinator is configured")
-        .dead_letter_queue()
-        .clone();
-
     // Begin transaction
     harness
         .begin_transaction()
@@ -72,40 +63,41 @@ fn test_failed_sync_to_dead_letter_queue() {
         .assert_vertex_exists("test_space", &Value::Int(1))
         .expect("Vertex should exist");
 
-    // In normal operation, DLQ should be empty
-    // This test verifies the DLQ infrastructure exists
-    let _entries = dlq.get_all();
-    // DLQ might be empty if sync succeeded, which is fine
-    // The test verifies DLQ is accessible
+    // In normal operation the durable dead letters should stay empty.
+    let stats = harness.sync_manager.outbox_stats();
+    assert_eq!(
+        stats.dead_lettered, 0,
+        "Successful commits must not produce durable dead letters"
+    );
 }
 
-/// TC-061: Dead letter queue recovery
+/// TC-061: Durable dead letter listing and requeue are safe no-ops when empty.
 #[test]
 fn test_dead_letter_queue_recovery() {
-    let dlq = Arc::new(DeadLetterQueue::new(DeadLetterQueueConfig::default()));
+    let mut harness = SyncTestHarness::new().expect("Failed to create test harness");
+    harness
+        .create_space("test_space")
+        .expect("Failed to create space");
+    harness
+        .create_tag_with_fulltext(
+            "test_space",
+            "Person",
+            vec![("name", DataType::String)],
+            vec!["name"],
+        )
+        .expect("Failed to create tag");
 
-    // Add entries up to limit
-    for i in 0..15 {
-        let entry = DeadLetterEntry::new(
-            linkrs::sync::IndexOperation {
-                key: linkrs::sync::IndexOpKey::new(1, "Person", "name"),
-                index_type: IndexType::Fulltext,
-                change_type: ChangeType::Insert,
-                id: format!("test_id_{}", i),
-                data: Some(IndexData::Fulltext(format!("Test{}", i))),
-            },
-            "Test failure".to_string(),
-            3,
-        );
-        dlq.add(entry);
-    }
+    let rows = harness
+        .sync_manager
+        .list_dead_letters(None, None, None, 100, 0)
+        .expect("Listing dead letters should succeed");
+    assert!(rows.is_empty());
 
-    // Verify size limit is enforced
-    let entries = dlq.get_all();
-    assert!(
-        entries.len() <= 15,
-        "DLQ should respect size limit (or handle overflow gracefully)"
-    );
+    let requeued = harness
+        .sync_manager
+        .requeue_dead_letters_batch(None, None, None, 100)
+        .expect("Batch requeue should succeed");
+    assert_eq!(requeued, 0);
 }
 
 /// TC-080: Crash recovery uncommitted transaction
@@ -448,9 +440,9 @@ fn test_failure_policy_configuration() {
     // Verify the coordinator is functional (happy path)
     // Note: Full failure-policy behavior (FailClosed halting on first error)
     // requires engine error injection which is not available in integration tests
-    let dead_letter = _coordinator.dead_letter_queue();
-    assert!(
-        dead_letter.is_empty(),
-        "Dead letter queue should be empty for happy path"
+    let stats = linkrs::sync::manager::SyncManager::new_without_fulltext().outbox_stats();
+    assert_eq!(
+        stats.dead_lettered, 0,
+        "A fresh manager without outbox reports no durable dead letters"
     );
 }

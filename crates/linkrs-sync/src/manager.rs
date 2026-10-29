@@ -51,7 +51,6 @@ pub struct SyncManager {
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pending_intents: DashMap<TransactionId, Vec<linkrs_core::wal::OutboxIntent>>,
     running: Arc<std::sync::atomic::AtomicBool>,
-    dead_letter_queue: Option<Arc<crate::DeadLetterQueue>>,
     sqlite_outbox: Option<Arc<SqliteOutbox>>,
     #[cfg(feature = "vector")]
     vector_receiver: Option<Arc<crate::VectorReceiver>>,
@@ -82,7 +81,6 @@ impl Clone for SyncManager {
             vector_coordinator: self.vector_coordinator.clone(),
             pending_intents: self.pending_intents.clone(),
             running: self.running.clone(),
-            dead_letter_queue: self.dead_letter_queue.clone(),
             sqlite_outbox: self.sqlite_outbox.clone(),
             #[cfg(feature = "vector")]
             vector_receiver: self.vector_receiver.clone(),

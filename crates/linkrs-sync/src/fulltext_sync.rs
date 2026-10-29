@@ -5,7 +5,6 @@ use dashmap::DashMap;
 use tracing::{debug, warn};
 
 use crate::batch::{BatchConfig, BatchProcessor, FulltextBatchProcessor, TransactionBatchBuffer};
-use crate::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 use crate::retry::{default_local_retry_config, with_retry};
 use crate::types::{ChangeType, IndexOpKey, IndexOperation};
 use linkrs_fulltext::manager::FulltextIndexManager;
@@ -52,7 +51,6 @@ pub struct FulltextSyncCoordinator {
     fulltext_processors: DashMap<(u64, String, String), Arc<FulltextProcessor>>,
     transaction_buffers: DashMap<linkrs_core::types::TransactionId, Arc<TransactionBatchBuffer>>,
     config: BatchConfig,
-    dead_letter_queue: Arc<DeadLetterQueue>,
     stats_manager: Option<Arc<StatsManager>>,
 }
 
@@ -67,14 +65,11 @@ impl std::fmt::Debug for FulltextSyncCoordinator {
 
 impl FulltextSyncCoordinator {
     pub fn new(fulltext_manager: Arc<FulltextIndexManager>, config: BatchConfig) -> Self {
-        let dead_letter_queue = Arc::new(DeadLetterQueue::new(DeadLetterQueueConfig::default()));
-
         Self {
             fulltext_manager,
             fulltext_processors: DashMap::new(),
             transaction_buffers: DashMap::new(),
             config,
-            dead_letter_queue,
             stats_manager: None,
         }
     }
@@ -82,10 +77,6 @@ impl FulltextSyncCoordinator {
     pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {
         self.stats_manager = Some(stats_manager);
         self
-    }
-
-    pub fn dead_letter_queue(&self) -> &Arc<DeadLetterQueue> {
-        &self.dead_letter_queue
     }
 
     pub fn fulltext_manager(&self) -> &Arc<FulltextIndexManager> {
@@ -367,7 +358,6 @@ impl FulltextSyncCoordinator {
                 ) {
                     let ops_clone = operations.clone();
                     let retry_config_clone = retry_config.clone();
-                    let dlq_clone = self.dead_letter_queue.clone();
 
                     match with_retry(
                         || async {
@@ -383,15 +373,10 @@ impl FulltextSyncCoordinator {
                             debug!("Fulltext batch applied (pending commit)");
                         }
                         Err(e) => {
-                            warn!("Fulltext batch failed after retries: {:?}", e);
-                            for op in operations {
-                                let entry = DeadLetterEntry::new(
-                                    op.clone(),
-                                    format!("Local index sync failed after retries: {:?}", e),
-                                    retry_config_clone.max_retries,
-                                );
-                                dlq_clone.add(entry);
-                            }
+                            warn!(
+                                "Fulltext batch failed after retries ({} attempts): {:?}",
+                                retry_config_clone.max_retries, e
+                            );
                             fulltext_failed = true;
                             failed_keys.push(key.clone());
                         }
@@ -529,149 +514,6 @@ impl FulltextSyncCoordinator {
                 p.start_background_task().await;
             });
         }
-    }
-
-    /// Recover operations from the dead letter queue.
-    pub async fn recover_dead_letter(&self) -> Result<RecoveryResult, FulltextCoordinatorError> {
-        let dead_letter_entries = self.dead_letter_queue.get_all();
-        let mut result = RecoveryResult {
-            total: dead_letter_entries.len(),
-            ..Default::default()
-        };
-
-        for (index, entry) in dead_letter_entries.iter().enumerate() {
-            match self.recover_operation(&entry.operation).await {
-                Ok(()) => {
-                    self.dead_letter_queue.mark_recovered(index);
-                    result.recovered += 1;
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to recover dead letter entry at index {}: {:?}",
-                        index, e
-                    );
-                    result.failed += 1;
-                }
-            }
-        }
-
-        result.total_attempted = result.total;
-        Ok(result)
-    }
-
-    /// Recover operations from the dead letter queue by retrying each one.
-    ///
-    /// This retries each failed operation through the normal batch processing pipeline.
-    /// Successfully retried operations are marked as recovered in the DLQ.
-    pub async fn retry_dead_letter(
-        &self,
-        max_entries: Option<usize>,
-    ) -> Result<RecoveryResult, FulltextCoordinatorError> {
-        let all_entries = self.dead_letter_queue.get_all();
-        let mut result = RecoveryResult::default();
-        let mut processed = 0;
-
-        for (index, entry) in all_entries.iter().enumerate() {
-            if entry.recovered {
-                continue;
-            }
-            if let Some(limit) = max_entries {
-                if processed >= limit {
-                    break;
-                }
-            }
-            result.total += 1;
-
-            match self.recover_operation(&entry.operation).await {
-                Ok(()) => {
-                    self.dead_letter_queue.mark_recovered(index);
-                    result.recovered += 1;
-                }
-                Err(e) => {
-                    warn!("Dead letter retry failed at index {}: {:?}", index, e);
-                    result.failed += 1;
-                }
-            }
-            processed += 1;
-        }
-
-        result.total_attempted = processed;
-        Ok(result)
-    }
-
-    /// Recover operations from specific indexes
-    pub async fn recover_operations_for_indexes(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-    ) -> Result<RecoveryResult, FulltextCoordinatorError> {
-        let target_key = IndexOpKey::new(space_id, tag_name, field_name);
-        let entries = self.dead_letter_queue.get_all();
-        let mut result = RecoveryResult::default();
-
-        for (index, entry) in entries.iter().enumerate() {
-            let matches = entry.operation.key == target_key;
-
-            if matches {
-                result.total += 1;
-                match self.recover_operation(&entry.operation).await {
-                    Ok(()) => {
-                        self.dead_letter_queue.mark_recovered(index);
-                        result.recovered += 1;
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to recover operation for {}.{}.{}: {:?}",
-                            space_id, tag_name, field_name, e
-                        );
-                        result.failed += 1;
-                    }
-                }
-            }
-        }
-
-        result.total_attempted = result.total;
-        Ok(result)
-    }
-
-    /// Recover a single operation
-    async fn recover_operation(
-        &self,
-        operation: &IndexOperation,
-    ) -> Result<(), FulltextCoordinatorError> {
-        let key = &operation.key;
-        if let Some(processor) =
-            self.get_or_create_fulltext_processor(key.space_id, &key.tag_name, &key.field_name)
-        {
-            match operation.change_type {
-                ChangeType::Insert => {
-                    processor.add(operation.clone()).await.map_err(|e| {
-                        FulltextCoordinatorError::BatchError(
-                            crate::batch::BatchError::InvalidOperation(format!(
-                                "Recovery failed: {:?}",
-                                e
-                            )),
-                        )
-                    })?;
-                }
-                ChangeType::Update | ChangeType::Delete => {
-                    processor
-                        .execute_now(vec![operation.clone()])
-                        .await
-                        .map_err(|e| {
-                            FulltextCoordinatorError::BatchError(
-                                crate::batch::BatchError::InvalidOperation(format!(
-                                    "Recovery failed: {:?}",
-                                    e
-                                )),
-                            )
-                        })?;
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// Search a fulltext index with a plain query string.

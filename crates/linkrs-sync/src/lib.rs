@@ -13,7 +13,6 @@ pub mod batch;
 pub mod builder;
 pub mod checkpoint_manifest;
 pub mod circuit_breaker;
-pub mod dead_letter_queue;
 #[cfg(feature = "fulltext")]
 pub mod fulltext_rebuild;
 #[cfg(feature = "fulltext")]
@@ -53,7 +52,6 @@ pub use circuit_breaker::{
     with_circuit_breaker, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
     CircuitBreakerStats, CircuitState,
 };
-pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 #[cfg(feature = "fulltext")]
 pub use fulltext_rebuild::{
     fulltext_edge_doc_basis, fulltext_field_index_id, fulltext_tag_index_id,
