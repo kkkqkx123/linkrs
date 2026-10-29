@@ -1,16 +1,15 @@
 <script lang="ts">
 	import { t, type MessageKey } from '$i18n';
-	import { Clock, BarChart3, Link2, X, Check, Ban, Braces } from '@lucide/svelte';
-	import IconButton from '$components/common/IconButton.svelte';
+	import { Clock, X, Check, Ban } from '@lucide/svelte';
 	import VirtualTable from '$components/common/VirtualTable.svelte';
-	import LazyCytoscapeCanvas from '$components/common/LazyCytoscapeCanvas.svelte';
-	import GraphPreviewControls from '$components/business/GraphPreviewControls.svelte';
+	import ResultViewTabs from '$components/business/workbench/result/ResultViewTabs.svelte';
+	import GraphPreview from '$components/business/workbench/result/GraphPreview.svelte';
+	import JsonPreview from '$components/business/workbench/result/JsonPreview.svelte';
+	import ServerExportButtons from '$components/business/workbench/result/ServerExportButtons.svelte';
 	import type { StreamCardState, StreamState } from '$stores/stream';
 	import type { QueryResult } from '$types/query';
 	import { formatExecutionTime, formatRowCount } from '$utils/parseData';
-	import { exportStreamViaServer } from '$utils/export';
 	import { queryResultToGraph } from '$utils/cytoscapeConfig';
-	import { STREAM_JSON_PREVIEW_LIMIT } from '$utils/virtualWindow';
 
 	const GRAPH_PREFIX_LIMIT = 5000;
 
@@ -29,23 +28,6 @@
 		onCancel: () => void;
 		onOpenInGraph: (result: QueryResult) => void;
 	} = $props();
-
-	let previewActive = $state(false);
-	const handlePreviewToggle = (active: boolean) => (previewActive = active);
-	let exportError = $state<string | null>(null);
-
-	/** Server-side export re-executes the card's statement; failures leave no file. */
-	async function handleServerExport(query: string, format: 'csv' | 'jsonl') {
-		exportError = null;
-		try {
-			await exportStreamViaServer(query, format);
-		} catch (error) {
-			exportError =
-				error instanceof Error
-					? error.message
-					: t('notification.serverExportFailed');
-		}
-	}
 
 	interface CardModel {
 		indexed: { index: number; row: Record<string, unknown> }[];
@@ -72,16 +54,12 @@
 		return { columns: card.columns, rows: dense, rowCount: card.receivedCount };
 	}
 
-	function jsonPreviewOf(
-		card: StreamCardState,
-		dense: Record<string, unknown>[],
-	): string {
-		const shown = dense.slice(0, STREAM_JSON_PREVIEW_LIMIT);
-		return JSON.stringify(
-			{ columns: card.columns, rows: shown, rowCount: card.receivedCount },
-			null,
-			2,
-		);
+	function graphOf(card: StreamCardState, dense: Record<string, unknown>[]) {
+		return queryResultToGraph({
+			columns: card.columns,
+			rows: dense.slice(0, GRAPH_PREFIX_LIMIT),
+			rowCount: card.receivedCount,
+		});
 	}
 
 	let totalRows = $derived(
@@ -151,47 +129,15 @@
 				{t('console.noResult')}
 			</div>
 		{:else}
-			{#if card.receivedCount > STREAM_JSON_PREVIEW_LIMIT}
-				<p class="mb-2 text-xs text-muted">
-					{t('console.streamJsonTruncated', {
-						shown: STREAM_JSON_PREVIEW_LIMIT,
-						total: card.receivedCount,
-					})}
-				</p>
-			{/if}
-			<pre
-				class="ui-pre ui-pre-lg">{jsonPreviewOf(
-					card,
-					model.dense,
-				)}</pre>
+			<JsonPreview
+				columns={card.columns}
+				rows={model.dense}
+				rowCount={card.receivedCount}
+			/>
 		{/if}
 	{:else}
-		{@const graph = queryResultToGraph({
-			columns: card.columns,
-			rows: model.dense.slice(0, GRAPH_PREFIX_LIMIT),
-			rowCount: card.receivedCount,
-		})}
-		{#if graph.nodes.length > 0 || graph.edges.length > 0}
-			<div class="flex flex-col gap-2 text-sm text-muted">
-				<GraphPreviewControls
-					{graph}
-					{previewActive}
-					onOpenInGraph={() => onOpenInGraph(synthetic)}
-					onTogglePreview={handlePreviewToggle}
-				/>
-				{#if previewActive}
-					<div
-						class="h-80 rounded border border-line relative overflow-hidden"
-					>
-						<LazyCytoscapeCanvas data={graph} {isDark} />
-					</div>
-				{/if}
-			</div>
-		{:else}
-			<div class="ui-empty">
-				{t('console.viewGraph')} - {t('graph.noData')}
-			</div>
-		{/if}
+		{@const graph = graphOf(card, model.dense)}
+		<GraphPreview {graph} result={synthetic} {isDark} {onOpenInGraph} />
 	{/if}
 {/snippet}
 
@@ -230,48 +176,13 @@
 		</button>
 	{/if}
 	<div class="flex-1"></div>
-	<div class="flex gap-1">
-		{#each ['table', 'json', 'graph'] as view (view)}
-			<button
-				class="ui-seg {activeView === view ? 'ui-seg-active' : ''}"
-				onclick={() => onViewChange(view as 'table' | 'json' | 'graph')}
-			>
-				{#if view === 'table'}<BarChart3 size={14} /> {t('console.viewTable')}{:else if view === 'json'}<Braces size={14} /> {t('console.viewJson')}{:else}<Link2 size={14} /> {t('console.viewGraph')}{/if}
-			</button>
-		{/each}
-	</div>
+	<ResultViewTabs {activeView} {onViewChange} />
 	{#if !stream.batch && stream.cards.length === 1}
-		{@const only = stream.cards[0]}
-		<div class="h-4 w-px bg-line"></div>
-		<button
-			class="ui-link text-xs"
-			title={t('console.serverExportHint')}
-			onclick={() => void handleServerExport(only.query, 'csv')}>CSV</button
-		>
-		<button
-			class="ui-link text-xs"
-			title={t('console.serverExportHint')}
-			onclick={() => void handleServerExport(only.query, 'jsonl')}>JSONL</button
-		>
+		<ServerExportButtons query={stream.cards[0].query} />
 	{/if}
 </div>
 
 <div class="flex-1 overflow-auto p-5">
-	{#if exportError}
-		<div
-			class="ui-alert ui-alert-error mb-3 flex items-start gap-2"
-		>
-			<p class="flex-1 text-error text-sm">{exportError}</p>
-			<IconButton
-				label={t('common.dismiss')}
-				class="ui-link-danger text-sm"
-				onclick={() => {
-					exportError = null;
-				}}
-				size={14}
-			/>
-		</div>
-	{/if}
 	{#if stream.error && !stream.batch}
 		<div
 			class="ui-alert ui-alert-error mb-3"
@@ -313,18 +224,7 @@
 							<span>{formatExecutionTime(card.executionTime)}</span>
 						{/if}
 						<span>{formatRowCount(card.receivedCount)}</span>
-						<button
-							class="ui-link text-xs"
-							title={t('console.serverExportHint')}
-							onclick={() => void handleServerExport(card.query, 'csv')}
-							>CSV</button
-						>
-						<button
-							class="ui-link text-xs"
-							title={t('console.serverExportHint')}
-							onclick={() => void handleServerExport(card.query, 'jsonl')}
-							>JSONL</button
-						>
+						<ServerExportButtons query={card.query} />
 					</div>
 					<div class="p-3">
 						{@render cardBody(card)}

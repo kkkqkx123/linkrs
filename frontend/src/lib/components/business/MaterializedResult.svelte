@@ -1,15 +1,17 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { Clock, Check, X, Database, AlertTriangle, BarChart3, Link2, Braces } from '@lucide/svelte';
+	import { Clock, Check, X, Database, AlertTriangle } from '@lucide/svelte';
 	import {
 		formatExecutionTime,
 		formatRowCount,
-		formatCellValue,
 	} from '$utils/parseData';
 	import { queryResultToGraph } from '$utils/cytoscapeConfig';
 	import { exportToCSV, exportToJSON } from '$utils/export';
-	import LazyCytoscapeCanvas from '$components/common/LazyCytoscapeCanvas.svelte';
-	import GraphPreviewControls from '$components/business/GraphPreviewControls.svelte';
+	import VirtualTable from '$components/common/VirtualTable.svelte';
+	import type { IndexedRow } from '$components/common/VirtualTable.svelte';
+	import ResultViewTabs from '$components/business/workbench/result/ResultViewTabs.svelte';
+	import GraphPreview from '$components/business/workbench/result/GraphPreview.svelte';
+	import JsonPreview from '$components/business/workbench/result/JsonPreview.svelte';
 	import type { QueryResult, QueryError } from '$types/query';
 	import type { StatementResultEntry } from '$stores/console';
 
@@ -22,7 +24,7 @@
 		activeView: 'table' | 'json' | 'graph';
 		isDark: boolean;
 		onViewChange: (view: 'table' | 'json' | 'graph') => void;
-		onOpenInGraph: () => void;
+		onOpenInGraph: (result: QueryResult) => void;
 		onJumpToError?: (position: { line: number; column: number }) => void;
 	}
 
@@ -44,15 +46,14 @@
 		results.find((e) => e.success) ?? results[0] ?? null,
 	);
 	let graph = $derived.by(() => {
-		if (!currentResult) return null;
+		if (!currentResult || activeView !== 'graph') return null;
 		return queryResultToGraph(currentResult);
 	});
 
-	let previewActive = $state(false);
-
-	function handlePreviewToggle(open: boolean) {
-		previewActive = open;
-	}
+	let indexedRows = $derived.by<IndexedRow[]>(() => {
+		if (!currentResult) return [];
+		return currentResult.rows.map((row, index) => ({ index, row }));
+	});
 
 	function stageDetail(entry: StatementResultEntry | null): string {
 		if (!entry?.stages) return '';
@@ -166,26 +167,11 @@
 							</div>
 						{:else if entry.result}
 							{#if entry.result.columns.length > 0}
-								<div class="overflow-x-auto">
-									<table class="ui-table w-full border-collapse">
-										<thead>
-											<tr class="bg-secondary">
-												{#each entry.result.columns as col (col)}
-													<th>{col}</th>
-												{/each}
-											</tr>
-										</thead>
-										<tbody>
-											{#each entry.result.rows as row, i (i)}
-												<tr class="even:bg-hover">
-													{#each entry.result.columns as col (col)}
-														<td>{formatCellValue(row[col])}</td>
-													{/each}
-												</tr>
-											{/each}
-										</tbody>
-									</table>
-								</div>
+								<VirtualTable
+									columns={entry.result.columns}
+									rows={entry.result.rows.map((row, i) => ({ index: i, row }))}
+									height={240}
+								/>
 							{:else}
 								<div class="text-xs text-success">
 									{t('common.ok')}
@@ -223,17 +209,7 @@
 				>
 			{/if}
 			<div class="flex-1"></div>
-			<div class="flex gap-1">
-				{#each ['table', 'json', 'graph'] as view (view)}
-					<button
-						class="ui-seg {activeView === view ? 'ui-seg-active' : ''}"
-						onclick={() => onViewChange(view as 'table' | 'json' | 'graph')}
-					>
-						{#if view === 'table'}<BarChart3 size={14} /> {t('console.viewTable')}{:else if view === 'json'}<Braces size={14} /> {t('console.viewJson')}{:else}<Link2 size={14} /> {t('console.viewGraph')}{/if}
-					</button>
-				{/each}
-			</div>
-			<div class="h-4 w-px bg-line"></div>
+			<ResultViewTabs {activeView} {onViewChange} />
 			<button
 				class="ui-link text-xs"
 				onclick={() => exportToCSV(currentResult)}>CSV</button
@@ -245,59 +221,24 @@
 		</div>
 		<div class="flex-1 overflow-auto p-5">
 			{#if activeView === 'table'}
-				<div class="overflow-x-auto">
-					<table class="ui-table w-full border-collapse">
-						<thead>
-							<tr class="bg-secondary">
-								{#each currentResult.columns as col (col)}
-									<th>{col}</th>
-								{/each}
-							</tr>
-						</thead>
-						<tbody>
-							{#each currentResult.rows as row, i (i)}
-								<tr class="even:bg-hover">
-									{#each currentResult.columns as col (col)}
-										<td>{formatCellValue(row[col])}</td>
-									{/each}
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{:else if activeView === 'json'}
-				<pre
-					class="ui-pre ui-pre-lg">{JSON.stringify(
-						currentResult,
-						null,
-						2,
-					)}</pre>
-			{:else}
-				{#if graph && (graph.nodes.length > 0 || graph.edges.length > 0)}
-					<div
-						class="flex flex-col gap-2 text-sm text-muted"
-					>
-						<GraphPreviewControls
-							{graph}
-							{previewActive}
-							{onOpenInGraph}
-							onTogglePreview={handlePreviewToggle}
-						/>
-						{#if previewActive && graph}
-							<div
-								class="h-80 rounded border border-line relative overflow-hidden"
-							>
-								<LazyCytoscapeCanvas data={graph} {isDark} />
-							</div>
-						{/if}
+				{#if currentResult.columns.length === 0}
+					<div class="text-xs text-success">
+						{t('common.ok')}
 					</div>
 				{:else}
-					<div
-						class="ui-empty"
-					>
-						{t('console.viewGraph')} - {t('graph.noData')}
-					</div>
+					<VirtualTable
+						columns={currentResult.columns}
+						rows={indexedRows}
+					/>
 				{/if}
+			{:else if activeView === 'json'}
+				<JsonPreview
+					columns={currentResult.columns}
+					rows={currentResult.rows}
+					rowCount={currentResult.rowCount}
+				/>
+			{:else}
+				<GraphPreview {graph} result={currentResult} {isDark} {onOpenInGraph} />
 			{/if}
 		</div>
 	{:else}

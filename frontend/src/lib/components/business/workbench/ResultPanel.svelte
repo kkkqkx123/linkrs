@@ -26,15 +26,13 @@
 		isDark: boolean;
 
 		onCloseWorkbench: () => void;
-		onStreamViewChange: (view: 'table' | 'json' | 'graph') => void;
+		// Single view-change / open-in-graph pair for all transports; the
+		// transport-specific duplication used to live in the page.
+		onViewChange: (view: 'table' | 'json' | 'graph') => void;
 		onCancelStream: () => void;
-		onStreamOpenInGraph: (result: QueryResult) => void;
-		onCursorViewChange: (view: 'table' | 'json' | 'graph') => void;
+		onOpenInGraph: (result: QueryResult) => void;
 		onCursorLoadMore: () => void;
 		onCursorClose: () => void;
-		onCursorOpenInGraph: (result: QueryResult) => void;
-		onMaterializedViewChange: (view: 'table' | 'json' | 'graph') => void;
-		onOpenInGraph: () => void;
 		onJumpToError: (position: { line: number; column: number }) => void;
 	}
 
@@ -51,15 +49,11 @@
 		activeView,
 		isDark,
 		onCloseWorkbench,
-		onStreamViewChange,
+		onViewChange,
 		onCancelStream,
-		onStreamOpenInGraph,
-		onCursorViewChange,
+		onOpenInGraph,
 		onCursorLoadMore,
 		onCursorClose,
-		onCursorOpenInGraph,
-		onMaterializedViewChange,
-		onOpenInGraph,
 		onJumpToError,
 	}: Props = $props();
 </script>
@@ -83,19 +77,19 @@
 		{stream}
 		{activeView}
 		{isDark}
-		onViewChange={onStreamViewChange}
+		{onViewChange}
 		onCancel={onCancelStream}
-		onOpenInGraph={onStreamOpenInGraph}
+		{onOpenInGraph}
 	/>
 {:else if resultMode === 'cursor' && cursor}
 	<CursorResult
 		{cursor}
 		{activeView}
 		{isDark}
-		onViewChange={onCursorViewChange}
+		{onViewChange}
 		onLoadMore={onCursorLoadMore}
 		onClose={onCursorClose}
-		onOpenInGraph={onCursorOpenInGraph}
+		{onOpenInGraph}
 	/>
 {:else}
 	<MaterializedResult
@@ -106,8 +100,8 @@
 		{error}
 		{activeView}
 		{isDark}
-		onViewChange={onMaterializedViewChange}
-		onOpenInGraph={onOpenInGraph}
+		{onViewChange}
+		{onOpenInGraph}
 		onJumpToError={onJumpToError}
 	/>
 {/if}

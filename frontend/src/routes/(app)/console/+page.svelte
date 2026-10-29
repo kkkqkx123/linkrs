@@ -12,10 +12,6 @@
 		type ResultMode,
 		type AutoDecision,
 	} from '$stores/console';
-	import {
-		clampAutoThreshold,
-		type ExecutionPreference,
-	} from '$utils/autoRoute';
 	import { graphStore } from '$stores/graph';
 	import { historyStore } from '$stores/history';
 	import PageHeader from '$components/layout/PageHeader.svelte';
@@ -372,16 +368,8 @@
 		bind:this={editorPanelRef}
 		bind:editorContent
 		{isDark}
-		{isExecuting}
-		{isBusy}
 		{isValidating}
 		{isExplaining}
-		{resultMode}
-		{executionPreference}
-		{autoStreamThreshold}
-		{autoDecision}
-		{streamEligibility}
-		{streamingActive}
 		{parameters}
 		{sessionVariables}
 		{paramsOpen}
@@ -409,9 +397,6 @@
 			saveModalError = '';
 			saveModalOpen = true;
 		}}
-		onPreferenceChange={(pref) => consoleStore.setExecutionPreference(pref)}
-		onThresholdChange={(val) =>
-			consoleStore.setAutoStreamThreshold(clampAutoThreshold(val))}
 		onToggleParams={() => (paramsOpen = !paramsOpen)}
 		onParametersChange={(rows) => (parameters = rows)}
 		onSessionVariablesChange={(rows) => (sessionVariables = rows)}
@@ -433,17 +418,11 @@
 		{activeView}
 		{isDark}
 		onCloseWorkbench={() => graphStore.closeWorkbench()}
-		onStreamViewChange={handleViewChange}
+		onViewChange={handleViewChange}
 		onCancelStream={handleCancelStream}
-		onStreamOpenInGraph={handleOpenInGraph}
-		onCursorViewChange={handleViewChange}
+		onOpenInGraph={handleOpenInGraph}
 		onCursorLoadMore={handleCursorLoadMore}
 		onCursorClose={handleCursorClose}
-		onCursorOpenInGraph={handleOpenInGraph}
-		onMaterializedViewChange={handleViewChange}
-		onOpenInGraph={() => {
-			if (currentResult) handleOpenInGraph(currentResult);
-		}}
 		onJumpToError={handleJumpToError}
 	/>
 
