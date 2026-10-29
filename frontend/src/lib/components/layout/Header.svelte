@@ -18,14 +18,7 @@
 			: t('ui.density.comfortable');
 	}
 
-	let store = $state({
-		isVerified: false,
-		connectionInfo: { username: '' },
-		role: null as UiRole | null,
-		mustChangePassword: false,
-		isLoading: false,
-	});
-	connectionStore.subscribe((v) => (store = v));
+	const store = fromStore(connectionStore);
 
 	function roleLabel(role: UiRole | null): string {
 		if (role === 'admin') return t('auth.role.admin');
@@ -43,7 +36,7 @@
 		<span class="text-base font-semibold text-ink"
 			>{t('app.title')}</span
 		>
-		{#if store.isVerified}
+		{#if store.current.isVerified}
 			<div class="h-4 w-px bg-line"></div>
 			<SpaceSelector />
 		{/if}
@@ -61,8 +54,8 @@
 		>
 			<Rows3 size={16} />
 		</button>
-		{#if store.isVerified}
-			{#if store.mustChangePassword}
+		{#if store.current.isVerified}
+			{#if store.current.mustChangePassword}
 				<span
 					class="ui-badge bg-warning-light text-warning border-warning/40"
 				>
@@ -71,13 +64,13 @@
 			{/if}
 			<span class="flex items-center gap-1.5 text-sm text-muted">
 				<User size={16} />
-				{store.connectionInfo.username}
+				{store.current.connectionInfo.username}
 			</span>
-			{#if store.role}
+			{#if store.current.role}
 				<span
 					class="ui-badge bg-info-light text-info border-info/40"
 				>
-					{roleLabel(store.role)}
+					{roleLabel(store.current.role)}
 				</span>
 			{/if}
 			<button
@@ -86,7 +79,7 @@
 					await connectionStore.logout();
 					goto('/login');
 				}}
-				disabled={store.isLoading}
+				disabled={store.current.isLoading}
 			>
 				{t('common.logout')}
 			</button>

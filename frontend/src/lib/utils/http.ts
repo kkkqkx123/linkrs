@@ -8,6 +8,8 @@ import { BASE_URL } from '$lib/api/client';
  * `export`), which intentionally bypass codegen. Not covered by codegen.
  */
 
+import { STORAGE_KEYS } from '$config/constants';
+
 export function getApiBaseUrl(): string {
 	return BASE_URL;
 }
@@ -17,7 +19,7 @@ export function getSessionHeaders(): Record<string, string> {
 		'Content-Type': 'application/json',
 	};
 	try {
-		const sessionId = localStorage.getItem('sessionId');
+		const sessionId = localStorage.getItem(STORAGE_KEYS.SESSION_ID);
 		if (sessionId) headers['X-Session-ID'] = sessionId;
 	} catch {
 		/* storage unavailable */
@@ -29,7 +31,7 @@ export function getSessionHeaders(): Record<string, string> {
 export function resolveSessionId(explicit?: number): number | undefined {
 	if (explicit !== undefined) return explicit;
 	try {
-		const stored = localStorage.getItem('sessionId');
+		const stored = localStorage.getItem(STORAGE_KEYS.SESSION_ID);
 		if (!stored) return undefined;
 		const parsed = Number(stored);
 		return Number.isFinite(parsed) ? parsed : undefined;

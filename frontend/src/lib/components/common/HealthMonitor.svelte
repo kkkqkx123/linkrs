@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { fromStore } from 'svelte/store';
 	import { t } from '$i18n';
 	import { connectionStore } from '$stores/connection';
 	import { connectionService } from '$services/connection';
@@ -10,7 +10,10 @@
 	} from '$services/statistics';
 	import { formatBytes } from '$utils/metricsFormat';
 
-	let isConnected = $state(false);
+	const connection = fromStore(connectionStore);
+	const isConnected = $derived(
+		connection.current.isConnected && connection.current.isVerified,
+	);
 	let isChecking = $state(false);
 	let panelOpen = $state(false);
 	let healthData = $state<HealthResponse | null>(null);
@@ -19,13 +22,6 @@
 	let latency = $state<number | null>(null);
 	let checkError = $state<string | null>(null);
 	let panelEl = $state<HTMLDivElement>();
-
-	onMount(() => {
-		const unsub = connectionStore.subscribe((s) => {
-			isConnected = s.isConnected && s.isVerified;
-		});
-		return unsub;
-	});
 
 	function handleClickOutside(e: MouseEvent) {
 		if (panelEl && !panelEl.contains(e.target as Node)) {

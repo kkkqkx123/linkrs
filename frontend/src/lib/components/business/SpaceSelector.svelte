@@ -1,18 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { fromStore } from 'svelte/store';
 	import { t } from '$i18n';
 	import { schemaStore } from '$stores/schema';
 
-	let spaces = $state<Array<{ name: string }>>([]);
-	let currentSpace = $state<string | null>(null);
+	const schema = fromStore(schemaStore);
+	const spaces = $derived(schema.current.spaces);
+	const currentSpace = $derived(schema.current.currentSpace);
 
 	onMount(() => {
 		schemaStore.fetchSpaces();
-		const unsub1 = schemaStore.subscribe((s) => {
-			spaces = s.spaces;
-			currentSpace = s.currentSpace;
-		});
-		return unsub1;
 	});
 
 	function handleChange(e: Event) {

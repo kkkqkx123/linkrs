@@ -17,6 +17,7 @@ import { t } from '$i18n';
 import type { Client } from 'openapi-fetch';
 import type { paths } from './schema';
 import { API_BASE_URL } from '$app/env/public';
+import { STORAGE_KEYS } from '$config/constants';
 import {
 	MockFailure,
 	failureBody,
@@ -43,7 +44,7 @@ const SESSION_DEAD_CODES = new Set(['unauthenticated', 'account_locked']);
 
 function handleUnauthorized() {
 	try {
-		localStorage.removeItem('sessionId');
+		localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
 	} catch {
 		/* storage unavailable */
 	}

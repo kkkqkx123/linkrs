@@ -26,6 +26,11 @@ export interface QueryFavoriteItem {
 
 const MAX_HISTORY = 50;
 const MAX_FAVORITES = 30;
+// Own persistence key: the console store also writes its UI preferences, so
+// sharing one key made the two writers overwrite each other's fields.
+const STORAGE_KEY = 'linkrs-history-storage';
+// Key used before the split; read once for migration.
+const LEGACY_STORAGE_KEY = 'linkrs-console-storage';
 
 function generateId(): string {
 	return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -33,9 +38,18 @@ function generateId(): string {
 
 function loadPersisted(): { history: QueryHistoryItem[]; favorites: QueryFavoriteItem[] } {
 	try {
-		const saved = localStorage.getItem('linkrs-console-storage');
+		const saved = localStorage.getItem(STORAGE_KEY);
 		if (saved) {
 			const parsed = JSON.parse(saved);
+			return {
+				history: Array.isArray(parsed.history) ? parsed.history : [],
+				favorites: Array.isArray(parsed.favorites) ? parsed.favorites : [],
+			};
+		}
+		// One-time migration from the pre-split shared key.
+		const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+		if (legacy) {
+			const parsed = JSON.parse(legacy);
 			return {
 				history: Array.isArray(parsed.history) ? parsed.history : [],
 				favorites: Array.isArray(parsed.favorites) ? parsed.favorites : [],
@@ -49,7 +63,7 @@ function loadPersisted(): { history: QueryHistoryItem[]; favorites: QueryFavorit
 
 function persist(history: QueryHistoryItem[], favorites: QueryFavoriteItem[]): void {
 	try {
-		localStorage.setItem('linkrs-console-storage', JSON.stringify({ history, favorites }));
+		localStorage.setItem(STORAGE_KEY, JSON.stringify({ history, favorites }));
 	} catch {
 		/* ignore */
 	}

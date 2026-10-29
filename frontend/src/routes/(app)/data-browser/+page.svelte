@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { t } from '$i18n';
 	import { RefreshCw, Search, Package, ArrowLeftRight } from '@lucide/svelte';
-	import { get } from 'svelte/store';
+	import { get, fromStore } from 'svelte/store';
 	import { goto } from '$app/navigation';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { dataBrowserStore } from '$stores/dataBrowser';
@@ -17,6 +17,7 @@
 		buildVertexUpdate,
 	} from '$utils/cypherTemplates';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
+	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import StatisticsPanel from '$components/business/dataBrowser/StatisticsPanel.svelte';
 	import DetailModal from '$components/business/dataBrowser/DetailModal.svelte';
 	import VertexTable from '$components/business/dataBrowser/VertexTable.svelte';
@@ -26,69 +27,46 @@
 	import FulltextSearchPanel from '$components/business/FulltextSearchPanel.svelte';
 	import type { DataBrowserTab } from '$types/dataBrowser';
 	import EditPreviewModal from '$components/business/EditPreviewModal.svelte';
-	import type { VertexData, EdgeData, Statistics } from '$types/dataBrowser';
-	import type { Tag, EdgeType } from '$types/schema';
+	import type { VertexData, EdgeData } from '$types/dataBrowser';
 	import { queryService } from '$services/query';
 
-	let currentSpace = $state<string | null>(null);
-	let tags = $state<Tag[]>([]);
-	let edgeTypes = $state<EdgeType[]>([]);
-
-	let activeTab = $state<DataBrowserTab>('vertices');
-	let selectedTag = $state<string | null>(null);
-	let selectedEdgeType = $state<string | null>(null);
-	let vertices = $state<VertexData[]>([]);
-	let edges = $state<EdgeData[]>([]);
-	let vertexTotal = $state(0);
-	let edgeTotal = $state(0);
-	let vertexPage = $state(1);
-	let edgePage = $state(1);
-	let vertexPageSize = $state(50);
-	let edgePageSize = $state(50);
-	let loading = $state(false);
-	let error = $state<string | null>(null);
-	let statistics = $state<Statistics | null>(null);
-	let filterPanelVisible = $state(false);
-	let detailModalVisible = $state(false);
-	let detailData = $state<VertexData | EdgeData | null>(null);
-	let detailType = $state<string | null>(null);
+	const schemaState = fromStore(schemaStore);
+	const browserState = fromStore(dataBrowserStore);
+	// Store-owned state is read through fromStore: the store is the single
+	// source of truth and this page only writes back through its setters.
+	const currentSpace = $derived(schemaState.current.currentSpace);
+	const tags = $derived(schemaState.current.tags);
+	const edgeTypes = $derived(schemaState.current.edgeTypes);
+	const activeTab = $derived(browserState.current.activeTab);
+	const selectedTag = $derived(browserState.current.selectedTag);
+	const selectedEdgeType = $derived(browserState.current.selectedEdgeType);
+	const vertices = $derived(browserState.current.vertices);
+	const edges = $derived(browserState.current.edges);
+	const vertexTotal = $derived(browserState.current.vertexTotal);
+	const edgeTotal = $derived(browserState.current.edgeTotal);
+	const vertexPage = $derived(browserState.current.vertexPage);
+	const edgePage = $derived(browserState.current.edgePage);
+	const vertexPageSize = $derived(browserState.current.vertexPageSize);
+	const edgePageSize = $derived(browserState.current.edgePageSize);
+	const loading = $derived(browserState.current.loading);
+	const error = $derived(browserState.current.error);
+	const statistics = $derived(browserState.current.statistics);
+	const filterPanelVisible = $derived(browserState.current.filterPanelVisible);
+	const detailModalVisible = $derived(browserState.current.detailModalVisible);
+	const detailData = $derived(browserState.current.detailData);
+	const detailType = $derived(browserState.current.detailType);
 
 	let vertexProperties = $state<string[]>([]);
 	let edgeProperties = $state<string[]>([]);
 	let pageInitialized = $state(false);
 
-	onMount(() => {
-		const unsub1 = schemaStore.subscribe((s) => {
-			currentSpace = s.currentSpace;
-			tags = s.tags;
-			edgeTypes = s.edgeTypes;
-		});
-		const unsub2 = dataBrowserStore.subscribe((s) => {
-			activeTab = s.activeTab;
-			selectedTag = s.selectedTag;
-			selectedEdgeType = s.selectedEdgeType;
-			vertices = s.vertices;
-			edges = s.edges;
-			vertexTotal = s.vertexTotal;
-			edgeTotal = s.edgeTotal;
-			vertexPage = s.vertexPage;
-			edgePage = s.edgePage;
-			vertexPageSize = s.vertexPageSize;
-			edgePageSize = s.edgePageSize;
-			loading = s.loading;
-			error = s.error;
-			statistics = s.statistics;
-			filterPanelVisible = s.filterPanelVisible;
-			detailModalVisible = s.detailModalVisible;
-			detailData = s.detailData;
-			detailType = s.detailType;
-		});
+	// Fetch the tag list whenever the space changes (including the initial one).
+	$effect(() => {
 		if (currentSpace) schemaStore.fetchTags(currentSpace);
+	});
+
+	onMount(() => {
 		pageInitialized = true;
-		return () => {
-			unsub1();
-			unsub2();
-		};
 	});
 
 	async function loadVertices() {
@@ -416,6 +394,20 @@
 	let batchMessage = $state<string | null>(null);
 	let batchError = $state<string | null>(null);
 
+	// Pending confirmation; the dialog owns the decision, the action runs only
+	// after explicit confirmation.
+	let pendingConfirm = $state<{
+		title: string;
+		message: string;
+		run: () => Promise<void>;
+	} | null>(null);
+
+	async function confirmPending() {
+		const pending = pendingConfirm;
+		pendingConfirm = null;
+		if (pending) await pending.run();
+	}
+
 	function toggleSelect(id: string) {
 		if (selectedIds.has(id)) selectedIds.delete(id);
 		else selectedIds.add(id);
@@ -430,7 +422,14 @@
 	async function batchDelete() {
 		const count = selectedIds.size;
 		if (count === 0 || batchBusy) return;
-		if (!confirm(t('dataBrowser.batch.confirmDelete', { count }))) return;
+		pendingConfirm = {
+			title: t('dataBrowser.batch.deleteSelected'),
+			message: t('dataBrowser.batch.confirmDelete', { count }),
+			run: runBatchDelete,
+		};
+	}
+
+	async function runBatchDelete() {
 		batchBusy = true;
 		batchError = null;
 		batchMessage = null;
@@ -799,3 +798,13 @@
 		</div>
 	</div>
 {/if}
+
+<ConfirmDialog
+	open={pendingConfirm !== null}
+	title={pendingConfirm?.title ?? ''}
+	message={pendingConfirm?.message ?? ''}
+	danger
+	busy={batchBusy}
+	onConfirm={confirmPending}
+	onClose={() => (pendingConfirm = null)}
+/>

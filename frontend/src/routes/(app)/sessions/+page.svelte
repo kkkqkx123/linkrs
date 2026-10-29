@@ -5,6 +5,7 @@
 	import { t } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
 	import PageHeader from '$components/layout/PageHeader.svelte';
+	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import {
 		connectionService,
 		type SessionListItem,
@@ -13,6 +14,20 @@
 	let sessions = $state<SessionListItem[]>([]);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+
+	// Pending confirmation; the dialog owns the decision, the action runs only
+	// after explicit confirmation.
+	let pendingConfirm = $state<{
+		title: string;
+		message: string;
+		run: () => Promise<void>;
+	} | null>(null);
+
+	async function confirmPending() {
+		const pending = pendingConfirm;
+		pendingConfirm = null;
+		if (pending) await pending.run();
+	}
 
 	onMount(async () => {
 		if (!get(canManageUsers)) {
@@ -36,18 +51,23 @@
 	}
 
 	async function terminateSession(id: number) {
-		if (!confirm(t('sessions.confirmTerminate', { id: String(id) }))) return;
-		loading = true;
-		error = null;
-		try {
-			await connectionService.sessions.delete(id);
-			await loadSessions();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		pendingConfirm = {
+			title: t('sessions.terminate'),
+			message: t('sessions.confirmTerminate', { id: String(id) }),
+			run: async () => {
+				loading = true;
+				error = null;
+				try {
+					await connectionService.sessions.delete(id);
+					await loadSessions();
+				} catch (err) {
+					error =
+						err instanceof Error ? err.message : t('notification.requestFailed');
+				} finally {
+					loading = false;
+				}
+			},
+		};
 	}
 </script>
 
@@ -107,3 +127,13 @@
 		{/if}
 	</section>
 </div>
+
+<ConfirmDialog
+	open={pendingConfirm !== null}
+	title={pendingConfirm?.title ?? ''}
+	message={pendingConfirm?.message ?? ''}
+	danger
+	busy={loading}
+	onConfirm={confirmPending}
+	onClose={() => (pendingConfirm = null)}
+/>

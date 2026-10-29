@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { t } from '$i18n';
-	import { syncService, type DeadLetterRow, type DegradedRangeRow } from '$services/sync';
+	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
+	import { syncService, type SyncStatusResponse, type DeadLetterRow, type DegradedRangeRow } from '$services/sync';
 	import { formatCount } from '$utils/metricsFormat';
 
 	let {
@@ -11,17 +12,31 @@
 		overview:
 			| { sync?: { is_running?: unknown; outbox_pending?: unknown; outbox_retries?: unknown; outbox_dead_lettered?: unknown } }
 			| null;
-		syncSnapshot: unknown;
+		syncSnapshot: SyncStatusResponse | null;
 	} = $props();
 
 	let syncLoading = $state(false);
 	let syncError = $state<string | null>(null);
 	let syncMessage = $state<string | null>(null);
 	let syncDiagnostics = $state('');
-	let syncStatusText = $state('');
+	let syncStatus = $state<SyncStatusResponse | null>(null);
 	let retentionText = $state('');
 	let clearTarget = $state('');
 	let clearIndexId = $state('');
+
+	// Pending confirmation; the dialog owns the decision, the action runs only
+	// after explicit confirmation.
+	let pendingConfirm = $state<{
+		title: string;
+		message: string;
+		run: () => Promise<void>;
+	} | null>(null);
+
+	async function confirmPending() {
+		const pending = pendingConfirm;
+		pendingConfirm = null;
+		if (pending) await pending.run();
+	}
 	let clearGeneration = $state('');
 	let clearStartLsn = $state('');
 	let clearEndLsn = $state('');
@@ -35,13 +50,6 @@
 	let deadRows = $state<DeadLetterRow[]>([]);
 	let degradedRows = $state<DegradedRangeRow[]>([]);
 
-	function num(record: unknown, key: string): unknown {
-		if (record && typeof record === 'object') {
-			return (record as Record<string, unknown>)[key];
-		}
-		return undefined;
-	}
-
 	function stringifyPayload(payload: unknown): string {
 		try {
 			return JSON.stringify(payload, null, 2);
@@ -49,6 +57,59 @@
 			return String(payload ?? '');
 		}
 	}
+
+	// Status snapshot rendered as a labelled key-value list. Field values are
+	// merged by priority: the panel's own status fetch first, then the page
+	// snapshot, then the overview summary; missing fields render as an em dash.
+	const statusFields = [
+		'is_running',
+		'outbox_pending',
+		'outbox_leased',
+		'outbox_retries',
+		'outbox_dead_lettered',
+		'outbox_persist_operations',
+		'outbox_lock_wait_nanos',
+		'outbox_oldest_event_age_ms',
+		'outbox_write_amplification_bytes',
+		'dlq_size',
+		'unrecovered_dlq_size',
+	] as const satisfies readonly (keyof SyncStatusResponse)[];
+
+	const statusLabelKeys = {
+		is_running: 'monitoring.statusIsRunning',
+		outbox_pending: 'monitoring.statusOutboxPending',
+		outbox_leased: 'monitoring.statusOutboxLeased',
+		outbox_retries: 'monitoring.statusOutboxRetries',
+		outbox_dead_lettered: 'monitoring.statusOutboxDeadLettered',
+		outbox_persist_operations: 'monitoring.statusOutboxPersistOps',
+		outbox_lock_wait_nanos: 'monitoring.statusOutboxLockWait',
+		outbox_oldest_event_age_ms: 'monitoring.statusOldestAge',
+		outbox_write_amplification_bytes: 'monitoring.statusOutboxWriteAmp',
+		dlq_size: 'monitoring.statusDlqSize',
+		unrecovered_dlq_size: 'monitoring.statusUnrecoveredDlq',
+	} as const satisfies Record<(typeof statusFields)[number], string>;
+
+	const statusRows = $derived(
+		statusFields.map((key) => {
+			const sources = [syncStatus, syncSnapshot, overview?.sync];
+			const value = sources
+				.map((src) =>
+					src && typeof src === 'object'
+						? (src as Record<string, unknown>)[key]
+						: undefined,
+				)
+				.find((v) => v !== undefined && v !== null);
+			let rendered: string;
+			if (key === 'is_running') {
+				rendered = value ? t('common.running') : '—';
+			} else if (typeof value === 'number') {
+				rendered = formatCount(value);
+			} else {
+				rendered = '—';
+			}
+			return { key, label: t(statusLabelKeys[key]), value: rendered };
+		}),
+	);
 
 	function deadLetterParams() {
 		return {
@@ -73,7 +134,7 @@
 					syncService.degradedRangeRows(),
 					syncService.retentionStatus(),
 				]);
-			syncStatusText = stringifyPayload(status);
+			syncStatus = status;
 			syncDiagnostics = stringifyPayload(diagnostics);
 			deadRows = dead;
 			degradedRows = degraded;
@@ -112,19 +173,24 @@
 	}
 
 	async function requeueDeadLetters() {
-		if (!confirm(t('monitoring.confirmRequeueAll'))) return;
-		syncLoading = true;
-		syncError = null;
-		try {
-			const result = await syncService.requeue({ limit: 100 });
-			syncMessage = stringifyPayload(result);
-			await loadSyncDiagnostics();
-		} catch (err) {
-			syncError =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			syncLoading = false;
-		}
+		pendingConfirm = {
+			title: t('monitoring.requeueDeadLetters'),
+			message: t('monitoring.confirmRequeueAll'),
+			run: async () => {
+				syncLoading = true;
+				syncError = null;
+				try {
+					const result = await syncService.requeue({ limit: 100 });
+					syncMessage = stringifyPayload(result);
+					await loadSyncDiagnostics();
+				} catch (err) {
+					syncError =
+						err instanceof Error ? err.message : t('notification.requestFailed');
+				} finally {
+					syncLoading = false;
+				}
+			},
+		};
 	}
 
 	async function requeueRow(row: DeadLetterRow) {
@@ -133,19 +199,24 @@
 			syncError = t('notification.requestFailed');
 			return;
 		}
-		if (!confirm(t('monitoring.confirmRequeueRow', { id: String(id) }))) return;
-		syncLoading = true;
-		syncError = null;
-		try {
-			const result = await syncService.requeue({ event_ids: [id] });
-			syncMessage = stringifyPayload(result);
-			await loadSyncDiagnostics();
-		} catch (err) {
-			syncError =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			syncLoading = false;
-		}
+		pendingConfirm = {
+			title: t('monitoring.requeueDeadLetters'),
+			message: t('monitoring.confirmRequeueRow', { id: String(id) }),
+			run: async () => {
+				syncLoading = true;
+				syncError = null;
+				try {
+					const result = await syncService.requeue({ event_ids: [id] });
+					syncMessage = stringifyPayload(result);
+					await loadSyncDiagnostics();
+				} catch (err) {
+					syncError =
+						err instanceof Error ? err.message : t('notification.requestFailed');
+				} finally {
+					syncLoading = false;
+				}
+			},
+		};
 	}
 
 	async function runRetention() {
@@ -177,26 +248,30 @@
 			syncError = t('monitoring.clearDegradedInvalid');
 			return;
 		}
-		if (!confirm(t('monitoring.confirmClearDegraded', { id: clearTarget })))
-			return;
-		syncLoading = true;
-		syncError = null;
-		try {
-			const result = await syncService.clearDegraded({
-				target: clearTarget.trim(),
-				index_id: indexId,
-				generation,
-				start_lsn: startLsn,
-				end_lsn: endLsn,
-			});
-			syncMessage = stringifyPayload(result);
-			await loadSyncDiagnostics();
-		} catch (err) {
-			syncError =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			syncLoading = false;
-		}
+		pendingConfirm = {
+			title: t('monitoring.clearDegraded'),
+			message: t('monitoring.confirmClearDegraded', { id: clearTarget }),
+			run: async () => {
+				syncLoading = true;
+				syncError = null;
+				try {
+				const result = await syncService.clearDegraded({
+					target: clearTarget.trim(),
+					index_id: indexId,
+					generation,
+					start_lsn: startLsn,
+					end_lsn: endLsn,
+				});
+					syncMessage = stringifyPayload(result);
+					await loadSyncDiagnostics();
+				} catch (err) {
+					syncError =
+						err instanceof Error ? err.message : t('notification.requestFailed');
+				} finally {
+					syncLoading = false;
+				}
+			},
+		};
 	}
 
 	function cell(row: Record<string, unknown>, key: string): string {
@@ -221,37 +296,15 @@
 		</h2>
 	</div>
 	<p class="text-xs text-muted mb-3">{t('monitoring.dlqExplainer')}</p>
-	<div class="space-y-1 text-sm font-mono mb-3">
-		<div class="flex justify-between">
-			<span class="text-muted">{t('common.status')}</span>
-			<span
-				>{(overview?.sync?.is_running ??
-				num(syncSnapshot, 'is_running'))
-					? t('common.running')
-					: '—'}</span
-			>
-		</div>
-		{#if syncStatusText}
-			<pre class="ui-pre ui-pre-sm max-h-32">{syncStatusText}</pre>
-		{/if}
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.outbox')}</span>
-			<span>
-				{formatCount(
-					overview?.sync?.outbox_pending ??
-						num(syncSnapshot, 'outbox_pending'),
-				)}
-				/
-				{formatCount(
-					overview?.sync?.outbox_retries ??
-						num(syncSnapshot, 'outbox_retries'),
-				)}
-				/
-				{formatCount(
-					overview?.sync?.outbox_dead_lettered ??
-						num(syncSnapshot, 'outbox_dead_lettered'),
-				)}
-			</span>
+	<div class="mb-3">
+		<h3 class="font-medium text-muted mb-1">{t('common.status')}</h3>
+		<div class="space-y-1 text-sm">
+			{#each statusRows as row (row.key)}
+				<div class="flex justify-between gap-4">
+					<span class="text-muted">{row.label}</span>
+					<span class="font-mono">{row.value}</span>
+				</div>
+			{/each}
 		</div>
 	</div>
 	{#if syncError}
@@ -463,4 +516,14 @@
 			{/if}
 		</div>
 	</div>
+
+	<ConfirmDialog
+		open={pendingConfirm !== null}
+		title={pendingConfirm?.title ?? ''}
+		message={pendingConfirm?.message ?? ''}
+		danger
+		busy={syncLoading}
+		onConfirm={confirmPending}
+		onClose={() => (pendingConfirm = null)}
+	/>
 </section>

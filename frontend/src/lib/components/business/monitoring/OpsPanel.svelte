@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import { operationsService } from '$services/operations';
 
 	let opsLoading = $state(false);
@@ -10,6 +11,20 @@
 	let configBusy = $state<Record<string, boolean>>({});
 	let configMessage = $state<string | null>(null);
 	// Active-transaction management lives on the dedicated Transactions page.
+
+	// Pending confirmation; the dialog owns the decision, the action runs only
+	// after explicit confirmation.
+	let pendingConfirm = $state<{
+		title: string;
+		message: string;
+		run: () => Promise<void>;
+	} | null>(null);
+
+	async function confirmPending() {
+		const pending = pendingConfirm;
+		pendingConfirm = null;
+		if (pending) await pending.run();
+	}
 
 	function configEntryKey(section: string, key: string): string {
 		return `${section}.${key}`;
@@ -87,19 +102,24 @@
 
 	async function resetConfigKey(section: string, key: string) {
 		const entry = configEntryKey(section, key);
-		if (!confirm(t('monitoring.confirmReset', { id: entry }))) return;
-		configBusy = { ...configBusy, [entry]: true };
-		configMessage = null;
-		try {
-			await operationsService.resetConfigKey(section, key);
-			configMessage = t('monitoring.configReset', { id: entry });
-			await loadOps();
-		} catch (err) {
-			opsError =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			configBusy = { ...configBusy, [entry]: false };
-		}
+		pendingConfirm = {
+			title: t('common.confirm'),
+			message: t('monitoring.confirmReset', { id: entry }),
+			run: async () => {
+				configBusy = { ...configBusy, [entry]: true };
+				configMessage = null;
+				try {
+					await operationsService.resetConfigKey(section, key);
+					configMessage = t('monitoring.configReset', { id: entry });
+					await loadOps();
+				} catch (err) {
+					opsError =
+						err instanceof Error ? err.message : t('notification.requestFailed');
+				} finally {
+					configBusy = { ...configBusy, [entry]: false };
+				}
+			},
+		};
 	}
 
 </script>
@@ -179,3 +199,12 @@
 			{/if}
 	</div>
 </section>
+
+<ConfirmDialog
+	open={pendingConfirm !== null}
+	title={pendingConfirm?.title ?? ''}
+	message={pendingConfirm?.message ?? ''}
+	danger
+	onConfirm={confirmPending}
+	onClose={() => (pendingConfirm = null)}
+/>

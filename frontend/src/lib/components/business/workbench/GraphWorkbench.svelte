@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { SvelteSet } from 'svelte/reactivity';
-	import { get } from 'svelte/store';
+	import { get, fromStore } from 'svelte/store';
 
 	import { t } from '$i18n';
 	import { Link2, Undo2, AlertTriangle } from '@lucide/svelte';
@@ -8,7 +8,6 @@
 	import {
 		graphStore,
 		type EdgeDetail,
-		type GraphState,
 		type NodeDetail,
 	} from '$stores/graph';
 	import { schemaStore } from '$stores/schema';
@@ -48,27 +47,23 @@
 		{ nodeId: string; nodeIds: string[]; edgeIds: string[] }[]
 	>([]);
 
-	let storeState = $state<GraphState>(get(graphStore));
-	$effect(() =>
-		graphStore.subscribe((s) => {
-			storeState = s;
-		}),
-	);
+	const graphState = fromStore(graphStore);
+	const themeState = fromStore(theme);
 
-	let layout = $derived(storeState.layout);
-	let graphData = $derived(storeState.graphData);
-	let detailPanelVisible = $derived(storeState.detailPanelVisible);
-	let detailData = $derived(storeState.detailData);
-	let detailType = $derived(storeState.detailType);
-	let nodeStyles = $derived(storeState.nodeStyles);
-	let edgeStyles = $derived(storeState.edgeStyles);
-	let storeZoom = $derived(storeState.zoom);
-	let isDark = $derived(get(theme) === 'dark');
-	let searchQuery = $derived(storeState.searchQuery);
-	let filterTags = $derived(storeState.filterTags);
-	let filterEdgeTypes = $derived(storeState.filterEdgeTypes);
-	let simplifiedMode = $derived(storeState.simplifiedMode);
-	let layoutParams = $derived(storeState.layoutParams);
+	let layout = $derived(graphState.current.layout);
+	let graphData = $derived(graphState.current.graphData);
+	let detailPanelVisible = $derived(graphState.current.detailPanelVisible);
+	let detailData = $derived(graphState.current.detailData);
+	let detailType = $derived(graphState.current.detailType);
+	let nodeStyles = $derived(graphState.current.nodeStyles);
+	let edgeStyles = $derived(graphState.current.edgeStyles);
+	let storeZoom = $derived(graphState.current.zoom);
+	let isDark = $derived(themeState.current === 'dark');
+	let searchQuery = $derived(graphState.current.searchQuery);
+	let filterTags = $derived(graphState.current.filterTags);
+	let filterEdgeTypes = $derived(graphState.current.filterEdgeTypes);
+	let simplifiedMode = $derived(graphState.current.simplifiedMode);
+	let layoutParams = $derived(graphState.current.layoutParams);
 
 	const layoutOptions = getLayoutOptions();
 

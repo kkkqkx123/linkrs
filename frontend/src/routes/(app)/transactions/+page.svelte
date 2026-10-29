@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { t } from '$i18n';
 	import PageHeader from '$components/layout/PageHeader.svelte';
+	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import TransactionPanel from '$components/business/monitoring/TransactionPanel.svelte';
 	import { statisticsService, type OverviewResponse, type TransactionMetrics } from '$services/statistics';
 	import { operationsService, type ActiveTransaction } from '$services/operations';
@@ -12,6 +13,20 @@
 	let activeTransactions = $state<ActiveTransaction[]>([]);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+
+	// Pending confirmation; the dialog owns the decision, the action runs only
+	// after explicit confirmation.
+	let pendingConfirm = $state<{
+		title: string;
+		message: string;
+		run: () => Promise<void>;
+	} | null>(null);
+
+	async function confirmPending() {
+		const pending = pendingConfirm;
+		pendingConfirm = null;
+		if (pending) await pending.run();
+	}
 
 	async function load() {
 		loading = true;
@@ -34,33 +49,43 @@
 	}
 
 	async function killTransaction(id: number) {
-		if (!confirm(t('monitoring.confirmKill', { id: String(id) }))) return;
-		loading = true;
-		error = null;
-		try {
-			await operationsService.killTransaction(id);
-			await load();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		pendingConfirm = {
+			title: t('monitoring.kill'),
+			message: t('monitoring.confirmKill', { id: String(id) }),
+			run: async () => {
+				loading = true;
+				error = null;
+				try {
+					await operationsService.killTransaction(id);
+					await load();
+				} catch (err) {
+					error =
+						err instanceof Error ? err.message : t('notification.requestFailed');
+				} finally {
+					loading = false;
+				}
+			},
+		};
 	}
 
 	async function retryTransactionOutbox(id: number) {
-		if (!confirm(t('monitoring.confirmRetryTxn', { id: String(id) }))) return;
-		loading = true;
-		error = null;
-		try {
-			await operationsService.retryTransactionOutbox(id);
-			await load();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		pendingConfirm = {
+			title: t('monitoring.retryTxnOutbox'),
+			message: t('monitoring.confirmRetryTxn', { id: String(id) }),
+			run: async () => {
+				loading = true;
+				error = null;
+				try {
+					await operationsService.retryTransactionOutbox(id);
+					await load();
+				} catch (err) {
+					error =
+						err instanceof Error ? err.message : t('notification.requestFailed');
+				} finally {
+					loading = false;
+				}
+			},
+		};
 	}
 
 	function hasBlockingReason(tx: ActiveTransaction): boolean {
@@ -149,3 +174,13 @@
 		{/if}
 	</section>
 </div>
+
+<ConfirmDialog
+	open={pendingConfirm !== null}
+	title={pendingConfirm?.title ?? ''}
+	message={pendingConfirm?.message ?? ''}
+	danger
+	busy={loading}
+	onConfirm={confirmPending}
+	onClose={() => (pendingConfirm = null)}
+/>

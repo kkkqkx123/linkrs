@@ -36,6 +36,57 @@ interface MonitoringState {
 	loading: boolean;
 	paused: boolean;
 	error: string | null;
+	/** Alert thresholds; owned here so any panel can consume them. */
+	thresholds: Thresholds;
+}
+
+export interface Thresholds {
+	cpuPercent: number;
+	memPercent: number;
+	slowMs: number;
+}
+
+const THRESHOLDS_STORAGE_KEY = 'linkrs_monitor_thresholds';
+
+const DEFAULT_THRESHOLDS: Thresholds = {
+	cpuPercent: 80,
+	memPercent: 80,
+	slowMs: 500,
+};
+
+function loadThresholds(): Thresholds {
+	try {
+		const raw = localStorage.getItem(THRESHOLDS_STORAGE_KEY);
+		if (!raw) return { ...DEFAULT_THRESHOLDS };
+		const parsed = JSON.parse(raw) as Partial<Thresholds>;
+		return {
+			cpuPercent:
+				typeof parsed.cpuPercent === 'number'
+					? parsed.cpuPercent
+					: DEFAULT_THRESHOLDS.cpuPercent,
+			memPercent:
+				typeof parsed.memPercent === 'number'
+					? parsed.memPercent
+					: DEFAULT_THRESHOLDS.memPercent,
+			slowMs:
+				typeof parsed.slowMs === 'number'
+					? parsed.slowMs
+					: DEFAULT_THRESHOLDS.slowMs,
+		};
+	} catch {
+		return { ...DEFAULT_THRESHOLDS };
+	}
+}
+
+function persistThresholds(thresholds: Thresholds): void {
+	try {
+		localStorage.setItem(
+			THRESHOLDS_STORAGE_KEY,
+			JSON.stringify(thresholds),
+		);
+	} catch {
+		/* storage unavailable */
+	}
 }
 
 const emptySnapshots = (): MonitoringSnapshots => ({
@@ -56,6 +107,7 @@ function createMonitoringStore() {
 		loading: false,
 		paused: false,
 		error: null,
+		thresholds: loadThresholds(),
 	});
 
 	let timer: ReturnType<typeof setInterval> | null = null;
@@ -135,6 +187,10 @@ function createMonitoringStore() {
 		startPolling,
 		stopPolling,
 		setPaused: (paused: boolean) => update((s) => ({ ...s, paused })),
+		setThresholds: (next: Thresholds) => {
+			update((s) => ({ ...s, thresholds: next }));
+			persistThresholds(next);
+		},
 	};
 }
 

@@ -2,9 +2,11 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { get } from 'svelte/store';
-	import { t } from '$i18n';
+	import { t, type MessageKey } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
+	import { notificationStore } from '$stores/notification';
 	import PageHeader from '$components/layout/PageHeader.svelte';
+	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import { usersService, type ManagedUser } from '$services/users';
 
 	let users = $state<ManagedUser[]>([]);
@@ -23,6 +25,14 @@
 	let ownNewPassword = $state('');
 	let ownConfirmPassword = $state('');
 
+	// Pending confirmation; the dialog owns the decision, the action runs only
+	// after explicit confirmation.
+	let pendingConfirm = $state<{
+		title: string;
+		message: string;
+		run: () => Promise<void>;
+	} | null>(null);
+
 	const filtered = $derived(
 		users.filter((user) =>
 			user.username.toLowerCase().includes(query.trim().toLowerCase()),
@@ -37,127 +47,102 @@
 		await loadUsers();
 	});
 
-	async function loadUsers() {
+	/** Shared wrapper: one loading/error path for every mutating action, with an
+	 * optional success toast so success and failure feedback stay symmetric. */
+	async function runAction(action: () => Promise<void>, successKey?: MessageKey) {
 		loading = true;
 		error = null;
 		try {
-			const result = await usersService.list();
-			users = result.users;
-			fallback = result.fallback;
+			await action();
+			if (successKey) notificationStore.success(successKey);
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('users.loadFailed');
+			error = err instanceof Error ? err.message : t('notification.requestFailed');
 		} finally {
 			loading = false;
 		}
+	}
+
+	async function loadUsers() {
+		await runAction(async () => {
+			const result = await usersService.list();
+			users = result.users;
+			fallback = result.fallback;
+		});
 	}
 
 	async function createUser() {
 		if (!newUsername.trim() || !newPassword.trim()) return;
-		loading = true;
-		error = null;
-		try {
+		await runAction(async () => {
 			await usersService.create(newUsername.trim(), newPassword);
 			newUsername = '';
 			newPassword = '';
 			await loadUsers();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		}, 'users.createdSuccess');
 	}
 
-	async function toggleEnabled(user: ManagedUser, enabled: boolean) {
-		if (
-			!confirm(t('users.confirmDisable', { name: user.username })) &&
-			!enabled
-		) {
+	function requestToggle(user: ManagedUser, enabled: boolean) {
+		if (enabled) {
+			void runAction(
+				() => usersService.setEnabled(user.username, true).then(() => loadUsers()),
+				'users.statusSuccess',
+			);
 			return;
 		}
-		loading = true;
-		error = null;
-		try {
-			await usersService.setEnabled(user.username, enabled);
-			await loadUsers();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		// Disabling locks the user out; ask first.
+		pendingConfirm = {
+			title: t('users.disable'),
+			message: t('users.confirmDisable', { name: user.username }),
+			run: async () => {
+				await usersService.setEnabled(user.username, false);
+				await loadUsers();
+			},
+		};
+	}
+
+	function requestDeleteUser(user: ManagedUser) {
+		pendingConfirm = {
+			title: t('users.deleteUser'),
+			message: t('users.confirmDeleteUser', { name: user.username }),
+			run: async () => {
+				await usersService.drop(user.username);
+				await loadUsers();
+			},
+		};
+	}
+
+	async function confirmPending() {
+		const pending = pendingConfirm;
+		if (!pending) return;
+		pendingConfirm = null;
+		await runAction(pending.run, 'users.statusSuccess');
 	}
 
 	async function submitReset(user: ManagedUser) {
 		if (!resetPassword.trim()) return;
-		loading = true;
-		error = null;
-		try {
+		await runAction(async () => {
 			await usersService.resetPassword(user.username, resetPassword);
 			resetTarget = null;
 			resetPassword = '';
 			await loadUsers();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		}, 'users.resetSuccess');
 	}
 
 	async function submitGrant(user: ManagedUser) {
 		if (!roleSpace.trim() || !roleName.trim()) return;
-		loading = true;
-		error = null;
-		try {
-			await usersService.grant(
-				user.username,
-				roleName.trim(),
-				roleSpace.trim(),
-			);
+		await runAction(async () => {
+			await usersService.grant(user.username, roleName.trim(), roleSpace.trim());
 			roleTarget = null;
 			await loadUsers();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		}, 'users.roleSuccess');
 	}
 
 	async function submitRevoke(user: ManagedUser) {
 		if (!roleSpace.trim() || !roleName.trim()) return;
-		loading = true;
-		error = null;
-		try {
-			await usersService.revoke(
-				user.username,
-				roleName.trim(),
-				roleSpace.trim(),
-			);
+		await runAction(async () => {
+			await usersService.revoke(user.username, roleName.trim(), roleSpace.trim());
 			roleTarget = null;
 			await loadUsers();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function deleteUser(user: ManagedUser) {
-		if (!confirm(t('users.confirmDeleteUser', { name: user.username }))) return;
-		loading = true;
-		error = null;
-		try {
-			await usersService.drop(user.username);
-			await loadUsers();
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		}, 'users.roleSuccess');
 	}
 
 	async function submitOwnPassword() {
@@ -166,19 +151,12 @@
 			error = t('users.passwordMismatch');
 			return;
 		}
-		loading = true;
-		error = null;
-		try {
+		await runAction(async () => {
 			await usersService.changeOwnPassword(ownOldPassword, ownNewPassword);
 			ownOldPassword = '';
 			ownNewPassword = '';
 			ownConfirmPassword = '';
-		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		} finally {
-			loading = false;
-		}
+		}, 'users.passwordChangedSuccess');
 	}
 </script>
 
@@ -311,14 +289,14 @@
 										{#if !fallback}
 											<button
 												class="ui-btn ui-btn-ghost ui-btn-sm"
-												onclick={() => toggleEnabled(user, false)}
+												onclick={() => requestToggle(user, false)}
 												disabled={loading}
 											>
 												{t('users.disable')}
 											</button>
 											<button
 												class="ui-btn ui-btn-ghost ui-btn-sm"
-												onclick={() => toggleEnabled(user, true)}
+												onclick={() => requestToggle(user, true)}
 												disabled={loading}
 											>
 												{t('users.enable')}
@@ -334,7 +312,7 @@
 										</button>
 										<button
 											class="ui-btn ui-btn-danger-outline ui-btn-xs"
-											onclick={() => deleteUser(user)}
+											onclick={() => requestDeleteUser(user)}
 											disabled={loading}
 										>
 											{t('users.deleteUser')}
@@ -401,3 +379,13 @@
 		{/if}
 	</section>
 </div>
+
+<ConfirmDialog
+			open={pendingConfirm !== null}
+			title={pendingConfirm?.title ?? ''}
+			message={pendingConfirm?.message ?? ''}
+			danger
+			busy={loading}
+			onConfirm={confirmPending}
+			onClose={() => (pendingConfirm = null)}
+		/>

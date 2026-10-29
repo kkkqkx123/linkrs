@@ -9,6 +9,7 @@
 	import { theme } from '$stores/theme';
 	import { DATA_TYPE_LABELS } from '$config/constants';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
+	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import SchemaAlterModal from '$components/business/SchemaAlterModal.svelte';
 	import type { Space, Tag, EdgeType } from '$types/schema';
 	import type { components } from '$lib/api/schema';
@@ -41,6 +42,14 @@
 	let activeTab = $derived(data.tab);
 	let pageInitialized = $state(false);
 	let isDark = $state(false);
+
+	// Pending confirmation; the dialog owns the decision, the action runs only
+	// after explicit confirmation.
+	let pendingConfirm = $state<{
+		title: string;
+		message: string;
+		run: () => Promise<void>;
+	} | null>(null);
 
 	// Spaces
 	let spaces = $state<Space[]>([]);
@@ -271,9 +280,11 @@
 	}
 
 	async function deleteSpace(name: string) {
-		if (confirm(t('common.confirmDelete', { name }))) {
-			await schemaStore.deleteSpace(name);
-		}
+		pendingConfirm = {
+			title: t('common.delete'),
+			message: t('common.confirmDelete', { name }),
+			run: () => schemaStore.deleteSpace(name),
+		};
 	}
 
 	async function createTag() {
@@ -288,12 +299,13 @@
 	}
 
 	async function deleteTag(tagName: string) {
-		if (
-			currentSpace &&
-			confirm(t('common.confirmDeleteItem', { name: tagName }))
-		) {
-			await schemaStore.deleteTag(currentSpace, tagName);
-		}
+		const space = currentSpace;
+		if (!space) return;
+		pendingConfirm = {
+			title: t('common.delete'),
+			message: t('common.confirmDeleteItem', { name: tagName }),
+			run: () => schemaStore.deleteTag(space, tagName),
+		};
 	}
 
 	async function createEdge() {
@@ -308,12 +320,13 @@
 	}
 
 	async function deleteEdge(edgeName: string) {
-		if (
-			currentSpace &&
-			confirm(t('common.confirmDeleteItem', { name: edgeName }))
-		) {
-			await schemaStore.deleteEdgeType(currentSpace, edgeName);
-		}
+		const space = currentSpace;
+		if (!space) return;
+		pendingConfirm = {
+			title: t('common.delete'),
+			message: t('common.confirmDeleteItem', { name: edgeName }),
+			run: () => schemaStore.deleteEdgeType(space, edgeName),
+		};
 	}
 
 	async function createIndex() {
@@ -335,12 +348,13 @@
 	}
 
 	async function deleteIndex(indexName: string) {
-		if (
-			currentSpace &&
-			confirm(t('common.confirmDeleteItem', { name: indexName }))
-		) {
-			await schemaStore.deleteIndex(currentSpace, indexName);
-		}
+		const space = currentSpace;
+		if (!space) return;
+		pendingConfirm = {
+			title: t('common.delete'),
+			message: t('common.confirmDeleteItem', { name: indexName }),
+			run: () => schemaStore.deleteIndex(space, indexName),
+		};
 	}
 
 	async function rebuildIndex(indexName: string) {
@@ -1269,4 +1283,17 @@
 	busy={alterBusy}
 	onClose={() => (alterEdgeName = null)}
 	onSubmit={submitAlterEdge}
+/>
+
+<ConfirmDialog
+	open={pendingConfirm !== null}
+	title={pendingConfirm?.title ?? ''}
+	message={pendingConfirm?.message ?? ''}
+	danger
+	onConfirm={async () => {
+		const pending = pendingConfirm;
+		pendingConfirm = null;
+		if (pending) await pending.run();
+	}}
+	onClose={() => (pendingConfirm = null)}
 />

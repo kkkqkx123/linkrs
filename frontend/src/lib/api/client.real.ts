@@ -18,6 +18,7 @@ import createClient from 'openapi-fetch';
 import JSONBigint from 'json-bigint';
 import type { paths } from './schema';
 import { API_BASE_URL } from '$app/env/public';
+import { STORAGE_KEYS } from '$config/constants';
 
 export const BASE_URL = API_BASE_URL;
 
@@ -31,7 +32,7 @@ const SESSION_DEAD_CODES = new Set(['unauthenticated', 'account_locked']);
 
 function handleUnauthorized() {
 	try {
-		localStorage.removeItem('sessionId');
+		localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
 	} catch {
 		/* storage unavailable */
 	}
@@ -159,7 +160,7 @@ const networkClient = createClient<paths>({
 networkClient.use({
 	async onRequest({ request }) {
 		try {
-			const sessionId = localStorage.getItem('sessionId');
+			const sessionId = localStorage.getItem(STORAGE_KEYS.SESSION_ID);
 			if (sessionId) request.headers.set('X-Session-ID', sessionId);
 		} catch {
 			/* storage unavailable */

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { t } from '$i18n';
-	import { get } from 'svelte/store';
+	import { get, fromStore } from 'svelte/store';
 	import {
 		consoleStore,
 		type QueryHistoryItem,
@@ -34,22 +34,29 @@
 	import type { QueryResult, QueryError } from '$types/query';
 	import type { ParamRow } from '$components/business/workbench/EditorPanel.svelte';
 
+	const consoleState = fromStore(consoleStore);
+	const historyState = fromStore(historyStore);
+	const streamState = fromStore(streamStore);
+	const cursorState = fromStore(cursorStore);
+	const graphState = fromStore(graphStore);
+	const themeState = fromStore(theme);
+
 	let editorContent = $state('');
-	let isExecuting = $state(false);
-	let currentResult = $state<QueryResult | null>(null);
-	let results = $state<StatementResultEntry[]>([]);
-	let executionTime = $state(0);
-	let error = $state<QueryError | null>(null);
-	let activeView = $state<'table' | 'json' | 'graph'>('table');
-	let stream = $state<StreamState | null>(null);
-	let cursor = $state<CursorState | null>(null);
-	let resultMode = $state<ResultMode>(null);
-	let executionPreference = $state<ExecutionPreference>('materialized');
-	let autoStreamThreshold = $state(1000);
-	let autoDecision = $state<AutoDecision | null>(null);
-	let isDark = $state(false);
-	let history = $state<QueryHistoryItem[]>([]);
-	let favorites = $state<QueryFavoriteItem[]>([]);
+	let isExecuting = $derived(consoleState.current.isExecuting);
+	let currentResult = $derived(consoleState.current.currentResult);
+	let results = $derived(consoleState.current.results);
+	let executionTime = $derived(consoleState.current.executionTime);
+	let error = $derived(consoleState.current.error);
+	let activeView = $derived(consoleState.current.activeView);
+	let stream = $derived(streamState.current);
+	let cursor = $derived(cursorState.current);
+	let resultMode = $derived(consoleState.current.resultMode);
+	let executionPreference = $derived(consoleState.current.executionPreference);
+	let autoStreamThreshold = $derived(consoleState.current.autoStreamThreshold);
+	let autoDecision = $derived(consoleState.current.autoDecision);
+	let isDark = $derived(themeState.current === 'dark');
+	let history = $derived(historyState.current.history);
+	let favorites = $derived(historyState.current.favorites);
 	let favoritesCount = $derived(favorites.length);
 	let historyOpen = $state(false);
 	let favoritesOpen = $state(false);
@@ -65,7 +72,7 @@
 	// Graph workbench replaces the result area; fed from graphStore so the
 	// exploration context survives view switches. Other pages (e.g. data
 	// browser) open it by pushing data into graphStore from anywhere.
-	let workbenchOpen = $state(false);
+	let workbenchOpen = $derived(graphState.current.workbenchOpen);
 	let editorPanelRef = $state<{
 		focusEditor: () => void;
 		jumpToPosition: (line: number, column: number) => void;
@@ -98,32 +105,6 @@
 		const snapshot = get(consoleStore);
 		parameters = rowsFromRecord(snapshot.parameters);
 		sessionVariables = rowsFromRecord(snapshot.sessionVariables);
-		const unsub = consoleStore.subscribe((s) => {
-			editorContent = s.editorContent;
-			isExecuting = s.isExecuting;
-			currentResult = s.currentResult;
-			results = s.results;
-			executionTime = s.executionTime;
-			error = s.error;
-			activeView = s.activeView;
-			resultMode = s.resultMode;
-			executionPreference = s.executionPreference;
-			autoStreamThreshold = s.autoStreamThreshold;
-			autoDecision = s.autoDecision;
-		});
-		const unsubHistory = historyStore.subscribe((s) => {
-			history = s.history;
-			favorites = s.favorites;
-		});
-		const unsubStream = streamStore.subscribe((s) => {
-			stream = s;
-		});
-		const unsubCursor = cursorStore.subscribe((s) => {
-			cursor = s;
-		});
-		const unsubGraph = graphStore.subscribe((s) => {
-			workbenchOpen = s.workbenchOpen;
-		});
 		const uninstallKeymap = installKeymap({
 			execute: () => handleExecute(),
 			focusEditor: () => editorPanelRef?.focusEditor(),
@@ -136,16 +117,7 @@
 				),
 			isBusy: () => isBusy,
 		});
-		const unsubTheme = theme.subscribe((v) => {
-			isDark = v === 'dark';
-		});
 		return () => {
-			unsub();
-			unsubHistory();
-			unsubStream();
-			unsubCursor();
-			unsubGraph();
-			unsubTheme();
 			uninstallKeymap();
 			if (saveTimer) clearTimeout(saveTimer);
 			if (validateTimer) clearTimeout(validateTimer);
@@ -258,30 +230,14 @@
 		void consoleStore.closeCursor();
 	}
 
-	function handleCursorViewChange(view: 'table' | 'json' | 'graph') {
-		activeView = view;
-		consoleStore.setActiveView(view);
-	}
-
-	function handleCursorOpenInGraph(result: QueryResult) {
-		const parsed = queryResultToGraph(result);
-		graphStore.setGraphData({ nodes: parsed.nodes, edges: parsed.edges });
-		graphStore.openWorkbench();
-	}
-
 	function handleCancelStream() {
 		consoleStore.cancelStream();
 	}
 
-	function handleStreamViewChange(view: 'table' | 'json' | 'graph') {
-		activeView = view;
+	// One view-change handler for all transports: the active view is owned by
+	// the console store, so the derived value updates through it.
+	function handleViewChange(view: 'table' | 'json' | 'graph') {
 		consoleStore.setActiveView(view);
-	}
-
-	function handleStreamOpenInGraph(result: QueryResult) {
-		const parsed = queryResultToGraph(result);
-		graphStore.setGraphData({ nodes: parsed.nodes, edges: parsed.edges });
-		graphStore.openWorkbench();
 	}
 
 	/** Parse-and-bind each statement without executing it, reporting the first problem. */
@@ -372,9 +328,8 @@
 		}
 	}
 
-	function handleOpenInGraph() {
-		if (!currentResult) return;
-		const parsed = queryResultToGraph(currentResult);
+	function handleOpenInGraph(result: QueryResult) {
+		const parsed = queryResultToGraph(result);
 		graphStore.setGraphData({ nodes: parsed.nodes, edges: parsed.edges });
 		graphStore.openWorkbench();
 	}
@@ -478,15 +433,17 @@
 		{activeView}
 		{isDark}
 		onCloseWorkbench={() => graphStore.closeWorkbench()}
-		onStreamViewChange={handleStreamViewChange}
+		onStreamViewChange={handleViewChange}
 		onCancelStream={handleCancelStream}
-		onStreamOpenInGraph={handleStreamOpenInGraph}
-		onCursorViewChange={handleCursorViewChange}
+		onStreamOpenInGraph={handleOpenInGraph}
+		onCursorViewChange={handleViewChange}
 		onCursorLoadMore={handleCursorLoadMore}
 		onCursorClose={handleCursorClose}
-		onCursorOpenInGraph={handleCursorOpenInGraph}
-		onMaterializedViewChange={handleMaterializedViewChange}
-		onOpenInGraph={handleOpenInGraph}
+		onCursorOpenInGraph={handleOpenInGraph}
+		onMaterializedViewChange={handleViewChange}
+		onOpenInGraph={() => {
+			if (currentResult) handleOpenInGraph(currentResult);
+		}}
 		onJumpToError={handleJumpToError}
 	/>
 

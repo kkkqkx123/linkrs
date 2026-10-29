@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import { get, fromStore } from 'svelte/store';
 	import { t } from '$i18n';
 	import {
 		monitoringStore,
 		type MonitoringSnapshots,
+		type Thresholds,
 	} from '$stores/monitoring';
 	import PortraitDrawer from '$components/business/monitoring/PortraitDrawer.svelte';
 	// Sync management moved to the dedicated /sync page.
@@ -18,32 +20,21 @@
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { formatCount } from '$utils/metricsFormat';
 
-	let monitor = $state({
-		snapshots: {
-			overview: null,
-			system: null,
-			database: null,
-			queries: null,
-			search: null,
-			transaction: null,
-			sync: null,
-		} as MonitoringSnapshots,
-		lastRefreshAt: null as number | null,
-		loading: false,
-		paused: false,
-		error: null as string | null,
-	});
+	const monitorState = fromStore(monitoringStore);
+	const snapshots = $derived(
+		monitorState.current.snapshots as MonitoringSnapshots,
+	);
 
 	let selectedTrace = $state<string | null>(null);
 
-	const overview = $derived(monitor.snapshots.overview);
-	const system = $derived(monitor.snapshots.system ?? overview?.system ?? null);
+	const overview = $derived(snapshots.overview);
+	const system = $derived(snapshots.system ?? overview?.system ?? null);
 	const database = $derived(
-		monitor.snapshots.database ?? overview?.database ?? null,
+		snapshots.database ?? overview?.database ?? null,
 	);
-	const queries = $derived(monitor.snapshots.queries);
-	const search = $derived(monitor.snapshots.search);
-	const retrieval = $derived(monitor.snapshots.retrieval);
+	const queries = $derived(snapshots.queries);
+	const search = $derived(snapshots.search);
+	const retrieval = $derived(snapshots.retrieval);
 
 	const slowRows = $derived(queries?.slow_queries ?? []);
 	const patterns = $derived(queries?.top_patterns ?? []);
@@ -64,59 +55,16 @@
 	});
 
 	function togglePaused() {
-		monitoringStore.setPaused(!monitor.paused);
+		monitoringStore.setPaused(!monitorState.current.paused);
 	}
 
-	interface Thresholds {
-		cpuPercent: number;
-		memPercent: number;
-		slowMs: number;
-	}
-
-	function loadThresholds(): Thresholds {
-		const fallback: Thresholds = {
-			cpuPercent: 80,
-			memPercent: 80,
-			slowMs: 500,
-		};
-		try {
-			const raw = localStorage.getItem('linkrs_monitor_thresholds');
-			if (!raw) return fallback;
-			const parsed = JSON.parse(raw) as Partial<Thresholds>;
-			return {
-				cpuPercent:
-					typeof parsed.cpuPercent === 'number'
-						? parsed.cpuPercent
-						: fallback.cpuPercent,
-				memPercent:
-					typeof parsed.memPercent === 'number'
-						? parsed.memPercent
-						: fallback.memPercent,
-				slowMs:
-					typeof parsed.slowMs === 'number' ? parsed.slowMs : fallback.slowMs,
-			};
-		} catch {
-			return fallback;
-		}
-	}
-
-	let thresholds = $state<Thresholds>({
-		cpuPercent: 80,
-		memPercent: 80,
-		slowMs: 500,
-	});
-	let thresholdsReady = $state(false);
+	// Editable thresholds live in the monitoring store (with persistence);
+	// the local copy exists only so the inputs can bind, and every change is
+	// written back through the store setter.
+	let thresholds = $state<Thresholds>({ ...get(monitoringStore).thresholds });
 
 	$effect(() => {
-		if (!thresholdsReady) return;
-		try {
-			localStorage.setItem(
-				'linkrs_monitor_thresholds',
-				JSON.stringify(thresholds),
-			);
-		} catch {
-			/* storage unavailable */
-		}
+		monitoringStore.setThresholds({ ...thresholds });
 	});
 
 	const cpuExceeded = $derived(
@@ -127,22 +75,8 @@
 	);
 
 	onMount(() => {
-		thresholds = loadThresholds();
-		thresholdsReady = true;
-		const unsub = monitoringStore.subscribe((s) => {
-			monitor = {
-				snapshots: s.snapshots as MonitoringSnapshots,
-				lastRefreshAt: s.lastRefreshAt,
-				loading: s.loading,
-				paused: s.paused,
-				error: s.error,
-			};
-		});
 		monitoringStore.startPolling();
-		return () => {
-			unsub();
-			monitoringStore.stopPolling();
-		};
+		return () => monitoringStore.stopPolling();
 	});
 
 	onDestroy(() => monitoringStore.stopPolling());
@@ -150,22 +84,22 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.monitoring')}>
-		{#if monitor.lastRefreshAt}
+		{#if monitorState.current.lastRefreshAt}
 			<span class="text-sm text-muted">
 				{t('monitoring.lastRefresh')}: {new Date(
-					monitor.lastRefreshAt,
+					monitorState.current.lastRefreshAt,
 				).toLocaleTimeString()}
 			</span>
 		{/if}
 		<button class="ui-btn ui-btn-soft ui-btn-sm" onclick={togglePaused}>
-			{monitor.paused ? t('monitoring.resume') : t('monitoring.pause')}
+			{monitorState.current.paused ? t('monitoring.resume') : t('monitoring.pause')}
 		</button>
 		<button
 			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={() => monitoringStore.refresh()}
-			disabled={monitor.loading}
+			disabled={monitorState.current.loading}
 		>
-			{monitor.loading ? t('monitoring.loading') : t('common.refresh')}
+			{monitorState.current.loading ? t('monitoring.loading') : t('common.refresh')}
 		</button>
 	</PageHeader>
 
@@ -217,9 +151,9 @@
 		{/if}
 	</section>
 
-	{#if monitor.error}
+	{#if monitorState.current.error}
 		<div class="ui-alert ui-alert-warn">
-			{t('monitoring.loadFailed')}: {monitor.error}
+			{t('monitoring.loadFailed')}: {monitorState.current.error}
 		</div>
 	{/if}
 
@@ -262,7 +196,7 @@
 	<div class="grid md:grid-cols-3 gap-4">
 		<TransactionPanel
 			overview={overview}
-			transactionSnapshot={monitor.snapshots.transaction}
+			transactionSnapshot={snapshots.transaction}
 		/>
 		<section class="ui-card shadow-sm p-6">
 			<div class="flex items-center justify-between mb-3">

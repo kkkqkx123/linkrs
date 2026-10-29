@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { fromStore } from 'svelte/store';
 	import { X } from '@lucide/svelte';
 	import { message, t } from '$i18n';
 	import { dataBrowserStore } from '$stores/dataBrowser';
@@ -19,6 +19,15 @@
 		onApply: () => void;
 	} = $props();
 
+	const browser = fromStore(dataBrowserStore);
+	const schema = fromStore(schemaStore);
+	const conditions = $derived(browser.current.filters.conditions);
+	const logic = $derived(browser.current.filters.logic);
+	const selectedTag = $derived(browser.current.selectedTag);
+	const selectedEdgeType = $derived(browser.current.selectedEdgeType);
+	const tags = $derived(schema.current.tags as Tag[]);
+	const edgeTypes = $derived(schema.current.edgeTypes as EdgeType[]);
+
 	const OPERATORS: { value: FilterOperator; label: () => string }[] = [
 		{ value: 'eq', label: message('dataBrowser.op.eq') },
 		{ value: 'ne', label: message('dataBrowser.op.ne') },
@@ -31,30 +40,7 @@
 		{ value: 'endsWith', label: message('dataBrowser.op.endsWith') },
 	];
 
-	let conditions = $state<FilterCondition[]>([]);
-	let logic = $state<'AND' | 'OR'>('AND');
 	let availableProperties = $state<string[]>([]);
-	let selectedTag = $state<string | null>(null);
-	let selectedEdgeType = $state<string | null>(null);
-	let tags = $state<Tag[]>([]);
-	let edgeTypes = $state<EdgeType[]>([]);
-
-	onMount(() => {
-		const unsubBrowser = dataBrowserStore.subscribe((s) => {
-			conditions = s.filters.conditions;
-			logic = s.filters.logic;
-			selectedTag = s.selectedTag;
-			selectedEdgeType = s.selectedEdgeType;
-		});
-		const unsubSchema = schemaStore.subscribe((s) => {
-			tags = s.tags;
-			edgeTypes = s.edgeTypes;
-		});
-		return () => {
-			unsubBrowser();
-			unsubSchema();
-		};
-	});
 
 	$effect(() => {
 		if (activeTab === 'vertices') {
