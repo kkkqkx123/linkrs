@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { t } from '$i18n';
 	import { syncService, type DeadLetterRow, type DegradedRangeRow } from '$services/sync';
 	import { formatCount } from '$utils/metricsFormat';
@@ -203,20 +204,21 @@
 		if (value === null || value === undefined) return '—';
 		return String(value);
 	}
+
+	// Page hosts keep a single refresh control; they call `reload` to
+	// refresh panel data together with the page-level overview.
+	export function reload() {
+		return loadSyncDiagnostics();
+	}
+
+	onMount(loadSyncDiagnostics);
 </script>
 
 <section class="ui-card shadow-sm p-6">
-	<div class="flex items-center justify-between mb-3">
+	<div class="mb-3">
 		<h2 class="ui-section-title mb-0">
 			{t('monitoring.sync')}
 		</h2>
-		<button
-			class="ui-btn ui-btn-primary ui-btn-sm"
-			onclick={loadSyncDiagnostics}
-			disabled={syncLoading}
-		>
-			{syncLoading ? t('monitoring.loading') : t('common.refresh')}
-		</button>
 	</div>
 	<p class="text-xs text-muted mb-3">{t('monitoring.dlqExplainer')}</p>
 	<div class="space-y-1 text-sm font-mono mb-3">
@@ -309,7 +311,7 @@
 					onclick={applyDeadLetterFilter}
 					disabled={syncLoading}
 				>
-					{t('common.refresh')}
+					{t('monitoring.applyFilter')}
 				</button>
 				<button
 					class="ui-btn ui-btn-secondary ui-btn-xs"

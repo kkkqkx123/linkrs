@@ -70,62 +70,46 @@
 			key as keyof NonNullable<TransactionMetrics['resources']>
 		];
 	}
+	const outcomeRows = [
+		{ label: t('monitoring.begun'), value: outcome('begun') },
+		{ label: t('monitoring.committed'), value: outcome('committed') },
+		{ label: t('monitoring.rolledBack'), value: outcome('rolled_back') ?? outcome('aborted') },
+		{ label: t('monitoring.active'), value: outcome('active') },
+		{ label: t('monitoring.conflict'), value: outcome('conflict') },
+		{ label: t('monitoring.timeout'), value: outcome('timeout') },
+	];
+
+	const resourceRows = [
+		{ label: t('monitoring.pendingWrites'), value: resource('pending_writes') },
+		{ label: t('monitoring.stagedWalBytes'), value: resource('staged_wal_bytes') },
+		{ label: t('monitoring.undoBytes'), value: resource('undo_bytes') },
+		{ label: t('monitoring.frontierLag'), value: resource('committed_frontier_lag') },
+		{ label: t('monitoring.activeSnapshots'), value: resource('active_snapshots') },
+	];
 </script>
 
 <section class="ui-card shadow-sm p-6">
 	<h2 class="ui-section-title">
 		{t('monitoring.transactions')}
 	</h2>
-	<div class="space-y-1 text-sm font-mono">
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.begun')}</span>
-			<span>{formatCount(outcome('begun'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.committed')}</span>
-			<span>{formatCount(outcome('committed'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.rolledBack')}</span>
-			<span>{formatCount(outcome('rolled_back') ?? outcome('aborted'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.active')}</span>
-			<span>{formatCount(outcome('active'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.conflict')}</span>
-			<span>{formatCount(outcome('conflict'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.timeout')}</span>
-			<span>{formatCount(outcome('timeout'))}</span>
-		</div>
-	</div>
+	<ul class="space-y-1 text-sm font-mono">
+		{#each outcomeRows as row (row.label)}
+			<li class="flex justify-between">
+				<span class="text-muted">{row.label}</span>
+				<span>{formatCount(row.value)}</span>
+			</li>
+		{/each}
+	</ul>
 
-	<h3 class="mt-4 text-sm font-semibold">{t('monitoring.txResources')}</h3>
-	<div class="space-y-1 text-sm font-mono">
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.pendingWrites')}</span>
-			<span>{formatCount(resource('pending_writes'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.stagedWalBytes')}</span>
-			<span>{formatCount(resource('staged_wal_bytes'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.undoBytes')}</span>
-			<span>{formatCount(resource('undo_bytes'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.frontierLag')}</span>
-			<span>{formatCount(resource('committed_frontier_lag'))}</span>
-		</div>
-		<div class="flex justify-between">
-			<span class="text-muted">{t('monitoring.activeSnapshots')}</span>
-			<span>{formatCount(resource('active_snapshots'))}</span>
-		</div>
-	</div>
+	<h3 class="mt-4 mb-3 text-sm font-semibold">{t('monitoring.txResources')}</h3>
+	<ul class="space-y-1 text-sm font-mono">
+		{#each resourceRows as row (row.label)}
+			<li class="flex justify-between">
+				<span class="text-muted">{row.label}</span>
+				<span>{formatCount(row.value)}</span>
+			</li>
+		{/each}
+	</ul>
 
 	<div class="mt-4 space-y-2">
 		<div class="flex items-center justify-between">

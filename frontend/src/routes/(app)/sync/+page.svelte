@@ -6,6 +6,8 @@
 	import { statisticsService, type OverviewResponse } from '$services/statistics';
 	import type { SyncStatusResponse } from '$services/sync';
 
+	let syncPanel: SyncPanel | null = null;
+
 	let overview = $state<OverviewResponse | null>(null);
 	let syncSnapshot = $state<SyncStatusResponse | null>(null);
 	let loading = $state(false);
@@ -21,6 +23,7 @@
 			]);
 			overview = ov;
 			syncSnapshot = sync;
+			await syncPanel?.reload();
 		} catch (err) {
 			error =
 				err instanceof Error ? err.message : t('notification.requestFailed');
@@ -47,5 +50,5 @@
 		<p class="ui-error-text">{error}</p>
 	{/if}
 
-	<SyncPanel overview={overview} syncSnapshot={syncSnapshot} />
+	<SyncPanel bind:this={syncPanel} overview={overview} syncSnapshot={syncSnapshot} />
 </div>

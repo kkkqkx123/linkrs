@@ -317,6 +317,7 @@
 	"monitoring.active": "活跃",
 	"monitoring.activeSnapshots": "活跃快照",
 	"monitoring.activeTransactions": "活跃事务",
+	"monitoring.applyFilter": "应用筛选",
 	"monitoring.avg": "均值",
 	"monitoring.avgLatency": "平均延迟",
 	"monitoring.backToConsole": "去控制台复现",

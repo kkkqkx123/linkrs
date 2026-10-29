@@ -317,6 +317,7 @@
 	"monitoring.active": "Active",
 	"monitoring.activeSnapshots": "Active snapshots",
 	"monitoring.activeTransactions": "Active transactions",
+	"monitoring.applyFilter": "Apply filter",
 	"monitoring.avg": "Avg",
 	"monitoring.avgLatency": "Avg latency",
 	"monitoring.backToConsole": "Open in console",
