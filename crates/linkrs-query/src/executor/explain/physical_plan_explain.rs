@@ -48,8 +48,8 @@ fn expand_bypass_display(
 pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription {
     let mut desc = PlanDescription::new();
     desc.requested_workers = 1;
-    desc.parallel_fallback_reason = plan.parallel_fallback_reason.clone();
-    desc.cbo_notes = plan.cbo_notes.clone();
+    desc.parallel_fallback_reason = plan.diagnostics.fallback_reason.clone();
+    desc.cbo_notes = plan.diagnostics.notes.clone();
     desc.statistics_summary = plan.statistics_summary.clone();
     if let Some(spec) = plan.partition_spec() {
         let version = spec

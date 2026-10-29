@@ -9,7 +9,6 @@ use crate::executor::expression::functions::global_registry_ref;
 use crate::executor::expression::functions::OwnedFunctionRef;
 use crate::executor::streaming::pool::SharedScheduler;
 use crate::optimizer::stats::feedback::history::QueryFeedbackHistory;
-use crate::optimizer::JoinAlgorithm;
 use crate::storage::QueryStorage;
 use linkrs_core::metadata::SequenceManager;
 use linkrs_core::metadata::{MacroManager, TypeAliasManager};
@@ -85,14 +84,6 @@ pub struct ExecutionContext {
     /// Injected from the optimizer engine by the pipeline; each query merges
     /// its columnar hit/miss counts back into the policy at completion.
     pub columnar_policy: Option<Arc<crate::executor::streaming::chunk::ColumnarPolicy>>,
-    /// Cost-based join algorithm decisions keyed by planner node id
-    /// (CBO join-order decision channel).
-    ///
-    /// Populated by the optimizer from the join reorder walker and consumed
-    /// by the arena builder when converting `InnerJoin`/`LeftJoin` nodes.
-    /// Absent keys fall back to the default heuristic (hash join for valid
-    /// equi keys).
-    pub join_algorithms: HashMap<i64, JoinAlgorithm>,
     /// Transaction isolation level for this execution, when running inside
     /// an explicit transaction. Execution-time knob threaded from the
     /// API layer through [`crate::QueryContext`]; `None` = auto-commit.
@@ -130,7 +121,6 @@ fn new_base(expression_context: Arc<ExpressionAnalysisContext>) -> ExecutionCont
         arena: None,
         feedback_history: None,
         columnar_policy: None,
-        join_algorithms: HashMap::new(),
         isolation_level: None,
         ryw_config: None,
         sequence_manager: None,

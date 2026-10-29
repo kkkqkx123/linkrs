@@ -95,19 +95,19 @@ impl OptimizerEngine {
                             e
                         );
                         log::warn!("LogicalPlan::from_plan_node fallback failed: {}", e);
-                        plan.cbo_notes.push(msg.clone());
-                        plan.cbo_notes.push(format!(
+                        plan.diagnostics.notes.push(msg.clone());
+                        plan.diagnostics.notes.push(format!(
                             "factorization: logical_plan_fallback_total=1 (node={})",
                             node_type
                         ));
                         if let Some(ref ms) = self.metrics_stats {
                             ms.add_value(linkrs_metrics::MetricType::FactorizationFallbackTotal);
                         }
-                        if plan.parallel_fallback_reason.is_empty() {
-                            plan.parallel_fallback_reason = msg;
+                        if plan.diagnostics.fallback_reason.is_empty() {
+                            plan.diagnostics.fallback_reason = msg;
                         } else {
-                            plan.parallel_fallback_reason.push_str("; ");
-                            plan.parallel_fallback_reason.push_str(&msg);
+                            plan.diagnostics.fallback_reason.push_str("; ");
+                            plan.diagnostics.fallback_reason.push_str(&msg);
                         }
                     }
                 }
@@ -163,11 +163,11 @@ impl OptimizerEngine {
             log::debug!("Selected partition layout: {}", decision.reason);
             plan.set_partition_spec(spec);
         } else if !decision.reason.is_empty() {
-            if plan.parallel_fallback_reason.is_empty() {
-                plan.parallel_fallback_reason = decision.reason;
+            if plan.diagnostics.fallback_reason.is_empty() {
+                plan.diagnostics.fallback_reason = decision.reason;
             } else {
-                plan.parallel_fallback_reason.push_str("; ");
-                plan.parallel_fallback_reason.push_str(&decision.reason);
+                plan.diagnostics.fallback_reason.push_str("; ");
+                plan.diagnostics.fallback_reason.push_str(&decision.reason);
             }
         }
         plan
@@ -261,18 +261,15 @@ impl OptimizerEngine {
         if let Some(root) = plan.root.take() {
             let calculator = self.cost_calculator_for(space);
             let mut notes = Vec::new();
-            let mut decisions = std::collections::HashMap::new();
-            let rewritten = crate::optimizer::cost_based::join_order_rewriter::
-                walk_and_optimize_joins_with_decisions(
+            let rewritten =
+                crate::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
                     &root,
                     stats,
                     &calculator,
                     &mut notes,
-                    &mut Some(&mut decisions),
                 );
             plan.set_root(rewritten);
-            plan.join_algorithms = decisions;
-            plan.cbo_notes.extend(notes);
+            plan.diagnostics.notes.extend(notes);
         }
 
         if let Some(root) = plan.root.take() {
@@ -289,7 +286,7 @@ impl OptimizerEngine {
                 &mut notes,
             );
             plan.set_root(rewritten);
-            plan.cbo_notes.extend(notes);
+            plan.diagnostics.notes.extend(notes);
         }
 
         self.apply_topn_wiring(space, plan, stats);
@@ -299,7 +296,7 @@ impl OptimizerEngine {
             let mut notes = Vec::new();
             let rewritten = self.select_aggregate_strategies(&root, stats, &selector, &mut notes);
             plan.set_root(rewritten);
-            plan.cbo_notes.extend(notes);
+            plan.diagnostics.notes.extend(notes);
         }
 
         self.apply_precompute_notes(space, plan);
@@ -312,7 +309,7 @@ impl OptimizerEngine {
             let rewritten = self.unnest_subqueries(&root, stats, &mut notes);
             let rewritten = Self::apply_unnesting_heuristic_fallback(&rewritten, &mut notes);
             plan.set_root(rewritten);
-            plan.cbo_notes.extend(notes);
+            plan.diagnostics.notes.extend(notes);
         }
     }
 
@@ -356,7 +353,7 @@ impl OptimizerEngine {
         };
         let mut notes = Vec::new();
         let rewritten = unnest_pattern_applies_logical(logical.root(), &mut notes);
-        plan.cbo_notes.extend(notes);
+        plan.diagnostics.notes.extend(notes);
         let mut updated_logical = logical;
         updated_logical.root = rewritten;
         plan.set_logical_plan(updated_logical);
@@ -376,11 +373,11 @@ impl OptimizerEngine {
 
         if logical.should_skip_join_order_review() {
             if logical.join_order_hinted {
-                plan.cbo_notes.push(
+                plan.diagnostics.notes.push(
                     "join_order: kept planning order (user hint, reviewer skipped)".to_string(),
                 );
             } else {
-                plan.cbo_notes.push(
+                plan.diagnostics.notes.push(
                     "join_order: kept planning order (statistics-backed, reviewer skipped)"
                         .to_string(),
                 );
@@ -392,7 +389,7 @@ impl OptimizerEngine {
         let mut notes = Vec::new();
         let rewritten_logical =
             walk_and_optimize_joins_logical(logical.root(), stats, &calculator, &mut notes);
-        plan.cbo_notes.extend(notes);
+        plan.diagnostics.notes.extend(notes);
 
         let mut updated_logical = logical;
         updated_logical.root = rewritten_logical;
@@ -400,17 +397,14 @@ impl OptimizerEngine {
 
         if let Some(root) = plan.root.take() {
             let mut scratch = Vec::new();
-            let mut decisions = std::collections::HashMap::new();
-            let rewritten = crate::optimizer::cost_based::join_order_rewriter::
-                walk_and_optimize_joins_with_decisions(
+            let rewritten =
+                crate::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
                     &root,
                     stats,
                     &calculator,
                     &mut scratch,
-                    &mut Some(&mut decisions),
                 );
             plan.set_root(rewritten);
-            plan.join_algorithms = decisions;
         }
     }
 
@@ -434,7 +428,7 @@ impl OptimizerEngine {
             space,
             &mut notes,
         );
-        plan.cbo_notes.extend(notes);
+        plan.diagnostics.notes.extend(notes);
 
         let mut updated_logical = logical;
         updated_logical.root = rewritten_logical;
@@ -473,7 +467,7 @@ impl OptimizerEngine {
             &self.selectivity_estimator,
             &mut notes,
         );
-        plan.cbo_notes.extend(notes);
+        plan.diagnostics.notes.extend(notes);
     }
 
     fn apply_topn_wiring_logical(
@@ -496,7 +490,7 @@ impl OptimizerEngine {
             &self.selectivity_estimator,
             &mut notes,
         );
-        plan.cbo_notes.extend(notes);
+        plan.diagnostics.notes.extend(notes);
         let mut updated_logical = logical;
         updated_logical.root = rewritten;
         plan.set_logical_plan(updated_logical);
@@ -515,18 +509,12 @@ impl OptimizerEngine {
                 &mut notes,
             );
             plan.set_root(rewritten);
-            plan.cbo_notes.extend(notes);
+            plan.diagnostics.notes.extend(notes);
         }
     }
 
     fn apply_row_estimates(&self, plan: &mut ExecutionPlan, stats: &StatsView) {
         if let Some(root) = plan.root.as_ref() {
-            plan.row_estimates =
-                crate::optimizer::cost_based::row_estimates::collect_node_row_estimates(
-                    root,
-                    stats,
-                    &self.selectivity_estimator,
-                );
             crate::optimizer::cost_based::row_estimates::register_plan_estimates(
                 &self.cardinality_feedback,
                 root,
@@ -543,7 +531,7 @@ impl OptimizerEngine {
                 crate::optimizer::cost_based::precomputation_wiring::collect_precompute_notes(
                     root, &optimizer,
                 );
-            plan.cbo_notes.extend(notes);
+            plan.diagnostics.notes.extend(notes);
         }
     }
 

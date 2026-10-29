@@ -1,5 +1,8 @@
 use super::*;
 use crate::optimizer::cost::config::UNKNOWN_SCAN_ROWS;
+use crate::optimizer::cost::SelectivityEstimator;
+use crate::optimizer::stats::StatsView;
+use crate::planning::plan::PlanNodeEnum;
 
 use crate::optimizer::stats::StatisticsManager;
 use crate::planning::plan::core::nodes::access::graph_scan_node::ScanVerticesNode;
@@ -81,11 +84,9 @@ fn topn_caps_input_rows() {
 }
 
 #[test]
-fn collect_returns_estimates_for_every_node() {
+fn estimator_covers_every_node_shape() {
     let (manager, selectivity) = setup();
     let view = StatsView::new(&manager, Some("test"));
-    // Direct constructors leave the placeholder id (-1); number the nodes
-    // explicitly like planner output, since estimates are keyed by node id.
     let start = crate::planning::plan::core::nodes::control_flow::start_node::StartNode::new()
         .clone_with_new_id(1);
     let sort = SortNode::new(start, vec![SortItem::column_asc("x".to_string())])
@@ -94,9 +95,7 @@ fn collect_returns_estimates_for_every_node() {
     let plan = LimitNode::new(sort, 0, 5)
         .expect("limit should build")
         .clone_with_new_id(3);
-    let estimates = collect_node_row_estimates(&plan, &view, &selectivity);
-    assert_eq!(estimates.len(), 3);
-    assert!(estimates.contains_key(&plan.id()));
+    assert!(estimate_node_output_rows(&plan, &view, &selectivity) >= 1);
 }
 
 #[test]

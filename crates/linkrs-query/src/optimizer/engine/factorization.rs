@@ -12,7 +12,8 @@ impl OptimizerEngine {
         if let Some(logical) = plan.logical_plan.as_mut() {
             crate::optimizer::factorization::RemoveFactorizationRewriter::new()
                 .rewrite(&mut logical.root)?;
-            plan.cbo_notes
+            plan.diagnostics
+                .notes
                 .push("factorization: removed LogicalFlatten".to_string());
         }
         Ok(plan)
@@ -33,19 +34,23 @@ impl OptimizerEngine {
             flattens.sort_unstable();
             flattens.dedup();
             for pos in &flattens {
-                plan.cbo_notes.push(format!("Flatten(group={})", pos));
+                plan.diagnostics
+                    .notes
+                    .push(format!("Flatten(group={})", pos));
             }
             let mut skipped = rewriter.take_skipped_flat_groups();
             skipped.sort_unstable();
             skipped.dedup();
             for pos in &skipped {
                 if !flattens.contains(pos) {
-                    plan.cbo_notes
+                    plan.diagnostics
+                        .notes
                         .push(format!("factorization: flatten_noop_flat(group={})", pos));
                 }
             }
             if !flattens.is_empty() {
-                plan.cbo_notes
+                plan.diagnostics
+                    .notes
                     .push(format!("factorization: flatten_total={}", flattens.len()));
                 if let Some(ref ms) = self.metrics_stats {
                     ms.add_value_with_amount(
@@ -55,11 +60,13 @@ impl OptimizerEngine {
                 }
             }
             if plan
-                .cbo_notes
+                .diagnostics
+                .notes
                 .iter()
                 .all(|n| !n.starts_with("Flatten(group="))
             {
-                plan.cbo_notes
+                plan.diagnostics
+                    .notes
                     .push("factorization: re-inserted LogicalFlatten".to_string());
             }
         }
@@ -88,8 +95,8 @@ impl OptimizerEngine {
                     if let Some(logical) = plan.logical_plan.as_mut() {
                         logical.root = root;
                     }
-                    plan.cbo_notes.extend(notes);
-                    plan.cbo_notes.push(format!(
+                    plan.diagnostics.notes.extend(notes);
+                    plan.diagnostics.notes.push(format!(
                         "factorization: intersect_to_join_rewrite_total={}",
                         rewrite_count
                     ));
@@ -100,15 +107,15 @@ impl OptimizerEngine {
                         );
                     }
                 } else {
-                    plan.cbo_notes.extend(notes);
-                    plan.cbo_notes.push(
+                    plan.diagnostics.notes.extend(notes);
+                    plan.diagnostics.notes.push(
                         "factorization: intersect_to_join_rewrite_total=0 \
                          (reverted, schema invariant violated)"
                             .to_string(),
                     );
                 }
             } else if !notes.is_empty() {
-                plan.cbo_notes.extend(notes);
+                plan.diagnostics.notes.extend(notes);
             }
         }
         plan

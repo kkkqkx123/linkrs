@@ -1,9 +1,10 @@
 //! Shared child traversal for cost-based plan rewriters.
 //!
-//! `rewrite_children` clones a node, rewrites every child with the supplied
-//! closure, and returns the rebuilt node. It mirrors the accessors used by
-//! `PlanNodeEnum::children` but with mutation support, so rewriters only
-//! implement their per-node decision and delegate recursion here.
+//! Physical adapter for the single traversal semantics shared with
+//! `traversal_logical`: node-type access differs between `PlanNodeEnum` and
+//! `LogicalNodeEnum`, but recursion shape (single/binary/multiple inputs,
+//! dependency-based set ops) is the same. Decision logic lives in the
+//! rewriters; this file only adapts child access.
 
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
     BinaryInputNode, MultipleInputNode, SingleInputNode,

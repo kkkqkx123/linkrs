@@ -183,8 +183,7 @@ fn partitioned_plan_is_isolated_from_plain_text_lookup() {
             params: Vec::new(),
             name_to_slot: HashMap::new(),
         },
-        parallel_fallback_reason: String::new(),
-        cbo_notes: Vec::new(),
+        diagnostics: crate::planning::plan::PlanDiagnostics::default(),
         statistics_summary: String::new(),
         partition_spec: Some(spec.clone()),
     });
@@ -247,8 +246,7 @@ fn partitioned_plan_hit_respects_compatibility_context() {
             params: Vec::new(),
             name_to_slot: HashMap::new(),
         },
-        parallel_fallback_reason: String::new(),
-        cbo_notes: Vec::new(),
+        diagnostics: crate::planning::plan::PlanDiagnostics::default(),
         statistics_summary: String::new(),
         partition_spec: Some(spec.clone()),
     });

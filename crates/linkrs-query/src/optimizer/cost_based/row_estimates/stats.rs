@@ -44,3 +44,14 @@ pub(super) fn stats_fanout_skewed(stats: &StatsView, edge_types: &[String]) -> u
         .fold(1.0f64, f64::max);
     ((base * factor).round() as u64).max(1)
 }
+
+/// Shared filter row estimate: input rows scaled by selectivity, floored at 1.
+pub(super) fn apply_filter_selectivity(input_rows: u64, selectivity: f64) -> u64 {
+    (input_rows as f64 * selectivity).max(1.0) as u64
+}
+
+/// Shared limit capping: output cannot exceed offset+count window.
+pub(super) fn cap_limit_rows(input_rows: u64, offset: i64, count: i64) -> u64 {
+    let window = offset.saturating_add(count).max(0) as u64;
+    input_rows.min(window)
+}

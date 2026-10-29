@@ -469,12 +469,8 @@ pub struct PhysicalPlan {
     pub required_capabilities: CapabilitySet,
     /// Parameter schema for this plan (empty if no parameters).
     pub parameter_schema: ParameterSchema,
-    /// Why parallel partitioning was not applied (empty = partitioning
-    /// active or not requested). Surfaced in EXPLAIN / PROFILE diagnostics.
-    pub parallel_fallback_reason: String,
-    /// Cost-based decision notes (subquery unnest / join order) recorded by
-    /// the optimizer. Surfaced in EXPLAIN / PROFILE diagnostics.
-    pub cbo_notes: Vec<String>,
+    /// Unified cost diagnostics (fallback reason + CBO notes).
+    pub diagnostics: crate::planning::plan::PlanDiagnostics,
     /// Effective statistics collection settings recorded at plan build.
     /// Surfaced in EXPLAIN / PROFILE diagnostics.
     pub statistics_summary: String,

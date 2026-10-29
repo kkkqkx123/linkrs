@@ -41,7 +41,7 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     exec_ctx,
                 )?;
-                let spec = match exec_ctx.join_algorithms.get(&node.id()) {
+                let spec = match join_node.algorithm() {
                     Some(crate::optimizer::JoinAlgorithm::NestedLoopJoin { .. }) => {
                         build_inner_join_nested_loop_spec(join_node)?
                     }
@@ -94,7 +94,7 @@ impl ArenaPlanAssembler {
                     frag_alloc,
                     exec_ctx,
                 )?;
-                let spec = match exec_ctx.join_algorithms.get(&node.id()) {
+                let spec = match join_node.algorithm() {
                     Some(crate::optimizer::JoinAlgorithm::NestedLoopJoin { .. }) => {
                         build_left_join_nested_loop_spec(join_node)?
                     }

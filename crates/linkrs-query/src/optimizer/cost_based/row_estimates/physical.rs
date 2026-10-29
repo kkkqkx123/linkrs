@@ -12,7 +12,10 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::PlanNodeEnum;
 
 use super::cardinality::corrected_rows;
-use super::stats::{stats_fanout_skewed, DEFAULT_FILTER_SELECTIVITY, DEFAULT_NEIGHBORHOOD_FANOUT};
+use super::stats::{
+    apply_filter_selectivity, cap_limit_rows, stats_fanout_skewed, DEFAULT_FILTER_SELECTIVITY,
+    DEFAULT_NEIGHBORHOOD_FANOUT,
+};
 use crate::executor::streaming::chunk::VECTORIZED_BATCH_SIZE;
 
 /// Estimate the output row count of a logical node, post-order.
@@ -135,7 +138,7 @@ fn estimate_node_output_rows_impl(
                     )
                 })
                 .unwrap_or(DEFAULT_FILTER_SELECTIVITY);
-            (input_rows as f64 * expr_selectivity).max(1.0) as u64
+            apply_filter_selectivity(input_rows, expr_selectivity)
         }
         Project(_) | Sort(_) | Sample(_) | Window(_) => {
             child_rows_of_impl(node, stats, selectivity, cardinality)
@@ -148,7 +151,7 @@ fn estimate_node_output_rows_impl(
         Limit(n) => {
             let input_rows =
                 estimate_node_output_rows_impl(n.input(), stats, selectivity, cardinality);
-            input_rows.min((n.offset() + n.count()) as u64)
+            cap_limit_rows(input_rows, n.offset(), n.count())
         }
         Dedup(n) => {
             let input_rows =

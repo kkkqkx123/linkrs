@@ -9,10 +9,12 @@ use crate::optimizer::stats::StatsView;
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::core::nodes::PlanNodeEnum;
 use crate::planning::plan::core::nodes::{PatternApplyNode, SemiJoinNode};
-use linkrs_core::types::operators::BinaryOperator;
 use linkrs_core::Expression;
 
-use super::types::{KeepReason, UnnestDecision, UnnestReason, MAX_BOUNDED_SUBQUERY_ROWS};
+use super::types::{
+    hash_join_cost, pattern_apply_cost, KeepReason, UnnestDecision, UnnestReason,
+    MAX_BOUNDED_SUBQUERY_ROWS,
+};
 
 /// Subquery decorrelation optimizer
 ///
@@ -308,29 +310,7 @@ impl SubqueryUnnestingOptimizer {
     /// chain of such comparisons, or a disjunction (OR) of them — i.e. the
     /// correlated condition is expressible as a DNF of equality conjuncts.
     fn is_simple_equality_condition(expr: &Expression) -> bool {
-        match expr {
-            Expression::Binary { op, left, right } => match op {
-                BinaryOperator::Equal => {
-                    Self::is_simple_expression(left.as_ref())
-                        && Self::is_simple_expression(right.as_ref())
-                }
-                BinaryOperator::And | BinaryOperator::Or => {
-                    Self::is_simple_equality_condition(left.as_ref())
-                        && Self::is_simple_equality_condition(right.as_ref())
-                }
-                _ => false,
-            },
-            _ => false,
-        }
-    }
-
-    /// Check whether the expression is simple (consisting of literals,
-    /// variables, or properties).
-    fn is_simple_expression(expr: &Expression) -> bool {
-        matches!(
-            expr,
-            Expression::Literal(_) | Expression::Variable(_) | Expression::Property { .. }
-        )
+        super::types::is_simple_equality_condition(expr)
     }
 
     /// Estimating the number of rows returned by a subquery
@@ -359,25 +339,12 @@ impl SubqueryUnnestingOptimizer {
         subquery_rows: u64,
         measured_per_row_cost: Option<f64>,
     ) -> f64 {
-        // Nested loops that execute the subquery once per left row; the
-        // default coefficient models subquery startup + execution, a measured
-        // value (us per row) is used when feedback is available.
-        match measured_per_row_cost {
-            Some(cost) => left_rows * cost * 0.001,
-            None => left_rows * (subquery_rows as f64 * 0.1),
-        }
+        pattern_apply_cost(left_rows, subquery_rows, measured_per_row_cost)
     }
 
     /// Estimating the cost of a HashJoin operation
     fn estimate_hash_join_cost(&self, left_rows: f64, subquery_rows: u64) -> f64 {
-        // Simplified estimation: hash connections
-        let right_rows = subquery_rows as f64;
-
-        // Cost of building the hash table + cost of probing
-        let build_cost = right_rows;
-        let probe_cost = left_rows * 0.5; // Hash detection is fast.
-
-        build_cost + probe_cost
+        hash_join_cost(left_rows, subquery_rows)
     }
 
     /// Perform the de-association transformation.
@@ -442,6 +409,7 @@ mod tests {
     use crate::planning::plan::core::nodes::PlanNodeEnum;
     use linkrs_core::types::expr::expression_context::ExpressionAnalysisContext;
     use linkrs_core::types::expr::ExpressionMeta;
+    use linkrs_core::types::operators::BinaryOperator;
     use linkrs_core::types::ContextualExpression;
     use std::sync::Arc;
 
@@ -472,23 +440,35 @@ mod tests {
     #[test]
     fn test_simple_expression_check() {
         let literal = Expression::Literal(linkrs_core::Value::Int(42));
-        assert!(SubqueryUnnestingOptimizer::is_simple_expression(&literal));
+        assert!(
+            crate::optimizer::cost_based::subquery_unnesting::types::is_simple_expression(&literal)
+        );
 
         let variable = Expression::Variable("n".to_string());
-        assert!(SubqueryUnnestingOptimizer::is_simple_expression(&variable));
+        assert!(
+            crate::optimizer::cost_based::subquery_unnesting::types::is_simple_expression(
+                &variable
+            )
+        );
 
         let property = Expression::Property {
             object: Box::new(Expression::Variable("n".to_string())),
             property: "name".to_string(),
         };
-        assert!(SubqueryUnnestingOptimizer::is_simple_expression(&property));
+        assert!(
+            crate::optimizer::cost_based::subquery_unnesting::types::is_simple_expression(
+                &property
+            )
+        );
 
         let binary = Expression::Binary {
             left: Box::new(Expression::Literal(linkrs_core::Value::Int(1))),
             op: linkrs_core::types::operators::BinaryOperator::Add,
             right: Box::new(Expression::Literal(linkrs_core::Value::Int(2))),
         };
-        assert!(!SubqueryUnnestingOptimizer::is_simple_expression(&binary));
+        assert!(
+            !crate::optimizer::cost_based::subquery_unnesting::types::is_simple_expression(&binary)
+        );
     }
 
     #[test]

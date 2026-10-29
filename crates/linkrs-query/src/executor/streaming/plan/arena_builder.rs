@@ -33,7 +33,7 @@ impl PhysicalPlanBuilder {
     /// partitionable, a partitioned plan (N local source fragments + one
     /// exchange fragment + global fragments) is produced instead; otherwise
     /// the single-tree path is used and the reason is recorded in
-    /// `ctx.parallel_fallback_reason`.
+    /// `ctx.diagnostics.fallback_reason`.
     pub fn build(
         node: &PlanNodeEnum,
         ctx: &mut PhysicalPlanBuildContext,
@@ -43,18 +43,18 @@ impl PhysicalPlanBuilder {
         if let Some(spec) = ctx.partition_spec.clone() {
             match partition::build_partitioned(node, &spec, exec_ctx) {
                 Ok(Some(result)) => {
-                    ctx.parallel_fallback_reason.clear();
+                    ctx.diagnostics.fallback_reason.clear();
                     partitioned = Some(result);
                 }
                 Ok(None) => {
-                    if ctx.parallel_fallback_reason.is_empty() {
-                        ctx.parallel_fallback_reason =
+                    if ctx.diagnostics.fallback_reason.is_empty() {
+                        ctx.diagnostics.fallback_reason =
                             "plan shape does not support partitioned execution".to_string();
                     }
                 }
                 Err(error) => {
-                    if ctx.parallel_fallback_reason.is_empty() {
-                        ctx.parallel_fallback_reason =
+                    if ctx.diagnostics.fallback_reason.is_empty() {
+                        ctx.diagnostics.fallback_reason =
                             format!("partitioned execution unavailable ({error})");
                     }
                 }
@@ -113,11 +113,7 @@ impl PhysicalPlanBuilder {
         metadata::populate_input_contracts(operators, fragments)?;
         metadata::populate_runtime_metadata(operators);
         metadata::populate_choice_reasons(operators);
-        metadata::populate_estimated_rows(
-            operators,
-            fragments,
-            &ctx.statistics.per_node_row_estimates,
-        );
+        metadata::populate_estimated_rows(operators, fragments);
 
         let output = operators
             .iter()
@@ -164,8 +160,8 @@ impl PhysicalPlanBuilder {
             },
             required_capabilities,
             parameter_schema: ctx.parameter_schema.clone(),
-            parallel_fallback_reason: ctx.parallel_fallback_reason.clone(),
-            cbo_notes: ctx.cbo_notes.clone(),
+            diagnostics: ctx.diagnostics.clone(),
+
             statistics_summary: ctx.statistics_summary.clone(),
             partition_spec: ctx.partition_spec.clone(),
         };

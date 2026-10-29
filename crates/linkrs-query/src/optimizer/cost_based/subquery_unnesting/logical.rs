@@ -64,8 +64,10 @@ pub fn unnest_pattern_applies_logical(
 
 /// Whether a logical subquery input has a provably-safe simple shape:
 ///
-/// a single-table scan wrapped in filters, projections, skip, or a constant
-/// limit. Aggregation or any other operator keeps the apply shape.
+/// a single-table scan wrapped in equality filters, projections, skip, or a
+/// constant limit. Aggregation or any other operator keeps the apply shape.
+/// Filter conditions use the shared equality gate from `super::types` so the
+/// logical and physical shape checks cannot drift.
 fn is_simple_logical_subquery_shape(node: &LogicalNodeEnum) -> bool {
     match node {
         LogicalNodeEnum::ScanVertices(_)
@@ -76,10 +78,16 @@ fn is_simple_logical_subquery_shape(node: &LogicalNodeEnum) -> bool {
         | LogicalNodeEnum::Start(_)
         | LogicalNodeEnum::Argument(_)
         | LogicalNodeEnum::PassThrough(_) => true,
-        LogicalNodeEnum::Filter(n) => n
-            .input
-            .as_deref()
-            .is_some_and(is_simple_logical_subquery_shape),
+        LogicalNodeEnum::Filter(n) => {
+            let condition_ok = n
+                .condition
+                .expression()
+                .is_none_or(|meta| super::types::is_simple_equality_condition(meta.inner()));
+            condition_ok
+                && n.input
+                    .as_deref()
+                    .is_some_and(is_simple_logical_subquery_shape)
+        }
         LogicalNodeEnum::Project(n) => n
             .input
             .as_deref()

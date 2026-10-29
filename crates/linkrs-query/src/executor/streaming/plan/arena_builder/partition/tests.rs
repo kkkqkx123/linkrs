@@ -157,7 +157,7 @@ fn unsupported_shape_falls_back_to_serial() {
 
     let plan = PhysicalPlanBuilder::build(&start, &mut ctx, &exec_ctx).expect("build");
     assert_eq!(plan.fragment_count(), 1);
-    assert!(!ctx.parallel_fallback_reason.is_empty());
+    assert!(!ctx.diagnostics.fallback_reason.is_empty());
 }
 
 /// Build a keyed equality join plan node with the given hash/probe key
@@ -200,9 +200,9 @@ fn co_partitioned_equality_join_pairs_partition_fragments() {
 
     let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
     assert!(
-        ctx.parallel_fallback_reason.is_empty(),
+        ctx.diagnostics.fallback_reason.is_empty(),
         "vid-key join must not fall back, got: {}",
-        ctx.parallel_fallback_reason
+        ctx.diagnostics.fallback_reason
     );
 
     // 2 left scans + 2 right scans + 2 local joins + 1 exchange.
@@ -272,9 +272,9 @@ fn non_vid_equality_join_falls_back_to_global_gather_join() {
 
     let plan = PhysicalPlanBuilder::build(&node, &mut ctx, &exec_ctx).expect("build");
     assert!(
-        ctx.parallel_fallback_reason.is_empty(),
+        ctx.diagnostics.fallback_reason.is_empty(),
         "non-vid equality join must use hash exchange path, got: {}",
-        ctx.parallel_fallback_reason
+        ctx.diagnostics.fallback_reason
     );
 
     // Hash exchange path: 2 left frags + 1 left hash exchange +

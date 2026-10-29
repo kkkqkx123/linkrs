@@ -25,10 +25,6 @@ pub struct SchemaRef {
 #[derive(Debug, Clone, Default)]
 pub struct StatisticsSnapshot {
     pub row_count_estimates: Vec<(String, u64)>,
-    /// Per-logical-node output row estimates from the cost-based phase,
-    /// keyed by logical node id. Consumed by the `estimated_rows` metadata
-    /// pass to write `estimated_cardinality` onto physical operators.
-    pub per_node_row_estimates: std::collections::HashMap<i64, u64>,
 }
 
 /// Planning configuration flags and thresholds.
@@ -81,15 +77,8 @@ pub struct PhysicalPlanBuildContext {
     /// fragments and exchange/gather fragments instead of a single linear chain.
     pub partition_spec: Option<PartitionSpec>,
 
-    /// Why parallel partitioning was not applied (empty = partitioning
-    /// active or not requested). Copied into the built [`PhysicalPlan`] so
-    /// EXPLAIN / PROFILE diagnostics can surface it.
-    pub parallel_fallback_reason: String,
-
-    /// Cost-based decision notes (unnest / join order) copied from the
-    /// optimized [`ExecutionPlan`] into the built [`PhysicalPlan`] so
-    /// EXPLAIN diagnostics can surface why the optimizer chose a shape.
-    pub cbo_notes: Vec<String>,
+    /// Unified cost diagnostics copied from the optimized [`ExecutionPlan`].
+    pub diagnostics: crate::planning::plan::PlanDiagnostics,
 
     /// Effective statistics collection settings (sampling window and
     /// refresh threshold) copied from the pipeline into the built
@@ -123,8 +112,7 @@ impl PhysicalPlanBuildContext {
             expected_output_layout: None,
             parameter_schema: ParameterSchema::default(),
             partition_spec: None,
-            parallel_fallback_reason: String::new(),
-            cbo_notes: Vec::new(),
+            diagnostics: crate::planning::plan::PlanDiagnostics::default(),
             statistics_summary: String::new(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
@@ -140,8 +128,7 @@ impl PhysicalPlanBuildContext {
             expected_output_layout: None,
             parameter_schema: ParameterSchema::default(),
             partition_spec: None,
-            parallel_fallback_reason: String::new(),
-            cbo_notes: Vec::new(),
+            diagnostics: crate::planning::plan::PlanDiagnostics::default(),
             statistics_summary: String::new(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),

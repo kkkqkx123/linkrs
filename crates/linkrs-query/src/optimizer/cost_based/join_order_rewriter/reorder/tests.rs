@@ -80,8 +80,7 @@ fn test_non_join_unchanged() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let result =
-        walk_and_optimize_joins_with_decisions(&a, &stats_view, &cost_calc, &mut notes, &mut None);
+    let result = walk_and_optimize_joins(&a, &stats_view, &cost_calc, &mut notes);
     // StartNode is preserved (same variant)
     assert!(matches!(result, PlanNodeEnum::Start(_)));
     // Output var is preserved
@@ -100,13 +99,7 @@ fn test_optimize_three_table() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let optimized = walk_and_optimize_joins_with_decisions(
-        &join2,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut None,
-    );
+    let optimized = walk_and_optimize_joins(&join2, &stats_view, &cost_calc, &mut notes);
 
     // The smallest table (b, 10 rows) should be first in the new tree
     assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
@@ -137,26 +130,19 @@ fn test_keyed_chain_records_join_decision() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, Some("test"));
     let mut notes = Vec::new();
-    let mut decisions = HashMap::new();
-    let optimized = walk_and_optimize_joins_with_decisions(
-        &join,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut Some(&mut decisions),
-    );
+    let optimized = walk_and_optimize_joins(&join, &stats_view, &cost_calc, &mut notes);
 
-    // The reordered tree is a join and the rebuild records exactly one
-    // decision, keyed by the rebuilt root node id.
+    // The reordered tree is a join and the rebuild stamps exactly one
+    // decision on the rebuilt root node.
     assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
-    assert_eq!(decisions.len(), 1);
-    let algorithm = decisions
-        .get(&optimized.id())
-        .expect("decision for the rebuilt join node");
+    let algorithm = match &optimized {
+        PlanNodeEnum::InnerJoin(n) => n.algorithm().cloned(),
+        other => panic!("expected InnerJoin, got {other:?}"),
+    };
     assert!(
         matches!(
             algorithm,
-            JoinAlgorithm::HashJoin { .. } | JoinAlgorithm::NestedLoopJoin { .. }
+            Some(JoinAlgorithm::HashJoin { .. }) | Some(JoinAlgorithm::NestedLoopJoin { .. })
         ),
         "expected an executable join algorithm, got {:?}",
         algorithm
@@ -187,17 +173,13 @@ fn test_already_optimal_order_is_kept_without_notes() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, Some("test"));
     let mut notes = Vec::new();
-    let mut decisions = HashMap::new();
-    let result = walk_and_optimize_joins_with_decisions(
-        &join,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut Some(&mut decisions),
-    );
+    let result = walk_and_optimize_joins(&join, &stats_view, &cost_calc, &mut notes);
     assert!(matches!(result, PlanNodeEnum::InnerJoin(_)));
     assert!(notes.is_empty(), "no-op review must stay silent: {notes:?}");
-    assert!(decisions.is_empty());
+    match &result {
+        PlanNodeEnum::InnerJoin(n) => assert!(n.algorithm().is_none()),
+        other => panic!("expected InnerJoin, got {other:?}"),
+    }
     // Leaf order preserved: small table still leftmost.
     match &result {
         PlanNodeEnum::InnerJoin(n) => match n.left_input() {
@@ -222,13 +204,7 @@ fn test_tied_costs_keep_current_order() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let optimized = walk_and_optimize_joins_with_decisions(
-        &join,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut None,
-    );
+    let optimized = walk_and_optimize_joins(&join, &stats_view, &cost_calc, &mut notes);
     assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
     assert!(notes.is_empty(), "tied review must stay silent: {notes:?}");
 }
@@ -262,13 +238,7 @@ fn test_min_improvement_threshold_blocks_marginal_rewrite() {
     // Default threshold (zero): any strict improvement rewrites.
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let mut notes = Vec::new();
-    let rewritten = walk_and_optimize_joins_with_decisions(
-        &build(&stats),
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut None,
-    );
+    let rewritten = walk_and_optimize_joins(&build(&stats), &stats_view, &cost_calc, &mut notes);
     assert_eq!(notes.len(), 1, "expected one rewrite note: {notes:?}");
     assert!(
         notes[0].contains("cost "),
@@ -282,13 +252,7 @@ fn test_min_improvement_threshold_blocks_marginal_rewrite() {
     config.strategy_thresholds.join_reorder_min_improvement = 0.5;
     let cost_calc = CostCalculator::with_config(std::sync::Arc::new(stats.clone()), config);
     let mut notes = Vec::new();
-    let kept = walk_and_optimize_joins_with_decisions(
-        &build(&stats),
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut None,
-    );
+    let kept = walk_and_optimize_joins(&build(&stats), &stats_view, &cost_calc, &mut notes);
     assert!(
         notes.is_empty(),
         "blocked review must stay silent: {notes:?}"
@@ -303,16 +267,8 @@ fn test_unchanged_tree_records_no_decisions() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let mut decisions = HashMap::new();
-    let result = walk_and_optimize_joins_with_decisions(
-        &a,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut Some(&mut decisions),
-    );
+    let result = walk_and_optimize_joins(&a, &stats_view, &cost_calc, &mut notes);
     assert!(matches!(result, PlanNodeEnum::Start(_)));
-    assert!(decisions.is_empty());
 }
 
 #[test]
@@ -328,21 +284,15 @@ fn test_cross_join_never_records_hash_decision() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let mut decisions = HashMap::new();
-    let optimized = walk_and_optimize_joins_with_decisions(
-        &join,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut Some(&mut decisions),
-    );
+    let optimized = walk_and_optimize_joins(&join, &stats_view, &cost_calc, &mut notes);
     assert!(matches!(optimized, PlanNodeEnum::InnerJoin(_)));
-    assert!(
-        !decisions
-            .values()
-            .any(|a| matches!(a, JoinAlgorithm::HashJoin { .. })),
-        "keyless join must not record a HashJoin decision"
-    );
+    match &optimized {
+        PlanNodeEnum::InnerJoin(n) => assert!(
+            !matches!(n.algorithm(), Some(JoinAlgorithm::HashJoin { .. })),
+            "keyless join must not record a HashJoin decision"
+        ),
+        other => panic!("expected InnerJoin, got {other:?}"),
+    }
 }
 
 #[test]
@@ -362,13 +312,7 @@ fn test_left_join_acts_as_boundary() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let result = walk_and_optimize_joins_with_decisions(
-        &left_join,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut None,
-    );
+    let result = walk_and_optimize_joins(&left_join, &stats_view, &cost_calc, &mut notes);
 
     // The root should still be a LeftJoin
     assert!(matches!(result, PlanNodeEnum::LeftJoin(_)));
@@ -390,13 +334,7 @@ fn test_large_join_uses_greedy() {
     let cost_calc = CostCalculator::new(std::sync::Arc::new(stats.clone()));
     let stats_view = StatsView::new(&stats, None);
     let mut notes = Vec::new();
-    let result = walk_and_optimize_joins_with_decisions(
-        &join,
-        &stats_view,
-        &cost_calc,
-        &mut notes,
-        &mut None,
-    );
+    let result = walk_and_optimize_joins(&join, &stats_view, &cost_calc, &mut notes);
 
     // Should complete without panic (greedy path)
     assert!(matches!(result, PlanNodeEnum::InnerJoin(_)));

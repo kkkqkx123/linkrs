@@ -1,8 +1,6 @@
 //! Structure definition of the execution plan
 //! Contains the ExecutionPlan and SubPlan structures.
 
-use std::collections::HashMap;
-
 use crate::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
 };
@@ -17,6 +15,38 @@ use crate::planning::planner::PlannerError;
 pub use crate::planning::plan::partition_spec::{
     PartitionSource, PartitionSpec, PartitionSpecError,
 };
+
+/// Unified cost diagnostics carried with the plan.
+///
+/// Groups the cost-based decision notes and the parallel fallback reason so
+/// they travel as one record instead of scattered strings. Display layers
+/// (`PlanDescription`, EXPLAIN output) read from here without changing text.
+#[derive(Debug, Clone, Default)]
+pub struct PlanDiagnostics {
+    /// Why parallel partitioning was not selected (empty = active or not requested).
+    pub fallback_reason: String,
+    /// Cost-based decision notes (unnest, join order, index, TopN, aggregate).
+    pub notes: Vec<String>,
+}
+
+impl PlanDiagnostics {
+    pub fn push_note(&mut self, note: String) {
+        self.notes.push(note);
+    }
+
+    pub fn extend_notes(&mut self, notes: impl IntoIterator<Item = String>) {
+        self.notes.extend(notes);
+    }
+
+    pub fn append_fallback(&mut self, reason: String) {
+        if self.fallback_reason.is_empty() {
+            self.fallback_reason = reason;
+        } else if !reason.is_empty() {
+            self.fallback_reason.push_str("; ");
+            self.fallback_reason.push_str(&reason);
+        }
+    }
+}
 
 /// Execution plan structure
 /// Represents the complete executable plan, including the root node and the plan ID.
@@ -45,26 +75,8 @@ pub struct ExecutionPlan {
     /// Per-partition output channel capacity for backpressure.
     pub max_buffered_chunks: usize,
 
-    /// Why parallel partitioning was not selected (empty = partitioning
-    /// active or not requested). Surfaced in EXPLAIN / PROFILE diagnostics.
-    pub parallel_fallback_reason: String,
-
-    /// Cost-based decision notes produced during optimization (e.g. subquery
-    /// unnesting and join-order rewrites). Surfaced in EXPLAIN diagnostics.
-    pub cbo_notes: Vec<String>,
-
-    /// Per-logical-node output row estimates produced by the cost-based
-    /// phase, keyed by logical node id. Written into physical operator
-    /// specs (`estimated_cardinality`) by the `estimated_rows` metadata pass.
-    pub row_estimates: HashMap<i64, u64>,
-
-    /// Cost-based join algorithm decisions keyed by planner node id.
-    ///
-    /// Produced by the join-order rewriter when it reorders a join chain;
-    /// consumed by the arena builder to pick `HashJoin` vs nested-loop
-    /// execution for each `InnerJoin`/`LeftJoin` node. Absent keys fall
-    /// back to the default heuristic (hash join for valid equi keys).
-    pub join_algorithms: HashMap<i64, crate::optimizer::JoinAlgorithm>,
+    /// Unified cost diagnostics (fallback reason + CBO notes).
+    pub diagnostics: PlanDiagnostics,
 
     /// The pure logical plan (if conversion succeeded).
     /// Used by cost-based optimization to make physical decisions.
@@ -82,10 +94,7 @@ impl ExecutionPlan {
             partition_spec: None,
             max_workers: 1,
             max_buffered_chunks: 10,
-            parallel_fallback_reason: String::new(),
-            cbo_notes: Vec::new(),
-            row_estimates: HashMap::new(),
-            join_algorithms: HashMap::new(),
+            diagnostics: PlanDiagnostics::default(),
             logical_plan: None,
         }
     }

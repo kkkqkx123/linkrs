@@ -45,7 +45,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         // produced the plan. Unassembled pipelines carry no label and stay
         // silent.
         if let Some(label) = self.cost_profile_label_for(space_name) {
-            optimized.cbo_notes.push(format!(
+            optimized.diagnostics.notes.push(format!(
                 "cost_profile: {} (space '{}')",
                 label,
                 space_name.unwrap_or_default()
@@ -624,8 +624,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             DBError::from(QueryError::execution("Empty execution plan".to_string()))
         })?;
 
-        let mut exec_ctx = self.build_execution_context(query_context);
-        exec_ctx.join_algorithms = plan.join_algorithms.clone();
+        let exec_ctx = self.build_execution_context(query_context);
         let mut build_ctx = PhysicalPlanBuildContext::from_execution_context(&exec_ctx);
         if let Some(schema) = build_ctx.schema.as_mut() {
             schema.layout_version = self
@@ -634,10 +633,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
         build_ctx.parameter_schema = self.parameter_schema(query_context);
         build_ctx.partition_spec = plan.partition_spec().cloned();
-        build_ctx.parallel_fallback_reason = plan.parallel_fallback_reason.clone();
-        build_ctx.cbo_notes = plan.cbo_notes.clone();
+        build_ctx.diagnostics = plan.diagnostics.clone();
         build_ctx.statistics_summary = self.statistics_settings_summary();
-        build_ctx.statistics.per_node_row_estimates = plan.row_estimates.clone();
         let physical_plan = PhysicalPlanBuilder::build(root_node, &mut build_ctx, &exec_ctx)
             .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 

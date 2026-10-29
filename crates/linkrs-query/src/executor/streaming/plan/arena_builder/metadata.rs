@@ -244,16 +244,14 @@ pub(super) fn populate_choice_reasons(operators: &mut [PhysicalOperatorSpec]) {
 
 /// Populate `estimated_cardinality` for every operator.
 ///
-/// The cost-based phase attaches a per-logical-node row estimate map to the
-/// optimized plan (`ExecutionPlan.row_estimates`); this pass writes those
-/// estimates onto physical operators matched by `logical_node_id`. Operators
-/// without a matching logical node (synthesized exchanges, sinks, and
-/// materialization wrappers) fall back to their input's estimate, keeping
-/// EXPLAIN free of large `est_rows = None` gaps.
+/// Estimates are carried on the operator specs themselves: source operators
+/// arrive with `estimate_source_cardinality` already set at conversion, and
+/// this pass fills the remaining operators from their input's estimate,
+/// keeping EXPLAIN free of large `est_rows = None` gaps. No id-keyed map is
+/// consulted, so physical rebuilds cannot stale the values.
 pub(super) fn populate_estimated_rows(
     operators: &mut [PhysicalOperatorSpec],
     fragments: &[FragmentSpec],
-    estimates: &std::collections::HashMap<i64, u64>,
 ) {
     // Fragments form a DAG; propagate input-fragment root estimates so the
     // fallback can flow across fragment boundaries.
@@ -282,17 +280,11 @@ pub(super) fn populate_estimated_rows(
             let Some(operator) = operators.get_mut(operator_id.0) else {
                 continue;
             };
-            let mapped = operator
-                .logical_node_id
-                .and_then(|logical_id| estimates.get(&logical_id.0))
-                .copied();
-            let estimate = if let Some(rows) = mapped {
-                rows as f64
-            } else {
-                previous_rows * fallback_selectivity_factor(&operator.spec)
-            };
-            operator.estimated_cardinality = Some(estimate);
-            previous_rows = estimate;
+            if operator.estimated_cardinality.is_none() {
+                operator.estimated_cardinality =
+                    Some(previous_rows * fallback_selectivity_factor(&operator.spec));
+            }
+            previous_rows = operator.estimated_cardinality.unwrap_or(previous_rows);
         }
         fragment_input_rows.insert(
             fragment.id,

@@ -8,7 +8,7 @@ pub mod logical_plan;
 pub mod partition_spec;
 
 pub use core::PlanNodeEnum;
-pub use execution_plan::{ExecutionPlan, SubPlan};
+pub use execution_plan::{ExecutionPlan, PlanDiagnostics, SubPlan};
 pub use partition_spec::{PartitionSource, PartitionSpec, PartitionSpecError, PartitionStrategy};
 
 pub use core::common::{EdgeProp, TagProp};

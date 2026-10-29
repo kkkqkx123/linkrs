@@ -7,10 +7,12 @@ pub(super) fn convert_inner_join(
     let right = convert_logical_to_physical(*n.right);
     let hash_keys = n.hash_keys;
     let probe_keys = n.probe_keys;
+    let recommended = n.recommended_algorithm;
     let mut node = crate::planning::plan::core::nodes::join::join_node::InnerJoinNode::new(
         left, right, hash_keys, probe_keys,
     )
     .expect("Failed to construct InnerJoinNode");
+    node.set_algorithm(recommended);
     if let Some(var) = n.output_var {
         node.set_output_var(var);
     }

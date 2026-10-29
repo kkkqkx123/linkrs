@@ -10,7 +10,10 @@ use crate::optimizer::stats::StatsView;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
 
-use super::stats::{stats_fanout_skewed, DEFAULT_FILTER_SELECTIVITY, DEFAULT_NEIGHBORHOOD_FANOUT};
+use super::stats::{
+    apply_filter_selectivity, cap_limit_rows, stats_fanout_skewed, DEFAULT_FILTER_SELECTIVITY,
+    DEFAULT_NEIGHBORHOOD_FANOUT,
+};
 
 /// Estimate the output row count of a logical node, post-order.
 ///
@@ -84,7 +87,7 @@ pub fn estimate_node_output_rows_logical(
                     )
                 })
                 .unwrap_or(DEFAULT_FILTER_SELECTIVITY);
-            (input_rows as f64 * expr_selectivity).max(1.0) as u64
+            apply_filter_selectivity(input_rows, expr_selectivity)
         }
         Project(_) | Sort(_) | Sample(_) | Window(_) => {
             child_rows_of_logical(node, stats, selectivity)
@@ -95,7 +98,7 @@ pub fn estimate_node_output_rows_logical(
         }
         Limit(n) => {
             let input_rows = estimate_node_output_rows_logical(n.input(), stats, selectivity);
-            input_rows.min((n.offset + n.count) as u64)
+            cap_limit_rows(input_rows, n.offset, n.count)
         }
         Skip(n) => {
             let input_rows = estimate_node_output_rows_logical(n.input(), stats, selectivity);

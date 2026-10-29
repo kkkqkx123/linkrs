@@ -1,14 +1,9 @@
 //! Shared child traversal for logical cost-based walkers.
 //!
-//! `rewrite_children_logical` clones a logical node, rewrites every child
-//! with the supplied closure, and returns the rebuilt node. It mirrors the
-//! physical `rewrite_children` (`cost_based::traversal`) but operates on
-//! `LogicalNodeEnum`, so logical decision walkers only implement their
-//! per-node decision and delegate recursion here.
-//!
-//! The logical tree is pure (no physical operators), so only the operator
-//! categories produced by `conversion::convert_plan` are traversed; all
-//! other variants are returned unchanged.
+//! Logical adapter for the single traversal semantics shared with
+//! `traversal`: node-type access differs between `LogicalNodeEnum` and
+//! `PlanNodeEnum`, but recursion shape is the same. Decision logic lives in
+//! the rewriters; this file only adapts child access.
 
 use crate::planning::plan::logical::logical_node_traits::{
     LogicalMultipleInputNode, LogicalSingleInputNode,

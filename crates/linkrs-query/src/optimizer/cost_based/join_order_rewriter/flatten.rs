@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::planning::plan::logical::logical_node_traits::LogicalSingleInputNode;
 use crate::planning::plan::logical::LogicalNodeEnum;
@@ -162,20 +160,8 @@ fn estimate_leaf_rows(node: &PlanNodeEnum, stats: &StatsView) -> u64 {
 }
 
 fn match_key_to_leaf(key: &[ContextualExpression], leaves: &[LeafInfo]) -> Option<String> {
-    for expr in key {
-        let vars = collect_variables_from_contextual(expr);
-        for v in &vars {
-            for leaf in leaves {
-                if leaf.id == *v {
-                    return Some(leaf.id.clone());
-                }
-                if v.starts_with(&leaf.id) || leaf.id.starts_with(v) {
-                    return Some(leaf.id.clone());
-                }
-            }
-        }
-    }
-    None
+    let ids: Vec<String> = leaves.iter().map(|leaf| leaf.id.clone()).collect();
+    match_key_to_leaf_ids(key, &ids)
 }
 
 pub fn flatten_join_chain(root: &PlanNodeEnum) -> Option<FlattenedJoinChain> {
@@ -267,14 +253,10 @@ pub fn assign_leaf_info(chain: &mut FlattenedJoinChain, stats: &StatsView) {
         leaf.has_index = has_index_scan(&leaf.physical_node);
     }
 
-    let mut seen: HashMap<String, usize> = HashMap::new();
-    for leaf in &mut chain.leaves {
-        let key = leaf.id.clone();
-        let count = seen.entry(key.clone()).or_insert(0);
-        if *count > 0 {
-            leaf.id = format!("{}_{}", key, count);
-        }
-        *count += 1;
+    let mut ids: Vec<String> = chain.leaves.iter().map(|leaf| leaf.id.clone()).collect();
+    crate::optimizer::cost_based::join_order_rewriter::types::deduplicate_leaf_ids(&mut ids);
+    for (leaf, id) in chain.leaves.iter_mut().zip(ids) {
+        leaf.id = id;
     }
 
     // Resolve predicate table ids now that the leaf ids are assigned. At
@@ -621,14 +603,10 @@ pub fn assign_leaf_info_logical(chain: &mut FlattenedJoinChainLogical, stats: &S
         }
     }
 
-    let mut seen: HashMap<String, usize> = HashMap::new();
-    for leaf in &mut chain.leaves {
-        let key = leaf.id.clone();
-        let count = seen.entry(key.clone()).or_insert(0);
-        if *count > 0 {
-            leaf.id = format!("{}_{}", key, count);
-        }
-        *count += 1;
+    let mut ids: Vec<String> = chain.leaves.iter().map(|leaf| leaf.id.clone()).collect();
+    crate::optimizer::cost_based::join_order_rewriter::types::deduplicate_leaf_ids(&mut ids);
+    for (leaf, id) in chain.leaves.iter_mut().zip(ids) {
+        leaf.id = id;
     }
 
     // Resolve predicate table ids now that the leaf ids are assigned (see

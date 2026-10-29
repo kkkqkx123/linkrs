@@ -10,6 +10,8 @@ define_join_node! {
     pub struct InnerJoinNode {
         // Whether constant folding replaced part of the join keys.
         has_folded_expressions: bool,
+        // Cost-based join algorithm decision carried on the node.
+        algorithm: Option<crate::optimizer::JoinAlgorithm>,
     }
     enum: InnerJoin
 }
@@ -48,6 +50,7 @@ impl InnerJoinNode {
             hash_keys,
             probe_keys,
             has_folded_expressions: false,
+            algorithm: None,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -67,12 +70,24 @@ impl InnerJoinNode {
     pub fn set_has_folded_expressions(&mut self, val: bool) {
         self.has_folded_expressions = val;
     }
+
+    /// Cost-based algorithm decision carried on the node.
+    pub fn algorithm(&self) -> Option<&crate::optimizer::JoinAlgorithm> {
+        self.algorithm.as_ref()
+    }
+
+    /// Record the cost-based algorithm decision on the node.
+    pub fn set_algorithm(&mut self, algorithm: Option<crate::optimizer::JoinAlgorithm>) {
+        self.algorithm = algorithm;
+    }
 }
 
 define_join_node! {
     pub struct LeftJoinNode {
         // Whether constant folding replaced part of the join keys.
         has_folded_expressions: bool,
+        // Cost-based join algorithm decision carried on the node.
+        algorithm: Option<crate::optimizer::JoinAlgorithm>,
     }
     enum: LeftJoin
 }
@@ -111,6 +126,7 @@ impl LeftJoinNode {
             hash_keys,
             probe_keys,
             has_folded_expressions: false,
+            algorithm: None,
             output_var: None,
             col_names,
             column_types: vec![],
@@ -125,6 +141,16 @@ impl LeftJoinNode {
     /// Mark whether constant folding replaced part of the join keys.
     pub fn set_has_folded_expressions(&mut self, val: bool) {
         self.has_folded_expressions = val;
+    }
+
+    /// Cost-based algorithm decision carried on the node.
+    pub fn algorithm(&self) -> Option<&crate::optimizer::JoinAlgorithm> {
+        self.algorithm.as_ref()
+    }
+
+    /// Record the cost-based algorithm decision on the node.
+    pub fn set_algorithm(&mut self, algorithm: Option<crate::optimizer::JoinAlgorithm>) {
+        self.algorithm = algorithm;
     }
 }
 
