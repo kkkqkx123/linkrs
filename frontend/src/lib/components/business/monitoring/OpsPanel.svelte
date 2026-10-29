@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { operationsService, type ActiveTransaction } from '$services/operations';
-	import { formatLatencyMs } from '$utils/metricsFormat';
+	import { operationsService } from '$services/operations';
 
 	let opsLoading = $state(false);
 	let opsError = $state<string | null>(null);
@@ -10,7 +9,7 @@
 	let configDrafts = $state<Record<string, string>>({});
 	let configBusy = $state<Record<string, boolean>>({});
 	let configMessage = $state<string | null>(null);
-	let activeTransactions = $state<ActiveTransaction[]>([]);
+	// Active-transaction management lives on the dedicated Transactions page.
 
 	function configEntryKey(section: string, key: string): string {
 		return `${section}.${key}`;
@@ -31,10 +30,7 @@
 		opsError = null;
 		configMessage = null;
 		try {
-			const [config, txns] = await Promise.all([
-				operationsService.config(),
-				operationsService.transactions(),
-			]);
+			const config = await operationsService.config();
 			try {
 				configText = JSON.stringify(config, null, 2);
 			} catch {
@@ -64,7 +60,6 @@
 				configSections = {};
 				configDrafts = {};
 			}
-			activeTransactions = txns;
 		} catch (err) {
 			opsError =
 				err instanceof Error ? err.message : t('notification.requestFailed');
@@ -107,16 +102,6 @@
 		}
 	}
 
-	async function killTransaction(id: number) {
-		if (!confirm(t('monitoring.confirmKill', { id }))) return;
-		try {
-			await operationsService.killTransaction(id);
-			await loadOps();
-		} catch (err) {
-			opsError =
-				err instanceof Error ? err.message : t('notification.requestFailed');
-		}
-	}
 </script>
 
 <section class="ui-card shadow-sm p-6">
@@ -135,49 +120,10 @@
 	{#if opsError}
 		<p class="ui-error-text mb-2">{opsError}</p>
 	{/if}
-	<div class="grid md:grid-cols-2 gap-4">
-		<div>
-			<h3 class="text-xs font-medium text-muted mb-1">
-				{t('monitoring.activeTransactions')} ({activeTransactions.length})
-			</h3>
-			{#if activeTransactions.length === 0}
-				<p class="text-sm text-muted">{t('monitoring.noData')}</p>
-			{:else}
-				<div class="overflow-x-auto">
-					<table class="ui-table ui-table-dense min-w-full font-mono">
-						<thead>
-							<tr>
-								<th>id</th>
-								<th>{t('common.status')}</th>
-								<th>{t('monitoring.duration')}</th>
-								<th>{t('common.actions')}</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each activeTransactions as txn (txn.transaction_id)}
-								<tr>
-									<td>{txn.transaction_id}</td>
-									<td>{txn.state}</td>
-									<td>{formatLatencyMs(txn.elapsed_ms)}</td>
-									<td>
-										<button
-											class="ui-link-danger"
-											onclick={() => killTransaction(txn.transaction_id)}
-										>
-											{t('monitoring.kill')}
-										</button>
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
-		</div>
-		<div>
-			<h3 class="text-xs font-medium text-muted mb-1">
-				{t('monitoring.config')}
-			</h3>
+	<div>
+		<h3 class="text-xs font-medium text-muted mb-1">
+			{t('monitoring.config')}
+		</h3>
 			{#if configMessage}
 				<p class="text-xs text-success mb-2">
 					{configMessage}
@@ -231,6 +177,5 @@
 			{:else}
 				<p class="text-sm text-muted">{t('monitoring.configHint')}</p>
 			{/if}
-		</div>
 	</div>
 </section>

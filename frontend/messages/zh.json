@@ -167,7 +167,7 @@
 	"dataBrowser.retrieval.invalidVector": "请输入逗号/空格分隔的数字。",
 	"dataBrowser.retrieval.runHintVector": "在当前空间执行 SEARCH VECTOR。",
 	"dataBrowser.retrieval.runHintFulltext": "在当前空间执行 SEARCH INDEX。",
-	"dataBrowser.retrieval.manageHint": "索引管理仍在旧版控制台：",
+	"dataBrowser.retrieval.manageHint": "索引管理可在本面板中进行。",
 	"dataBrowser.viewDetail": "查看详情",
 	"dataBrowser.copyId": "复制标识",
 	"dataBrowser.editUpdate": "生成更新语句",
@@ -551,5 +551,7 @@
 	"sessions.terminate": "终止",
 	"sessions.confirmTerminate": "确认终止会话 {id}？",
 	"sessions.loadFailed": "会话加载失败",
-	"login.mustChangePassword": "默认密码必须修改，请在用户管理中更新。"
+	"login.mustChangePassword": "默认密码必须修改，请在用户管理中更新。",
+	"sidebar.transactions": "事务",
+	"sidebar.sync": "同步管理"
 }

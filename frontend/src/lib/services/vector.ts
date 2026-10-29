@@ -8,16 +8,8 @@ export interface CreateVectorIndexParams {
 	distance?: string;
 }
 
-export interface VectorSearchParams {
-	space_id: number;
-	tag_name: string;
-	field_name: string;
-	query_vector: number[];
-	limit?: number;
-}
-
 /**
- * Vector index management and search. Payloads stay opaque (`unknown`)
+ * Vector index management. Payloads stay opaque (`unknown`)
  * because index info shapes vary by backend; the page renders them as
  * JSON plus the key result tables.
  */
@@ -57,19 +49,6 @@ export const vectorService = {
 		call(
 			client.DELETE('/v1/vector/indexes/{space_id}/{tag_name}/{field_name}', {
 				params: { path: { space_id: spaceId, tag_name: tagName, field_name: fieldName } },
-			}),
-		),
-
-	search: async (params: VectorSearchParams): Promise<unknown> =>
-		call(
-			client.POST('/v1/vector/search', {
-				body: {
-					space_id: params.space_id,
-					tag_name: params.tag_name,
-					field_name: params.field_name,
-					query_vector: params.query_vector,
-					limit: params.limit ?? 10,
-				} as never,
 			}),
 		),
 

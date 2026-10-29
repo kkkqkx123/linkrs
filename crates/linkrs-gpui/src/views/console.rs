@@ -204,9 +204,7 @@ impl ConsolePanel {
             },
             Err(error) => {
                 if connection_service::is_session_expired(&error) {
-                    crate::state::AppState::global(cx).update(cx, |state, cx| {
-                        state.set_disconnected(cx);
-                    });
+                    connection_service::invalidate_session(cx);
                 }
                 tab.error = Some(QueryErrorInfo {
                     code: "CLIENT_ERROR".into(),

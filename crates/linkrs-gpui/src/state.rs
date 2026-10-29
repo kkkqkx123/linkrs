@@ -28,6 +28,7 @@ pub struct AppState {
     pub status: ConnectionStatus,
     pub user: Option<SharedString>,
     pub space: Option<SharedString>,
+    pub session_id: Option<i64>,
 }
 
 pub struct AppStateGlobal(Entity<AppState>);
@@ -40,6 +41,7 @@ impl AppState {
             status: ConnectionStatus::Disconnected,
             user: None,
             space: None,
+            session_id: None,
         });
         cx.set_global(AppStateGlobal(entity));
     }
@@ -57,11 +59,13 @@ impl AppState {
         &mut self,
         user: SharedString,
         space: Option<SharedString>,
+        session_id: Option<i64>,
         cx: &mut gpui_kit::Context<Self>,
     ) {
         self.status = ConnectionStatus::Connected;
         self.user = Some(user);
         self.space = space;
+        self.session_id = session_id;
         cx.notify();
     }
 
@@ -69,11 +73,17 @@ impl AppState {
         self.status = ConnectionStatus::Disconnected;
         self.user = None;
         self.space = None;
+        self.session_id = None;
         cx.notify();
     }
 
     pub fn set_space(&mut self, space: Option<SharedString>, cx: &mut gpui_kit::Context<Self>) {
         self.space = space;
+        cx.notify();
+    }
+
+    pub fn set_session_id(&mut self, session_id: Option<i64>, cx: &mut gpui_kit::Context<Self>) {
+        self.session_id = session_id;
         cx.notify();
     }
 

@@ -14,6 +14,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 pub struct ConnectedProfile {
     pub user: SharedString,
     pub space: Option<SharedString>,
+    pub session_id: Option<i64>,
 }
 
 /// Connect (and authenticate) against `host:port`. Runs on the tokio runtime;
@@ -35,12 +36,16 @@ pub fn connect(
         guard
             .connect_with_host(&host, port, &user, &password)
             .await?;
-        let space = guard
-            .session()
-            .and_then(|session| session.current_space.clone());
+        let session = guard.session();
+        let space = session.and_then(|s| s.current_space.clone());
+        let session_id = session.map(|s| s.session_id);
+        let user_name = session
+            .map(|s| s.username.clone())
+            .unwrap_or_else(|| user.clone());
         Ok(ConnectedProfile {
-            user: user.into(),
+            user: user_name.into(),
             space: space.map(Into::into),
+            session_id,
         })
     })
 }
@@ -107,4 +112,16 @@ pub fn start_heartbeat(cx: &mut App) -> Task<()> {
             AppState::global(cx).update(cx, |state, cx| state.set_unhealthy(!healthy, cx));
         });
     })
+}
+
+/// Best-effort local invalidation used when the server reports the session id
+/// is no longer valid. The server-side logout is attempted but ignored.
+pub fn invalidate_session(cx: &mut App) {
+    let manager = SessionStore::manager(cx);
+    let _ = runtime::spawn(cx, async move {
+        let mut guard = manager.lock().await;
+        let _ = guard.disconnect().await;
+        Ok(())
+    });
+    AppState::global(cx).update(cx, |state, cx| state.set_disconnected(cx));
 }

@@ -15,8 +15,8 @@
 		Repeat,
 		Users,
 		PlugZap,
-		FileSearch,
-		ScanSearch,
+		Activity,
+		RefreshCw,
 	} from '@lucide/svelte';
 
 	const path = $derived(page.url.pathname);
@@ -147,20 +147,6 @@
 			group: 'data',
 		},
 		{
-			key: '/fulltext',
-			icon: FileSearch,
-			label: 'sidebar.fulltext',
-			route: '/fulltext',
-			group: 'data',
-		},
-		{
-			key: '/vector',
-			icon: ScanSearch,
-			label: 'sidebar.vector',
-			route: '/vector',
-			group: 'data',
-		},
-		{
 			key: '/batch',
 			icon: Package,
 			label: 'sidebar.batch',
@@ -179,6 +165,20 @@
 			icon: LineChart,
 			label: 'sidebar.monitoring',
 			route: '/monitoring',
+			group: 'ops',
+		},
+		{
+			key: '/transactions',
+			icon: Activity,
+			label: 'sidebar.transactions',
+			route: '/transactions',
+			group: 'ops',
+		},
+		{
+			key: '/sync',
+			icon: RefreshCw,
+			label: 'sidebar.sync',
+			route: '/sync',
 			group: 'ops',
 		},
 		{

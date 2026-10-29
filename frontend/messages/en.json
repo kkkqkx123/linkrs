@@ -167,7 +167,7 @@
 	"dataBrowser.retrieval.invalidVector": "Enter comma/space separated numbers.",
 	"dataBrowser.retrieval.runHintVector": "Runs SEARCH VECTOR in the current space.",
 	"dataBrowser.retrieval.runHintFulltext": "Runs SEARCH INDEX in the current space.",
-	"dataBrowser.retrieval.manageHint": "Index management stays in the legacy console:",
+	"dataBrowser.retrieval.manageHint": "Index management is available in this panel.",
 	"dataBrowser.viewDetail": "View Detail",
 	"dataBrowser.copyId": "Copy ID",
 	"dataBrowser.editUpdate": "Edit update",
@@ -551,5 +551,7 @@
 	"sessions.terminate": "Terminate",
 	"sessions.confirmTerminate": "Terminate session {id}?",
 	"sessions.loadFailed": "Failed to load sessions",
-	"login.mustChangePassword": "Default password must be changed. Update it in User Management."
+	"login.mustChangePassword": "Default password must be changed. Update it in User Management.",
+	"sidebar.transactions": "Transactions",
+	"sidebar.sync": "Sync Management"
 }

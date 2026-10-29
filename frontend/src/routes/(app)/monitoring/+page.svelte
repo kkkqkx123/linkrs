@@ -6,7 +6,7 @@
 		type MonitoringSnapshots,
 	} from '$stores/monitoring';
 	import PortraitDrawer from '$components/business/monitoring/PortraitDrawer.svelte';
-	import SyncPanel from '$components/business/monitoring/SyncPanel.svelte';
+	// Sync management moved to the dedicated /sync page.
 	import OpsPanel from '$components/business/monitoring/OpsPanel.svelte';
 	import OverviewCards from '$components/business/monitoring/OverviewCards.svelte';
 	import SystemPanel from '$components/business/monitoring/SystemPanel.svelte';
@@ -16,6 +16,7 @@
 	import TransactionPanel from '$components/business/monitoring/TransactionPanel.svelte';
 	import SearchPanel from '$components/business/monitoring/SearchPanel.svelte';
 	import PageHeader from '$components/layout/PageHeader.svelte';
+	import { formatCount } from '$utils/metricsFormat';
 
 	let monitor = $state({
 		snapshots: {
@@ -257,13 +258,38 @@
 		onselect={(traceId) => (selectedTrace = traceId)}
 	/>
 
-	<!-- Transactions + sync + search -->
+	<!-- Transactions + sync summary + search -->
 	<div class="grid md:grid-cols-3 gap-4">
 		<TransactionPanel
 			overview={overview}
 			transactionSnapshot={monitor.snapshots.transaction}
 		/>
-		<SyncPanel overview={overview} syncSnapshot={monitor.snapshots.sync} />
+		<section class="ui-card shadow-sm p-6">
+			<div class="flex items-center justify-between mb-3">
+				<h2 class="ui-section-title mb-0">
+					{t('monitoring.sync')}
+				</h2>
+				<a class="ui-btn ui-btn-primary ui-btn-sm" href="/sync">
+					{t('sidebar.sync')}
+				</a>
+			</div>
+			<div class="space-y-1 text-sm font-mono">
+				<div class="flex justify-between">
+					<span class="text-muted">{t('common.status')}</span>
+					<span>
+						{overview?.sync?.is_running ? t('common.running') : '—'}
+					</span>
+				</div>
+				<div class="flex justify-between">
+					<span class="text-muted">{t('monitoring.outbox')}</span>
+					<span>
+						{formatCount(overview?.sync?.outbox_pending)} /
+						{formatCount(overview?.sync?.outbox_retries)} /
+						{formatCount(overview?.sync?.outbox_dead_lettered)}
+					</span>
+				</div>
+			</div>
+		</section>
 		<SearchPanel search={search} byIndex={byIndex} />
 	</div>
 

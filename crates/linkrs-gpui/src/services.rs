@@ -1,3 +1,13 @@
+pub(crate) mod batch_service;
+pub(crate) mod config_service;
 pub(crate) mod connection_service;
+pub(crate) mod cursor_service;
+pub(crate) mod fulltext_service;
+pub(crate) mod function_service;
 pub(crate) mod query_service;
 pub(crate) mod schema_service;
+pub(crate) mod server_session_service;
+pub(crate) mod stats_service;
+pub(crate) mod transaction_service;
+pub(crate) mod user_service;
+pub(crate) mod vector_service;

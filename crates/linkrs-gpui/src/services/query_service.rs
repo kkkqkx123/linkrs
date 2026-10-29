@@ -2,6 +2,7 @@ use gpui_kit::{App, Task};
 use linkrs_client::{ClientError, QueryResult};
 
 use crate::connection::SessionStore;
+use crate::state::AppState;
 use crate::runtime;
 
 /// Execute one statement (or script) through the session. `raw` skips the
@@ -91,6 +92,43 @@ pub fn split_statements(script: &str) -> Vec<String> {
     }
 
     statements
+}
+
+
+/// Execute a query in streaming mode.
+pub fn execute_stream(cx: &App, sql: &str) -> Task<Result<QueryResult, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let sql = sql.to_string();
+    let session_id = AppState::global(cx).read(cx).session_id;
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        let id = session_id.ok_or(ClientError::NotConnected)?;
+        guard.client().execute_query_stream(&sql, id).await
+    })
+}
+
+/// Validate a query without executing it.
+pub fn validate(cx: &App, sql: &str) -> Task<Result<serde_json::Value, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let sql = sql.to_string();
+    let session_id = AppState::global(cx).read(cx).session_id;
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        let id = session_id.ok_or(ClientError::NotConnected)?;
+        guard.client().validate_query(&sql, id).await
+    })
+}
+
+/// Explain a query.
+pub fn explain(cx: &App, sql: &str) -> Task<Result<QueryResult, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let sql = sql.to_string();
+    let session_id = AppState::global(cx).read(cx).session_id;
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        let id = session_id.ok_or(ClientError::NotConnected)?;
+        guard.client().explain_query(&sql, id).await
+    })
 }
 
 #[cfg(test)]

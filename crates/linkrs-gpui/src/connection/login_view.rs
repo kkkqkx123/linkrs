@@ -108,7 +108,7 @@ impl LoginView {
                     Ok(profile) => {
                         settings::record_connection(cx, host.trim(), port, user.trim());
                         crate::state::AppState::global(cx).update(cx, |state, cx| {
-                            state.set_connected(profile.user, profile.space, cx);
+                            state.set_connected(profile.user, profile.space, profile.session_id, cx);
                         });
                         window.push_notification(
                             Notification::success(format!("Connected to {host}:{port}")),

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { t } from '$i18n';
 	import { queryService } from '$services/query';
+	import { vectorService } from '$services/vector';
 
 	let { currentSpace }: { currentSpace: string | null } = $props();
 
@@ -15,6 +16,38 @@
 	let columns = $state<string[]>([]);
 	let rows = $state<Record<string, unknown>[]>([]);
 	let searched = $state(false);
+
+	// Index management (migrated from the legacy /vector page).
+	let spaceId = $state(1);
+	let tagName = $state('');
+	let fieldName = $state('');
+	let vectorSize = $state(128);
+	let distance = $state('Cosine');
+	let rebuildId = $state('');
+	let manageLoading = $state(false);
+	let manageError = $state<string | null>(null);
+	let manageResultText = $state('');
+
+	function stringify(payload: unknown): string {
+		try {
+			return JSON.stringify(payload, null, 2);
+		} catch {
+			return String(payload ?? '');
+		}
+	}
+
+	async function runManage(fn: () => Promise<unknown>) {
+		manageLoading = true;
+		manageError = null;
+		try {
+			manageResultText = stringify(await fn());
+		} catch (err) {
+			manageError =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			manageLoading = false;
+		}
+	}
 
 	function parseVector(raw: string): number[] | null {
 		const values = raw
@@ -73,7 +106,6 @@
 	<p class="text-xs text-muted">
 		{t('dataBrowser.retrieval.runHintVector')}
 		{t('dataBrowser.retrieval.manageHint')}
-		<a class="ui-link" href="/vector">{t('sidebar.vector')}</a>
 	</p>
 
 	<div class="grid md:grid-cols-3 gap-2 text-sm">
@@ -177,4 +209,131 @@
 			</p>
 		{/if}
 	{/if}
+
+	<!-- Migrated index management -->
+	<section class="ui-card shadow-sm p-4 mt-4">
+		<h3 class="ui-section-title mb-3">{t('vector.manage')}</h3>
+		<div class="flex flex-wrap gap-2 mb-3">
+			<button
+				class="ui-btn ui-btn-primary ui-btn-sm"
+				onclick={() => runManage(() => vectorService.list())}
+				disabled={manageLoading}
+			>
+				{manageLoading ? t('common.loading') : t('vector.list')}
+			</button>
+		</div>
+		<div class="grid md:grid-cols-4 gap-2 text-sm mb-3">
+			<label class="ui-field">
+				{t('vector.spaceId')}
+				<input
+					type="number"
+					class="ui-input ui-input-sm font-mono"
+					bind:value={spaceId}
+				/>
+			</label>
+			<label class="ui-field">
+				{t('vector.tag')}
+				<input class="ui-input ui-input-sm font-mono" bind:value={tagName} />
+			</label>
+			<label class="ui-field">
+				{t('vector.field')}
+				<input class="ui-input ui-input-sm font-mono" bind:value={fieldName} />
+			</label>
+			<label class="ui-field">
+				{t('vector.size')}
+				<input
+					type="number"
+					class="ui-input ui-input-sm font-mono"
+					bind:value={vectorSize}
+				/>
+			</label>
+		</div>
+		<div class="grid md:grid-cols-2 gap-2 text-sm mb-3">
+			<label class="ui-field">
+				{t('vector.distance')}
+				<select class="ui-input ui-input-sm" bind:value={distance}>
+					<option value="Cosine">Cosine</option>
+					<option value="Euclidean">Euclidean</option>
+					<option value="DotProduct">DotProduct</option>
+				</select>
+			</label>
+			<label class="ui-field">
+				{t('vector.rebuildId')}
+				<input class="ui-input ui-input-sm font-mono" bind:value={rebuildId} />
+			</label>
+		</div>
+		<div class="flex flex-wrap gap-2">
+			<button
+				class="ui-btn ui-btn-primary ui-btn-sm"
+				onclick={() =>
+					runManage(() =>
+						vectorService.create({
+							space_id: spaceId,
+							tag_name: tagName,
+							field_name: fieldName,
+							vector_size: vectorSize,
+							distance,
+						}),
+					)}
+				disabled={manageLoading}
+			>
+				{t('common.create')}
+			</button>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm"
+				onclick={() => runManage(() => vectorService.info(spaceId, tagName, fieldName))}
+				disabled={manageLoading}
+			>
+				{t('common.detail')}
+			</button>
+			<button
+				class="ui-btn ui-btn-danger ui-btn-sm"
+				onclick={() => runManage(() => vectorService.drop(spaceId, tagName, fieldName))}
+				disabled={manageLoading}
+			>
+				{t('common.delete')}
+			</button>
+			<button
+				class="ui-btn ui-btn-warn ui-btn-xs"
+				onclick={() =>
+					runManage(() =>
+						vectorService.rebuild({
+							space_id: spaceId,
+							tag_name: tagName,
+							field_name: fieldName,
+						}),
+					)}
+				disabled={manageLoading}
+			>
+				{t('schema.rebuild')}
+			</button>
+			<button
+				class="ui-btn ui-btn-muted ui-btn-xs"
+				onclick={() =>
+					runManage(() =>
+						vectorService.clear({
+							space_id: spaceId,
+							tag_name: tagName,
+							field_name: fieldName,
+						}),
+					)}
+				disabled={manageLoading}
+			>
+				{t('common.clear')}
+			</button>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm"
+				onclick={() => runManage(() => vectorService.rebuildStatus(rebuildId))}
+				disabled={manageLoading || !rebuildId}
+			>
+				{t('vector.rebuildStatus')}
+			</button>
+		</div>
+		{#if manageError}
+			<p class="ui-error-text mt-2">{manageError}</p>
+		{/if}
+		{#if manageResultText}
+			<pre class="ui-pre mt-3">{manageResultText}</pre>
+		{/if}
+	</section>
 </div>

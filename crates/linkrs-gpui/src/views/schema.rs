@@ -113,7 +113,7 @@ impl SchemaPanel {
             Ok(list) => list,
             Err(error) => {
                 if connection_service::is_session_expired(&error) {
-                    AppState::global(cx).update(cx, |state, cx| state.set_disconnected(cx));
+                    connection_service::invalidate_session(cx);
                 }
                 self.message = Some(schema_message(&error).into());
                 self.tree_state
