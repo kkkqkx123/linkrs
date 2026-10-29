@@ -1,5 +1,9 @@
 import { writable, get } from 'svelte/store';
-import { statisticsService, type OverviewResponse } from '$services/statistics';
+import {
+	statisticsService,
+	type OverviewResponse,
+	type TransactionMetrics,
+} from '$services/statistics';
 import {
 	retrievalService,
 	type RetrievalSnapshot,
@@ -21,7 +25,7 @@ export interface MonitoringSnapshots {
 	database: DatabaseOverviewResponse | null;
 	queries: QueryStatsResponse | null;
 	search: SearchStatsResponse | null;
-	transaction: Record<string, unknown> | null;
+	transaction: TransactionMetrics | null;
 	sync: Record<string, unknown> | null;
 	retrieval: RetrievalSnapshot | null;
 }
@@ -96,7 +100,7 @@ function createMonitoringStore() {
 			if (queries.status === 'fulfilled') next.queries = queries.value;
 			if (search.status === 'fulfilled') next.search = search.value;
 			if (transaction.status === 'fulfilled')
-				next.transaction = transaction.value as Record<string, unknown>;
+				next.transaction = transaction.value;
 			if (sync.status === 'fulfilled')
 				next.sync = sync.value as Record<string, unknown>;
 			if (retrieval.status === 'fulfilled') next.retrieval = retrieval.value;

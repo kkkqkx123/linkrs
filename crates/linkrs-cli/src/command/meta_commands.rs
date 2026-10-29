@@ -229,6 +229,15 @@ fn show_general_help() -> String {
         "  {:25} {}\n",
         "\\rollback", "Rollback current transaction"
     ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\txstatus", "Local session transaction state (use \\transactions list for server truth)"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\transactions <sub>",
+        "Server-side transactions (list|metrics|kill <id>|retry-outbox <id>)"
+    ));
 
     output.push_str(&format!("\n{}\n", "Streaming & Cursors".yellow().bold()));
     output.push_str(&format!(

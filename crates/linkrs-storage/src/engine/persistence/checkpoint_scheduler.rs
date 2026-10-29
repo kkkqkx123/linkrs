@@ -99,9 +99,8 @@ impl CheckpointScheduler {
         execution_timeout: Duration,
         execution_threads: usize,
     ) -> Self {
-        let execution_pool = Arc::new(
-            StorageThreadPool::with_threads(execution_threads.max(1)).unwrap_or_default(),
-        );
+        let execution_pool =
+            Arc::new(StorageThreadPool::with_threads(execution_threads.max(1)).unwrap_or_default());
         Self {
             coordinator,
             thread_pool,

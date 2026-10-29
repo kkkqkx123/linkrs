@@ -1,78 +1,9 @@
-//! Outbox operational commands.
+//! Request payloads for outbox/sync operations.
 //!
-//! Provides `linkrs outbox` sub-commands that drive the HTTP endpoints added
-//! in `crates/linkrs-server/src/http/handlers/sync.rs`:
-//! diagnostics / dead_letters / requeue / degraded_ranges / degraded_clear.
-//! The module is intentionally self-contained so the interactive CLI can evolve
-//! without coupling to the wire crate.
-
-use clap::{Parser, Subcommand};
-
-#[derive(Parser, Debug)]
-pub struct OutboxArgs {
-    #[command(subcommand)]
-    pub command: OutboxCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum OutboxCommand {
-    /// Show outbox diagnostics (frontier lag, degraded, dead-letter counts)
-    Diagnostics {
-        #[arg(long)]
-        json: bool,
-    },
-    /// List dead letters with optional filters
-    DeadLetters {
-        #[arg(long)]
-        target: Option<String>,
-        #[arg(long)]
-        index_id: Option<u64>,
-        #[arg(long)]
-        generation: Option<u64>,
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-    },
-    /// Requeue dead letters in batch
-    Requeue {
-        #[arg(long)]
-        target: Option<String>,
-        #[arg(long)]
-        index_id: Option<u64>,
-        #[arg(long)]
-        generation: Option<u64>,
-        #[arg(long, default_value_t = 100)]
-        limit: usize,
-        /// Comma-separated event IDs; when present, target/index filters are ignored
-        #[arg(long, value_delimiter = ',')]
-        event_ids: Option<Vec<i64>>,
-    },
-    /// List degraded ranges
-    DegradedRanges {
-        #[arg(long)]
-        target: Option<String>,
-        #[arg(long)]
-        index_id: Option<u64>,
-        #[arg(long)]
-        generation: Option<u64>,
-    },
-    /// Clear a degraded range after offline repair
-    DegradedClear {
-        #[arg(long)]
-        target: String,
-        #[arg(long)]
-        index_id: u64,
-        #[arg(long)]
-        generation: u64,
-        #[arg(long)]
-        start_lsn: u64,
-        #[arg(long)]
-        end_lsn: u64,
-    },
-    /// Trigger retry of all pending outbox entries
-    Retry,
-}
+//! The interactive `\sync` commands build these payloads and send them
+//! through `linkrs-client`. The one-shot Clap command tree that used to live
+//! here was removed: it duplicated the `\sync` surface without ever being
+//! wired into the CLI, so all outbox access goes through `\sync`.
 
 #[derive(serde::Serialize)]
 pub struct RequeuePayload {

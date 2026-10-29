@@ -168,9 +168,8 @@ fn bulk_load_session_finish_runs_final_checkpoint() {
     .expect("load social network data");
 
     let final_stats = session.finish().expect("final checkpoint");
-    let stats = final_stats.unwrap_or_else(|| {
-        panic!("finish must anchor the load with exactly one final checkpoint")
-    });
+    let stats = final_stats
+        .unwrap_or_else(|| panic!("finish must anchor the load with exactly one final checkpoint"));
     assert_eq!(
         stats.trigger_reason,
         linkrs_metrics::CheckpointTriggerReason::Explicit,

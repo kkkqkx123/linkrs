@@ -262,7 +262,10 @@ impl GraphStorage {
     /// no-op and its `finish` reports `Ok(None)`.
     pub fn begin_bulk_load(&self) -> StorageResult<bulk_load::BulkLoadSession> {
         let coordinator = self.ctx.persistence().as_ref().cloned();
-        Ok(bulk_load::BulkLoadSession::new(coordinator, self.ctx.clone()))
+        Ok(bulk_load::BulkLoadSession::new(
+            coordinator,
+            self.ctx.clone(),
+        ))
     }
 
     pub fn open_with_persistence(

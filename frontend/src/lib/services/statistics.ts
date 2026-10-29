@@ -13,8 +13,35 @@ export type QueryProfileDetailResponse =
 export type QueryStageTimings = components['schemas']['QueryStageTimings'];
 export type SyncStatusResponse = components['schemas']['SyncStatusResponse'];
 
-/** Transaction metrics endpoint is untyped in the contract; keep it opaque. */
-export type TransactionMetrics = Record<string, unknown>;
+/** Transaction outcome counters (`outcomes`) and resource gauges (`resources`).
+ * Every field stays optional so older backends missing a gauge render
+ * as unknown instead of crashing. */
+export interface TransactionOutcomes {
+	begun?: unknown;
+	active?: unknown;
+	committed?: unknown;
+	aborted?: unknown;
+	timeout?: unknown;
+	conflict?: unknown;
+	disconnect?: unknown;
+	recovery_abort?: unknown;
+	cleanup_failure?: unknown;
+}
+
+export interface TransactionResources {
+	active_statements?: unknown;
+	active_snapshots?: unknown;
+	pending_writes?: unknown;
+	committed_frontier_lag?: unknown;
+	staged_wal_bytes?: unknown;
+	undo_bytes?: unknown;
+	checkpoint_drain_time_ms?: unknown;
+}
+
+export interface TransactionMetrics {
+	outcomes?: TransactionOutcomes;
+	resources?: TransactionResources;
+}
 
 export interface QueryStatsParams {
 	from?: string;

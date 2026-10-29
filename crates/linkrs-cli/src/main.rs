@@ -94,7 +94,8 @@ async fn run(mut cli: Cli) -> Result<()> {
         formatter.set_format(fmt);
     }
 
-    let mut executor = CommandExecutor::with_options(formatter, cli.exec.force, cli.exec.single_transaction);
+    let mut executor =
+        CommandExecutor::with_options(formatter, cli.exec.force, cli.exec.single_transaction);
 
     match session_mgr.connect(&user, &password).await {
         Ok(()) => {

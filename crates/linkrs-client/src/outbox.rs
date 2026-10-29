@@ -7,8 +7,7 @@ impl HttpClient {
     pub async fn outbox_diagnostics(&self) -> Result<serde_json::Value> {
         let url = format!("{}/sync/outbox/diagnostics", self.base_url());
         let resp = self
-            .inner()
-            .get(&url)
+            .authed(self.inner().get(&url))
             .send()
             .await
             .map_err(|e| ClientError::connection(e.to_string()))?;
@@ -39,8 +38,7 @@ impl HttpClient {
             url.push_str(&format!("&generation={}", gen));
         }
         let resp = self
-            .inner()
-            .get(&url)
+            .authed(self.inner().get(&url))
             .send()
             .await
             .map_err(|e| ClientError::connection(e.to_string()))?;
@@ -50,8 +48,7 @@ impl HttpClient {
     pub async fn outbox_requeue(&self, req: &impl serde::Serialize) -> Result<serde_json::Value> {
         let url = format!("{}/sync/outbox/requeue", self.base_url());
         let resp = self
-            .inner()
-            .post(&url)
+            .authed(self.inner().post(&url))
             .json(req)
             .send()
             .await
@@ -83,8 +80,7 @@ impl HttpClient {
             ));
         }
         let resp = self
-            .inner()
-            .get(&url)
+            .authed(self.inner().get(&url))
             .send()
             .await
             .map_err(|e| ClientError::connection(e.to_string()))?;
@@ -97,8 +93,7 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let url = format!("{}/sync/outbox/degraded/clear", self.base_url());
         let resp = self
-            .inner()
-            .post(&url)
+            .authed(self.inner().post(&url))
             .json(req)
             .send()
             .await
@@ -109,8 +104,7 @@ impl HttpClient {
     pub async fn outbox_retry(&self) -> Result<serde_json::Value> {
         let url = format!("{}/sync/outbox/retry", self.base_url());
         let resp = self
-            .inner()
-            .post(&url)
+            .authed(self.inner().post(&url))
             .send()
             .await
             .map_err(|e| ClientError::connection(e.to_string()))?;
@@ -120,8 +114,7 @@ impl HttpClient {
     pub async fn sync_status(&self) -> Result<serde_json::Value> {
         let url = format!("{}/sync/status", self.base_url());
         let resp = self
-            .inner()
-            .get(&url)
+            .authed(self.inner().get(&url))
             .send()
             .await
             .map_err(|e| ClientError::connection(e.to_string()))?;
@@ -131,8 +124,7 @@ impl HttpClient {
     pub async fn retention_status(&self) -> Result<serde_json::Value> {
         let url = format!("{}/sync/outbox/retention/status", self.base_url());
         let resp = self
-            .inner()
-            .get(&url)
+            .authed(self.inner().get(&url))
             .send()
             .await
             .map_err(|e| ClientError::connection(e.to_string()))?;
@@ -150,8 +142,7 @@ impl HttpClient {
             "max_age_ms": max_age_ms,
         });
         let resp = self
-            .inner()
-            .post(&url)
+            .authed(self.inner().post(&url))
             .json(&body)
             .send()
             .await

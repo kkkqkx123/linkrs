@@ -638,6 +638,19 @@ pub async fn retry_transaction_outbox<
     manager
         .check_transaction_owner(txn_id.into(), owner)
         .map_err(|error| HttpError::transaction_message(error.to_string()))?;
+    // The engine currently replays the global outbox queue; validate the id
+    // so unknown transactions fail instead of reporting an unrelated
+    // global delivered count.
+    if !manager
+        .list_transactions()
+        .iter()
+        .any(|info| info.id.as_u64() == txn_id)
+    {
+        return Err(HttpError::not_found(format!(
+            "Transaction {} not found",
+            txn_id
+        )));
+    }
     let delivered = manager
         .retry_outbox_projection()
         .map_err(|error| HttpError::transaction_message(error.to_string()))?;

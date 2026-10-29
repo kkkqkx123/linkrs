@@ -114,6 +114,11 @@ impl CommandExecutor {
         self.force_mode = force;
     }
 
+    /// Whether destructive confirmations are skipped (script/force mode).
+    pub fn is_force_mode(&self) -> bool {
+        self.force_mode
+    }
+
     pub fn set_single_transaction(&mut self, single: bool) {
         self.single_transaction = single;
     }
@@ -486,6 +491,9 @@ impl CommandExecutor {
             }
             MetaCommand::Sync { action } => {
                 meta::sync::execute_sync(self, &action, session_mgr).await
+            }
+            MetaCommand::Transactions { action } => {
+                meta::transactions::execute_transactions(self, &action, session_mgr).await
             }
         }
     }

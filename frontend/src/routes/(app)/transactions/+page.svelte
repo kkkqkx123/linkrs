@@ -3,12 +3,12 @@
 	import { t } from '$i18n';
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import TransactionPanel from '$components/business/monitoring/TransactionPanel.svelte';
-	import { statisticsService, type OverviewResponse } from '$services/statistics';
+	import { statisticsService, type OverviewResponse, type TransactionMetrics } from '$services/statistics';
 	import { operationsService, type ActiveTransaction } from '$services/operations';
 	import { formatLatencyMs } from '$utils/metricsFormat';
 
 	let overview = $state<OverviewResponse | null>(null);
-	let transactionSnapshot = $state<Record<string, unknown> | null>(null);
+	let transactionSnapshot = $state<TransactionMetrics | null>(null);
 	let activeTransactions = $state<ActiveTransaction[]>([]);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
@@ -23,7 +23,7 @@
 				operationsService.transactions(),
 			]);
 			overview = ov;
-			transactionSnapshot = metrics as Record<string, unknown>;
+			transactionSnapshot = metrics;
 			activeTransactions = txns;
 		} catch (err) {
 			error =
@@ -48,6 +48,25 @@
 		}
 	}
 
+	async function retryTransactionOutbox(id: number) {
+		if (!confirm(t('monitoring.confirmRetryTxn', { id: String(id) }))) return;
+		loading = true;
+		error = null;
+		try {
+			await operationsService.retryTransactionOutbox(id);
+			await load();
+		} catch (err) {
+			error =
+				err instanceof Error ? err.message : t('notification.requestFailed');
+		} finally {
+			loading = false;
+		}
+	}
+
+	function hasBlockingReason(tx: ActiveTransaction): boolean {
+		return tx.blocking_reason !== null && tx.blocking_reason !== undefined && String(tx.blocking_reason).length > 0;
+	}
+
 	onMount(load);
 </script>
 
@@ -66,7 +85,12 @@
 		<p class="ui-error-text">{error}</p>
 	{/if}
 
-	<TransactionPanel overview={overview} transactionSnapshot={transactionSnapshot} />
+	<TransactionPanel
+		overview={overview}
+		transactionSnapshot={transactionSnapshot}
+		transactions={activeTransactions}
+		onKill={killTransaction}
+	/>
 
 	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
@@ -85,6 +109,7 @@
 							<th>{t('monitoring.duration')}</th>
 							<th>staged</th>
 							<th>undo</th>
+							<th>{t('monitoring.blocking')}</th>
 							<th>{t('common.actions')}</th>
 						</tr>
 					</thead>
@@ -97,6 +122,7 @@
 								<td>{formatLatencyMs(txn.elapsed_ms)}</td>
 								<td>{txn.staged_bytes}</td>
 								<td>{txn.undo_bytes}</td>
+								<td>{hasBlockingReason(txn) ? String(txn.blocking_reason) : '—'}</td>
 								<td>
 									<button
 										class="ui-link-danger"
@@ -105,6 +131,15 @@
 									>
 										{t('monitoring.kill')}
 									</button>
+									{#if hasBlockingReason(txn)}
+										<button
+											class="ui-link ml-2"
+											onclick={() => retryTransactionOutbox(txn.transaction_id)}
+											disabled={loading}
+										>
+											{t('monitoring.retryTxnOutbox')}
+										</button>
+									{/if}
 								</td>
 							</tr>
 						{/each}

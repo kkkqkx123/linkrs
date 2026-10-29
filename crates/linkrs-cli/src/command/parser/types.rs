@@ -220,6 +220,9 @@ pub enum MetaCommand {
     Sync {
         action: SyncAction,
     },
+    Transactions {
+        action: TransactionsAction,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +280,20 @@ pub enum UsersAction {
         username: String,
         space: String,
     },
+}
+
+/// Server-side transaction observability and intervention
+/// (`\transactions ...`).
+///
+/// Unlike `\txstatus` (local session state), these commands query the
+/// server truth across all sessions: list, metrics, kill, per-transaction
+/// outbox retry.
+#[derive(Debug, Clone)]
+pub enum TransactionsAction {
+    List,
+    Metrics,
+    Kill { id: u64 },
+    RetryOutbox { id: u64 },
 }
 
 /// Server-session management subcommands (`\sessions ...`).
@@ -436,6 +453,7 @@ pub enum SyncAction {
         index_id: Option<u64>,
         generation: Option<u64>,
         limit: usize,
+        event_ids: Option<Vec<i64>>,
     },
     Retry,
     DegradedRanges {

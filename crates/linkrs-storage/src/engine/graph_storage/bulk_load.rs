@@ -88,9 +88,7 @@ impl BulkLoadSession {
     /// Returns `None` when there is no persistence layer or the session was
     /// already released; each session releases exactly once because the
     /// handle is taken out of `self`.
-    fn release(
-        &mut self,
-    ) -> Option<Arc<parking_lot::RwLock<PersistenceCoordinator>>> {
+    fn release(&mut self) -> Option<Arc<parking_lot::RwLock<PersistenceCoordinator>>> {
         let persistence = self.coordinator.take()?;
         persistence.read().exit_bulk_load();
         Some(persistence)

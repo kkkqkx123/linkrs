@@ -253,8 +253,8 @@ impl GraphStorageContext {
         snapshot: &crate::engine::resource_budget::ResourceSnapshot,
     ) {
         use std::sync::atomic::Ordering;
-        let index_pressure = snapshot.tombstone_count
-            >= self.persistent.config.resources.max_tombstones / 4.max(1);
+        let index_pressure =
+            snapshot.tombstone_count >= self.persistent.config.resources.max_tombstones / 4.max(1);
         let vertex_blocked = self
             .runtime
             .vertex_gc_manager
@@ -307,10 +307,7 @@ impl GraphStorageContext {
         }
         if index_pressure
             && !self.is_index_gc_running()
-            && !self
-                .runtime
-                .index_gc_user_stopped
-                .load(Ordering::Acquire)
+            && !self.runtime.index_gc_user_stopped.load(Ordering::Acquire)
         {
             if self.runtime.start_index_gc().is_some() {
                 self.runtime
@@ -321,10 +318,7 @@ impl GraphStorageContext {
         }
         if vertex_pressure
             && !self.is_vertex_gc_running()
-            && !self
-                .runtime
-                .vertex_gc_user_stopped
-                .load(Ordering::Acquire)
+            && !self.runtime.vertex_gc_user_stopped.load(Ordering::Acquire)
         {
             if self.runtime.start_vertex_gc().is_some() {
                 self.runtime

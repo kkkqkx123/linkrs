@@ -161,11 +161,15 @@ impl GraphStorageContext {
         let resources = &self.persistent.config.resources;
         let limit = resources.index_memory_bytes;
         if resources.index_eviction_enabled && limit > 0 {
-            let _ = self.persistent.index_data_manager.read().evict_cold_chunks_for_pressure(
-                limit,
-                resources.index_eviction_high_ratio,
-                resources.index_eviction_low_ratio,
-            );
+            let _ = self
+                .persistent
+                .index_data_manager
+                .read()
+                .evict_cold_chunks_for_pressure(
+                    limit,
+                    resources.index_eviction_high_ratio,
+                    resources.index_eviction_low_ratio,
+                );
             self.persistent
                 .index_data_manager
                 .read()

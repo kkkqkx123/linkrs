@@ -882,3 +882,60 @@ fn test_parse_vector() {
         Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
     ));
 }
+
+#[test]
+fn test_parse_transactions_subcommands() {
+    use crate::command::parser::types::TransactionsAction;
+
+    match parse_command("\\transactions list") {
+        Command::MetaCommand(MetaCommand::Transactions {
+            action: TransactionsAction::List,
+        }) => {}
+        _ => panic!("Expected Transactions::List"),
+    }
+
+    match parse_command("\\transactions metrics") {
+        Command::MetaCommand(MetaCommand::Transactions {
+            action: TransactionsAction::Metrics,
+        }) => {}
+        _ => panic!("Expected Transactions::Metrics"),
+    }
+
+    match parse_command("\\transactions kill 42") {
+        Command::MetaCommand(MetaCommand::Transactions {
+            action: TransactionsAction::Kill { id },
+        }) => assert_eq!(id, 42),
+        _ => panic!("Expected Transactions::Kill"),
+    }
+
+    match parse_command("\\transactions retry-outbox 7") {
+        Command::MetaCommand(MetaCommand::Transactions {
+            action: TransactionsAction::RetryOutbox { id },
+        }) => assert_eq!(id, 7),
+        _ => panic!("Expected Transactions::RetryOutbox"),
+    }
+
+    // Missing id and unknown subcommand surface as help text, not a command.
+    assert!(matches!(
+        parse_command("\\transactions kill"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+    assert!(matches!(
+        parse_command("\\transactions frobnicate"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+}
+
+#[test]
+fn test_parse_sync_requeue_rejects_mixed_filters_and_ids() {
+    // event_ids and filter arguments are mutually exclusive.
+    assert!(matches!(
+        parse_command("\\sync requeue tgt 1 2 100 9,10"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+    // Invalid event ids fail at parse time instead of being silently dropped.
+    assert!(matches!(
+        parse_command("\\sync requeue tgt 1 2 100 abc"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+}

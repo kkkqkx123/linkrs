@@ -114,13 +114,15 @@ impl GraphStorageContext {
                 .map(|(label_id, table)| (*label_id, table.clone()))
                 .collect()
         });
-        self.runtime.checkpoint_flush_pool.install(|| -> StorageResult<()> {
-            vertex_tables.par_iter().try_for_each(|(label_id, table)| {
-                let table_dir = vertex_dir.join(format!("label_{}", label_id));
-                table.flush(&table_dir, compression)
+        self.runtime
+            .checkpoint_flush_pool
+            .install(|| -> StorageResult<()> {
+                vertex_tables.par_iter().try_for_each(|(label_id, table)| {
+                    let table_dir = vertex_dir.join(format!("label_{}", label_id));
+                    table.flush(&table_dir, compression)
+                })?;
+                Ok(())
             })?;
-            Ok(())
-        })?;
 
         let edge_dir = data_dir.join("edges");
         fs::create_dir_all(&edge_dir)?;
@@ -137,38 +139,42 @@ impl GraphStorageContext {
                     .map(|(key, arc)| (*key, arc.clone()))
                     .collect()
             });
-            self.runtime.checkpoint_flush_pool.install(|| -> StorageResult<()> {
-                edge_tables
-                    .par_iter()
-                    .try_for_each(|(key, edge_table)| -> StorageResult<()> {
-                        let table_dir = edge_dir.join(format!(
-                            "{}_{}_{}",
-                            key.src_label, key.dst_label, key.edge_label
-                        ));
-                        let mut table = edge_table.write();
-                        table.maybe_compact_for_flush_with_watermarks(
-                            &wm,
-                            margin,
-                            crate::edge::GROUP_FRAGMENTATION_THRESHOLD,
-                        );
-                        let kind = table.flush(&table_dir, compression)?;
-                        log::info!(
-                            "Edge flush {}_{}_{} kind={:?}",
-                            key.src_label,
-                            key.dst_label,
-                            key.edge_label,
-                            kind
-                        );
-                        if let Some(stats) = self.persistent.stats_manager.as_ref() {
-                            stats.record_checkpoint_strategy_by_name(match kind {
-                                crate::edge::EdgeCheckpointKind::AppendOnly => "edge-append-only",
-                                crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
-                            });
-                        }
-                        Ok(())
-                    })?;
-                Ok(())
-            })?;
+            self.runtime
+                .checkpoint_flush_pool
+                .install(|| -> StorageResult<()> {
+                    edge_tables.par_iter().try_for_each(
+                        |(key, edge_table)| -> StorageResult<()> {
+                            let table_dir = edge_dir.join(format!(
+                                "{}_{}_{}",
+                                key.src_label, key.dst_label, key.edge_label
+                            ));
+                            let mut table = edge_table.write();
+                            table.maybe_compact_for_flush_with_watermarks(
+                                &wm,
+                                margin,
+                                crate::edge::GROUP_FRAGMENTATION_THRESHOLD,
+                            );
+                            let kind = table.flush(&table_dir, compression)?;
+                            log::info!(
+                                "Edge flush {}_{}_{} kind={:?}",
+                                key.src_label,
+                                key.dst_label,
+                                key.edge_label,
+                                kind
+                            );
+                            if let Some(stats) = self.persistent.stats_manager.as_ref() {
+                                stats.record_checkpoint_strategy_by_name(match kind {
+                                    crate::edge::EdgeCheckpointKind::AppendOnly => {
+                                        "edge-append-only"
+                                    }
+                                    crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
+                                });
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    Ok(())
+                })?;
         }
 
         let index_dir = data_dir.join("indexes");
@@ -342,43 +348,45 @@ impl GraphStorageContext {
             (pages, total)
         };
 
-        self.runtime.checkpoint_flush_pool.install(|| -> StorageResult<()> {
-            vertex_tables.par_iter().try_for_each(|(label_id, table)| {
-                let table_dir = vertex_dir.join(format!("label_{}", label_id));
-                if use_incremental {
-                    // A table that flipped to a full verdict after policy
-                    // selection must error, never silently upgrade inside a
-                    // globally incremental checkpoint.
-                    let plan = table.flush_plan();
-                    crate::vertex::vertex_table::flush_trigger::check_single_table_kind(
-                        table.label_name(),
-                        plan.kind,
-                        crate::vertex::vertex_table::flush_trigger::FlushKind::Incremental,
-                        plan.reason,
-                    )?;
-                    let epoch = self.checkpoint_epoch_hint();
-                    let base = self.persistent.persistence.as_ref().and_then(|p| {
-                        p.read()
-                            .manifest_manager
-                            .load_latest()
-                            .ok()
-                            .flatten()
-                            .map(|m| m.checkpoint_id)
-                    });
-                    table.flush_incremental_with_epoch(&table_dir, compression, epoch, base)
-                } else {
-                    let epoch = self.checkpoint_epoch_hint();
-                    table.flush_with_epoch(
-                        &table_dir,
-                        compression,
-                        epoch,
-                        crate::vertex::vertex_table::CommitKind::Full,
-                        None,
-                    )
-                }
+        self.runtime
+            .checkpoint_flush_pool
+            .install(|| -> StorageResult<()> {
+                vertex_tables.par_iter().try_for_each(|(label_id, table)| {
+                    let table_dir = vertex_dir.join(format!("label_{}", label_id));
+                    if use_incremental {
+                        // A table that flipped to a full verdict after policy
+                        // selection must error, never silently upgrade inside a
+                        // globally incremental checkpoint.
+                        let plan = table.flush_plan();
+                        crate::vertex::vertex_table::flush_trigger::check_single_table_kind(
+                            table.label_name(),
+                            plan.kind,
+                            crate::vertex::vertex_table::flush_trigger::FlushKind::Incremental,
+                            plan.reason,
+                        )?;
+                        let epoch = self.checkpoint_epoch_hint();
+                        let base = self.persistent.persistence.as_ref().and_then(|p| {
+                            p.read()
+                                .manifest_manager
+                                .load_latest()
+                                .ok()
+                                .flatten()
+                                .map(|m| m.checkpoint_id)
+                        });
+                        table.flush_incremental_with_epoch(&table_dir, compression, epoch, base)
+                    } else {
+                        let epoch = self.checkpoint_epoch_hint();
+                        table.flush_with_epoch(
+                            &table_dir,
+                            compression,
+                            epoch,
+                            crate::vertex::vertex_table::CommitKind::Full,
+                            None,
+                        )
+                    }
+                })?;
+                Ok(())
             })?;
-            Ok(())
-        })?;
 
         // Persist incremental checkpoint meta if incremental selected.
         // Written via shadow file so a crash cannot leave a half-written
@@ -447,38 +455,42 @@ impl GraphStorageContext {
                     .map(|(key, arc)| (*key, arc.clone()))
                     .collect()
             });
-            self.runtime.checkpoint_flush_pool.install(|| -> StorageResult<()> {
-                edge_tables
-                    .par_iter()
-                    .try_for_each(|(key, edge_table)| -> StorageResult<()> {
-                        let table_dir = edge_dir.join(format!(
-                            "{}_{}_{}",
-                            key.src_label, key.dst_label, key.edge_label
-                        ));
-                        let mut table = edge_table.write();
-                        table.maybe_compact_for_flush_with_watermarks(
-                            &wm,
-                            margin,
-                            crate::edge::GROUP_FRAGMENTATION_THRESHOLD,
-                        );
-                        let kind = table.flush(&table_dir, compression)?;
-                        log::info!(
-                            "Edge flush {}_{}_{} kind={:?}",
-                            key.src_label,
-                            key.dst_label,
-                            key.edge_label,
-                            kind
-                        );
-                        if let Some(stats) = self.persistent.stats_manager.as_ref() {
-                            stats.record_checkpoint_strategy_by_name(match kind {
-                                crate::edge::EdgeCheckpointKind::AppendOnly => "edge-append-only",
-                                crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
-                            });
-                        }
-                        Ok(())
-                    })?;
-                Ok(())
-            })?;
+            self.runtime
+                .checkpoint_flush_pool
+                .install(|| -> StorageResult<()> {
+                    edge_tables.par_iter().try_for_each(
+                        |(key, edge_table)| -> StorageResult<()> {
+                            let table_dir = edge_dir.join(format!(
+                                "{}_{}_{}",
+                                key.src_label, key.dst_label, key.edge_label
+                            ));
+                            let mut table = edge_table.write();
+                            table.maybe_compact_for_flush_with_watermarks(
+                                &wm,
+                                margin,
+                                crate::edge::GROUP_FRAGMENTATION_THRESHOLD,
+                            );
+                            let kind = table.flush(&table_dir, compression)?;
+                            log::info!(
+                                "Edge flush {}_{}_{} kind={:?}",
+                                key.src_label,
+                                key.dst_label,
+                                key.edge_label,
+                                kind
+                            );
+                            if let Some(stats) = self.persistent.stats_manager.as_ref() {
+                                stats.record_checkpoint_strategy_by_name(match kind {
+                                    crate::edge::EdgeCheckpointKind::AppendOnly => {
+                                        "edge-append-only"
+                                    }
+                                    crate::edge::EdgeCheckpointKind::Rebalance => "edge-rebalance",
+                                });
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    Ok(())
+                })?;
         }
 
         let index_dir = data_dir.join("indexes");

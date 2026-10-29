@@ -10,6 +10,8 @@ export interface ActiveTransaction {
 	staged_bytes: number;
 	undo_bytes: number;
 	blocking_reason: unknown;
+	read_timestamp: unknown;
+	write_timestamp: unknown;
 }
 
 function toTransaction(row: Record<string, unknown>): ActiveTransaction {
@@ -27,6 +29,8 @@ function toTransaction(row: Record<string, unknown>): ActiveTransaction {
 		staged_bytes: num(row.staged_bytes),
 		undo_bytes: num(row.undo_bytes),
 		blocking_reason: row.blocking_reason ?? null,
+		read_timestamp: row.read_timestamp ?? null,
+		write_timestamp: row.write_timestamp ?? null,
 	};
 }
 
@@ -77,6 +81,13 @@ export const operationsService = {
 			}),
 		);
 	},
+
+	retryTransactionOutbox: async (id: number): Promise<unknown> =>
+		call(
+			client.POST('/v1/transactions/{id}/outbox/retry', {
+				params: { path: { id } },
+			}),
+		),
 };
 
 export default operationsService;

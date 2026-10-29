@@ -72,12 +72,32 @@ pub fn parse_sync(arg: &str) -> Result<MetaCommand, String> {
                 .map(|s| parse_usize(s, "limit"))
                 .transpose()?
                 .unwrap_or(100);
+            let event_ids = parts
+                .get(5)
+                .map(|s| {
+                    s.split(',')
+                        .map(|x| {
+                            x.trim().parse::<i64>().map_err(|_| {
+                                format!("Invalid event id: expected integer, got '{}'", x.trim())
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?;
+            let has_filter =
+                target.is_some() || index_id.is_some() || generation.is_some();
+            if event_ids.is_some() && has_filter {
+                return Err(
+                    "requeue takes either event_ids (position 6, comma separated) or filter arguments (target/index_id/generation), not both".to_string(),
+                );
+            }
             Ok(MetaCommand::Sync {
                 action: SyncAction::Requeue {
                     target,
                     index_id,
                     generation,
                     limit,
+                    event_ids,
                 },
             })
         }

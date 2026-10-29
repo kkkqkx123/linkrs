@@ -1578,7 +1578,6 @@ max_files = 10
     }
 }
 
-
 impl Config {
     #[cfg(feature = "server")]
     pub fn shutdown_timeout_secs(&self) -> u64 {

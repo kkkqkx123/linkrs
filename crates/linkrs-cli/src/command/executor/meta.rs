@@ -13,5 +13,6 @@ pub mod search;
 pub mod stats;
 pub mod sync;
 pub mod transaction;
+pub mod transactions;
 pub mod users;
 pub mod variables;

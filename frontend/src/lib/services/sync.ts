@@ -27,11 +27,51 @@ export interface ClearDegradedParams {
 	end_lsn: number;
 }
 
+/** One dead-letter row. All fields optional: the server returns
+ * free-form JSON and older backends may omit gauges. */
+export interface DeadLetterRow {
+	event_id?: unknown;
+	target?: unknown;
+	index_id?: unknown;
+	generation?: unknown;
+	lsn?: unknown;
+	state?: unknown;
+	attempts?: unknown;
+	last_error?: unknown;
+}
+
+export interface DeadLettersResponse {
+	dead_letters?: DeadLetterRow[];
+}
+
+/** One degraded-range row; fields mirror the server DTO. */
+export interface DegradedRangeRow {
+	target?: unknown;
+	index_id?: unknown;
+	generation?: unknown;
+	start_lsn?: unknown;
+	end_lsn?: unknown;
+}
+
+export interface DegradedRangesResponse {
+	degraded_ranges?: DegradedRangeRow[];
+}
+
+/** Extract the row array from either a wrapped or bare payload. */
+function rowsOf<T>(payload: unknown, key: string): T[] {
+	if (payload && typeof payload === 'object') {
+		const wrapped = (payload as Record<string, unknown>)[key];
+		if (Array.isArray(wrapped)) return wrapped as T[];
+	}
+	if (Array.isArray(payload)) return payload as T[];
+	return [];
+}
+
 /**
  * Sync/outbox management service. All calls go through the shared
  * openapi-fetch client so session injection and auth redirects stay
- * in one place. Payloads are opaque (`unknown`) because the server
- * returns free-form JSON for diagnostics-style endpoints.
+ * in one place. Diagnostics-style endpoints stay `unknown`; list
+ * endpoints expose typed row helpers alongside the raw payload.
  */
 export const syncService = {
 	status: async (): Promise<SyncStatusResponse> =>
@@ -55,6 +95,9 @@ export const syncService = {
 			}),
 		),
 
+	deadLetterRows: async (params?: DeadLettersParams): Promise<DeadLetterRow[]> =>
+		rowsOf<DeadLetterRow>(await syncService.deadLetters(params), 'dead_letters'),
+
 	requeue: async (params?: RequeueParams): Promise<unknown> =>
 		call(
 			client.POST('/v1/sync/outbox/requeue', {
@@ -70,6 +113,13 @@ export const syncService = {
 
 	retryOutbox: async (): Promise<unknown> =>
 		call(client.POST('/v1/sync/outbox/retry')),
+
+	degradedRangeRows: async (params?: {
+		target?: string;
+		index_id?: number;
+		generation?: number;
+	}): Promise<DegradedRangeRow[]> =>
+		rowsOf<DegradedRangeRow>(await syncService.degradedRanges(params), 'degraded_ranges'),
 
 	degradedRanges: async (params?: {
 		target?: string;

@@ -83,7 +83,7 @@ impl HttpClient {
     }
 
     /// Attach the session header required by protected routes.
-    fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub(crate) fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match self.session_id() {
             Some(id) => builder.header("X-Session-ID", id),
             None => builder,
@@ -432,6 +432,53 @@ impl HttpClient {
         Self::check_response(response, "Failed to commit transaction").await?;
 
         Ok(())
+    }
+
+    /// List server-side transactions (`GET /v1/transactions`).
+    ///
+    /// Unlike the local `\txstatus` view, this reflects the server truth
+    /// across all sessions and owners.
+    pub async fn list_transactions(&self) -> Result<Vec<serde_json::Value>> {
+        let url = format!("{}/transactions", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list transactions").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Fetch transaction outcome and resource gauges
+    /// (`GET /v1/transactions/metrics`).
+    pub async fn transaction_metrics(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/transactions/metrics", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get transaction metrics").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Kill a server-side transaction (`POST /v1/transactions/{id}/kill`).
+    pub async fn kill_transaction(&self, txn_id: u64) -> Result<serde_json::Value> {
+        let url = format!("{}/transactions/{}/kill", self.base_url, txn_id);
+        let response = self.authed(self.inner.post(&url)).send().await?;
+        let response =
+            Self::check_response(response, format!("Failed to kill transaction {}", txn_id))
+                .await?;
+        Ok(response.json().await?)
+    }
+
+    /// Retry outbox projection scoped to one transaction
+    /// (`POST /v1/transactions/{id}/outbox/retry`).
+    ///
+    /// Note: the current engine performs a global retry pass; the id is
+    /// validated server-side so unknown ids fail instead of silently
+    /// reporting a global count.
+    pub async fn retry_transaction_outbox(&self, txn_id: u64) -> Result<serde_json::Value> {
+        let url = format!("{}/transactions/{}/outbox/retry", self.base_url, txn_id);
+        let response = self.authed(self.inner.post(&url)).send().await?;
+        let response = Self::check_response(
+            response,
+            format!("Failed to retry outbox for transaction {}", txn_id),
+        )
+        .await?;
+        Ok(response.json().await?)
     }
 
     /// Rollback a transaction

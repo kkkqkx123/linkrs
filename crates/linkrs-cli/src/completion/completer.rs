@@ -72,6 +72,7 @@ const META_COMMANDS: &[&str] = &[
     "\\batch",
     "\\sync",
     "\\outbox",
+    "\\transactions",
     "\\show_users",
     "\\du",
     "\\users",
@@ -95,6 +96,8 @@ const USERS_SUBCOMMANDS: &[&str] = &[
 ];
 
 const SESSIONS_SUBCOMMANDS: &[&str] = &["list", "show", "kill"];
+
+const TRANSACTIONS_SUBCOMMANDS: &[&str] = &["list", "metrics", "kill", "retry-outbox"];
 
 const FULLTEXT_SUBCOMMANDS: &[&str] = &[
     "search",
@@ -251,6 +254,9 @@ impl LinkrsCompleter {
                 }
                 "sessions" => {
                     return self.complete_word_list(SESSIONS_SUBCOMMANDS, arg, pos);
+                }
+                "transactions" => {
+                    return self.complete_word_list(TRANSACTIONS_SUBCOMMANDS, arg, pos);
                 }
                 "fulltext" => {
                     return self.complete_word_list(FULLTEXT_SUBCOMMANDS, arg, pos);

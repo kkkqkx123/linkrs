@@ -599,7 +599,10 @@ mod tests {
         let accounting = Arc::new(MemoryAccounting::new(budget));
         accounting.release(MemoryCategory::Cache, 50);
         let snapshot = accounting.snapshot();
-        assert_eq!(snapshot.categories[MemoryCategory::Cache as usize].current_bytes, 0);
+        assert_eq!(
+            snapshot.categories[MemoryCategory::Cache as usize].current_bytes,
+            0
+        );
         assert_eq!(snapshot.total_current_bytes, 0);
     }
 }
