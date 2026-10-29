@@ -54,5 +54,10 @@
 		"monaco-editor": "^0.57.0",
 		"openapi-fetch": "^0.17.0",
 		"web-tree-sitter": "^0.27.1"
+	},
+	"overrides": {
+		"deepmerge": "^4.3.1",
+		"dompurify": "^3.4.17",
+		"tar": "^7.5.22"
 	}
 }
