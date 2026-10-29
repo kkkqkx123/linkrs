@@ -48,9 +48,9 @@
 		"vite": "^8.2.1"
 	},
 	"dependencies": {
+		"@lucide/svelte": "^1.63.0",
 		"cytoscape": "^3.34.0",
 		"json-bigint": "^1.0.0",
-		"lucide-svelte": "^1.0.1",
 		"monaco-editor": "^0.57.0",
 		"openapi-fetch": "^0.17.0",
 		"web-tree-sitter": "^0.27.1"

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { X } from 'lucide-svelte';
+	import { X } from '@lucide/svelte';
 	import { message, t } from '$i18n';
 	import { dataBrowserStore } from '$stores/dataBrowser';
 	import { schemaStore } from '$stores/schema';

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { RotateCw } from 'lucide-svelte';
+	import { RotateCw } from '@lucide/svelte';
 	import IconButton from '$components/common/IconButton.svelte';
 	import type { QueryFavoriteItem } from '$stores/console';
 

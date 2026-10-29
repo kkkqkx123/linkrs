@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { Table } from 'lucide-svelte';
+	import { Table } from '@lucide/svelte';
 	import EmptyState from '$components/common/EmptyState.svelte';
 	import { formatCellValue } from '$utils/parseData';
 	import type { VertexData } from '$types/dataBrowser';

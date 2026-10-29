@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { History, Star } from 'lucide-svelte';
+	import { History, Star } from '@lucide/svelte';
 	import CypherEditor from '$components/common/CypherEditor.svelte';
 	import QueryToolbar from '$components/business/QueryToolbar.svelte';
 	import ParametersPanel from '$components/business/ParametersPanel.svelte';

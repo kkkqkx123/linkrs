@@ -9,7 +9,7 @@
 	import HealthMonitor from '$components/common/HealthMonitor.svelte';
 	import { toggleDensity, density } from '$stores/ui';
 	import { fromStore } from 'svelte/store';
-	import { Rows3, User } from 'lucide-svelte';
+	import { Rows3, User } from '@lucide/svelte';
 
 	const densityState = fromStore(density);
 	function densityLabel(d: 'comfortable' | 'dense'): string {

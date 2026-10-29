@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { t } from '$i18n';
 	import { goto } from '$app/navigation';
-	import { Keyboard, Database, Link2, Table, LineChart } from 'lucide-svelte';
+	import { Keyboard, Database, Link2, Table, LineChart } from '@lucide/svelte';
 </script>
 
 <div class="max-w-5xl mx-auto space-y-6 animate-fade-in">

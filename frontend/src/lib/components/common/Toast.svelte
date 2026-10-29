@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { fromStore } from 'svelte/store';
-	import type { Icon } from 'lucide-svelte';
-	import { Check, X, AlertTriangle, Info } from 'lucide-svelte';
+	import type { LucideIcon } from '@lucide/svelte';
+	import { Check, X, AlertTriangle, Info } from '@lucide/svelte';
 	import IconButton from '$components/common/IconButton.svelte';
 	import { t } from '$i18n';
 	import {
@@ -11,7 +11,7 @@
 
 	const notifState = fromStore(notificationStore);
 
-	const iconMap: Record<NotificationType, typeof Icon> = {
+	const iconMap: Record<NotificationType, LucideIcon> = {
 		success: Check,
 		error: X,
 		warning: AlertTriangle,

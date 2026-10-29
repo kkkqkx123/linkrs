@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import type { Icon } from 'lucide-svelte';
+	import type { LucideIcon } from '@lucide/svelte';
 
 	let {
 		icon,
@@ -8,7 +8,7 @@
 		hint,
 		children,
 	}: {
-		icon?: typeof Icon;
+		icon?: LucideIcon;
 		message: string;
 		hint?: string;
 		children?: Snippet;
@@ -17,7 +17,8 @@
 
 <div class="ui-empty flex-col gap-1.5">
 	{#if icon}
-		<icon size={28} class="text-faint"></icon>
+		{@const Icon = icon}
+		<Icon size={28} class="text-faint" />
 	{/if}
 	<p class="text-muted">{message}</p>
 	{#if hint}

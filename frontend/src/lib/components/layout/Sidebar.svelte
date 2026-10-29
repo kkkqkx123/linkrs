@@ -4,7 +4,7 @@
 	import { t, type MessageKey } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
 	import { fromStore } from 'svelte/store';
-	import type { Icon } from 'lucide-svelte';
+	import type { LucideIcon } from '@lucide/svelte';
 	import {
 		Keyboard,
 		Database,
@@ -17,7 +17,7 @@
 		PlugZap,
 		FileSearch,
 		ScanSearch,
-	} from 'lucide-svelte';
+	} from '@lucide/svelte';
 
 	const path = $derived(page.url.pathname);
 	const managesUsers = fromStore(canManageUsers);
@@ -107,7 +107,7 @@
 
 	interface MenuItem {
 		key: string;
-		icon: typeof Icon;
+		icon: LucideIcon;
 		label: MessageKey;
 		route?: string;
 		requiresUsers?: boolean;

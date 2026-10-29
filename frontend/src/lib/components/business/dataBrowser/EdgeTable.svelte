@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { ArrowLeftRight } from 'lucide-svelte';
+	import { ArrowLeftRight } from '@lucide/svelte';
 	import EmptyState from '$components/common/EmptyState.svelte';
 	import { formatCellValue } from '$utils/parseData';
 	import type { EdgeData } from '$types/dataBrowser';

@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { t, type MessageKey } from '$i18n';
 	import PageHeader from '$components/layout/PageHeader.svelte';
-	import { X } from 'lucide-svelte';
+	import { X } from '@lucide/svelte';
 	import { functionsService } from '$services/functions';
 	import { schemaVersionsService } from '$services/schemaVersions';
 	import { schemaStore } from '$stores/schema';

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { Timer } from 'lucide-svelte';
+	import { Timer } from '@lucide/svelte';
 	import EmptyState from '$components/common/EmptyState.svelte';
 	import { formatLatencyMs } from '$utils/metricsFormat';
 	import type { QueryStatsResponse } from '$services/statistics';

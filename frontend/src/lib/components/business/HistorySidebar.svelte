@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { Check, X, Database, RotateCw } from 'lucide-svelte';
+	import { Check, X, Database, RotateCw } from '@lucide/svelte';
 	import IconButton from '$components/common/IconButton.svelte';
 	import type { QueryHistoryItem } from '$stores/console';
 

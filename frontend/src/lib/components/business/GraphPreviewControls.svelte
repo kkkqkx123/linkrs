@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { Link2 } from 'lucide-svelte';
+	import { Link2 } from '@lucide/svelte';
 	import type { ParsedGraph } from '$utils/cytoscapeConfig';
 
 	let {

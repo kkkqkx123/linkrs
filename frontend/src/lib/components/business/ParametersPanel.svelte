@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { ChevronDown, ChevronRight, X } from 'lucide-svelte';
+	import { ChevronDown, ChevronRight, X } from '@lucide/svelte';
 
 	interface ParamRow {
 		id: string;

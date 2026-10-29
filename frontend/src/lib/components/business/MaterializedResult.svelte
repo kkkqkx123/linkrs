@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { Clock, Check, X, Database, AlertTriangle, BarChart3, Link2, Braces } from 'lucide-svelte';
+	import { Clock, Check, X, Database, AlertTriangle, BarChart3, Link2, Braces } from '@lucide/svelte';
 	import {
 		formatExecutionTime,
 		formatRowCount,

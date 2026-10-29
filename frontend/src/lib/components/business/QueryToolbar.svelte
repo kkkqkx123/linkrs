@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import { History, Star, Save } from 'lucide-svelte';
+	import { History, Star, Save } from '@lucide/svelte';
 	import { type ExecutionPreference } from '$utils/autoRoute';
 
 	interface Props {

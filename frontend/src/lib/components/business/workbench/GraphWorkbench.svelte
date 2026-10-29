@@ -3,7 +3,7 @@
 	import { get } from 'svelte/store';
 
 	import { t } from '$i18n';
-	import { Link2, Undo2, AlertTriangle } from 'lucide-svelte';
+	import { Link2, Undo2, AlertTriangle } from '@lucide/svelte';
 	import IconButton from '$components/common/IconButton.svelte';
 	import {
 		graphStore,
