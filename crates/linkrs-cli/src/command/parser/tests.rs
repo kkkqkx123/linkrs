@@ -204,29 +204,56 @@ fn test_parse_meta_command_format_error() {
 #[test]
 fn test_parse_meta_command_set() {
     match parse_command("\\set VAR value") {
-        Command::MetaCommand(MetaCommand::Set { name, value }) => {
+        Command::MetaCommand(MetaCommand::Set { name, value, remote }) => {
             assert_eq!(name, "VAR");
             assert_eq!(value, Some("value".to_string()));
+            assert!(!remote);
         }
         _ => panic!("Expected Set command"),
     }
 
     match parse_command("\\set VAR") {
-        Command::MetaCommand(MetaCommand::Set { name, value }) => {
+        Command::MetaCommand(MetaCommand::Set { name, value, remote }) => {
             assert_eq!(name, "VAR");
             assert!(value.is_none());
+            assert!(!remote);
         }
         _ => panic!("Expected Set command without value"),
+    }
+
+    match parse_command("\\set --remote FOO 1") {
+        Command::MetaCommand(MetaCommand::Set { name, value, remote }) => {
+            assert_eq!(name, "FOO");
+            assert_eq!(value, Some("1".to_string()));
+            assert!(remote);
+        }
+        _ => panic!("Expected remote Set command"),
+    }
+
+    match parse_command("\\set --remote") {
+        Command::MetaCommand(MetaCommand::ShowVariables { remote }) => {
+            assert!(remote);
+        }
+        _ => panic!("Expected remote ShowVariables command"),
     }
 }
 
 #[test]
 fn test_parse_meta_command_unset() {
     match parse_command("\\unset VAR") {
-        Command::MetaCommand(MetaCommand::Unset { name }) => {
+        Command::MetaCommand(MetaCommand::Unset { name, remote }) => {
             assert_eq!(name, "VAR");
+            assert!(!remote);
         }
         _ => panic!("Expected Unset command"),
+    }
+
+    match parse_command("\\unset --remote VAR") {
+        Command::MetaCommand(MetaCommand::Unset { name, remote }) => {
+            assert_eq!(name, "VAR");
+            assert!(remote);
+        }
+        _ => panic!("Expected remote Unset command"),
     }
 }
 

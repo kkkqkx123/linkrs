@@ -511,6 +511,33 @@ impl<'sess, S: StorageClient + Clone + Send + Sync + 'static> Drop for Transacti
     }
 }
 
+/// Snapshot of transaction counters and resource gauges.
+///
+/// Embedded equivalent of `GET /v1/transactions/metrics`: plain `u64`/`i32`
+/// fields so the snapshot is `Clone + Serialize`-friendly without exposing
+/// the internal atomics.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct TransactionMetrics {
+    /// Total transactions begun.
+    pub begun: u64,
+    /// Currently active transactions.
+    pub active: u64,
+    /// Committed transactions.
+    pub committed: u64,
+    /// Aborted transactions.
+    pub aborted: u64,
+    /// Statements currently executing.
+    pub active_statements: u64,
+    /// Active MVCC snapshots.
+    pub active_snapshots: u64,
+    /// Pending version-manager writes.
+    pub pending_writes: i32,
+    /// Staged WAL bytes across active transactions.
+    pub staged_wal_bytes: u64,
+    /// Undo-log bytes across active transactions.
+    pub undo_bytes: u64,
+}
+
 /// Transaction information
 ///
 /// Provide detailed information and the status of the transaction.

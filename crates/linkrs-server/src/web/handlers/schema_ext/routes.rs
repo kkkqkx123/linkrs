@@ -9,6 +9,9 @@ use super::edge_type::{
     create_edge_type, delete_edge_type, get_edge_type, list_edge_types, update_edge_type,
 };
 use super::index::{create_index, delete_index, get_index, list_indexes, rebuild_index};
+use super::migration_read::{
+    get_label_migration_history, get_label_migration_status, get_label_version_history,
+};
 use super::space::{get_space_details, get_space_statistics, list_spaces};
 use super::tag::{create_tag, delete_tag, get_tag, list_tags, update_tag};
 use crate::storage::{
@@ -61,5 +64,18 @@ pub fn create_routes<
         .route(
             "/spaces/{name}/indexes/{index_name}/rebuild",
             post(rebuild_index),
+        )
+        // Read-only version / migration history for display
+        .route(
+            "/spaces/{name}/versions/{label}",
+            get(get_label_version_history),
+        )
+        .route(
+            "/spaces/{name}/migrations/{label}/history",
+            get(get_label_migration_history),
+        )
+        .route(
+            "/spaces/{name}/migrations/{label}/status",
+            get(get_label_migration_status),
         )
 }

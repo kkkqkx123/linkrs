@@ -112,11 +112,11 @@ fn show_general_help() -> String {
     output.push_str(&format!("\n{}\n", "Variables".yellow().bold()));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\set [name [value]]", "Set or show variables"
+        "\\set [--remote] [name [value]]", "Set/show vars (local; --remote = server $vars)"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\unset <name>", "Delete a variable"
+        "\\unset [--remote] <name>", "Delete a variable"
     ));
 
     output.push_str(&format!("\n{}\n", "Script and I/O".yellow().bold()));
@@ -245,6 +245,11 @@ fn show_general_help() -> String {
         "\\transactions <sub>",
         "Server-side transactions (list|metrics|kill <id>|retry-outbox <id>|savepoint-*)"
     ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\queries [list|kill]",
+        "Running queries (list|kill <session_id> <query_id>, SHOW/KILL QUERY over HTTP)"
+    ));
 
     output.push_str(&format!("\n{}\n", "Streaming & Cursors".yellow().bold()));
     output.push_str(&format!(
@@ -274,6 +279,10 @@ fn show_general_help() -> String {
         "  {:25} {}\n",
         "\\status", "Show database overview (alias for statistics overview)"
     ));
+    output.push_str(&format!(
+        "  {:25} {}",
+        "\\health", "Remote health/live/ready probes (remote only)"
+    ));
 
     output.push_str(&format!("\n{}\n", "Configuration".yellow().bold()));
     output.push_str(&format!(
@@ -291,6 +300,10 @@ fn show_general_help() -> String {
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\config reset <sec> <key>", "Reset a configuration item to default"
+    ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\config bulk <json|@file>", "Bulk update configuration sections"
     ));
 
     output.push_str(&format!("\n{}\n", "Conditional Execution".yellow().bold()));
@@ -482,7 +495,7 @@ Example:
         "variables" | "set" => {
             let mut s = String::new();
             s.push_str("Variable Management\n\n");
-            s.push_str("Set a variable:\n");
+            s.push_str("Local substitution variables (CLI `:name` expansion):\n");
             s.push_str("  \\set NAME VALUE\n\n");
             s.push_str("Show a variable:\n");
             s.push_str("  \\set NAME\n\n");
@@ -490,6 +503,11 @@ Example:
             s.push_str("  \\set\n\n");
             s.push_str("Delete a variable:\n");
             s.push_str("  \\unset NAME\n\n");
+            s.push_str("Server-side $variables (LET scope, per-session):\n");
+            s.push_str("  \\set --remote NAME VALUE\n");
+            s.push_str("  \\set --remote\n");
+            s.push_str("  \\unset --remote NAME\n\n");
+            s.push_str("Local \\set and server $variables do NOT auto-sync.\n\n");
             s.push_str("Use variables in queries:\n");
             s.push_str("  MATCH (p:person) WHERE p.age > :min_age RETURN p\n");
             s.push_str("  MATCH (p:person) WHERE p.name = :'name' RETURN p\n\n");
@@ -578,6 +596,7 @@ Example:
             s.push_str("  \\config get <sec> <key>  - Get a single item\n");
             s.push_str("  \\config set <sec> <key> <value>   - Update an item\n");
             s.push_str("  \\config reset <sec> <key> - Reset an item to default\n");
+            s.push_str("  \\config bulk <json|@file> - Bulk update sections (PUT /v1/config)\n");
             s
         }
         "edit" | "buffer" => {            let mut s = String::new();

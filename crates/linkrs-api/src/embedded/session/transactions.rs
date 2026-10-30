@@ -429,4 +429,43 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             .rollback_to_savepoint(txn_handle.0, savepoint.0, &*storage)
             .map_err(|e| CoreError::TransactionFailed(e.to_string()))
     }
+
+    /// List currently active transactions (embedded equivalent of
+    /// `GET /v1/transactions`).
+    pub fn list_transactions(&self) -> Vec<linkrs_transaction::TransactionInfo> {
+        self.txn_manager().list_transactions()
+    }
+
+    /// Abort another transaction by id (embedded equivalent of
+    /// `POST /v1/transactions/{id}/kill`).
+    ///
+    /// Useful for multi-threaded embedded use where one thread must revoke
+    /// a runaway transaction owned by another thread. Single-threaded
+    /// callers should prefer `Transaction::rollback` and cooperative
+    /// `Session::interrupt` instead.
+    pub fn kill_transaction(&self, txn_id: u64) -> CoreResult<()> {
+        self.txn_manager()
+            .kill_transaction(txn_id.into(), None)
+            .map_err(|e| CoreError::TransactionFailed(e.to_string()))
+    }
+
+    /// Snapshot transaction counters and resource gauges (embedded
+    /// equivalent of `GET /v1/transactions/metrics`).
+    pub fn transaction_metrics(&self) -> crate::embedded::transaction::TransactionMetrics {
+        use std::sync::atomic::Ordering;
+        let manager = self.txn_manager();
+        let stats = manager.stats();
+        let resources = manager.resource_metrics();
+        crate::embedded::transaction::TransactionMetrics {
+            begun: stats.total_transactions.load(Ordering::Relaxed),
+            active: stats.active_transactions.load(Ordering::Relaxed),
+            committed: stats.committed_transactions.load(Ordering::Relaxed),
+            aborted: stats.aborted_transactions.load(Ordering::Relaxed),
+            active_statements: stats.active_statements.load(Ordering::Relaxed),
+            active_snapshots: resources.active_snapshots,
+            pending_writes: resources.pending_writes,
+            staged_wal_bytes: resources.staged_wal_bytes,
+            undo_bytes: resources.undo_bytes,
+        }
+    }
 }

@@ -76,6 +76,104 @@ impl<
         self.handle_close_session(request).await
     }
 
+    async fn list_sessions(
+        &self,
+        request: Request<ListSessionsRequest>,
+    ) -> Result<Response<ListSessionsResponse>, Status> {
+        self.handle_list_sessions(request).await
+    }
+
+    async fn kill_session(
+        &self,
+        request: Request<KillSessionRequest>,
+    ) -> Result<Response<KillSessionResponse>, Status> {
+        self.handle_kill_session(request).await
+    }
+
+    async fn auth_me(
+        &self,
+        request: Request<AuthMeRequest>,
+    ) -> Result<Response<AuthMeResponse>, Status> {
+        self.handle_auth_me(request).await
+    }
+
+    async fn list_session_variables(
+        &self,
+        request: Request<ListSessionVariablesRequest>,
+    ) -> Result<Response<ListSessionVariablesResponse>, Status> {
+        self.handle_list_session_variables(request).await
+    }
+
+    async fn set_session_variable(
+        &self,
+        request: Request<SetSessionVariableRequest>,
+    ) -> Result<Response<SetSessionVariableResponse>, Status> {
+        self.handle_set_session_variable(request).await
+    }
+
+    async fn delete_session_variable(
+        &self,
+        request: Request<DeleteSessionVariableRequest>,
+    ) -> Result<Response<DeleteSessionVariableResponse>, Status> {
+        self.handle_delete_session_variable(request).await
+    }
+
+    async fn list_users(
+        &self,
+        request: Request<ListUsersRequest>,
+    ) -> Result<Response<ListUsersResponse>, Status> {
+        self.handle_list_users(request).await
+    }
+
+    async fn create_user(
+        &self,
+        request: Request<CreateUserRequest>,
+    ) -> Result<Response<CreateUserResponse>, Status> {
+        self.handle_create_user(request).await
+    }
+
+    async fn drop_user(
+        &self,
+        request: Request<DropUserRequest>,
+    ) -> Result<Response<DropUserResponse>, Status> {
+        self.handle_drop_user(request).await
+    }
+
+    async fn reset_user_password(
+        &self,
+        request: Request<ResetUserPasswordRequest>,
+    ) -> Result<Response<ResetUserPasswordResponse>, Status> {
+        self.handle_reset_user_password(request).await
+    }
+
+    async fn enable_user(
+        &self,
+        request: Request<EnableUserRequest>,
+    ) -> Result<Response<EnableUserResponse>, Status> {
+        self.handle_enable_user(request).await
+    }
+
+    async fn disable_user(
+        &self,
+        request: Request<DisableUserRequest>,
+    ) -> Result<Response<DisableUserResponse>, Status> {
+        self.handle_disable_user(request).await
+    }
+
+    async fn grant_user_role(
+        &self,
+        request: Request<GrantUserRoleRequest>,
+    ) -> Result<Response<GrantUserRoleResponse>, Status> {
+        self.handle_grant_user_role(request).await
+    }
+
+    async fn revoke_user_role(
+        &self,
+        request: Request<RevokeUserRoleRequest>,
+    ) -> Result<Response<RevokeUserRoleResponse>, Status> {
+        self.handle_revoke_user_role(request).await
+    }
+
     async fn execute_query(
         &self,
         request: Request<ExecuteQueryRequest>,
@@ -95,6 +193,20 @@ impl<
         request: Request<ExecuteQueryRequest>,
     ) -> Result<Response<Self::ExecuteQueryStreamStream>, Status> {
         self.handle_execute_query_stream(request).await
+    }
+
+    async fn list_queries(
+        &self,
+        request: Request<ListQueriesRequest>,
+    ) -> Result<Response<ListQueriesResponse>, Status> {
+        self.handle_list_queries(request).await
+    }
+
+    async fn kill_query(
+        &self,
+        request: Request<KillQueryRequest>,
+    ) -> Result<Response<KillQueryResponse>, Status> {
+        self.handle_kill_query(request).await
     }
 
     async fn begin_transaction(
@@ -578,6 +690,13 @@ impl<
         request: Request<ListInconsistentFulltextRequest>,
     ) -> Result<Response<ListInconsistentFulltextResponse>, Status> {
         self.handle_list_inconsistent_fulltext(request).await
+    }
+
+    async fn search_fulltext(
+        &self,
+        request: Request<SearchFulltextRequest>,
+    ) -> Result<Response<SearchFulltextResponse>, Status> {
+        self.handle_search_fulltext(request).await
     }
 
     async fn explain_query(

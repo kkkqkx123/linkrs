@@ -313,14 +313,14 @@ impl CommandExecutor {
             MetaCommand::Format { format } => meta::control::execute_format(self, format),
             MetaCommand::Pager { command } => meta::control::execute_pager(self, command),
             MetaCommand::Timing => meta::control::execute_timing(self),
-            MetaCommand::Set { name, value } => {
-                meta::variables::execute_set(self, name, value, session_mgr).await
+            MetaCommand::Set { name, value, remote } => {
+                meta::variables::execute_set(self, name, value, remote, session_mgr).await
             }
-            MetaCommand::Unset { name } => {
-                meta::variables::execute_unset(self, name, session_mgr).await
+            MetaCommand::Unset { name, remote } => {
+                meta::variables::execute_unset(self, name, remote, session_mgr).await
             }
-            MetaCommand::ShowVariables => {
-                meta::variables::execute_show_variables(self, session_mgr)
+            MetaCommand::ShowVariables { remote } => {
+                meta::variables::execute_show_variables(self, remote, session_mgr).await
             }
             MetaCommand::ExecuteScript { path } => {
                 self.execute_script(&path, session_mgr, false).await
@@ -497,6 +497,7 @@ impl CommandExecutor {
                 meta::stats::execute_statistics(self, target.as_deref(), session_mgr).await
             }
             MetaCommand::Status => meta::stats::execute_status(self, session_mgr).await,
+            MetaCommand::Health => meta::stats::execute_health(self, session_mgr).await,
             MetaCommand::Config { action } => {
                 meta::config::execute_config(self, &action, session_mgr).await
             }
@@ -508,6 +509,9 @@ impl CommandExecutor {
             }
             MetaCommand::Transactions { action } => {
                 meta::transactions::execute_transactions(self, &action, session_mgr).await
+            }
+            MetaCommand::Queries { action } => {
+                meta::queries::execute_queries(self, &action, session_mgr).await
             }
         }
     }

@@ -204,6 +204,43 @@ pub unsafe extern "C" fn linkrs_free_string(str: *mut c_char) {
     }
 }
 
+/// Abort another transaction by id (`GraphDatabase::kill_transaction` over FFI).
+///
+/// # Safety
+/// - `db` must be a valid database handle
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_kill_transaction(db: *mut linkrs_t, txn_id: u64) -> c_int {
+    if db.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    unsafe {
+        let handle = &*(db as *mut LinkrsHandle);
+        match handle.inner.kill_transaction(txn_id) {
+            Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+            Err(e) => {
+                let (error_code, _) = error_code_from_core_error(&e);
+                set_last_error_message(format!("{e}"));
+                error_code
+            }
+        }
+    }
+}
+
+/// Number of currently active transactions (`list_transactions().len()`).
+///
+/// # Safety
+/// - `db` must be a valid database handle
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_transaction_count(db: *mut linkrs_t) -> c_int {
+    if db.is_null() {
+        return -1;
+    }
+    unsafe {
+        let handle = &*(db as *mut LinkrsHandle);
+        handle.inner.list_transactions().len() as c_int
+    }
+}
+
 /// Freeing memory (memory allocated by Linkrs)
 ///
 /// # Arguments

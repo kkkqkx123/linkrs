@@ -45,6 +45,7 @@
 - `Passwd`
 - `PrintBuffer`
 - `Profile`
+- `Queries`
 - `Quit`
 - `RegisterFunction`
 - `ReleaseSavepoint`

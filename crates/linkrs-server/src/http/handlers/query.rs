@@ -1,7 +1,7 @@
 use crate::graph_service::GraphServiceError;
 use crate::value::{from_json as json_value_to_core, to_json as value_to_json};
 use axum::{
-    extract::{Json, State},
+    extract::{Json, Path, State},
     response::Json as JsonResponse,
 };
 use linkrs_metrics::{ErrorInfo, ErrorType, QueryMetrics, QueryPhase, QueryProfile, StatsManager};
@@ -615,6 +615,95 @@ pub(crate) fn result_size_limit<
     } else {
         None
     }
+}
+
+/// List currently running queries (`SHOW QUERIES` over HTTP).
+///
+/// Returns the same `query_id / session_id / user_name / space_name /
+/// status / duration_ms / query` rows as the Cypher `SHOW QUERIES`
+/// statement so operators can discover `KILL QUERY` targets without
+/// opening a query shell.
+#[utoipa::path(
+    get,
+    operation_id = "get_v1_queries",
+    path = "/v1/queries",
+    tag = "Query",
+    responses(
+        (status = 200, body = serde_json::Value, description = "Running queries"),
+        (status = 500, description = "Internal error")
+    )
+)]
+pub async fn list_queries<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let result = graph_service
+        .serve_show_queries()
+        .map_err(|e| HttpError::internal(e.message().to_string()))?;
+    let response = query_result_to_response(result, None, "list-queries", 0);
+    Ok(JsonResponse(
+        serde_json::to_value(&response).unwrap_or_default(),
+    ))
+}
+
+/// Cancel a running query by `(session_id, query_id)`.
+///
+/// HTTP equivalent of the Cypher `KILL QUERY <session_id> <query_id>`
+/// statement. Marks the tracked execution as killed and cancels the
+/// shared execution token (plus a best-effort streaming cancel under the
+/// same id). Returns `{session_id, query_id, status: "killed"}`.
+#[utoipa::path(
+    post,
+    operation_id = "post_v1_sessions_queries_kill",
+    path = "/v1/sessions/{id}/queries/{qid}/kill",
+    tag = "Query",
+    params(
+        ("id" = i64, Path, description = "Session id"),
+        ("qid" = i64, Path, description = "Query id from SHOW QUERIES")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Query killed"),
+        (status = 404, description = "Session or query not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
+pub async fn kill_query<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Path((session_id, query_id)): Path<(i64, i64)>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let result = graph_service
+        .serve_kill_query(session_id, query_id)
+        .map_err(|e| {
+            let message = e.message().to_string();
+            if message.contains("does not exist") {
+                HttpError::not_found(message)
+            } else {
+                HttpError::transaction_message(message)
+            }
+        })?;
+    let response = query_result_to_response(result, None, "kill-query", 0);
+    Ok(JsonResponse(
+        serde_json::to_value(&response).unwrap_or_default(),
+    ))
 }
 
 /// Convert an HTTP request's JSON parameter map to core `Value` bindings.

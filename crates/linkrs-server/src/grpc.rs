@@ -26,6 +26,7 @@ pub mod statistics;
 pub mod sync;
 pub mod transaction;
 pub mod transfer;
+pub mod users;
 pub mod vector;
 
 // Proto module will be generated at compile time

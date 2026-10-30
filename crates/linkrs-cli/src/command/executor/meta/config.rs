@@ -53,6 +53,31 @@ pub async fn execute_config(
             let receipt = session_mgr.client().reset_config(section, key).await?;
             executor.write_output(&pretty(&receipt))?;
         }
+        ConfigAction::Bulk { payload } => {
+            let raw = payload.trim();
+            let json_text = if let Some(path) = raw.strip_prefix('@') {
+                std::fs::read_to_string(path.trim()).map_err(|e| {
+                    crate::utils::error::CliError::command(format!(
+                        "failed to read bulk config file '{}': {e}",
+                        path.trim()
+                    ))
+                })?
+            } else {
+                raw.to_string()
+            };
+            let updates: serde_json::Value = serde_json::from_str(&json_text).map_err(|e| {
+                crate::utils::error::CliError::command(format!(
+                    "invalid bulk config JSON object: {e}"
+                ))
+            })?;
+            if !updates.is_object() {
+                return Err(crate::utils::error::CliError::command(
+                    "bulk config payload must be a JSON object of section objects".to_string(),
+                ));
+            }
+            let receipt = session_mgr.client().bulk_update_config(updates).await?;
+            executor.write_output(&pretty(&receipt))?;
+        }
     }
     Ok(true)
 }

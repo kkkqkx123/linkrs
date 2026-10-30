@@ -31,7 +31,10 @@ use super::{
         config::{get as get_config, get_key, reset_key, update as update_config, update_key},
         function::{info as function_info, list, register, unregister},
         health, query, schema,
-        session::{create as create_session, delete_session, get_session, list_sessions},
+        session::{
+            create as create_session, delete_session, delete_variable, get_session, list_sessions,
+            list_variables, set_variable,
+        },
         statistics::{
             database, freeze_stats, overview, queries, query_profile_detail,
             search as search_stats, session, system, trigger_freeze,
@@ -111,10 +114,17 @@ pub fn create_router<
         .route("/users/{name}/revoke", post(super::handlers::users::revoke))
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
+        .route(
+            "/sessions/{id}/variables",
+            get(list_variables).post(set_variable),
+        )
+        .route("/sessions/{id}/variables/{name}", delete(delete_variable))
         .route("/query", post(query::execute))
         .route("/query/validate", post(query::validate))
         .route("/query/explain", post(query::explain))
         .route("/query/batch", post(query::execute_batch))
+        .route("/queries", get(query::list_queries))
+        .route("/sessions/{id}/queries/{qid}/kill", post(query::kill_query))
         .route(
             "/transactions",
             post(transaction::begin).get(transaction::list_transactions),
@@ -213,8 +223,16 @@ pub fn create_router<
             post(schema::create_tag).get(schema::list_tags),
         )
         .route(
+            "/schema/spaces/{name}/tags/{tag}",
+            get(schema::get_tag).delete(schema::drop_tag),
+        )
+        .route(
             "/schema/spaces/{name}/edge-types",
             post(schema::create_edge_type).get(schema::list_edge_types),
+        )
+        .route(
+            "/schema/spaces/{name}/edge-types/{edge}",
+            get(schema::get_edge_type).delete(schema::drop_edge_type),
         )
         // Schema Versioning Routes
         .route(

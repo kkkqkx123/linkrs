@@ -12,6 +12,10 @@ use crate::planning::plan::core::nodes::base::plan_node_traits::{
 };
 
 impl ArenaPlanAssembler {
+    /// Shared entry point for every write/DDL/retrieval/transaction/control node.
+    ///
+    /// `conversion.rs::convert_node` delegates the whole group here so the
+    /// fine-grained routing lives in exactly one place.
     pub(crate) fn convert_write_node(
         node: &PlanNodeEnum,
         operators: &mut Vec<PhysicalOperatorSpec>,
@@ -634,7 +638,7 @@ impl ArenaPlanAssembler {
         fragments: &mut Vec<FragmentSpec>,
         op_alloc: &mut PhysicalOperatorIdAllocator,
         frag_alloc: &mut ArenaFragmentAllocator,
-        exec_ctx: &ExecutionContext,
+        _exec_ctx: &ExecutionContext,
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
         match node {
             PlanNodeEnum::BeginTransaction(_) => Self::push_txn_op(

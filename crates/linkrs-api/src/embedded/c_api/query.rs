@@ -200,6 +200,93 @@ pub unsafe extern "C" fn linkrs_execute_params(
     }
 }
 
+/// Validate a query without executing it (`Session::validate_query` over FFI).
+///
+/// # Returns
+/// - `LINKRS_OK` when the statement parses and binds; otherwise a normal
+///   error code with details in the session error slot.
+///
+/// # Safety
+/// - `session` must be a valid session handle
+/// - `query` must be a null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_validate_query(
+    session: *mut linkrs_session_t,
+    query: *const c_char,
+) -> c_int {
+    if session.is_null() || query.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    let query_str = unsafe {
+        match CStr::from_ptr(query).to_str() {
+            Ok(s) => s,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        }
+    };
+    unsafe {
+        let handle = &mut *(session as *mut LinkrsSessionHandle);
+        match handle.inner.validate_query(query_str) {
+            Ok(_) => {
+                handle.clear_error();
+                linkrs_error_code_t::LINKRS_OK as c_int
+            }
+            Err(e) => {
+                let (error_code, _) = error_code_from_core_error(&e);
+                let error_msg = format!("{e}");
+                let offset = e.error_offset();
+                let extended_code = Some(extended_error_code_from_core_error(&e));
+                handle.set_error(error_msg, offset, extended_code);
+                error_code
+            }
+        }
+    }
+}
+
+/// Explain a query without executing it (`Session::explain_query` over FFI).
+///
+/// # Safety
+/// - `session` must be a valid session handle
+/// - `query` must be a null-terminated UTF-8 string
+/// - `result` must be a valid out-pointer; free with `linkrs_result_free`
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_explain_query(
+    session: *mut linkrs_session_t,
+    query: *const c_char,
+    result: *mut *mut linkrs_result_t,
+) -> c_int {
+    if session.is_null() || query.is_null() || result.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    let query_str = unsafe {
+        match CStr::from_ptr(query).to_str() {
+            Ok(s) => s,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        }
+    };
+    unsafe {
+        let handle = &mut *(session as *mut LinkrsSessionHandle);
+        match handle.inner.explain_query(query_str) {
+            Ok(query_result) => {
+                handle.clear_error();
+                let result_handle = Box::new(LinkrsResultHandle {
+                    inner: query_result,
+                });
+                *result = Box::into_raw(result_handle) as *mut linkrs_result_t;
+                linkrs_error_code_t::LINKRS_OK as c_int
+            }
+            Err(e) => {
+                let (error_code, _) = error_code_from_core_error(&e);
+                let error_msg = format!("{e}");
+                let offset = e.error_offset();
+                let extended_code = Some(extended_error_code_from_core_error(&e));
+                handle.set_error(error_msg, offset, extended_code);
+                *result = ptr::null_mut();
+                error_code
+            }
+        }
+    }
+}
+
 /// Convert a C value to a Rust value.
 ///
 /// Integer inputs map to `BigInt` and float inputs to `Double`: these are

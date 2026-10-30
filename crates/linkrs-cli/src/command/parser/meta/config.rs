@@ -58,8 +58,21 @@ pub fn parse_config(arg: &str) -> Result<MetaCommand, String> {
                 },
             })
         }
+        "bulk" => {
+            if rest.is_empty() {
+                return Err(
+                    "Usage: \\config bulk <json-object | @file> (e.g. \\config bulk '{\"log\":{\"level\":\"debug\"}}')"
+                        .to_string(),
+                );
+            }
+            Ok(MetaCommand::Config {
+                action: ConfigAction::Bulk {
+                    payload: rest.to_string(),
+                },
+            })
+        }
         _ => Err(
-            "Usage: \\config [show [section] | get <section> <key> | set <section> <key> <value> | reset <section> <key>]"
+            "Usage: \\config [show [section] | get <section> <key> | set <section> <key> <value> | reset <section> <key> | bulk <json-object | @file>]"
                 .to_string(),
         ),
     }

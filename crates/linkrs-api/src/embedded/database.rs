@@ -245,7 +245,7 @@ fn build_secondary_managers(
 /// ```
 pub struct GraphDatabase<S: StorageClient + Clone + Send + Sync + 'static> {
     inner: Arc<GraphDatabaseInner<S>>,
-    config: DatabaseConfig,
+    config: Arc<RwLock<DatabaseConfig>>,
 }
 
 impl GraphDatabase<GraphStorage> {
@@ -404,7 +404,10 @@ impl GraphDatabase<GraphStorage> {
             read_only: config.read_only,
         });
 
-        Ok(Self { inner, config })
+        Ok(Self {
+            inner,
+            config: Arc::new(RwLock::new(config)),
+        })
     }
 
     /// Idempotent close: quiesce background loops and, when
@@ -495,14 +498,326 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
         session.list_spaces()
     }
 
-    /// Get Configuration
-    pub fn config(&self) -> &DatabaseConfig {
-        &self.config
+    /// Create a tag in `space` (convenience method over `Session::create_tag`).
+    pub fn create_tag(
+        &self,
+        space: &str,
+        name: &str,
+        properties: Vec<crate::api_core::types::PropertyDef>,
+    ) -> CoreResult<()> {
+        let session = self.session()?;
+        session.create_tag(space, name, properties)
+    }
+
+    /// Drop a tag from `space` (convenience method).
+    pub fn drop_tag(&self, space: &str, name: &str) -> CoreResult<()> {
+        let session = self.session()?;
+        session.drop_tag(space, name)
+    }
+
+    /// List tag names in `space` (convenience method).
+    pub fn list_tags(&self, space: &str) -> CoreResult<Vec<String>> {
+        let session = self.session()?;
+        session.list_tags(space)
+    }
+
+    /// Create an edge type in `space` (convenience method).
+    pub fn create_edge_type(
+        &self,
+        space: &str,
+        name: &str,
+        properties: Vec<crate::api_core::types::PropertyDef>,
+    ) -> CoreResult<()> {
+        let session = self.session()?;
+        session.create_edge_type(space, name, properties)
+    }
+
+    /// Drop an edge type from `space` (convenience method).
+    pub fn drop_edge_type(&self, space: &str, name: &str) -> CoreResult<()> {
+        let session = self.session()?;
+        session.drop_edge_type(space, name)
+    }
+
+    /// List edge type names in `space` (convenience method).
+    pub fn list_edge_types(&self, space: &str) -> CoreResult<Vec<String>> {
+        let session = self.session()?;
+        session.list_edge_types(space)
+    }
+
+    /// Fetch full descriptor for `space` (`None` when missing).
+    ///
+    /// Embedded equivalent of `GET /v1/spaces/{name}` and gRPC `GetSpace`.
+    pub fn get_space(&self, space: &str) -> CoreResult<Option<linkrs_core::types::SpaceInfo>> {
+        let session = self.session()?;
+        session.get_space(space)
+    }
+
+    /// Fetch full descriptor for tag `name` in `space` (`None` when missing).
+    pub fn get_tag(
+        &self,
+        space: &str,
+        name: &str,
+    ) -> CoreResult<Option<linkrs_core::types::TagInfo>> {
+        let session = self.session()?;
+        session.get_tag(space, name)
+    }
+
+    /// Fetch full descriptor for edge type `name` in `space` (`None` when missing).
+    pub fn get_edge_type(
+        &self,
+        space: &str,
+        name: &str,
+    ) -> CoreResult<Option<linkrs_core::types::EdgeTypeInfo>> {
+        let session = self.session()?;
+        session.get_edge_type(space, name)
+    }
+
+    /// Validate query text without executing it (convenience method).
+    ///
+    /// Mirrors `POST /v1/query/validate`: parses and binds the statement,
+    /// returning parameter names on success.
+    pub fn validate_query(
+        &self,
+        query: &str,
+    ) -> CoreResult<crate::embedded::session::validate::QueryValidation> {
+        let session = self.session()?;
+        session.validate_query(query)
+    }
+
+    /// Plan a statement via `EXPLAIN` without executing it (convenience method).
+    ///
+    /// Mirrors `POST /v1/query/explain`.
+    pub fn explain_query(&self, query: &str) -> CoreResult<QueryResult> {
+        let session = self.session()?;
+        session.explain_query(query)
+    }
+
+    /// List currently active transactions (convenience method).
+    ///
+    /// Embedded equivalent of `GET /v1/transactions`.
+    pub fn list_transactions(&self) -> Vec<linkrs_transaction::TransactionInfo> {
+        self.inner.txn_manager.list_transactions()
+    }
+
+    /// Abort another transaction by id (convenience method).
+    ///
+    /// Embedded equivalent of `POST /v1/transactions/{id}/kill`.
+    pub fn kill_transaction(&self, txn_id: u64) -> CoreResult<()> {
+        let session = self.session()?;
+        session.kill_transaction(txn_id)
+    }
+
+    /// Execute `query` and write the result to `path` as `csv`/`jsonl`.
+    ///
+    /// Embedded equivalent of `GET /v1/export`. Returns rows written.
+    pub fn export_query_to_file(
+        &self,
+        query: &str,
+        path: impl AsRef<std::path::Path>,
+        format: crate::embedded::session::export::ExportFormat,
+    ) -> CoreResult<usize> {
+        let session = self.session()?;
+        session.export_query_to_file(query, path, format)
+    }
+
+    /// Simplified database overview for embedded use (subset of
+    /// `GET /v1/statistics/overview`).
+    ///
+    /// Combines space count, live transaction metrics, and the shared
+    /// `StatsManager` query counters so single-process users get the same
+    /// top-level signals as the server overview without the system/storage
+    /// sections (which need a server runtime).
+    pub fn database_overview(&self) -> serde_json::Value {
+        let spaces = self.list_spaces().map(|names| names.len()).unwrap_or(0);
+        let metrics = self.transaction_metrics();
+        let counters = self.inner.stats_manager.get_all_metrics();
+        let counters: std::collections::HashMap<String, u64> = counters
+            .into_iter()
+            .map(|(k, v)| (format!("{k:?}"), v))
+            .collect();
+        serde_json::json!({
+            "spaces": spaces,
+            "transactions": {
+                "begun": metrics.begun,
+                "active": metrics.active,
+                "committed": metrics.committed,
+                "aborted": metrics.aborted,
+                "active_statements": metrics.active_statements,
+                "active_snapshots": metrics.active_snapshots,
+                "pending_writes": metrics.pending_writes,
+            },
+            "counters": counters,
+            "in_memory": self.is_memory(),
+        })
+    }
+
+    /// Snapshot transaction counters and resource gauges (convenience method).
+    ///
+    /// Embedded equivalent of `GET /v1/transactions/metrics`.
+    pub fn transaction_metrics(&self) -> crate::embedded::transaction::TransactionMetrics {
+        use std::sync::atomic::Ordering;
+        let stats = self.inner.txn_manager.stats();
+        let resources = self.inner.txn_manager.resource_metrics();
+        crate::embedded::transaction::TransactionMetrics {
+            begun: stats.total_transactions.load(Ordering::Relaxed),
+            active: stats.active_transactions.load(Ordering::Relaxed),
+            committed: stats.committed_transactions.load(Ordering::Relaxed),
+            aborted: stats.aborted_transactions.load(Ordering::Relaxed),
+            active_statements: stats.active_statements.load(Ordering::Relaxed),
+            active_snapshots: resources.active_snapshots,
+            pending_writes: resources.pending_writes,
+            staged_wal_bytes: resources.staged_wal_bytes,
+            undo_bytes: resources.undo_bytes,
+        }
+    }
+
+    /// Get Configuration (read guard; derefs to `&DatabaseConfig`).
+    ///
+    /// The guard keeps the existing `db.config().field` call style working
+    /// while allowing live updates via `update_config_value` /
+    /// `bulk_update_config` on the same instance.
+    pub fn config(&self) -> parking_lot::RwLockReadGuard<'_, DatabaseConfig> {
+        self.config.read()
+    }
+
+    /// Snapshot the current configuration (cloned value).
+    pub fn config_snapshot(&self) -> DatabaseConfig {
+        self.config.read().clone()
+    }
+
+    /// Read one `section.key` value as a string.
+    ///
+    /// Embedded equivalent of `GET /v1/config/{section}/{key}`.
+    /// Supported keys: `cache.size_mb`, `timeout.default_ms`,
+    /// `wal.enabled`, `sync.mode`, `storage.read_only`,
+    /// `storage.create_if_missing`, `storage.checkpoint_on_close`.
+    /// Returns `None` for unknown keys.
+    pub fn get_config_value(&self, section: &str, key: &str) -> Option<String> {
+        let config = self.config.read();
+        Some(match (section, key) {
+            ("cache", "size_mb") => config.cache_size_mb.to_string(),
+            ("timeout", "default_ms") => config.default_timeout.as_millis().to_string(),
+            ("wal", "enabled") => config.enable_wal.to_string(),
+            ("sync", "mode") => format!("{:?}", config.sync_mode).to_lowercase(),
+            ("storage", "read_only") => config.read_only.to_string(),
+            ("storage", "create_if_missing") => config.create_if_missing.to_string(),
+            ("storage", "checkpoint_on_close") => config.checkpoint_on_close.to_string(),
+            _ => return None,
+        })
+    }
+
+    /// Update one `section.key` value from its string form.
+    ///
+    /// Embedded equivalent of `PUT /v1/config/{section}/{key}`.
+    /// Applied fields take effect immediately for session admission
+    /// (`storage.read_only`) and for newly created sessions/transactions
+    /// (`cache.size_mb`, `timeout.default_ms`); WAL/sync/persistence flags
+    /// are recorded and apply on the next open (same as server restart
+    /// semantics for those flags).
+    pub fn update_config_value(&self, section: &str, key: &str, value: &str) -> CoreResult<()> {
+        let mut config = self.config.write();
+        match (section, key) {
+            ("cache", "size_mb") => {
+                config.cache_size_mb = value.parse::<usize>().map_err(|_| {
+                    CoreError::InvalidParameter(format!("invalid cache.size_mb: {value}"))
+                })?;
+            }
+            ("timeout", "default_ms") => {
+                let ms = value.parse::<u64>().map_err(|_| {
+                    CoreError::InvalidParameter(format!("invalid timeout.default_ms: {value}"))
+                })?;
+                config.default_timeout = std::time::Duration::from_millis(ms);
+            }
+            ("wal", "enabled") => {
+                config.enable_wal = value.parse::<bool>().map_err(|_| {
+                    CoreError::InvalidParameter(format!("invalid wal.enabled: {value}"))
+                })?;
+            }
+            ("sync", "mode") => {
+                config.sync_mode = match value.to_lowercase().as_str() {
+                    "normal" => linkrs_config::SyncMode::Normal,
+                    "full" => linkrs_config::SyncMode::Full,
+                    _ => {
+                        return Err(CoreError::InvalidParameter(format!(
+                            "invalid sync.mode: {value} (expected normal|full)"
+                        )));
+                    }
+                };
+            }
+            ("storage", "read_only") => {
+                config.read_only = value.parse::<bool>().map_err(|_| {
+                    CoreError::InvalidParameter(format!("invalid storage.read_only: {value}"))
+                })?;
+            }
+            ("storage", "create_if_missing") => {
+                config.create_if_missing = value.parse::<bool>().map_err(|_| {
+                    CoreError::InvalidParameter(format!(
+                        "invalid storage.create_if_missing: {value}"
+                    ))
+                })?;
+            }
+            ("storage", "checkpoint_on_close") => {
+                config.checkpoint_on_close = value.parse::<bool>().map_err(|_| {
+                    CoreError::InvalidParameter(format!(
+                        "invalid storage.checkpoint_on_close: {value}"
+                    ))
+                })?;
+            }
+            _ => {
+                return Err(CoreError::InvalidParameter(format!(
+                    "unknown config key {section}.{key}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Reset one `section.key` to its compiled default.
+    ///
+    /// Embedded equivalent of `DELETE /v1/config/{section}/{key}`
+    /// (server `ResetConfig`).
+    pub fn reset_config_value(&self, section: &str, key: &str) -> CoreResult<()> {
+        let defaults = DatabaseConfig::default();
+        let fallback = match (section, key) {
+            ("cache", "size_mb") => defaults.cache_size_mb.to_string(),
+            ("timeout", "default_ms") => defaults.default_timeout.as_millis().to_string(),
+            ("wal", "enabled") => defaults.enable_wal.to_string(),
+            ("sync", "mode") => format!("{:?}", defaults.sync_mode).to_lowercase(),
+            ("storage", "read_only") => defaults.read_only.to_string(),
+            ("storage", "create_if_missing") => defaults.create_if_missing.to_string(),
+            ("storage", "checkpoint_on_close") => defaults.checkpoint_on_close.to_string(),
+            _ => {
+                return Err(CoreError::InvalidParameter(format!(
+                    "unknown config key {section}.{key}"
+                )));
+            }
+        };
+        self.update_config_value(section, key, &fallback)
+    }
+
+    /// Apply many `section.key -> value` updates atomically (best effort
+    /// order; first failure aborts and returns the error).
+    ///
+    /// Embedded equivalent of `PUT /v1/config` (bulk) and gRPC
+    /// `BulkUpdateConfig`.
+    pub fn bulk_update_config(
+        &self,
+        updates: std::collections::HashMap<String, String>,
+    ) -> CoreResult<()> {
+        for (dotted, value) in &updates {
+            let (section, key) = dotted.split_once('.').ok_or_else(|| {
+                CoreError::InvalidParameter(format!(
+                    "invalid config key {dotted:?} (expected section.key)"
+                ))
+            })?;
+            self.update_config_value(section, key, value)?;
+        }
+        Ok(())
     }
 
     /// Checking for in-memory databases
     pub fn is_memory(&self) -> bool {
-        self.config.is_memory()
+        self.config.read().is_memory()
     }
 
     /// Getting a reference to the storage client
@@ -583,7 +898,7 @@ impl GraphDatabase<MockStorage> {
 
         Ok(Self {
             inner,
-            config: DatabaseConfig::default(),
+            config: Arc::new(RwLock::new(DatabaseConfig::default())),
         })
     }
 }

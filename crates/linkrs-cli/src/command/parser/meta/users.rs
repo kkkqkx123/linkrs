@@ -128,3 +128,37 @@ fn parse_session_id(raw: Option<&str>, subcommand: &str) -> Result<i64, String> 
     raw.parse::<i64>()
         .map_err(|_| format!("Invalid session id '{}', expected integer", raw))
 }
+
+/// Parse `\queries [list|kill <session_id> <query_id>]`.
+pub fn parse_queries(arg: &str) -> Result<MetaCommand, String> {
+    use crate::command::parser::types::QueriesAction;
+    let parts: Vec<&str> = arg.split_whitespace().collect();
+    if parts.is_empty() || parts[0].eq_ignore_ascii_case("list") {
+        return Ok(MetaCommand::Queries {
+            action: QueriesAction::List,
+        });
+    }
+    match parts[0].to_lowercase().as_str() {
+        "kill" | "cancel" | "terminate" => {
+            if parts.len() < 3 {
+                return Err("Usage: \\queries kill <session_id> <query_id>".to_string());
+            }
+            let session_id = parts[1]
+                .parse::<i64>()
+                .map_err(|_| format!("Invalid session id '{}', expected integer", parts[1]))?;
+            let query_id = parts[2]
+                .parse::<i64>()
+                .map_err(|_| format!("Invalid query id '{}', expected integer", parts[2]))?;
+            Ok(MetaCommand::Queries {
+                action: QueriesAction::Kill {
+                    session_id,
+                    query_id,
+                },
+            })
+        }
+        other => Err(format!(
+            "Unknown queries subcommand: {}. Expected list|kill <session_id> <query_id>",
+            other
+        )),
+    }
+}

@@ -84,7 +84,7 @@ impl HttpClient {
     }
 
     /// Attach the session header required by protected routes.
-    pub(crate) fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match self.session_id() {
             Some(id) => builder.header("X-Session-ID", id),
             None => builder,
@@ -295,6 +295,30 @@ impl HttpClient {
         }
     }
 
+    /// Fetch the full `/v1/health` payload (status + dependency map).
+    pub async fn health_detail(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/health", self.base_url);
+        let response = self.inner().get(&url).send().await?;
+        let response = Self::check_response(response, "Failed to get health detail").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Fetch the `/v1/health/live` liveness probe payload.
+    pub async fn live_check(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/health/live", self.base_url);
+        let response = self.inner().get(&url).send().await?;
+        let response = Self::check_response(response, "Failed to get liveness").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Fetch the `/v1/health/ready` readiness probe payload.
+    pub async fn ready_check(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/health/ready", self.base_url);
+        let response = self.inner().get(&url).send().await?;
+        let response = Self::check_response(response, "Failed to get readiness").await?;
+        Ok(response.json().await?)
+    }
+
     // ── Schema DDL (admin commands) ──
 
     /// Create a new graph space
@@ -380,6 +404,46 @@ impl HttpClient {
 
         Self::check_response(response, "Failed to create edge type").await?;
 
+        Ok(())
+    }
+
+    /// Get a single tag by name (`GET /v1/schema/spaces/{space}/tags/{tag}`).
+    pub async fn get_tag(&self, space: &str, tag: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/schema/spaces/{}/tags/{}", self.base_url, space, tag);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get tag").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Drop a single tag by name (`DELETE /v1/schema/spaces/{space}/tags/{tag}`).
+    pub async fn drop_tag(&self, space: &str, tag: &str) -> Result<()> {
+        let url = format!("{}/schema/spaces/{}/tags/{}", self.base_url, space, tag);
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        Self::check_response(response, "Failed to drop tag").await?;
+        Ok(())
+    }
+
+    /// Get a single edge type by name
+    /// (`GET /v1/schema/spaces/{space}/edge-types/{edge}`).
+    pub async fn get_edge_type(&self, space: &str, edge: &str) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/schema/spaces/{}/edge-types/{}",
+            self.base_url, space, edge
+        );
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get edge type").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Drop a single edge type by name
+    /// (`DELETE /v1/schema/spaces/{space}/edge-types/{edge}`).
+    pub async fn drop_edge_type(&self, space: &str, edge: &str) -> Result<()> {
+        let url = format!(
+            "{}/schema/spaces/{}/edge-types/{}",
+            self.base_url, space, edge
+        );
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        Self::check_response(response, "Failed to drop edge type").await?;
         Ok(())
     }
 
@@ -875,6 +939,28 @@ impl HttpClient {
         Ok(response.json().await?)
     }
 
+    /// Bulk update configuration via `PUT /v1/config`.
+    ///
+    /// `updates` maps section names to key/value maps, matching the
+    /// server bulk schema (`{ "section": { "key": value } }`) and the
+    /// gRPC `BulkUpdateConfig` RPC.
+    pub async fn bulk_update_config(
+        &self,
+        updates: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/config", self.base_url);
+
+        let response = self
+            .authed(self.inner.put(&url))
+            .json(&updates)
+            .send()
+            .await?;
+
+        let response = Self::check_response(response, "Failed to bulk update config").await?;
+
+        Ok(response.json().await?)
+    }
+
     /// Reset a single configuration item via `DELETE /v1/config/{section}/{key}`.
     pub async fn reset_config(&self, section: &str, key: &str) -> Result<serde_json::Value> {
         let url = format!("{}/config/{}/{}", self.base_url, section, key);
@@ -1176,6 +1262,71 @@ impl HttpClient {
         let response = self.authed(self.inner.delete(&url)).send().await?;
         Self::check_response(response, format!("Failed to kill session {}", session_id)).await?;
         Ok(())
+    }
+
+    /// List running queries via `GET /v1/queries` (`SHOW QUERIES` over HTTP).
+    pub async fn list_queries(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/queries", self.base_url);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list queries").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Cancel a running query via
+    /// `POST /v1/sessions/{session_id}/queries/{query_id}/kill`
+    /// (HTTP equivalent of `KILL QUERY`).
+    pub async fn kill_query(&self, session_id: i64, query_id: i64) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/sessions/{}/queries/{}/kill",
+            self.base_url, session_id, query_id
+        );
+        let response = self.authed(self.inner.post(&url)).send().await?;
+        let response = Self::check_response(
+            response,
+            format!("Failed to kill query {query_id} in session {session_id}"),
+        )
+        .await?;
+        Ok(response.json().await?)
+    }
+
+    /// Snapshot session variables via `GET /v1/sessions/{id}/variables`.
+    pub async fn list_session_variables(&self, session_id: i64) -> Result<serde_json::Value> {
+        let url = format!("{}/sessions/{}/variables", self.base_url, session_id);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list session variables").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Assign a session variable via `POST /v1/sessions/{id}/variables`.
+    pub async fn set_session_variable(
+        &self,
+        session_id: i64,
+        name: &str,
+        value: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/sessions/{}/variables", self.base_url, session_id);
+        let body = serde_json::json!({ "name": name, "value": value });
+        let response = self
+            .authed(self.inner.post(&url).json(&body))
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to set session variable").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Remove a session variable via `DELETE /v1/sessions/{id}/variables/{name}`.
+    pub async fn delete_session_variable(
+        &self,
+        session_id: i64,
+        name: &str,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/sessions/{}/variables/{}",
+            self.base_url, session_id, name
+        );
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to delete session variable").await?;
+        Ok(response.json().await?)
     }
 
     /// Refresh current identity via `GET /v1/auth/me`.

@@ -4,7 +4,6 @@ use axum::{
     response::Json as JsonResponse,
 };
 use linkrs_wire::meta::{BeginTransactionRequest, TransactionResponse};
-use serde::{Deserialize, Serialize};
 use tokio::task;
 
 use crate::http::{error::HttpError, state::AppState};

@@ -11,7 +11,8 @@ use super::Session;
 use crate::api_core::error::{CoreError, CoreResult};
 use crate::api_core::query_api::QueryApi;
 use crate::api_core::types::{
-    ExecutionMetadata, QueryRequestBuilder, QueryResult as CoreQueryResult, SpaceConfig,
+    ExecutionMetadata, PropertyDef, QueryRequestBuilder, QueryResult as CoreQueryResult,
+    SpaceConfig,
 };
 use crate::embedded::result::QueryResult;
 use linkrs_core::types::DataSet;
@@ -298,6 +299,19 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         self.session_variables.variables_snapshot()
     }
 
+    /// Effective value of one session variable (`None` when unset).
+    pub fn variable_value(&self, name: &str) -> Option<Value> {
+        self.session_variables.variable_value(name)
+    }
+
+    /// Remove one session variable (transaction-aware, like `set_variable`).
+    ///
+    /// Returns whether the variable was present.
+    pub fn remove_variable(&self, name: &str) -> bool {
+        self.session_variables
+            .remove_variable(name, self.current_transaction.read().is_some())
+    }
+
     /// Base request carrying the session-scoped context: current space,
     /// autocommit mode, and the session-variable snapshot. Callers layer
     /// per-statement fields on top.
@@ -500,6 +514,113 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             .list_spaces()
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
         Ok(spaces.into_iter().map(|s| s.space_name).collect())
+    }
+
+    /// Resolve a space name to its id, mirroring `SchemaApi::use_space`
+    /// without changing the session space context.
+    fn resolve_space_id(&self, space: &str) -> CoreResult<u64> {
+        self.db.schema_api.use_space(space)
+    }
+
+    /// Create a tag in `space` (name-based wrapper over `SchemaApi`).
+    ///
+    /// Full descriptors remain available through DDL (`CREATE TAG ...`)
+    /// via [`Session::execute`]; this helper covers the common case.
+    pub fn create_tag(
+        &self,
+        space: &str,
+        name: &str,
+        properties: Vec<PropertyDef>,
+    ) -> CoreResult<()> {
+        self.ensure_writable_op()?;
+        let space_id = self.resolve_space_id(space)?;
+        self.db.schema_api.create_tag(space_id, name, properties)
+    }
+
+    /// Drop a tag from `space`.
+    pub fn drop_tag(&self, space: &str, name: &str) -> CoreResult<()> {
+        self.ensure_writable_op()?;
+        let space_id = self.resolve_space_id(space)?;
+        self.db.schema_api.drop_tag(space_id, name)
+    }
+
+    /// List tag names in `space`.
+    pub fn list_tags(&self, space: &str) -> CoreResult<Vec<String>> {
+        let storage = self.db.storage.write();
+        let tags = storage
+            .list_tags(space)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        Ok(tags.into_iter().map(|t| t.tag_name).collect())
+    }
+
+    /// Create an edge type in `space` (name-based wrapper over `SchemaApi`).
+    pub fn create_edge_type(
+        &self,
+        space: &str,
+        name: &str,
+        properties: Vec<PropertyDef>,
+    ) -> CoreResult<()> {
+        self.ensure_writable_op()?;
+        let space_id = self.resolve_space_id(space)?;
+        self.db
+            .schema_api
+            .create_edge_type(space_id, name, properties)
+    }
+
+    /// Drop an edge type from `space`.
+    pub fn drop_edge_type(&self, space: &str, name: &str) -> CoreResult<()> {
+        self.ensure_writable_op()?;
+        let space_id = self.resolve_space_id(space)?;
+        self.db.schema_api.drop_edge_type(space_id, name)
+    }
+
+    /// List edge type names in `space`.
+    pub fn list_edge_types(&self, space: &str) -> CoreResult<Vec<String>> {
+        let storage = self.db.storage.write();
+        let edges = storage
+            .list_edge_types(space)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        Ok(edges.into_iter().map(|e| e.edge_type_name).collect())
+    }
+
+    /// Fetch full descriptor for `space` (`None` when missing).
+    ///
+    /// Embedded equivalent of `GET /v1/spaces/{name}` and gRPC `GetSpace`.
+    pub fn get_space(&self, space: &str) -> CoreResult<Option<linkrs_core::types::SpaceInfo>> {
+        let storage = self.db.storage.read();
+        storage
+            .get_space(space)
+            .map_err(|e| CoreError::StorageError(e.to_string()))
+    }
+
+    /// Fetch full descriptor for tag `name` in `space` (`None` when missing).
+    ///
+    /// Embedded equivalent of `GET /v1/spaces/{space}/tags/{name}` and
+    /// gRPC `GetTag`. Full DDL text remains available via `SHOW` queries.
+    pub fn get_tag(
+        &self,
+        space: &str,
+        name: &str,
+    ) -> CoreResult<Option<linkrs_core::types::TagInfo>> {
+        let storage = self.db.storage.read();
+        storage
+            .get_tag(space, name)
+            .map_err(|e| CoreError::StorageError(e.to_string()))
+    }
+
+    /// Fetch full descriptor for edge type `name` in `space` (`None` when missing).
+    ///
+    /// Embedded equivalent of `GET /v1/spaces/{space}/edge-types/{name}`
+    /// and gRPC `GetEdgeType`.
+    pub fn get_edge_type(
+        &self,
+        space: &str,
+        name: &str,
+    ) -> CoreResult<Option<linkrs_core::types::EdgeTypeInfo>> {
+        let storage = self.db.storage.read();
+        storage
+            .get_edge_type(space, name)
+            .map_err(|e| CoreError::StorageError(e.to_string()))
     }
 }
 

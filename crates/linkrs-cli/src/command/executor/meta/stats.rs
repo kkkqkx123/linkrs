@@ -102,3 +102,34 @@ pub async fn execute_status(
 ) -> Result<bool> {
     execute_statistics(executor, Some("overview"), session_mgr).await
 }
+
+/// Remote liveness/readiness probe (`\\health`).
+///
+/// Unlike `\\status` (database overview), this hits the HTTP health
+/// endpoints directly: `/v1/health` plus `/v1/health/live` and
+/// `/v1/health/ready` for k8s-style tri-state. Embedded mode short-circuits
+/// to healthy since there is no network service to probe.
+pub async fn execute_health(
+    executor: &mut CommandExecutor,
+    session_mgr: &mut SessionManager,
+) -> Result<bool> {
+    if !executor.conditional_stack().is_active() {
+        return Ok(true);
+    }
+    if session_mgr.is_embedded() {
+        executor.write_output("healthy (embedded, no network service to probe)")?;
+        return Ok(true);
+    }
+    session_mgr.require_http("\\health")?;
+    let client = session_mgr.client();
+    let health = client.health_detail().await?;
+    let live = client.live_check().await?;
+    let ready = client.ready_check().await?;
+    let report = serde_json::json!({
+        "health": health,
+        "live": live,
+        "ready": ready,
+    });
+    executor.write_output(&pretty(&report))?;
+    Ok(true)
+}

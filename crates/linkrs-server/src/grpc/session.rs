@@ -176,6 +176,79 @@ impl<
             error: String::new(),
         }))
     }
+
+    pub(crate) async fn handle_list_session_variables(
+        &self,
+        request: Request<ListSessionVariablesRequest>,
+    ) -> Result<Response<ListSessionVariablesResponse>, Status> {
+        let session_id = request.into_inner().session_id;
+        let session = self
+            .app_state
+            .server
+            .get_session_manager()
+            .find_session(session_id)
+            .ok_or_else(|| Status::not_found("Session not found"))?;
+        let snapshot = session.variables_snapshot();
+        let variables: std::collections::HashMap<String, serde_json::Value> = snapshot
+            .into_iter()
+            .map(|(k, v)| (k, crate::value::to_json(v)))
+            .collect();
+        Ok(Response::new(ListSessionVariablesResponse {
+            success: true,
+            variables_json: serde_json::to_string(&variables).unwrap_or_default(),
+            error: String::new(),
+        }))
+    }
+
+    pub(crate) async fn handle_set_session_variable(
+        &self,
+        request: Request<SetSessionVariableRequest>,
+    ) -> Result<Response<SetSessionVariableResponse>, Status> {
+        let req = request.into_inner();
+        if req.name.trim().is_empty() {
+            return Err(Status::invalid_argument("variable name must not be empty"));
+        }
+        let session = self
+            .app_state
+            .server
+            .get_session_manager()
+            .find_session(req.session_id)
+            .ok_or_else(|| Status::not_found("Session not found"))?;
+        let value_json: serde_json::Value = if req.value_json.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&req.value_json)
+                .map_err(|e| Status::invalid_argument(format!("invalid value_json: {e}")))?
+        };
+        session.set_variable(req.name, crate::value::from_json(&value_json));
+        Ok(Response::new(SetSessionVariableResponse {
+            success: true,
+            error: String::new(),
+        }))
+    }
+
+    pub(crate) async fn handle_delete_session_variable(
+        &self,
+        request: Request<DeleteSessionVariableRequest>,
+    ) -> Result<Response<DeleteSessionVariableResponse>, Status> {
+        let req = request.into_inner();
+        let session = self
+            .app_state
+            .server
+            .get_session_manager()
+            .find_session(req.session_id)
+            .ok_or_else(|| Status::not_found("Session not found"))?;
+        if !session.remove_variable(&req.name) {
+            return Err(Status::not_found(format!(
+                "Variable '{}' not found",
+                req.name
+            )));
+        }
+        Ok(Response::new(DeleteSessionVariableResponse {
+            success: true,
+            error: String::new(),
+        }))
+    }
 }
 
 /// Attach an authenticated session to a space by name.

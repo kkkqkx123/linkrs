@@ -86,11 +86,15 @@ pub enum MetaCommand {
     Set {
         name: String,
         value: Option<String>,
+        remote: bool,
     },
     Unset {
         name: String,
+        remote: bool,
     },
-    ShowVariables,
+    ShowVariables {
+        remote: bool,
+    },
     ExecuteScript {
         path: String,
     },
@@ -213,6 +217,7 @@ pub enum MetaCommand {
         target: Option<String>,
     },
     Status,
+    Health,
     Config {
         action: ConfigAction,
     },
@@ -224,6 +229,9 @@ pub enum MetaCommand {
     },
     Transactions {
         action: TransactionsAction,
+    },
+    Queries {
+        action: QueriesAction,
     },
     Migration {
         action: MigrationAction,
@@ -247,6 +255,9 @@ pub enum ConfigAction {
     Reset {
         section: String,
         key: String,
+    },
+    Bulk {
+        payload: String,
     },
 }
 
@@ -311,6 +322,16 @@ pub enum SessionsAction {
     List,
     Show { session_id: i64 },
     Kill { session_id: i64 },
+}
+
+/// Running-query management subcommands (`\queries ...`).
+///
+/// HTTP equivalent of `SHOW QUERIES` / `KILL QUERY` for operators who do
+/// not want to open a query shell.
+#[derive(Debug, Clone)]
+pub enum QueriesAction {
+    List,
+    Kill { session_id: i64, query_id: i64 },
 }
 
 /// Fulltext index subcommands (`\fulltext ...`).

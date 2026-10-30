@@ -137,3 +137,117 @@ pub async fn list_tags<
 
     Ok(JsonResponse(result?))
 }
+
+#[utoipa::path(
+    get,
+    operation_id = "get_v1_schema_spaces_name_tags_tag",
+    path = "/v1/schema/spaces/{name}/tags/{tag}",
+    tag = "Schema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("tag" = String, Path, description = "Tag name")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Tag details"),
+        (status = 404, description = "Tag not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Get a single tag by name
+pub async fn get_tag<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Path((space_name, tag_name)): Path<(String, String)>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let storage = storage.read();
+        let tag = storage
+            .get_tag(&space_name, &tag_name)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?
+            .ok_or_else(|| {
+                HttpError::NotFound(format!(
+                    "Tag '{}' not found in space '{}'",
+                    tag_name, space_name
+                ))
+            })?;
+        Ok::<_, HttpError>(serde_json::json!({
+            "name": tag.tag_name,
+            "space_name": space_name,
+            "properties": tag.properties.iter().map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "data_type": format!("{:?}", p.data_type),
+                    "nullable": p.nullable,
+                })
+            }).collect::<Vec<_>>(),
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}
+
+#[utoipa::path(
+    delete,
+    operation_id = "delete_v1_schema_spaces_name_tags_tag",
+    path = "/v1/schema/spaces/{name}/tags/{tag}",
+    tag = "Schema",
+    params(
+        ("name" = String, Path, description = "Space name"),
+        ("tag" = String, Path, description = "Tag name")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Tag deleted"),
+        (status = 404, description = "Tag not found"),
+        (status = 500, description = "Internal error")
+    )
+)]
+/// Drop a single tag by name
+pub async fn drop_tag<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(session_id): Extension<i64>,
+    Path((space_name, tag_name)): Path<(String, String)>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    super::super::authz::require_schema_write_session(&state, session_id, &space_name)?;
+    let result = task::spawn_blocking(move || {
+        let storage = state.server.get_storage();
+        let mut storage = storage.write();
+        let dropped = storage
+            .drop_tag(&space_name, &tag_name)
+            .map_err(|e| HttpError::InternalError(e.to_string()))?;
+        if !dropped {
+            return Err(HttpError::NotFound(format!(
+                "Tag '{}' not found in space '{}'",
+                tag_name, space_name
+            )));
+        }
+        Ok::<_, HttpError>(serde_json::json!({
+            "message": "Tag deleted successfully",
+            "tag_name": tag_name,
+            "space_name": space_name,
+        }))
+    })
+    .await
+    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
+
+    Ok(JsonResponse(result?))
+}

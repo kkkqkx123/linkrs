@@ -8,6 +8,7 @@ pub mod cursor;
 pub mod functions;
 pub mod io;
 pub mod migration;
+pub mod queries;
 pub mod schema;
 pub mod schema_version;
 pub mod search;

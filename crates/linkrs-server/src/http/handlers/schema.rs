@@ -16,11 +16,11 @@ pub mod space;
 pub mod tag;
 pub mod version;
 
-pub use edge_type::{create_edge_type, list_edge_types};
+pub use edge_type::{create_edge_type, drop_edge_type, get_edge_type, list_edge_types};
 pub use migration::{
     create_migration_plan, dry_run_migration, execute_migration, migration_history,
     migration_status, rollback_migration,
 };
 pub use space::{create_space, drop_space, get_space, list_spaces};
-pub use tag::{create_tag, list_tags};
+pub use tag::{create_tag, drop_tag, get_tag, list_tags};
 pub use version::{detect_breaking_changes, get_schema_changes, get_version_history, ChangeInfo};

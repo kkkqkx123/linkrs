@@ -54,9 +54,12 @@ pub use database::GraphDatabase;
 pub use hooks::HookBus;
 pub use linkrs_config::SyncMode;
 pub use result::{QueryResult, ResultMetadata, Row};
+pub use session::export::ExportFormat;
+pub use session::prepared::PreparedStatement;
+pub use session::validate::QueryValidation;
 pub use session::Session;
 pub use statistics::QueryStatistics;
-pub use transaction::{Transaction, TransactionConfig, TransactionInfo};
+pub use transaction::{Transaction, TransactionConfig, TransactionInfo, TransactionMetrics};
 
 // Re-export SessionStatistics from core
 pub use linkrs_core::SessionStatistics;

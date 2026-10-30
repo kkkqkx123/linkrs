@@ -18,6 +18,10 @@ enum VariableOp {
         prev: Option<Value>,
         value: Value,
     },
+    Remove {
+        name: String,
+        prev: Option<Value>,
+    },
     Savepoint {
         name: String,
     },
@@ -53,20 +57,35 @@ impl SessionVariables {
         }
     }
 
+    /// Remove a session variable. When `in_transaction` is true the removal
+    /// is recorded on the overlay so ROLLBACK restores the previous value.
+    pub fn remove_variable(&self, name: &str, in_transaction: bool) -> bool {
+        if in_transaction {
+            let prev = self.variable_value(name);
+            let existed = prev.is_some();
+            self.ops.write().push(VariableOp::Remove {
+                name: name.to_string(),
+                prev,
+            });
+            existed
+        } else {
+            self.base.write().remove(name).is_some()
+        }
+    }
+
     /// Effective value of a session variable: transaction overlay first,
     /// then the base store.
     pub fn variable_value(&self, name: &str) -> Option<Value> {
         let ops = self.ops.read();
         for op in ops.iter().rev() {
-            if let VariableOp::Set {
-                name: op_name,
-                value,
-                ..
-            } = op
-            {
-                if op_name == name {
-                    return Some(value.clone());
-                }
+            match op {
+                VariableOp::Set {
+                    name: op_name,
+                    value,
+                    ..
+                } if op_name == name => return Some(value.clone()),
+                VariableOp::Remove { name: op_name, .. } if op_name == name => return None,
+                _ => {}
             }
         }
         self.base.read().get(name).cloned()
@@ -77,8 +96,14 @@ impl SessionVariables {
     pub fn variables_snapshot(&self) -> HashMap<String, Value> {
         let mut merged = self.base.read().clone();
         for op in self.ops.read().iter() {
-            if let VariableOp::Set { name, value, .. } = op {
-                merged.insert(name.clone(), value.clone());
+            match op {
+                VariableOp::Set { name, value, .. } => {
+                    merged.insert(name.clone(), value.clone());
+                }
+                VariableOp::Remove { name, .. } => {
+                    merged.remove(name);
+                }
+                VariableOp::Savepoint { .. } => {}
             }
         }
         merged
@@ -90,8 +115,14 @@ impl SessionVariables {
         let mut base = self.base.write();
         let ops = std::mem::take(&mut *self.ops.write());
         for op in ops {
-            if let VariableOp::Set { name, value, .. } = op {
-                base.insert(name, value);
+            match op {
+                VariableOp::Set { name, value, .. } => {
+                    base.insert(name, value);
+                }
+                VariableOp::Remove { name, .. } => {
+                    base.remove(&name);
+                }
+                VariableOp::Savepoint { .. } => {}
             }
         }
     }
@@ -144,14 +175,17 @@ impl SessionVariables {
             None => std::mem::take(&mut *ops),
         };
         for op in removed.iter().rev() {
-            if let VariableOp::Set { name, prev, .. } = op {
-                match prev {
-                    Some(value) => {
-                        base.insert(name.clone(), value.clone());
-                    }
-                    None => {
-                        base.remove(name);
-                    }
+            let (name, prev) = match op {
+                VariableOp::Set { name, prev, .. } => (name, prev),
+                VariableOp::Remove { name, prev } => (name, prev),
+                VariableOp::Savepoint { .. } => continue,
+            };
+            match prev {
+                Some(value) => {
+                    base.insert(name.clone(), value.clone());
+                }
+                None => {
+                    base.remove(name);
                 }
             }
         }

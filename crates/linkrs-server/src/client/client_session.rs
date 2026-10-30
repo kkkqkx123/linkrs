@@ -288,6 +288,12 @@ impl ClientSession {
         self.session_variables.variables_snapshot()
     }
 
+    /// Remove one session variable (transaction-aware).
+    pub fn remove_variable(&self, name: &str) -> bool {
+        self.session_variables
+            .remove_variable(name, self.has_active_transaction())
+    }
+
     /// COMMIT: apply overlay operations to the base store and clear the
     /// overlay (the last assignment of each variable wins).
     pub fn commit_variables(&self) {

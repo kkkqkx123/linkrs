@@ -18,6 +18,7 @@
 pub mod common;
 pub mod edge_type;
 pub mod index;
+pub mod migration_read;
 pub mod routes;
 pub mod space;
 pub mod tag;

@@ -336,6 +336,67 @@ impl<
             error: String::new(),
         }))
     }
+
+    pub(crate) async fn handle_list_queries(
+        &self,
+        _request: Request<ListQueriesRequest>,
+    ) -> Result<Response<ListQueriesResponse>, Status> {
+        let graph_service = self.app_state.server.get_graph_service();
+        match graph_service.serve_show_queries() {
+            Ok(result) => {
+                let columns = result.columns().to_vec();
+                let rows: Vec<Vec<String>> = result
+                    .rows()
+                    .iter()
+                    .map(|row| row.iter().map(|v| format!("{v:?}")).collect())
+                    .collect();
+                let payload = serde_json::json!({
+                    "columns": columns,
+                    "queries": rows,
+                });
+                Ok(Response::new(ListQueriesResponse {
+                    success: true,
+                    queries_json: payload.to_string(),
+                    error: String::new(),
+                }))
+            }
+            Err(e) => Ok(Response::new(ListQueriesResponse {
+                success: false,
+                queries_json: String::new(),
+                error: e.to_string(),
+            })),
+        }
+    }
+
+    pub(crate) async fn handle_kill_query(
+        &self,
+        request: Request<KillQueryRequest>,
+    ) -> Result<Response<KillQueryResponse>, Status> {
+        let req = request.into_inner();
+        let graph_service = self.app_state.server.get_graph_service();
+        match graph_service.serve_kill_query(req.session_id, req.query_id) {
+            Ok(_) => Ok(Response::new(KillQueryResponse {
+                success: true,
+                session_id: req.session_id,
+                query_id: req.query_id,
+                status: "killed".to_string(),
+                error: String::new(),
+            })),
+            Err(e) => {
+                let message = e.to_string();
+                if message.contains("does not exist") {
+                    return Err(Status::not_found(message));
+                }
+                Ok(Response::new(KillQueryResponse {
+                    success: false,
+                    session_id: req.session_id,
+                    query_id: req.query_id,
+                    status: String::new(),
+                    error: message,
+                }))
+            }
+        }
+    }
 }
 
 fn http_error_to_status(error: crate::http::error::HttpError) -> Status {

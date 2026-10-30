@@ -15,11 +15,29 @@ service LinkrsService {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
   rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc KillSession(KillSessionRequest) returns (KillSessionResponse);
+  rpc AuthMe(AuthMeRequest) returns (AuthMeResponse);
+  rpc ListSessionVariables(ListSessionVariablesRequest) returns (ListSessionVariablesResponse);
+  rpc SetSessionVariable(SetSessionVariableRequest) returns (SetSessionVariableResponse);
+  rpc DeleteSessionVariable(DeleteSessionVariableRequest) returns (DeleteSessionVariableResponse);
+
+  // User Management (admin channel parity with /v1/users/*)
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc DropUser(DropUserRequest) returns (DropUserResponse);
+  rpc ResetUserPassword(ResetUserPasswordRequest) returns (ResetUserPasswordResponse);
+  rpc EnableUser(EnableUserRequest) returns (EnableUserResponse);
+  rpc DisableUser(DisableUserRequest) returns (DisableUserResponse);
+  rpc GrantUserRole(GrantUserRoleRequest) returns (GrantUserRoleResponse);
+  rpc RevokeUserRole(RevokeUserRoleRequest) returns (RevokeUserRoleResponse);
   
   // Query Execution
   rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
   rpc ValidateQuery(ValidateQueryRequest) returns (ValidateQueryResponse);
   rpc ExecuteQueryStream(ExecuteQueryRequest) returns (stream StreamResponse);
+  rpc ListQueries(ListQueriesRequest) returns (ListQueriesResponse);
+  rpc KillQuery(KillQueryRequest) returns (KillQueryResponse);
   
   // Transaction Management
   rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionResponse);
@@ -121,6 +139,7 @@ service LinkrsService {
   rpc GetFulltextRebuildStatus(GetFulltextRebuildStatusRequest) returns (GetFulltextRebuildStatusResponse);
   rpc ClearFulltextIndex(ClearFulltextIndexRequest) returns (ClearFulltextIndexResponse);
   rpc ListInconsistentFulltext(ListInconsistentFulltextRequest) returns (ListInconsistentFulltextResponse);
+  rpc SearchFulltext(SearchFulltextRequest) returns (SearchFulltextResponse);
 
   // Query Extras
   rpc ExplainQuery(ExplainQueryRequest) returns (ExplainQueryResponse);
@@ -235,6 +254,171 @@ message CloseSessionRequest {
 }
 
 message CloseSessionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Session Inspection + User Management (parity with /v1/sessions,
+// /v1/users/* and /v1/auth/me)
+// ============================================================
+
+message ListSessionsRequest {
+  string session_id = 1;
+}
+
+message SessionEntry {
+  string session_id = 1;
+  string username = 2;
+  string space_name = 3;
+  int64 created_at = 4;
+  int64 last_accessed = 5;
+}
+
+message ListSessionsResponse {
+  repeated SessionEntry sessions = 1;
+  string error = 2;
+}
+
+message KillSessionRequest {
+  string session_id = 1;
+  string target_session_id = 2;
+}
+
+message KillSessionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message AuthMeRequest {
+  string session_id = 1;
+}
+
+message ListSessionVariablesRequest {
+  int64 session_id = 1;
+}
+
+message ListSessionVariablesResponse {
+  bool success = 1;
+  string variables_json = 2;
+  string error = 3;
+}
+
+message SetSessionVariableRequest {
+  int64 session_id = 1;
+  string name = 2;
+  string value_json = 3;
+}
+
+message SetSessionVariableResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DeleteSessionVariableRequest {
+  int64 session_id = 1;
+  string name = 2;
+}
+
+message DeleteSessionVariableResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message AuthMeResponse {
+  string username = 1;
+  string role = 2;
+  repeated string roles = 3;
+  string error = 4;
+}
+
+message ListUsersRequest {
+  string session_id = 1;
+}
+
+message UserEntry {
+  string username = 1;
+  string role = 2;
+  string status = 3;
+  string last_active = 4;
+}
+
+message ListUsersResponse {
+  repeated UserEntry users = 1;
+  string error = 2;
+}
+
+message CreateUserRequest {
+  string session_id = 1;
+  string username = 2;
+  string password = 3;
+}
+
+message CreateUserResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DropUserRequest {
+  string session_id = 1;
+  string username = 2;
+}
+
+message DropUserResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ResetUserPasswordRequest {
+  string session_id = 1;
+  string username = 2;
+  string new_password = 3;
+}
+
+message ResetUserPasswordResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message EnableUserRequest {
+  string session_id = 1;
+  string username = 2;
+}
+
+message EnableUserResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DisableUserRequest {
+  string session_id = 1;
+  string username = 2;
+}
+
+message DisableUserResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GrantUserRoleRequest {
+  string session_id = 1;
+  string username = 2;
+  string role = 3;
+  string space = 4;
+}
+
+message GrantUserRoleResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RevokeUserRoleRequest {
+  string session_id = 1;
+  string username = 2;
+  string space = 3;
+}
+
+message RevokeUserRoleResponse {
   bool success = 1;
   string error = 2;
 }
@@ -1371,6 +1555,27 @@ message ListInconsistentFulltextResponse {
   string error = 2;
 }
 
+message SearchFulltextRequest {
+  uint64 space_id = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  string query = 4;
+  uint32 limit = 5;
+  string session_id = 6;
+}
+
+message FulltextSearchHit {
+  string doc_id = 1;
+  float score = 2;
+  repeated string highlights = 3;
+}
+
+message SearchFulltextResponse {
+  repeated FulltextSearchHit results = 1;
+  uint64 total_hits = 2;
+  string error = 3;
+}
+
 // ============================================================
 // Query Extras (explain + batch parity)
 // ============================================================
@@ -1395,6 +1600,32 @@ message ExecuteBatchQueryResponse {
   bool success = 1;
   string results_json = 2;
   string error = 3;
+}
+
+// ============================================================
+// Query Management (SHOW QUERIES / KILL QUERY parity)
+// ============================================================
+
+message ListQueriesRequest {
+}
+
+message ListQueriesResponse {
+  bool success = 1;
+  string queries_json = 2;
+  string error = 3;
+}
+
+message KillQueryRequest {
+  int64 session_id = 1;
+  int64 query_id = 2;
+}
+
+message KillQueryResponse {
+  bool success = 1;
+  int64 session_id = 2;
+  int64 query_id = 3;
+  string status = 4;
+  string error = 5;
 }
 
 // ============================================================

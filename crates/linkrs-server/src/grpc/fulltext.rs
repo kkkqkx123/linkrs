@@ -173,4 +173,58 @@ impl<
             Err(Status::unimplemented("fulltext feature is not enabled"))
         }
     }
+
+    pub(crate) async fn handle_search_fulltext(
+        &self,
+        request: Request<SearchFulltextRequest>,
+    ) -> Result<Response<SearchFulltextResponse>, Status> {
+        #[cfg(feature = "fulltext")]
+        {
+            use crate::http::handlers::fulltext::{
+                FulltextSearchRequestBody, FulltextSearchResponse,
+            };
+            let req = request.into_inner();
+            let session_id = super::error::require_session_id(&req.session_id)?;
+            let limit = if req.limit == 0 { 10 } else { req.limit as usize };
+            let body = FulltextSearchRequestBody {
+                space_id: req.space_id,
+                tag_name: req.tag_name,
+                field_name: req.field_name,
+                query: req.query,
+                limit,
+            };
+            match crate::http::handlers::fulltext::search(
+                axum::extract::State(self.app_state.clone()),
+                axum::extract::Extension(session_id),
+                axum::Json(body),
+            )
+            .await
+            {
+                Ok(axum::Json(FulltextSearchResponse {
+                    results,
+                    total_hits,
+                })) => {
+                    let hits = results
+                        .into_iter()
+                        .map(|h| super::proto::FulltextSearchHit {
+                            doc_id: h.doc_id,
+                            score: h.score,
+                            highlights: h.highlights.unwrap_or_default(),
+                        })
+                        .collect();
+                    Ok(Response::new(SearchFulltextResponse {
+                        results: hits,
+                        total_hits: total_hits as u64,
+                        error: String::new(),
+                    }))
+                }
+                Err(e) => Err(http_status(e)),
+            }
+        }
+        #[cfg(not(feature = "fulltext"))]
+        {
+            let _ = request;
+            Err(Status::unimplemented("fulltext feature is not enabled"))
+        }
+    }
 }

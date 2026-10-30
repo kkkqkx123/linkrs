@@ -615,7 +615,7 @@ impl<
     /// duration_ms, query. The query_id values are the KILL QUERY targets.
     /// Only executions registered through the service carry entries;
     /// durations of running queries are measured live.
-    pub(crate) fn serve_show_queries(
+    pub fn serve_show_queries(
         &self,
     ) -> Result<linkrs_api::api_core::QueryResult, super::error::GraphServiceError> {
         use linkrs_core::{NullType, Value};
@@ -658,7 +658,7 @@ impl<
     /// given id; the kill marks the entry and cancels the shared
     /// execution token, with a best-effort session-level cancel for
     /// streaming executions under the same id.
-    pub(crate) fn serve_kill_query(
+    pub fn serve_kill_query(
         &self,
         target_session_id: i64,
         query_id: i64,

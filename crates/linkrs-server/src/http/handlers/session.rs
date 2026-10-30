@@ -224,3 +224,164 @@ pub async fn delete_session<
         })?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// List session variables (`$name` snapshot) for one session.
+///
+/// HTTP equivalent of the embedded `Session::variables_snapshot`. Values
+/// are rendered with the same JSON mapping as query results. Callers may
+/// only read their own session unless they are admins.
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/{id}/variables",
+    tag = "Session",
+    params(("id" = i64, Path, description = "Session id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Variable snapshot"),
+        (status = 404, description = "Session not found")
+    )
+)]
+pub async fn list_variables<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
+    Path(session_id): Path<i64>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let caller = super::authz::find_session(&state, caller_session_id)?;
+    let manager = state.server.get_session_manager();
+    let target = manager
+        .find_session(session_id)
+        .ok_or_else(|| HttpError::NotFound("Session not found".to_string()))?;
+    let graph_service = state.server.get_graph_service();
+    let is_admin = graph_service
+        .get_permission_manager()
+        .is_admin(&caller.user());
+    if !is_admin && target.user() != caller.user() {
+        return Err(HttpError::forbidden("Admin permission required"));
+    }
+    let snapshot = target.variables_snapshot();
+    let variables: std::collections::HashMap<String, serde_json::Value> = snapshot
+        .into_iter()
+        .map(|(k, v)| (k, crate::value::to_json(v)))
+        .collect();
+    Ok(JsonResponse(serde_json::json!({
+        "session_id": session_id,
+        "variables": variables,
+    })))
+}
+
+/// Assign one session variable (`$name`) on a session.
+///
+/// HTTP equivalent of the embedded `Session::set_variable` and the `LET`
+/// statement. Assignments inside an explicit transaction join the
+/// transaction overlay (rollback-aware), matching embedded semantics.
+#[utoipa::path(
+    post,
+    path = "/v1/sessions/{id}/variables",
+    tag = "Session",
+    params(("id" = i64, Path, description = "Session id")),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Variable assigned"),
+        (status = 404, description = "Session not found")
+    )
+)]
+pub async fn set_variable<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
+    Path(session_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let caller = super::authz::find_session(&state, caller_session_id)?;
+    let manager = state.server.get_session_manager();
+    let target = manager
+        .find_session(session_id)
+        .ok_or_else(|| HttpError::NotFound("Session not found".to_string()))?;
+    let graph_service = state.server.get_graph_service();
+    let is_admin = graph_service
+        .get_permission_manager()
+        .is_admin(&caller.user());
+    if !is_admin && target.user() != caller.user() {
+        return Err(HttpError::forbidden("Admin permission required"));
+    }
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| HttpError::BadRequest("field 'name' is required".to_string()))?;
+    let value_json = body
+        .get("value")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let value = crate::value::from_json(&value_json);
+    target.set_variable(name.to_string(), value);
+    Ok(JsonResponse(serde_json::json!({
+        "session_id": session_id,
+        "name": name,
+        "value": value_json,
+    })))
+}
+
+/// Remove one session variable (`$name`) from a session.
+#[utoipa::path(
+    delete,
+    path = "/v1/sessions/{id}/variables/{name}",
+    tag = "Session",
+    params(
+        ("id" = i64, Path, description = "Session id"),
+        ("name" = String, Path, description = "Variable name")
+    ),
+    responses(
+        (status = 200, body = serde_json::Value, description = "Variable removed"),
+        (status = 404, description = "Session or variable not found")
+    )
+)]
+pub async fn delete_variable<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+    Extension(caller_session_id): Extension<i64>,
+    Path((session_id, name)): Path<(i64, String)>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let caller = super::authz::find_session(&state, caller_session_id)?;
+    let manager = state.server.get_session_manager();
+    let target = manager
+        .find_session(session_id)
+        .ok_or_else(|| HttpError::NotFound("Session not found".to_string()))?;
+    let graph_service = state.server.get_graph_service();
+    let is_admin = graph_service
+        .get_permission_manager()
+        .is_admin(&caller.user());
+    if !is_admin && target.user() != caller.user() {
+        return Err(HttpError::forbidden("Admin permission required"));
+    }
+    if !target.remove_variable(&name) {
+        return Err(HttpError::NotFound(format!("Variable '{name}' not found")));
+    }
+    Ok(JsonResponse(serde_json::json!({
+        "session_id": session_id,
+        "name": name,
+        "removed": true,
+    })))
+}
