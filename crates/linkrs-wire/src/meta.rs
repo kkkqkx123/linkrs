@@ -150,6 +150,22 @@ pub struct TransactionActionRequest {
     pub session_id: i64,
 }
 
+/// Create savepoint request for an explicit server-side transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CreateSavepointRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Savepoint descriptor returned by the server.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SavepointResponse {
+    pub savepoint_id: u64,
+    pub transaction_id: u64,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 // ── Config ────────────────────────────────────────────────────────────────
 
 /// Update config request

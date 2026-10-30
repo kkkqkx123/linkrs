@@ -98,16 +98,19 @@ const USERS_SUBCOMMANDS: &[&str] = &[
 
 const SESSIONS_SUBCOMMANDS: &[&str] = &["list", "show", "kill"];
 
-const TRANSACTIONS_SUBCOMMANDS: &[&str] = &["list", "metrics", "kill", "retry-outbox"];
+const TRANSACTIONS_SUBCOMMANDS: &[&str] = &[
+    "list",
+    "metrics",
+    "kill",
+    "retry-outbox",
+    "savepoint-create",
+    "savepoint-list",
+    "savepoint-rollback",
+    "savepoint-release",
+];
 
 const MIGRATION_SUBCOMMANDS: &[&str] = &[
-    "plan",
-    "dry-run",
-    "execute",
-    "rollback",
-    "status",
-    "history",
-    "watch",
+    "plan", "dry-run", "execute", "rollback", "status", "history", "watch",
 ];
 
 const FULLTEXT_SUBCOMMANDS: &[&str] = &[

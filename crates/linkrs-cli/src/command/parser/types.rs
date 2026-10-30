@@ -165,6 +165,7 @@ pub enum MetaCommand {
         file_path: String,
         target: ImportTarget,
         batch_size: Option<usize>,
+        server: bool,
     },
     Export {
         format: ExportFormat,
@@ -172,6 +173,7 @@ pub enum MetaCommand {
         query: String,
         streaming: bool,
         chunk_size: Option<usize>,
+        server: bool,
     },
     Copy {
         direction: CopyDirection,
@@ -297,6 +299,10 @@ pub enum TransactionsAction {
     Metrics,
     Kill { id: u64 },
     RetryOutbox { id: u64 },
+    SavepointCreate { id: u64, name: String },
+    SavepointList { id: u64 },
+    SavepointRollback { id: u64, savepoint_id: u64 },
+    SavepointRelease { id: u64, savepoint_id: u64 },
 }
 
 /// Server-session management subcommands (`\sessions ...`).
@@ -476,6 +482,7 @@ pub enum MigrationAction {
         space: String,
         label: String,
         is_edge: bool,
+        follow: bool,
     },
 }
 

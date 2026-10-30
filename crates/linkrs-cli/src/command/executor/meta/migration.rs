@@ -59,6 +59,35 @@ fn status_line(status: &linkrs_wire::migration::MigrationStatusResponse) -> Stri
     )
 }
 
+/// Poll migration status until it stops changing between polls.
+async fn poll_migration_status(
+    executor: &mut CommandExecutor,
+    client: &linkrs_client::HttpClient,
+    space: &str,
+    label: &str,
+    is_edge: bool,
+) -> Result<()> {
+    let mut last: Option<String> = None;
+    let mut stable_polls = 0u32;
+    loop {
+        let resp = client.migration_status(space, label, is_edge).await?;
+        let line = status_line(&resp);
+        if Some(&line) == last.as_ref() {
+            stable_polls += 1;
+        } else {
+            stable_polls = 0;
+        }
+        last = Some(line.clone());
+        executor.write_output(&line)?;
+        if stable_polls >= 2 {
+            executor.write_output("Migration status settled")?;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    Ok(())
+}
+
 pub async fn execute_migration(
     executor: &mut CommandExecutor,
     action: &MigrationAction,
@@ -140,26 +169,38 @@ pub async fn execute_migration(
             space,
             label,
             is_edge,
+            follow,
         } => {
-            // Poll status every second until it stops changing between two
-            // consecutive polls, then report the final state.
-            let mut last: Option<String> = None;
-            let mut stable_polls = 0u32;
-            loop {
-                let resp = client.migration_status(space, label, *is_edge).await?;
-                let line = status_line(&resp);
-                if Some(&line) == last.as_ref() {
-                    stable_polls += 1;
-                } else {
-                    stable_polls = 0;
+            if *follow {
+                // Live event stream first; fall back to status polling when
+                // the stream endpoint is unreachable or yields nothing.
+                match client
+                    .stream_migration_progress(space, label, *is_edge)
+                    .await
+                {
+                    Ok(events) if !events.is_empty() => {
+                        for event in &events {
+                            executor.write_output(&pretty(event))?;
+                        }
+                    }
+                    Ok(_) => {
+                        executor.write_output(
+                            "Progress stream returned no events; falling back to status polling",
+                        )?;
+                        poll_migration_status(executor, client, space, label, *is_edge).await?;
+                    }
+                    Err(e) => {
+                        executor.write_output(&format!(
+                            "Progress stream unavailable ({}); falling back to status polling",
+                            e
+                        ))?;
+                        poll_migration_status(executor, client, space, label, *is_edge).await?;
+                    }
                 }
-                last = Some(line.clone());
-                executor.write_output(&line)?;
-                if stable_polls >= 2 {
-                    executor.write_output("Migration status settled")?;
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            } else {
+                // Poll status every second until it stops changing between two
+                // consecutive polls, then report the final state.
+                poll_migration_status(executor, client, space, label, *is_edge).await?;
             }
         }
     }

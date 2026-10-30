@@ -49,6 +49,47 @@ pub async fn execute_transactions(
             let metrics = client.transaction_metrics().await?;
             executor.write_output(&crate::command::executor::meta::stats::pretty(&metrics))?;
         }
+        TransactionsAction::SavepointCreate { id, name } => {
+            let created = client.create_savepoint(*id, Some(name.clone())).await?;
+            executor.write_output(&format!(
+                "Savepoint '{}' created in transaction {}.\n{}",
+                name,
+                id,
+                crate::command::executor::meta::stats::pretty(
+                    &serde_json::to_value(&created).unwrap_or(serde_json::Value::Null)
+                )
+            ))?;
+        }
+        TransactionsAction::SavepointList { id } => {
+            let rows = client.list_savepoints(*id).await?;
+            if rows.is_empty() {
+                executor.write_output(&format!("No savepoints in transaction {}.", id))?;
+            } else {
+                let mut out = format!("Savepoints in transaction {} ({}):", id, rows.len());
+                for row in &rows {
+                    out.push_str(&format!("\n  {}  {}", cell(row, "id"), cell(row, "name")));
+                }
+                executor.write_output(&out)?;
+            }
+        }
+        TransactionsAction::SavepointRollback { id, savepoint_id } => {
+            let result = client.rollback_to_savepoint(*id, *savepoint_id).await?;
+            executor.write_output(&format!(
+                "Rolled back transaction {} to savepoint {}.\n{}",
+                id,
+                savepoint_id,
+                crate::command::executor::meta::stats::pretty(&result)
+            ))?;
+        }
+        TransactionsAction::SavepointRelease { id, savepoint_id } => {
+            let result = client.release_savepoint(*id, *savepoint_id).await?;
+            executor.write_output(&format!(
+                "Released savepoint {} in transaction {}.\n{}",
+                savepoint_id,
+                id,
+                crate::command::executor::meta::stats::pretty(&result)
+            ))?;
+        }
         TransactionsAction::Kill { id } => {
             let result = client.kill_transaction(*id).await?;
             executor.write_output(&format!(

@@ -404,9 +404,18 @@ impl CommandExecutor {
                 file_path,
                 target,
                 batch_size,
+                server,
             } => {
-                meta::io::execute_import(self, format, file_path, target, batch_size, session_mgr)
-                    .await
+                meta::io::execute_import(
+                    self,
+                    format,
+                    file_path,
+                    target,
+                    batch_size,
+                    server,
+                    session_mgr,
+                )
+                .await
             }
             MetaCommand::Export {
                 format,
@@ -414,6 +423,7 @@ impl CommandExecutor {
                 query,
                 streaming,
                 chunk_size,
+                server,
             } => {
                 meta::io::execute_export(
                     self,
@@ -422,6 +432,7 @@ impl CommandExecutor {
                     &query,
                     streaming,
                     chunk_size,
+                    server,
                     session_mgr,
                 )
                 .await

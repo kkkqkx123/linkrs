@@ -32,6 +32,7 @@ pub async fn execute_import(
     file_path: String,
     target: ImportTarget,
     batch_size: Option<usize>,
+    server: bool,
     session_mgr: &mut SessionManager,
 ) -> Result<bool> {
     if !executor.conditional_stack().is_active() {
@@ -41,6 +42,10 @@ pub async fn execute_import(
         return Err(crate::utils::error::CliError::CommandError(
             "database is read-only: \\import is a write operation".to_string(),
         ));
+    }
+    if server {
+        return execute_server_import(executor, format, file_path, target, batch_size, session_mgr)
+            .await;
     }
 
     let config = ImportConfig::new(file_path.into(), target)
@@ -73,10 +78,14 @@ pub async fn execute_export(
     query: &str,
     streaming: bool,
     chunk_size: Option<usize>,
+    server: bool,
     session_mgr: &mut SessionManager,
 ) -> Result<bool> {
     if !executor.conditional_stack().is_active() {
         return Ok(true);
+    }
+    if server {
+        return execute_server_export(executor, format, file_path, query, session_mgr).await;
     }
 
     let mut config = ExportConfig::new(file_path.into(), format).with_streaming(streaming);
@@ -97,6 +106,115 @@ pub async fn execute_export(
     };
 
     executor.write_output(&stats.format_summary())?;
+    Ok(true)
+}
+
+/// Server-side import via `POST /v1/import`.
+///
+/// The file is uploaded as multipart and parsed by the server, which loads
+/// rows through the group-commit batch window instead of one statement per
+/// round trip. Falls back to nothing: callers pick this path explicitly
+/// with `\import ... --server`.
+async fn execute_server_import(
+    executor: &mut CommandExecutor,
+    format: ImportFormat,
+    file_path: String,
+    target: ImportTarget,
+    batch_size: Option<usize>,
+    session_mgr: &mut SessionManager,
+) -> Result<bool> {
+    session_mgr.require_http("\\import --server")?;
+    let space = session_mgr
+        .current_space()
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            crate::utils::error::CliError::CommandError(
+                "no space selected: run \\connect <space> first".to_string(),
+            )
+        })?;
+    let format_name = match &format {
+        ImportFormat::Csv { .. } => "csv",
+        ImportFormat::Json { .. } => "json",
+        ImportFormat::JsonLines => "jsonl",
+    };
+    let (target_type, target_name) = match &target {
+        ImportTarget::Vertex { tag } => ("tag", tag.clone()),
+        ImportTarget::Edge { edge_type } => ("edge", edge_type.clone()),
+    };
+    let file_bytes = std::fs::read(&file_path).map_err(|e| {
+        crate::utils::error::CliError::CommandError(format!(
+            "cannot read import file '{}': {}",
+            file_path, e
+        ))
+    })?;
+    let file_name = std::path::Path::new(&file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("upload")
+        .to_string();
+    let value = session_mgr
+        .client()
+        .server_import_file(
+            &space,
+            format_name,
+            target_type,
+            &target_name,
+            batch_size,
+            &file_name,
+            file_bytes,
+        )
+        .await?;
+    let imported = value
+        .get("rows_imported")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let failed = value
+        .get("rows_failed")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    executor.write_output(&format!(
+        "Server import: {} rows imported, {} failed",
+        imported, failed
+    ))?;
+    Ok(true)
+}
+
+/// Server-side export via `GET /v1/export`.
+///
+/// The server re-executes the query and streams the result back as a file
+/// download, so large results never materialize in the CLI process. Only
+/// `csv` and `jsonl` are supported server-side; plain `json` stays on the
+/// local exporter.
+async fn execute_server_export(
+    executor: &mut CommandExecutor,
+    format: ExportFormat,
+    file_path: String,
+    query: &str,
+    session_mgr: &mut SessionManager,
+) -> Result<bool> {
+    session_mgr.require_http("\\export --server")?;
+    let format_name = match &format {
+        ExportFormat::Csv { .. } => "csv",
+        ExportFormat::JsonLines => "jsonl",
+        ExportFormat::Json { .. } => {
+            return Err(crate::utils::error::CliError::CommandError(
+                "server export supports csv and jsonl only: use jsonl or drop --server".to_string(),
+            ));
+        }
+    };
+    let session_id = session_mgr
+        .session()
+        .map(|s| s.session_id)
+        .ok_or_else(|| crate::utils::error::CliError::CommandError("not connected".to_string()))?;
+    let space = session_mgr.current_space().map(|s| s.to_string());
+    let bytes_written = session_mgr
+        .client()
+        .server_export_to_file(query, session_id, format_name, space.as_deref(), &file_path)
+        .await?;
+    executor.write_output(&format!(
+        "Server export: {} bytes written to {}",
+        bytes_written, file_path
+    ))?;
     Ok(true)
 }
 

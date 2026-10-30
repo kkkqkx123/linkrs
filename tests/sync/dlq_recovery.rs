@@ -63,7 +63,10 @@ fn test_dlq_retry_flow() {
         .sync_manager
         .requeue_dead_letter(42)
         .expect("Requeue of unknown event should succeed");
-    assert!(!requeued, "Unknown event id must not be reported as requeued");
+    assert!(
+        !requeued,
+        "Unknown event id must not be reported as requeued"
+    );
 
     let batch = harness
         .sync_manager
@@ -125,7 +128,10 @@ fn test_recover_operations_for_specific_index() {
         .sync_manager
         .list_degraded_ranges(None, None, None)
         .expect("Listing degraded ranges should succeed");
-    assert!(ranges.is_empty(), "Fresh outbox should have no degraded ranges");
+    assert!(
+        ranges.is_empty(),
+        "Fresh outbox should have no degraded ranges"
+    );
 
     let target = TargetId::new("fulltext".to_string()).expect("valid target");
     let cleared = harness

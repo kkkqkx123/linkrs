@@ -35,7 +35,8 @@ pub fn parse_import(arg: &str) -> Result<MetaCommand, String> {
 
     if parts.len() < 4 {
         return Err(
-            "Usage: \\import <csv|json|jsonl> <file> <tag|edge> <name> [batch_size]".to_string(),
+            "Usage: \\import <csv|json|jsonl> <file> <tag|edge> <name> [batch_size] [--server]"
+                .to_string(),
         );
     }
 
@@ -54,13 +55,22 @@ pub fn parse_import(arg: &str) -> Result<MetaCommand, String> {
         _ => return Err(format!("Invalid target type: {}", parts[2])),
     };
 
-    let batch_size = parts.get(4).and_then(|s| s.parse().ok());
+    let mut batch_size = None;
+    let mut server = false;
+    for part in parts.iter().skip(4) {
+        if part.eq_ignore_ascii_case("--server") {
+            server = true;
+        } else if batch_size.is_none() {
+            batch_size = part.parse().ok();
+        }
+    }
 
     Ok(MetaCommand::Import {
         format,
         file_path,
         target,
         batch_size,
+        server,
     })
 }
 
@@ -69,7 +79,7 @@ pub fn parse_export(arg: &str) -> Result<MetaCommand, String> {
 
     if parts.len() < 3 {
         return Err(
-            "Usage: \\export <csv|json|jsonl> <file> <query> [--stream] [--chunk-size <n>]"
+            "Usage: \\export <csv|json|jsonl> <file> <query> [--stream] [--chunk-size <n>] [--server]"
                 .to_string(),
         );
     }
@@ -85,6 +95,7 @@ pub fn parse_export(arg: &str) -> Result<MetaCommand, String> {
 
     let mut streaming = false;
     let mut chunk_size: Option<usize> = None;
+    let mut server = false;
     let mut query_parts: Vec<&str> = Vec::new();
 
     let mut i = 2;
@@ -92,6 +103,9 @@ pub fn parse_export(arg: &str) -> Result<MetaCommand, String> {
         match parts[i] {
             "--stream" | "-s" => {
                 streaming = true;
+            }
+            "--server" => {
+                server = true;
             }
             "--chunk-size" | "-c" => {
                 i += 1;
@@ -119,6 +133,7 @@ pub fn parse_export(arg: &str) -> Result<MetaCommand, String> {
         query,
         streaming,
         chunk_size,
+        server,
     })
 }
 

@@ -16,15 +16,18 @@ cargo build --features embedded
 
 ## 模块结构
 
-| 模块 | 功能 |
-|------|------|
-| `database` | `GraphDatabase` 入口与数据库打开逻辑 |
-| `session` | 会话管理与查询执行上下文 |
-| `transaction` | 事务控制 |
-| `config` | 嵌入式配置类型 |
-| `result` | 查询结果封装 |
-| `batch` | 批量写入辅助 |
-| `statement` | 预编译语句 |
+| 模块文档 | 功能 |
+|----------|------|
+| [00_overview.md](00_overview.md) | 入口与数据库打开逻辑 |
+| [graph_database.md](graph_database.md) | `GraphDatabase` 入口与数据库打开逻辑 |
+| [session.md](session.md) | 会话管理与查询执行上下文 |
+| [transaction.md](transaction.md) | 事务控制与保存点 |
+| [query_result.md](query_result.md) | 查询结果封装 |
+| [row.md](row.md) | 行访问与类型化获取 |
+| [prepared_statement.md](prepared_statement.md) | 预编译语句 |
+| [batch_inserter.md](batch_inserter.md) | 批量写入辅助 |
+| [config_types.md](config_types.md) | 嵌入式配置类型 |
+| [examples.md](examples.md) | 完整使用示例 |
 
 ## 核心对象
 
@@ -38,34 +41,8 @@ cargo build --features embedded
 
 ### Transaction
 
-事务对象，负责提交、回滚和保存点操作。
+事务对象，负责事务控制、保存点管理。
 
-### QueryResult
+## C API 说明
 
-查询结果封装，提供行列访问与类型化读取。
-
-## 使用示例
-
-```rust
-use linkrs::api::embedded::{DatabaseConfig, GraphDatabase};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = GraphDatabase::open("my_database")?;
-    let mut session = db.session()?;
-
-    session.use_space("test_space")?;
-    let result = session.execute("MATCH (n) RETURN n")?;
-
-    println!("{:?}", result);
-    Ok(())
-}
-```
-
-## 配置
-
-常用配置项由 `DatabaseConfig` 和 `TransactionConfig` 管理，具体字段请参考 [配置参考](../../release/07_configuration_reference.md)。
-
-## 相关文档
-
-- [配置参考](../../release/07_configuration_reference.md)
-- [向量引擎文档索引](../../vector/README.md)
+当前仓库不再维护独立的 C API 实现；嵌入式 Rust API 是唯一支持的嵌入式入口。

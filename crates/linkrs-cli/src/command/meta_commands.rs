@@ -138,11 +138,13 @@ fn show_general_help() -> String {
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\import <fmt> <file> <type> <name>", "Import data from file"
+        "\\import <fmt> <file> <type> <name> [opts]",
+        "Import data from file (--server for server-side import)"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
-        "\\export <fmt> <file> <query> [opts]", "Export query results to file"
+        "\\export <fmt> <file> <query> [opts]",
+        "Export query results to file (--server for server-side export)"
     ));
     output.push_str(&format!(
         "  {:25} {}\n",
@@ -185,7 +187,7 @@ fn show_general_help() -> String {
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\migration <subcommand>",
-        "Schema migration (plan|dry-run|execute|rollback|status|history|watch)"
+        "Schema migration (plan|dry-run|execute|rollback|status|history|watch [--follow])"
     ));
 
     output.push_str(&format!("\n{}\n", "Query Buffer".yellow().bold()));
@@ -241,7 +243,7 @@ fn show_general_help() -> String {
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\transactions <sub>",
-        "Server-side transactions (list|metrics|kill <id>|retry-outbox <id>)"
+        "Server-side transactions (list|metrics|kill <id>|retry-outbox <id>|savepoint-*)"
     ));
 
     output.push_str(&format!("\n{}\n", "Streaming & Cursors".yellow().bold()));
@@ -404,6 +406,7 @@ fn show_topic_help(topic: &str) -> String {
             s.push_str("  jsonl  - JSON Lines format\n\n");
             s.push_str("Options:\n");
             s.push_str("  --stream, -s          - Enable streaming export (memory efficient)\n");
+            s.push_str("  --server              - Server-side export via GET /v1/export (csv/jsonl only)\n");
             s.push_str(
                 "  --chunk-size <n>, -c  - Set chunk size for streaming (default: 1000)\n\n",
             );
@@ -417,7 +420,7 @@ fn show_topic_help(topic: &str) -> String {
             let mut s = String::new();
             s.push_str("Import data from file\n\n");
             s.push_str("Syntax:\n");
-            s.push_str("  \\import <format> <file> <type> <name> [batch_size]\n\n");
+            s.push_str("  \\import <format> <file> <type> <name> [batch_size] [--server]\n\n");
             s.push_str("Formats:\n");
             s.push_str("  csv    - CSV format\n");
             s.push_str("  json   - JSON array format\n");
@@ -425,6 +428,8 @@ fn show_topic_help(topic: &str) -> String {
             s.push_str("Types:\n");
             s.push_str("  tag, vertex  - Import as vertices\n");
             s.push_str("  edge         - Import as edges\n\n");
+            s.push_str("Options:\n");
+            s.push_str("  --server     - Server-side import via POST /v1/import (group-commit)\n\n");
             s.push_str("Examples:\n");
             s.push_str("  \\import csv data.csv tag person 100\n");
             s.push_str("  \\import json data.json vertex person\n");

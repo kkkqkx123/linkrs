@@ -10,8 +10,9 @@ use linkrs_wire::batch::{
     CreateBatchRequest, CreateBatchResponse, ExecuteBatchResponse,
 };
 use linkrs_wire::meta::{
-    BeginTransactionRequest, DatabaseStatistics, LoginRequest, LoginResponse, LogoutRequest,
-    QueryStatistics, SessionStatistics, TransactionActionRequest, TransactionResponse,
+    BeginTransactionRequest, CreateSavepointRequest, DatabaseStatistics, LoginRequest,
+    LoginResponse, LogoutRequest, QueryStatistics, SavepointResponse, SessionStatistics,
+    TransactionActionRequest, TransactionResponse,
 };
 use linkrs_wire::query::{BatchQueryRequest, BatchQueryResponse, QueryRequest, QueryResponse};
 use linkrs_wire::schema::{
@@ -394,10 +395,10 @@ impl HttpClient {
         let request = BeginTransactionRequest {
             read_only: options.read_only,
             timeout_seconds: options.timeout_seconds,
-            query_timeout_seconds: None,
-            statement_timeout_seconds: None,
-            idle_timeout_seconds: None,
-            isolation_level: None,
+            query_timeout_seconds: options.query_timeout_seconds,
+            statement_timeout_seconds: options.statement_timeout_seconds,
+            idle_timeout_seconds: options.idle_timeout_seconds,
+            isolation_level: options.isolation_level,
         };
 
         let response = self
@@ -504,7 +505,72 @@ impl HttpClient {
         Ok(())
     }
 
-    // ── Batch import (admin commands) ──
+    // ── Savepoints on explicit server-side transactions ──
+
+    /// Create a savepoint inside an explicit transaction
+    /// (`POST /v1/transactions/{id}/savepoints`).
+    ///
+    /// Session-bound interactive transactions keep using GQL `SAVEPOINT`;
+    /// this covers the explicit transaction-handle path used by admin
+    /// tooling and programmatic clients.
+    pub async fn create_savepoint(
+        &self,
+        txn_id: u64,
+        name: Option<String>,
+    ) -> Result<SavepointResponse> {
+        let url = format!("{}/transactions/{}/savepoints", self.base_url, txn_id);
+        let request = CreateSavepointRequest { name };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to create savepoint").await?;
+        Ok(response.json().await?)
+    }
+
+    /// List savepoints of an explicit transaction
+    /// (`GET /v1/transactions/{id}/savepoints`).
+    pub async fn list_savepoints(&self, txn_id: u64) -> Result<Vec<serde_json::Value>> {
+        let url = format!("{}/transactions/{}/savepoints", self.base_url, txn_id);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list savepoints").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Roll back an explicit transaction to a savepoint
+    /// (`POST /v1/transactions/{id}/savepoints/{sid}/rollback`).
+    pub async fn rollback_to_savepoint(
+        &self,
+        txn_id: u64,
+        savepoint_id: u64,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/transactions/{}/savepoints/{}/rollback",
+            self.base_url, txn_id, savepoint_id
+        );
+        let response = self.authed(self.inner.post(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to rollback to savepoint").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Release a savepoint of an explicit transaction
+    /// (`DELETE /v1/transactions/{id}/savepoints/{sid}`).
+    pub async fn release_savepoint(
+        &self,
+        txn_id: u64,
+        savepoint_id: u64,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/transactions/{}/savepoints/{}",
+            self.base_url, txn_id, savepoint_id
+        );
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to release savepoint").await?;
+        Ok(response.json().await?)
+    }
+
+    // ── Server-side import/export ──
 
     /// Create a batch task
     pub async fn create_batch(
@@ -593,6 +659,141 @@ impl HttpClient {
         Self::check_response(response, "Failed to delete batch").await?;
 
         Ok(())
+    }
+
+    // ── Server-side import/export ──
+
+    /// Upload a data file for server-side import (`POST /v1/import`, multipart).
+    ///
+    /// Unlike the local row-by-row importer, the server parses the file and
+    /// loads it through the group-commit batch window, amortizing WAL fsync
+    /// across rows. `format` is `csv`, `json` or `jsonl`; `target_type` is
+    /// `tag`/`vertex` or `edge`.
+    pub async fn server_import_file(
+        &self,
+        space: &str,
+        format: &str,
+        target_type: &str,
+        target_name: &str,
+        batch_size: Option<usize>,
+        file_name: &str,
+        file_bytes: Vec<u8>,
+    ) -> Result<serde_json::Value> {
+        use reqwest::multipart::{Form, Part};
+        let url = format!("{}/import", self.base_url);
+        let file_part = Part::bytes(file_bytes)
+            .file_name(file_name.to_string())
+            .mime_str("application/octet-stream")
+            .map_err(|e| ClientError::connection(e.to_string()))?;
+        let mut form = Form::new()
+            .text("space", space.to_string())
+            .text("format", format.to_string())
+            .text("target_type", target_type.to_string())
+            .text("target_name", target_name.to_string())
+            .part("file", file_part);
+        if let Some(batch_size) = batch_size {
+            form = form.text("batch_size", batch_size.to_string());
+        }
+        let response = self
+            .authed(self.inner.post(&url))
+            .multipart(form)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Server import failed").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Query a server-side import job (`GET /v1/import/{id}`).
+    ///
+    /// Imports run synchronously today, so this reports the compatibility
+    /// contract rather than live progress; it stays available for polling
+    /// loops that must not assume synchronous completion.
+    pub async fn import_status(&self, job_id: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/import/{}", self.base_url, job_id);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get import status").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Download a server-side export (`GET /v1/export`) into memory.
+    ///
+    /// Only `csv` and `jsonl` are supported by the server; the caller picks
+    /// the format. `space` is reserved by the server and optional.
+    pub async fn server_export_bytes(
+        &self,
+        query: &str,
+        session_id: i64,
+        format: &str,
+        space: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        let url = format!("{}/export", self.base_url);
+        let mut request = self.authed(self.inner.get(&url)).query(&[
+            ("query", query),
+            ("session_id", &session_id.to_string()),
+            ("format", format),
+        ]);
+        if let Some(space) = space {
+            request = request.query(&[("space", space)]);
+        }
+        let response = request.send().await?;
+        let response = Self::check_response(response, "Server export failed").await?;
+        Ok(response.bytes().await?.to_vec())
+    }
+
+    /// Download a server-side export straight into a local file.
+    /// Returns the number of bytes written.
+    pub async fn server_export_to_file(
+        &self,
+        query: &str,
+        session_id: i64,
+        format: &str,
+        space: Option<&str>,
+        path: &str,
+    ) -> Result<usize> {
+        let bytes = self
+            .server_export_bytes(query, session_id, format, space)
+            .await?;
+        std::fs::write(path, &bytes).map_err(|e| ClientError::connection(e.to_string()))?;
+        Ok(bytes.len())
+    }
+
+    /// Subscribe to migration progress events
+    /// (`GET /v1/migration/stream/{space}/{label}`, SSE).
+    ///
+    /// Collects the `data:` payloads of the event stream into JSON values.
+    /// Callers that need live updates should poll this with a short-lived
+    /// subscription; connection failures surface as errors so the caller
+    /// can fall back to polling `migration_status`.
+    pub async fn stream_migration_progress(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<Vec<serde_json::Value>> {
+        let url = format!("{}/migration/stream/{}/{}", self.base_url, space, label);
+        let response = self
+            .authed(self.inner.get(&url))
+            .header("Accept", "text/event-stream")
+            .query(&[("is_edge", is_edge.to_string())])
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Migration progress stream failed").await?;
+        let text = response.text().await?;
+        let mut events = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            let Some(payload) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let payload = payload.trim();
+            if payload.is_empty() || payload == "[DONE]" {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str(payload) {
+                events.push(value);
+            }
+        }
+        Ok(events)
     }
 
     // ── Statistics ──
@@ -1108,8 +1309,12 @@ impl HttpClient {
         &self,
         plan_json: &str,
     ) -> Result<linkrs_wire::migration::MigrationExecuteResponse> {
-        self.post_migration_plan("migration/execute", plan_json, "Failed to execute migration")
-            .await
+        self.post_migration_plan(
+            "migration/execute",
+            plan_json,
+            "Failed to execute migration",
+        )
+        .await
     }
 
     /// Dry-run a migration plan via `POST /v1/migration/dry-run`.
@@ -1117,8 +1322,12 @@ impl HttpClient {
         &self,
         plan_json: &str,
     ) -> Result<linkrs_wire::migration::MigrationExecuteResponse> {
-        self.post_migration_plan("migration/dry-run", plan_json, "Failed to dry-run migration")
-            .await
+        self.post_migration_plan(
+            "migration/dry-run",
+            plan_json,
+            "Failed to dry-run migration",
+        )
+        .await
     }
 
     /// Rollback a migration plan via `POST /v1/migration/rollback`.

@@ -546,6 +546,32 @@ fn test_parse_meta_command_import() {
         }
         _ => panic!("Expected Import command with batch size"),
     }
+
+    // Server-side import is opt-in and defaults to off.
+    match parse_command("\\import csv data.csv tag Person") {
+        Command::MetaCommand(MetaCommand::Import { server, .. }) => {
+            assert!(!server);
+        }
+        _ => panic!("Expected Import command"),
+    }
+    match parse_command("\\import csv data.csv tag Person --server") {
+        Command::MetaCommand(MetaCommand::Import {
+            server, batch_size, ..
+        }) => {
+            assert!(server);
+            assert!(batch_size.is_none());
+        }
+        _ => panic!("Expected server Import command"),
+    }
+    match parse_command("\\import csv data.csv tag Person 200 --server") {
+        Command::MetaCommand(MetaCommand::Import {
+            server, batch_size, ..
+        }) => {
+            assert!(server);
+            assert_eq!(batch_size, Some(200));
+        }
+        _ => panic!("Expected server Import command with batch size"),
+    }
 }
 
 #[test]
@@ -558,6 +584,21 @@ fn test_parse_meta_command_export() {
             assert_eq!(query, "MATCH (v) RETURN v");
         }
         _ => panic!("Expected Export command"),
+    }
+
+    // Server-side export is opt-in and defaults to off.
+    match parse_command("\\export csv output.csv MATCH (v) RETURN v") {
+        Command::MetaCommand(MetaCommand::Export { server, .. }) => {
+            assert!(!server);
+        }
+        _ => panic!("Expected Export command"),
+    }
+    match parse_command("\\export csv output.csv MATCH (v) RETURN v --server") {
+        Command::MetaCommand(MetaCommand::Export { server, query, .. }) => {
+            assert!(server);
+            assert_eq!(query, "MATCH (v) RETURN v");
+        }
+        _ => panic!("Expected server Export command"),
     }
 }
 
@@ -924,6 +965,105 @@ fn test_parse_transactions_subcommands() {
         parse_command("\\transactions frobnicate"),
         Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
     ));
+}
+
+#[test]
+fn test_parse_transactions_savepoint_subcommands() {
+    use crate::command::parser::types::TransactionsAction;
+
+    match parse_command("\\transactions savepoint-create 42 mysp") {
+        Command::MetaCommand(MetaCommand::Transactions {
+            action: TransactionsAction::SavepointCreate { id, name },
+        }) => {
+            assert_eq!(id, 42);
+            assert_eq!(name, "mysp");
+        }
+        _ => panic!("Expected Transactions::SavepointCreate"),
+    }
+
+    match parse_command("\\transactions savepoint-list 42") {
+        Command::MetaCommand(MetaCommand::Transactions {
+            action: TransactionsAction::SavepointList { id },
+        }) => assert_eq!(id, 42),
+        _ => panic!("Expected Transactions::SavepointList"),
+    }
+
+    match parse_command("\\transactions savepoint-rollback 42 7") {
+        Command::MetaCommand(MetaCommand::Transactions {
+            action: TransactionsAction::SavepointRollback { id, savepoint_id },
+        }) => {
+            assert_eq!(id, 42);
+            assert_eq!(savepoint_id, 7);
+        }
+        _ => panic!("Expected Transactions::SavepointRollback"),
+    }
+
+    match parse_command("\\transactions savepoint-release 42 7") {
+        Command::MetaCommand(MetaCommand::Transactions {
+            action: TransactionsAction::SavepointRelease { id, savepoint_id },
+        }) => {
+            assert_eq!(id, 42);
+            assert_eq!(savepoint_id, 7);
+        }
+        _ => panic!("Expected Transactions::SavepointRelease"),
+    }
+
+    // Missing arguments surface as help text, not a command.
+    assert!(matches!(
+        parse_command("\\transactions savepoint-create 42"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+    assert!(matches!(
+        parse_command("\\transactions savepoint-rollback 42"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+    assert!(matches!(
+        parse_command("\\transactions savepoint-rollback abc 7"),
+        Command::MetaCommand(MetaCommand::Help { topic: Some(_) })
+    ));
+}
+
+#[test]
+fn test_parse_migration_watch_follow() {
+    use crate::command::parser::types::MigrationAction;
+
+    // Plain watch keeps polling semantics.
+    match parse_command("\\migration watch myspace mytag") {
+        Command::MetaCommand(MetaCommand::Migration {
+            action: MigrationAction::Watch { follow, .. },
+        }) => assert!(!follow),
+        _ => panic!("Expected Migration::Watch"),
+    }
+
+    // --follow selects the SSE progress stream; edge marker still parses.
+    match parse_command("\\migration watch myspace mytag --follow") {
+        Command::MetaCommand(MetaCommand::Migration {
+            action:
+                MigrationAction::Watch {
+                    space,
+                    label,
+                    is_edge,
+                    follow,
+                },
+        }) => {
+            assert_eq!(space, "myspace");
+            assert_eq!(label, "mytag");
+            assert!(!is_edge);
+            assert!(follow);
+        }
+        _ => panic!("Expected Migration::Watch with follow"),
+    }
+    match parse_command("\\migration watch myspace mytag edge --follow") {
+        Command::MetaCommand(MetaCommand::Migration {
+            action: MigrationAction::Watch {
+                is_edge, follow, ..
+            },
+        }) => {
+            assert!(is_edge);
+            assert!(follow);
+        }
+        _ => panic!("Expected edge Migration::Watch with follow"),
+    }
 }
 
 #[test]

@@ -84,29 +84,41 @@ pub fn parse_migration(arg: &str) -> Result<MetaCommand, String> {
         "status" | "history" | "watch" => {
             if parts.len() < 3 {
                 return Err(format!(
-                    "Usage: \\migration {} <space> <label> [edge]",
+                    "Usage: \\migration {} <space> <label> [edge] [--follow]",
                     parts[0]
                 ));
             }
-            let is_edge = parts
+            let follow = parts.iter().any(|v| v.eq_ignore_ascii_case("--follow"));
+            let rest: Vec<&&str> = parts
+                .iter()
+                .filter(|v| !v.eq_ignore_ascii_case("--follow"))
+                .collect();
+            if rest.len() < 3 {
+                return Err(format!(
+                    "Usage: \\migration {} <space> <label> [edge] [--follow]",
+                    parts[0]
+                ));
+            }
+            let is_edge = rest
                 .get(3)
                 .map(|v| v.eq_ignore_ascii_case("edge"))
                 .unwrap_or(false);
             let action = match parts[0].to_lowercase().as_str() {
                 "status" => MigrationAction::Status {
-                    space: parts[1].to_string(),
-                    label: parts[2].to_string(),
+                    space: rest[1].to_string(),
+                    label: rest[2].to_string(),
                     is_edge,
                 },
                 "history" => MigrationAction::History {
-                    space: parts[1].to_string(),
-                    label: parts[2].to_string(),
+                    space: rest[1].to_string(),
+                    label: rest[2].to_string(),
                     is_edge,
                 },
                 _ => MigrationAction::Watch {
-                    space: parts[1].to_string(),
-                    label: parts[2].to_string(),
+                    space: rest[1].to_string(),
+                    label: rest[2].to_string(),
                     is_edge,
+                    follow,
                 },
             };
             Ok(MetaCommand::Migration { action })
@@ -157,15 +169,16 @@ mod tests {
         let cmd = parse_migration("plan s t 1 2 edge --expand-contract -f plan.json").unwrap();
         match cmd {
             MetaCommand::Migration {
-                action: MigrationAction::Plan {
-                    space,
-                    label,
-                    from,
-                    to,
-                    is_edge,
-                    expand_contract,
-                    output,
-                },
+                action:
+                    MigrationAction::Plan {
+                        space,
+                        label,
+                        from,
+                        to,
+                        is_edge,
+                        expand_contract,
+                        output,
+                    },
             } => {
                 assert_eq!(space, "s");
                 assert_eq!(label, "t");

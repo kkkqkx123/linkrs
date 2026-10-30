@@ -120,7 +120,7 @@ fs4 = "0.13"
 bcrypt = "0.18.0"
 
 # HTTP / networking
-reqwest = { version = "0.13", features = ["json", "query", "socks", "stream", "rustls"] }
+reqwest = { version = "0.13", features = ["json", "query", "socks", "stream", "rustls", "multipart"] }
 url = { version = "2.5", features = ["serde"] }
 
 # (optional) HTTP server stack

@@ -205,21 +205,11 @@ pub async fn rollback<
     Ok(JsonResponse(result?))
 }
 
+use linkrs_wire::meta::{CreateSavepointRequest, SavepointResponse};
+
 /// ---------------------------------------------------------------------------
 /// Savepoint endpoints
 /// ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct CreateSavepointRequest {
-    pub name: Option<String>,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct SavepointResponse {
-    pub savepoint_id: u64,
-    pub transaction_id: u64,
-    pub name: Option<String>,
-}
 
 #[utoipa::path(
     post,
