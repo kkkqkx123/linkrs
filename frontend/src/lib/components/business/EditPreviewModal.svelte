@@ -66,7 +66,7 @@
 			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
 		>
 			<div class="flex items-center justify-between mb-4">
-				<h3 class="text-base font-semibold text-ink">{title}</h3>
+				<h2 class="text-base font-semibold text-ink">{title}</h2>
 				<IconButton
 					onclick={onClose}
 					label={t('common.close')}
@@ -106,9 +106,9 @@
 			</div>
 
 			<div class="mt-4">
-				<h4 class="text-sm font-medium text-ink mb-1">
+				<h3 class="text-sm font-medium text-ink mb-1">
 					{t('dataBrowser.edit.statement')}
-				</h4>
+				</h3>
 				<pre
 					class="ui-pre ui-pre-sm whitespace-pre-wrap">{statement}</pre>
 			</div>

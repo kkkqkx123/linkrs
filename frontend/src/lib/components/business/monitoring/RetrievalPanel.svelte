@@ -45,14 +45,14 @@
 				<h3 class="text-xs font-medium text-muted mb-1">
 					{t('monitoring.retrievalVector')}
 				</h3>
-				<div class="space-y-1 font-mono">
-					<div class="flex justify-between">
+				<ul class="ui-kv-list font-mono">
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalEngine')}</span
 						>
 						<span>{textOrDash(retrieval.vector.engine)}</span>
-					</div>
-					<div class="flex justify-between">
+					</li>
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalEndpoint')}</span
 						>
@@ -61,55 +61,55 @@
 								(TLS)
 							{/if}</span
 						>
-					</div>
-					<div class="flex justify-between">
+					</li>
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalProbe')}</span
 						>
 						<span class={probeClass(retrieval.vector.probe)}
 							>{probeLabel(retrieval.vector.probe)}</span
 						>
-					</div>
-					<div class="flex justify-between">
+					</li>
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalIndexes')}</span
 						>
 						<span>{formatCount(retrieval.vector.indexCount)}</span>
-					</div>
-					<div class="flex justify-between">
+					</li>
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalEmbedding')}</span
 						>
 						<span>{configuredLabel(retrieval.embeddingConfigured)}</span>
-					</div>
-					<div class="flex justify-between">
+					</li>
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalRerank')}</span
 						>
 						<span>{configuredLabel(retrieval.rerankConfigured)}</span>
-					</div>
-				</div>
+					</li>
+				</ul>
 			</div>
 			<div>
 				<h3 class="text-xs font-medium text-muted mb-1">
 					{t('monitoring.retrievalFulltext')}
 				</h3>
-				<div class="space-y-1 font-mono">
-					<div class="flex justify-between">
+				<ul class="ui-kv-list font-mono">
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalEngine')}</span
 						>
 						<span>{textOrDash(retrieval.fulltext.engine)}</span>
-					</div>
-					<div class="flex justify-between">
+					</li>
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalProbe')}</span
 						>
 						<span class={probeClass(retrieval.fulltext.probe)}
 							>{probeLabel(retrieval.fulltext.probe)}</span
 						>
-					</div>
-					<div class="flex justify-between">
+					</li>
+					<li>
 						<span class="text-muted"
 							>{t('monitoring.retrievalInconsistent')}</span
 						>
@@ -118,8 +118,8 @@
 								? 'text-warning font-semibold'
 								: ''}>{formatCount(retrieval.fulltext.inconsistentCount)}</span
 						>
-					</div>
-				</div>
+					</li>
+				</ul>
 			</div>
 		</div>
 	{:else}

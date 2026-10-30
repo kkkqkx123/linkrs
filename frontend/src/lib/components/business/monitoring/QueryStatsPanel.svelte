@@ -93,9 +93,9 @@
 	{#if queries}
 		<div class="grid md:grid-cols-2 gap-4 mb-4 text-sm">
 			<div>
-				<h3 class="text-xs font-medium text-muted mb-1">
+				<p class="text-xs font-medium text-muted mb-1">
 					{t('monitoring.errorsByType')}
-				</h3>
+				</p>
 				{#if Object.keys(queries.errors_by_type ?? {}).length === 0}
 					<EmptyState message={t('monitoring.noData')} />
 				{:else}
@@ -112,9 +112,9 @@
 				{/if}
 			</div>
 			<div>
-				<h3 class="text-xs font-medium text-muted mb-1">
+				<p class="text-xs font-medium text-muted mb-1">
 					{t('monitoring.errorsByPhase')}
-				</h3>
+				</p>
 				{#if Object.keys(queries.errors_by_phase ?? {}).length === 0}
 					<EmptyState message={t('monitoring.noData')} />
 				{:else}
@@ -133,9 +133,9 @@
 		</div>
 	{/if}
 
-	<h3 class="text-xs font-medium text-muted mb-1">
+	<p class="text-xs font-medium text-muted mb-1">
 		{t('monitoring.topPatterns')}
-	</h3>
+	</p>
 	<div class="overflow-x-auto mb-4">
 		{#if patterns.length === 0}
 			<EmptyState message={t('monitoring.noData')} />
@@ -188,9 +188,9 @@
 		{/if}
 	</div>
 
-	<h3 class="text-xs font-medium text-muted mb-1">
+	<p class="text-xs font-medium text-muted mb-1">
 		{t('monitoring.executors')}
-	</h3>
+	</p>
 	<div class="overflow-x-auto">
 		{#if executors.length === 0}
 			<EmptyState message={t('monitoring.noData')} />

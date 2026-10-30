@@ -350,7 +350,7 @@
 
 <div class="ui-page">
 	<div class="ui-card shadow-sm px-5 py-3 flex items-center gap-3 flex-wrap">
-		<h1
+		<h2
 			class="ui-page-title text-base flex items-center gap-2 whitespace-nowrap"
 		>
 			<span><Link2 size={18} /></span>
@@ -369,7 +369,7 @@
 					>Expanding…</span
 				>
 			{/if}
-		</h1>
+		</h2>
 		<div class="flex items-center gap-2 ml-auto flex-wrap">
 			<input
 				type="text"

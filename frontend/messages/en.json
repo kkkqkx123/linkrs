@@ -65,6 +65,7 @@
 	"common.service": "Service",
 	"common.status": "Status",
 	"common.statusHealthy": "Healthy",
+	"common.stopped": "Stopped",
 	"common.type": "Type",
 	"common.unhealthy": "Unhealthy",
 	"common.username": "Username",

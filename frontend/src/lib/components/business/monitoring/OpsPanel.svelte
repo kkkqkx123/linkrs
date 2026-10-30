@@ -141,9 +141,9 @@
 		<p class="ui-error-text mb-2">{opsError}</p>
 	{/if}
 	<div>
-		<h3 class="text-xs font-medium text-muted mb-1">
+		<p class="text-xs font-medium text-muted mb-1">
 			{t('monitoring.config')}
-		</h3>
+		</p>
 			{#if configMessage}
 				<p class="text-xs text-success mb-2">
 					{configMessage}

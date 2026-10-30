@@ -24,7 +24,7 @@
 			id="save-modal-title"
 			class="relative ui-card shadow-lg p-6 w-96"
 		>
-			<h3>{t('console.saveFavorite')}</h3>
+			<h2>{t('console.saveFavorite')}</h2>
 			{#if error}
 				<div
 					class="ui-alert ui-alert-error mb-3"

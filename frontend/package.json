@@ -10,7 +10,7 @@
 		"build:analyze": "VITE_BUNDLE_REPORT=1 vite build",
 		"build:mock": "vite build --mode mock",
 		"preview": "vite preview",
-		"check": "npm run check:i18n && npm run gen:i18n && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check": "npm run check:i18n && npm run gen:i18n && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && npm run check:mock",
 		"check:i18n": "node scripts/check-i18n.mjs",
 		"gen:i18n": "paraglide-js compile --project ./project.inlang --outdir ./src/lib/paraglide",
 		"test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
@@ -22,7 +22,8 @@
 		"gen:grammar": "npm run gen --prefix ../tools/grammar-codegen",
 		"dev:preview": "vite dev --mode preview",
 		"build:preview": "vite build --mode preview",
-		"check:preview": "npm run check:i18n && npm run gen:i18n && svelte-kit sync && svelte-check --tsconfig ./tsconfig.preview.json"
+		"check:preview": "npm run check:i18n && npm run gen:i18n && svelte-kit sync && svelte-check --tsconfig ./tsconfig.preview.json",
+		"check:mock": "node scripts/check-mock-coverage.mjs"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

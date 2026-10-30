@@ -1,4 +1,4 @@
-import { call, client } from '$lib/api/client';
+import { call, client, isMockMode } from '$lib/api/client';
 import { getApiBaseUrl, getSessionHeaders } from '$utils/http';
 
 export interface ImportParams {
@@ -18,6 +18,17 @@ export interface ImportParams {
  */
 export const transferService = {
 	importFile: async (params: ImportParams): Promise<unknown> => {
+		if (isMockMode) {
+			return {
+				job_id: 'mock-import-1',
+				status: 'completed',
+				rows_imported: 4,
+				rows_failed: 0,
+				space: params.space,
+				target_type: params.target_type,
+				target_name: params.target_name,
+			};
+		}
 		const form = new FormData();
 		form.append('space', params.space);
 		form.append('format', params.format);

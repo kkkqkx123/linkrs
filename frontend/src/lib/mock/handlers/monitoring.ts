@@ -280,12 +280,27 @@ export const monitoringHandlers: MockRegistry = {
 	// reads begun/committed/rolled_back/active through the overview snapshot,
 	// so mirror those keys here.
 	'GET /v1/transactions/metrics': {
-		active: 1,
-		begun: 20496,
-		committed: 20487,
-		rolled_back: 9,
-		avg_commit_latency_ms: 2.4,
-		conflicts_total: 3,
+		outcomes: {
+			begun: 20496,
+			active: 1,
+			committed: 20487,
+			aborted: 9,
+			rolled_back: 9,
+			timeout: 2,
+			conflict: 3,
+			disconnect: 0,
+			recovery_abort: 0,
+			cleanup_failure: 0,
+		},
+		resources: {
+			active_statements: 2,
+			active_snapshots: 1,
+			pending_writes: 3,
+			committed_frontier_lag: 0,
+			staged_wal_bytes: 1024,
+			undo_bytes: 512,
+			checkpoint_drain_time_ms: 8,
+		},
 	} satisfies MockEntry,
 
 	'POST /v1/transactions': { transaction_id: 700001 } satisfies MockEntry,
@@ -306,10 +321,25 @@ export const monitoringHandlers: MockRegistry = {
 
 	'POST /v1/transactions/{id}/kill': { success: true } satisfies MockEntry,
 
+	'POST /v1/transactions/{id}/outbox/retry': { retried: 1, delivered: 1 } satisfies MockEntry,
+
 	'GET /v1/config': {
 		server: { bind: '127.0.0.1:9758', log_level: 'info' },
 		monitoring: { poll_interval_ms: 10000 },
 		query: { timeout_secs: 30, row_limit: 10000 },
+		vector: {
+			enabled: true,
+			engine: 'qdrant',
+			connection: { host: 'localhost', port: 6333, use_tls: false, transport: 'http' },
+			embedding: { model: 'mock-embedding' },
+			rerank: { model: 'mock-rerank' },
+		},
+		fulltext: {
+			enabled: true,
+			default_engine: 'tantivy',
+			index_path: '/data/fulltext',
+			tantivy: { tokenizer: 'default' },
+		},
 	} satisfies MockEntry,
 
 	'POST /v1/transactions/{id}/commit': { success: true } satisfies MockEntry,

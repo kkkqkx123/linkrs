@@ -183,9 +183,9 @@
 		executors={executors}
 	/>
 
-	<h3 class="text-xs font-medium text-muted mb-1">
+	<h2 class="text-xs font-medium text-muted mb-1">
 		{t('monitoring.slowQueries')}
-	</h3>
+	</h2>
 	<SlowQueryTable
 		rows={slowRows}
 		slowMs={thresholds.slowMs}

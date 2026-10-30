@@ -113,9 +113,9 @@
 	/>
 
 	<section class="ui-card shadow-sm p-6">
-		<h2 class="ui-section-title">
+		<h3 class="ui-section-title">
 			{t('monitoring.activeTransactions')} ({activeTransactions.length})
-		</h2>
+		</h3>
 		{#if activeTransactions.length === 0}
 			<p class="text-sm text-muted">{t('monitoring.noData')}</p>
 		{:else}

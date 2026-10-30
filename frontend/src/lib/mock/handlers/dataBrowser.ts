@@ -29,7 +29,12 @@ export const dataBrowserHandlers: MockRegistry = {
 					.filter((v) => v.tag === tag)
 					.map((v) => ({ id: v.id, tag: v.tag, properties: v.properties }));
 		const { data, total } = paginate(items, page, pageSize);
-		return envelope({ data, total, page, pageSize });
+		return envelope({
+			items: data,
+			total,
+			limit: pageSize,
+			offset: (page - 1) * pageSize,
+		});
 	}) satisfies MockEntry,
 
 	'GET /api/v1/data/spaces/{name}/edge-types/{edge_name}/edges': ((ctx) => {
@@ -49,25 +54,22 @@ export const dataBrowserHandlers: MockRegistry = {
 						properties: e.properties,
 					}));
 		const { data, total } = paginate(items, page, pageSize);
-		return envelope({ data, total, page, pageSize });
+		return envelope({
+			items: data,
+			total,
+			limit: pageSize,
+			offset: (page - 1) * pageSize,
+		});
 	}) satisfies MockEntry,
 
 	'GET /api/v1/schema/spaces/{name}/statistics': ((ctx) => {
 		const name = String(ctx.path.name ?? demoSpace);
 		return envelope({
-			space: name,
-			totalVertices: scenarioIsEmpty() ? 0 : demoVertices.length,
-			totalEdges: scenarioIsEmpty() ? 0 : demoEdges.length,
-			tagCount: 2,
-			edgeTypeCount: 2,
-			tagDistribution: [
-				{ tag: 'person', count: 3 },
-				{ tag: 'company', count: 1 },
-			],
-			edgeTypeDistribution: [
-				{ type: 'knows', count: 2 },
-				{ type: 'works_at', count: 1 },
-			],
+			tag_count: scenarioIsEmpty() ? 0 : 2,
+			edge_type_count: scenarioIsEmpty() ? 0 : 2,
+			index_count: scenarioIsEmpty() ? 0 : 2,
+			estimated_vertex_count: scenarioIsEmpty() ? 0 : demoVertices.length,
+			estimated_edge_count: scenarioIsEmpty() ? 0 : demoEdges.length,
 		});
 	}) satisfies MockEntry,
 };

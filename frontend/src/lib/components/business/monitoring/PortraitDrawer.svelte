@@ -117,9 +117,9 @@
 				</div>
 				{#if portrait.stages}
 					<div>
-						<h3 class="text-xs font-medium text-muted mb-1">
+						<p class="text-xs font-medium text-muted mb-1">
 							{t('monitoring.stages')}
-						</h3>
+						</p>
 						<ul class="font-mono space-y-1">
 							<li class="flex justify-between">
 								<span>{t('monitoring.stageParse')}</span><span
@@ -151,9 +151,9 @@
 				{/if}
 				{#if portrait.executors && portrait.executors.length > 0}
 					<div>
-						<h3 class="text-xs font-medium text-muted mb-1">
+						<p class="text-xs font-medium text-muted mb-1">
 							{t('monitoring.stageExecutors')}
-						</h3>
+						</p>
 						<ul class="font-mono space-y-1">
 							{#each portrait.executors as ex (ex.executor_type)}
 								<li class="flex justify-between">
@@ -170,9 +170,9 @@
 				{/if}
 				{#if portrait.error}
 					<div>
-						<h3 class="text-xs font-medium text-muted mb-1">
+						<p class="text-xs font-medium text-muted mb-1">
 							{t('monitoring.errorDetail')}
-						</h3>
+						</p>
 						<p
 							class="font-mono text-xs text-error break-words bg-error-light rounded p-2"
 						>

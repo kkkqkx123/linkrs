@@ -60,7 +60,7 @@
 			}}
 		></div>
 		<div class="relative ui-card shadow-lg p-6 w-96">
-			<h3 class="text-lg font-semibold text-ink mb-4">{title}</h3>
+			<h2 class="text-lg font-semibold text-ink mb-4">{title}</h2>
 			<div class="space-y-2 max-h-48 overflow-y-auto mb-3">
 				{#each properties as prop (prop.name)}
 					<label

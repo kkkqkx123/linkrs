@@ -3,7 +3,12 @@
 	import { t } from '$i18n';
 	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import { syncService, type SyncStatusResponse, type DeadLetterRow, type DegradedRangeRow } from '$services/sync';
-	import { formatCount } from '$utils/metricsFormat';
+	import {
+		formatBytes,
+		formatCount,
+		formatLatencyMs,
+		formatLatencyUs,
+	} from '$utils/metricsFormat';
 
 	let {
 		overview,
@@ -99,15 +104,29 @@
 						: undefined,
 				)
 				.find((v) => v !== undefined && v !== null);
-			let rendered: string;
+			let rendered = '—';
+			// Running state carries its own tone so a stopped worker is never
+			// confused with a missing snapshot; other gauges keep neutral ink.
+			let tone: 'success' | 'error' | null = null;
 			if (key === 'is_running') {
-				rendered = value ? t('common.running') : '—';
-			} else if (typeof value === 'number') {
-				rendered = formatCount(value);
+				if (value === true) {
+					rendered = t('common.running');
+					tone = 'success';
+				} else if (value === false) {
+					rendered = t('common.stopped');
+					tone = 'error';
+				}
+			} else if (key === 'outbox_lock_wait_nanos') {
+				rendered =
+					typeof value === 'number' ? formatLatencyUs(value / 1000) : '—';
+			} else if (key === 'outbox_oldest_event_age_ms') {
+				rendered = formatLatencyMs(value);
+			} else if (key === 'outbox_write_amplification_bytes') {
+				rendered = formatBytes(value);
 			} else {
-				rendered = '—';
+				rendered = formatCount(value);
 			}
-			return { key, label: t(statusLabelKeys[key]), value: rendered };
+			return { key, label: t(statusLabelKeys[key]), value: rendered, tone };
 		}),
 	);
 
@@ -290,22 +309,32 @@
 </script>
 
 <section class="ui-card shadow-sm p-6">
-	<div class="mb-3">
-		<h2 class="ui-section-title mb-0">
-			{t('monitoring.sync')}
-		</h2>
-	</div>
 	<p class="text-xs text-muted mb-3">{t('monitoring.dlqExplainer')}</p>
 	<div class="mb-3">
-		<h3 class="font-medium text-muted mb-1">{t('common.status')}</h3>
-		<div class="space-y-1 text-sm">
+		<p class="text-xs font-medium text-muted mb-1">{t('common.status')}</p>
+		<ul class="ui-kv-list text-sm">
 			{#each statusRows as row (row.key)}
-				<div class="flex justify-between gap-4">
+				<li>
 					<span class="text-muted">{row.label}</span>
-					<span class="font-mono">{row.value}</span>
-				</div>
+					{#if row.tone}
+						<span
+							class="font-mono flex items-center gap-1.5 {row.tone === 'success'
+								? 'text-success'
+								: 'text-error'}"
+						>
+							<span
+								class="inline-block w-1.5 h-1.5 rounded-full {row.tone === 'success'
+									? 'bg-success'
+									: 'bg-error'}"
+							></span>
+							{row.value}
+						</span>
+					{:else}
+						<span class="font-mono text-ink">{row.value}</span>
+					{/if}
+				</li>
 			{/each}
-		</div>
+		</ul>
 	</div>
 	{#if syncError}
 		<p class="ui-error-text mb-2">{syncError}</p>
@@ -338,9 +367,9 @@
 	</div>
 	<div class="grid md:grid-cols-2 gap-3 text-xs">
 		<div class="md:col-span-2">
-			<h3 class="font-medium text-muted mb-1">
+			<h2 class="font-medium text-muted mb-1">
 				{t('monitoring.deadLetters')}
-			</h3>
+			</h2>
 			<div class="flex flex-wrap gap-1 mb-2">
 				<input
 					class="ui-input ui-input-xs"
@@ -425,9 +454,9 @@
 			{/if}
 		</div>
 		<div>
-			<h3 class="font-medium text-muted mb-1">
+			<h2 class="font-medium text-muted mb-1">
 				{t('monitoring.degradedRanges')}
-			</h3>
+			</h2>
 			{#if degradedRows.length === 0}
 				<p class="text-muted">{t('monitoring.noData')}</p>
 			{:else}
@@ -496,9 +525,9 @@
 			</button>
 		</div>
 		<div>
-			<h3 class="font-medium text-muted mb-1">
+			<h2 class="font-medium text-muted mb-1">
 				{t('monitoring.diagnostics')}
-			</h3>
+			</h2>
 			{#if syncDiagnostics}
 				<pre class="ui-pre ui-pre-sm">{syncDiagnostics}</pre>
 			{:else}
@@ -506,9 +535,9 @@
 			{/if}
 		</div>
 		<div>
-			<h3 class="font-medium text-muted mb-1">
+			<h2 class="font-medium text-muted mb-1">
 				{t('monitoring.retention')}
-			</h3>
+			</h2>
 			{#if retentionText}
 				<pre class="ui-pre ui-pre-sm">{retentionText}</pre>
 			{:else}

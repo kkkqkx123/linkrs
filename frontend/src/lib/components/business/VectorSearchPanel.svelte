@@ -212,7 +212,7 @@
 
 	<!-- Migrated index management -->
 	<section class="ui-card shadow-sm p-4 mt-4">
-		<h3 class="ui-section-title mb-3">{t('vector.manage')}</h3>
+		<h2 class="ui-section-title mb-3">{t('vector.manage')}</h2>
 		<div class="flex flex-wrap gap-2 mb-3">
 			<button
 				class="ui-btn ui-btn-primary ui-btn-sm"

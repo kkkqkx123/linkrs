@@ -92,9 +92,9 @@
 	<h2 class="ui-section-title">
 		{t('monitoring.transactions')}
 	</h2>
-	<ul class="space-y-1 text-sm font-mono">
+	<ul class="ui-kv-list text-sm font-mono">
 		{#each outcomeRows as row (row.label)}
-			<li class="flex justify-between">
+			<li>
 				<span class="text-muted">{row.label}</span>
 				<span>{formatCount(row.value)}</span>
 			</li>
@@ -102,9 +102,9 @@
 	</ul>
 
 	<h3 class="mt-4 mb-3 text-sm font-semibold">{t('monitoring.txResources')}</h3>
-	<ul class="space-y-1 text-sm font-mono">
+	<ul class="ui-kv-list text-sm font-mono">
 		{#each resourceRows as row (row.label)}
-			<li class="flex justify-between">
+			<li>
 				<span class="text-muted">{row.label}</span>
 				<span>{formatCount(row.value)}</span>
 			</li>

@@ -521,6 +521,26 @@
 		padding: 0.25rem 0.75rem;
 	}
 
+	/* Key-value diagnostic list: labelled rows with hairline dividers, as the
+	   monitoring status panels. Lighter than ui-table: no outer border or
+	   header, dividers only between rows. Owns row layout, dividers and
+	   padding so panels only add one class; label/value tone stays in
+	   markup (text-muted label, font-mono value, semantic tones). */
+	.ui-kv-list {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.ui-kv-list > * {
+		display: flex;
+		justify-content: space-between;
+		gap: var(--size-6);
+		padding-block: var(--size-2);
+	}
+	.ui-kv-list > * + * {
+		border-top: 1px solid var(--color-border-light);
+	}
+
 	/* Alert: single-message notice box with semantic tones */
 	.ui-alert {
 		padding: 0.625rem 0.875rem;
@@ -662,6 +682,9 @@
 	/* Tab: text tab inside a structural card tab bar. Active tab uses the
 	   brand green underline, as the reference tabs. */
 	.ui-tab {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
 		padding: var(--size-5) var(--size-6);
 		font-size: var(--font-size-base);
 		line-height: var(--line-height-body);

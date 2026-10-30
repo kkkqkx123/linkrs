@@ -2,7 +2,7 @@ Name: linkrs
 Version: 1.0.0
 Release: 1%{?dist}
 Summary: Linkrs graph database server
-License: MIT
+License: Apache-2.0
 BuildArch: x86_64
 Requires: systemd
 

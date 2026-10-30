@@ -95,6 +95,11 @@ export const demoVertices: MockVertex[] = [
 		properties: { name: 'Carol', age: 25 },
 	},
 	{
+		id: '9007199254740997',
+		tag: 'person',
+		properties: { name: 'Dave', age: 36 },
+	},
+	{
 		id: '9007199254740996',
 		tag: 'company',
 		properties: { title: 'Linkrs Inc.' },
@@ -125,6 +130,14 @@ export const demoEdges: MockEdge[] = [
 		dst: '9007199254740996',
 		rank: 0,
 		properties: {},
+	},
+	{
+		id: 'e4',
+		type: 'knows',
+		src: '9007199254740995',
+		dst: '9007199254740997',
+		rank: 0,
+		properties: { since: '2023-01-10T00:00:00' },
 	},
 ];
 

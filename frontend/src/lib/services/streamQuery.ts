@@ -8,6 +8,7 @@ import {
 	clearSessionId,
 } from '$utils/http';
 import { t } from '$i18n';
+import { isMockMode } from '$lib/api/client';
 
 export interface StreamRowHandler {
 	onSchema?: (columns: string[], stmt: number) => void;
@@ -103,6 +104,32 @@ export async function streamQuery(
 				fail_fast: options.failFast ?? true,
 			}
 		: { query: options.query, session_id: sessionId };
+	if (isMockMode) {
+		if (options.signal?.aborted) {
+			outcome.cancelled = true;
+			return outcome;
+		}
+		const columns = ['vid', 'name', 'age'];
+		handlers.onSchema?.(columns, 0);
+		const rows = [
+			{ vid: '9007199254740993', name: 'Alice', age: 30 },
+			{ vid: '9007199254740994', name: 'Bob', age: 41 },
+			{ vid: '9007199254740995', name: 'Carol', age: 25 },
+		];
+		rows.forEach((row, index) => {
+			if (options.signal?.aborted) return;
+			handlers.onRow?.(row, index, 0);
+			outcome.rowsReturned += 1;
+		});
+		if (options.signal?.aborted) {
+			outcome.cancelled = true;
+			return outcome;
+		}
+		outcome.executionTimeMs = 12;
+		handlers.onMetadata?.({ rowsReturned: rows.length, executionTimeMs: 12, stmt: 0 });
+		outcome.doneReceived = true;
+		return outcome;
+	}
 	try {
 		response = await fetch(`${getApiBaseUrl()}/v1/query/stream`, {
 			method: 'POST',

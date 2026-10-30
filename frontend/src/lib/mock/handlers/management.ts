@@ -6,6 +6,7 @@
  */
 
 import type { MockEntry, MockRegistry } from '../index';
+import { scenarioIsEmpty } from '../scenario';
 
 const now = '2025-01-01T00:00:00Z';
 
@@ -126,11 +127,37 @@ export const managementHandlers: MockRegistry = {
 		errors: [],
 	} satisfies MockEntry,
 
-	'GET /v1/migration/history/{space}/{label}': { history: [] } satisfies MockEntry,
+	'GET /v1/migration/history/{space}/{label}': {
+		history: scenarioIsEmpty()
+			? []
+			: [
+			{
+				version: 1,
+				status: 'completed',
+				started_at: '2025-01-01T00:00:00Z',
+				finished_at: '2025-01-01T00:00:10Z',
+				rows_migrated: 4,
+			},
+		],
+	} satisfies MockEntry,
 
-	'GET /v1/migration/status/{space}/{label}': { status: 'idle' } satisfies MockEntry,
+	'GET /v1/migration/status/{space}/{label}': { status: scenarioIsEmpty() ? 'idle' : 'completed', current_version: 1, target_version: 1 } satisfies MockEntry,
 
-	'GET /v1/vector/indexes': { indexes: [] } satisfies MockEntry,
+	'GET /v1/vector/indexes': {
+		indexes: scenarioIsEmpty()
+			? []
+			: [
+			{
+				space_id: 1,
+				tag_name: 'person',
+				field_name: 'embedding',
+				vector_size: 128,
+				distance: 'Cosine',
+				status: 'ready',
+				point_count: 4,
+			},
+		],
+	} satisfies MockEntry,
 
 	'GET /v1/vector/indexes/{space_id}/{tag_name}/{field_name}': {
 		exists: false,
@@ -156,7 +183,18 @@ export const managementHandlers: MockRegistry = {
 
 	'POST /v1/vector/indexes/clear': { ok: true } satisfies MockEntry,
 
-	'GET /v1/fulltext/indexes/inconsistent': { indexes: [] } satisfies MockEntry,
+	'GET /v1/fulltext/indexes/inconsistent': {
+		indexes: scenarioIsEmpty()
+			? []
+			: [
+			{
+				space_id: 1,
+				tag_name: 'person',
+				field_name: 'content',
+				reason: 'missing index',
+			},
+		],
+	} satisfies MockEntry,
 
 	'POST /v1/fulltext/indexes/rebuild': {
 		rebuild_id: 'mock-fulltext-rebuild-1',
@@ -170,7 +208,19 @@ export const managementHandlers: MockRegistry = {
 
 	'POST /v1/fulltext/indexes/clear': { ok: true } satisfies MockEntry,
 
-	'GET /v1/functions': { functions: [] } satisfies MockEntry,
+	'GET /v1/functions': {
+		functions: scenarioIsEmpty()
+			? []
+			: [
+			{
+				name: 'score',
+				function_type: 'custom',
+				parameters: [{ name: 'value', type: 'DOUBLE' }],
+				return_type: 'DOUBLE',
+				description: 'Mock scoring function',
+			},
+		],
+	} satisfies MockEntry,
 
 	'GET /v1/functions/{name}': ((ctx) => ({
 		name: String(ctx.path.name ?? ''),
@@ -187,10 +237,21 @@ export const managementHandlers: MockRegistry = {
 
 	'DELETE /v1/functions/{name}': { success: true } satisfies MockEntry,
 
-	'GET /v1/schema/versions/{space}/{label}': { versions: [] } satisfies MockEntry,
+	'GET /v1/schema/versions/{space}/{label}': {
+		versions: scenarioIsEmpty()
+			? []
+			: [
+			{ version: 1, created_at: 1735689600, description: 'initial' },
+			{ version: 2, created_at: 1735776000, description: 'add age' },
+		],
+	} satisfies MockEntry,
 
 	'GET /v1/schema/changes/{space}/{label}/{from_version}/{to_version}': {
-		changes: [],
+		changes: scenarioIsEmpty()
+			? []
+			: [
+			{ type: 'add_property', entity: 'person', property: 'age', from: null, to: 'INT64' },
+		],
 	} satisfies MockEntry,
 
 	'GET /v1/schema/breaking-changes/{space}/{label}/{from_version}/{to_version}':

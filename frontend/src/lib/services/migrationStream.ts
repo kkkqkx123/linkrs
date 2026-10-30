@@ -1,4 +1,5 @@
 import { getApiBaseUrl, getSessionHeaders } from '$utils/http';
+import { isMockMode } from '$lib/api/client';
 import {
 	MigrationSseParser,
 	type MigrationProgressEvent,
@@ -36,6 +37,18 @@ export async function streamMigrationProgress(
 	};
 	const query =
 		options.isEdge === undefined ? '' : `?is_edge=${options.isEdge}`;
+	if (isMockMode) {
+		const emit = (event: Parameters<NonNullable<typeof options.onEvent>>[0]) => {
+			outcome.eventsReceived += 1;
+			options.onEvent?.(event);
+		};
+		emit({ kind: 'started', planHash: 'mock-plan', space, label, isEdge: options.isEdge === true });
+		emit({ kind: 'step_started', stepIdx: 0 });
+		emit({ kind: 'step_completed', stepIdx: 0, rows: 4 });
+		emit({ kind: 'completed', success: true, stepsCompleted: 1, rowsMigrated: 4, errors: [] });
+		outcome.finished = true;
+		return outcome;
+	}
 	let response: Response;
 	try {
 		response = await fetch(

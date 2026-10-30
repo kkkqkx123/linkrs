@@ -26,9 +26,9 @@
 			id="favorites-panel-title"
 			class="p-5 border-b border-line flex items-center justify-between"
 		>
-			<h3 class="text-base font-semibold text-ink">
+			<h2 class="text-base font-semibold text-ink">
 				{t('console.favorites')}
-			</h3>
+			</h2>
 			<IconButton
 				label={t('common.close')}
 				class="ui-icon-btn"

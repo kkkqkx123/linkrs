@@ -65,6 +65,7 @@
 	"common.service": "服务",
 	"common.status": "状态",
 	"common.statusHealthy": "健康",
+	"common.stopped": "已停止",
 	"common.type": "类型",
 	"common.unhealthy": "异常",
 	"common.username": "用户名",

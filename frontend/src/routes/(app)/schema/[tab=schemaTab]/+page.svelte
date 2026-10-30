@@ -926,12 +926,12 @@
 			onkeydown={(e) => e.stopPropagation()}
 			onclick={(e) => e.stopPropagation()}
 		>
-			<h3
+			<h2
 				id="create-space-title"
 				class="font-semibold text-ink mb-4"
 			>
 				{t('schema.createSpace')}
-			</h3>
+			</h2>
 			<div class="space-y-3">
 				<div>
 					<label
@@ -1027,12 +1027,12 @@
 			onkeydown={(e) => e.stopPropagation()}
 			onclick={(e) => e.stopPropagation()}
 		>
-			<h3
+			<h2
 				id="create-tag-title"
 				class="font-semibold text-ink mb-4"
 			>
 				{t('schema.createTag')}
-			</h3>
+			</h2>
 			<div class="space-y-3">
 				<div>
 					<label
@@ -1115,12 +1115,12 @@
 			onkeydown={(e) => e.stopPropagation()}
 			onclick={(e) => e.stopPropagation()}
 		>
-			<h3
+			<h2
 				id="create-edge-title"
 				class="font-semibold text-ink mb-4"
 			>
 				{t('schema.createEdge')}
-			</h3>
+			</h2>
 			<div class="space-y-3">
 				<div>
 					<label
@@ -1192,9 +1192,9 @@
 			class="relative ui-card shadow-lg p-6 w-96"
 			onclick={(e) => e.stopPropagation()}
 		>
-			<h3 class="text-lg font-semibold text-ink mb-4">
+			<h2 class="text-lg font-semibold text-ink mb-4">
 				{t('schema.createIndex')}
-			</h3>
+			</h2>
 			<div class="space-y-3">
 				<div>
 					<label

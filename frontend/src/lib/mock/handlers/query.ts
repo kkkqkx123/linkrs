@@ -14,8 +14,9 @@ function resultRows(): Record<string, unknown>[] {
 	if (scenarioIsEmpty()) return [];
 	return demoVertices.map((v) => ({
 		vid: v.id,
-		name: v.properties.name,
-		age: v.properties.age,
+		name: v.properties.name ?? v.properties.title ?? v.tag,
+		age: v.properties.age ?? null,
+		tag: v.tag,
 	}));
 }
 
@@ -48,6 +49,19 @@ function queryResponse(query: string): unknown {
 				result_row_count: 0,
 				plan_node_count: 1,
 			},
+		};
+	}
+	if (trimmed.startsWith('SEARCH VECTOR') || trimmed.startsWith('SEARCH INDEX')) {
+		const rows = scenarioIsEmpty()
+			? []
+			: [
+					{ id: demoVertices[0].id, score: 0.98, payload: 'mock result 1' },
+					{ id: demoVertices[1].id, score: 0.87, payload: 'mock result 2' },
+				];
+		return {
+			success: true,
+			data: { columns: ['id', 'score', 'payload'], rows, row_count: rows.length },
+			metadata: { execution_time_ms: 8, result_row_count: rows.length, plan_node_count: 4 },
 		};
 	}
 	if (
@@ -103,6 +117,17 @@ export const queryHandlers: MockRegistry = {
 		message: 'Mock fixture: valid query',
 		estimated_rows: null,
 	} satisfies MockEntry,
+
+	'POST /v1/query/explain': ((ctx) => {
+		const body = (ctx.body ?? {}) as { query?: unknown };
+		const query = typeof body.query === 'string' ? body.query : '';
+		const base = queryResponse(query) as Record<string, unknown>;
+		return {
+			...base,
+			metadata: { ...(base.metadata as Record<string, unknown>), plan_node_count: 8 },
+			plan: { nodes: 8, edges: 3, estimated_rows: 4 },
+		};
+	}) satisfies MockEntry,
 
 	'POST /v1/query/cursor/open': ((ctx) => {
 		const body = (ctx.body ?? {}) as { query?: unknown };

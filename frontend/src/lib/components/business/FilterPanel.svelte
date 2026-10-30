@@ -89,9 +89,9 @@
 	class="ui-card p-4 flex flex-col gap-3"
 >
 	<div class="flex items-center justify-between">
-		<h3 class="text-sm font-semibold text-ink">
+		<h2 class="text-sm font-semibold text-ink">
 			{t('dataBrowser.filterPanel.title')}
-		</h3>
+		</h2>
 		<div class="flex items-center gap-1 text-xs">
 			<button
 				class="ui-seg {logic === 'AND' ? 'ui-seg-active' : ''}"
