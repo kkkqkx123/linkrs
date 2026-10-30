@@ -9,6 +9,7 @@ import {
 	type ExecutionPreference,
 } from '$utils/autoRoute';
 import { t } from '$i18n';
+import { storage, getLegacyRaw } from '$utils/storage';
 import { streamStore, type StreamState } from '$stores/stream';
 import { cursorStore, type CursorState } from '$stores/cursor';
 import { historyStore, type QueryHistoryItem, type QueryFavoriteItem } from '$stores/history';
@@ -58,10 +59,23 @@ function generateId(): string {
 	return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
+// Persistence keys, unified through `utils/storage.ts` (prefixed, safe).
+const PREFS_KEY = 'console.preferences';
+const DRAFT_KEY = 'console.editor-draft';
+const PARAMETERS_KEY = 'console.parameters';
+const SESSION_VARIABLES_KEY = 'console.session-variables';
+// Key used before storage access was unified; read once as a fallback.
+const LEGACY_PREFS_KEY = 'linkrs-console-storage';
+const LEGACY_DRAFT_KEY = 'linkrs_editor_draft';
+const LEGACY_PARAMETERS_KEY = 'linkrs_console_parameters';
+const LEGACY_SESSION_VARIABLES_KEY = 'linkrs_console_session_variables';
+
 function loadPersisted(): Partial<ConsoleState> {
+	const saved = storage.get<Partial<ConsoleState>>(PREFS_KEY);
+	if (saved) return saved;
 	try {
-		const saved = localStorage.getItem('linkrs-console-storage');
-		if (saved) return JSON.parse(saved);
+		const legacy = getLegacyRaw(LEGACY_PREFS_KEY);
+		if (legacy) return JSON.parse(legacy);
 	} catch {
 		/* ignore */
 	}
@@ -69,15 +83,11 @@ function loadPersisted(): Partial<ConsoleState> {
 }
 
 function persist(state: ConsoleState): void {
-	try {
-		localStorage.setItem('linkrs-console-storage', JSON.stringify({
-			activeView: state.activeView,
-			executionPreference: state.executionPreference,
-			autoStreamThreshold: state.autoStreamThreshold,
-		}));
-	} catch {
-		/* ignore */
-	}
+	storage.set(PREFS_KEY, {
+		activeView: state.activeView,
+		executionPreference: state.executionPreference,
+		autoStreamThreshold: state.autoStreamThreshold,
+	});
 }
 
 const persisted = loadPersisted();
@@ -103,13 +113,14 @@ function toEntry(item: BatchStatementResult): StatementResultEntry {
 	};
 }
 
-function loadBindings(key: string): Record<string, unknown> {
+function loadBindings(key: string, legacyKey: string): Record<string, unknown> {
+	const saved = storage.get<unknown>(key);
+	if (isRecord(saved)) return saved;
 	try {
-		const saved = localStorage.getItem(key);
-		if (!saved) return {};
-		const parsed: unknown = JSON.parse(saved);
-		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-			return parsed as Record<string, unknown>;
+		const legacy = getLegacyRaw(legacyKey);
+		if (legacy) {
+			const parsed: unknown = JSON.parse(legacy);
+			if (isRecord(parsed)) return parsed;
 		}
 	} catch {
 		/* ignore */
@@ -117,17 +128,25 @@ function loadBindings(key: string): Record<string, unknown> {
 	return {};
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function createConsoleStore() {
 	const { subscribe, update } = writable<ConsoleState>({
-		editorContent: localStorage.getItem('linkrs_editor_draft') || '',
+		editorContent:
+			storage.get<string>(DRAFT_KEY) ?? getLegacyRaw(LEGACY_DRAFT_KEY) ?? '',
 		isExecuting: false,
 		currentResult: null,
 		results: [],
 		executionTime: 0,
 		error: null,
 		activeView: (persisted.activeView as 'table' | 'json' | 'graph') || 'table',
-		parameters: loadBindings('linkrs_console_parameters'),
-		sessionVariables: loadBindings('linkrs_console_session_variables'),
+		parameters: loadBindings(PARAMETERS_KEY, LEGACY_PARAMETERS_KEY),
+		sessionVariables: loadBindings(
+			SESSION_VARIABLES_KEY,
+			LEGACY_SESSION_VARIABLES_KEY,
+		),
 		resultMode: null,
 		executionPreference: restorePreference(),
 		autoStreamThreshold: clampAutoThreshold(
@@ -340,23 +359,15 @@ export function createConsoleStore() {
 		subscribe,
 		setEditorContent: (content: string) => {
 			update((s) => ({ ...s, editorContent: content }));
-			localStorage.setItem('linkrs_editor_draft', content);
+			storage.set(DRAFT_KEY, content);
 		},
 		setParameters: (parameters: Record<string, unknown>) => {
 			update((s) => ({ ...s, parameters }));
-			try {
-				localStorage.setItem('linkrs_console_parameters', JSON.stringify(parameters));
-			} catch {
-				/* ignore */
-			}
+			storage.set(PARAMETERS_KEY, parameters);
 		},
 		setSessionVariables: (sessionVariables: Record<string, unknown>) => {
 			update((s) => ({ ...s, sessionVariables }));
-			try {
-				localStorage.setItem('linkrs_console_session_variables', JSON.stringify(sessionVariables));
-			} catch {
-				/* ignore */
-			}
+			storage.set(SESSION_VARIABLES_KEY, sessionVariables);
 		},
 		executeQuery: async () => {
 			const state = get({ subscribe });

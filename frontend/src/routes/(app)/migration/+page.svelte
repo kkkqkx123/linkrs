@@ -8,6 +8,7 @@
 		migrationService,
 		type MigrationProgressEvent,
 	} from '$services/migration';
+	import { notificationStore } from '$stores/notification';
 
 	let space = $state('');
 	let label = $state('');
@@ -21,8 +22,15 @@
 	let streamController: AbortController | null = null;
 
 	let loading = $state(false);
-	let error = $state<string | null>(null);
 	let resultText = $state('');
+
+	function reportError(err: unknown) {
+		notificationStore.error(
+			'notification.requestFailed',
+			undefined,
+			err instanceof Error ? err.message : undefined,
+		);
+	}
 
 	function stringify(payload: unknown): string {
 		try {
@@ -34,7 +42,6 @@
 
 	async function run(fn: () => Promise<unknown>, keepPlan = false) {
 		loading = true;
-		error = null;
 		try {
 			const payload = await fn();
 			resultText = stringify(payload);
@@ -43,8 +50,7 @@
 				if (typeof plan === 'string' && plan) planJson = plan;
 			}
 		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
+			reportError(err);
 		} finally {
 			loading = false;
 		}
@@ -54,7 +60,6 @@
 		streamController?.abort();
 		streamController = new AbortController();
 		streaming = true;
-		error = null;
 		progressEvents = [];
 		try {
 			const outcome = await migrationService.streamProgress(space, label, {
@@ -64,10 +69,10 @@
 					progressEvents = [...progressEvents, event];
 				},
 			});
-			if (outcome.streamError) error = outcome.streamError;
+			if (outcome.streamError)
+				notificationStore.error('notification.requestFailed', undefined, outcome.streamError);
 		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
+			reportError(err);
 		} finally {
 			streaming = false;
 		}
@@ -80,10 +85,6 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.migration')} />
-
-	{#if error}
-		<p class="ui-error-text">{error}</p>
-	{/if}
 
 	<MigrationPlanForm
 		bind:space

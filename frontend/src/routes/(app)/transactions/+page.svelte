@@ -7,12 +7,21 @@
 	import { statisticsService, type OverviewResponse, type TransactionMetrics } from '$services/statistics';
 	import { operationsService, type ActiveTransaction } from '$services/operations';
 	import { formatLatencyMs } from '$utils/metricsFormat';
+	import { notificationStore } from '$stores/notification';
+	import Button from '$components/common/Button.svelte';
 
 	let overview = $state<OverviewResponse | null>(null);
 	let transactionSnapshot = $state<TransactionMetrics | null>(null);
 	let activeTransactions = $state<ActiveTransaction[]>([]);
 	let loading = $state(false);
-	let error = $state<string | null>(null);
+
+	function reportError(err: unknown) {
+		notificationStore.error(
+			'notification.requestFailed',
+			undefined,
+			err instanceof Error ? err.message : undefined,
+		);
+	}
 
 	// Pending confirmation; the dialog owns the decision, the action runs only
 	// after explicit confirmation.
@@ -30,7 +39,6 @@
 
 	async function load() {
 		loading = true;
-		error = null;
 		try {
 			const [ov, metrics, txns] = await Promise.all([
 				statisticsService.overview(),
@@ -41,8 +49,7 @@
 			transactionSnapshot = metrics;
 			activeTransactions = txns;
 		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
+			reportError(err);
 		} finally {
 			loading = false;
 		}
@@ -54,13 +61,11 @@
 			message: t('monitoring.confirmKill', { id: String(id) }),
 			run: async () => {
 				loading = true;
-				error = null;
 				try {
 					await operationsService.killTransaction(id);
 					await load();
 				} catch (err) {
-					error =
-						err instanceof Error ? err.message : t('notification.requestFailed');
+					reportError(err);
 				} finally {
 					loading = false;
 				}
@@ -74,13 +79,11 @@
 			message: t('monitoring.confirmRetryTxn', { id: String(id) }),
 			run: async () => {
 				loading = true;
-				error = null;
 				try {
 					await operationsService.retryTransactionOutbox(id);
 					await load();
 				} catch (err) {
-					error =
-						err instanceof Error ? err.message : t('notification.requestFailed');
+					reportError(err);
 				} finally {
 					loading = false;
 				}
@@ -97,18 +100,10 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.transactions')}>
-		<button
-			class="ui-btn ui-btn-primary ui-btn-sm"
-			onclick={load}
-			disabled={loading}
-		>
+		<Button variant="primary" onclick={load} disabled={loading}>
 			{loading ? t('monitoring.loading') : t('common.refresh')}
-		</button>
+		</Button>
 	</PageHeader>
-
-	{#if error}
-		<p class="ui-error-text">{error}</p>
-	{/if}
 
 	<TransactionPanel
 		overview={overview}

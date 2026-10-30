@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import { storage } from '$utils/storage';
+import { storeSessionId, clearSessionId } from '$utils/http';
 import { connectionService } from '$services/connection';
 import { STORAGE_KEYS, DEFAULT_VALUES } from '$config/constants';
 import {
@@ -160,7 +161,7 @@ function createConnectionStore() {
 			};
 			set(emptyState);
 			persist(emptyState);
-			localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
+			clearSessionId();
 		}
 	};
 
@@ -179,11 +180,7 @@ function createConnectionStore() {
 			}));
 			try {
 				const result = await connectionService.login({ username, password });
-				if (result.session_id)
-					localStorage.setItem(
-						STORAGE_KEYS.SESSION_ID,
-						String(result.session_id),
-					);
+				if (result.session_id) storeSessionId(result.session_id);
 				const role = await resolveRoleAfterLogin(result, username);
 				const connectionInfo: ConnectionInfo = { username };
 				const expiresAt = expiresFromPayload(result);
@@ -212,8 +209,8 @@ function createConnectionStore() {
 			} catch (err: unknown) {
 				const errorMessage =
 					err instanceof Error ? err.message : t('errors.loginFailed');
-				localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
-				clearExpiryTimer();
+			clearSessionId();
+			clearExpiryTimer();
 				set({
 					isConnected: false,
 					isVerified: false,
@@ -288,7 +285,7 @@ function createConnectionStore() {
 				set(emptyState);
 				persist(emptyState);
 				clearExpiryTimer();
-				localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
+				clearSessionId();
 				return false;
 			}
 		},

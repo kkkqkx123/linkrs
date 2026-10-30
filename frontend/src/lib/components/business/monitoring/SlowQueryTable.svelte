@@ -2,6 +2,7 @@
 	import { t } from '$i18n';
 	import { Timer } from '@lucide/svelte';
 	import EmptyState from '$components/common/EmptyState.svelte';
+	import VirtualTable from '$components/common/VirtualTable.svelte';
 	import { formatLatencyMs } from '$utils/metricsFormat';
 	import type { QueryStatsResponse } from '$services/statistics';
 
@@ -51,63 +52,57 @@
 		});
 		return sorted;
 	});
+
+	// VirtualTable works on plain record rows; keep the original row reachable
+	// through a single column so cell snippets can render it.
+	const tableRows = $derived(
+		sortedRows.map((row, index) => ({ index, row: { data: row } })),
+	);
 </script>
 
-<div class="overflow-x-auto">
-	{#if rows.length === 0}
-		<EmptyState
-			icon={Timer}
-			message={t('monitoring.noData')}
-			hint={t('monitoring.slowQueries')}
-		/>
-	{:else}
-		<table class="ui-table ui-table-dense min-w-full">
-			<thead>
-				<tr>
-					<th>
-						<button
-							class="cursor-pointer select-none hover:underline"
-							onclick={() => toggleSort('query')}
-						>
-							{t('monitoring.query')} {sortIndicator('query')}
-						</button>
-					</th>
-					<th>
-						<button
-							class="cursor-pointer select-none hover:underline"
-							onclick={() => toggleSort('duration')}
-						>
-							{t('monitoring.duration')} {sortIndicator('duration')}
-						</button>
-					</th>
-					<th>
-						<button
-							class="cursor-pointer select-none hover:underline"
-							onclick={() => toggleSort('trace')}
-						>
-							{t('monitoring.trace')} {sortIndicator('trace')}
-						</button>
-					</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each sortedRows as row (row.trace_id)}
-					<tr class={Number(row.duration_ms) > slowMs ? 'bg-error-light' : ''}>
-						<td class="max-w-80 truncate font-mono">
-							<button
-								class="hover:underline cursor-pointer text-left"
-								onclick={() => onselect(row.trace_id)}
-							>
-								{row.query}
-							</button>
-						</td>
-						<td class="font-mono">{formatLatencyMs(row.duration_ms)}</td>
-						<td class="font-mono text-muted"
-							>{row.trace_id}</td
-						>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-	{/if}
-</div>
+{#if rows.length === 0}
+	<EmptyState
+		icon={Timer}
+		message={t('monitoring.noData')}
+		hint={t('monitoring.slowQueries')}
+	/>
+{:else}
+	<VirtualTable
+		columns={['query', 'duration', 'trace']}
+		rows={tableRows}
+		rowHeight={32}
+		height={400}
+		rowClass={(row) => {
+			const data = row.data as SlowRow;
+			return Number(data.duration_ms) > slowMs ? 'bg-error-light' : '';
+		}}
+	>
+		{#snippet header(column)}
+			<button
+				class="cursor-pointer select-none hover:underline"
+				onclick={() => toggleSort(column as SortField)}
+			>
+				{column === 'query'
+					? t('monitoring.query')
+					: column === 'duration'
+						? t('monitoring.duration')
+						: t('monitoring.trace')}
+				{sortIndicator(column as SortField)}
+			</button>
+		{/snippet}
+		{#snippet cell(column, row)}
+			{#if column === 'query'}
+				<button
+					class="hover:underline cursor-pointer text-left font-mono"
+					onclick={() => onselect((row.data as SlowRow).trace_id)}
+				>
+					{(row.data as SlowRow).query}
+				</button>
+			{:else if column === 'duration'}
+				<span class="font-mono">{formatLatencyMs((row.data as SlowRow).duration_ms)}</span>
+			{:else}
+				<span class="font-mono text-muted">{(row.data as SlowRow).trace_id}</span>
+			{/if}
+		{/snippet}
+	</VirtualTable>
+{/if}

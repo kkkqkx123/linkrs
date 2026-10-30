@@ -469,6 +469,7 @@
 	"notification.healthCheckFailed": "Health check failed",
 	"notification.loadEdgesFailed": "Failed to load edges",
 	"notification.loadNeighborsFailed": "Failed to load neighbors",
+	"notification.loadStatsFailed": "Failed to load statistics",
 	"notification.loadVerticesFailed": "Failed to load vertices",
 	"notification.missingSessionForExport": "Missing session id for server export",
 	"notification.requestFailed": "Request failed",

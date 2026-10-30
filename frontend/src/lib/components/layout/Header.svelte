@@ -6,7 +6,7 @@
 	import SpaceSelector from '$components/business/SpaceSelector.svelte';
 	import LanguageSwitcher from '$components/common/LanguageSwitcher.svelte';
 	import ThemeToggle from '$components/common/ThemeToggle.svelte';
-	import HealthMonitor from '$components/common/HealthMonitor.svelte';
+	import HealthMonitor from '$components/business/monitoring/HealthMonitor.svelte';
 	import { toggleDensity, density } from '$stores/ui';
 	import { fromStore } from 'svelte/store';
 	import { Rows3, User } from '@lucide/svelte';

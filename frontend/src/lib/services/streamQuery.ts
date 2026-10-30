@@ -5,8 +5,8 @@ import {
 	getApiBaseUrl,
 	getSessionHeaders,
 	resolveSessionId,
+	clearSessionId,
 } from '$utils/http';
-import { STORAGE_KEYS } from '$config/constants';
 import { t } from '$i18n';
 
 export interface StreamRowHandler {
@@ -63,11 +63,7 @@ export interface StreamQueryOutcome {
 
 function handleStreamUnauthorized(status: number): void {
 	if (status !== 401) return;
-	try {
-		localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
-	} catch {
-		/* storage unavailable */
-	}
+	clearSessionId();
 	if (page.url.pathname !== '/login') void goto('/login');
 }
 

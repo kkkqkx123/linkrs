@@ -179,11 +179,4 @@ mod tests {
         assert!(!session.active());
         session.abandon();
     }
-
-    /// `finish` needs a real `GraphStorageContext` to run the final
-    /// checkpoint, which requires a full persistent storage setup covered by
-    /// the e2e perf tests; reference-count release is asserted above.
-    fn ctx() -> Arc<GraphStorageContext> {
-        unreachable!("ctx is only touched by finish(), which these tests avoid")
-    }
 }

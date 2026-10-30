@@ -336,8 +336,7 @@ fn empty_plan_with_hash(hash: u64) -> Arc<PhysicalPlan> {
             params: Vec::new(),
             name_to_slot: HashMap::new(),
         },
-        parallel_fallback_reason: String::new(),
-        cbo_notes: Vec::new(),
+        diagnostics: Default::default(),
         statistics_summary: String::new(),
         partition_spec: None,
     })
@@ -483,7 +482,7 @@ fn lifecycle_explain_plan_description_round_trips_cbo_notes() {
     // Plan-level metadata is part of the immutable plan; annotate and verify
     // it survives the conversion (EXPLAIN uses this to print decisions).
     let mut annotated = (*plan).clone();
-    annotated.cbo_notes = vec!["join_order: greedy".to_string()];
+    annotated.diagnostics.notes = vec!["join_order: greedy".to_string()];
     let desc = physical_plan_to_plan_description(&Arc::new(annotated));
     assert_eq!(desc.cbo_notes, vec!["join_order: greedy".to_string()]);
 }

@@ -5,6 +5,12 @@ import type {
 	EdgeDetail,
 } from '$types/graph';
 import type { GraphData } from '$types/graph';
+import { storage, getLegacyRaw } from '$utils/storage';
+
+// Persistence key, unified through `utils/storage.ts` (prefixed, safe).
+const PREFS_KEY = 'graph.preferences';
+// Key used before storage access was unified; read once as a fallback.
+const LEGACY_PREFS_KEY = 'graph-storage';
 
 export type { NodeDetail, EdgeDetail };
 
@@ -78,9 +84,11 @@ const generateEdgeColor = (index: number): string => {
 };
 
 function loadPersisted(): Partial<GraphState> {
+	const saved = storage.get<Partial<GraphState>>(PREFS_KEY);
+	if (saved) return saved;
 	try {
-		const saved = localStorage.getItem('graph-storage');
-		if (saved) return JSON.parse(saved);
+		const legacy = getLegacyRaw(LEGACY_PREFS_KEY);
+		if (legacy) return JSON.parse(legacy);
 	} catch {
 		/* ignore */
 	}
@@ -90,18 +98,11 @@ function loadPersisted(): Partial<GraphState> {
 const persisted = loadPersisted();
 
 function persistStyles(state: GraphState) {
-	try {
-		localStorage.setItem(
-			'graph-storage',
-			JSON.stringify({
-				layout: state.layout,
-				nodeStyles: state.nodeStyles,
-				edgeStyles: state.edgeStyles,
-			}),
-		);
-	} catch {
-		/* storage unavailable */
-	}
+	storage.set(PREFS_KEY, {
+		layout: state.layout,
+		nodeStyles: state.nodeStyles,
+		edgeStyles: state.edgeStyles,
+	});
 }
 
 function ensureStylesForData(

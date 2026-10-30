@@ -5,17 +5,17 @@
 	import SyncPanel from '$components/business/monitoring/SyncPanel.svelte';
 	import { statisticsService, type OverviewResponse } from '$services/statistics';
 	import type { SyncStatusResponse } from '$services/sync';
+	import { notificationStore } from '$stores/notification';
+	import Button from '$components/common/Button.svelte';
 
 	let syncPanel: SyncPanel | null = null;
 
 	let overview = $state<OverviewResponse | null>(null);
 	let syncSnapshot = $state<SyncStatusResponse | null>(null);
 	let loading = $state(false);
-	let error = $state<string | null>(null);
 
 	async function load() {
 		loading = true;
-		error = null;
 		try {
 			const [ov, sync] = await Promise.all([
 				statisticsService.overview(),
@@ -25,8 +25,11 @@
 			syncSnapshot = sync;
 			await syncPanel?.reload();
 		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
+			notificationStore.error(
+				'notification.requestFailed',
+				undefined,
+				err instanceof Error ? err.message : undefined,
+			);
 		} finally {
 			loading = false;
 		}
@@ -37,18 +40,10 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.sync')}>
-		<button
-			class="ui-btn ui-btn-primary ui-btn-sm"
-			onclick={load}
-			disabled={loading}
-		>
+		<Button variant="primary" onclick={load} disabled={loading}>
 			{loading ? t('monitoring.loading') : t('common.refresh')}
-		</button>
+		</Button>
 	</PageHeader>
-
-	{#if error}
-		<p class="ui-error-text">{error}</p>
-	{/if}
 
 	<SyncPanel bind:this={syncPanel} overview={overview} syncSnapshot={syncSnapshot} />
 </div>

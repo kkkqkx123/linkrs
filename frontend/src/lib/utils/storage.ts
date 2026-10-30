@@ -34,6 +34,20 @@ export function isStorageNearCapacity(threshold = 0.8): boolean {
 	}
 }
 
+/**
+ * Raw read of an unprefixed entry left behind by pre-unification storage
+ * access. Used as a one-time read fallback when a store moves to the
+ * prefixed `storage` helpers; the legacy entry is left in place so several
+ * stores can migrate from the same old key independently.
+ */
+export function getLegacyRaw(key: string): string | null {
+	try {
+		return localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
+
 export function safeSetItem(key: string, value: unknown): boolean {
 	try {
 		const serialized = JSON.stringify(value);

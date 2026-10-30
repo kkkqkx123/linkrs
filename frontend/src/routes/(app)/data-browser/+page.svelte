@@ -6,6 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { dataBrowserStore } from '$stores/dataBrowser';
+	import { notificationStore } from '$stores/notification';
 	import { graphStore } from '$stores/graph';
 	import { schemaStore } from '$stores/schema';
 	import PageHeader from '$components/layout/PageHeader.svelte';
@@ -139,7 +140,11 @@
 			const stats = await dataBrowserService.getStatistics(currentSpace);
 			dataBrowserStore.setStatistics(stats);
 		} catch (err) {
-			console.error('Failed to load statistics:', err);
+			notificationStore.error(
+				'notification.loadStatsFailed',
+				undefined,
+				err instanceof Error ? err.message : undefined,
+			);
 		}
 	}
 

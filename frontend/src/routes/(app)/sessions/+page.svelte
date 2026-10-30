@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { get } from 'svelte/store';
-	import { t } from '$i18n';
+	import { t, type MessageKey } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
@@ -10,10 +10,19 @@
 		connectionService,
 		type SessionListItem,
 	} from '$services/connection';
+	import { notificationStore } from '$stores/notification';
+	import Button from '$components/common/Button.svelte';
 
 	let sessions = $state<SessionListItem[]>([]);
 	let loading = $state(false);
-	let error = $state<string | null>(null);
+
+	function reportError(err: unknown, key: MessageKey = 'notification.requestFailed') {
+		notificationStore.error(
+			key,
+			undefined,
+			err instanceof Error ? err.message : undefined,
+		);
+	}
 
 	// Pending confirmation; the dialog owns the decision, the action runs only
 	// after explicit confirmation.
@@ -39,12 +48,11 @@
 
 	async function loadSessions() {
 		loading = true;
-		error = null;
 		try {
 			const result = await connectionService.sessions.list();
 			sessions = result.sessions;
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('sessions.loadFailed');
+			reportError(err, 'sessions.loadFailed');
 		} finally {
 			loading = false;
 		}
@@ -56,13 +64,11 @@
 			message: t('sessions.confirmTerminate', { id: String(id) }),
 			run: async () => {
 				loading = true;
-				error = null;
 				try {
 					await connectionService.sessions.delete(id);
 					await loadSessions();
 				} catch (err) {
-					error =
-						err instanceof Error ? err.message : t('notification.requestFailed');
+					reportError(err);
 				} finally {
 					loading = false;
 				}
@@ -73,18 +79,10 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sessions.title')}>
-		<button
-			class="ui-btn ui-btn-primary ui-btn-sm"
-			onclick={loadSessions}
-			disabled={loading}
-		>
+		<Button variant="primary" onclick={loadSessions} disabled={loading}>
 			{loading ? t('common.loading') : t('common.refresh')}
-		</button>
+		</Button>
 	</PageHeader>
-
-	{#if error}
-		<p class="ui-error-text">{error}</p>
-	{/if}
 
 	<section class="ui-card shadow-sm p-6">
 		{#if sessions.length === 0}

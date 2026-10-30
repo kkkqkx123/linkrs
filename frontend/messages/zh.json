@@ -469,6 +469,7 @@
 	"notification.healthCheckFailed": "健康检查失败",
 	"notification.loadEdgesFailed": "加载边失败",
 	"notification.loadNeighborsFailed": "加载邻居失败",
+	"notification.loadStatsFailed": "加载统计信息失败",
 	"notification.loadVerticesFailed": "加载顶点失败",
 	"notification.missingSessionForExport": "缺少服务端导出的会话标识",
 	"notification.requestFailed": "请求失败",

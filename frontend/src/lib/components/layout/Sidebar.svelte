@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { t, type MessageKey } from '$i18n';
 	import { canManageUsers } from '$stores/connection';
+	import { storage, getLegacyRaw } from '$utils/storage';
 	import { fromStore } from 'svelte/store';
 	import type { LucideIcon } from '@lucide/svelte';
 	import {
@@ -30,10 +31,12 @@
 	const SIDEBAR_MIN = 76;
 	const SIDEBAR_MAX = 300;
 	const SNAP_PX = 6;
-	const WIDTH_KEY = 'linkrs.sidebar-width.v2';
+	const WIDTH_KEY = 'layout.sidebar-width';
+	// Key used before storage access was unified; read once as a fallback.
+	const LEGACY_WIDTH_KEY = 'linkrs.sidebar-width.v2';
 
 	function loadWidth(): number {
-		const saved = Number(localStorage.getItem(WIDTH_KEY));
+		const saved = Number(storage.get<string>(WIDTH_KEY) ?? getLegacyRaw(LEGACY_WIDTH_KEY));
 		if (Number.isFinite(saved)) {
 			return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, saved));
 		}
@@ -45,7 +48,7 @@
 	let navEl: HTMLElement | null = null;
 
 	function persist() {
-		localStorage.setItem(WIDTH_KEY, String(Math.round(width)));
+		storage.set(WIDTH_KEY, String(Math.round(width)));
 	}
 
 	// 边缘贴合文字:最宽一行的完整内容宽度 + 导航内边距.
@@ -72,7 +75,7 @@
 	onMount(() => {
 		// 无存档时不使用拍脑袋的默认值,直接贴合当前语言下的内容宽度.
 		// 必须等字体就绪再测量,否则按回退字体量出的宽度偏小,标签会被截断.
-		if (localStorage.getItem(WIDTH_KEY) === null) {
+		if (storage.get<string>(WIDTH_KEY) === null) {
 			document.fonts.ready.then(() => {
 				width = measureFitWidth();
 			});

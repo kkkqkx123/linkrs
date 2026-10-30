@@ -9,6 +9,7 @@ import {
 	type RetrievalSnapshot,
 } from '$services/retrieval';
 import { t } from '$i18n';
+import { storage, getLegacyRaw } from '$utils/storage';
 import type {
 	DatabaseOverviewResponse,
 	QueryStatsResponse,
@@ -46,7 +47,9 @@ export interface Thresholds {
 	slowMs: number;
 }
 
-const THRESHOLDS_STORAGE_KEY = 'linkrs_monitor_thresholds';
+const THRESHOLDS_STORAGE_KEY = 'monitor.thresholds';
+// Key used before storage access was unified; read once as a fallback.
+const LEGACY_THRESHOLDS_STORAGE_KEY = 'linkrs_monitor_thresholds';
 
 const DEFAULT_THRESHOLDS: Thresholds = {
 	cpuPercent: 80,
@@ -55,38 +58,39 @@ const DEFAULT_THRESHOLDS: Thresholds = {
 };
 
 function loadThresholds(): Thresholds {
+	const fallback = { ...DEFAULT_THRESHOLDS };
+	const parsed =
+		storage.get<Partial<Thresholds>>(THRESHOLDS_STORAGE_KEY) ??
+		parseLegacyThresholds();
+	if (!parsed) return fallback;
+	return {
+		cpuPercent:
+			typeof parsed.cpuPercent === 'number'
+				? parsed.cpuPercent
+				: DEFAULT_THRESHOLDS.cpuPercent,
+		memPercent:
+			typeof parsed.memPercent === 'number'
+				? parsed.memPercent
+				: DEFAULT_THRESHOLDS.memPercent,
+		slowMs:
+			typeof parsed.slowMs === 'number'
+				? parsed.slowMs
+				: DEFAULT_THRESHOLDS.slowMs,
+	};
+}
+
+function parseLegacyThresholds(): Partial<Thresholds> | null {
 	try {
-		const raw = localStorage.getItem(THRESHOLDS_STORAGE_KEY);
-		if (!raw) return { ...DEFAULT_THRESHOLDS };
-		const parsed = JSON.parse(raw) as Partial<Thresholds>;
-		return {
-			cpuPercent:
-				typeof parsed.cpuPercent === 'number'
-					? parsed.cpuPercent
-					: DEFAULT_THRESHOLDS.cpuPercent,
-			memPercent:
-				typeof parsed.memPercent === 'number'
-					? parsed.memPercent
-					: DEFAULT_THRESHOLDS.memPercent,
-			slowMs:
-				typeof parsed.slowMs === 'number'
-					? parsed.slowMs
-					: DEFAULT_THRESHOLDS.slowMs,
-		};
+		const raw = getLegacyRaw(LEGACY_THRESHOLDS_STORAGE_KEY);
+		if (!raw) return null;
+		return JSON.parse(raw) as Partial<Thresholds>;
 	} catch {
-		return { ...DEFAULT_THRESHOLDS };
+		return null;
 	}
 }
 
 function persistThresholds(thresholds: Thresholds): void {
-	try {
-		localStorage.setItem(
-			THRESHOLDS_STORAGE_KEY,
-			JSON.stringify(thresholds),
-		);
-	} catch {
-		/* storage unavailable */
-	}
+	storage.set(THRESHOLDS_STORAGE_KEY, thresholds);
 }
 
 const emptySnapshots = (): MonitoringSnapshots => ({

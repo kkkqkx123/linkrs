@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { t } from '$i18n';
+	import { t, type MessageKey } from '$i18n';
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { transferService } from '$services/transfer';
 	import { resolveSessionId } from '$utils/http';
+	import { notificationStore } from '$stores/notification';
 
 	let space = $state('');
 	let format = $state('csv');
@@ -15,8 +16,15 @@
 	let files = $state<FileList | null>(null);
 
 	let loading = $state(false);
-	let error = $state<string | null>(null);
 	let resultText = $state('');
+
+	function reportError(err: unknown, key: MessageKey = 'notification.requestFailed') {
+		notificationStore.error(
+			key,
+			undefined,
+			err instanceof Error ? err.message : undefined,
+		);
+	}
 
 	function stringify(payload: unknown): string {
 		try {
@@ -29,11 +37,10 @@
 	async function runImport() {
 		const file = files?.[0];
 		if (!file) {
-			error = t('transfer.pickFile');
+			notificationStore.warning('transfer.pickFile');
 			return;
 		}
 		loading = true;
-		error = null;
 		try {
 			const payload = await transferService.importFile({
 				space,
@@ -45,8 +52,7 @@
 			});
 			resultText = stringify(payload);
 		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
+			reportError(err);
 		} finally {
 			loading = false;
 		}
@@ -54,12 +60,10 @@
 
 	async function runImportStatus() {
 		loading = true;
-		error = null;
 		try {
 			resultText = stringify(await transferService.importStatus(importId));
 		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
+			reportError(err);
 		} finally {
 			loading = false;
 		}
@@ -68,11 +72,10 @@
 	async function runExport() {
 		const sessionId = resolveSessionId();
 		if (sessionId === undefined) {
-			error = t('notification.missingSessionForExport');
+			notificationStore.warning('notification.missingSessionForExport');
 			return;
 		}
 		loading = true;
-		error = null;
 		try {
 			const blob = await transferService.exportQuery(
 				exportQuery,
@@ -89,10 +92,7 @@
 			URL.revokeObjectURL(url);
 			resultText = t('transfer.exported');
 		} catch (err) {
-			error =
-				err instanceof Error
-					? err.message
-					: t('notification.serverExportFailed');
+			reportError(err, 'notification.serverExportFailed');
 		} finally {
 			loading = false;
 		}
@@ -101,10 +101,6 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.transfer')} />
-
-	{#if error}
-		<p class="ui-error-text">{error}</p>
-	{/if}
 
 	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">

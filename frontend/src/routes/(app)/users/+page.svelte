@@ -7,12 +7,12 @@
 	import { notificationStore } from '$stores/notification';
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
+	import Button from '$components/common/Button.svelte';
 	import { usersService, type ManagedUser } from '$services/users';
 
 	let users = $state<ManagedUser[]>([]);
 	let fallback = $state(false);
 	let loading = $state(false);
-	let error = $state<string | null>(null);
 	let query = $state('');
 	let newUsername = $state('');
 	let newPassword = $state('');
@@ -51,12 +51,15 @@
 	 * optional success toast so success and failure feedback stay symmetric. */
 	async function runAction(action: () => Promise<void>, successKey?: MessageKey) {
 		loading = true;
-		error = null;
 		try {
 			await action();
 			if (successKey) notificationStore.success(successKey);
 		} catch (err) {
-			error = err instanceof Error ? err.message : t('notification.requestFailed');
+			notificationStore.error(
+				'notification.requestFailed',
+				undefined,
+				err instanceof Error ? err.message : undefined,
+			);
 		} finally {
 			loading = false;
 		}
@@ -148,7 +151,7 @@
 	async function submitOwnPassword() {
 		if (!ownOldPassword.trim() || !ownNewPassword.trim()) return;
 		if (ownNewPassword !== ownConfirmPassword) {
-			error = t('users.passwordMismatch');
+			notificationStore.warning('users.passwordMismatch');
 			return;
 		}
 		await runAction(async () => {
@@ -162,23 +165,15 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('users.title')}>
-		<button
-			class="ui-btn ui-btn-primary ui-btn-sm"
-			onclick={loadUsers}
-			disabled={loading}
-		>
+		<Button variant="primary" onclick={loadUsers} disabled={loading}>
 			{loading ? t('common.loading') : t('common.refresh')}
-		</button>
+		</Button>
 	</PageHeader>
 
 	{#if fallback}
 		<p class="ui-alert ui-alert-warn">
 			{t('users.queryFallback')}
 		</p>
-	{/if}
-
-	{#if error}
-		<p class="ui-error-text">{error}</p>
 	{/if}
 
 	<section class="ui-card shadow-sm p-6">
@@ -199,13 +194,13 @@
 				bind:value={newPassword}
 				disabled={loading}
 			/>
-			<button
-				class="ui-btn ui-btn-primary ui-btn-sm"
+			<Button
+				variant="primary"
 				onclick={createUser}
 				disabled={loading || !newUsername.trim() || !newPassword.trim()}
 			>
 				{t('common.create')}
-			</button>
+			</Button>
 		</div>
 	</section>
 
@@ -235,13 +230,13 @@
 				bind:value={ownConfirmPassword}
 				disabled={loading}
 			/>
-			<button
-				class="ui-btn ui-btn-primary ui-btn-sm"
+			<Button
+				variant="primary"
 				onclick={submitOwnPassword}
 				disabled={loading || !ownOldPassword.trim() || !ownNewPassword.trim()}
 			>
 				{t('common.save')}
-			</button>
+			</Button>
 		</div>
 	</section>
 
@@ -277,99 +272,100 @@
 								</td>
 								<td>{user.lastActive ?? '—'}</td>
 								<td>
-									<div class="flex flex-wrap gap-2">
-										<button
-											class="ui-btn ui-btn-ghost ui-btn-sm"
-											onclick={() =>
-												(resetTarget =
-													resetTarget === user.username ? null : user.username)}
-										>
-											{t('users.resetPassword')}
-										</button>
-										{#if !fallback}
-											<button
-												class="ui-btn ui-btn-ghost ui-btn-sm"
-												onclick={() => requestToggle(user, false)}
-												disabled={loading}
-											>
-												{t('users.disable')}
-											</button>
-											<button
-												class="ui-btn ui-btn-ghost ui-btn-sm"
-												onclick={() => requestToggle(user, true)}
-												disabled={loading}
-											>
-												{t('users.enable')}
-											</button>
-										{/if}
-										<button
-											class="ui-btn ui-btn-ghost ui-btn-sm"
-											onclick={() =>
-												(roleTarget =
-													roleTarget === user.username ? null : user.username)}
-										>
-											{t('users.grant')}
-										</button>
-										<button
-											class="ui-btn ui-btn-danger-outline ui-btn-xs"
-											onclick={() => requestDeleteUser(user)}
-											disabled={loading}
-										>
-											{t('users.deleteUser')}
-										</button>
-									</div>
-									{#if roleTarget === user.username}
-										<div class="mt-2 flex flex-wrap gap-2">
-											<input
-												class="ui-input ui-input-sm"
-												placeholder={t('users.space')}
-												bind:value={roleSpace}
-												disabled={loading}
-											/>
-											<input
-												class="ui-input ui-input-sm"
-												placeholder={t('users.role')}
-												bind:value={roleName}
-												disabled={loading}
-											/>
-											<button
-												class="ui-btn ui-btn-primary ui-btn-sm"
-												onclick={() => submitGrant(user)}
-												disabled={loading ||
-													!roleSpace.trim() ||
-													!roleName.trim()}
-											>
-												{t('users.grant')}
-											</button>
-											<button
-												class="ui-btn ui-btn-ghost ui-btn-sm"
-												onclick={() => submitRevoke(user)}
-												disabled={loading ||
-													!roleSpace.trim() ||
-													!roleName.trim()}
-											>
-												{t('users.revoke')}
-											</button>
-										</div>
-									{/if}
-									{#if resetTarget === user.username}
-										<div class="mt-2 flex gap-2">
-											<input
-												type="password"
-												class="ui-input ui-input-sm"
-												placeholder={t('common.password')}
-												bind:value={resetPassword}
-												disabled={loading}
-											/>
-											<button
-												class="ui-btn ui-btn-primary ui-btn-sm"
-												onclick={() => submitReset(user)}
-												disabled={loading || !resetPassword.trim()}
-											>
-												{t('common.save')}
-											</button>
-										</div>
-									{/if}
+								 <div class="flex flex-wrap gap-2">
+								  <Button
+								   variant="ghost"
+								   onclick={() =>
+								    (resetTarget =
+								     resetTarget === user.username ? null : user.username)}
+								  >
+								   {t('users.resetPassword')}
+								  </Button>
+								  {#if !fallback}
+								   <Button
+								    variant="ghost"
+								    onclick={() => requestToggle(user, false)}
+								    disabled={loading}
+								   >
+								    {t('users.disable')}
+								   </Button>
+								   <Button
+								    variant="ghost"
+								    onclick={() => requestToggle(user, true)}
+								    disabled={loading}
+								   >
+								    {t('users.enable')}
+								   </Button>
+								  {/if}
+								  <Button
+								   variant="ghost"
+								   onclick={() =>
+								    (roleTarget =
+								     roleTarget === user.username ? null : user.username)}
+								  >
+								   {t('users.grant')}
+								  </Button>
+								  <Button
+								   variant="danger-outline"
+								   size="xs"
+								   onclick={() => requestDeleteUser(user)}
+								   disabled={loading}
+								  >
+								   {t('users.deleteUser')}
+								  </Button>
+								 </div>
+								 {#if roleTarget === user.username}
+								  <div class="mt-2 flex flex-wrap gap-2">
+								   <input
+								    class="ui-input ui-input-sm"
+								    placeholder={t('users.space')}
+								    bind:value={roleSpace}
+								    disabled={loading}
+								   />
+								   <input
+								    class="ui-input ui-input-sm"
+								    placeholder={t('users.role')}
+								    bind:value={roleName}
+								    disabled={loading}
+								   />
+								   <Button
+								    variant="primary"
+								    onclick={() => submitGrant(user)}
+								    disabled={loading ||
+								     !roleSpace.trim() ||
+								     !roleName.trim()}
+								   >
+								    {t('users.grant')}
+								   </Button>
+								   <Button
+								    variant="ghost"
+								    onclick={() => submitRevoke(user)}
+								    disabled={loading ||
+								     !roleSpace.trim() ||
+								     !roleName.trim()}
+								   >
+								    {t('users.revoke')}
+								   </Button>
+								  </div>
+								 {/if}
+								 {#if resetTarget === user.username}
+								  <div class="mt-2 flex gap-2">
+								   <input
+								    type="password"
+								    class="ui-input ui-input-sm"
+								    placeholder={t('common.password')}
+								    bind:value={resetPassword}
+								    disabled={loading}
+								   />
+								   <Button
+								    variant="primary"
+								    onclick={() => submitReset(user)}
+								    disabled={loading || !resetPassword.trim()}
+								   >
+								    {t('common.save')}
+								   </Button>
+								  </div>
+								 {/if}
 								</td>
 							</tr>
 						{/each}

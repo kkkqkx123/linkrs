@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import { computeWindow, estimateColumnWidths } from '$utils/virtualWindow';
 	import { formatCellValue } from '$utils/parseData';
 
@@ -13,11 +14,20 @@
 		rows = [],
 		rowHeight = 40,
 		height = 400,
+		/** Optional custom header cell; falls back to the column name. */
+		header,
+		/** Optional custom body cell; falls back to the formatted value. */
+		cell,
+		/** Optional per-row class (e.g. highlight slow rows). */
+		rowClass,
 	}: {
 		columns: string[];
 		rows: IndexedRow[];
 		rowHeight?: number;
 		height?: number;
+		header?: Snippet<[string]>;
+		cell?: Snippet<[string, Record<string, unknown>]>;
+		rowClass?: (row: Record<string, unknown>) => string;
 	} = $props();
 
 	let containerEl = $state<HTMLDivElement | undefined>(undefined);
@@ -87,8 +97,10 @@
 				{#each columns as column (column)}
 					<th
 						class="sticky top-0 bg-page z-10 overflow-hidden text-ellipsis"
-						title={column}>{column}</th
+						title={column}
 					>
+						{#if header}{@render header(column)}{:else}{column}{/if}
+					</th>
 				{/each}
 			</tr>
 		</thead>
@@ -103,7 +115,7 @@
 			{/if}
 			{#each visible as entry (entry.index)}
 				<tr
-					class="even:bg-hover"
+					class="even:bg-hover {rowClass ? rowClass(entry.row) : ''}"
 					style="height: {rowHeight}px;"
 				>
 					<td class="text-muted whitespace-nowrap overflow-hidden"
@@ -113,8 +125,9 @@
 						<td
 							class="whitespace-nowrap overflow-hidden text-ellipsis"
 							title={formatCellValue(entry.row[column])}
-							>{formatCellValue(entry.row[column])}</td
 						>
+							{#if cell}{@render cell(column, entry.row)}{:else}{formatCellValue(entry.row[column])}{/if}
+						</td>
 					{/each}
 				</tr>
 			{/each}

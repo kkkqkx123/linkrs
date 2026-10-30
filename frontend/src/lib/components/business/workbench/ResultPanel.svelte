@@ -1,9 +1,11 @@
 <script lang="ts">
+	import { fromStore } from 'svelte/store';
 	import { t } from '$i18n';
 	import StreamingResult from '$components/business/StreamingResult.svelte';
 	import CursorResult from '$components/business/CursorResult.svelte';
 	import MaterializedResult from '$components/business/MaterializedResult.svelte';
 	import GraphWorkbench from '$components/business/workbench/GraphWorkbench.svelte';
+	import { theme } from '$stores/theme';
 	import type {
 		StatementResultEntry,
 		StreamState,
@@ -23,7 +25,6 @@
 		executionTime: number;
 		error: QueryError | null;
 		activeView: 'table' | 'json' | 'graph';
-		isDark: boolean;
 
 		onCloseWorkbench: () => void;
 		// Single view-change / open-in-graph pair for all transports; the
@@ -47,7 +48,6 @@
 		executionTime,
 		error,
 		activeView,
-		isDark,
 		onCloseWorkbench,
 		onViewChange,
 		onCancelStream,
@@ -56,6 +56,11 @@
 		onCursorClose,
 		onJumpToError,
 	}: Props = $props();
+
+	// Theme is read from the store directly instead of being threaded through
+	// the page as a prop.
+	const themeState = fromStore(theme);
+	let isDark = $derived(themeState.current === 'dark');
 </script>
 
 <!-- Result Section -->

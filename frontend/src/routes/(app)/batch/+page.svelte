@@ -2,6 +2,8 @@
 	import { t } from '$i18n';
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { batchService } from '$services/batch';
+	import { notificationStore } from '$stores/notification';
+	import Button from '$components/common/Button.svelte';
 
 	let spaceId = $state(1);
 	let batchType = $state('mixed');
@@ -10,8 +12,15 @@
 	let itemsText = $state('[]');
 
 	let loading = $state(false);
-	let error = $state<string | null>(null);
 	let resultText = $state('');
+
+	function reportError(err: unknown) {
+		notificationStore.error(
+			'notification.requestFailed',
+			undefined,
+			err instanceof Error ? err.message : undefined,
+		);
+	}
 
 	function stringify(payload: unknown): string {
 		try {
@@ -23,7 +32,6 @@
 
 	async function run(fn: () => Promise<unknown>, captureId = false) {
 		loading = true;
-		error = null;
 		try {
 			const payload = await fn();
 			resultText = stringify(payload);
@@ -32,8 +40,7 @@
 				if (typeof id === 'string' && id) batchId = id;
 			}
 		} catch (err) {
-			error =
-				err instanceof Error ? err.message : t('notification.requestFailed');
+			reportError(err);
 		} finally {
 			loading = false;
 		}
@@ -51,10 +58,6 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.batch')} />
-
-	{#if error}
-		<p class="ui-error-text">{error}</p>
-	{/if}
 
 	<section class="ui-card shadow-sm p-6">
 		<h2 class="ui-section-title">
@@ -86,8 +89,8 @@
 				/>
 			</label>
 		</div>
-		<button
-			class="ui-btn ui-btn-primary ui-btn-sm"
+		<Button
+			variant="primary"
 			onclick={() =>
 				run(
 					() =>
@@ -101,7 +104,7 @@
 			disabled={loading}
 		>
 			{t('common.create')}
-		</button>
+		</Button>
 	</section>
 
 	<section class="ui-card shadow-sm p-6">
@@ -120,41 +123,43 @@
 				bind:value={itemsText}></textarea>
 		</label>
 		<div class="flex flex-wrap gap-2">
-			<button
-				class="ui-btn ui-btn-primary ui-btn-sm"
+			<Button
+				variant="primary"
 				onclick={() => run(() => batchService.addItems(batchId, parseItems()))}
 				disabled={loading || !batchId}
 			>
 				{t('batch.addItems')}
-			</button>
-			<button
-				class="ui-btn ui-btn-success ui-btn-xs"
+			</Button>
+			<Button
+				variant="success"
+				size="xs"
 				onclick={() => run(() => batchService.execute(batchId))}
 				disabled={loading || !batchId}
 			>
 				{t('batch.execute')}
-			</button>
-			<button
-				class="ui-btn ui-btn-ghost ui-btn-sm"
+			</Button>
+			<Button
+				variant="ghost"
 				onclick={() => run(() => batchService.status(batchId))}
 				disabled={loading || !batchId}
 			>
 				{t('common.status')}
-			</button>
-			<button
-				class="ui-btn ui-btn-warn ui-btn-xs"
+			</Button>
+			<Button
+				variant="warn"
+				size="xs"
 				onclick={() => run(() => batchService.cancel(batchId))}
 				disabled={loading || !batchId}
 			>
 				{t('common.cancel')}
-			</button>
-			<button
-				class="ui-btn ui-btn-danger ui-btn-sm"
+			</Button>
+			<Button
+				variant="danger"
 				onclick={() => run(() => batchService.remove(batchId))}
 				disabled={loading || !batchId}
 			>
 				{t('common.delete')}
-			</button>
+			</Button>
 		</div>
 	</section>
 

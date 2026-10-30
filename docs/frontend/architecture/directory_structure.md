@@ -101,9 +101,11 @@ frontend/                           # 前端项目根目录
 ```
 components/
 ├── common/                          # 通用基础组件
+│   ├── Button.svelte                # 通用按钮（variant/size 约定）
+│   ├── ConfirmDialog.svelte         # 确认对话框
 │   ├── CypherEditor.svelte          # Monaco 查询编辑器
 │   ├── CytoscapeCanvas.svelte       # 图可视化画布
-│   ├── HealthMonitor.svelte         # 服务健康监控
+│   ├── IconButton.svelte            # 图标按钮
 │   ├── LanguageSwitcher.svelte      # 语言切换
 │   ├── LoadingScreen.svelte         # 全屏加载
 │   ├── PageSkeleton.svelte          # 页面骨架
@@ -117,6 +119,7 @@ components/
 │   ├── GraphPreviewControls.svelte  # 图预览操作条
 │   ├── SchemaErGraph.svelte         # ER 关系图视图
 │   ├── SpaceSelector.svelte         # 空间选择器
+│   ├── monitoring/                  # 监控业务组件（含 HealthMonitor）
 │   └── StreamingResult.svelte       # 流式结果展示
 └── layout/                          # 布局组件
     ├── Header.svelte                # 页面头部

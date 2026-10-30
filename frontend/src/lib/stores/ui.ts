@@ -1,8 +1,11 @@
 import { writable, get } from 'svelte/store';
+import { storage, getLegacyRaw } from '$utils/storage';
 
 export type Density = 'comfortable' | 'dense';
 
-const KEY = 'linkrs.ui.density.v1';
+const KEY = 'appearance.density';
+// Key used before storage access was unified; read once as a fallback.
+const LEGACY_KEY = 'linkrs.ui.density.v1';
 
 interface StoredDensity {
 	density: Density;
@@ -10,18 +13,24 @@ interface StoredDensity {
 }
 
 function load(): StoredDensity {
-	try {
-		const raw = localStorage.getItem(KEY);
-		if (raw) {
-			const parsed = JSON.parse(raw) as { density?: unknown };
-			if (parsed.density === 'dense' || parsed.density === 'comfortable') {
-				return { density: parsed.density, userSet: true };
-			}
-		}
-	} catch {
-		/* storage unavailable */
+	const fallback = { density: 'comfortable' as Density, userSet: false };
+	const parsed =
+		storage.get<{ density?: unknown }>(KEY) ?? parseLegacyDensity();
+	if (!parsed) return fallback;
+	if (parsed.density === 'dense' || parsed.density === 'comfortable') {
+		return { density: parsed.density, userSet: true };
 	}
-	return { density: 'comfortable', userSet: false };
+	return fallback;
+}
+
+function parseLegacyDensity(): { density?: unknown } | null {
+	try {
+		const raw = getLegacyRaw(LEGACY_KEY);
+		if (!raw) return null;
+		return JSON.parse(raw) as { density?: unknown };
+	} catch {
+		return null;
+	}
 }
 
 const stored = load();
@@ -41,11 +50,7 @@ density.subscribe((d) => {
 export function setDensity(d: Density): void {
 	userSet = true;
 	density.set(d);
-	try {
-		localStorage.setItem(KEY, JSON.stringify({ density: d }));
-	} catch {
-		/* storage unavailable */
-	}
+	storage.set(KEY, { density: d });
 }
 
 export function toggleDensity(): void {
