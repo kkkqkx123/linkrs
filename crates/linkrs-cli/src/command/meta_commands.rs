@@ -182,6 +182,11 @@ fn show_general_help() -> String {
         "  {:25} {}\n",
         "\\sync <subcommand>", "Manage sync/outbox (status|diagnostics|dead-letters|requeue|retry|degraded|clear|retention-status|retention-run)"
     ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\migration <subcommand>",
+        "Schema migration (plan|dry-run|execute|rollback|status|history|watch)"
+    ));
 
     output.push_str(&format!("\n{}\n", "Query Buffer".yellow().bold()));
     output.push_str(&format!(
@@ -315,6 +320,7 @@ fn show_general_help() -> String {
 
     output.push_str("\nEmbedded mode: \\users, \\sessions, \\sync, \\fulltext, \\vector,\n");
     output.push_str("\\stream, \\cursor, \\statistics, \\status, \\config, \\batch,\n");
+    output.push_str("\\migration, \\login, \\passwd, \\validate, plan-only \\explain,\n");
     output.push_str("\\login, \\passwd, \\validate, plan-only \\explain, function\n");
     output.push_str("management and schema-version commands require a server\n");
     output.push_str("connection and report `embedded mode does not support`.\n");

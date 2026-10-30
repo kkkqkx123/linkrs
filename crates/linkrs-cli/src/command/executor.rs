@@ -307,6 +307,9 @@ impl CommandExecutor {
                 )
                 .await
             }
+            MetaCommand::Migration { action } => {
+                meta::migration::execute_migration(self, &action, session_mgr).await
+            }
             MetaCommand::Format { format } => meta::control::execute_format(self, format),
             MetaCommand::Pager { command } => meta::control::execute_pager(self, command),
             MetaCommand::Timing => meta::control::execute_timing(self),

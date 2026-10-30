@@ -39,8 +39,9 @@ qdrant = [
 # Embedded API for standalone/embedded usage (Rust API only)
 embedded = ["linkrs-api/embedded", "linkrs-config/embedded"]
 
-# gRPC API (implies server)
-grpc = ["linkrs-api/grpc"]
+# gRPC API for external service integration (opt-in, NOT in default;
+# default = ["server", "vector"] so local builds do not pull tonic/prost)
+grpc = ["linkrs-server/grpc"]
 
 # C API bindings (requires embedded to be usable)
 c_api = ["linkrs-api/c_api"]
@@ -291,6 +292,24 @@ fn test_c_api_database_open_close() {
 | `embedded,server,qdrant` | cdylib + rlib | linkrs-server | Embedded + Server + 向量检索 |
 | `server,grpc` | cdylib + rlib | linkrs-server | HTTP 服务器 + gRPC |
 | `embedded,c_api` | cdylib + rlib | 无 | Embedded + C API |
+
+### gRPC 服务集成构建说明
+
+gRPC 面向外部服务集成，默认构建（`default = ["server", "vector"]`）不包含
+tonic/prost 依赖。需要 gRPC 时显式启用：
+
+```shell
+cargo build --features grpc
+# 或针对单个 crate：
+cargo check -p linkrs-server --features grpc
+```
+
+CI / 本地防 feature 组合腐化检查（两步编译检查，保证 `#[cfg(feature = "grpc")]`
+降级路径两侧都能编译）：
+
+```shell
+scripts/check-feature-grpc.sh
+```
 
 ---
 

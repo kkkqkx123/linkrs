@@ -9,7 +9,6 @@
 
 pub mod error;
 pub mod handlers;
-pub mod middleware;
 pub mod models;
 pub mod services;
 pub mod storage;
@@ -17,6 +16,7 @@ pub mod storage;
 use axum::{middleware as axum_middleware, Router};
 use std::sync::Arc;
 
+use crate::http::middleware::auth::auth_middleware;
 use crate::http::state::AppState;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
@@ -87,9 +87,12 @@ pub fn create_router<
         .nest("/v1/schema", schema_routes)
         .nest("/v1/data", data_routes)
         .nest("/v1/graph", graph_routes)
+        // Single authentication system for the whole API surface: the web
+        // management routes share the same X-Session-ID auth middleware as
+        // the main /v1 routes instead of a dedicated copy.
         .layer(axum_middleware::from_fn_with_state(
-            web_state.clone(),
-            middleware::web_auth_middleware,
+            web_state.core_state.clone(),
+            auth_middleware,
         ))
         .with_state(web_state)
 }

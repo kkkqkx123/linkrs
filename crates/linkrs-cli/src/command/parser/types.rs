@@ -223,6 +223,9 @@ pub enum MetaCommand {
     Transactions {
         action: TransactionsAction,
     },
+    Migration {
+        action: MigrationAction,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +437,45 @@ pub enum BatchAction {
     },
     Delete {
         batch_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum MigrationAction {
+    Plan {
+        space: String,
+        label: String,
+        from: u64,
+        to: u64,
+        is_edge: bool,
+        expand_contract: bool,
+        output: Option<String>,
+    },
+    DryRun {
+        file: String,
+    },
+    Execute {
+        file: String,
+        yes: bool,
+    },
+    Rollback {
+        file: String,
+        yes: bool,
+    },
+    Status {
+        space: String,
+        label: String,
+        is_edge: bool,
+    },
+    History {
+        space: String,
+        label: String,
+        is_edge: bool,
+    },
+    Watch {
+        space: String,
+        label: String,
+        is_edge: bool,
     },
 }
 

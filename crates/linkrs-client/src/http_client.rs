@@ -1071,6 +1071,120 @@ impl HttpClient {
         Ok(response.json().await?)
     }
 
+    // ── Migration ──
+
+    /// Create a migration plan via `POST /v1/migration/plan/{space}/{label}`.
+    pub async fn create_migration_plan(
+        &self,
+        space: &str,
+        label: &str,
+        from_version: u64,
+        to_version: u64,
+        is_edge: bool,
+        expand_contract: bool,
+    ) -> Result<linkrs_wire::migration::MigrationPlanResponse> {
+        let url = format!("{}/migration/plan/{}/{}", self.base_url, space, label);
+        let mut params = vec![
+            ("from_version", from_version.to_string()),
+            ("to_version", to_version.to_string()),
+        ];
+        if is_edge {
+            params.push(("is_edge", "true".to_string()));
+        }
+        if expand_contract {
+            params.push(("expand_contract", "true".to_string()));
+        }
+        let response = self
+            .authed(self.inner.post(&url))
+            .query(&params)
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to create migration plan").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Execute a migration plan via `POST /v1/migration/execute`.
+    pub async fn execute_migration(
+        &self,
+        plan_json: &str,
+    ) -> Result<linkrs_wire::migration::MigrationExecuteResponse> {
+        self.post_migration_plan("migration/execute", plan_json, "Failed to execute migration")
+            .await
+    }
+
+    /// Dry-run a migration plan via `POST /v1/migration/dry-run`.
+    pub async fn dry_run_migration(
+        &self,
+        plan_json: &str,
+    ) -> Result<linkrs_wire::migration::MigrationExecuteResponse> {
+        self.post_migration_plan("migration/dry-run", plan_json, "Failed to dry-run migration")
+            .await
+    }
+
+    /// Rollback a migration plan via `POST /v1/migration/rollback`.
+    pub async fn rollback_migration(
+        &self,
+        plan_json: &str,
+    ) -> Result<linkrs_wire::migration::MigrationExecuteResponse> {
+        self.post_migration_plan(
+            "migration/rollback",
+            plan_json,
+            "Failed to rollback migration",
+        )
+        .await
+    }
+
+    async fn post_migration_plan(
+        &self,
+        path: &str,
+        plan_json: &str,
+        context: &str,
+    ) -> Result<linkrs_wire::migration::MigrationExecuteResponse> {
+        let url = format!("{}/{}", self.base_url, path);
+        let body = linkrs_wire::migration::MigrationExecuteRequest {
+            plan_json: plan_json.to_string(),
+        };
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&body)
+            .send()
+            .await?;
+        let response = Self::check_response(response, context).await?;
+        Ok(response.json().await?)
+    }
+
+    /// Get migration status via `GET /v1/migration/status/{space}/{label}`.
+    pub async fn migration_status(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<linkrs_wire::migration::MigrationStatusResponse> {
+        let mut url = format!("{}/migration/status/{}/{}", self.base_url, space, label);
+        if is_edge {
+            url.push_str("?is_edge=true");
+        }
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get migration status").await?;
+        Ok(response.json().await?)
+    }
+
+    /// Get migration history via `GET /v1/migration/history/{space}/{label}`.
+    pub async fn migration_history(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> Result<linkrs_wire::migration::MigrationHistoryResponse> {
+        let mut url = format!("{}/migration/history/{}/{}", self.base_url, space, label);
+        if is_edge {
+            url.push_str("?is_edge=true");
+        }
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to get migration history").await?;
+        Ok(response.json().await?)
+    }
+
     // ── Function management ──
 
     /// Get function details via `GET /v1/functions/{name}`.
