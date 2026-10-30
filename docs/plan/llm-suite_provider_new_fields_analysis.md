@@ -56,36 +56,51 @@ workspace 依赖，用于满足嵌套 path 依赖的 `workspace = true` 继承�
 
 ## check 检查结果
 
-执行环境：rustc 1.92.0（另有 1.90/1.91/1.94 可选，无 1.97）。
+执行环境：rustc 1.97.0 —— 由根目录新增的 `rust-toolchain.toml` 固定（始终使用新版），
+检查无需再带 `--ignore-rust-version`。
 
 ```shell
 # llm-suite 子工作区（自身 MSRV 1.88）
 cargo check --workspace --all-targets        # ✅ 通过，0 error
 
-# linkrs 主工作区消费方（--ignore-rust-version 为绕过下述 MSRV 门槛，与本次升级无关）
-cargo check --ignore-rust-version -p linkrs-config --features embedding,rerank   # ✅
-cargo check --ignore-rust-version -p linkrs-sync   --features embedding,rerank --all-targets  # ✅
-cargo check --ignore-rust-version -p linkrs-server --features embedding,rerank   # ✅
-cargo check --ignore-rust-version -p vector-client                              # ✅
+# linkrs 主工作区全量（修复预存破损后）
+cargo check --workspace --all-targets        # ✅ 通过，0 error
+
+# linkrs 主工作区消费方
+cargo check -p linkrs-config --features embedding,rerank   # ✅
+cargo check -p linkrs-sync   --features embedding,rerank --all-targets  # ✅
+cargo check -p linkrs-server --features embedding,rerank   # ✅
+cargo check -p vector-client                              # ✅
 
 # 单元测试
 cargo test -p llm-suite-types -p llm-suite-config -p llm-suite-proxy -p llm-suite-token  # ✅ 71 passed
-cargo test --ignore-rust-version -p linkrs-sync --features embedding,rerank vector_sync  # ✅ 17 passed
+cargo test -p linkrs-sync --features embedding,rerank vector_sync  # ✅ 17 passed
+cargo test -p linkrs-query --test lifecycle                # ✅ 15 passed
+cargo test -p linkrs-storage bulk_load                    # ✅ 4 passed
 ```
 
-发现的两个问题（均**非**本次升级引入）：
+发现的三个预存问题（均**非**本次升级引入，已在本次一并修复）：
 
-1. **MSRV 门槛冲突（预存在）**
+1. **MSRV 门槛冲突（已修复：安装 1.97.0 并新增 `rust-toolchain.toml` 固定）**
    根 `Cargo.toml [workspace.package] rust-version = "1.97"`，而 llm-suite 成员写
    `rust-version.workspace = true`。由于嵌套 path 依赖的 workspace 继承被解析到**主
    工作区根**（根 Cargo.toml 第 162–166 行注释已记录该机制），llm-suite 各 crate 在
-   主工作区内被判定要求 rustc 1.97，本地 1.92 直接被 cargo 拒绝。
+   主工作区内被判定要求 rustc 1.97，旧本地工具链 1.92 直接被 cargo 拒绝。
    **验证**：检出旧提交 `fcd8551` 后 `cargo metadata` 同样解析出 1.97 —— 冲突在升级前
    就存在，与新字段无关。
-2. **`cargo check --workspace --all-targets` 全量时报 `linkrs-query/tests/lifecycle.rs`
-   编译错误（预存在，与 llm 无关）**：`PhysicalPlan` 已重构为 `diagnostics` 字段，
-   测试仍构造 `parallel_fallback_reason`/`cbo_notes`（E0560/E0609）。该测试不依赖
-   llm-suite，主工作区 diff 仅有 `M crates/llm-suite`，可确认为遗留破损。
+   **修复**：按「版本问题始终使用新版」原则，不降级 `rust-version`，而是新增根目录
+   `rust-toolchain.toml`（`channel = "1.97.0"`），rustup 自动选用/安装 1.97.0，
+   本地与 CI 行为一致。注：环境的 aliyun rustup 镜像停留在 1.96，1.97.0 需从官方
+   `static.rust-lang.org` 源安装。
+2. **`linkrs-query/tests/lifecycle.rs` 编译错误（已修复）**
+   `cargo check --workspace --all-targets` 全量时报 E0560/E0609：`PhysicalPlan` 已
+   重构为 `diagnostics: PlanDiagnostics` 字段，测试仍构造旧字段
+   `parallel_fallback_reason`/`cbo_notes`。该测试不依赖 llm-suite，属遗留破损。
+   **修复**：构造处改用 `diagnostics: Default::default()`，注解处改写
+   `annotated.diagnostics.notes`（`PlanDescription` 输出层字段名不变，断言无需调整）。
+3. **`linkrs-storage/src/engine/graph_storage/bulk_load.rs` 测试模块重复定义（已修复）**
+   同一 `mod tests` 内出现两个 `fn ctx()`（合并残留，E0428）：保留返回内存上下文的
+   版本，删除 `unreachable!` 版本 —— 后者在调用时即 panic，会使全部 4 个会话测试失败。
 
 ## 改造评估：哪些代码需要更新
 
@@ -122,12 +137,7 @@ embedding 批次、并以 `EMBEDDING_MAX_TOKENS_PER_CALL = 8192` 拒绝超长文
 
 ### 可选/后续事项
 
-1. **MSRV 对齐（建议单独立项）**：三选一 —— 主工作区 `rust-version` 降级到与实际
-   工具链一致、升级 CI 工具链到 1.97、或为 llm-suite 路径依赖显式豁免。当前所有
-   check 需带 `--ignore-rust-version`，应消除这一噪音。
-2. **修复 `linkrs-query/tests/lifecycle.rs`**：按 `PhysicalPlan::diagnostics` 新结构
-   改写构造，恢复全工作区 `--all-targets` 绿灯（与 llm 无关，另行处理）。
-3. **能力预留**：若未来要在 linkrs 中接入 LLM chat/provider 定义，本次升级已备齐
+1. **能力预留**：若未来要在 linkrs 中接入 LLM chat/provider 定义，本次升级已备齐
    `compat`（本地网关 max_tokens 兼容）、`transport`（内网自签证书）、`env`、`identity`
    全套机制，届时配置体系需要新增对应 TOML 段 —— 属新功能，不在本次范围。
 
@@ -136,7 +146,12 @@ embedding 批次、并以 `EMBEDDING_MAX_TOKENS_PER_CALL = 8192` 拒绝超长文
 本次 llm-suite 升级对 linkrs 是**纯增量、无破坏**的：被消费的 embedding/rerank 两个
 crate 零变更，新增 4 字段落在未使用的类型上，serde 向后兼容，全部相关包 check/test
 通过。**代码与配置体系均无需改造**；唯一需要留意的是 `SYMBOL_FACTOR` 系数变更对
-embedding 批切分的行为影响，以及两个与本次升级无关的预存在问题（MSRV 门槛、
-lifecycle 测试破损）。
+embedding 批切分的行为影响。
 
-升级本身只需提交子仓库指针变更（`git add crates/llm-suite`）。
+三个与升级无关的预存问题已一并修复：MSRV 门槛（`rust-toolchain.toml` 固定 1.97.0，
+「始终使用新版」）、`lifecycle.rs` 测试按 `PhysicalPlan::diagnostics` 新结构改写、
+`bulk_load.rs` 测试模块重复 `ctx` 删除。修复后
+`cargo check --workspace --all-targets` 全量 0 error（不再需要
+`--ignore-rust-version`），受影响测试 19 个全部通过。
+
+交付 patch 由 git 变更生成，包含上述代码修复、`rust-toolchain.toml` 与本文档更新。

@@ -1,0 +1,5 @@
+# Pin the workspace toolchain so it always satisfies the `rust-version`
+# requirement declared in Cargo.toml. rustup auto-installs this version on
+# first build, keeping local and CI builds aligned with the MSRV floor.
+[toolchain]
+channel = "1.97.0"
