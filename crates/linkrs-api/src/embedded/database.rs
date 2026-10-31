@@ -572,6 +572,34 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
         session.get_edge_type(space, name)
     }
 
+    /// Fetch schema version history for a label (convenience method).
+    ///
+    /// Embedded equivalent of `GET /v1/schema/versions/{space}/{label}` and
+    /// gRPC `GetVersionHistory`.
+    pub fn get_label_version_history(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> CoreResult<Option<linkrs_storage::LabelVersionHistory>> {
+        let session = self.session()?;
+        session.get_label_version_history(space, label, is_edge)
+    }
+
+    /// List schema versions applied to a label (convenience method).
+    ///
+    /// Embedded equivalent of the `applied_versions` field of
+    /// `GET /v1/migration/{space}/{label}/status`.
+    pub fn get_applied_versions(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> CoreResult<Vec<u64>> {
+        let session = self.session()?;
+        session.get_applied_versions(space, label, is_edge)
+    }
+
     /// Validate query text without executing it (convenience method).
     ///
     /// Mirrors `POST /v1/query/validate`: parses and binds the statement,
@@ -914,6 +942,30 @@ mod tests {
 
         let config = DatabaseConfig::file("/tmp/test.db");
         assert!(!config.is_memory());
+    }
+
+    #[test]
+    fn test_label_version_history_reads() {
+        let db = GraphDatabase::open_with_config(DatabaseConfig::memory()).unwrap();
+        db.create_space("vh_space", SpaceConfig::default()).unwrap();
+        let mut session = db.session().unwrap();
+        session.use_space("vh_space").unwrap();
+        session.execute("CREATE TAG vh_tag(name string)").unwrap();
+
+        let history = db
+            .get_label_version_history("vh_space", "vh_tag", false)
+            .unwrap();
+        assert!(history.is_some(), "created tag must expose version history");
+
+        let missing = db
+            .get_label_version_history("vh_space", "nosuch", false)
+            .unwrap();
+        assert!(missing.is_none(), "unknown labels have no version history");
+
+        let applied = db
+            .get_applied_versions("vh_space", "vh_tag", false)
+            .unwrap();
+        assert!(applied.is_empty(), "no migrations applied yet");
     }
 
     #[test]

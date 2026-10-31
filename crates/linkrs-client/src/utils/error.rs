@@ -26,6 +26,9 @@ pub enum ClientError {
     #[error("HTTP {status}: {message}")]
     Http { status: u16, message: String },
 
+    #[error("gRPC error: {0}")]
+    GrpcError(String),
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
@@ -105,6 +108,10 @@ impl ClientError {
             status,
             message: msg.into(),
         }
+    }
+
+    pub fn grpc(msg: impl Into<String>) -> Self {
+        ClientError::GrpcError(msg.into())
     }
 
     pub fn session(msg: impl Into<String>) -> Self {

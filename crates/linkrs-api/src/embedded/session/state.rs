@@ -622,6 +622,48 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             .get_edge_type(space, name)
             .map_err(|e| CoreError::StorageError(e.to_string()))
     }
+
+    /// Fetch schema version history for a label (vertex tag or edge type).
+    ///
+    /// Returns `None` for unknown labels, mirroring `get_tag`/`get_edge_type`.
+    /// Embedded equivalent of `GET /v1/schema/versions/{space}/{label}` and
+    /// gRPC `GetVersionHistory`.
+    pub fn get_label_version_history(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> CoreResult<Option<linkrs_storage::LabelVersionHistory>> {
+        let storage = self.db.storage.read();
+        let history = if is_edge {
+            storage.get_edge_version_history(space, label)
+        } else {
+            storage.get_vertex_version_history(space, label)
+        };
+        match history {
+            Ok(history) => Ok(history),
+            Err(e) if e.kind() == linkrs_core::error::storage::StorageErrorKind::LabelNotFound => {
+                Ok(None)
+            }
+            Err(e) => Err(CoreError::StorageError(e.to_string())),
+        }
+    }
+
+    /// List schema versions applied to a label in ascending order.
+    ///
+    /// Embedded equivalent of the `applied_versions` field of
+    /// `GET /v1/migration/{space}/{label}/status`.
+    pub fn get_applied_versions(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+    ) -> CoreResult<Vec<u64>> {
+        let storage = self.db.storage.read();
+        storage
+            .get_applied_versions(space, label, is_edge)
+            .map_err(|e| CoreError::StorageError(e.to_string()))
+    }
 }
 
 /// First whitespace-delimited keyword of a statement, used only for the

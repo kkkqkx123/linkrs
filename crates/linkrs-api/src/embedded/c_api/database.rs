@@ -241,6 +241,116 @@ pub unsafe extern "C" fn linkrs_transaction_count(db: *mut linkrs_t) -> c_int {
     }
 }
 
+/// Database overview (`Database::database_overview` over FFI).
+///
+/// Returns a heap JSON object combining the space count, live transaction
+/// metrics, shared query counters, and the in-memory flag, mirroring the
+/// embedded `database_overview` result.
+///
+/// # Arguments
+/// - `db`: Database handle
+///
+/// # Returns
+/// - JSON object string (UTF-8 encoded), returns NULL on error
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_database_overview(db: *mut linkrs_t) -> *mut c_char {
+    if db.is_null() {
+        return ptr::null_mut();
+    }
+    unsafe {
+        let handle = &*(db as *mut LinkrsHandle);
+        let overview = handle.inner.database_overview();
+        match serde_json::to_string(&overview) {
+            Ok(json) => match CString::new(json) {
+                Ok(c_json) => c_json.into_raw(),
+                Err(_) => ptr::null_mut(),
+            },
+            Err(e) => {
+                set_last_error_message(format!("failed to serialize database overview: {e}"));
+                ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Execute `query` and write the result to `path`
+/// (`Database::export_query_to_file` over FFI).
+///
+/// # Arguments
+/// - `db`: Database handle
+/// - `query`: Query statement (UTF-8 encoded)
+/// - `path`: Output file path (UTF-8 encoded)
+/// - `format`: Export format: 0 = CSV, 1 = JSONL
+/// - `out_rows`: Output parameter, number of rows written (excluding the
+///   CSV header row)
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code (an out-of-range `format` fails with LINKRS_MISUSE)
+///
+/// # Safety
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
+/// - `query` and `path` must be valid pointers to null-terminated UTF-8 strings
+/// - `out_rows` must be a valid pointer to store the result
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_export_to_file(
+    db: *mut linkrs_t,
+    query: *const c_char,
+    path: *const c_char,
+    format: c_int,
+    out_rows: *mut u64,
+) -> c_int {
+    if db.is_null() || query.is_null() || path.is_null() || out_rows.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    // Integer-to-enum marshalling mirrors `linkrs_config_set_sync_mode`.
+    let export_format = match format {
+        0 => crate::embedded::session::export::ExportFormat::Csv,
+        1 => crate::embedded::session::export::ExportFormat::Jsonl,
+        _ => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let query_str = unsafe {
+        match CStr::from_ptr(query).to_str() {
+            Ok(s) => s,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        }
+    };
+    let path_str = unsafe {
+        match CStr::from_ptr(path).to_str() {
+            Ok(s) => s,
+            Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        }
+    };
+
+    unsafe {
+        let handle = &*(db as *mut LinkrsHandle);
+        match handle
+            .inner
+            .export_query_to_file(query_str, path_str, export_format)
+        {
+            Ok(rows) => {
+                *out_rows = rows as u64;
+                linkrs_error_code_t::LINKRS_OK as c_int
+            }
+            Err(e) => {
+                let (error_code, _) = error_code_from_core_error(&e);
+                set_last_error_message(format!("{e}"));
+                error_code
+            }
+        }
+    }
+}
+
 /// Freeing memory (memory allocated by Linkrs)
 ///
 /// # Arguments
@@ -320,5 +430,105 @@ mod tests {
 
         let rc = unsafe { linkrs_close(ptr::null_mut()) };
         assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+    }
+
+    fn open_memory_db() -> *mut linkrs_t {
+        use crate::embedded::c_api::config::{linkrs_config_free, linkrs_config_memory};
+
+        unsafe {
+            let config = linkrs_config_memory();
+            let mut db: *mut linkrs_t = ptr::null_mut();
+            assert_eq!(linkrs_open_with_config(config, &mut db), 0);
+            assert!(!db.is_null());
+            assert_eq!(linkrs_config_free(config), 0);
+            db
+        }
+    }
+
+    #[test]
+    fn test_database_overview() {
+        unsafe {
+            let db = open_memory_db();
+
+            let json_ptr = linkrs_database_overview(db);
+            assert!(!json_ptr.is_null());
+            let json_str = CStr::from_ptr(json_ptr)
+                .to_str()
+                .expect("overview JSON is not valid UTF-8");
+            let overview: serde_json::Value =
+                serde_json::from_str(json_str).expect("overview JSON does not parse");
+            linkrs_free_string(json_ptr);
+
+            assert!(overview.get("spaces").is_some());
+            let transactions = overview
+                .get("transactions")
+                .expect("overview has no transactions section");
+            assert!(transactions.get("begun").is_some());
+            assert!(transactions.get("active").is_some());
+            assert_eq!(
+                overview.get("in_memory"),
+                Some(&serde_json::Value::Bool(true))
+            );
+
+            assert!(linkrs_database_overview(ptr::null_mut()).is_null());
+
+            assert_eq!(linkrs_close(db), linkrs_error_code_t::LINKRS_OK as c_int);
+        }
+    }
+
+    #[test]
+    fn test_export_to_file() {
+        let query = CString::new("RETURN 1").expect("query CString");
+        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_dir = std::env::temp_dir().join("linkrs_c_api_test");
+        std::fs::create_dir_all(&temp_dir).ok();
+
+        let csv_path = temp_dir.join(format!("export_{}_{}.csv", std::process::id(), counter));
+        let jsonl_path = temp_dir.join(format!("export_{}_{}.jsonl", std::process::id(), counter));
+        let csv_c =
+            CString::new(csv_path.to_str().expect("invalid csv path")).expect("csv path CString");
+        let jsonl_c = CString::new(jsonl_path.to_str().expect("invalid jsonl path"))
+            .expect("jsonl path CString");
+
+        unsafe {
+            let db = open_memory_db();
+
+            let mut rows: u64 = 0;
+            let rc = linkrs_export_to_file(db, query.as_ptr(), csv_c.as_ptr(), 0, &mut rows);
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
+            assert_eq!(rows, 1);
+            let csv_content =
+                std::fs::read_to_string(&csv_path).expect("csv export file was not written");
+            assert!(!csv_content.trim().is_empty());
+
+            rows = 0;
+            let rc = linkrs_export_to_file(db, query.as_ptr(), jsonl_c.as_ptr(), 1, &mut rows);
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
+            assert_eq!(rows, 1);
+            let jsonl_content =
+                std::fs::read_to_string(&jsonl_path).expect("jsonl export file was not written");
+            assert!(!jsonl_content.trim().is_empty());
+
+            let rc = linkrs_export_to_file(db, query.as_ptr(), csv_c.as_ptr(), 7, &mut rows);
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+
+            let rc = linkrs_export_to_file(
+                ptr::null_mut(),
+                query.as_ptr(),
+                csv_c.as_ptr(),
+                0,
+                &mut rows,
+            );
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+            let rc = linkrs_export_to_file(db, ptr::null(), csv_c.as_ptr(), 0, &mut rows);
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+            let rc = linkrs_export_to_file(db, query.as_ptr(), csv_c.as_ptr(), 0, ptr::null_mut());
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+
+            assert_eq!(linkrs_close(db), linkrs_error_code_t::LINKRS_OK as c_int);
+        }
+
+        std::fs::remove_file(&csv_path).ok();
+        std::fs::remove_file(&jsonl_path).ok();
     }
 }

@@ -2,10 +2,13 @@
 //!
 //! Provides configuration management functions for database opening
 
-use crate::embedded::c_api::error::linkrs_error_code_t;
-use crate::embedded::c_api::types::linkrs_config_t;
+use crate::embedded::c_api::database::LinkrsHandle;
+use crate::embedded::c_api::error::{
+    error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
+};
+use crate::embedded::c_api::types::{linkrs_config_t, linkrs_t};
 use crate::embedded::{DatabaseConfig, SyncMode};
-use std::ffi::{c_char, c_int, CStr};
+use std::ffi::{c_char, c_int, CStr, CString};
 use std::time::Duration;
 
 /// Internal structure of configuration handles
@@ -269,6 +272,212 @@ pub unsafe extern "C" fn linkrs_config_set_sync_mode(
     linkrs_error_code_t::LINKRS_OK as c_int
 }
 
+/// Read one runtime `section.key` configuration value
+/// (`Database::get_config_value` over FFI).
+///
+/// Supported keys: `cache.size_mb`, `timeout.default_ms`, `wal.enabled`,
+/// `sync.mode`, `storage.read_only`, `storage.create_if_missing`,
+/// `storage.checkpoint_on_close`.
+///
+/// # Arguments
+/// - `db`: Database handle
+/// - `section`: Config section name (UTF-8 encoded)
+/// - `key`: Config key name (UTF-8 encoded)
+///
+/// # Returns
+/// - Current value as a heap string, NULL for unknown keys or on error
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
+/// - `section` and `key` must be valid pointers to null-terminated UTF-8 strings
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_get_value(
+    db: *mut linkrs_t,
+    section: *const c_char,
+    key: *const c_char,
+) -> *mut c_char {
+    if db.is_null() || section.is_null() || key.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let section_str = match CStr::from_ptr(section).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let key_str = match CStr::from_ptr(key).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let handle = &*(db as *mut LinkrsHandle);
+    match handle.inner.get_config_value(section_str, key_str) {
+        Some(value) => match CString::new(value) {
+            Ok(c_value) => c_value.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Update one runtime `section.key` configuration value from its string form
+/// (`Database::update_config_value` over FFI).
+///
+/// # Arguments
+/// - `db`: Database handle
+/// - `section`: Config section name (UTF-8 encoded)
+/// - `key`: Config key name (UTF-8 encoded)
+/// - `value`: New value (UTF-8 encoded)
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code (unknown keys and unparsable values fail with
+///   details in the thread-local error message)
+///
+/// # Safety
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
+/// - `section`, `key`, and `value` must be valid pointers to null-terminated UTF-8 strings
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_update_value(
+    db: *mut linkrs_t,
+    section: *const c_char,
+    key: *const c_char,
+    value: *const c_char,
+) -> c_int {
+    if db.is_null() || section.is_null() || key.is_null() || value.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let section_str = match CStr::from_ptr(section).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+    let key_str = match CStr::from_ptr(key).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+    let value_str = match CStr::from_ptr(value).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &*(db as *mut LinkrsHandle);
+    match handle
+        .inner
+        .update_config_value(section_str, key_str, value_str)
+    {
+        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Err(e) => {
+            let (error_code, _) = error_code_from_core_error(&e);
+            set_last_error_message(format!("{e}"));
+            error_code
+        }
+    }
+}
+
+/// Reset one runtime `section.key` configuration value to its compiled
+/// default (`Database::reset_config_value` over FFI).
+///
+/// # Arguments
+/// - `db`: Database handle
+/// - `section`: Config section name (UTF-8 encoded)
+/// - `key`: Config key name (UTF-8 encoded)
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code (unknown keys fail with details in the
+///   thread-local error message)
+///
+/// # Safety
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
+/// - `section` and `key` must be valid pointers to null-terminated UTF-8 strings
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_reset_value(
+    db: *mut linkrs_t,
+    section: *const c_char,
+    key: *const c_char,
+) -> c_int {
+    if db.is_null() || section.is_null() || key.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let section_str = match CStr::from_ptr(section).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+    let key_str = match CStr::from_ptr(key).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &*(db as *mut LinkrsHandle);
+    match handle.inner.reset_config_value(section_str, key_str) {
+        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Err(e) => {
+            let (error_code, _) = error_code_from_core_error(&e);
+            set_last_error_message(format!("{e}"));
+            error_code
+        }
+    }
+}
+
+/// Apply many runtime configuration updates at once
+/// (`Database::bulk_update_config` over FFI).
+///
+/// # Arguments
+/// - `db`: Database handle
+/// - `updates_json`: JSON object mapping `"section.key"` to the new value
+///   string, e.g. `{"timeout.default_ms":"2000","cache.size_mb":"64"}`
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code (malformed JSON, unknown keys, and unparsable
+///   values fail with details in the thread-local error message)
+///
+/// # Safety
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
+/// - `updates_json` must be a valid pointer to a null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_bulk_update(
+    db: *mut linkrs_t,
+    updates_json: *const c_char,
+) -> c_int {
+    if db.is_null() || updates_json.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let json_str = match CStr::from_ptr(updates_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let updates: std::collections::HashMap<String, String> = match serde_json::from_str(json_str) {
+        Ok(u) => u,
+        Err(e) => {
+            let err = crate::api_core::error::CoreError::InvalidParameter(format!(
+                "invalid updates_json: {e}"
+            ));
+            let (error_code, _) = error_code_from_core_error(&err);
+            set_last_error_message(format!("{err}"));
+            return error_code;
+        }
+    };
+
+    let handle = &*(db as *mut LinkrsHandle);
+    match handle.inner.bulk_update_config(updates) {
+        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Err(e) => {
+            let (error_code, _) = error_code_from_core_error(&e);
+            set_last_error_message(format!("{e}"));
+            error_code
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +566,160 @@ mod tests {
                 linkrs_open_with_config(std::ptr::null_mut(), &mut db),
                 linkrs_error_code_t::LINKRS_MISUSE as c_int
             );
+        }
+    }
+
+    fn open_memory_db() -> *mut linkrs_t {
+        use crate::embedded::c_api::database::linkrs_open_with_config;
+        use crate::embedded::c_api::types::linkrs_t;
+
+        unsafe {
+            let config = linkrs_config_memory();
+            let mut db: *mut linkrs_t = std::ptr::null_mut();
+            assert_eq!(linkrs_open_with_config(config, &mut db), 0);
+            assert!(!db.is_null());
+            assert_eq!(linkrs_config_free(config), 0);
+            db
+        }
+    }
+
+    #[test]
+    fn test_runtime_config_get_update() {
+        use crate::embedded::c_api::database::{linkrs_close, linkrs_free_string};
+        use crate::embedded::c_api::types::linkrs_t;
+
+        unsafe {
+            let db = open_memory_db();
+
+            let section = CString::new("cache").unwrap();
+            let key = CString::new("size_mb").unwrap();
+            let out = linkrs_config_get_value(db, section.as_ptr(), key.as_ptr());
+            assert!(!out.is_null());
+            linkrs_free_string(out);
+
+            let timeout_section = CString::new("timeout").unwrap();
+            let timeout_key = CString::new("default_ms").unwrap();
+            let value = CString::new("1234").unwrap();
+            assert_eq!(
+                linkrs_config_update_value(
+                    db,
+                    timeout_section.as_ptr(),
+                    timeout_key.as_ptr(),
+                    value.as_ptr()
+                ),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let out = linkrs_config_get_value(db, timeout_section.as_ptr(), timeout_key.as_ptr());
+            assert!(!out.is_null());
+            let text = std::ffi::CStr::from_ptr(out).to_str().unwrap().to_string();
+            linkrs_free_string(out);
+            assert_eq!(text, "1234");
+
+            // Unknown keys read back as NULL.
+            let unknown_section = CString::new("nope").unwrap();
+            let unknown_key = CString::new("nothing").unwrap();
+            let out = linkrs_config_get_value(db, unknown_section.as_ptr(), unknown_key.as_ptr());
+            assert!(out.is_null());
+
+            assert_eq!(linkrs_close(db), 0);
+        }
+    }
+
+    #[test]
+    fn test_runtime_config_bulk_and_reset() {
+        use crate::embedded::c_api::database::{linkrs_close, linkrs_free_string};
+        use crate::embedded::c_api::types::linkrs_t;
+
+        unsafe {
+            let db = open_memory_db();
+
+            let updates =
+                CString::new(r#"{"timeout.default_ms":"2500","cache.size_mb":"64"}"#).unwrap();
+            assert_eq!(
+                linkrs_config_bulk_update(db, updates.as_ptr()),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let timeout_section = CString::new("timeout").unwrap();
+            let timeout_key = CString::new("default_ms").unwrap();
+            let out = linkrs_config_get_value(db, timeout_section.as_ptr(), timeout_key.as_ptr());
+            let text = std::ffi::CStr::from_ptr(out).to_str().unwrap().to_string();
+            linkrs_free_string(out);
+            assert_eq!(text, "2500");
+
+            let cache_section = CString::new("cache").unwrap();
+            let cache_key = CString::new("size_mb").unwrap();
+            let out = linkrs_config_get_value(db, cache_section.as_ptr(), cache_key.as_ptr());
+            let text = std::ffi::CStr::from_ptr(out).to_str().unwrap().to_string();
+            linkrs_free_string(out);
+            assert_eq!(text, "64");
+
+            // Reset restores the compiled default.
+            assert_eq!(
+                linkrs_config_reset_value(db, timeout_section.as_ptr(), timeout_key.as_ptr()),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let out = linkrs_config_get_value(db, timeout_section.as_ptr(), timeout_key.as_ptr());
+            let text = std::ffi::CStr::from_ptr(out).to_str().unwrap().to_string();
+            linkrs_free_string(out);
+            let expected = DatabaseConfig::default()
+                .default_timeout
+                .as_millis()
+                .to_string();
+            assert_eq!(text, expected);
+
+            assert_eq!(linkrs_close(db), 0);
+        }
+    }
+
+    #[test]
+    fn test_runtime_config_errors() {
+        use crate::embedded::c_api::database::linkrs_close;
+        use crate::embedded::c_api::types::linkrs_t;
+
+        unsafe {
+            let db = open_memory_db();
+
+            let section = CString::new("cache").unwrap();
+            let key = CString::new("size_mb").unwrap();
+            let bad_value = CString::new("not_a_number").unwrap();
+            assert_ne!(
+                linkrs_config_update_value(db, section.as_ptr(), key.as_ptr(), bad_value.as_ptr()),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let bad_json = CString::new("{not json").unwrap();
+            assert_ne!(
+                linkrs_config_bulk_update(db, bad_json.as_ptr()),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let unknown_section = CString::new("nope").unwrap();
+            let unknown_key = CString::new("nothing").unwrap();
+            assert_ne!(
+                linkrs_config_reset_value(db, unknown_section.as_ptr(), unknown_key.as_ptr()),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            assert_eq!(
+                linkrs_config_update_value(
+                    std::ptr::null_mut(),
+                    section.as_ptr(),
+                    key.as_ptr(),
+                    bad_value.as_ptr()
+                ),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            assert_eq!(
+                linkrs_config_reset_value(std::ptr::null_mut(), section.as_ptr(), key.as_ptr()),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            assert_eq!(
+                linkrs_config_bulk_update(std::ptr::null_mut(), bad_json.as_ptr()),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            assert_eq!(linkrs_close(db), 0);
         }
     }
 }

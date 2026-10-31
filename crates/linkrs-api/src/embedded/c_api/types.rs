@@ -37,6 +37,16 @@ pub struct linkrs_result_t {
     _dummy: u8,
 }
 
+/// Prepared statement handles (opaque pointers).
+///
+/// Created by `linkrs_prepare`, released with `linkrs_stmt_free`. The
+/// handle does not keep its session alive: free it before closing the
+/// session it was prepared on.
+#[repr(C)]
+pub struct linkrs_stmt_t {
+    _dummy: u8,
+}
+
 /// Batch operation handles (opaque pointers)
 #[repr(C)]
 pub struct linkrs_batch_t {
