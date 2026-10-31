@@ -76,7 +76,7 @@ impl<
     ) -> Result<Response<MigrateExecuteResponse>, Status> {
         let req = request.into_inner();
         let session_id = require_session_id(&req.session_id)?;
-        crate::http::handlers::authz::require_admin_session(&self.app_state, session_id)
+        crate::services::authz::require_admin_session(&self.app_state, session_id)
             .map_err(map_http_error)?;
         let storage = self.app_state.server.get_storage();
         let stats = self.app_state.server.get_stats_manager();
@@ -94,7 +94,7 @@ impl<
         let plan: linkrs_migration::MigrationPlan = serde_json::from_str(&req.plan_json)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let sender = crate::http::handlers::migration_progress::get_or_create_sender(
+        let sender = crate::services::migration_progress::get_or_create_sender(
             &plan.target.space,
             &plan.target.label,
             plan.target.is_edge,
@@ -102,9 +102,7 @@ impl<
         let registry = linkrs_core::event_dispatch::EventSubscriptions::<
             linkrs_migration::MigrationEvent,
         >::new();
-        registry.add(crate::http::handlers::migration_progress::event_bridge(
-            sender,
-        ));
+        registry.add(crate::services::migration_progress::event_bridge(sender));
         let registry = std::sync::Arc::new(registry);
         let report = linkrs_api::migration_online::execute_online_migration(
             &mut *storage_write,
@@ -138,7 +136,7 @@ impl<
     ) -> Result<Response<MigrateRollbackResponse>, Status> {
         let req = request.into_inner();
         let session_id = require_session_id(&req.session_id)?;
-        crate::http::handlers::authz::require_admin_session(&self.app_state, session_id)
+        crate::services::authz::require_admin_session(&self.app_state, session_id)
             .map_err(map_http_error)?;
         let storage = self.app_state.server.get_storage();
         let migration_config = self.app_state.server.migration_config();
@@ -147,7 +145,7 @@ impl<
         let plan: linkrs_migration::MigrationPlan = serde_json::from_str(&req.plan_json)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let sender = crate::http::handlers::migration_progress::get_or_create_sender(
+        let sender = crate::services::migration_progress::get_or_create_sender(
             &plan.target.space,
             &plan.target.label,
             plan.target.is_edge,
@@ -155,9 +153,7 @@ impl<
         let registry = linkrs_core::event_dispatch::EventSubscriptions::<
             linkrs_migration::MigrationEvent,
         >::new();
-        registry.add(crate::http::handlers::migration_progress::event_bridge(
-            sender,
-        ));
+        registry.add(crate::services::migration_progress::event_bridge(sender));
         let registry = std::sync::Arc::new(registry);
         let report = linkrs_migration::rollback_migration_with_options(
             &mut *storage_write,
@@ -188,14 +184,14 @@ impl<
         let wire = linkrs_wire::migration::MigrationExecuteRequest {
             plan_json: req.plan_json,
         };
-        match crate::http::handlers::schema::migration::dry_run_migration(
-            axum::extract::State(self.app_state.clone()),
-            axum::extract::Extension(session_id),
-            axum::Json(wire),
+        match crate::services::schema_migration::dry_run_migration_core(
+            &self.app_state,
+            session_id,
+            &wire.plan_json,
         )
         .await
         {
-            Ok(axum::Json(resp)) => Ok(Response::new(DryRunMigrationResponse {
+            Ok(resp) => Ok(Response::new(DryRunMigrationResponse {
                 success: resp.success,
                 steps_completed: resp.steps_completed as u64,
                 rows_migrated: resp.rows_migrated,
@@ -212,17 +208,16 @@ impl<
     ) -> Result<Response<GetMigrationHistoryResponse>, Status> {
         let req = request.into_inner();
         let session_id = require_session_id(&req.session_id)?;
-        let query =
-            std::collections::HashMap::from([("is_edge".to_string(), req.is_edge.to_string())]);
-        match crate::http::handlers::schema::migration::migration_history(
-            axum::extract::State(self.app_state.clone()),
-            axum::extract::Extension(session_id),
-            axum::extract::Path((req.space, req.label)),
-            axum::extract::Query(query),
+        match crate::services::schema_migration::migration_history_core(
+            &self.app_state,
+            session_id,
+            req.space,
+            req.label,
+            req.is_edge,
         )
         .await
         {
-            Ok(axum::Json(resp)) => Ok(Response::new(GetMigrationHistoryResponse {
+            Ok(resp) => Ok(Response::new(GetMigrationHistoryResponse {
                 history_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
                 error: String::new(),
             })),
@@ -236,17 +231,16 @@ impl<
     ) -> Result<Response<GetMigrationStatusResponse>, Status> {
         let req = request.into_inner();
         let session_id = require_session_id(&req.session_id)?;
-        let query =
-            std::collections::HashMap::from([("is_edge".to_string(), req.is_edge.to_string())]);
-        match crate::http::handlers::schema::migration::migration_status(
-            axum::extract::State(self.app_state.clone()),
-            axum::extract::Extension(session_id),
-            axum::extract::Path((req.space, req.label)),
-            axum::extract::Query(query),
+        match crate::services::schema_migration::migration_status_core(
+            &self.app_state,
+            session_id,
+            req.space,
+            req.label,
+            req.is_edge,
         )
         .await
         {
-            Ok(axum::Json(resp)) => Ok(Response::new(GetMigrationStatusResponse {
+            Ok(resp) => Ok(Response::new(GetMigrationStatusResponse {
                 status_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
                 error: String::new(),
             })),
@@ -259,11 +253,8 @@ impl<
         request: Request<StreamMigrationProgressRequest>,
     ) -> Result<Response<StreamMigrationProgressStream>, Status> {
         let req = request.into_inner();
-        let rx = crate::http::handlers::migration_progress::subscribe(
-            &req.space,
-            &req.label,
-            req.is_edge,
-        );
+        let rx =
+            crate::services::migration_progress::subscribe(&req.space, &req.label, req.is_edge);
         let rx_stream = tokio_stream::wrappers::BroadcastStream::new(rx);
         let stream = rx_stream.filter_map(|res| match res {
             Ok(ev) => {

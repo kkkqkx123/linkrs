@@ -52,10 +52,8 @@ pub(crate) fn transaction_status(error: TransactionError) -> Status {
     }
 }
 
-pub(crate) fn op_error_to_status(
-    error: crate::http::handlers::function::FunctionOpError,
-) -> Status {
-    use crate::http::handlers::function::FunctionOpError;
+pub(crate) fn op_error_to_status(error: crate::services::function::FunctionOpError) -> Status {
+    use crate::services::function::FunctionOpError;
     match error {
         FunctionOpError::NotFound(message) => Status::not_found(message),
         FunctionOpError::Conflict(message) => Status::already_exists(message),

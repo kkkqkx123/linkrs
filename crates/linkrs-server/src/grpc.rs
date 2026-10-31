@@ -16,6 +16,7 @@ pub mod cursor;
 pub mod error;
 pub mod fulltext;
 pub mod function;
+pub mod metrics;
 pub mod migration;
 pub mod query;
 pub mod schema;

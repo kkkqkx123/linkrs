@@ -6,6 +6,8 @@ package linkrs;
 service LinkrsService {
   // Health Check
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  // Metrics
+  rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
   
   // Authentication
   rpc Login(LoginRequest) returns (LoginResponse);
@@ -192,6 +194,13 @@ message HealthCheckResponse {
   bool healthy = 1;
   string version = 2;
   int64 uptime_seconds = 3;
+}
+
+message GetMetricsRequest {}
+
+message GetMetricsResponse {
+  string content_type = 1;
+  string body = 2;
 }
 
 // ============================================================

@@ -29,8 +29,12 @@ pub async fn execute_set(
                 executor.write_output(&format!("Set server variable: {} = {}", name, v))?;
             }
             None => {
-                let vars = session_mgr.client().list_session_variables(session_id).await?;
-                let rendered = serde_json::to_string_pretty(&vars).unwrap_or_else(|_| vars.to_string());
+                let vars = session_mgr
+                    .client()
+                    .list_session_variables(session_id)
+                    .await?;
+                let rendered =
+                    serde_json::to_string_pretty(&vars).unwrap_or_else(|_| vars.to_string());
                 executor.write_output(&format!("Server variables:\n{}", rendered))?;
             }
         }
@@ -98,7 +102,10 @@ pub async fn execute_show_variables(
             .session()
             .map(|s| s.session_id)
             .ok_or(CliError::NotConnected)?;
-        let vars = session_mgr.client().list_session_variables(session_id).await?;
+        let vars = session_mgr
+            .client()
+            .list_session_variables(session_id)
+            .await?;
         let rendered = serde_json::to_string_pretty(&vars).unwrap_or_else(|_| vars.to_string());
         executor.write_output(&rendered)?;
         return Ok(true);
@@ -119,9 +126,7 @@ pub async fn execute_show_variables(
         }
         executor.write_output(output.trim_end())?;
         if !session_mgr.is_embedded() {
-            executor.write_output(
-                "(local-only; server $variables: \\set --remote)",
-            )?;
+            executor.write_output("(local-only; server $variables: \\set --remote)")?;
         }
     }
     Ok(true)

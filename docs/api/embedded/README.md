@@ -4,14 +4,23 @@
 
 Linkrs 的嵌入式 API 允许开发者把数据库直接嵌入到应用程序中使用，适合单机应用、桌面工具和测试环境。
 
-当前仓库只保留 Rust 嵌入式 API，不再维护独立的 C API 实现。
+仓库同时提供两层嵌入式入口：
+
+- 嵌入式 Rust API（`embedded` feature）：主要入口，文档见下方模块表。
+- C API（`c_api` feature）：嵌入式 Rust API 的薄 FFI 投影，头文件为 `include/linkrs.h`。
 
 ## 启用方式
 
-嵌入式 API 通过 `embedded` feature 暴露：
+嵌入式 Rust API 通过 `embedded` feature 暴露：
 
 ```bash
 cargo build --features embedded
+```
+
+C API 通过 `c_api` feature 暴露（同时启用 `embedded`）：
+
+```bash
+cargo build --features c_api
 ```
 
 ## 模块结构
@@ -45,4 +54,10 @@ cargo build --features embedded
 
 ## C API 说明
 
-当前仓库不再维护独立的 C API 实现；嵌入式 Rust API 是唯一支持的嵌入式入口。
+C API 位于 `crates/linkrs-api/src/embedded/c_api`，是嵌入式 Rust API 的薄 FFI 投影，由 `c_api` feature 编译。
+它覆盖查询、事务与保存点、Schema 与版本历史、批量写入、配置（含批量更新）、迁移、UDF、统计、观测
+（health/metrics/事务快照）、会话变量等能力。
+
+头文件 `include/linkrs.h` 在 `c_api` 构建时由 `cbindgen` 从 Rust 源码重新生成，因此声明的 `linkrs_*`
+始终与 Rust 导出保持一致。字符串返回值需由调用方使用 `linkrs_free_string` 释放；错误码通过返回值和
+`linkrs_errmsg` 获取。

@@ -49,14 +49,10 @@ impl<
                 tag_name: req.tag_name,
                 field_name: req.field_name,
             };
-            match crate::http::handlers::rebuild::rebuild_fulltext(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::Json(wire),
-            )
-            .await
+            match crate::services::rebuild::rebuild_fulltext_core(&self.app_state, session_id, wire)
+                .await
             {
-                Ok(axum::Json(resp)) => Ok(Response::new(RebuildFulltextIndexResponse {
+                Ok(resp) => Ok(Response::new(RebuildFulltextIndexResponse {
                     rebuild_id: resp.rebuild_id,
                     status: resp.status,
                     error: String::new(),
@@ -79,14 +75,14 @@ impl<
         {
             let req = request.into_inner();
             let session_id = super::error::require_session_id(&req.session_id)?;
-            match crate::http::handlers::rebuild::fulltext_rebuild_status(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::extract::Path(req.rebuild_id.clone()),
+            match crate::services::rebuild::fulltext_rebuild_status_core(
+                &self.app_state,
+                session_id,
+                req.rebuild_id.clone(),
             )
             .await
             {
-                Ok(axum::Json(resp)) => {
+                Ok(resp) => {
                     let progress_json =
                         serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
                     Ok(Response::new(GetFulltextRebuildStatusResponse {
@@ -125,14 +121,10 @@ impl<
                 field_name: req.field_name,
                 force: true,
             };
-            match crate::http::handlers::rebuild::clear_fulltext(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::Json(wire),
-            )
-            .await
+            match crate::services::rebuild::clear_fulltext_core(&self.app_state, session_id, wire)
+                .await
             {
-                Ok(axum::Json(resp)) => Ok(Response::new(ClearFulltextIndexResponse {
+                Ok(resp) => Ok(Response::new(ClearFulltextIndexResponse {
                     ok: resp.ok,
                     error: String::new(),
                 })),
@@ -154,13 +146,10 @@ impl<
         {
             let req = request.into_inner();
             let session_id = super::error::require_session_id(&req.session_id)?;
-            match crate::http::handlers::rebuild::inconsistent_fulltext(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-            )
-            .await
+            match crate::services::rebuild::inconsistent_fulltext_core(&self.app_state, session_id)
+                .await
             {
-                Ok(axum::Json(resp)) => Ok(Response::new(ListInconsistentFulltextResponse {
+                Ok(resp) => Ok(Response::new(ListInconsistentFulltextResponse {
                     indexes_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
                     error: String::new(),
                 })),
@@ -180,12 +169,14 @@ impl<
     ) -> Result<Response<SearchFulltextResponse>, Status> {
         #[cfg(feature = "fulltext")]
         {
-            use crate::http::handlers::fulltext::{
-                FulltextSearchRequestBody, FulltextSearchResponse,
-            };
+            use crate::services::fulltext::FulltextSearchRequestBody;
             let req = request.into_inner();
             let session_id = super::error::require_session_id(&req.session_id)?;
-            let limit = if req.limit == 0 { 10 } else { req.limit as usize };
+            let limit = if req.limit == 0 {
+                10
+            } else {
+                req.limit as usize
+            };
             let body = FulltextSearchRequestBody {
                 space_id: req.space_id,
                 tag_name: req.tag_name,
@@ -193,18 +184,10 @@ impl<
                 query: req.query,
                 limit,
             };
-            match crate::http::handlers::fulltext::search(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::Json(body),
-            )
-            .await
-            {
-                Ok(axum::Json(FulltextSearchResponse {
-                    results,
-                    total_hits,
-                })) => {
-                    let hits = results
+            match crate::services::fulltext::search_core(&self.app_state, session_id, body).await {
+                Ok(resp) => {
+                    let hits = resp
+                        .results
                         .into_iter()
                         .map(|h| super::proto::FulltextSearchHit {
                             doc_id: h.doc_id,
@@ -214,7 +197,7 @@ impl<
                         .collect();
                     Ok(Response::new(SearchFulltextResponse {
                         results: hits,
-                        total_hits: total_hits as u64,
+                        total_hits: resp.total_hits as u64,
                         error: String::new(),
                     }))
                 }

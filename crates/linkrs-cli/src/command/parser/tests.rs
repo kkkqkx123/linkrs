@@ -204,7 +204,11 @@ fn test_parse_meta_command_format_error() {
 #[test]
 fn test_parse_meta_command_set() {
     match parse_command("\\set VAR value") {
-        Command::MetaCommand(MetaCommand::Set { name, value, remote }) => {
+        Command::MetaCommand(MetaCommand::Set {
+            name,
+            value,
+            remote,
+        }) => {
             assert_eq!(name, "VAR");
             assert_eq!(value, Some("value".to_string()));
             assert!(!remote);
@@ -213,7 +217,11 @@ fn test_parse_meta_command_set() {
     }
 
     match parse_command("\\set VAR") {
-        Command::MetaCommand(MetaCommand::Set { name, value, remote }) => {
+        Command::MetaCommand(MetaCommand::Set {
+            name,
+            value,
+            remote,
+        }) => {
             assert_eq!(name, "VAR");
             assert!(value.is_none());
             assert!(!remote);
@@ -222,7 +230,11 @@ fn test_parse_meta_command_set() {
     }
 
     match parse_command("\\set --remote FOO 1") {
-        Command::MetaCommand(MetaCommand::Set { name, value, remote }) => {
+        Command::MetaCommand(MetaCommand::Set {
+            name,
+            value,
+            remote,
+        }) => {
             assert_eq!(name, "FOO");
             assert_eq!(value, Some("1".to_string()));
             assert!(remote);

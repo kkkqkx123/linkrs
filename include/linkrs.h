@@ -18,6 +18,56 @@
 #define LINKRS_HOOK_DELETE 3
 
 /**
+ * Tag describing which payload a value carries.
+ */
+typedef enum linkrs_value_type_t {
+  /**
+   * Null / empty value
+   */
+  LINKRS_NULL = 0,
+  /**
+   * Boolean
+   */
+  LINKRS_BOOL = 1,
+  /**
+   * 64-bit signed integer
+   */
+  LINKRS_INT = 2,
+  /**
+   * Double-precision floating point
+   */
+  LINKRS_FLOAT = 3,
+  /**
+   * UTF-8 string
+   */
+  LINKRS_STRING = 4,
+  /**
+   * List
+   */
+  LINKRS_LIST = 5,
+  /**
+   * Map / dictionary
+   */
+  LINKRS_MAP = 6,
+  /**
+   * Vertex
+   */
+  LINKRS_VERTEX = 7,
+  /**
+   * Edge
+   */
+  LINKRS_EDGE = 8,
+  /**
+   * Path
+   */
+  LINKRS_PATH = 9,
+  /**
+   * Binary blob
+   */
+  LINKRS_BLOB = 10,
+} linkrs_value_type_t;
+
+/**
  * Error code
  */
 typedef enum linkrs_error_code_t {
@@ -147,56 +197,6 @@ typedef enum linkrs_extended_error_code_t {
   LINKRS_ERROR_PATH_NOT_FOUND = 1402,
   LINKRS_ERROR_INTERNAL = 1500,
 } linkrs_extended_error_code_t;
-
-/**
- * Tag describing which payload a value carries.
- */
-typedef enum linkrs_value_type_t {
-  /**
-   * Null / empty value
-   */
-  LINKRS_NULL = 0,
-  /**
-   * Boolean
-   */
-  LINKRS_BOOL = 1,
-  /**
-   * 64-bit signed integer
-   */
-  LINKRS_INT = 2,
-  /**
-   * Double-precision floating point
-   */
-  LINKRS_FLOAT = 3,
-  /**
-   * UTF-8 string
-   */
-  LINKRS_STRING = 4,
-  /**
-   * List
-   */
-  LINKRS_LIST = 5,
-  /**
-   * Map / dictionary
-   */
-  LINKRS_MAP = 6,
-  /**
-   * Vertex
-   */
-  LINKRS_VERTEX = 7,
-  /**
-   * Edge
-   */
-  LINKRS_EDGE = 8,
-  /**
-   * Path
-   */
-  LINKRS_PATH = 9,
-  /**
-   * Binary blob
-   */
-  LINKRS_BLOB = 10,
-} linkrs_value_type_t;
 
 /**
  * Session handles (opaque pointers)
@@ -842,6 +842,39 @@ int linkrs_config_set_enable_wal(struct linkrs_config_t *config, int enable);
 int linkrs_config_set_sync_mode(struct linkrs_config_t *config, int mode);
 
 /**
+ * Apply several configuration updates in one call.
+ *
+ * `updates_json` is a JSON object whose keys mirror the individual
+ * `linkrs_config_set_*` setters:
+ *
+ * - `cache_size_mb` (positive integer)
+ * - `timeout_ms` (non-negative integer)
+ * - `read_only` (boolean)
+ * - `create_if_missing` (boolean)
+ * - `enable_wal` (boolean)
+ * - `sync_mode` (integer: 0 = Full, 1 = Normal, 2 = Off)
+ * - `checkpoint_on_close` (boolean)
+ * - `vector_enabled` (boolean)
+ *
+ * The update is atomic: unknown keys or invalid values leave the
+ * configuration unchanged.
+ *
+ * # Arguments
+ * - `config`: Configuration handle
+ * - `updates_json`: Null-terminated JSON object string
+ *
+ * # Returns
+ * - Success: LINKRS_OK
+ * - Failure: LINKRS_MISUSE for null handles, LINKRS_ERROR for malformed
+ *   JSON or an unknown key, LINKRS_MISUSE for an invalid value
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ * - `updates_json` must be a valid null-terminated UTF-8 string
+ */
+int linkrs_bulk_update_config(struct linkrs_config_t *config, const char *updates_json);
+
+/**
  * Open database
  *
  * # Arguments
@@ -932,6 +965,22 @@ const char *linkrs_libversion(void);
  * - This function should only be called on strings that were allocated by Linkrs C API functions
  */
 void linkrs_free_string(char *str);
+
+/**
+ * Abort another transaction by id (`GraphDatabase::kill_transaction` over FFI).
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ */
+int linkrs_kill_transaction(struct linkrs_t *db, uint64_t txn_id);
+
+/**
+ * Number of currently active transactions (`list_transactions().len()`).
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ */
+int linkrs_transaction_count(struct linkrs_t *db);
 
 /**
  * Freeing memory (memory allocated by Linkrs)
@@ -1218,6 +1267,100 @@ int linkrs_unload_extension(struct linkrs_session_t *session, const char *name);
 int linkrs_reload_extension(struct linkrs_session_t *session, const char *name, int *reloaded);
 
 /**
+ * Return the process-internal health payload as JSON.
+ *
+ * Mirrors the `/v1/health` response; listener readiness is reported as
+ * `not_applicable` because no network endpoint is involved.
+ *
+ * # Returns
+ * Null-terminated JSON object, or null when `db` is null.
+ *
+ * # Memory Management
+ * The returned string must be freed with `linkrs_free_string`.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ */
+char *linkrs_health_json(struct linkrs_t *db);
+
+/**
+ * Return the Prometheus metrics of the database as text.
+ *
+ * Byte-identical to the HTTP `/v1/metrics` endpoint and the gRPC
+ * `GetMetrics` response for the same database.
+ *
+ * # Returns
+ * Null-terminated metrics text, or null when `db` is null.
+ *
+ * # Memory Management
+ * The returned string must be freed with `linkrs_free_string`.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ */
+char *linkrs_metrics_text(struct linkrs_t *db);
+
+/**
+ * Return the version history of a vertex tag or edge type as JSON.
+ *
+ * The payload matches `GET /v1/schema/versions/{space}/{label}`. When the
+ * label has no recorded history the literal JSON `null` is returned.
+ *
+ * # Arguments
+ * - `db`: Database handle
+ * - `space`: Null-terminated space name
+ * - `label`: Null-terminated tag or edge type name
+ * - `is_edge`: Non-zero selects an edge type, zero a vertex tag
+ *
+ * # Returns
+ * Null-terminated JSON string, or null on invalid arguments or error
+ * (details through `linkrs_errmsg`).
+ *
+ * # Memory Management
+ * The returned string must be freed with `linkrs_free_string`.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` and `label` must be valid null-terminated UTF-8 strings
+ */
+char *linkrs_schema_version_history_json(struct linkrs_t *db,
+                                         const char *space,
+                                         const char *label,
+                                         int is_edge);
+
+/**
+ * Return the active transaction list as a JSON array.
+ *
+ * Each entry mirrors the fields of `GET /v1/transactions`.
+ *
+ * # Returns
+ * Null-terminated JSON array, or null when `db` is null.
+ *
+ * # Memory Management
+ * The returned string must be freed with `linkrs_free_string`.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ */
+char *linkrs_transactions_json(struct linkrs_t *db);
+
+/**
+ * Return transaction outcome and resource gauges as JSON.
+ *
+ * Mirrors `GET /v1/transactions/metrics`.
+ *
+ * # Returns
+ * Null-terminated JSON object, or null when `db` is null.
+ *
+ * # Memory Management
+ * The returned string must be freed with `linkrs_free_string`.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ */
+char *linkrs_transaction_metrics_json(struct linkrs_t *db);
+
+/**
  * Execute a migration plan given as JSON.
  *
  * Runs through the shared online orchestration: writes stall only across
@@ -1339,6 +1482,31 @@ int linkrs_execute_params(struct linkrs_session_t *session,
                           const struct linkrs_value_t *params,
                           uintptr_t param_count,
                           struct linkrs_result_t **result);
+
+/**
+ * Validate a query without executing it (`Session::validate_query` over FFI).
+ *
+ * # Returns
+ * - `LINKRS_OK` when the statement parses and binds; otherwise a normal
+ *   error code with details in the session error slot.
+ *
+ * # Safety
+ * - `session` must be a valid session handle
+ * - `query` must be a null-terminated UTF-8 string
+ */
+int linkrs_validate_query(struct linkrs_session_t *session, const char *query);
+
+/**
+ * Explain a query without executing it (`Session::explain_query` over FFI).
+ *
+ * # Safety
+ * - `session` must be a valid session handle
+ * - `query` must be a null-terminated UTF-8 string
+ * - `result` must be a valid out-pointer; free with `linkrs_result_free`
+ */
+int linkrs_explain_query(struct linkrs_session_t *session,
+                         const char *query,
+                         struct linkrs_result_t **result);
 
 /**
  * Releasing the result set
@@ -1755,6 +1923,85 @@ int linkrs_session_set_autocommit(struct linkrs_session_t *session, bool autocom
  * - `session` must be a valid session handle created by `linkrs_session_create`
  */
 bool linkrs_session_get_autocommit(struct linkrs_session_t *session);
+
+/**
+ * Assign a session variable from a JSON-encoded value.
+ *
+ * Session variables are exposed to queries as `$name` and are scoped to the
+ * session. Inside a text-begun transaction the assignment participates in
+ * `ROLLBACK` / `ROLLBACK TO SAVEPOINT`, matching the Rust API.
+ *
+ * # Arguments
+ * - `session`: Session handle
+ * - `name`: Null-terminated variable name
+ * - `value_json`: Null-terminated JSON representation of the value
+ *
+ * # Returns
+ * - Success: LINKRS_OK
+ * - Failure: LINKRS_MISUSE for null pointers or an empty name,
+ *   LINKRS_ERROR when `value_json` is not valid JSON
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ * - `name` and `value_json` must be valid null-terminated UTF-8 strings
+ */
+int linkrs_session_set_variable(struct linkrs_session_t *session,
+                                const char *name,
+                                const char *value_json);
+
+/**
+ * Read a session variable as JSON.
+ *
+ * # Arguments
+ * - `session`: Session handle
+ * - `name`: Null-terminated variable name
+ *
+ * # Returns
+ * - Null-terminated JSON string when the variable is set, null otherwise
+ *
+ * # Memory Management
+ * The returned string must be freed with `linkrs_free_string`.
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ * - `name` must be a valid null-terminated UTF-8 string
+ */
+char *linkrs_session_get_variable(struct linkrs_session_t *session, const char *name);
+
+/**
+ * Remove a session variable.
+ *
+ * # Arguments
+ * - `session`: Session handle
+ * - `name`: Null-terminated variable name
+ *
+ * # Returns
+ * - LINKRS_OK when the variable was removed
+ * - LINKRS_NOTFOUND when the variable was not set
+ * - LINKRS_MISUSE for null pointers or an empty name
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ * - `name` must be a valid null-terminated UTF-8 string
+ */
+int linkrs_session_remove_variable(struct linkrs_session_t *session, const char *name);
+
+/**
+ * List all session variables as a JSON object.
+ *
+ * # Arguments
+ * - `session`: Session handle
+ *
+ * # Returns
+ * - Null-terminated JSON object string, or null on a null handle
+ *
+ * # Memory Management
+ * The returned string must be freed with `linkrs_free_string`.
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ */
+char *linkrs_session_list_variables(struct linkrs_session_t *session);
 
 /**
  * Setting the busy wait timeout

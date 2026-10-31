@@ -2233,6 +2233,7 @@ name = "linkrs-api"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "csv",
  "linkrs-config",
  "linkrs-core",
  "linkrs-fulltext",

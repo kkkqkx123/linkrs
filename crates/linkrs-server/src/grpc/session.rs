@@ -22,18 +22,6 @@ impl<
             + 'static,
     > LinkrsService<S>
 {
-    pub(crate) async fn handle_health_check(
-        &self,
-        _request: Request<HealthCheckRequest>,
-    ) -> Result<Response<HealthCheckResponse>, Status> {
-        let uptime = self.start_time.elapsed().as_secs();
-        Ok(Response::new(HealthCheckResponse {
-            healthy: true,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            uptime_seconds: uptime as i64,
-        }))
-    }
-
     pub(crate) async fn handle_login(
         &self,
         request: Request<LoginRequest>,

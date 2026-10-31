@@ -622,6 +622,55 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             .get_edge_type(space, name)
             .map_err(|e| CoreError::StorageError(e.to_string()))
     }
+
+    /// Version history of a vertex tag (embedded equivalent of
+    /// `GET /v1/schema/versions/{space}/{label}`).
+    pub fn get_vertex_version_history(
+        &self,
+        space: &str,
+        tag: &str,
+    ) -> CoreResult<Option<linkrs_storage::LabelVersionHistory>> {
+        self.db.schema_api.get_vertex_version_history(space, tag)
+    }
+
+    /// Version history of an edge type.
+    pub fn get_edge_version_history(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> CoreResult<Option<linkrs_storage::LabelVersionHistory>> {
+        self.db
+            .schema_api
+            .get_edge_version_history(space, edge_type)
+    }
+
+    /// Schema changes between two versions of a label.
+    pub fn get_schema_changes(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    ) -> CoreResult<Vec<linkrs_storage::PropertyChange>> {
+        self.db
+            .schema_api
+            .get_schema_changes(space, label, is_edge, from_version, to_version)
+    }
+
+    /// Breaking changes between two versions of a label.
+    pub fn detect_breaking_changes(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    ) -> CoreResult<Vec<linkrs_storage::PropertyChange>> {
+        self.db
+            .schema_api
+            .detect_breaking_changes(space, label, is_edge, from_version, to_version)
+    }
 }
 
 /// First whitespace-delimited keyword of a statement, used only for the

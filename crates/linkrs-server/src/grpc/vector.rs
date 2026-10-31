@@ -276,10 +276,9 @@ impl<
             );
             if let Some(filter) = &req.filter {
                 if !filter.expression.is_empty() {
-                    let parsed = crate::http::handlers::vector::parse_vector_filter_expression(
-                        &filter.expression,
-                    )
-                    .map_err(Status::invalid_argument)?;
+                    let parsed =
+                        crate::services::vector::parse_vector_filter_expression(&filter.expression)
+                            .map_err(Status::invalid_argument)?;
                     options = options.with_filter(parsed);
                 }
             }
@@ -333,7 +332,7 @@ impl<
                     "tag_name and field_name are required",
                 ));
             }
-            let wire = crate::http::handlers::vector::ScrollRequest {
+            let wire = crate::services::vector::ScrollRequest {
                 space_id: req.space_id,
                 tag_name: req.tag_name,
                 field_name: req.field_name,
@@ -342,14 +341,8 @@ impl<
                 with_payload: None,
                 with_vector: None,
             };
-            match crate::http::handlers::vector::scroll(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::Json(wire),
-            )
-            .await
-            {
-                Ok(axum::Json(resp)) => Ok(Response::new(ScrollVectorResponse {
+            match crate::services::vector::scroll_core(&self.app_state, session_id, wire).await {
+                Ok(resp) => Ok(Response::new(ScrollVectorResponse {
                     points_json: serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()),
                     error: String::new(),
                 })),
@@ -371,20 +364,19 @@ impl<
         {
             let req = request.into_inner();
             let session_id = super::error::require_session_id(&req.session_id)?;
-            match crate::http::handlers::vector::count(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::extract::Path((req.space_id, req.tag_name, req.field_name)),
+            match crate::services::vector::count_core(
+                &self.app_state,
+                session_id,
+                req.space_id,
+                &req.tag_name,
+                &req.field_name,
             )
             .await
             {
-                Ok(axum::Json(resp)) => {
-                    let count = resp.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                    Ok(Response::new(GetVectorCountResponse {
-                        count,
-                        error: String::new(),
-                    }))
-                }
+                Ok(count) => Ok(Response::new(GetVectorCountResponse {
+                    count,
+                    error: String::new(),
+                })),
                 Err(e) => Err(vector_http_status(e)),
             }
         }
@@ -408,14 +400,10 @@ impl<
                 tag_name: req.tag_name,
                 field_name: req.field_name,
             };
-            match crate::http::handlers::rebuild::rebuild_vector(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::Json(wire),
-            )
-            .await
+            match crate::services::rebuild::rebuild_vector_core(&self.app_state, session_id, wire)
+                .await
             {
-                Ok(axum::Json(resp)) => Ok(Response::new(RebuildVectorIndexResponse {
+                Ok(resp) => Ok(Response::new(RebuildVectorIndexResponse {
                     rebuild_id: resp.rebuild_id,
                     status: resp.status,
                     error: String::new(),
@@ -438,14 +426,14 @@ impl<
         {
             let req = request.into_inner();
             let session_id = super::error::require_session_id(&req.session_id)?;
-            match crate::http::handlers::rebuild::vector_rebuild_status(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::extract::Path(req.rebuild_id.clone()),
+            match crate::services::rebuild::vector_rebuild_status_core(
+                &self.app_state,
+                session_id,
+                req.rebuild_id.clone(),
             )
             .await
             {
-                Ok(axum::Json(resp)) => {
+                Ok(resp) => {
                     let progress_json =
                         serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
                     Ok(Response::new(GetVectorRebuildStatusResponse {
@@ -484,14 +472,10 @@ impl<
                 field_name: req.field_name,
                 force: true,
             };
-            match crate::http::handlers::rebuild::clear_vector(
-                axum::extract::State(self.app_state.clone()),
-                axum::extract::Extension(session_id),
-                axum::Json(wire),
-            )
-            .await
+            match crate::services::rebuild::clear_vector_core(&self.app_state, session_id, wire)
+                .await
             {
-                Ok(axum::Json(resp)) => Ok(Response::new(ClearVectorIndexResponse {
+                Ok(resp) => Ok(Response::new(ClearVectorIndexResponse {
                     ok: resp.ok,
                     error: String::new(),
                 })),

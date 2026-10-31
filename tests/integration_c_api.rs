@@ -528,3 +528,228 @@ fn test_c_api_concurrent_sessions() {
     assert_ne!(session2.handle(), session3.handle());
     assert_ne!(session1.handle(), session3.handle());
 }
+
+// ==================== Session Variables ====================
+
+unsafe fn take_c_string(ptr: *mut std::ffi::c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let text = std::ffi::CStr::from_ptr(ptr)
+        .to_str()
+        .ok()
+        .map(|value| value.to_string());
+    linkrs::api::embedded::c_api::database::linkrs_free_string(ptr);
+    text
+}
+
+#[test]
+fn test_c_api_session_variables_roundtrip() {
+    use linkrs::api::embedded::c_api::session::{
+        linkrs_session_get_variable, linkrs_session_list_variables, linkrs_session_remove_variable,
+        linkrs_session_set_variable,
+    };
+
+    let test_db = CApiTestDatabase::new();
+    let session = CApiTestSession::from_db(&test_db);
+    let name = CString::new("limit").expect("valid name");
+    let value = CString::new("42").expect("valid json");
+
+    let rc =
+        unsafe { linkrs_session_set_variable(session.handle(), name.as_ptr(), value.as_ptr()) };
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
+
+    let stored =
+        unsafe { take_c_string(linkrs_session_get_variable(session.handle(), name.as_ptr())) };
+    assert_eq!(stored.as_deref(), Some("42"));
+
+    let listed = unsafe { take_c_string(linkrs_session_list_variables(session.handle())) }
+        .expect("non-null variable list");
+    let parsed: serde_json::Value = serde_json::from_str(&listed).expect("valid JSON object");
+    assert_eq!(parsed.get("limit"), Some(&serde_json::json!(42)));
+
+    let rc = unsafe { linkrs_session_remove_variable(session.handle(), name.as_ptr()) };
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
+    let rc = unsafe { linkrs_session_remove_variable(session.handle(), name.as_ptr()) };
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_NOTFOUND as i32);
+    let stored =
+        unsafe { take_c_string(linkrs_session_get_variable(session.handle(), name.as_ptr())) };
+    assert!(stored.is_none());
+}
+
+#[test]
+fn test_c_api_session_variables_invalid_arguments() {
+    use linkrs::api::embedded::c_api::session::{
+        linkrs_session_get_variable, linkrs_session_list_variables, linkrs_session_remove_variable,
+        linkrs_session_set_variable,
+    };
+
+    let name = CString::new("x").expect("valid name");
+    let invalid = CString::new("{not json").expect("valid cstring");
+
+    assert_eq!(
+        unsafe { linkrs_session_set_variable(ptr::null_mut(), name.as_ptr(), invalid.as_ptr()) }
+            as i32,
+        linkrs_error_code_t::LINKRS_MISUSE as i32
+    );
+    assert_eq!(
+        unsafe { linkrs_session_set_variable(ptr::null_mut(), ptr::null(), invalid.as_ptr()) }
+            as i32,
+        linkrs_error_code_t::LINKRS_MISUSE as i32
+    );
+
+    let test_db = CApiTestDatabase::new();
+    let session = CApiTestSession::from_db(&test_db);
+    assert_eq!(
+        unsafe { linkrs_session_set_variable(session.handle(), name.as_ptr(), invalid.as_ptr()) },
+        linkrs_error_code_t::LINKRS_ERROR as i32
+    );
+    assert_eq!(
+        unsafe { linkrs_session_remove_variable(session.handle(), ptr::null()) },
+        linkrs_error_code_t::LINKRS_MISUSE as i32
+    );
+    assert!(unsafe { linkrs_session_get_variable(session.handle(), ptr::null()) }.is_null());
+    assert!(unsafe { linkrs_session_list_variables(ptr::null_mut()) }.is_null());
+}
+
+// ==================== Observability ====================
+
+#[test]
+fn test_c_api_health_and_metrics() {
+    use linkrs::api::embedded::c_api::inspection::{linkrs_health_json, linkrs_metrics_text};
+
+    let test_db = CApiTestDatabase::new();
+
+    let health = unsafe { take_c_string(linkrs_health_json(test_db.handle())) }
+        .expect("non-null health payload");
+    let parsed: serde_json::Value = serde_json::from_str(&health).expect("valid health JSON");
+    assert_eq!(
+        parsed.get("status").and_then(|value| value.as_str()),
+        Some("healthy")
+    );
+
+    let metrics = unsafe { take_c_string(linkrs_metrics_text(test_db.handle())) }
+        .expect("non-null metrics text");
+    assert!(!metrics.is_empty());
+
+    assert!(unsafe { linkrs_health_json(ptr::null_mut()) }.is_null());
+    assert!(unsafe { linkrs_metrics_text(ptr::null_mut()) }.is_null());
+}
+
+// ==================== Schema Version History ====================
+
+#[test]
+fn test_c_api_schema_version_history_json() {
+    use linkrs::api::embedded::c_api::inspection::linkrs_schema_version_history_json;
+
+    let test_db = CApiTestDatabase::new();
+    let session = CApiTestSession::from_db(&test_db);
+    let _ = CApiTestResult::from_query(&session, "CREATE SPACE demo (vid_type=STRING)");
+    let _ = CApiTestResult::from_query(&session, "USE demo");
+    let _ = CApiTestResult::from_query(&session, "CREATE TAG person(name string)");
+
+    let space = CString::new("demo").expect("valid space");
+    let label = CString::new("person").expect("valid label");
+
+    let payload = unsafe {
+        take_c_string(linkrs_schema_version_history_json(
+            test_db.handle(),
+            space.as_ptr(),
+            label.as_ptr(),
+            0,
+        ))
+    }
+    .expect("non-null history payload");
+    let parsed: serde_json::Value = serde_json::from_str(&payload).expect("valid history JSON");
+    assert!(parsed.get("versions").is_some());
+
+    // An unknown label surfaces as an error through the C API channel.
+    let missing = CString::new("Missing").expect("valid label");
+    let unknown = unsafe {
+        linkrs_schema_version_history_json(test_db.handle(), space.as_ptr(), missing.as_ptr(), 0)
+    };
+    assert!(unknown.is_null());
+
+    let rc_value = unsafe {
+        linkrs_schema_version_history_json(test_db.handle(), ptr::null(), label.as_ptr(), 0)
+    };
+    assert!(rc_value.is_null());
+    let rc_value = unsafe {
+        linkrs_schema_version_history_json(test_db.handle(), space.as_ptr(), ptr::null(), 0)
+    };
+    assert!(rc_value.is_null());
+}
+
+// ==================== Transaction Inspection ====================
+
+#[test]
+fn test_c_api_transaction_inspection() {
+    use linkrs::api::embedded::c_api::inspection::{
+        linkrs_transaction_metrics_json, linkrs_transactions_json,
+    };
+
+    let test_db = CApiTestDatabase::new();
+    let session = CApiTestSession::from_db(&test_db);
+    let txn = CApiTestTransaction::from_session(&session);
+
+    let list = unsafe { take_c_string(linkrs_transactions_json(test_db.handle())) }
+        .expect("non-null transaction list");
+    let parsed: serde_json::Value = serde_json::from_str(&list).expect("valid JSON array");
+    let entries = parsed.as_array().expect("array");
+    assert!(entries
+        .iter()
+        .any(|entry| entry.get("transaction_id").is_some()));
+
+    let metrics = unsafe { take_c_string(linkrs_transaction_metrics_json(test_db.handle())) }
+        .expect("non-null transaction metrics");
+    let parsed: serde_json::Value = serde_json::from_str(&metrics).expect("valid JSON object");
+    assert!(parsed.get("active").is_some());
+
+    assert!(unsafe { linkrs_transactions_json(ptr::null_mut()) }.is_null());
+    assert!(unsafe { linkrs_transaction_metrics_json(ptr::null_mut()) }.is_null());
+
+    txn.commit();
+}
+
+// ==================== Bulk Configuration ====================
+
+#[test]
+fn test_c_api_bulk_update_config() {
+    use linkrs::api::embedded::c_api::config::{
+        linkrs_bulk_update_config, linkrs_config_free, linkrs_config_memory,
+    };
+
+    let config = unsafe { linkrs_config_memory() };
+    assert!(!config.is_null());
+
+    let updates =
+        CString::new(r#"{"cache_size_mb":128,"timeout_ms":5000,"sync_mode":2,"read_only":true}"#)
+            .expect("valid JSON");
+    assert_eq!(
+        unsafe { linkrs_bulk_update_config(config, updates.as_ptr()) },
+        linkrs_error_code_t::LINKRS_OK as i32
+    );
+
+    let unknown = CString::new(r#"{"unknown_key":1}"#).expect("valid JSON");
+    assert_eq!(
+        unsafe { linkrs_bulk_update_config(config, unknown.as_ptr()) },
+        linkrs_error_code_t::LINKRS_ERROR as i32
+    );
+
+    let invalid = CString::new(r#"{"cache_size_mb":"big"}"#).expect("valid JSON");
+    assert_eq!(
+        unsafe { linkrs_bulk_update_config(config, invalid.as_ptr()) },
+        linkrs_error_code_t::LINKRS_MISUSE as i32
+    );
+
+    assert_eq!(
+        unsafe { linkrs_bulk_update_config(ptr::null_mut(), updates.as_ptr()) },
+        linkrs_error_code_t::LINKRS_MISUSE as i32
+    );
+    assert_eq!(
+        unsafe { linkrs_bulk_update_config(config, ptr::null()) },
+        linkrs_error_code_t::LINKRS_MISUSE as i32
+    );
+
+    unsafe { linkrs_config_free(config) };
+}

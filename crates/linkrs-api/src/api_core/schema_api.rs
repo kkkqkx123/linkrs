@@ -7,6 +7,7 @@ use linkrs_core::types::{
     EdgeTypeInfo, Index, IndexField, IndexStatus, IndexType, SpaceInfo, TagInfo,
 };
 use linkrs_storage::StorageClient;
+use linkrs_storage::{LabelVersionHistory, PropertyChange};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -487,6 +488,68 @@ impl<S: StorageClient> SchemaApi<S> {
             "Index '{}' does not exist",
             index_name
         )))
+    }
+
+    /// Read the version history of a vertex tag.
+    pub fn get_vertex_version_history(
+        &self,
+        space: &str,
+        tag: &str,
+    ) -> CoreResult<Option<LabelVersionHistory>> {
+        let storage = self.storage.read();
+        storage
+            .get_vertex_version_history(space, tag)
+            .map_err(|e| CoreError::StorageError(e.to_string()))
+    }
+
+    /// Read the version history of an edge type.
+    pub fn get_edge_version_history(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> CoreResult<Option<LabelVersionHistory>> {
+        let storage = self.storage.read();
+        storage
+            .get_edge_version_history(space, edge_type)
+            .map_err(|e| CoreError::StorageError(e.to_string()))
+    }
+
+    /// Read schema changes for a label between two versions.
+    pub fn get_schema_changes(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    ) -> CoreResult<Vec<PropertyChange>> {
+        let storage = self.storage.read();
+        let changes = if is_edge {
+            storage.get_edge_schema_changes(space, label, from_version, to_version)
+        } else {
+            storage.get_vertex_schema_changes(space, label, from_version, to_version)
+        }
+        .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        Ok(changes)
+    }
+
+    /// Detect breaking changes for a label between two versions.
+    pub fn detect_breaking_changes(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    ) -> CoreResult<Vec<PropertyChange>> {
+        let storage = self.storage.read();
+        let changes = if is_edge {
+            storage.detect_edge_breaking_changes(space, label, from_version, to_version)
+        } else {
+            storage.detect_vertex_breaking_changes(space, label, from_version, to_version)
+        }
+        .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        Ok(changes)
     }
 }
 

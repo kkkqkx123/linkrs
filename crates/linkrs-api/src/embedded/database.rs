@@ -244,7 +244,7 @@ fn build_secondary_managers(
 /// # }
 /// ```
 pub struct GraphDatabase<S: StorageClient + Clone + Send + Sync + 'static> {
-    inner: Arc<GraphDatabaseInner<S>>,
+    pub(crate) inner: Arc<GraphDatabaseInner<S>>,
     config: Arc<RwLock<DatabaseConfig>>,
 }
 
@@ -572,6 +572,53 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
         session.get_edge_type(space, name)
     }
 
+    /// Version history of a vertex tag (embedded equivalent of
+    /// `GET /v1/schema/versions/{space}/{label}`).
+    pub fn get_vertex_version_history(
+        &self,
+        space: &str,
+        tag: &str,
+    ) -> CoreResult<Option<linkrs_storage::LabelVersionHistory>> {
+        let session = self.session()?;
+        session.get_vertex_version_history(space, tag)
+    }
+
+    /// Version history of an edge type.
+    pub fn get_edge_version_history(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> CoreResult<Option<linkrs_storage::LabelVersionHistory>> {
+        let session = self.session()?;
+        session.get_edge_version_history(space, edge_type)
+    }
+
+    /// Schema changes between two versions of a label.
+    pub fn get_schema_changes(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    ) -> CoreResult<Vec<linkrs_storage::PropertyChange>> {
+        let session = self.session()?;
+        session.get_schema_changes(space, label, is_edge, from_version, to_version)
+    }
+
+    /// Breaking changes between two versions of a label.
+    pub fn detect_breaking_changes(
+        &self,
+        space: &str,
+        label: &str,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+    ) -> CoreResult<Vec<linkrs_storage::PropertyChange>> {
+        let session = self.session()?;
+        session.detect_breaking_changes(space, label, is_edge, from_version, to_version)
+    }
+
     /// Validate query text without executing it (convenience method).
     ///
     /// Mirrors `POST /v1/query/validate`: parses and binds the statement,
@@ -834,6 +881,17 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
     /// - RwLockWriteGuard for Storage Clients
     pub fn storage_mut(&self) -> parking_lot::RwLockWriteGuard<'_, S> {
         self.inner.storage.write()
+    }
+
+    /// Sync operations API.
+    ///
+    /// Returns `None` when synchronization is not configured; callers must
+    /// not treat an absent manager as an empty outbox.
+    pub fn sync_api(&self) -> Option<crate::api_core::SyncApi> {
+        self.inner
+            .sync_manager
+            .clone()
+            .map(crate::api_core::SyncApi::new)
     }
 
     /// Get stats manager

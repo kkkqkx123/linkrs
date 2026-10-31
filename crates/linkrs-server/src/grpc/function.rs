@@ -25,7 +25,7 @@ impl<
         &self,
         request: Request<RegisterFunctionRequest>,
     ) -> Result<Response<RegisterFunctionResponse>, Status> {
-        use crate::http::handlers::function::register_udf_from_source;
+        use crate::services::function::register_udf_from_source;
         let req = request.into_inner();
         let registry = self.app_state.server.get_function_registry();
         let registered_name = register_udf_from_source(&registry, &req.name, &req.implementation)
@@ -41,7 +41,7 @@ impl<
         &self,
         request: Request<UnregisterFunctionRequest>,
     ) -> Result<Response<UnregisterFunctionResponse>, Status> {
-        use crate::http::handlers::function::unregister_udf_by_name;
+        use crate::services::function::unregister_udf_by_name;
         let req = request.into_inner();
         let registry = self.app_state.server.get_function_registry();
         unregister_udf_by_name(&registry, &req.name).map_err(op_error_to_status)?;

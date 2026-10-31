@@ -369,6 +369,169 @@ pub unsafe extern "C" fn linkrs_session_get_autocommit(session: *mut linkrs_sess
     handle.inner.auto_commit()
 }
 
+/// Assign a session variable from a JSON-encoded value.
+///
+/// Session variables are exposed to queries as `$name` and are scoped to the
+/// session. Inside a text-begun transaction the assignment participates in
+/// `ROLLBACK` / `ROLLBACK TO SAVEPOINT`, matching the Rust API.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `name`: Null-terminated variable name
+/// - `value_json`: Null-terminated JSON representation of the value
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: LINKRS_MISUSE for null pointers or an empty name,
+///   LINKRS_ERROR when `value_json` is not valid JSON
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+/// - `name` and `value_json` must be valid null-terminated UTF-8 strings
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_session_set_variable(
+    session: *mut linkrs_session_t,
+    name: *const c_char,
+    value_json: *const c_char,
+) -> c_int {
+    if session.is_null() || name.is_null() || value_json.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let name_str = match CStr::from_ptr(name).to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+    let json_str = match CStr::from_ptr(value_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let json = match serde_json::from_str::<serde_json::Value>(json_str) {
+        Ok(value) => value,
+        Err(e) => {
+            set_last_error_message(format!("invalid variable JSON: {e}"));
+            return linkrs_error_code_t::LINKRS_ERROR as c_int;
+        }
+    };
+
+    let handle = &*(session as *mut LinkrsSessionHandle);
+    handle
+        .inner
+        .set_variable(name_str.to_string(), super::value::json_to_value(&json));
+    linkrs_error_code_t::LINKRS_OK as c_int
+}
+
+/// Read a session variable as JSON.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `name`: Null-terminated variable name
+///
+/// # Returns
+/// - Null-terminated JSON string when the variable is set, null otherwise
+///
+/// # Memory Management
+/// The returned string must be freed with `linkrs_free_string`.
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_session_get_variable(
+    session: *mut linkrs_session_t,
+    name: *const c_char,
+) -> *mut c_char {
+    if session.is_null() || name.is_null() {
+        return ptr::null_mut();
+    }
+
+    let name_str = match CStr::from_ptr(name).to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return ptr::null_mut(),
+    };
+
+    let handle = &*(session as *mut LinkrsSessionHandle);
+    match handle.inner.variable_value(name_str) {
+        Some(value) => {
+            let json = super::value::value_to_json(&value).to_string();
+            CString::new(json)
+                .map(|c| c.into_raw())
+                .unwrap_or(ptr::null_mut())
+        }
+        None => ptr::null_mut(),
+    }
+}
+
+/// Remove a session variable.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `name`: Null-terminated variable name
+///
+/// # Returns
+/// - LINKRS_OK when the variable was removed
+/// - LINKRS_NOTFOUND when the variable was not set
+/// - LINKRS_MISUSE for null pointers or an empty name
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+/// - `name` must be a valid null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_session_remove_variable(
+    session: *mut linkrs_session_t,
+    name: *const c_char,
+) -> c_int {
+    if session.is_null() || name.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let name_str = match CStr::from_ptr(name).to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &*(session as *mut LinkrsSessionHandle);
+    if handle.inner.remove_variable(name_str) {
+        linkrs_error_code_t::LINKRS_OK as c_int
+    } else {
+        linkrs_error_code_t::LINKRS_NOTFOUND as c_int
+    }
+}
+
+/// List all session variables as a JSON object.
+///
+/// # Arguments
+/// - `session`: Session handle
+///
+/// # Returns
+/// - Null-terminated JSON object string, or null on a null handle
+///
+/// # Memory Management
+/// The returned string must be freed with `linkrs_free_string`.
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_session_list_variables(
+    session: *mut linkrs_session_t,
+) -> *mut c_char {
+    if session.is_null() {
+        return ptr::null_mut();
+    }
+
+    let handle = &*(session as *mut LinkrsSessionHandle);
+    let snapshot = handle.inner.variables_snapshot();
+    let mut object = serde_json::Map::new();
+    for (name, value) in snapshot.iter() {
+        object.insert(name.clone(), super::value::value_to_json(value));
+    }
+
+    CString::new(serde_json::Value::Object(object).to_string())
+        .map(|c| c.into_raw())
+        .unwrap_or(ptr::null_mut())
+}
+
 /// Setting the busy wait timeout
 ///
 /// # Arguments

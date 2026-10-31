@@ -16,6 +16,9 @@ use tokio::task;
 
 use super::version::parse_is_edge_param;
 use crate::http::{error::HttpError, state::AppState};
+use crate::services::schema_migration::{
+    dry_run_migration_core, migration_history_core, migration_status_core,
+};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
@@ -158,15 +161,13 @@ pub async fn execute_migration<
         let start = std::time::Instant::now();
         stats.record_migration_start();
         let mut storage_write = storage.write();
-        let sender = crate::http::handlers::migration_progress::get_or_create_sender(
+        let sender = crate::services::migration_progress::get_or_create_sender(
             &plan.target.space,
             &plan.target.label,
             plan.target.is_edge,
         );
         let registry = EventSubscriptions::<MigrationEvent>::new();
-        registry.add(crate::http::handlers::migration_progress::event_bridge(
-            sender,
-        ));
+        registry.add(crate::services::migration_progress::event_bridge(sender));
         let registry = std::sync::Arc::new(registry);
         let report = linkrs_api::migration_online::execute_online_migration(
             &mut *storage_write,
@@ -231,15 +232,13 @@ pub async fn rollback_migration<
         let storage = state.server.get_storage();
         let migration_config = state.server.migration_config();
         let mut storage_write = storage.write();
-        let sender = crate::http::handlers::migration_progress::get_or_create_sender(
+        let sender = crate::services::migration_progress::get_or_create_sender(
             &plan.target.space,
             &plan.target.label,
             plan.target.is_edge,
         );
         let registry = EventSubscriptions::<MigrationEvent>::new();
-        registry.add(crate::http::handlers::migration_progress::event_bridge(
-            sender,
-        ));
+        registry.add(crate::services::migration_progress::event_bridge(sender));
         let registry = std::sync::Arc::new(registry);
         let report = linkrs_migration::rollback_migration_with_options(
             &mut *storage_write,
@@ -290,29 +289,8 @@ pub async fn dry_run_migration<
     Extension(session_id): Extension<i64>,
     Json(req): Json<MigrationExecuteRequest>,
 ) -> Result<JsonResponse<MigrationExecuteResponse>, HttpError> {
-    let mut plan: linkrs_migration::MigrationPlan =
-        serde_json::from_str(&req.plan_json).map_err(|e| HttpError::BadRequest(e.to_string()))?;
-    plan.dry_run = true;
-
-    super::super::authz::require_admin_session(&state, session_id)?;
-    let result = task::spawn_blocking(move || {
-        let storage = state.server.get_storage();
-        let mut storage_write = storage.write();
-        let report = linkrs_migration::execute_migration_plan(&mut *storage_write, &plan)
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
-
-        Ok::<_, HttpError>(MigrationExecuteResponse {
-            success: report.success,
-            steps_completed: report.steps_completed,
-            rows_migrated: report.rows_migrated,
-            errors: report.errors,
-            preview: Some(true),
-        })
-    })
-    .await
-    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
-
-    Ok(JsonResponse(result?))
+    let response = dry_run_migration_core(&state, session_id, &req.plan_json).await?;
+    Ok(JsonResponse(response))
 }
 
 #[utoipa::path(
@@ -345,32 +323,8 @@ pub async fn migration_history<
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<JsonResponse<MigrationHistoryResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
-    super::super::authz::require_admin_session(&state, session_id)?;
-    let result = task::spawn_blocking(move || {
-        let storage = state.server.get_storage();
-        let storage_read = storage.read();
-        let history = storage_read
-            .list_migration_history(&space, &label, is_edge)
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
-        let versions = storage_read
-            .get_applied_versions(&space, &label, is_edge)
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
-        let history: Vec<serde_json::Value> = history
-            .into_iter()
-            .map(|r| serde_json::to_value(&r).unwrap())
-            .collect();
-        Ok::<_, HttpError>(MigrationHistoryResponse {
-            space,
-            label,
-            is_edge,
-            applied_versions: versions,
-            history,
-        })
-    })
-    .await
-    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
-
-    Ok(JsonResponse(result?))
+    let response = migration_history_core(&state, session_id, space, label, is_edge).await?;
+    Ok(JsonResponse(response))
 }
 
 #[utoipa::path(
@@ -403,28 +357,6 @@ pub async fn migration_status<
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<JsonResponse<MigrationStatusResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
-    super::super::authz::require_admin_session(&state, session_id)?;
-    let result = task::spawn_blocking(move || {
-        let storage = state.server.get_storage();
-        let storage_read = storage.read();
-        let applied = storage_read
-            .get_applied_versions(&space, &label, is_edge)
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
-        let history = storage_read
-            .list_migration_history(&space, &label, is_edge)
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
-        let latest = applied.iter().max().copied().unwrap_or(0);
-        Ok::<_, HttpError>(MigrationStatusResponse {
-            space: Some(space),
-            label: Some(label),
-            is_edge: Some(is_edge),
-            latest_applied_version: Some(latest),
-            applied_versions: applied,
-            history_count: history.len(),
-        })
-    })
-    .await
-    .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
-
-    Ok(JsonResponse(result?))
+    let response = migration_status_core(&state, session_id, space, label, is_edge).await?;
+    Ok(JsonResponse(response))
 }

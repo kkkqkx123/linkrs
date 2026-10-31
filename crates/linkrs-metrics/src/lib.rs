@@ -12,6 +12,7 @@ pub mod latency_histogram;
 pub mod manager;
 pub mod metrics;
 pub mod profile;
+pub mod prometheus;
 pub mod slow_query_logger;
 pub mod utils;
 
@@ -29,6 +30,7 @@ pub use manager::{
 };
 pub use metrics::QueryMetrics;
 pub use profile::{ExecutorStat, QueryProfile, QueryStatus, StageMetrics};
+pub use prometheus::{render_prometheus, PROMETHEUS_CONTENT_TYPE};
 pub use slow_query_logger::{SlowQueryConfig, SlowQueryLogger};
 pub use utils::{
     calculate_average, calculate_cache_hit_rate, duration_to_micros, format_duration,

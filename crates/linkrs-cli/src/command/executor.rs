@@ -313,9 +313,11 @@ impl CommandExecutor {
             MetaCommand::Format { format } => meta::control::execute_format(self, format),
             MetaCommand::Pager { command } => meta::control::execute_pager(self, command),
             MetaCommand::Timing => meta::control::execute_timing(self),
-            MetaCommand::Set { name, value, remote } => {
-                meta::variables::execute_set(self, name, value, remote, session_mgr).await
-            }
+            MetaCommand::Set {
+                name,
+                value,
+                remote,
+            } => meta::variables::execute_set(self, name, value, remote, session_mgr).await,
             MetaCommand::Unset { name, remote } => {
                 meta::variables::execute_unset(self, name, remote, session_mgr).await
             }
@@ -498,6 +500,7 @@ impl CommandExecutor {
             }
             MetaCommand::Status => meta::stats::execute_status(self, session_mgr).await,
             MetaCommand::Health => meta::stats::execute_health(self, session_mgr).await,
+            MetaCommand::Metrics => meta::stats::execute_metrics(self, session_mgr).await,
             MetaCommand::Config { action } => {
                 meta::config::execute_config(self, &action, session_mgr).await
             }

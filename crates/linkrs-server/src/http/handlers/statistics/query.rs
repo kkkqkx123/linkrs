@@ -10,15 +10,14 @@ use axum::{
 use serde::Deserialize;
 
 use crate::http::{error::HttpError, state::AppState};
+use crate::services::statistics::search_core;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use linkrs_metrics::MetricType;
 use linkrs_wire::meta::{
-    CacheSection, DeleteSection, EmbeddingSection, ExecutorSummaryEntry, IndexSection,
-    LatencyPercentilesUs, QueryPatternEntry, QueryProfileDetailResponse, QueryProfileExecutor,
-    QueryStatsResponse, RerankSection, SearchIndexEntry, SearchSection, SearchStatsResponse,
-    SlowQueryInfo, VectorSearchSection,
+    ExecutorSummaryEntry, LatencyPercentilesUs, QueryPatternEntry, QueryProfileDetailResponse,
+    QueryProfileExecutor, QueryStatsResponse, SearchStatsResponse, SlowQueryInfo,
 };
 use linkrs_wire::query::QueryStageTimings;
 
@@ -248,209 +247,7 @@ pub async fn search<
 >(
     State(state): State<AppState<S>>,
 ) -> Result<JsonResponse<SearchStatsResponse>, HttpError> {
-    let stats_manager = state.server.get_stats_manager();
-
-    let num_search_queries = stats_manager
-        .get_value(MetricType::NumSearchQueries)
-        .unwrap_or(0);
-    let num_search_errors = stats_manager
-        .get_value(MetricType::NumSearchErrors)
-        .unwrap_or(0);
-    let search_latency_ms = stats_manager
-        .get_value(MetricType::SearchLatencyMs)
-        .unwrap_or(0);
-    let num_index_operations = stats_manager
-        .get_value(MetricType::NumIndexOperations)
-        .unwrap_or(0);
-    let num_index_errors = stats_manager
-        .get_value(MetricType::NumIndexErrors)
-        .unwrap_or(0);
-    let index_latency_ms = stats_manager
-        .get_value(MetricType::IndexLatencyMs)
-        .unwrap_or(0);
-    let num_delete_operations = stats_manager
-        .get_value(MetricType::NumDeleteOperations)
-        .unwrap_or(0);
-    let num_delete_errors = stats_manager
-        .get_value(MetricType::NumDeleteErrors)
-        .unwrap_or(0);
-    let delete_latency_ms = stats_manager
-        .get_value(MetricType::DeleteLatencyMs)
-        .unwrap_or(0);
-    let search_result_count = stats_manager
-        .get_value(MetricType::SearchResultCount)
-        .unwrap_or(0);
-    let cache_hit_count = stats_manager
-        .get_value(MetricType::SearchCacheHitCount)
-        .unwrap_or(0);
-    let cache_miss_count = stats_manager
-        .get_value(MetricType::SearchCacheMissCount)
-        .unwrap_or(0);
-    let vector_queries = stats_manager
-        .get_value(MetricType::VectorSearchOps)
-        .unwrap_or(0);
-    let vector_errors = stats_manager
-        .get_value(MetricType::VectorSearchErrors)
-        .unwrap_or(0);
-    let vector_latency_ms = stats_manager
-        .get_value(MetricType::VectorSearchLatencyMs)
-        .unwrap_or(0);
-    let vector_upserts = stats_manager
-        .get_value(MetricType::VectorUpsertOps)
-        .unwrap_or(0);
-    let vector_upsert_errors = stats_manager
-        .get_value(MetricType::VectorUpsertErrors)
-        .unwrap_or(0);
-    let vector_deletes = stats_manager
-        .get_value(MetricType::VectorDeleteOps)
-        .unwrap_or(0);
-    let vector_delete_errors = stats_manager
-        .get_value(MetricType::VectorDeleteErrors)
-        .unwrap_or(0);
-    let vector_disabled_skips = stats_manager
-        .get_value(MetricType::VectorDisabledSkips)
-        .unwrap_or(0);
-    let embedding_ops = stats_manager
-        .get_value(MetricType::VectorEmbeddingOps)
-        .unwrap_or(0);
-    let embedding_errors = stats_manager
-        .get_value(MetricType::VectorEmbeddingErrors)
-        .unwrap_or(0);
-    let embedding_latency_ms = stats_manager
-        .get_value(MetricType::VectorEmbeddingLatencyMs)
-        .unwrap_or(0);
-    let embedding_prompt_tokens = stats_manager
-        .get_value(MetricType::VectorEmbeddingPromptTokens)
-        .unwrap_or(0);
-    let embedding_total_tokens = stats_manager
-        .get_value(MetricType::VectorEmbeddingTotalTokens)
-        .unwrap_or(0);
-    let rerank_ops = stats_manager
-        .get_value(MetricType::VectorRerankOps)
-        .unwrap_or(0);
-    let rerank_errors = stats_manager
-        .get_value(MetricType::VectorRerankErrors)
-        .unwrap_or(0);
-    let rerank_latency_ms = stats_manager
-        .get_value(MetricType::VectorRerankLatencyMs)
-        .unwrap_or(0);
-
-    let avg_search_latency_ms = if num_search_queries > 0 {
-        search_latency_ms as f64 / num_search_queries as f64
-    } else {
-        0.0
-    };
-
-    let avg_index_latency_ms = if num_index_operations > 0 {
-        index_latency_ms as f64 / num_index_operations as f64
-    } else {
-        0.0
-    };
-
-    let avg_delete_latency_ms = if num_delete_operations > 0 {
-        delete_latency_ms as f64 / num_delete_operations as f64
-    } else {
-        0.0
-    };
-
-    let avg_vector_latency_ms = if vector_queries > 0 {
-        vector_latency_ms as f64 / vector_queries as f64
-    } else {
-        0.0
-    };
-    let avg_embedding_latency_ms = if embedding_ops > 0 {
-        embedding_latency_ms as f64 / embedding_ops as f64
-    } else {
-        0.0
-    };
-    let avg_rerank_latency_ms = if rerank_ops > 0 {
-        rerank_latency_ms as f64 / rerank_ops as f64
-    } else {
-        0.0
-    };
-
-    let cache_hit_rate = if cache_hit_count + cache_miss_count > 0 {
-        cache_hit_count as f64 / (cache_hit_count + cache_miss_count) as f64
-    } else {
-        0.0
-    };
-
-    let (search_avg_us, search_p50_us, search_p95_us, search_p99_us) =
-        stats_manager.get_search_latency_percentiles();
-
-    let by_index = stats_manager
-        .search_index_breakdown()
-        .into_iter()
-        .map(|b| SearchIndexEntry {
-            index: b.index,
-            search_queries: b.search_queries,
-            search_errors: b.search_errors,
-            search_latency_ms: b.search_latency_ms,
-            avg_search_latency_ms: b.avg_search_latency_ms,
-            index_operations: b.index_operations,
-            index_errors: b.index_errors,
-            index_latency_ms: b.index_latency_ms,
-        })
-        .collect::<Vec<_>>();
-
-    Ok(JsonResponse(SearchStatsResponse {
-        search: SearchSection {
-            total_queries: num_search_queries,
-            total_errors: num_search_errors,
-            total_latency_ms: search_latency_ms,
-            avg_latency_ms: avg_search_latency_ms,
-            total_results: search_result_count,
-            latency_percentiles_us: LatencyPercentilesUs {
-                avg: search_avg_us,
-                p50: search_p50_us,
-                p95: search_p95_us,
-                p99: search_p99_us,
-            },
-        },
-        index: IndexSection {
-            total_operations: num_index_operations,
-            total_errors: num_index_errors,
-            total_latency_ms: index_latency_ms,
-            avg_latency_ms: avg_index_latency_ms,
-        },
-        delete: DeleteSection {
-            total_operations: num_delete_operations,
-            total_errors: num_delete_errors,
-            total_latency_ms: delete_latency_ms,
-            avg_latency_ms: avg_delete_latency_ms,
-        },
-        cache: CacheSection {
-            hit_count: cache_hit_count,
-            miss_count: cache_miss_count,
-            hit_rate: cache_hit_rate,
-        },
-        by_index,
-        vector: VectorSearchSection {
-            total_queries: vector_queries,
-            total_errors: vector_errors,
-            total_latency_ms: vector_latency_ms,
-            avg_latency_ms: avg_vector_latency_ms,
-            total_upserts: vector_upserts,
-            upsert_errors: vector_upsert_errors,
-            total_deletes: vector_deletes,
-            delete_errors: vector_delete_errors,
-            disabled_skips: vector_disabled_skips,
-        },
-        embedding: EmbeddingSection {
-            total_operations: embedding_ops,
-            total_errors: embedding_errors,
-            total_latency_ms: embedding_latency_ms,
-            avg_latency_ms: avg_embedding_latency_ms,
-            prompt_tokens: embedding_prompt_tokens,
-            total_tokens: embedding_total_tokens,
-        },
-        rerank: RerankSection {
-            total_operations: rerank_ops,
-            total_errors: rerank_errors,
-            total_latency_ms: rerank_latency_ms,
-            avg_latency_ms: avg_rerank_latency_ms,
-        },
-    }))
+    Ok(JsonResponse(search_core(&state)))
 }
 
 #[utoipa::path(

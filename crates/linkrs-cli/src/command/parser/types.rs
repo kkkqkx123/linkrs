@@ -218,6 +218,7 @@ pub enum MetaCommand {
     },
     Status,
     Health,
+    Metrics,
     Config {
         action: ConfigAction,
     },

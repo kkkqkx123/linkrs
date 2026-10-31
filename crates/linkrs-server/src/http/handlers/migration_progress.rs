@@ -1,6 +1,9 @@
-use std::collections::HashMap;
+//! Migration progress SSE endpoint.
+//!
+//! The progress hub lives in [`crate::services::migration_progress`]; this
+//! module only renders the events as server-sent events.
+
 use std::convert::Infallible;
-use std::sync::{Arc, RwLock};
 
 use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, Sse};
@@ -8,54 +11,11 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 use crate::http::state::AppState;
+use crate::services::migration_progress::subscribe;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use linkrs_migration::MigrationEvent;
-
-type Sender = tokio::sync::broadcast::Sender<MigrationEvent>;
-type Receiver = tokio::sync::broadcast::Receiver<MigrationEvent>;
-
-static HUB: std::sync::OnceLock<Arc<RwLock<HashMap<String, Sender>>>> = std::sync::OnceLock::new();
-
-fn hub() -> Arc<RwLock<HashMap<String, Sender>>> {
-    HUB.get_or_init(|| Arc::new(RwLock::new(HashMap::new())))
-        .clone()
-}
-
-fn hub_key(space: &str, label: &str, is_edge: bool) -> String {
-    format!("{}/{}/{}", space, label, is_edge)
-}
-
-pub fn get_or_create_sender(space: &str, label: &str, is_edge: bool) -> Sender {
-    let key = hub_key(space, label, is_edge);
-    let hub_arc = hub();
-    {
-        let read = hub_arc.read().unwrap();
-        if let Some(s) = read.get(&key) {
-            return s.clone();
-        }
-    }
-    let mut write = hub_arc.write().unwrap();
-    if let Some(s) = write.get(&key) {
-        return s.clone();
-    }
-    let (tx, _rx) = tokio::sync::broadcast::channel(100);
-    write.insert(key, tx.clone());
-    tx
-}
-
-pub fn subscribe(space: &str, label: &str, is_edge: bool) -> Receiver {
-    get_or_create_sender(space, label, is_edge).subscribe()
-}
-
-/// Adapt a broadcast sender into an `EventSubscriptions` callback so a
-/// running migration fans its lifecycle events out to SSE subscribers.
-pub fn event_bridge(sender: Sender) -> Arc<dyn Fn(&MigrationEvent) + Send + Sync> {
-    Arc::new(move |event: &MigrationEvent| {
-        let _ = sender.send(event.clone());
-    })
-}
 
 fn migration_event_to_sse(event: MigrationEvent) -> Event {
     match event {

@@ -50,7 +50,7 @@ impl<
             Ok(result) => {
                 let store = self.app_state.server.config_store();
                 let config_path = self.app_state.server.get_config_path();
-                match crate::http::handlers::config::resolve_query_config_intent(
+                match crate::services::config::resolve_query_config_intent(
                     result,
                     &store,
                     config_path.as_deref(),
@@ -90,7 +90,7 @@ impl<
     ) -> Result<Response<ValidateQueryResponse>, Status> {
         let inner = request.into_inner();
         let session_id = inner.session_id.parse::<i64>().unwrap_or(0);
-        match crate::http::handlers::query::validate_gql(&inner.query) {
+        match crate::services::query::validate_gql(&inner.query) {
             Ok(parameter_names) => {
                 let (estimated_rows, has_estimate) = if !inner.need_estimate
                     || crate::graph_service::GraphService::<S>::is_command_like(&inner.query)
@@ -144,13 +144,8 @@ impl<
             parameters: std::collections::HashMap::new(),
             session_variables: std::collections::HashMap::new(),
         };
-        match crate::http::handlers::query::explain(
-            axum::extract::State(self.app_state.clone()),
-            axum::Json(wire),
-        )
-        .await
-        {
-            Ok(axum::Json(resp)) => {
+        match crate::services::query::explain(&self.app_state, wire).await {
+            Ok(resp) => {
                 if resp.success {
                     Ok(Response::new(ExplainQueryResponse {
                         success: true,

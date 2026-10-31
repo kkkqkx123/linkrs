@@ -35,6 +35,7 @@ pub mod graph_service;
 pub mod grpc;
 pub mod http;
 pub mod permission;
+pub(crate) mod services;
 pub mod session;
 pub mod web;
 

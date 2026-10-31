@@ -8,6 +8,7 @@ pub mod cost_profile;
 pub mod error;
 #[cfg(feature = "fulltext")]
 pub mod fulltext_api;
+pub mod import;
 pub mod query_api;
 pub(crate) mod query_api_builder;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
@@ -28,6 +29,9 @@ pub use cost_profile::{cost_config_for_profile, resolve_space_cost_configs};
 pub use error::{CoreError, CoreResult, ExtendedErrorCode};
 #[cfg(feature = "fulltext")]
 pub use fulltext_api::FulltextApi;
+pub use import::{
+    parse_import, ImportFailure, ImportFormat, ImportRow, ImportStats, ImportTarget, ParsedImport,
+};
 pub use query_api::QueryApi;
 pub use schema_api::SchemaApi;
 pub use session_command::{is_command_like, parse_session_command, CommandParseError};

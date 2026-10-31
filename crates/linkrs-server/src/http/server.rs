@@ -41,7 +41,7 @@ pub struct HttpServer<
     /// Config file the running config was loaded from, if any. Updates are
     /// written back here; `None` means memory-only updates.
     config_path: Option<std::path::PathBuf>,
-    rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry,
+    rebuild_tasks: crate::services::rebuild::RebuildTaskRegistry,
 }
 
 impl<
@@ -75,7 +75,7 @@ impl<
             storage: storage.clone(),
             config: Arc::new(RwLock::new(config.clone())),
             config_path,
-            rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry::default(),
+            rebuild_tasks: crate::services::rebuild::RebuildTaskRegistry::default(),
         }
     }
 
@@ -172,7 +172,7 @@ impl<
     }
 
     /// Async index rebuild task registry.
-    pub fn rebuild_tasks(&self) -> super::handlers::rebuild::RebuildTaskRegistry {
+    pub fn rebuild_tasks(&self) -> crate::services::rebuild::RebuildTaskRegistry {
         self.rebuild_tasks.clone()
     }
 }

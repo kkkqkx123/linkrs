@@ -41,6 +41,13 @@ impl<
         self.handle_health_check(request).await
     }
 
+    async fn get_metrics(
+        &self,
+        request: Request<GetMetricsRequest>,
+    ) -> Result<Response<GetMetricsResponse>, Status> {
+        self.handle_get_metrics(request).await
+    }
+
     async fn login(
         &self,
         request: Request<LoginRequest>,

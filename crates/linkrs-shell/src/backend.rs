@@ -82,6 +82,14 @@ impl EmbeddedOps for EmbeddedBackend {
         self.read_only
     }
 
+    fn health_json(&self) -> ClientResult<serde_json::Value> {
+        Ok(self.db.health())
+    }
+
+    fn metrics_text(&self) -> ClientResult<String> {
+        Ok(self.db.metrics_text())
+    }
+
     fn list_tags(&self) -> ClientResult<Vec<linkrs_cli::client::TagInfo>> {
         let current_space = self
             .current_space

@@ -41,7 +41,7 @@ impl<
         let value = proto_config_value_to_json(req.value);
         let store = self.app_state.server.config_store();
         let config_path = self.app_state.server.get_config_path();
-        let (requires_restart, persisted) = crate::http::handlers::config::apply_config_update(
+        let (requires_restart, persisted) = crate::services::config::apply_config_update(
             &store,
             config_path.as_deref(),
             &req.section,
@@ -63,8 +63,7 @@ impl<
     ) -> Result<Response<GetConfigKeyResponse>, Status> {
         let req = request.into_inner();
         let config = self.app_state.server.get_config();
-        let value =
-            crate::http::handlers::config::get_config_value(&config, &req.section, &req.key);
+        let value = crate::services::config::get_config_value(&config, &req.section, &req.key);
         Ok(Response::new(GetConfigKeyResponse {
             section: req.section,
             key: req.key,
@@ -95,7 +94,7 @@ impl<
                 ))
             })?;
             for (key, value) in values_obj {
-                match crate::http::handlers::config::apply_config_update(
+                match crate::services::config::apply_config_update(
                     &store,
                     config_path.as_deref(),
                     section,
@@ -129,14 +128,11 @@ impl<
     ) -> Result<Response<ResetConfigResponse>, Status> {
         let req = request.into_inner();
         let default_config = crate::config::Config::default();
-        let value = crate::http::handlers::config::get_config_value(
-            &default_config,
-            &req.section,
-            &req.key,
-        );
+        let value =
+            crate::services::config::get_config_value(&default_config, &req.section, &req.key);
         let store = self.app_state.server.config_store();
         let config_path = self.app_state.server.get_config_path();
-        let (requires_restart, persisted) = crate::http::handlers::config::apply_config_update(
+        let (requires_restart, persisted) = crate::services::config::apply_config_update(
             &store,
             config_path.as_deref(),
             &req.section,

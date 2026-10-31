@@ -31,6 +31,18 @@ pub trait EmbeddedOps: Send + Sync {
             "embedded mode does not support: \\show_edges (no embedded schema introspection yet)",
         ))
     }
+    /// Process-internal health payload.
+    fn health_json(&self) -> ClientResult<serde_json::Value> {
+        Err(linkrs_client::utils::error::ClientError::command(
+            "embedded backend does not expose health",
+        ))
+    }
+    /// Prometheus metrics text.
+    fn metrics_text(&self) -> ClientResult<String> {
+        Err(linkrs_client::utils::error::ClientError::command(
+            "embedded backend does not expose metrics",
+        ))
+    }
 }
 
 /// Handle to an embedded backend stored inside a [`SessionManager`].
@@ -142,6 +154,24 @@ impl SessionManager {
         match self {
             Self::Http(inner) => inner.health_check().await,
             Self::Embedded(_) => Ok(true),
+        }
+    }
+
+    pub fn embedded_health(&self) -> ClientResult<serde_json::Value> {
+        match self {
+            Self::Http(_) => Err(linkrs_client::utils::error::ClientError::command(
+                "health JSON is only available in embedded mode",
+            )),
+            Self::Embedded(embedded) => embedded.ops.health_json(),
+        }
+    }
+
+    pub fn embedded_metrics(&self) -> ClientResult<String> {
+        match self {
+            Self::Http(_) => Err(linkrs_client::utils::error::ClientError::command(
+                "metrics text is only available in embedded mode",
+            )),
+            Self::Embedded(embedded) => embedded.ops.metrics_text(),
         }
     }
 

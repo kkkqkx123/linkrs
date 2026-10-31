@@ -17,6 +17,7 @@ linkrs-sync = { version = "0.1.0", path = "../linkrs-sync" }
 linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext" }
 linkrs-migration = { version = "0.1.0", path = "../linkrs-migration" }
 linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
+csv.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

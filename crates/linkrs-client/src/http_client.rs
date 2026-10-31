@@ -319,6 +319,15 @@ impl HttpClient {
         Ok(response.json().await?)
     }
 
+    /// Fetch the `/metrics` Prometheus text exposition.
+    pub async fn metrics(&self) -> Result<String> {
+        let root = self.base_url.trim_end_matches("/v1");
+        let url = format!("{}/metrics", root);
+        let response = self.inner().get(&url).send().await?;
+        let response = Self::check_response(response, "Failed to get metrics").await?;
+        Ok(response.text().await?)
+    }
+
     // ── Schema DDL (admin commands) ──
 
     /// Create a new graph space

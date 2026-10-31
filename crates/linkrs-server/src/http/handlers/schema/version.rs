@@ -84,45 +84,9 @@ pub async fn get_version_history<
         .map_err(|e| HttpError::InternalError(format!("Failed to get version history: {}", e)))?;
 
         let versions = history
-            .map(|h| {
-                h.change_log
-                    .get_versions()
-                    .iter()
-                    .map(|&version| {
-                        let version_changes = h
-                            .change_log
-                            .get_version_changes(version)
-                            .cloned()
-                            .unwrap_or_default();
-                        let timestamp_ms = version_changes
-                            .iter()
-                            .map(|c| c.timestamp_ms)
-                            .max()
-                            .unwrap_or(0);
-                        let changes: Vec<_> = version_changes
-                            .into_iter()
-                            .map(|change| ChangeInfo {
-                                change_type: format!("{:?}", change.details),
-                                description: change.details.description(),
-                                details: {
-                                    let mut d = std::collections::HashMap::new();
-                                    d.insert(
-                                        "description".to_string(),
-                                        change.details.description(),
-                                    );
-                                    d
-                                },
-                            })
-                            .collect();
-
-                        serde_json::json!({
-                            "version": version,
-                            "timestamp_ms": timestamp_ms,
-                            "changes": changes,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
+            .as_ref()
+            .map(|h| h.summary_json(&space, is_edge))
+            .map(|value| value.get("versions").cloned().unwrap_or_default())
             .unwrap_or_default();
 
         Ok::<_, HttpError>(serde_json::json!({

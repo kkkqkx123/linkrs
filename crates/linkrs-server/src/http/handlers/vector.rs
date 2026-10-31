@@ -5,6 +5,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::http::{error::HttpError, state::AppState};
+use crate::services::vector::{
+    count_core, scroll_core, ScrollRequest, ScrollResponse, VectorSearchResult,
+};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
@@ -75,32 +78,11 @@ fn default_limit() -> usize {
     10
 }
 
-/// Parse the gRPC `SearchFilter.expression` wire string.
-///
-/// The wire carries a JSON-encoded `VectorFilter` with the same shape as the
-/// HTTP search filter. There is no expression language; arbitrary strings
-/// fail with the underlying JSON error.
-#[allow(dead_code)]
-pub(crate) fn parse_vector_filter_expression(expression: &str) -> Result<VectorFilter, String> {
-    serde_json::from_str(expression).map_err(|e| {
-        format!("filter.expression must be a JSON VectorFilter with the same shape as the HTTP search filter: {e}")
-    })
-}
-
 /// Vector search result
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct VectorSearchResponse {
     pub results: Vec<VectorSearchResult>,
     pub count: usize,
-}
-
-/// Single vector search result
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct VectorSearchResult {
-    pub doc_id: String,
-    pub score: f32,
-    pub vector: Option<Vec<f32>>,
-    pub payload: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// List of vector indexes response
@@ -574,27 +556,11 @@ pub async fn count<
     Extension(session_id): Extension<i64>,
     Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
 ) -> Result<JsonResponse<serde_json::Value>, HttpError> {
-    super::authz::require_space_read(&state, session_id, space_id as i64)?;
-    let graph_service = state.server.get_graph_service();
-    let vector_api = graph_service.vector_api();
-
-    if let Some(vector_api) = vector_api {
-        let count = vector_api
-            .count(space_id, &tag_name, &field_name)
-            .await
-            .map_err(|e: linkrs_api::api_core::error::CoreError| {
-                HttpError::InternalError(e.to_string())
-            })?;
-
-        Ok(JsonResponse(serde_json::json!({
-            "success": true,
-            "count": count
-        })))
-    } else {
-        Err(HttpError::InternalError(
-            "Vector API is not available".to_string(),
-        ))
-    }
+    let count = count_core(&state, session_id, space_id, &tag_name, &field_name).await?;
+    Ok(JsonResponse(serde_json::json!({
+        "success": true,
+        "count": count
+    })))
 }
 
 /// Set payload request
@@ -615,26 +581,6 @@ pub struct DeletePayloadRequest {
     pub field_name: String,
     pub point_ids: Vec<String>,
     pub keys: Vec<String>,
-}
-
-/// Scroll request
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct ScrollRequest {
-    pub space_id: u64,
-    pub tag_name: String,
-    pub field_name: String,
-    #[serde(default = "default_limit")]
-    pub limit: usize,
-    pub offset: Option<String>,
-    pub with_payload: Option<bool>,
-    pub with_vector: Option<bool>,
-}
-
-/// Scroll response
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct ScrollResponse {
-    pub points: Vec<VectorSearchResult>,
-    pub next_offset: Option<String>,
 }
 
 #[utoipa::path(
@@ -824,45 +770,7 @@ pub async fn scroll<
     Extension(session_id): Extension<i64>,
     Json(request): Json<ScrollRequest>,
 ) -> Result<JsonResponse<ScrollResponse>, HttpError> {
-    super::authz::require_space_read(&state, session_id, request.space_id as i64)?;
-    let graph_service = state.server.get_graph_service();
-    let vector_api = graph_service.vector_api();
-
-    if let Some(vector_api) = vector_api {
-        let (points, next_offset) = vector_api
-            .scroll(linkrs_api::api_core::vector_api::ScrollQuery {
-                space_id: request.space_id,
-                tag_name: &request.tag_name,
-                field_name: &request.field_name,
-                limit: request.limit,
-                offset: request.offset.as_deref(),
-                with_payload: request.with_payload,
-                with_vector: request.with_vector,
-            })
-            .await
-            .map_err(|e| HttpError::InternalError(e.to_string()))?;
-
-        let results: Vec<VectorSearchResult> = points
-            .into_iter()
-            .map(|p| VectorSearchResult {
-                doc_id: p.id.to_string(),
-                score: 0.0,
-                vector: if request.with_vector.unwrap_or(false) {
-                    Some(p.vector)
-                } else {
-                    None
-                },
-                payload: p.payload.map(|pay| pay.into_iter().collect()),
-            })
-            .collect();
-
-        Ok(JsonResponse(ScrollResponse {
-            points: results,
-            next_offset,
-        }))
-    } else {
-        Err(HttpError::InternalError(
-            "Vector API is not available".to_string(),
-        ))
-    }
+    Ok(JsonResponse(
+        scroll_core(&state, session_id, request).await?,
+    ))
 }

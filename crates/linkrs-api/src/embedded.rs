@@ -37,9 +37,11 @@ pub mod config;
 pub mod database;
 pub mod hooks;
 pub mod migration;
+pub mod observability;
 pub mod result;
 pub mod session;
 pub mod statistics;
+pub mod statistics_snapshot;
 pub mod transaction;
 
 // C API module: compiled only for callers that ask for the FFI surface.
@@ -47,6 +49,7 @@ pub mod transaction;
 pub mod c_api;
 
 // Re-export the main types
+pub use crate::api_core::import::{ImportFormat, ImportStats, ImportTarget};
 pub use batch::{BatchError, BatchInserter, BatchItemType, BatchResult};
 pub use busy_handler::{BusyConfig, BusyHandler, BusyResult};
 pub use config::DatabaseConfig;

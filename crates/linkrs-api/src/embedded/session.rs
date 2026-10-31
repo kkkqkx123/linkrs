@@ -49,7 +49,7 @@ use tokio::runtime::Runtime;
 /// # }
 /// ```
 pub struct Session<S: StorageClient + Clone + Send + Sync + 'static> {
-    db: Arc<GraphDatabaseInner<S>>,
+    pub(crate) db: Arc<GraphDatabaseInner<S>>,
     space_id: Arc<RwLock<Option<u64>>>,
     space_name: Arc<RwLock<Option<String>>>,
     auto_commit: bool,
@@ -128,6 +128,7 @@ pub(crate) mod extension;
 pub(crate) mod fulltext;
 #[cfg(all(feature = "fulltext", feature = "vector"))]
 pub(crate) mod hybrid;
+pub mod import;
 pub mod prepared;
 pub(crate) mod state;
 pub(crate) mod transactions;

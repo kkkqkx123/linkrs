@@ -117,7 +117,8 @@ pub async fn execute_health(
         return Ok(true);
     }
     if session_mgr.is_embedded() {
-        executor.write_output("healthy (embedded, no network service to probe)")?;
+        let health = session_mgr.embedded_health()?;
+        executor.write_output(&pretty(&health))?;
         return Ok(true);
     }
     session_mgr.require_http("\\health")?;
@@ -131,5 +132,26 @@ pub async fn execute_health(
         "ready": ready,
     });
     executor.write_output(&pretty(&report))?;
+    Ok(true)
+}
+
+/// Prometheus metrics dump (`\\metrics`).
+///
+/// Prints the raw text exposition: embedded mode renders it in-process,
+/// remote mode fetches `/metrics` over HTTP.
+pub async fn execute_metrics(
+    executor: &mut CommandExecutor,
+    session_mgr: &mut SessionManager,
+) -> Result<bool> {
+    if !executor.conditional_stack().is_active() {
+        return Ok(true);
+    }
+    let text = if session_mgr.is_embedded() {
+        session_mgr.embedded_metrics()?
+    } else {
+        session_mgr.require_http("\\metrics")?;
+        session_mgr.client().metrics().await?
+    };
+    executor.write_output(&text)?;
     Ok(true)
 }
