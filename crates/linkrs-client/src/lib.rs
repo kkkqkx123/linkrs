@@ -20,7 +20,7 @@ pub use utils::error::{ClientError, GrpcErrorCode};
 
 pub use config::{ClientConfig, SessionInfo};
 #[cfg(feature = "grpc")]
-pub use grpc_client::GrpcClient;
+pub use grpc_client::{GrpcClient, GrpcTlsConfig};
 pub use http_client::HttpClient;
 pub use linkrs_wire::batch::BatchItem;
 pub use linkrs_wire::meta::{
