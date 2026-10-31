@@ -1,22 +1,34 @@
-<script lang="ts">
+<script lang="ts" generics="T extends { id: string; properties: Record<string, unknown> }">
 	import { t } from '$i18n';
-	import { ArrowLeftRight } from '@lucide/svelte';
+	import type { LucideIcon } from '@lucide/svelte';
 	import EmptyState from '$components/common/EmptyState.svelte';
+	import LoadingState from '$components/common/LoadingState.svelte';
 	import { formatCellValue } from '$utils/parseData';
-	import type { EdgeData } from '$types/dataBrowser';
-	import type { EdgeType } from '$types/schema';
+
+	/** Extra entity columns rendered between the ID column and the properties. */
+	interface Column {
+		header: string;
+		value: (row: T) => string | number;
+		mono?: boolean;
+	}
 
 	let {
-		edgeTypes,
-		selectedEdgeType,
+		filterOptions,
+		filterLabel,
+		selectedFilter,
+		onFilterChange,
 		loading,
-		edges,
+		rows,
+		columns,
 		properties,
 		total,
 		page,
 		pageSize,
 		selectedIds,
-		onEdgeTypeChange,
+		icon,
+		emptyNoSelection,
+		emptyFiltered,
+		emptyHint,
 		onToggleSelect,
 		onViewDetail,
 		onViewInGraph,
@@ -26,55 +38,54 @@
 		onPrevPage,
 		onNextPage,
 	}: {
-		edgeTypes: EdgeType[];
-		selectedEdgeType: string | null;
+		filterOptions: string[];
+		filterLabel: string;
+		selectedFilter: string | null;
+		onFilterChange: (e: Event) => void;
 		loading: boolean;
-		edges: EdgeData[];
+		rows: T[];
+		columns: Column[];
 		properties: string[];
 		total: number;
 		page: number;
 		pageSize: number;
 		selectedIds: Set<string>;
-		onEdgeTypeChange: (e: Event) => void;
+		icon: LucideIcon;
+		emptyNoSelection: string;
+		emptyFiltered: string;
+		emptyHint: string;
 		onToggleSelect: (id: string) => void;
-		onViewDetail: (e: EdgeData) => void;
-		onViewInGraph: (e: EdgeData) => void;
-		onCopyId: (id: string) => void;
-		onEdit: (e: EdgeData) => void;
-		onDelete: (e: EdgeData) => void;
+		onViewDetail: (row: T) => void;
+		onViewInGraph: (row: T) => void;
+		onCopyId: (row: T) => void;
+		onEdit: (row: T) => void;
+		onDelete: (row: T) => void;
 		onPrevPage: () => void;
 		onNextPage: () => void;
 	} = $props();
 </script>
 
 <div class="mb-4">
-	<select
-		class="ui-input"
-		value={selectedEdgeType || ''}
-		onchange={onEdgeTypeChange}
-	>
-		<option value="">-- {t('dataBrowser.selectEdgeType')} --</option>
-		{#each edgeTypes as et (et.name)}
-			<option value={et.name}>{et.name}</option>
+	<select class="ui-input" value={selectedFilter || ''} onchange={onFilterChange}>
+		<option value="">-- {filterLabel} --</option>
+		{#each filterOptions as opt (opt)}
+			<option value={opt}>{opt}</option>
 		{/each}
 	</select>
 </div>
 
 {#if loading}
-	<div class="ui-empty">
-		<div class="ui-spinner"></div>
-	</div>
-{:else if edges.length > 0}
+	<LoadingState />
+{:else if rows.length > 0}
 	<div class="overflow-x-auto">
 		<table class="ui-table w-full border-collapse">
 			<thead>
 				<tr class="bg-secondary">
 					<th>{t('dataBrowser.batch.deletedColumn')}</th>
 					<th>ID</th>
-					<th>{t('common.type')}</th>
-					<th>{t('dataBrowser.source')}</th>
-					<th>{t('dataBrowser.target')}</th>
-					<th>{t('dataBrowser.rank')}</th>
+					{#each columns as col (col.header)}
+						<th>{col.header}</th>
+					{/each}
 					{#each properties as prop (prop)}
 						<th>{prop}</th>
 					{/each}
@@ -82,50 +93,49 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each edges as e (e.id)}
+				{#each rows as row (row.id)}
 					<tr>
 						<td>
 							<input
 								type="checkbox"
 								class="cursor-pointer"
-								checked={selectedIds.has(String(e.id))}
-								onchange={() => onToggleSelect(String(e.id))}
+								checked={selectedIds.has(String(row.id))}
+								onchange={() => onToggleSelect(String(row.id))}
 							/>
 						</td>
-						<td class="font-mono">{e.id}</td>
-						<td>{e.type}</td>
-						<td class="font-mono">{e.src}</td>
-						<td class="font-mono">{e.dst}</td>
-						<td>{e.rank}</td>
+						<td class="font-mono">{row.id}</td>
+						{#each columns as col (col.header)}
+							<td class={col.mono ? 'font-mono' : ''}>{col.value(row)}</td>
+						{/each}
 						{#each properties as prop (prop)}
 							<td class="max-w-40 truncate"
-								>{formatCellValue(e.properties[prop])}</td
+								>{formatCellValue(row.properties[prop])}</td
 							>
 						{/each}
 						<td>
 							<button
 								class="ui-link text-xs"
-								onclick={() => onViewDetail(e)}
+								onclick={() => onViewDetail(row)}
 								>{t('dataBrowser.viewDetail')}</button
 							>
 							<button
 								class="ml-2 text-success hover:text-success text-xs cursor-pointer"
-								onclick={() => onViewInGraph(e)}
+								onclick={() => onViewInGraph(row)}
 								>{t('graphPreview.openInGraph')}</button
 							>
 							<button
 								class="ml-2 text-muted hover:text-ink text-xs cursor-pointer"
-								onclick={() => onCopyId(String(e.src))}
+								onclick={() => onCopyId(row)}
 								>{t('dataBrowser.copyId')}</button
 							>
 							<button
 								class="ml-2 text-warning hover:text-warning text-xs cursor-pointer"
-								onclick={() => onEdit(e)}
+								onclick={() => onEdit(row)}
 								>{t('dataBrowser.editUpdate')}</button
 							>
 							<button
 								class="ml-2 ui-link-danger text-xs"
-								onclick={() => onDelete(e)}
+								onclick={() => onDelete(row)}
 								>{t('dataBrowser.editDelete')}</button
 							>
 						</td>
@@ -150,12 +160,8 @@
 			>
 		</div>
 	</div>
-{:else if selectedEdgeType}
-	<EmptyState
-		icon={ArrowLeftRight}
-		message={t('schema.noEdges')}
-		hint={t('dataBrowser.emptyHint')}
-	/>
+{:else if selectedFilter}
+	<EmptyState icon={icon} message={emptyFiltered} hint={emptyHint} />
 {:else}
-	<EmptyState icon={ArrowLeftRight} message={t('dataBrowser.selectEdgeType')} />
+	<EmptyState icon={icon} message={emptyNoSelection} />
 {/if}

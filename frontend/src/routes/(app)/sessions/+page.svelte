@@ -11,8 +11,7 @@
 		type SessionListItem,
 	} from '$services/connection';
 	import { notificationStore } from '$stores/notification';
-	import Button from '$components/common/Button.svelte';
-
+	
 	let sessions = $state<SessionListItem[]>([]);
 	let loading = $state(false);
 
@@ -79,9 +78,9 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sessions.title')}>
-		<Button variant="primary" onclick={loadSessions} disabled={loading}>
+		<button class="ui-btn ui-btn-primary ui-btn-sm" onclick={loadSessions} disabled={loading}>
 			{loading ? t('common.loading') : t('common.refresh')}
-		</Button>
+		</button>
 	</PageHeader>
 
 	<section class="ui-card shadow-sm p-6">

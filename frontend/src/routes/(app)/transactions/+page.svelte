@@ -8,8 +8,7 @@
 	import { operationsService, type ActiveTransaction } from '$services/operations';
 	import { formatLatencyMs } from '$utils/metricsFormat';
 	import { notificationStore } from '$stores/notification';
-	import Button from '$components/common/Button.svelte';
-
+	
 	let overview = $state<OverviewResponse | null>(null);
 	let transactionSnapshot = $state<TransactionMetrics | null>(null);
 	let activeTransactions = $state<ActiveTransaction[]>([]);
@@ -100,9 +99,9 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.transactions')}>
-		<Button variant="primary" onclick={load} disabled={loading}>
+		<button class="ui-btn ui-btn-primary ui-btn-sm" onclick={load} disabled={loading}>
 			{loading ? t('monitoring.loading') : t('common.refresh')}
-		</Button>
+		</button>
 	</PageHeader>
 
 	<TransactionPanel

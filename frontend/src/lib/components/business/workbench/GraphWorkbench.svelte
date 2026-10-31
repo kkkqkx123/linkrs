@@ -323,9 +323,12 @@
 
 	function handleExportPng() {
 		if (!cyInstance) return;
+		const bg = getComputedStyle(document.documentElement)
+			.getPropertyValue('--color-bg-white')
+			.trim();
 		const png = cyInstance.png({
 			full: true,
-			bg: isDark ? '#111827' : '#ffffff',
+			bg: bg || '#ffffff',
 		});
 		if (!png) return;
 		const link = document.createElement('a');
@@ -418,10 +421,10 @@
 				</button>
 				{#if exportOpen}
 					<div
-						class="absolute right-0 top-full mt-1 z-20 min-w-32 ui-card shadow-md py-1"
+						class="absolute right-0 top-full mt-1 z-20 min-w-32 ui-card shadow-lg py-1"
 					>
 						<button
-							class="w-full text-left px-3 py-1.5 text-sm text-ink hover:bg-hover cursor-pointer whitespace-nowrap"
+							class="ui-menu-item whitespace-nowrap"
 							onclick={() => {
 								exportOpen = false;
 								handleExportPng();
@@ -430,7 +433,7 @@
 							PNG
 						</button>
 						<button
-							class="w-full text-left px-3 py-1.5 text-sm text-ink hover:bg-hover cursor-pointer whitespace-nowrap"
+							class="ui-menu-item whitespace-nowrap"
 							onclick={() => {
 								exportOpen = false;
 								handleExportJson();
@@ -734,7 +737,6 @@
 					<IconButton
 						onclick={() => graphStore.hideDetail()}
 						label={t('common.close')}
-						class="ui-icon-btn"
 						size={18}
 					/>
 				</div>

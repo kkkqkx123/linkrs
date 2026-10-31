@@ -16,7 +16,7 @@
 
 <button
 	type="button"
-	class="flex-shrink-0 flex items-center justify-center cursor-pointer opacity-60 transition-opacity hover:opacity-100 {klass}"
+	class="ui-icon-btn flex-shrink-0 {klass}"
 	aria-label={label}
 	{onclick}
 >

@@ -1,13 +1,14 @@
 <script lang="ts">
 	import { t, type MessageKey } from '$i18n';
 	import VirtualTable from '$components/common/VirtualTable.svelte';
+	import EmptyState from '$components/common/EmptyState.svelte';
 	import ResultViewTabs from '$components/business/workbench/result/ResultViewTabs.svelte';
 	import GraphPreview from '$components/business/workbench/result/GraphPreview.svelte';
 	import JsonPreview from '$components/business/workbench/result/JsonPreview.svelte';
 	import ServerExportButtons from '$components/business/workbench/result/ServerExportButtons.svelte';
 	import type { CursorState } from '$stores/cursor';
 	import type { QueryResult } from '$types/query';
-	import { formatRowCount } from '$utils/parseData';
+	import { formatRowCount } from '$utils/metricsFormat';
 	import { queryResultToGraph } from '$utils/cytoscapeConfig';
 
 	const GRAPH_PREFIX_LIMIT = 5000;
@@ -117,18 +118,10 @@
 		</div>
 	{/if}
 	{#if loading && cursor.rows.length === 0}
-		<div
-			class="ui-empty"
-		>
-			{t('common.loading')}
-		</div>
+		<EmptyState message={t('common.loading')} />
 	{:else if activeView === 'table'}
 		{#if cursor.columns.length === 0}
-			<div
-				class="ui-empty"
-			>
-				{t('console.streamWaitingColumns')}
-			</div>
+			<EmptyState message={t('console.streamWaitingColumns')} />
 		{:else}
 			<VirtualTable columns={cursor.columns} rows={indexed} />
 			{#if loading}
@@ -137,11 +130,7 @@
 		{/if}
 	{:else if activeView === 'json'}
 		{#if cursor.rows.length === 0}
-			<div
-				class="ui-empty"
-			>
-				{t('console.noResult')}
-			</div>
+			<EmptyState message={t('console.noResult')} />
 		{:else}
 			<JsonPreview
 				columns={cursor.columns}

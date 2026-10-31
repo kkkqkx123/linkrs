@@ -150,7 +150,7 @@
 				y1="0"
 				x2={hoverXPos}
 				y2={height}
-				stroke="#9ca3af"
+				stroke="var(--color-text-placeholder)"
 				stroke-width="1"
 				stroke-dasharray="3 3"
 			/>

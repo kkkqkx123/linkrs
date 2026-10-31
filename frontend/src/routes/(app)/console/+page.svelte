@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { t } from '$i18n';
-	import { get, fromStore } from 'svelte/store';
+	import { fromStore } from 'svelte/store';
 	import {
 		consoleStore,
 		type QueryHistoryItem,

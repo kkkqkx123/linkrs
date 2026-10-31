@@ -3,8 +3,7 @@
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import { batchService } from '$services/batch';
 	import { notificationStore } from '$stores/notification';
-	import Button from '$components/common/Button.svelte';
-
+	
 	let spaceId = $state(1);
 	let batchType = $state('mixed');
 	let batchSize = $state(1000);
@@ -89,8 +88,8 @@
 				/>
 			</label>
 		</div>
-		<Button
-			variant="primary"
+		<button
+			class="ui-btn ui-btn-primary ui-btn-sm"
 			onclick={() =>
 				run(
 					() =>
@@ -104,7 +103,7 @@
 			disabled={loading}
 		>
 			{t('common.create')}
-		</Button>
+		</button>
 	</section>
 
 	<section class="ui-card shadow-sm p-6">
@@ -123,43 +122,41 @@
 				bind:value={itemsText}></textarea>
 		</label>
 		<div class="flex flex-wrap gap-2">
-			<Button
-				variant="primary"
+			<button
+				class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={() => run(() => batchService.addItems(batchId, parseItems()))}
 				disabled={loading || !batchId}
 			>
 				{t('batch.addItems')}
-			</Button>
-			<Button
-				variant="success"
-				size="xs"
+			</button>
+			<button
+				class="ui-btn ui-btn-success ui-btn-xs"
 				onclick={() => run(() => batchService.execute(batchId))}
 				disabled={loading || !batchId}
 			>
 				{t('batch.execute')}
-			</Button>
-			<Button
-				variant="ghost"
+			</button>
+			<button
+				class="ui-btn ui-btn-ghost ui-btn-sm"
 				onclick={() => run(() => batchService.status(batchId))}
 				disabled={loading || !batchId}
 			>
 				{t('common.status')}
-			</Button>
-			<Button
-				variant="warn"
-				size="xs"
+			</button>
+			<button
+				class="ui-btn ui-btn-warn ui-btn-xs"
 				onclick={() => run(() => batchService.cancel(batchId))}
 				disabled={loading || !batchId}
 			>
 				{t('common.cancel')}
-			</Button>
-			<Button
-				variant="danger"
+			</button>
+			<button
+				class="ui-btn ui-btn-danger ui-btn-sm"
 				onclick={() => run(() => batchService.remove(batchId))}
 				disabled={loading || !batchId}
 			>
 				{t('common.delete')}
-			</Button>
+			</button>
 		</div>
 	</section>
 

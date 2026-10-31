@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import Modal from '$components/common/Modal.svelte';
 
 	// Themed confirmation dialog replacing native `confirm()`. The caller owns
 	// the pending state; closing never executes the action.
@@ -26,30 +27,18 @@
 	} = $props();
 </script>
 
-{#if open}
-	<div class="fixed inset-0 z-50 flex items-center justify-center">
-		<div
-			role="presentation"
-			class="absolute inset-0 bg-mask"
-			onclick={onClose}
-		></div>
-		<div
-			class="relative ui-card shadow-lg p-6 w-[26rem] max-h-[85vh] overflow-y-auto"
+<Modal {open} {title} {onClose} class="w-[26rem]">
+	<p class="text-sm text-muted whitespace-pre-wrap">{message}</p>
+	{#snippet footer()}
+		<button class="ui-btn ui-btn-ghost" onclick={onClose}>
+			{cancelLabel}
+		</button>
+		<button
+			class="ui-btn {danger ? 'ui-btn-danger' : 'ui-btn-primary'}"
+			disabled={busy}
+			onclick={onConfirm}
 		>
-			<h2 class="text-base font-semibold text-ink mb-2">{title}</h2>
-			<p class="text-sm text-muted whitespace-pre-wrap">{message}</p>
-			<div class="mt-4 flex justify-end gap-2">
-				<button class="ui-btn ui-btn-ghost" onclick={onClose}>
-					{cancelLabel}
-				</button>
-				<button
-					class="ui-btn {danger ? 'ui-btn-danger' : 'ui-btn-primary'}"
-					disabled={busy}
-					onclick={onConfirm}
-				>
-					{busy ? t('common.loading') : confirmLabel}
-				</button>
-			</div>
-		</div>
-	</div>
-{/if}
+			{busy ? t('common.loading') : confirmLabel}
+		</button>
+	{/snippet}
+</Modal>

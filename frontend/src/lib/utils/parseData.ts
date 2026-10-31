@@ -54,20 +54,6 @@ export const formatCellValue = (value: unknown): string => {
 	return String(value);
 };
 
-export const formatExecutionTime = (ms: number): string => {
-	if (ms < 1) return '< 1 ms';
-	if (ms < 1000) return `${Math.round(ms)} ms`;
-	return `${(ms / 1000).toFixed(2)} s`;
-};
-
-export const formatRowCount = (count: number): string => {
-	if (count === 0) return '0 rows';
-	if (count === 1) return '1 row';
-	if (count < 1000) return `${count} rows`;
-	if (count < 1000000) return `${(count / 1000).toFixed(1)}K rows`;
-	return `${(count / 1000000).toFixed(1)}M rows`;
-};
-
 export const resultToObjects = (
 	result: QueryResult,
 ): Record<string, unknown>[] => {

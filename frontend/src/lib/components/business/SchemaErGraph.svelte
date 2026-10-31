@@ -168,7 +168,6 @@
 					<IconButton
 						onclick={() => (selected = null)}
 						label={t('common.close')}
-						class="ui-icon-btn"
 						size={18}
 					/>
 				</div>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import EmptyState from '$components/common/EmptyState.svelte';
 	import LazyCytoscapeCanvas from '$components/common/LazyCytoscapeCanvas.svelte';
 	import GraphPreviewControls from '$components/business/GraphPreviewControls.svelte';
 	import type { ParsedGraph } from '$utils/cytoscapeConfig';
@@ -39,7 +40,5 @@
 		{/if}
 	</div>
 {:else}
-	<div class="ui-empty">
-		{t('console.viewGraph')} - {t('graph.noData')}
-	</div>
+	<EmptyState message="{t('console.viewGraph')} - {t('graph.noData')}" />
 {/if}

@@ -84,6 +84,15 @@ export function formatCount(value: unknown): string {
 	return numberFormatter().format(num);
 }
 
+/** Row count with a trailing unit word, for result summaries. */
+export function formatRowCount(count: number): string {
+	if (count === 0) return '0 rows';
+	if (count === 1) return '1 row';
+	if (count < 1000) return `${count} rows`;
+	if (count < 1000000) return `${(count / 1000).toFixed(1)}K rows`;
+	return `${(count / 1000000).toFixed(1)}M rows`;
+}
+
 /** Grouped rate value; the surrounding label already carries the per-second unit. */
 export function formatQps(value: unknown): string {
 	const num = toFiniteNumber(value);

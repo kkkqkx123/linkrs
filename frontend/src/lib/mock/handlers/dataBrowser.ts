@@ -6,7 +6,7 @@
 
 import { envelope, type MockEntry, type MockRegistry } from '../index';
 import { scenarioIsEmpty } from '../scenario';
-import { demoEdges, demoSpace, demoVertices } from '../fixtures';
+import { demoEdges, demoVertices } from '../fixtures';
 
 function paginate<T>(
 	items: T[],
@@ -62,8 +62,7 @@ export const dataBrowserHandlers: MockRegistry = {
 		});
 	}) satisfies MockEntry,
 
-	'GET /api/v1/schema/spaces/{name}/statistics': ((ctx) => {
-		const name = String(ctx.path.name ?? demoSpace);
+	'GET /api/v1/schema/spaces/{name}/statistics': (() => {
 		return envelope({
 			tag_count: scenarioIsEmpty() ? 0 : 2,
 			edge_type_count: scenarioIsEmpty() ? 0 : 2,

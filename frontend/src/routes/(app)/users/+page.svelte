@@ -7,8 +7,7 @@
 	import { notificationStore } from '$stores/notification';
 	import PageHeader from '$components/layout/PageHeader.svelte';
 	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
-	import Button from '$components/common/Button.svelte';
-	import { usersService, type ManagedUser } from '$services/users';
+		import { usersService, type ManagedUser } from '$services/users';
 
 	let users = $state<ManagedUser[]>([]);
 	let fallback = $state(false);
@@ -165,9 +164,9 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('users.title')}>
-		<Button variant="primary" onclick={loadUsers} disabled={loading}>
+		<button class="ui-btn ui-btn-primary ui-btn-sm" onclick={loadUsers} disabled={loading}>
 			{loading ? t('common.loading') : t('common.refresh')}
-		</Button>
+		</button>
 	</PageHeader>
 
 	{#if fallback}
@@ -194,13 +193,12 @@
 				bind:value={newPassword}
 				disabled={loading}
 			/>
-			<Button
-				variant="primary"
+			<button class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={createUser}
 				disabled={loading || !newUsername.trim() || !newPassword.trim()}
 			>
 				{t('common.create')}
-			</Button>
+			</button>
 		</div>
 	</section>
 
@@ -230,13 +228,12 @@
 				bind:value={ownConfirmPassword}
 				disabled={loading}
 			/>
-			<Button
-				variant="primary"
+			<button class="ui-btn ui-btn-primary ui-btn-sm"
 				onclick={submitOwnPassword}
 				disabled={loading || !ownOldPassword.trim() || !ownNewPassword.trim()}
 			>
 				{t('common.save')}
-			</Button>
+			</button>
 		</div>
 	</section>
 
@@ -273,46 +270,40 @@
 								<td>{user.lastActive ?? '—'}</td>
 								<td>
 								 <div class="flex flex-wrap gap-2">
-								  <Button
-								   variant="ghost"
+								  <button class="ui-btn ui-btn-ghost ui-btn-sm"
 								   onclick={() =>
 								    (resetTarget =
 								     resetTarget === user.username ? null : user.username)}
 								  >
 								   {t('users.resetPassword')}
-								  </Button>
+								  </button>
 								  {#if !fallback}
-								   <Button
-								    variant="ghost"
+								   <button class="ui-btn ui-btn-ghost ui-btn-sm"
 								    onclick={() => requestToggle(user, false)}
 								    disabled={loading}
 								   >
 								    {t('users.disable')}
-								   </Button>
-								   <Button
-								    variant="ghost"
+								   </button>
+								   <button class="ui-btn ui-btn-ghost ui-btn-sm"
 								    onclick={() => requestToggle(user, true)}
 								    disabled={loading}
 								   >
 								    {t('users.enable')}
-								   </Button>
+								   </button>
 								  {/if}
-								  <Button
-								   variant="ghost"
+								  <button class="ui-btn ui-btn-ghost ui-btn-sm"
 								   onclick={() =>
 								    (roleTarget =
 								     roleTarget === user.username ? null : user.username)}
 								  >
 								   {t('users.grant')}
-								  </Button>
-								  <Button
-								   variant="danger-outline"
-								   size="xs"
+								  </button>
+								  <button class="ui-btn ui-btn-danger-outline ui-btn-xs"
 								   onclick={() => requestDeleteUser(user)}
 								   disabled={loading}
 								  >
 								   {t('users.deleteUser')}
-								  </Button>
+								  </button>
 								 </div>
 								 {#if roleTarget === user.username}
 								  <div class="mt-2 flex flex-wrap gap-2">
@@ -328,24 +319,22 @@
 								    bind:value={roleName}
 								    disabled={loading}
 								   />
-								   <Button
-								    variant="primary"
+								   <button class="ui-btn ui-btn-primary ui-btn-sm"
 								    onclick={() => submitGrant(user)}
 								    disabled={loading ||
 								     !roleSpace.trim() ||
 								     !roleName.trim()}
 								   >
 								    {t('users.grant')}
-								   </Button>
-								   <Button
-								    variant="ghost"
+								   </button>
+								   <button class="ui-btn ui-btn-ghost ui-btn-sm"
 								    onclick={() => submitRevoke(user)}
 								    disabled={loading ||
 								     !roleSpace.trim() ||
 								     !roleName.trim()}
 								   >
 								    {t('users.revoke')}
-								   </Button>
+								   </button>
 								  </div>
 								 {/if}
 								 {#if resetTarget === user.username}
@@ -357,13 +346,12 @@
 								    bind:value={resetPassword}
 								    disabled={loading}
 								   />
-								   <Button
-								    variant="primary"
+								   <button class="ui-btn ui-btn-primary ui-btn-sm"
 								    onclick={() => submitReset(user)}
 								    disabled={loading || !resetPassword.trim()}
 								   >
 								    {t('common.save')}
-								   </Button>
+								   </button>
 								  </div>
 								 {/if}
 								</td>

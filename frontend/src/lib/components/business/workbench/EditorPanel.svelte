@@ -217,12 +217,6 @@
 		saveDraftTimer = setTimeout(() => consoleStore.setEditorContent(content), 300);
 	});
 
-	/** Flush the draft immediately, so a run never reads a stale buffer. */
-	function flushDraft() {
-		if (saveDraftTimer) clearTimeout(saveDraftTimer);
-		consoleStore.setEditorContent(editorContent);
-	}
-
 	function handleFormat() {
 		const formatted = formatQuery(editorContent);
 		if (formatted && formatted !== editorContent) {

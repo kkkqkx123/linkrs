@@ -6,8 +6,7 @@
 	import { statisticsService, type OverviewResponse } from '$services/statistics';
 	import type { SyncStatusResponse } from '$services/sync';
 	import { notificationStore } from '$stores/notification';
-	import Button from '$components/common/Button.svelte';
-
+	
 	let syncPanel: SyncPanel | null = null;
 
 	let overview = $state<OverviewResponse | null>(null);
@@ -40,9 +39,9 @@
 
 <div class="ui-page-doc animate-fade-in">
 	<PageHeader title={t('sidebar.sync')}>
-		<Button variant="primary" onclick={load} disabled={loading}>
+		<button class="ui-btn ui-btn-primary ui-btn-sm" onclick={load} disabled={loading}>
 			{loading ? t('monitoring.loading') : t('common.refresh')}
-		</Button>
+		</button>
 	</PageHeader>
 
 	<SyncPanel bind:this={syncPanel} overview={overview} syncSnapshot={syncSnapshot} />

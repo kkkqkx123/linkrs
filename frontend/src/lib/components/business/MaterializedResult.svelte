@@ -2,12 +2,14 @@
 	import { t } from '$i18n';
 	import { Clock, Check, X, Database, AlertTriangle } from '@lucide/svelte';
 	import {
-		formatExecutionTime,
+		formatLatencyMs,
 		formatRowCount,
-	} from '$utils/parseData';
+	} from '$utils/metricsFormat';
 	import { queryResultToGraph } from '$utils/cytoscapeConfig';
 	import { exportToCSV, exportToJSON } from '$utils/export';
 	import VirtualTable from '$components/common/VirtualTable.svelte';
+	import EmptyState from '$components/common/EmptyState.svelte';
+	import LoadingState from '$components/common/LoadingState.svelte';
 	import type { IndexedRow } from '$components/common/VirtualTable.svelte';
 	import ResultViewTabs from '$components/business/workbench/result/ResultViewTabs.svelte';
 	import GraphPreview from '$components/business/workbench/result/GraphPreview.svelte';
@@ -59,7 +61,7 @@
 		if (!entry?.stages) return '';
 		const parts = Object.entries(entry.stages).map(([k, v]) => {
 			const num = typeof v === 'number' ? v : Number(v);
-			return `${k}: ${Number.isFinite(num) ? num.toFixed(2) : '?'}ms`;
+			return `${k}: ${Number.isFinite(num) ? formatLatencyMs(num) : '?'}`;
 		});
 		const trace = entry.traceId ? ` | trace: ${entry.traceId}` : '';
 		return parts.join(' | ') + trace;
@@ -68,16 +70,7 @@
 
 <div class="flex-1 ui-card ui-card-flush shadow-sm overflow-hidden flex flex-col">
 	{#if isExecuting}
-		<div class="ui-empty flex-1">
-			<div class="text-center">
-				<div
-					class="ui-spinner ui-spinner-lg"
-				></div>
-				<p class="mt-2 text-sm text-muted">
-					{t('common.loading')}
-				</p>
-			</div>
-		</div>
+		<LoadingState large message={t('common.loading')} class="flex-1" />
 	{:else if error && results.length === 0}
 		<div
 			class="ui-alert ui-alert-error m-5 p-5"
@@ -104,7 +97,7 @@
 		<div
 			class="ui-result-head"
 		>
-			<span><Clock size={12} /> {t('console.time')}: {formatExecutionTime(executionTime)}</span>
+			<span><Clock size={12} /> {t('console.time')}: {formatLatencyMs(executionTime)}</span>
 			<span>|</span>
 			<span
 				>{results.length}
@@ -130,7 +123,7 @@
 							>{entry.query}</span
 						>
 						<span title={entry.stages ? stageDetail(entry) : undefined}
-							>{formatExecutionTime(entry.executionTime)}</span
+							>{formatLatencyMs(entry.executionTime)}</span
 						>
 						{#if entry.traceId}
 							<span class="font-mono text-muted" title={entry.traceId}
@@ -190,7 +183,7 @@
 				title={primaryEntry?.stages
 					? `${t('console.stages')}: ${stageDetail(primaryEntry)}`
 					: undefined}
-				><Clock size={12} /> {t('console.time')}: {formatExecutionTime(executionTime)}</span
+				><Clock size={12} /> {t('console.time')}: {formatLatencyMs(executionTime)}</span
 			>
 			{#if primaryEntry?.traceId}
 				<span
@@ -242,10 +235,6 @@
 			{/if}
 		</div>
 	{:else}
-		<div
-			class="ui-empty flex-1"
-		>
-			{t('console.noResult')}
-		</div>
+		<EmptyState message={t('console.noResult')} class="flex-1" />
 	{/if}
 </div>

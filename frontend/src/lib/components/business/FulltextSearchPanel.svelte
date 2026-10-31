@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import EmptyState from '$components/common/EmptyState.svelte';
 	import { queryService } from '$services/query';
 	import { fulltextService } from '$services/fulltext';
 
@@ -148,9 +149,7 @@
 				</table>
 			</div>
 		{:else}
-			<p class="text-muted text-center py-8 text-sm">
-				{t('dataBrowser.retrieval.noResults')}
-			</p>
+			<EmptyState message={t('dataBrowser.retrieval.noResults')} />
 		{/if}
 	{/if}
 

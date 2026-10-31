@@ -6,16 +6,18 @@
 		icon,
 		message,
 		hint,
+		class: klass = '',
 		children,
 	}: {
 		icon?: LucideIcon;
 		message: string;
 		hint?: string;
+		class?: string;
 		children?: Snippet;
 	} = $props();
 </script>
 
-<div class="ui-empty flex-col gap-1.5">
+<div class="ui-empty flex-col gap-1.5 {klass}">
 	{#if icon}
 		{@const Icon = icon}
 		<Icon size={28} class="text-faint" />

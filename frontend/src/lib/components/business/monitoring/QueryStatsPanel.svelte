@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { consoleStore } from '$stores/console';
 	import EmptyState from '$components/common/EmptyState.svelte';
+	import { copyToClipboard } from '$utils/function';
 	import {
 		formatCount,
 		formatLatencyMs,
@@ -34,15 +35,12 @@
 	let copiedPattern = $state<string | null>(null);
 
 	async function copyStatement(pattern: PatternEntry) {
-		try {
-			await navigator.clipboard.writeText(pattern.normalized_query);
-			copiedPattern = pattern.normalized_query;
-			setTimeout(() => {
-				if (copiedPattern === pattern.normalized_query) copiedPattern = null;
-			}, 1500);
-		} catch {
-			/* clipboard unavailable */
-		}
+		const ok = await copyToClipboard(pattern.normalized_query);
+		if (!ok) return;
+		copiedPattern = pattern.normalized_query;
+		setTimeout(() => {
+			if (copiedPattern === pattern.normalized_query) copiedPattern = null;
+		}, 1500);
 	}
 
 	function runInConsole(pattern: PatternEntry) {

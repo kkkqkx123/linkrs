@@ -2,13 +2,14 @@
 	import { t, type MessageKey } from '$i18n';
 	import { Clock, X, Check, Ban } from '@lucide/svelte';
 	import VirtualTable from '$components/common/VirtualTable.svelte';
+	import EmptyState from '$components/common/EmptyState.svelte';
 	import ResultViewTabs from '$components/business/workbench/result/ResultViewTabs.svelte';
 	import GraphPreview from '$components/business/workbench/result/GraphPreview.svelte';
 	import JsonPreview from '$components/business/workbench/result/JsonPreview.svelte';
 	import ServerExportButtons from '$components/business/workbench/result/ServerExportButtons.svelte';
 	import type { StreamCardState, StreamState } from '$stores/stream';
 	import type { QueryResult } from '$types/query';
-	import { formatExecutionTime, formatRowCount } from '$utils/parseData';
+	import { formatLatencyMs, formatRowCount } from '$utils/metricsFormat';
 	import { queryResultToGraph } from '$utils/cytoscapeConfig';
 
 	const GRAPH_PREFIX_LIMIT = 5000;
@@ -113,21 +114,13 @@
 	{/if}
 	{#if activeView === 'table'}
 		{#if card.columns.length === 0}
-			<div
-				class="ui-empty"
-			>
-				{t('console.streamWaitingColumns')}
-			</div>
+			<EmptyState message={t('console.streamWaitingColumns')} />
 		{:else}
 			<VirtualTable columns={card.columns} rows={model.indexed} />
 		{/if}
 	{:else if activeView === 'json'}
 		{#if model.dense.length === 0}
-			<div
-				class="ui-empty"
-			>
-				{t('console.noResult')}
-			</div>
+			<EmptyState message={t('console.noResult')} />
 		{:else}
 			<JsonPreview
 				columns={card.columns}
@@ -158,7 +151,7 @@
 	<span>|</span>
 	{#if stream.executionTime > 0}
 		<span
-			><Clock size={12} /> {t('console.time')}: {formatExecutionTime(stream.executionTime)}</span
+			><Clock size={12} /> {t('console.time')}: {formatLatencyMs(stream.executionTime)}</span
 		>
 		<span>|</span>
 	{/if}
@@ -221,7 +214,7 @@
 						>
 						<span>{t(cardStatusKey(card.status))}</span>
 						{#if card.executionTime > 0}
-							<span>{formatExecutionTime(card.executionTime)}</span>
+							<span>{formatLatencyMs(card.executionTime)}</span>
 						{/if}
 						<span>{formatRowCount(card.receivedCount)}</span>
 						<ServerExportButtons query={card.query} />
@@ -235,11 +228,7 @@
 	{:else if stream.cards.length === 1}
 		{@render cardBody(stream.cards[0])}
 	{:else}
-		<div
-			class="ui-empty"
-		>
-			{t('console.noResult')}
-		</div>
+		<EmptyState message={t('console.noResult')} />
 	{/if}
 </div>
 </div>

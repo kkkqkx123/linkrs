@@ -21,14 +21,14 @@
 	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import StatisticsPanel from '$components/business/dataBrowser/StatisticsPanel.svelte';
 	import DetailModal from '$components/business/dataBrowser/DetailModal.svelte';
-	import VertexTable from '$components/business/dataBrowser/VertexTable.svelte';
-	import EdgeTable from '$components/business/dataBrowser/EdgeTable.svelte';
+	import EntityTable from '$components/business/dataBrowser/EntityTable.svelte';
 	import FilterPanel from '$components/business/FilterPanel.svelte';
 	import VectorSearchPanel from '$components/business/VectorSearchPanel.svelte';
 	import FulltextSearchPanel from '$components/business/FulltextSearchPanel.svelte';
 	import type { DataBrowserTab } from '$types/dataBrowser';
 	import EditPreviewModal from '$components/business/EditPreviewModal.svelte';
 	import type { VertexData, EdgeData } from '$types/dataBrowser';
+	import { copyToClipboard } from '$utils/function';
 	import { queryService } from '$services/query';
 
 	const schemaState = fromStore(schemaStore);
@@ -177,11 +177,7 @@
 	}
 
 	async function copyText(value: string) {
-		try {
-			await navigator.clipboard.writeText(value);
-		} catch {
-			/* clipboard unavailable */
-		}
+		await copyToClipboard(value);
 	}
 
 	// --- Edit preview with optimistic conflict protection ---
@@ -611,21 +607,27 @@
 					{:else if activeTab === 'fulltext'}
 						<FulltextSearchPanel {currentSpace} />
 					{:else if activeTab === 'vertices'}
-						<VertexTable
-							{tags}
-							{selectedTag}
+						<EntityTable
+							filterOptions={tags.map((tg) => tg.name)}
+							filterLabel={t('dataBrowser.selectTag')}
+							selectedFilter={selectedTag}
+							onFilterChange={handleTagChange}
 							{loading}
-							{vertices}
+							rows={vertices}
+							columns={[{ header: t('sidebar.tags'), value: (v) => v.tag }]}
 							properties={vertexProperties}
 							total={vertexTotal}
 							page={vertexPage}
 							pageSize={vertexPageSize}
 							selectedIds={selectedIds}
-							onTagChange={handleTagChange}
+							icon={Package}
+							emptyNoSelection={t('dataBrowser.selectTag')}
+							emptyFiltered={t('schema.noTags')}
+							emptyHint={t('dataBrowser.emptyHint')}
 							onToggleSelect={toggleSelect}
 							onViewDetail={(v) => showDetail(v, 'vertex')}
 							onViewInGraph={(v) => viewInGraph(v, 'vertex')}
-							onCopyId={copyText}
+							onCopyId={(v) => copyText(String(v.id))}
 							onEdit={(v) => openEdit(v, 'vertex')}
 							onDelete={(v) => requestDelete(v, 'vertex')}
 							onPrevPage={() => {
@@ -638,21 +640,32 @@
 							}}
 						/>
 					{:else}
-						<EdgeTable
-							{edgeTypes}
-							{selectedEdgeType}
+						<EntityTable
+							filterOptions={edgeTypes.map((et) => et.name)}
+							filterLabel={t('dataBrowser.selectEdgeType')}
+							selectedFilter={selectedEdgeType}
+							onFilterChange={handleEdgeTypeChange}
 							{loading}
-							{edges}
+							rows={edges}
+							columns={[
+								{ header: t('common.type'), value: (e) => e.type },
+								{ header: t('dataBrowser.source'), value: (e) => e.src, mono: true },
+								{ header: t('dataBrowser.target'), value: (e) => e.dst, mono: true },
+								{ header: t('dataBrowser.rank'), value: (e) => e.rank },
+							]}
 							properties={edgeProperties}
 							total={edgeTotal}
 							page={edgePage}
 							pageSize={edgePageSize}
 							selectedIds={selectedIds}
-							onEdgeTypeChange={handleEdgeTypeChange}
+							icon={ArrowLeftRight}
+							emptyNoSelection={t('dataBrowser.selectEdgeType')}
+							emptyFiltered={t('schema.noEdges')}
+							emptyHint={t('dataBrowser.emptyHint')}
 							onToggleSelect={toggleSelect}
 							onViewDetail={(e) => showDetail(e, 'edge')}
 							onViewInGraph={(e) => viewInGraph(e, 'edge')}
-							onCopyId={(id) => copyText(id)}
+							onCopyId={(e) => copyText(String(e.src))}
 							onEdit={(e) => openEdit(e, 'edge')}
 							onDelete={(e) => requestDelete(e, 'edge')}
 							onPrevPage={() => {

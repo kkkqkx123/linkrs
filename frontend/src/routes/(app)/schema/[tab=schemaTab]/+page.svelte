@@ -9,6 +9,8 @@
 	import { theme } from '$stores/theme';
 	import { DATA_TYPE_LABELS } from '$config/constants';
 	import PageSkeleton from '$components/common/PageSkeleton.svelte';
+	import LoadingState from '$components/common/LoadingState.svelte';
+	import EmptyState from '$components/common/EmptyState.svelte';
 	import ConfirmDialog from '$components/common/ConfirmDialog.svelte';
 	import SchemaAlterModal from '$components/business/SchemaAlterModal.svelte';
 	import type { Space, Tag, EdgeType } from '$types/schema';
@@ -470,13 +472,9 @@
 			<div class="flex-1 overflow-auto p-5">
 				{#if activeTab === 'spaces'}
 					{#if isLoadingSpaces}
-						<div class="ui-empty">
-							<div class="ui-spinner"></div>
-						</div>
+						<LoadingState />
 					{:else if spaces.length === 0}
-						<p class="text-muted text-center py-8">
-							{t('schema.noSpaces')}
-						</p>
+						<EmptyState message={t('schema.noSpaces')} />
 					{:else}
 						<div class="overflow-x-auto">
 							<table class="ui-table w-full border-collapse">
@@ -523,13 +521,9 @@
 						>
 					</div>
 					{#if isLoadingTags}
-						<div class="ui-empty">
-							<div class="ui-spinner"></div>
-						</div>
+						<LoadingState />
 					{:else if tags.length === 0}
-						<p class="text-muted text-center py-8">
-							{t('schema.noTags')}
-						</p>
+						<EmptyState message={t('schema.noTags')} />
 					{:else}
 						<div class="overflow-x-auto">
 							<table class="ui-table w-full border-collapse">
@@ -588,13 +582,9 @@
 						>
 					</div>
 					{#if isLoadingEdgeTypes}
-						<div class="ui-empty">
-							<div class="ui-spinner"></div>
-						</div>
+						<LoadingState />
 					{:else if edgeTypes.length === 0}
-						<p class="text-muted text-center py-8">
-							{t('schema.noEdges')}
-						</p>
+						<EmptyState message={t('schema.noEdges')} />
 					{:else}
 						<div class="overflow-x-auto">
 							<table class="ui-table w-full border-collapse">
@@ -653,13 +643,9 @@
 						>
 					</div>
 					{#if isLoadingIndexes}
-						<div class="ui-empty">
-							<div class="ui-spinner"></div>
-						</div>
+						<LoadingState />
 					{:else if indexes.length === 0}
-						<p class="text-muted text-center py-8">
-							{t('schema.noIndexes')}
-						</p>
+						<EmptyState message={t('schema.noIndexes')} />
 					{:else}
 						<div class="overflow-x-auto">
 							<table class="ui-table w-full border-collapse">
@@ -741,13 +727,9 @@
 						{t('common.create')}
 					</button>
 					{#if isLoadingFunctions}
-						<div class="ui-empty">
-							<div class="ui-spinner"></div>
-						</div>
+						<LoadingState />
 					{:else if functions.length === 0 && !functionsResult}
-						<p class="text-muted text-center py-8">
-							{t('functions.empty')}
-						</p>
+						<EmptyState message={t('functions.empty')} />
 					{:else}
 						<div class="overflow-x-auto mb-4">
 							<table class="ui-table w-full border-collapse">
@@ -871,21 +853,15 @@
 						</button>
 					</div>
 					{#if isLoadingVersions}
-						<div class="ui-empty">
-							<div class="ui-spinner"></div>
-						</div>
+						<LoadingState />
 					{:else if versionsResult}
 						<pre class="ui-pre">{versionsResult}</pre>
 					{:else}
-						<p class="text-muted text-center py-8">
-							{t('versions.hint')}
-						</p>
+						<EmptyState message={t('versions.hint')} />
 					{/if}
 				{:else if activeTab === 'visualization'}
 					{#await import('$components/business/SchemaErGraph.svelte')}
-						<div class="ui-empty">
-							<div class="ui-spinner"></div>
-						</div>
+						<LoadingState />
 					{:then { default: SchemaErGraph }}
 						<SchemaErGraph
 							{tags}

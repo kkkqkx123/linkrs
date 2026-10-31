@@ -17,13 +17,13 @@
 			{
 				key: 'queries',
 				label: t('monitoring.qps'),
-				color: '#3b82f6',
+				color: 'var(--color-info)',
 				values: points.map((p) => Number(p.queries) || 0),
 			},
 			{
 				key: 'errors',
 				label: t('monitoring.errors'),
-				color: '#ef4444',
+				color: 'var(--color-error)',
 				values: points.map((p) => Number(p.errors) || 0),
 			},
 		];
@@ -35,7 +35,7 @@
 			{
 				key: 'latency',
 				label: t('monitoring.avgLatency'),
-				color: '#14b8a6',
+				color: 'var(--color-primary)',
 				values: points.map((p) => Number(p.avg_latency_ms) || 0),
 			},
 		];

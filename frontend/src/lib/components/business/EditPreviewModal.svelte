@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
-	import IconButton from '$components/common/IconButton.svelte';
+	import Modal from '$components/common/Modal.svelte';
 
 	/**
 	 * Change-preview modal for data-browser edits. Shows the field-level diff
@@ -59,81 +59,57 @@
 	}
 </script>
 
-{#if open}
-	<div class="fixed inset-0 z-50 flex items-center justify-center">
-		<div role="presentation" class="absolute inset-0 bg-mask" onclick={onClose}></div>
-		<div
-			class="relative ui-card shadow-lg p-6 w-[28rem] max-h-[85vh] overflow-y-auto"
-		>
-			<div class="flex items-center justify-between mb-4">
-				<h2 class="text-base font-semibold text-ink">{title}</h2>
-				<IconButton
-					onclick={onClose}
-					label={t('common.close')}
-					class="ui-icon-btn"
-					size={18}
+<Modal {open} {title} {onClose} class="w-[28rem]">
+	<div class="space-y-2">
+		{#each keys as key (key)}
+			{@const isChanged = changed(key)}
+			<div
+				class="text-sm rounded px-2 py-1.5 {isChanged
+					? 'bg-warning-light border border-warning/40'
+					: ''}"
+			>
+				<div class="flex items-center justify-between gap-2">
+					<span class="text-muted font-mono text-xs">{key}</span>
+					{#if isChanged}
+						<span class="text-warning text-xs"
+							>{t('dataBrowser.edit.changed')}</span
+						>
+					{/if}
+				</div>
+				{#if isChanged}
+					<div class="text-xs text-muted line-through mt-1">
+						{formatValue(original[key])}
+					</div>
+				{/if}
+				<input
+					class="mt-1 w-full ui-input ui-input-sm font-mono"
+					value={formatValue(edited[key])}
+					oninput={(e) => updateValue(key, e.currentTarget.value)}
 				/>
 			</div>
-
-			<div class="space-y-2">
-				{#each keys as key (key)}
-					{@const isChanged = changed(key)}
-					<div
-						class="text-sm rounded px-2 py-1.5 {isChanged
-							? 'bg-warning-light border border-warning/40'
-							: ''}"
-					>
-						<div class="flex items-center justify-between gap-2">
-							<span class="text-muted font-mono text-xs">{key}</span>
-							{#if isChanged}
-								<span class="text-warning text-xs"
-									>{t('dataBrowser.edit.changed')}</span
-								>
-							{/if}
-						</div>
-						{#if isChanged}
-							<div class="text-xs text-muted line-through mt-1">
-								{formatValue(original[key])}
-							</div>
-						{/if}
-						<input
-							class="mt-1 w-full ui-input ui-input-sm font-mono"
-							value={formatValue(edited[key])}
-							oninput={(e) => updateValue(key, e.currentTarget.value)}
-						/>
-					</div>
-				{/each}
-			</div>
-
-			<div class="mt-4">
-				<h3 class="text-sm font-medium text-ink mb-1">
-					{t('dataBrowser.edit.statement')}
-				</h3>
-				<pre
-					class="ui-pre ui-pre-sm whitespace-pre-wrap">{statement}</pre>
-			</div>
-
-			{#if errorMessage}
-				<div
-					class="ui-alert ui-alert-error mt-3"
-				>
-					{errorMessage}
-				</div>
-			{/if}
-
-			<div class="mt-4 flex justify-end gap-2">
-				<button
-					class="ui-btn ui-btn-ghost"
-					onclick={onClose}>{t('common.cancel')}</button
-				>
-				<button
-					class="ui-btn ui-btn-primary"
-					disabled={busy}
-					onclick={onConfirm}
-				>
-					{busy ? t('console.executing') : t('common.ok')}
-				</button>
-			</div>
-		</div>
+		{/each}
 	</div>
-{/if}
+
+	<div class="mt-4">
+		<h3 class="text-sm font-medium text-ink mb-1">
+			{t('dataBrowser.edit.statement')}
+		</h3>
+		<pre
+			class="ui-pre ui-pre-sm whitespace-pre-wrap">{statement}</pre>
+	</div>
+
+	{#if errorMessage}
+		<div class="ui-alert ui-alert-error mt-3">
+			{errorMessage}
+		</div>
+	{/if}
+
+	{#snippet footer()}
+		<button class="ui-btn ui-btn-ghost" onclick={onClose}
+			>{t('common.cancel')}</button
+		>
+		<button class="ui-btn ui-btn-primary" disabled={busy} onclick={onConfirm}>
+			{busy ? t('console.executing') : t('common.ok')}
+		</button>
+	{/snippet}
+</Modal>

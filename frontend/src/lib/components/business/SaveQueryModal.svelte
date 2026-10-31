@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$i18n';
+	import Modal from '$components/common/Modal.svelte';
 
 	interface Props {
 		open: boolean;
@@ -13,52 +14,31 @@
 	let { open, name, error, onClose, onSave, onNameChange }: Props = $props();
 </script>
 
-{#if open}
-	<div
-		class="fixed inset-0 z-50 flex items-center justify-center"
-		role="dialog"
-		aria-labelledby="save-modal-title"
-	>
-		<div class="absolute inset-0 bg-mask" role="presentation" onclick={onClose}></div>
-		<div
-			id="save-modal-title"
-			class="relative ui-card shadow-lg p-6 w-96"
-		>
-			<h2>{t('console.saveFavorite')}</h2>
-			{#if error}
-				<div
-					class="ui-alert ui-alert-error mb-3"
-				>
-					{error}
-				</div>
-			{/if}
-			<div class="mb-4">
-				<label for="favorite-name" class="block text-sm text-muted mb-1"
-					>{t('common.name')}</label
-				>
-				<input
-					id="favorite-name"
-					type="text"
-					value={name}
-					oninput={(e) => onNameChange(e.currentTarget.value)}
-					class="ui-input w-full"
-					placeholder={t('console.favoriteNamePlaceholder')}
-				/>
-			</div>
-			<div class="flex justify-end gap-2">
-				<button
-					class="ui-btn ui-btn-ghost"
-					onclick={onClose}
-				>
-					{t('common.cancel')}
-				</button>
-				<button
-					class="ui-btn ui-btn-primary"
-					onclick={onSave}
-				>
-					{t('common.save')}
-				</button>
-			</div>
+<Modal {open} title={t('console.saveFavorite')} {onClose}>
+	{#if error}
+		<div class="ui-alert ui-alert-error mb-3">
+			{error}
 		</div>
+	{/if}
+	<div class="mb-4">
+		<label for="favorite-name" class="block text-sm text-muted mb-1"
+			>{t('common.name')}</label
+		>
+		<input
+			id="favorite-name"
+			type="text"
+			value={name}
+			oninput={(e) => onNameChange(e.currentTarget.value)}
+			class="ui-input w-full"
+			placeholder={t('console.favoriteNamePlaceholder')}
+		/>
 	</div>
-{/if}
+	{#snippet footer()}
+		<button class="ui-btn ui-btn-ghost" onclick={onClose}>
+			{t('common.cancel')}
+		</button>
+		<button class="ui-btn ui-btn-primary" onclick={onSave}>
+			{t('common.save')}
+		</button>
+	{/snippet}
+</Modal>
