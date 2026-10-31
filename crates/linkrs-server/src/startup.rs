@@ -805,8 +805,8 @@ fn property_graph_config_from_config(
     storage: &crate::config::StorageConfig,
 ) -> PropertyGraphConfig {
     let mut config = PropertyGraphConfig::default();
-    config.cache_memory = usize::try_from(storage.cache_memory_bytes)
-        .unwrap_or(config.cache_memory);
+    config.cache_memory =
+        usize::try_from(storage.cache_memory_bytes).unwrap_or(config.cache_memory);
     config.freeze = linkrs_storage::FreezeConfig {
         delta_edge_threshold: storage.freeze_delta_edge_threshold,
         delta_memory_threshold_bytes: storage.freeze_delta_memory_threshold_bytes,
@@ -820,6 +820,13 @@ fn property_graph_config_from_config(
     };
     config.edge_max_mutable_csr_bytes = usize::try_from(storage.edge_max_mutable_csr_bytes)
         .unwrap_or(config.edge_max_mutable_csr_bytes);
+    config.encoding_thresholds = linkrs_storage::EncodingThresholds {
+        string_min_rows: storage.string_min_rows,
+        avg_length_threshold: storage.avg_length_threshold,
+        cardinality_ratio_threshold: storage.cardinality_ratio_threshold,
+        fsst_rebuild_threshold: storage.fsst_rebuild_threshold,
+        ..linkrs_storage::EncodingThresholds::default()
+    };
     config.resources = ResourceConfig {
         max_memory_bytes: storage.max_memory_bytes,
         index_memory_bytes: storage.index_memory_bytes,
@@ -935,6 +942,24 @@ mod tests {
             mapped.resources.background_idle_maintenance_interval,
             Duration::from_secs(60)
         );
+    }
+
+    #[test]
+    fn test_encoding_thresholds_mapping_custom_values() {
+        let storage = crate::config::StorageConfig {
+            string_min_rows: 10,
+            avg_length_threshold: 8,
+            cardinality_ratio_threshold: 0.3,
+            fsst_rebuild_threshold: 0.5,
+            ..crate::config::StorageConfig::default()
+        };
+        let mapped = property_graph_config_from_config(&storage);
+        assert_eq!(mapped.encoding_thresholds.string_min_rows, 10);
+        assert_eq!(mapped.encoding_thresholds.avg_length_threshold, 8);
+        assert!(
+            (mapped.encoding_thresholds.cardinality_ratio_threshold - 0.3).abs() < f64::EPSILON
+        );
+        assert!((mapped.encoding_thresholds.fsst_rebuild_threshold - 0.5).abs() < f64::EPSILON);
     }
 
     fn open_service_storage(

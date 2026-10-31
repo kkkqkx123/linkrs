@@ -1,3 +1,4 @@
+use crate::encoding::selector::EncodingThresholds;
 use parking_lot::RwLock;
 
 use super::core::{VertexTable, VertexTableConfig};
@@ -101,6 +102,16 @@ impl ShardedVertexTable {
             label_name,
             generation,
             last_full_flush_ms: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Seed every shard selector with engine-configured thresholds.
+    /// Assembly calls this right after creation or recovery open so the
+    /// config file governs encoding choice; tables keep defaults until
+    /// this runs.
+    pub fn apply_encoding_thresholds(&self, thresholds: &EncodingThresholds) {
+        for shard in &self.shards {
+            shard.write().set_encoding_thresholds(thresholds.clone());
         }
     }
 

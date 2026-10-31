@@ -113,7 +113,10 @@ pub fn set_pressure_watermarks(high_pct: u64, critical_pct: u64) -> Result<(), &
 /// degradation strictly ahead of storage admission; with the instance
 /// defaults (0.80 / 0.95) this reproduces the historical 70 / 90 pair.
 /// Results are clamped into `0 < high < critical <= 100`.
-pub fn configure_from_instance_ratios(soft_ratio: f64, hard_ratio: f64) -> Result<(), &'static str> {
+pub fn configure_from_instance_ratios(
+    soft_ratio: f64,
+    hard_ratio: f64,
+) -> Result<(), &'static str> {
     if !soft_ratio.is_finite() || !hard_ratio.is_finite() {
         return Err("instance memory ratios must be finite");
     }
@@ -128,7 +131,8 @@ pub fn configure_from_instance_ratios(soft_ratio: f64, hard_ratio: f64) -> Resul
 pub fn reset_pressure_watermarks() {
     let w = watermark();
     w.high_pct.store(DEFAULT_HIGH_PCT, Ordering::Relaxed);
-    w.critical_pct.store(DEFAULT_CRITICAL_PCT, Ordering::Relaxed);
+    w.critical_pct
+        .store(DEFAULT_CRITICAL_PCT, Ordering::Relaxed);
 }
 
 /// Bytes currently reserved through this coordinator.

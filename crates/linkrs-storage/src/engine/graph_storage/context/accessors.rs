@@ -677,6 +677,11 @@ impl GraphStorageContext {
         self.persistent.config.vertex_table_shards
     }
 
+    /// String-encoding selection thresholds for vertex table selectors.
+    pub(crate) fn encoding_thresholds(&self) -> crate::encoding::selector::EncodingThresholds {
+        self.persistent.config.encoding_thresholds.clone()
+    }
+
     pub(crate) fn persistence(
         &self,
     ) -> &Option<

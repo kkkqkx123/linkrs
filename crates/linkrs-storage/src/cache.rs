@@ -12,7 +12,7 @@
 //! - Generic clock-algorithm cache with pin/unpin support
 //! - Used by ChunkedIndex for index chunk caching
 
-mod buffer_pool;
+pub(crate) mod buffer_pool;
 pub(crate) mod config;
 mod record_cache;
 mod types;

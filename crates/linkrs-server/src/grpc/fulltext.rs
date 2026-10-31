@@ -185,7 +185,11 @@ impl<
             };
             let req = request.into_inner();
             let session_id = super::error::require_session_id(&req.session_id)?;
-            let limit = if req.limit == 0 { 10 } else { req.limit as usize };
+            let limit = if req.limit == 0 {
+                10
+            } else {
+                req.limit as usize
+            };
             let body = FulltextSearchRequestBody {
                 space_id: req.space_id,
                 tag_name: req.tag_name,

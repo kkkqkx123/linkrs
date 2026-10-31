@@ -122,7 +122,7 @@ impl GraphStorage {
     ///
     /// One batch is one atomic unit holding the table lock for the whole
     /// apply; batches up to this size are the measured regime (see
-    /// `edge_group_commit_bench`). Larger fanouts split via
+    /// `commit_gate_bench`). Larger fanouts split via
     /// [`Self::chunk_edges_for_commit`] with one chunk per atomic commit.
     pub const RECOMMENDED_BATCH_CHUNK_EDGES: usize = writer::RECOMMENDED_BATCH_CHUNK_EDGES;
 

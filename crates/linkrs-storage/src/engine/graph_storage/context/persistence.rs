@@ -705,6 +705,9 @@ impl GraphStorageContext {
                                                                 &path,
                                                             )?,
                                                         );
+                                                        rebuilt.apply_encoding_thresholds(
+                                                            &self.persistent.config.encoding_thresholds,
+                                                        );
                                                         vertex_tables.insert(label_id, rebuilt);
                                                     } else {
                                                         table.as_ref().load(&path)?;

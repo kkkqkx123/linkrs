@@ -7,6 +7,8 @@ use linkrs_core::error::storage::StorageErrorKind;
 use linkrs_core::types::{AutoCompactConfig, Timestamp};
 use linkrs_core::StorageError;
 
+pub use crate::encoding::selector::EncodingThresholds;
+
 pub use crate::engine::freeze_decision::{FreezeDecisionEngine, FreezeDecisionInput};
 
 /// Default number of vertex table shards (hash partitions). Higher shard
@@ -321,6 +323,10 @@ pub struct PropertyGraphConfig {
     /// node-group CSR bytes before background compaction is requested.
     /// Zero disables the trigger. Locked per table at creation time.
     pub edge_max_mutable_csr_bytes: usize,
+    /// String-encoding selection thresholds seeded into every vertex table
+    /// at creation: minimum rows, length floor, cardinality ceiling and
+    /// rebuild ratio for FSST/dictionary choice.
+    pub encoding_thresholds: EncodingThresholds,
 }
 
 impl Default for PropertyGraphConfig {
@@ -336,6 +342,7 @@ impl Default for PropertyGraphConfig {
             gc_safety_margin: 1,
             edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
                 .max_mutable_csr_bytes,
+            encoding_thresholds: EncodingThresholds::default(),
         }
     }
 }
@@ -361,6 +368,7 @@ impl PropertyGraphConfig {
             gc_safety_margin: 1,
             edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
                 .max_mutable_csr_bytes,
+            encoding_thresholds: EncodingThresholds::default(),
         }
     }
 
@@ -380,6 +388,7 @@ impl PropertyGraphConfig {
             gc_safety_margin: 1,
             edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
                 .max_mutable_csr_bytes,
+            encoding_thresholds: EncodingThresholds::default(),
         }
     }
 
@@ -403,6 +412,7 @@ impl PropertyGraphConfig {
             gc_safety_margin: 1,
             edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
                 .max_mutable_csr_bytes,
+            encoding_thresholds: EncodingThresholds::default(),
         }
     }
 
@@ -438,6 +448,7 @@ impl PropertyGraphConfig {
             gc_safety_margin: 1,
             edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
                 .max_mutable_csr_bytes,
+            encoding_thresholds: EncodingThresholds::default(),
         }
     }
 

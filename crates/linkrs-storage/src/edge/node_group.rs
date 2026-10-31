@@ -116,7 +116,7 @@ struct Shard {
 /// Hot-row routing cache slots. Power of two so the slot is a mask, no
 /// division. Sized to cover the working set of repeated point lookups while
 /// staying small enough to fit a few cache lines.
-const ROUTE_CACHE_SLOTS: usize = 128;
+pub(crate) const ROUTE_CACHE_SLOTS: usize = 128;
 /// Empty-slot sentinel: no vertex id ever routes here since the id space is
 /// dense from zero and the sentinel is the maximum value.
 const ROUTE_CACHE_EMPTY: u32 = u32::MAX;

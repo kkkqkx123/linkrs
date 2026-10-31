@@ -4,7 +4,7 @@ use super::ShardedVertexTable;
 /// vertex label's write concurrency is no longer pinned to 16 on large
 /// machines; the interleaved ID encoding supports any power-of-two count up
 /// to this value within the u32 ID space (~16.7M vertices per shard).
-pub(super) const MAX_SHARDS: usize = 256;
+pub(crate) const MAX_SHARDS: usize = 256;
 
 /// Default segment slot width (2^14 slots per segment). Kept as the layout
 /// default for newly created tables; opened tables use the width pinned in

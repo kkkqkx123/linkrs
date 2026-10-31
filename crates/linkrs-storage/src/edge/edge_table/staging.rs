@@ -39,7 +39,7 @@
 //! for the whole apply with prefix rollback on failure, so commit latency
 //! grows with batch size. Batches holding tens of thousands of entries are
 //! correct; callers with very large fanouts chunk explicitly and treat each
-//! chunk as its own atomic unit. The `edge_group_commit_bench` records
+//! chunk as its own atomic unit. The `commit_gate_bench` records
 //! per-batch commit times across distributions and sizes, and the write-gate
 //! bench records the gate-wait share bounding the sharding decision;
 //! chunking follows those measurements, never a parallel-write change.

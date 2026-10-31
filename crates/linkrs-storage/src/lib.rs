@@ -46,7 +46,7 @@ pub use cursor::{
     PredicateRange, PropertyColumn, RequiredProperty, ScanOptions, ScanPredicate, ScanTarget,
     ShardSlice, VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
-pub use engine::config::{FreezeConfig, PropertyGraphConfig, ResourceConfig};
+pub use engine::config::{EncodingThresholds, FreezeConfig, PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::{
     AutoCommitBatchWindow, BulkLoadSession, GraphStorage, WriteGateStats,
 };

@@ -64,7 +64,7 @@ impl<T: Clone + Send + Sync> CachedItem<T> {
 
 /// Number of shard maps, rounded up to a power of two (required by the
 /// shard-selection mask). Adapted to CPU parallelism and bounded.
-const MAX_POOL_SHARDS: usize = 16;
+pub(crate) const MAX_POOL_SHARDS: usize = 16;
 
 fn default_pool_shards() -> usize {
     std::thread::available_parallelism()

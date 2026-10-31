@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 
 use linkrs_core::{StorageError, StorageResult, Value};
 
-const MAX_CONSTANT_OVERRIDES: usize = 128;
+pub(crate) const MAX_CONSTANT_OVERRIDES: usize = 128;
 
 #[derive(Debug, Clone)]
 pub struct ConstantColumn {

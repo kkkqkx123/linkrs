@@ -96,7 +96,7 @@ cd frontend && npm run build                   # static bundle
 cargo build --manifest-path crates/linkrs-gpui/Cargo.toml   # GUI client (own workspace, see above)
 ```
 
-Test organization: unit tests in same file (`#[cfg(test)]`), separate `test.rs` for large files, integration tests in `tests/`, benchmarks in `benches/`. Frontend pure functions are tested with `node:test` in `src/lib/utils/*.test.ts`.
+Test organization: unit tests in same file (`#[cfg(test)]`), separate `tests.rs` for large files, integration tests in `tests/`, benchmarks in `benches/`. Frontend pure functions are tested with `node:test` in `src/lib/utils/*.test.ts`.
 
 ## Coding Standards
 

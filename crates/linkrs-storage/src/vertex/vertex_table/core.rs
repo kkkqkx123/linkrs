@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use super::super::vertex_timestamp::IdentityLatch;
 use super::super::{ColumnStore, IdIndexer, LabelId, Timestamp, VertexSchema, VertexTimestamp};
-use crate::encoding::EncodingSelector;
+use crate::encoding::{selector::EncodingThresholds, EncodingSelector};
 use crate::schema::{LabelVersionHistory, SchemaObjectType};
 use linkrs_core::{StorageError, StorageResult};
 
@@ -162,6 +162,14 @@ impl VertexTable {
 
     pub fn schema(&self) -> &VertexSchema {
         &self.schema
+    }
+
+    /// Replace the encoding selection thresholds, resetting accumulated
+    /// feedback. Assembly applies the engine configuration here so tables
+    /// created before a config change keep their previous policy until
+    /// this runs.
+    pub(super) fn set_encoding_thresholds(&mut self, thresholds: EncodingThresholds) {
+        self.encoding_selector = EncodingSelector::new(thresholds);
     }
 
     /// Replace the published schema without staging.

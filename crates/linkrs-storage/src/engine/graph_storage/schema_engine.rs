@@ -46,13 +46,15 @@ pub fn create_vertex_type_with_estimate(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(ShardedVertexTable::with_estimate(
+            let table = ShardedVertexTable::with_estimate(
                 label_id,
                 name.to_string(),
                 schema,
                 ctx.vertex_table_shards(),
                 estimated_rows,
-            ))
+            );
+            table.apply_encoding_thresholds(&ctx.encoding_thresholds());
+            Ok(table)
         })
 }
 
@@ -105,13 +107,15 @@ pub fn create_vertex_type_with_id_with_estimate(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(ShardedVertexTable::with_estimate(
+            let table = ShardedVertexTable::with_estimate(
                 label_id,
                 user_name.to_string(),
                 schema,
                 ctx.vertex_table_shards(),
                 estimated_rows,
-            ))
+            );
+            table.apply_encoding_thresholds(&ctx.encoding_thresholds());
+            Ok(table)
         })
 }
 

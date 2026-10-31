@@ -17,7 +17,7 @@ use super::super::ops::endpoint_label_id;
 ///
 /// One batch is one atomic unit holding the table lock for the whole apply,
 /// so commit latency grows with batch size. Batches up to this size are the
-/// measured regime (see `edge_group_commit_bench`); callers with larger
+/// measured regime (see `commit_gate_bench`); callers with larger
 /// fanouts split into chunks of at most this many edges and treat each chunk
 /// as its own atomic unit instead of one giant commit.
 pub(crate) const RECOMMENDED_BATCH_CHUNK_EDGES: usize = 10_000;

@@ -153,6 +153,10 @@ impl ShardedVertexTable {
             target,
             self.generation.saturating_add(1),
         );
+        if let Some(first) = self.shards.first() {
+            let thresholds = first.read().encoding_selector.thresholds().clone();
+            rebuilt.apply_encoding_thresholds(&thresholds);
+        }
         let ts = MAX_TIMESTAMP - 1;
         let mut id_mapping: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         for key in self.external_id_keys() {

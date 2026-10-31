@@ -1,0 +1,162 @@
+//! Batch and capacity thresholds.
+
+use super::super::model::{ThresholdEntry, ThresholdValue, LAYER_AB, LAYER_B, LAYER_C};
+use crate::cursor::ScanOptions;
+use crate::edge::csr_shared::{DEFAULT_VERTEX_CAPACITY, VERTEX_GROWTH_FACTOR};
+use crate::edge::edge_table::iterator::DEFAULT_ADJACENCY_BATCH;
+use crate::edge::mutable_csr::core::DEFAULT_EDGE_CAPACITY;
+use crate::edge::node_group::address::{LEAF_HIGH_CSR_DENSITY, LEAF_REGION_ROWS};
+use crate::edge::node_group::DEFAULT_NODE_GROUP_BITS;
+use crate::engine::config::ResourceConfig;
+use crate::engine::graph_storage::reader::edge::SCAN_PAGE;
+use crate::vertex::vertex_table::sharded::routing::{
+    DEFAULT_SEGMENT_SLOTS_BITS, MAX_SHARDS, SINGLE_SHARD_MAX_ESTIMATE,
+};
+
+/// Domain entries.
+pub(crate) const ENTRIES: &[ThresholdEntry] = &[
+    // ---- batch / capacity ----
+    ThresholdEntry {
+        id: "ScanOptions::DEFAULT_BATCH_SIZE",
+        unit: "rows",
+        source: "cursor.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::Usize(ScanOptions::DEFAULT_BATCH_SIZE),
+        documented_default: ThresholdValue::Usize(1_024),
+        benches: &["bench_real_cursor_scan"],
+        affected_modules: &["cursor", "engine/graph_storage"],
+        note: "default cursor batch height",
+    },
+    ThresholdEntry {
+        id: "DEFAULT_ADJACENCY_BATCH",
+        unit: "rows",
+        source: "edge/edge_table/iterator.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::Usize(DEFAULT_ADJACENCY_BATCH),
+        documented_default: ThresholdValue::Usize(256),
+        benches: &["bench_edge_read"],
+        affected_modules: &["edge/edge_table"],
+        note: "adjacency iteration batch size",
+    },
+    ThresholdEntry {
+        id: "SCAN_PAGE",
+        unit: "rows",
+        source: "engine/graph_storage/reader/edge.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::Usize(SCAN_PAGE),
+        documented_default: ThresholdValue::Usize(1_024),
+        benches: &["bench_real_cursor_scan"],
+        affected_modules: &["engine/graph_storage"],
+        note: "internal page size for full edge scans",
+    },
+    ThresholdEntry {
+        id: "DEFAULT_SEGMENT_SLOTS_BITS",
+        unit: "bits",
+        source: "vertex/vertex_table/sharded/routing.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::U32(DEFAULT_SEGMENT_SLOTS_BITS),
+        documented_default: ThresholdValue::U32(14),
+        benches: &[],
+        affected_modules: &["vertex/vertex_table/sharded"],
+        note: "layout default for new tables; opened tables use the width pinned in their manifest",
+    },
+    ThresholdEntry {
+        id: "SINGLE_SHARD_MAX_ESTIMATE",
+        unit: "count",
+        source: "vertex/vertex_table/sharded/routing.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::U64(SINGLE_SHARD_MAX_ESTIMATE),
+        documented_default: ThresholdValue::U64(100_000),
+        benches: &[],
+        affected_modules: &["vertex/vertex_table/sharded"],
+        note: "estimate above which shard planning stops preferring a single shard",
+    },
+    ThresholdEntry {
+        id: "ResourceConfig.operation_timeout",
+        unit: "seconds",
+        source: "engine/config.rs",
+        layers: LAYER_AB,
+        live_default: || ThresholdValue::U64(ResourceConfig::default().operation_timeout.as_secs()),
+        documented_default: ThresholdValue::U64(30),
+        benches: &[],
+        affected_modules: &["engine/graph_storage", "maintenance_scheduler"],
+        note: "per-maintenance-operation deadline",
+    },
+    ThresholdEntry {
+        id: "DEFAULT_NODE_GROUP_BITS",
+        unit: "bits",
+        source: "edge/node_group/address.rs",
+        layers: LAYER_B,
+        live_default: || ThresholdValue::U32(DEFAULT_NODE_GROUP_BITS),
+        documented_default: ThresholdValue::U32(12),
+        benches: &[],
+        affected_modules: &["edge/node_group", "edge/edge_table"],
+        note: "topology node-group width locked at table creation",
+    },
+    ThresholdEntry {
+        id: "DEFAULT_VERTEX_CAPACITY",
+        unit: "count",
+        source: "edge/csr_shared.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::Usize(DEFAULT_VERTEX_CAPACITY),
+        documented_default: ThresholdValue::Usize(1_024),
+        benches: &["bench_bulk_vertex_insert"],
+        affected_modules: &["edge"],
+        note: "vertex row initial capacity shared by the CSR stores",
+    },
+    ThresholdEntry {
+        id: "VERTEX_GROWTH_FACTOR",
+        unit: "ratio",
+        source: "edge/csr_shared.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::F64(VERTEX_GROWTH_FACTOR),
+        documented_default: ThresholdValue::F64(1.25),
+        benches: &["bench_bulk_vertex_insert"],
+        affected_modules: &["edge"],
+        note: "vertex capacity growth factor shared by the CSR stores",
+    },
+    ThresholdEntry {
+        id: "DEFAULT_EDGE_CAPACITY",
+        unit: "count",
+        source: "edge/mutable_csr/core.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::Usize(DEFAULT_EDGE_CAPACITY),
+        documented_default: ThresholdValue::Usize(4_096),
+        benches: &["bench_bulk_vertex_insert"],
+        affected_modules: &["edge"],
+        note: "fresh CSR edge slot reservation; construction-time capacity only",
+    },
+    ThresholdEntry {
+        id: "MAX_SHARDS",
+        unit: "count",
+        source: "vertex/vertex_table/sharded/routing.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::Usize(MAX_SHARDS),
+        documented_default: ThresholdValue::Usize(256),
+        benches: &[],
+        affected_modules: &["vertex/vertex_table/sharded"],
+        note: "hard shard-count ceiling from the u32 id space; production width comes from the manifest layout",
+    },
+    ThresholdEntry {
+        id: "LEAF_REGION_ROWS",
+        unit: "rows",
+        source: "edge/node_group/address.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::Usize(LEAF_REGION_ROWS),
+        documented_default: ThresholdValue::Usize(256),
+        benches: &[],
+        affected_modules: &["edge/node_group"],
+        note: "rows per leaf region; region dirt and density merges operate at this granularity",
+    },
+    ThresholdEntry {
+        id: "LEAF_HIGH_CSR_DENSITY",
+        unit: "ratio",
+        source: "edge/node_group/address.rs",
+        layers: LAYER_C,
+        live_default: || ThresholdValue::F32(LEAF_HIGH_CSR_DENSITY),
+        documented_default: ThresholdValue::F32(1.0),
+        benches: &[],
+        affected_modules: &["edge/node_group"],
+        note: "leaf-level density ceiling of the packed-CSR calibrator tree",
+    },
+];
