@@ -23,11 +23,12 @@ futures.workspace = true
 linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
 linkrs-wire = { version = "0.1.0", path = "../linkrs-wire" }
 
-tonic = { workspace = true, optional = true }
+tonic = { workspace = true, features = ["tls", "tls-native-roots"], optional = true }
 prost = { workspace = true, optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 
 [features]
-grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-build", "dep:rustls"]
 
 [dev-dependencies]
 tempfile = "3.0"
