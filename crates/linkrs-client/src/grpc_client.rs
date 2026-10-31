@@ -7,26 +7,28 @@
 //! generated response messages directly (requests without fields take no
 //! argument).
 //!
-//! Covered RPC groups: health, authentication, sessions (including session
-//! variables), queries (including cursors), transactions (including savepoints
-//! and inspection), schema, configuration, statistics, batch, migration, and
-//! import/export. User management, custom functions, vector, fulltext, and
-//! sync RPC groups are deliberately out of scope for now.
+//! Every RPC in `proto/linkrs.proto` is wrapped: health, authentication,
+//! sessions, user management, queries (including cursors), transactions,
+//! schema, configuration, statistics, batch, migration, import/export,
+//! custom functions, vector, fulltext, and sync.
 //!
 //! Authentication mirrors the HTTP client: [`GrpcClient::login`] stores the
 //! session id returned by the server behind a lock, [`GrpcClient::logout`] and
-//! [`GrpcClient::auth_me`] reuse it, and every outgoing request carries it as
-//! `x-session-id` metadata through [`GrpcClient::authed`]. The service
-//! contract additionally accepts the session id inside request messages where
-//! such a field exists; request-carrying methods leave those fields to the
-//! caller.
+//! [`GrpcClient::auth_me`] reuse it, and [`GrpcClient::authed`] additionally
+//! sends it as `x-session-id` metadata for servers that install an auth
+//! interceptor. The current server reads the session id from request messages
+//! instead, so request-carrying methods fill missing `session_id` (and
+//! transaction `owner`) fields from the stored session before dispatch; an
+//! explicit caller value always wins.
 //!
 //! Streaming RPCs ([`GrpcClient::execute_query_stream`],
 //! [`GrpcClient::stream_migration_progress`]) hand back the raw
 //! `tonic::Streaming` values so callers control consumption and backpressure.
 //!
-//! Errors are mapped into the crate [`ClientError`]: transport failures become
-//! `ConnectionError`, non-OK statuses become `GrpcError`.
+//! Errors are mapped into the crate [`ClientError`]: connection establishment
+//! failures become `ConnectionError`, while every non-OK `tonic::Status`
+//! (including call-time transport failures) becomes a structured `GrpcError`
+//! carrying a [`GrpcErrorCode`] and the server message.
 
 use std::sync::RwLock;
 use std::time::Duration;
@@ -34,7 +36,7 @@ use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
 
 use crate::config::ClientConfig;
-use crate::utils::error::{ClientError, Result};
+use crate::utils::error::{ClientError, GrpcErrorCode, Result};
 
 /// Generated protobuf message types for the Linkrs service contract.
 pub mod proto {
@@ -56,6 +58,7 @@ pub struct GrpcClient {
     inner: LinkrsServiceClient<Channel>,
     endpoint: String,
     session: RwLock<Option<String>>,
+    max_message_size: Option<usize>,
 }
 
 impl GrpcClient {
@@ -66,17 +69,38 @@ impl GrpcClient {
 
     /// Create a client from a [`ClientConfig`] (lazy channel). The configured
     /// timeout bounds both connection establishment and individual calls.
+    ///
+    /// [`ClientConfig`] defaults to the HTTP port; pass the gRPC port explicitly
+    /// (the server default is `9669`).
     pub fn with_config(config: ClientConfig) -> Result<Self> {
         let endpoint = endpoint_address(&config.host, config.port);
         let channel = build_endpoint(&endpoint, config.timeout_seconds)?.connect_lazy();
         Ok(Self::from_channel(channel, endpoint))
     }
 
+    /// Create a client from a complete endpoint URI such as `http://host:9669`
+    /// or `https://host:9669` (lazy channel). Scheme handling is delegated to
+    /// tonic; `https` only passes through because this crate does not enable
+    /// tonic's `tls` feature, so TLS negotiation must be added separately.
+    pub fn from_endpoint(endpoint: impl Into<String>, timeout_seconds: u64) -> Result<Self> {
+        let endpoint = endpoint.into();
+        let channel = build_endpoint(&endpoint, timeout_seconds)?.connect_lazy();
+        Ok(Self::from_channel(channel, endpoint))
+    }
+
     /// Connect to `host:port` eagerly, failing if the server is unreachable.
     pub async fn connect(host: &str, port: u16) -> Result<Self> {
-        let config = ClientConfig::new().with_host(host).with_port(port);
-        let endpoint = endpoint_address(&config.host, config.port);
-        let channel = build_endpoint(&endpoint, config.timeout_seconds)?
+        let endpoint = endpoint_address(host, port);
+        Self::connect_endpoint(endpoint, ClientConfig::default().timeout_seconds).await
+    }
+
+    /// Connect to a complete endpoint URI eagerly.
+    pub async fn connect_endpoint(
+        endpoint: impl Into<String>,
+        timeout_seconds: u64,
+    ) -> Result<Self> {
+        let endpoint = endpoint.into();
+        let channel = build_endpoint(&endpoint, timeout_seconds)?
             .connect()
             .await
             .map_err(|e| {
@@ -88,12 +112,33 @@ impl GrpcClient {
         Ok(Self::from_channel(channel, endpoint))
     }
 
+    /// Configure the maximum decoded/encoded message size for subsequent calls.
+    ///
+    /// The server defaults to 10 MB while tonic clients default to 4 MB, so
+    /// setting this to the server value avoids truncation errors on large
+    /// query results.
+    pub fn with_message_size_limit(mut self, bytes: usize) -> Self {
+        self.max_message_size = Some(bytes);
+        self
+    }
+
     fn from_channel(channel: Channel, endpoint: String) -> Self {
         Self {
             inner: LinkrsServiceClient::new(channel),
             endpoint,
             session: RwLock::new(None),
+            max_message_size: None,
         }
+    }
+
+    fn client(&self) -> LinkrsServiceClient<Channel> {
+        let mut client = self.inner.clone();
+        if let Some(bytes) = self.max_message_size {
+            client = client
+                .max_decoding_message_size(bytes)
+                .max_encoding_message_size(bytes);
+        }
+        client
     }
 
     /// Endpoint address the client talks to.
@@ -104,6 +149,11 @@ impl GrpcClient {
     /// Session id issued by the last successful [`GrpcClient::login`].
     pub fn session_id(&self) -> Option<i64> {
         self.stored_session().and_then(|id| id.parse().ok())
+    }
+
+    /// Restore or replace the session used by subsequent protected calls.
+    pub fn set_session_id(&self, session_id: i64) {
+        self.store_session(session_id.to_string());
     }
 
     /// Attach the session metadata required by protected RPCs.
@@ -142,13 +192,41 @@ impl GrpcClient {
             .ok_or_else(|| ClientError::auth("no active gRPC session; call login() first"))
     }
 
+    fn fill_optional_session(&self, slot: &mut Option<String>) {
+        if slot.as_deref().is_none_or(|value| value.is_empty()) {
+            *slot = self.stored_session();
+        }
+    }
+
+    fn fill_required_session(&self, slot: &mut String) -> Result<()> {
+        if slot.is_empty() {
+            *slot = self.require_session()?;
+        }
+        Ok(())
+    }
+
+    fn fill_optional_session_i64(&self, slot: &mut i64) -> Result<()> {
+        if *slot == 0 {
+            *slot = self
+                .session_id()
+                .ok_or_else(|| ClientError::auth("no active gRPC session; call login() first"))?;
+        }
+        Ok(())
+    }
+
+    fn fill_optional_owner(&self, slot: &mut Option<String>) {
+        if slot.as_deref().is_none_or(|value| value.is_empty()) {
+            *slot = self.stored_session();
+        }
+    }
+
     // ================================================================
     // Health
     // ================================================================
 
     /// Check server health, version, and uptime.
     pub async fn health_check(&self) -> Result<HealthCheckResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .health_check(self.authed(tonic::Request::new(HealthCheckRequest {})))
             .await
@@ -162,12 +240,22 @@ impl GrpcClient {
 
     /// Authenticate and remember the returned session id for later calls.
     pub async fn login(&self, username: &str, password: &str) -> Result<LoginResponse> {
+        self.login_in_space(username, password, None).await
+    }
+
+    /// Authenticate against a specific space and remember the session id.
+    pub async fn login_in_space(
+        &self,
+        username: &str,
+        password: &str,
+        space: Option<&str>,
+    ) -> Result<LoginResponse> {
         let request = LoginRequest {
             username: username.to_string(),
             password: password.to_string(),
-            space: None,
+            space: space.map(str::to_string),
         };
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         let response = client
             .login(self.authed(tonic::Request::new(request)))
             .await
@@ -182,7 +270,7 @@ impl GrpcClient {
     /// End the remembered session and drop the stored session id.
     pub async fn logout(&self) -> Result<LogoutResponse> {
         let session_id = self.require_session()?;
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         let result = client
             .logout(self.authed(tonic::Request::new(LogoutRequest { session_id })))
             .await
@@ -195,7 +283,7 @@ impl GrpcClient {
     /// Fetch identity information for the remembered session.
     pub async fn auth_me(&self) -> Result<AuthMeResponse> {
         let session_id = self.require_session()?;
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .auth_me(self.authed(tonic::Request::new(AuthMeRequest { session_id })))
             .await
@@ -207,22 +295,27 @@ impl GrpcClient {
     // Sessions
     // ================================================================
 
-    /// Create a server-side session.
+    /// Create a server-side session and remember its id on success.
     pub async fn create_session(
         &self,
         request: CreateSessionRequest,
     ) -> Result<CreateSessionResponse> {
-        let mut client = self.inner.clone();
-        client
+        let mut client = self.client();
+        let response = client
             .create_session(self.authed(tonic::Request::new(request)))
             .await
             .map(|response| response.into_inner())
-            .map_err(status_error)
+            .map_err(status_error)?;
+        if response.success && !response.session_id.is_empty() {
+            self.store_session(response.session_id.clone());
+        }
+        Ok(response)
     }
 
     /// Inspect a server-side session.
-    pub async fn get_session(&self, request: GetSessionRequest) -> Result<GetSessionResponse> {
-        let mut client = self.inner.clone();
+    pub async fn get_session(&self, mut request: GetSessionRequest) -> Result<GetSessionResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .get_session(self.authed(tonic::Request::new(request)))
             .await
@@ -233,9 +326,10 @@ impl GrpcClient {
     /// Close a server-side session.
     pub async fn close_session(
         &self,
-        request: CloseSessionRequest,
+        mut request: CloseSessionRequest,
     ) -> Result<CloseSessionResponse> {
-        let mut client = self.inner.clone();
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .close_session(self.authed(tonic::Request::new(request)))
             .await
@@ -246,9 +340,10 @@ impl GrpcClient {
     /// List active server-side sessions.
     pub async fn list_sessions(
         &self,
-        request: ListSessionsRequest,
+        mut request: ListSessionsRequest,
     ) -> Result<ListSessionsResponse> {
-        let mut client = self.inner.clone();
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .list_sessions(self.authed(tonic::Request::new(request)))
             .await
@@ -257,8 +352,12 @@ impl GrpcClient {
     }
 
     /// Terminate another session as an administrator.
-    pub async fn kill_session(&self, request: KillSessionRequest) -> Result<KillSessionResponse> {
-        let mut client = self.inner.clone();
+    pub async fn kill_session(
+        &self,
+        mut request: KillSessionRequest,
+    ) -> Result<KillSessionResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .kill_session(self.authed(tonic::Request::new(request)))
             .await
@@ -269,9 +368,10 @@ impl GrpcClient {
     /// List variables of a session.
     pub async fn list_session_variables(
         &self,
-        request: ListSessionVariablesRequest,
+        mut request: ListSessionVariablesRequest,
     ) -> Result<ListSessionVariablesResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session_i64(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .list_session_variables(self.authed(tonic::Request::new(request)))
             .await
@@ -282,9 +382,10 @@ impl GrpcClient {
     /// Set a session variable.
     pub async fn set_session_variable(
         &self,
-        request: SetSessionVariableRequest,
+        mut request: SetSessionVariableRequest,
     ) -> Result<SetSessionVariableResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session_i64(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .set_session_variable(self.authed(tonic::Request::new(request)))
             .await
@@ -295,9 +396,10 @@ impl GrpcClient {
     /// Delete a session variable.
     pub async fn delete_session_variable(
         &self,
-        request: DeleteSessionVariableRequest,
+        mut request: DeleteSessionVariableRequest,
     ) -> Result<DeleteSessionVariableResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session_i64(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .delete_session_variable(self.authed(tonic::Request::new(request)))
             .await
@@ -312,9 +414,10 @@ impl GrpcClient {
     /// Execute a query (parameters travel inside the request message).
     pub async fn execute_query(
         &self,
-        request: ExecuteQueryRequest,
+        mut request: ExecuteQueryRequest,
     ) -> Result<ExecuteQueryResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .execute_query(self.authed(tonic::Request::new(request)))
             .await
@@ -325,9 +428,10 @@ impl GrpcClient {
     /// Validate a query without executing it.
     pub async fn validate_query(
         &self,
-        request: ValidateQueryRequest,
+        mut request: ValidateQueryRequest,
     ) -> Result<ValidateQueryResponse> {
-        let mut client = self.inner.clone();
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .validate_query(self.authed(tonic::Request::new(request)))
             .await
@@ -338,9 +442,10 @@ impl GrpcClient {
     /// Return the query plan for a query.
     pub async fn explain_query(
         &self,
-        request: ExplainQueryRequest,
+        mut request: ExplainQueryRequest,
     ) -> Result<ExplainQueryResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .explain_query(self.authed(tonic::Request::new(request)))
             .await
@@ -354,9 +459,10 @@ impl GrpcClient {
     /// until it yields `Ok(None)`.
     pub async fn execute_query_stream(
         &self,
-        request: ExecuteQueryRequest,
+        mut request: ExecuteQueryRequest,
     ) -> Result<tonic::Streaming<StreamResponse>> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .execute_query_stream(self.authed(tonic::Request::new(request)))
             .await
@@ -366,7 +472,7 @@ impl GrpcClient {
 
     /// List currently running queries.
     pub async fn list_queries(&self) -> Result<ListQueriesResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .list_queries(self.authed(tonic::Request::new(ListQueriesRequest {})))
             .await
@@ -375,8 +481,9 @@ impl GrpcClient {
     }
 
     /// Kill a running query.
-    pub async fn kill_query(&self, request: KillQueryRequest) -> Result<KillQueryResponse> {
-        let mut client = self.inner.clone();
+    pub async fn kill_query(&self, mut request: KillQueryRequest) -> Result<KillQueryResponse> {
+        self.fill_optional_session_i64(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .kill_query(self.authed(tonic::Request::new(request)))
             .await
@@ -385,8 +492,9 @@ impl GrpcClient {
     }
 
     /// Open a cursor for paged query result retrieval.
-    pub async fn open_cursor(&self, request: OpenCursorRequest) -> Result<OpenCursorResponse> {
-        let mut client = self.inner.clone();
+    pub async fn open_cursor(&self, mut request: OpenCursorRequest) -> Result<OpenCursorResponse> {
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .open_cursor(self.authed(tonic::Request::new(request)))
             .await
@@ -395,8 +503,12 @@ impl GrpcClient {
     }
 
     /// Fetch the next page of a cursor.
-    pub async fn fetch_cursor(&self, request: FetchCursorRequest) -> Result<FetchCursorResponse> {
-        let mut client = self.inner.clone();
+    pub async fn fetch_cursor(
+        &self,
+        mut request: FetchCursorRequest,
+    ) -> Result<FetchCursorResponse> {
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .fetch_cursor(self.authed(tonic::Request::new(request)))
             .await
@@ -405,8 +517,12 @@ impl GrpcClient {
     }
 
     /// Close a cursor and release its server-side resources.
-    pub async fn close_cursor(&self, request: CloseCursorRequest) -> Result<CloseCursorResponse> {
-        let mut client = self.inner.clone();
+    pub async fn close_cursor(
+        &self,
+        mut request: CloseCursorRequest,
+    ) -> Result<CloseCursorResponse> {
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .close_cursor(self.authed(tonic::Request::new(request)))
             .await
@@ -421,9 +537,10 @@ impl GrpcClient {
     /// Begin a transaction.
     pub async fn begin_transaction(
         &self,
-        request: BeginTransactionRequest,
+        mut request: BeginTransactionRequest,
     ) -> Result<BeginTransactionResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .begin_transaction(self.authed(tonic::Request::new(request)))
             .await
@@ -434,9 +551,10 @@ impl GrpcClient {
     /// Commit a transaction.
     pub async fn commit_transaction(
         &self,
-        request: CommitTransactionRequest,
+        mut request: CommitTransactionRequest,
     ) -> Result<CommitTransactionResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .commit_transaction(self.authed(tonic::Request::new(request)))
             .await
@@ -447,9 +565,10 @@ impl GrpcClient {
     /// Roll back a transaction.
     pub async fn rollback_transaction(
         &self,
-        request: RollbackTransactionRequest,
+        mut request: RollbackTransactionRequest,
     ) -> Result<RollbackTransactionResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .rollback_transaction(self.authed(tonic::Request::new(request)))
             .await
@@ -460,9 +579,10 @@ impl GrpcClient {
     /// Create a savepoint inside a transaction.
     pub async fn create_savepoint(
         &self,
-        request: CreateSavepointRequest,
+        mut request: CreateSavepointRequest,
     ) -> Result<CreateSavepointResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .create_savepoint(self.authed(tonic::Request::new(request)))
             .await
@@ -473,9 +593,10 @@ impl GrpcClient {
     /// Roll back to a savepoint.
     pub async fn rollback_to_savepoint(
         &self,
-        request: RollbackToSavepointRequest,
+        mut request: RollbackToSavepointRequest,
     ) -> Result<RollbackToSavepointResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .rollback_to_savepoint(self.authed(tonic::Request::new(request)))
             .await
@@ -486,9 +607,10 @@ impl GrpcClient {
     /// Release a savepoint.
     pub async fn release_savepoint(
         &self,
-        request: ReleaseSavepointRequest,
+        mut request: ReleaseSavepointRequest,
     ) -> Result<ReleaseSavepointResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .release_savepoint(self.authed(tonic::Request::new(request)))
             .await
@@ -498,7 +620,7 @@ impl GrpcClient {
 
     /// List active transactions.
     pub async fn list_transactions(&self) -> Result<ListTransactionsResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .list_transactions(self.authed(tonic::Request::new(ListTransactionsRequest {})))
             .await
@@ -509,9 +631,10 @@ impl GrpcClient {
     /// Kill a transaction.
     pub async fn kill_transaction(
         &self,
-        request: KillTransactionRequest,
+        mut request: KillTransactionRequest,
     ) -> Result<KillTransactionResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_owner(&mut request.owner);
+        let mut client = self.client();
         client
             .kill_transaction(self.authed(tonic::Request::new(request)))
             .await
@@ -521,7 +644,7 @@ impl GrpcClient {
 
     /// Fetch transaction manager metrics.
     pub async fn transaction_metrics(&self) -> Result<GetTransactionMetricsResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_transaction_metrics(
                 self.authed(tonic::Request::new(GetTransactionMetricsRequest {})),
@@ -537,7 +660,7 @@ impl GrpcClient {
 
     /// Create a space.
     pub async fn create_space(&self, request: CreateSpaceRequest) -> Result<CreateSpaceResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .create_space(self.authed(tonic::Request::new(request)))
             .await
@@ -547,7 +670,7 @@ impl GrpcClient {
 
     /// Fetch a space by name.
     pub async fn get_space(&self, request: GetSpaceRequest) -> Result<GetSpaceResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_space(self.authed(tonic::Request::new(request)))
             .await
@@ -557,7 +680,7 @@ impl GrpcClient {
 
     /// Drop a space.
     pub async fn drop_space(&self, request: DropSpaceRequest) -> Result<DropSpaceResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .drop_space(self.authed(tonic::Request::new(request)))
             .await
@@ -567,7 +690,7 @@ impl GrpcClient {
 
     /// List spaces.
     pub async fn list_spaces(&self) -> Result<ListSpacesResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .list_spaces(self.authed(tonic::Request::new(ListSpacesRequest {})))
             .await
@@ -577,7 +700,7 @@ impl GrpcClient {
 
     /// Create a tag.
     pub async fn create_tag(&self, request: CreateTagRequest) -> Result<CreateTagResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .create_tag(self.authed(tonic::Request::new(request)))
             .await
@@ -587,7 +710,7 @@ impl GrpcClient {
 
     /// Fetch a tag definition.
     pub async fn get_tag(&self, request: GetTagRequest) -> Result<GetTagResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_tag(self.authed(tonic::Request::new(request)))
             .await
@@ -597,7 +720,7 @@ impl GrpcClient {
 
     /// List tags in a space.
     pub async fn list_tags(&self, request: ListTagsRequest) -> Result<ListTagsResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .list_tags(self.authed(tonic::Request::new(request)))
             .await
@@ -607,7 +730,7 @@ impl GrpcClient {
 
     /// Drop a tag.
     pub async fn drop_tag(&self, request: DropTagRequest) -> Result<DropTagResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .drop_tag(self.authed(tonic::Request::new(request)))
             .await
@@ -620,7 +743,7 @@ impl GrpcClient {
         &self,
         request: CreateEdgeTypeRequest,
     ) -> Result<CreateEdgeTypeResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .create_edge_type(self.authed(tonic::Request::new(request)))
             .await
@@ -630,7 +753,7 @@ impl GrpcClient {
 
     /// Fetch an edge type definition.
     pub async fn get_edge_type(&self, request: GetEdgeTypeRequest) -> Result<GetEdgeTypeResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_edge_type(self.authed(tonic::Request::new(request)))
             .await
@@ -643,7 +766,7 @@ impl GrpcClient {
         &self,
         request: ListEdgeTypesRequest,
     ) -> Result<ListEdgeTypesResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .list_edge_types(self.authed(tonic::Request::new(request)))
             .await
@@ -656,7 +779,7 @@ impl GrpcClient {
         &self,
         request: DropEdgeTypeRequest,
     ) -> Result<DropEdgeTypeResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .drop_edge_type(self.authed(tonic::Request::new(request)))
             .await
@@ -670,7 +793,7 @@ impl GrpcClient {
 
     /// Fetch the full server configuration.
     pub async fn get_config(&self) -> Result<GetConfigResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_config(self.authed(tonic::Request::new(GetConfigRequest {})))
             .await
@@ -683,7 +806,7 @@ impl GrpcClient {
         &self,
         request: GetConfigKeyRequest,
     ) -> Result<GetConfigKeyResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_config_key(self.authed(tonic::Request::new(request)))
             .await
@@ -696,7 +819,7 @@ impl GrpcClient {
         &self,
         request: UpdateConfigRequest,
     ) -> Result<UpdateConfigResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .update_config(self.authed(tonic::Request::new(request)))
             .await
@@ -706,7 +829,7 @@ impl GrpcClient {
 
     /// Reset a configuration key to its default.
     pub async fn reset_config(&self, request: ResetConfigRequest) -> Result<ResetConfigResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .reset_config(self.authed(tonic::Request::new(request)))
             .await
@@ -719,7 +842,7 @@ impl GrpcClient {
         &self,
         request: BulkUpdateConfigRequest,
     ) -> Result<BulkUpdateConfigResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .bulk_update_config(self.authed(tonic::Request::new(request)))
             .await
@@ -734,9 +857,10 @@ impl GrpcClient {
     /// Fetch session statistics.
     pub async fn get_session_statistics(
         &self,
-        request: GetSessionStatisticsRequest,
+        mut request: GetSessionStatisticsRequest,
     ) -> Result<GetSessionStatisticsResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .get_session_statistics(self.authed(tonic::Request::new(request)))
             .await
@@ -747,9 +871,10 @@ impl GrpcClient {
     /// Fetch query statistics.
     pub async fn get_query_statistics(
         &self,
-        request: GetQueryStatisticsRequest,
+        mut request: GetQueryStatisticsRequest,
     ) -> Result<GetQueryStatisticsResponse> {
-        let mut client = self.inner.clone();
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .get_query_statistics(self.authed(tonic::Request::new(request)))
             .await
@@ -759,7 +884,7 @@ impl GrpcClient {
 
     /// Fetch database statistics.
     pub async fn get_database_statistics(&self) -> Result<GetDatabaseStatisticsResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_database_statistics(
                 self.authed(tonic::Request::new(GetDatabaseStatisticsRequest {})),
@@ -771,7 +896,7 @@ impl GrpcClient {
 
     /// Fetch system statistics.
     pub async fn get_system_statistics(&self) -> Result<GetSystemStatisticsResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_system_statistics(self.authed(tonic::Request::new(GetSystemStatisticsRequest {})))
             .await
@@ -785,7 +910,7 @@ impl GrpcClient {
 
     /// Create a batch job.
     pub async fn create_batch(&self, request: CreateBatchRequest) -> Result<CreateBatchResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .create_batch(self.authed(tonic::Request::new(request)))
             .await
@@ -798,7 +923,7 @@ impl GrpcClient {
         &self,
         request: AddBatchItemsRequest,
     ) -> Result<AddBatchItemsResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .add_batch_items(self.authed(tonic::Request::new(request)))
             .await
@@ -811,7 +936,7 @@ impl GrpcClient {
         &self,
         request: ExecuteBatchRequest,
     ) -> Result<ExecuteBatchResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .execute_batch(self.authed(tonic::Request::new(request)))
             .await
@@ -824,7 +949,7 @@ impl GrpcClient {
         &self,
         request: GetBatchStatusRequest,
     ) -> Result<GetBatchStatusResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_batch_status(self.authed(tonic::Request::new(request)))
             .await
@@ -834,7 +959,7 @@ impl GrpcClient {
 
     /// Cancel a batch job.
     pub async fn cancel_batch(&self, request: CancelBatchRequest) -> Result<CancelBatchResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .cancel_batch(self.authed(tonic::Request::new(request)))
             .await
@@ -851,7 +976,7 @@ impl GrpcClient {
         &self,
         request: MigratePlanRequest,
     ) -> Result<MigratePlanResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .migrate_plan(self.authed(tonic::Request::new(request)))
             .await
@@ -862,9 +987,10 @@ impl GrpcClient {
     /// Execute a previously planned migration.
     pub async fn execute_migration(
         &self,
-        request: MigrateExecuteRequest,
+        mut request: MigrateExecuteRequest,
     ) -> Result<MigrateExecuteResponse> {
-        let mut client = self.inner.clone();
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .migrate_execute(self.authed(tonic::Request::new(request)))
             .await
@@ -875,9 +1001,10 @@ impl GrpcClient {
     /// Roll back an executed migration.
     pub async fn rollback_migration(
         &self,
-        request: MigrateRollbackRequest,
+        mut request: MigrateRollbackRequest,
     ) -> Result<MigrateRollbackResponse> {
-        let mut client = self.inner.clone();
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
         client
             .migrate_rollback(self.authed(tonic::Request::new(request)))
             .await
@@ -890,7 +1017,7 @@ impl GrpcClient {
         &self,
         request: VersionHistoryRequest,
     ) -> Result<VersionHistoryResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_version_history(self.authed(tonic::Request::new(request)))
             .await
@@ -906,7 +1033,7 @@ impl GrpcClient {
         &self,
         request: StreamMigrationProgressRequest,
     ) -> Result<tonic::Streaming<MigrationProgressEvent>> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .stream_migration_progress(self.authed(tonic::Request::new(request)))
             .await
@@ -919,8 +1046,9 @@ impl GrpcClient {
     // ================================================================
 
     /// Import data into a space.
-    pub async fn import_data(&self, request: ImportDataRequest) -> Result<ImportDataResponse> {
-        let mut client = self.inner.clone();
+    pub async fn import_data(&self, mut request: ImportDataRequest) -> Result<ImportDataResponse> {
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .import_data(self.authed(tonic::Request::new(request)))
             .await
@@ -933,7 +1061,7 @@ impl GrpcClient {
         &self,
         request: GetImportStatusRequest,
     ) -> Result<GetImportStatusResponse> {
-        let mut client = self.inner.clone();
+        let mut client = self.client();
         client
             .get_import_status(self.authed(tonic::Request::new(request)))
             .await
@@ -942,10 +1070,766 @@ impl GrpcClient {
     }
 
     /// Export query results in the requested format.
-    pub async fn export_data(&self, request: ExportDataRequest) -> Result<ExportDataResponse> {
-        let mut client = self.inner.clone();
+    pub async fn export_data(&self, mut request: ExportDataRequest) -> Result<ExportDataResponse> {
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
         client
             .export_data(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+    // ================================================================
+    // Users
+    // ================================================================
+
+    /// List users.
+    pub async fn list_users(&self, mut request: ListUsersRequest) -> Result<ListUsersResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .list_users(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Create user.
+    pub async fn create_user(&self, mut request: CreateUserRequest) -> Result<CreateUserResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .create_user(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Drop user.
+    pub async fn drop_user(&self, mut request: DropUserRequest) -> Result<DropUserResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .drop_user(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Reset user password.
+    pub async fn reset_user_password(
+        &self,
+        mut request: ResetUserPasswordRequest,
+    ) -> Result<ResetUserPasswordResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .reset_user_password(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Enable user.
+    pub async fn enable_user(&self, mut request: EnableUserRequest) -> Result<EnableUserResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .enable_user(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Disable user.
+    pub async fn disable_user(
+        &self,
+        mut request: DisableUserRequest,
+    ) -> Result<DisableUserResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .disable_user(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Grant user role.
+    pub async fn grant_user_role(
+        &self,
+        mut request: GrantUserRoleRequest,
+    ) -> Result<GrantUserRoleResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .grant_user_role(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Revoke user role.
+    pub async fn revoke_user_role(
+        &self,
+        mut request: RevokeUserRoleRequest,
+    ) -> Result<RevokeUserRoleResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .revoke_user_role(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Custom Functions
+    // ================================================================
+
+    /// Register function.
+    pub async fn register_function(
+        &self,
+        request: RegisterFunctionRequest,
+    ) -> Result<RegisterFunctionResponse> {
+        let mut client = self.client();
+        client
+            .register_function(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Unregister function.
+    pub async fn unregister_function(
+        &self,
+        request: UnregisterFunctionRequest,
+    ) -> Result<UnregisterFunctionResponse> {
+        let mut client = self.client();
+        client
+            .unregister_function(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// List functions.
+    pub async fn list_functions(&self) -> Result<ListFunctionsResponse> {
+        let mut client = self.client();
+        client
+            .list_functions(self.authed(tonic::Request::new(ListFunctionsRequest {})))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get function info.
+    pub async fn get_function_info(
+        &self,
+        request: GetFunctionInfoRequest,
+    ) -> Result<GetFunctionInfoResponse> {
+        let mut client = self.client();
+        client
+            .get_function_info(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Vector
+    // ================================================================
+
+    /// Create vector index.
+    pub async fn create_vector_index(
+        &self,
+        request: CreateVectorIndexRequest,
+    ) -> Result<CreateVectorIndexResponse> {
+        let mut client = self.client();
+        client
+            .create_vector_index(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get vector index.
+    pub async fn get_vector_index(
+        &self,
+        request: GetVectorIndexRequest,
+    ) -> Result<GetVectorIndexResponse> {
+        let mut client = self.client();
+        client
+            .get_vector_index(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// List vector indexes.
+    pub async fn list_vector_indexes(
+        &self,
+        request: ListVectorIndexesRequest,
+    ) -> Result<ListVectorIndexesResponse> {
+        let mut client = self.client();
+        client
+            .list_vector_indexes(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Drop vector index.
+    pub async fn drop_vector_index(
+        &self,
+        request: DropVectorIndexRequest,
+    ) -> Result<DropVectorIndexResponse> {
+        let mut client = self.client();
+        client
+            .drop_vector_index(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Search vector.
+    pub async fn search_vector(
+        &self,
+        request: SearchVectorRequest,
+    ) -> Result<SearchVectorResponse> {
+        let mut client = self.client();
+        client
+            .search_vector(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Schema Versioning
+    // ================================================================
+
+    /// Get schema changes.
+    pub async fn get_schema_changes(
+        &self,
+        request: SchemaChangesRequest,
+    ) -> Result<SchemaChangesResponse> {
+        let mut client = self.client();
+        client
+            .get_schema_changes(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Detect breaking changes.
+    pub async fn detect_breaking_changes(
+        &self,
+        request: BreakingChangesRequest,
+    ) -> Result<BreakingChangesResponse> {
+        let mut client = self.client();
+        client
+            .detect_breaking_changes(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Migration Extensions
+    // ================================================================
+
+    /// Dry run migration.
+    pub async fn dry_run_migration(
+        &self,
+        mut request: DryRunMigrationRequest,
+    ) -> Result<DryRunMigrationResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .dry_run_migration(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get migration history.
+    pub async fn get_migration_history(
+        &self,
+        mut request: GetMigrationHistoryRequest,
+    ) -> Result<GetMigrationHistoryResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .get_migration_history(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get migration status.
+    pub async fn get_migration_status(
+        &self,
+        mut request: GetMigrationStatusRequest,
+    ) -> Result<GetMigrationStatusResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .get_migration_status(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Sync
+    // ================================================================
+
+    /// Get sync status.
+    pub async fn get_sync_status(&self) -> Result<GetSyncStatusResponse> {
+        let mut client = self.client();
+        client
+            .get_sync_status(self.authed(tonic::Request::new(GetSyncStatusRequest {})))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Retry outbox.
+    pub async fn retry_outbox(&self) -> Result<RetryOutboxResponse> {
+        let mut client = self.client();
+        client
+            .retry_outbox(self.authed(tonic::Request::new(RetryOutboxRequest {})))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get outbox diagnostics.
+    pub async fn get_outbox_diagnostics(&self) -> Result<GetOutboxDiagnosticsResponse> {
+        let mut client = self.client();
+        client
+            .get_outbox_diagnostics(
+                self.authed(tonic::Request::new(GetOutboxDiagnosticsRequest {})),
+            )
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// List dead letters.
+    pub async fn list_dead_letters(
+        &self,
+        request: ListDeadLettersRequest,
+    ) -> Result<ListDeadLettersResponse> {
+        let mut client = self.client();
+        client
+            .list_dead_letters(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Requeue dead letters.
+    pub async fn requeue_dead_letters(
+        &self,
+        request: RequeueDeadLettersRequest,
+    ) -> Result<RequeueDeadLettersResponse> {
+        let mut client = self.client();
+        client
+            .requeue_dead_letters(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get retention status.
+    pub async fn get_retention_status(&self) -> Result<GetRetentionStatusResponse> {
+        let mut client = self.client();
+        client
+            .get_retention_status(self.authed(tonic::Request::new(GetRetentionStatusRequest {})))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Run retention.
+    pub async fn run_retention(
+        &self,
+        request: RunRetentionRequest,
+    ) -> Result<RunRetentionResponse> {
+        let mut client = self.client();
+        client
+            .run_retention(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Fulltext
+    // ================================================================
+
+    /// Rebuild fulltext index.
+    pub async fn rebuild_fulltext_index(
+        &self,
+        mut request: RebuildFulltextIndexRequest,
+    ) -> Result<RebuildFulltextIndexResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .rebuild_fulltext_index(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get fulltext rebuild status.
+    pub async fn get_fulltext_rebuild_status(
+        &self,
+        mut request: GetFulltextRebuildStatusRequest,
+    ) -> Result<GetFulltextRebuildStatusResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .get_fulltext_rebuild_status(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Clear fulltext index.
+    pub async fn clear_fulltext_index(
+        &self,
+        mut request: ClearFulltextIndexRequest,
+    ) -> Result<ClearFulltextIndexResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .clear_fulltext_index(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// List inconsistent fulltext.
+    pub async fn list_inconsistent_fulltext(
+        &self,
+        mut request: ListInconsistentFulltextRequest,
+    ) -> Result<ListInconsistentFulltextResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .list_inconsistent_fulltext(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Search fulltext.
+    pub async fn search_fulltext(
+        &self,
+        mut request: SearchFulltextRequest,
+    ) -> Result<SearchFulltextResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .search_fulltext(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Query Extras
+    // ================================================================
+
+    /// Execute batch query.
+    pub async fn execute_batch_query(
+        &self,
+        mut request: ExecuteBatchQueryRequest,
+    ) -> Result<ExecuteBatchQueryResponse> {
+        self.fill_optional_session(&mut request.session_id);
+        let mut client = self.client();
+        client
+            .execute_batch_query(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Batch Extras
+    // ================================================================
+
+    /// Delete batch.
+    pub async fn delete_batch(&self, request: DeleteBatchRequest) -> Result<DeleteBatchResponse> {
+        let mut client = self.client();
+        client
+            .delete_batch(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Vector Extensions
+    // ================================================================
+
+    /// Scroll vector.
+    pub async fn scroll_vector(
+        &self,
+        mut request: ScrollVectorRequest,
+    ) -> Result<ScrollVectorResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .scroll_vector(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get vector count.
+    pub async fn get_vector_count(
+        &self,
+        mut request: GetVectorCountRequest,
+    ) -> Result<GetVectorCountResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .get_vector_count(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Rebuild vector index.
+    pub async fn rebuild_vector_index(
+        &self,
+        mut request: RebuildVectorIndexRequest,
+    ) -> Result<RebuildVectorIndexResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .rebuild_vector_index(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get vector rebuild status.
+    pub async fn get_vector_rebuild_status(
+        &self,
+        mut request: GetVectorRebuildStatusRequest,
+    ) -> Result<GetVectorRebuildStatusResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .get_vector_rebuild_status(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Clear vector index.
+    pub async fn clear_vector_index(
+        &self,
+        mut request: ClearVectorIndexRequest,
+    ) -> Result<ClearVectorIndexResponse> {
+        self.fill_required_session(&mut request.session_id)?;
+        let mut client = self.client();
+        client
+            .clear_vector_index(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Statistics Extensions
+    // ================================================================
+
+    /// Get overview statistics.
+    pub async fn get_overview_statistics(&self) -> Result<GetOverviewStatisticsResponse> {
+        let mut client = self.client();
+        client
+            .get_overview_statistics(
+                self.authed(tonic::Request::new(GetOverviewStatisticsRequest {})),
+            )
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get search statistics.
+    pub async fn get_search_statistics(&self) -> Result<GetSearchStatisticsResponse> {
+        let mut client = self.client();
+        client
+            .get_search_statistics(self.authed(tonic::Request::new(GetSearchStatisticsRequest {})))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get migration statistics.
+    pub async fn get_migration_statistics(&self) -> Result<GetMigrationStatisticsResponse> {
+        let mut client = self.client();
+        client
+            .get_migration_statistics(
+                self.authed(tonic::Request::new(GetMigrationStatisticsRequest {})),
+            )
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get freeze statistics.
+    pub async fn get_freeze_statistics(&self) -> Result<GetFreezeStatisticsResponse> {
+        let mut client = self.client();
+        client
+            .get_freeze_statistics(self.authed(tonic::Request::new(GetFreezeStatisticsRequest {})))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Trigger freeze.
+    pub async fn trigger_freeze(&self) -> Result<TriggerFreezeResponse> {
+        let mut client = self.client();
+        client
+            .trigger_freeze(self.authed(tonic::Request::new(TriggerFreezeRequest {})))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Get query profile detail.
+    pub async fn get_query_profile_detail(
+        &self,
+        request: GetQueryProfileDetailRequest,
+    ) -> Result<GetQueryProfileDetailResponse> {
+        let mut client = self.client();
+        client
+            .get_query_profile_detail(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Sync Degraded Ranges
+    // ================================================================
+
+    /// List degraded ranges.
+    pub async fn list_degraded_ranges(
+        &self,
+        request: ListDegradedRangesRequest,
+    ) -> Result<ListDegradedRangesResponse> {
+        let mut client = self.client();
+        client
+            .list_degraded_ranges(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Clear degraded range.
+    pub async fn clear_degraded_range(
+        &self,
+        request: ClearDegradedRangeRequest,
+    ) -> Result<ClearDegradedRangeResponse> {
+        let mut client = self.client();
+        client
+            .clear_degraded_range(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Transaction Extensions
+    // ================================================================
+
+    /// List savepoints.
+    pub async fn list_savepoints(
+        &self,
+        mut request: ListSavepointsRequest,
+    ) -> Result<ListSavepointsResponse> {
+        self.fill_optional_owner(&mut request.owner);
+        let mut client = self.client();
+        client
+            .list_savepoints(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Retry transaction outbox.
+    pub async fn retry_transaction_outbox(
+        &self,
+        mut request: RetryTransactionOutboxRequest,
+    ) -> Result<RetryTransactionOutboxResponse> {
+        self.fill_optional_owner(&mut request.owner);
+        let mut client = self.client();
+        client
+            .retry_transaction_outbox(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    // ================================================================
+    // Vector Payload
+    // ================================================================
+
+    /// Get vector point.
+    pub async fn get_vector_point(
+        &self,
+        request: GetVectorPointRequest,
+    ) -> Result<GetVectorPointResponse> {
+        let mut client = self.client();
+        client
+            .get_vector_point(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Set vector payload.
+    pub async fn set_vector_payload(
+        &self,
+        request: SetVectorPayloadRequest,
+    ) -> Result<SetVectorPayloadResponse> {
+        let mut client = self.client();
+        client
+            .set_vector_payload(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Set vector payload fields.
+    pub async fn set_vector_payload_fields(
+        &self,
+        request: SetVectorPayloadFieldsRequest,
+    ) -> Result<SetVectorPayloadFieldsResponse> {
+        let mut client = self.client();
+        client
+            .set_vector_payload_fields(self.authed(tonic::Request::new(request)))
+            .await
+            .map(|response| response.into_inner())
+            .map_err(status_error)
+    }
+
+    /// Delete vector payload.
+    pub async fn delete_vector_payload(
+        &self,
+        request: DeleteVectorPayloadRequest,
+    ) -> Result<DeleteVectorPayloadResponse> {
+        let mut client = self.client();
+        client
+            .delete_vector_payload(self.authed(tonic::Request::new(request)))
             .await
             .map(|response| response.into_inner())
             .map_err(status_error)
@@ -968,7 +1852,29 @@ fn build_endpoint(address: &str, timeout_seconds: u64) -> Result<Endpoint> {
 }
 
 fn status_error(status: tonic::Status) -> ClientError {
-    ClientError::grpc(format!("{:?}: {}", status.code(), status.message()))
+    ClientError::grpc_status(grpc_code(status.code()), status.message())
+}
+
+fn grpc_code(code: tonic::Code) -> GrpcErrorCode {
+    match code {
+        tonic::Code::Ok => GrpcErrorCode::Other,
+        tonic::Code::Cancelled => GrpcErrorCode::Cancelled,
+        tonic::Code::Unknown => GrpcErrorCode::Unknown,
+        tonic::Code::InvalidArgument => GrpcErrorCode::InvalidArgument,
+        tonic::Code::DeadlineExceeded => GrpcErrorCode::DeadlineExceeded,
+        tonic::Code::NotFound => GrpcErrorCode::NotFound,
+        tonic::Code::AlreadyExists => GrpcErrorCode::AlreadyExists,
+        tonic::Code::PermissionDenied => GrpcErrorCode::PermissionDenied,
+        tonic::Code::ResourceExhausted => GrpcErrorCode::ResourceExhausted,
+        tonic::Code::FailedPrecondition => GrpcErrorCode::FailedPrecondition,
+        tonic::Code::Aborted => GrpcErrorCode::Aborted,
+        tonic::Code::OutOfRange => GrpcErrorCode::OutOfRange,
+        tonic::Code::Unimplemented => GrpcErrorCode::Unimplemented,
+        tonic::Code::Internal => GrpcErrorCode::Internal,
+        tonic::Code::Unavailable => GrpcErrorCode::Unavailable,
+        tonic::Code::DataLoss => GrpcErrorCode::DataLoss,
+        tonic::Code::Unauthenticated => GrpcErrorCode::Unauthenticated,
+    }
 }
 
 #[cfg(test)]
@@ -1029,12 +1935,82 @@ mod tests {
     fn status_error_preserves_code_and_message() {
         let error = status_error(tonic::Status::unauthenticated("bad credentials"));
         match error {
-            ClientError::GrpcError(message) => {
-                assert!(message.contains("Unauthenticated"), "message: {}", message);
+            ClientError::GrpcError { code, message } => {
+                assert_eq!(code, GrpcErrorCode::Unauthenticated);
                 assert!(message.contains("bad credentials"), "message: {}", message);
             }
             other => panic!("expected grpc error, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn grpc_codes_map_to_structured_values() {
+        assert_eq!(
+            grpc_code(tonic::Code::PermissionDenied),
+            GrpcErrorCode::PermissionDenied
+        );
+        assert_eq!(grpc_code(tonic::Code::NotFound), GrpcErrorCode::NotFound);
+        assert_eq!(
+            grpc_code(tonic::Code::Unavailable),
+            GrpcErrorCode::Unavailable
+        );
+        assert_eq!(grpc_code(tonic::Code::Unknown), GrpcErrorCode::Unknown);
+    }
+
+    #[tokio::test]
+    async fn optional_session_is_filled_only_when_missing() {
+        let client = test_client();
+        client.set_session_id(42);
+
+        let mut slot = None;
+        client.fill_optional_session(&mut slot);
+        assert_eq!(slot.as_deref(), Some("42"));
+
+        let mut explicit = Some("other".to_string());
+        client.fill_optional_session(&mut explicit);
+        assert_eq!(explicit.as_deref(), Some("other"));
+    }
+
+    #[tokio::test]
+    async fn required_session_fails_without_login() {
+        let client = test_client();
+        let mut slot = String::new();
+        let error = client
+            .fill_required_session(&mut slot)
+            .expect_err("expected auth error");
+        assert!(matches!(error, ClientError::AuthError(_)));
+
+        client.set_session_id(42);
+        let mut slot = String::new();
+        client
+            .fill_required_session(&mut slot)
+            .expect("session should be filled");
+        assert_eq!(slot, "42");
+    }
+
+    #[tokio::test]
+    async fn optional_int_session_and_owner_are_filled() {
+        let client = test_client();
+        client.set_session_id(42);
+
+        let mut slot = 0;
+        client
+            .fill_optional_session_i64(&mut slot)
+            .expect("session should be filled");
+        assert_eq!(slot, 42);
+
+        let mut owner = None;
+        client.fill_optional_owner(&mut owner);
+        assert_eq!(owner.as_deref(), Some("42"));
+    }
+
+    #[tokio::test]
+    async fn endpoint_and_message_limit_configuration_is_applied() {
+        let client = GrpcClient::from_endpoint("https://127.0.0.1:9669", 0)
+            .expect("client should build")
+            .with_message_size_limit(10 * 1024 * 1024);
+        assert_eq!(client.endpoint(), "https://127.0.0.1:9669");
+        assert_eq!(client.max_message_size, Some(10 * 1024 * 1024));
     }
 
     #[tokio::test]

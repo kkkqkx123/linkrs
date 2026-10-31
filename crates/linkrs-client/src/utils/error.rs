@@ -1,5 +1,30 @@
 use thiserror::Error;
 
+/// Transport-level gRPC status code carried by [`ClientError::GrpcError`].
+///
+/// Mirrors the meaningful subset of `tonic::Code` so the error type does not
+/// depend on tonic when the `grpc` feature is disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrpcErrorCode {
+    Unauthenticated,
+    PermissionDenied,
+    NotFound,
+    InvalidArgument,
+    AlreadyExists,
+    Unavailable,
+    DeadlineExceeded,
+    ResourceExhausted,
+    FailedPrecondition,
+    Aborted,
+    OutOfRange,
+    Unimplemented,
+    Internal,
+    DataLoss,
+    Cancelled,
+    Unknown,
+    Other,
+}
+
 #[derive(Error, Debug)]
 pub enum ClientError {
     #[error("Connection error: {0}")]
@@ -26,8 +51,11 @@ pub enum ClientError {
     #[error("HTTP {status}: {message}")]
     Http { status: u16, message: String },
 
-    #[error("gRPC error: {0}")]
-    GrpcError(String),
+    #[error("gRPC error [{code:?}]: {message}")]
+    GrpcError {
+        code: GrpcErrorCode,
+        message: String,
+    },
 
     #[error("Configuration error: {0}")]
     ConfigError(String),
@@ -111,7 +139,17 @@ impl ClientError {
     }
 
     pub fn grpc(msg: impl Into<String>) -> Self {
-        ClientError::GrpcError(msg.into())
+        ClientError::GrpcError {
+            code: GrpcErrorCode::Other,
+            message: msg.into(),
+        }
+    }
+
+    pub fn grpc_status(code: GrpcErrorCode, msg: impl Into<String>) -> Self {
+        ClientError::GrpcError {
+            code,
+            message: msg.into(),
+        }
     }
 
     pub fn session(msg: impl Into<String>) -> Self {
