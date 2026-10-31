@@ -174,7 +174,15 @@ pub struct StorageConfig {
     #[serde(default = "default_dirty_flush_bytes")]
     pub dirty_flush_bytes: u64,
 
+    /// Record cache memory budget in bytes. Must stay within the instance
+    /// memory soft limit so data, index and MVCC keep their share of the
+    /// budget. Build-time only: changing it requires recreating the cache.
+    #[serde(default = "default_cache_memory_bytes")]
+    pub cache_memory_bytes: u64,
+
     /// Record cache TTL in seconds. Zero disables TTL.
+    /// When both TTL and TTI are set, TTI must not exceed TTL — otherwise
+    /// the idle term can never bind and the knob is dead.
     #[serde(default = "default_cache_ttl_secs")]
     pub cache_ttl_secs: u64,
 
@@ -218,6 +226,40 @@ pub struct StorageConfig {
     /// stays decoupled from the shared compute pool. Defaults to one.
     #[serde(default = "default_checkpoint_executor_threads")]
     pub checkpoint_executor_threads: usize,
+
+    /// Freeze when mutable CSR edges exceed this count (out + in entries).
+    #[serde(default = "default_freeze_delta_edge_threshold")]
+    pub freeze_delta_edge_threshold: u64,
+
+    /// Freeze when mutable CSR memory exceeds this in bytes. Must stay below
+    /// the memory soft limit (max_memory_bytes * memory_soft_ratio) so one hot
+    /// table freezes before global memory pressure degrades the write path.
+    #[serde(default = "default_freeze_delta_memory_threshold_bytes")]
+    pub freeze_delta_memory_threshold_bytes: u64,
+
+    /// Freeze when the tombstone deletion ratio reaches this (0.0-1.0).
+    #[serde(default = "default_freeze_deletion_threshold")]
+    pub freeze_deletion_threshold: f64,
+
+    /// Minimum absolute number of holes (allocated minus live IDs) before
+    /// automatic vertex compaction runs.
+    #[serde(default = "default_auto_compact_min_holes")]
+    pub auto_compact_min_holes: u32,
+
+    /// Minimum hole ratio (holes / allocated IDs) before automatic vertex
+    /// compaction runs. Range [0.0, 1.0].
+    #[serde(default = "default_auto_compact_min_hole_ratio")]
+    pub auto_compact_min_hole_ratio: f64,
+
+    /// Cooldown between automatic vertex compactions, in seconds.
+    #[serde(default = "default_auto_compact_min_interval_secs")]
+    pub auto_compact_min_interval_secs: u64,
+
+    /// Write backpressure seeded into every edge table at creation: max
+    /// node-group CSR bytes before background compaction is requested. Zero
+    /// disables the trigger. Locked per table at creation time.
+    #[serde(default = "default_edge_max_mutable_csr_bytes")]
+    pub edge_max_mutable_csr_bytes: u64,
 }
 
 fn default_compression_level() -> u32 {
@@ -292,12 +334,16 @@ fn default_dirty_flush_bytes() -> u64 {
     64 * 1024 * 1024
 }
 
+fn default_cache_memory_bytes() -> u64 {
+    128 * 1024 * 1024
+}
+
 fn default_cache_ttl_secs() -> u64 {
-    60
+    300
 }
 
 fn default_cache_tti_secs() -> u64 {
-    300
+    60
 }
 
 fn default_string_min_rows() -> usize {
@@ -330,6 +376,34 @@ fn default_index_eviction_low_ratio() -> f64 {
 
 fn default_checkpoint_executor_threads() -> usize {
     1
+}
+
+fn default_freeze_delta_edge_threshold() -> u64 {
+    100_000
+}
+
+fn default_freeze_delta_memory_threshold_bytes() -> u64 {
+    256 * 1024 * 1024
+}
+
+fn default_freeze_deletion_threshold() -> f64 {
+    0.2
+}
+
+fn default_auto_compact_min_holes() -> u32 {
+    65_536
+}
+
+fn default_auto_compact_min_hole_ratio() -> f64 {
+    0.25
+}
+
+fn default_auto_compact_min_interval_secs() -> u64 {
+    3600
+}
+
+fn default_edge_max_mutable_csr_bytes() -> u64 {
+    100 * 1024 * 1024
 }
 
 fn default_background_idle_maintenance_secs() -> u64 {
@@ -372,6 +446,7 @@ impl Default for StorageConfig {
             dirty_flush_bytes: default_dirty_flush_bytes(),
             cache_ttl_secs: default_cache_ttl_secs(),
             cache_tti_secs: default_cache_tti_secs(),
+            cache_memory_bytes: default_cache_memory_bytes(),
             string_min_rows: default_string_min_rows(),
             avg_length_threshold: default_avg_length_threshold(),
             cardinality_ratio_threshold: default_cardinality_ratio_threshold(),
@@ -381,6 +456,13 @@ impl Default for StorageConfig {
             index_eviction_high_ratio: default_index_eviction_high_ratio(),
             index_eviction_low_ratio: default_index_eviction_low_ratio(),
             checkpoint_executor_threads: default_checkpoint_executor_threads(),
+            freeze_delta_edge_threshold: default_freeze_delta_edge_threshold(),
+            freeze_delta_memory_threshold_bytes: default_freeze_delta_memory_threshold_bytes(),
+            freeze_deletion_threshold: default_freeze_deletion_threshold(),
+            auto_compact_min_holes: default_auto_compact_min_holes(),
+            auto_compact_min_hole_ratio: default_auto_compact_min_hole_ratio(),
+            auto_compact_min_interval_secs: default_auto_compact_min_interval_secs(),
+            edge_max_mutable_csr_bytes: default_edge_max_mutable_csr_bytes(),
         }
     }
 }
@@ -429,8 +511,46 @@ impl StorageConfig {
         {
             return Err("index eviction ratios must satisfy 0 < low < high <= 1".to_string());
         }
+        if self.cache_ttl_secs > 0 && self.cache_tti_secs > 0 && self.cache_tti_secs > self.cache_ttl_secs
+        {
+            return Err(
+                "cache_tti_secs must not exceed cache_ttl_secs; otherwise the idle term can never bind"
+                    .to_string(),
+            );
+        }
+        if self.cache_memory_bytes == 0 {
+            return Err("cache_memory_bytes must be greater than 0".to_string());
+        }
+        let memory_soft_limit = (self.max_memory_bytes as f64 * self.memory_soft_ratio).round() as u64;
+        if self.cache_memory_bytes > memory_soft_limit {
+            return Err(
+                "cache_memory_bytes must not exceed the memory soft limit (max_memory_bytes * memory_soft_ratio)"
+                    .to_string(),
+            );
+        }
         if self.checkpoint_executor_threads == 0 {
             return Err("checkpoint_executor_threads must be greater than 0".to_string());
+        }
+        if self.freeze_delta_edge_threshold == 0 || self.freeze_delta_memory_threshold_bytes == 0 {
+            return Err("freeze thresholds must be greater than 0".to_string());
+        }
+        if !self.freeze_deletion_threshold.is_finite()
+            || !(0.0..=1.0).contains(&self.freeze_deletion_threshold)
+        {
+            return Err("freeze_deletion_threshold must be in [0.0, 1.0]".to_string());
+        }
+        if !self.auto_compact_min_hole_ratio.is_finite()
+            || !(0.0..=1.0).contains(&self.auto_compact_min_hole_ratio)
+        {
+            return Err("auto_compact_min_hole_ratio must be in [0.0, 1.0]".to_string());
+        }
+        let freeze_soft_limit =
+            (self.max_memory_bytes as f64 * self.memory_soft_ratio).round() as u64;
+        if self.freeze_delta_memory_threshold_bytes >= freeze_soft_limit {
+            return Err(
+                "freeze_delta_memory_threshold_bytes must stay below the memory soft limit (max_memory_bytes * memory_soft_ratio)"
+                    .to_string(),
+            );
         }
         Ok(())
     }

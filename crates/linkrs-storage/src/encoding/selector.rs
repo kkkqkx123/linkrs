@@ -64,7 +64,7 @@ pub fn data_type_family(data_type: &DataType) -> DataTypeFamily {
 }
 
 #[derive(Debug, Clone, Default)]
-struct EncodingFeedback {
+pub(crate) struct EncodingFeedback {
     observations: std::collections::VecDeque<FeedbackObservation>,
 }
 
@@ -76,10 +76,10 @@ struct FeedbackObservation {
 }
 
 impl EncodingFeedback {
-    const MAX_OBSERVATIONS: usize = 100;
-    const REEVALUATE_AFTER: usize = 20;
-    const EARLY_OBSERVATIONS: usize = 3;
-    const EARLY_RATIO_MARGIN: f64 = 0.2;
+    pub(crate) const MAX_OBSERVATIONS: usize = 100;
+    pub(crate) const REEVALUATE_AFTER: usize = 20;
+    pub(crate) const EARLY_OBSERVATIONS: usize = 3;
+    pub(crate) const EARLY_RATIO_MARGIN: f64 = 0.2;
 
     fn record(
         &mut self,

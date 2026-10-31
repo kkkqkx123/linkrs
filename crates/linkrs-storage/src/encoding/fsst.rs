@@ -25,9 +25,9 @@ use linkrs_core::NullBitmap;
 const MAX_SYMBOL_LEN: usize = 8;
 const MIN_SYMBOL_LEN: usize = 2;
 const SYMBOL_TABLE_SIZE: usize = 255;
-const MAX_TRAINING_SAMPLES: usize = 10000;
-const MAX_NGRAMS_PER_STRING: usize = 1000;
-const DEFAULT_REBUILD_THRESHOLD: f64 = 0.2;
+pub(crate) const MAX_TRAINING_SAMPLES: usize = 10000;
+pub(crate) const MAX_NGRAMS_PER_STRING: usize = 1000;
+pub(crate) const DEFAULT_REBUILD_THRESHOLD: f64 = 0.2;
 #[derive(Debug, Clone)]
 pub struct FsstSymbolTable {
     code_to_symbol: Vec<Vec<u8>>,

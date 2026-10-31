@@ -20,7 +20,7 @@ use std::collections::HashSet;
 /// slots; 64 keeps the worst fallback walk to one cache-friendly row pass.
 /// Recommended range 32..=128. Tune against `benches/csr_perf_bench.rs`
 /// before changing it; changes without a benchmark run are not accepted.
-const TOMBSTONE_REUSE_SCAN_BOUND: usize = 64;
+pub(crate) const TOMBSTONE_REUSE_SCAN_BOUND: usize = 64;
 
 /// Physical position of one stored edge inside its row.
 ///

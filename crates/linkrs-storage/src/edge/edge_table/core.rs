@@ -257,7 +257,7 @@ impl EdgeStore {
     }
 }
 
-mod index;
+pub(crate) mod index;
 mod maintenance;
 pub use maintenance::{
     DirectionMigrationStats, DirectionNarrowingSuggestion, DirectionUsageSnapshot,

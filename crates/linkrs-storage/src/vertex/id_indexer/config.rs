@@ -1,6 +1,6 @@
 //! Construction parameters for the primary-key index.
 
-pub(super) const DEFAULT_INITIAL_CAPACITY: usize = 1024;
+pub(crate) const DEFAULT_INITIAL_CAPACITY: usize = 1024;
 pub const DEFAULT_GROWTH_FACTOR: f64 = 1.5;
 pub const MAX_CAPACITY: usize = u32::MAX as usize;
 

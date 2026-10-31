@@ -92,10 +92,13 @@ operation_timeout_secs = 30
 dirty_flush_operations = 50000
 # Estimated dirty bytes that trigger a flush request (default 67108864 = 64MB)
 dirty_flush_bytes = 67108864
-# Record cache TTL in seconds, 0 disables TTL (default 60)
-cache_ttl_secs = 60
-# Record cache TTI in seconds, 0 disables TTI (default 300)
-cache_tti_secs = 300
+# Record cache memory budget in bytes; must stay within the memory soft
+# limit (max_memory_bytes * memory_soft_ratio) (default 134217728 = 128MB)
+cache_memory_bytes = 134217728
+# Record cache TTL in seconds, 0 disables TTL (default 300)
+cache_ttl_secs = 300
+# Record cache TTI in seconds, 0 disables TTI (default 60; must not exceed TTL)
+cache_tti_secs = 60
 # Per-shard native-index buffer pool capacity in bytes (default 134217728 = 128MB)
 index_pool_capacity_bytes = 134217728
 # Evict chunks under memory pressure (default true)
@@ -104,6 +107,22 @@ index_eviction_enabled = true
 index_eviction_high_ratio = 0.85
 # Eviction low-water target ratio (default 0.65)
 index_eviction_low_ratio = 0.65
+# Freeze when mutable CSR edges exceed this count (default 100000)
+freeze_delta_edge_threshold = 100000
+# Freeze when mutable CSR memory exceeds this in bytes; must stay below the
+# memory soft limit (default 268435456 = 256MB)
+freeze_delta_memory_threshold_bytes = 268435456
+# Freeze when the tombstone deletion ratio reaches this, 0.0-1.0 (default 0.2)
+freeze_deletion_threshold = 0.2
+# Minimum absolute hole count before automatic vertex compaction (default 65536)
+auto_compact_min_holes = 65536
+# Minimum hole ratio before automatic vertex compaction, 0.0-1.0 (default 0.25)
+auto_compact_min_hole_ratio = 0.25
+# Cooldown between automatic vertex compactions in seconds (default 3600)
+auto_compact_min_interval_secs = 3600
+# Edge-table write backpressure: max node-group CSR bytes before background
+# compaction is requested, 0 disables (default 104857600 = 100MB)
+edge_max_mutable_csr_bytes = 104857600
 
 [query_resource]
 # Maximum memory per query in bytes, 0 means unlimited (default 0)

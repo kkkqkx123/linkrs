@@ -140,6 +140,14 @@ impl GraphStoragePersistent {
     }
 
     pub(crate) fn from_validated_config(config: PropertyGraphConfig) -> Self {
+        // Seed the edge-table creation template so tables built through
+        // `EdgeStore::new` inherit the configured write backpressure.
+        crate::edge::edge_table::config::set_default_template(
+            crate::edge::edge_table::config::EdgeTableConfig {
+                max_mutable_csr_bytes: config.edge_max_mutable_csr_bytes,
+                ..Default::default()
+            },
+        );
         let resource_accounting = Self::new_resource_accounting(&config);
         let cache_manager = CacheManager::new(
             config.enable_cache,
@@ -217,6 +225,14 @@ impl GraphStoragePersistent {
             resources.memory_soft_ratio,
             resources.memory_hard_ratio,
         );
+        // Keep the process-wide query watermark track aligned with the
+        // instance ratios so both pressure systems degrade in one order.
+        if let Err(reason) = crate::memory_watermark::configure_from_instance_ratios(
+            resources.memory_soft_ratio,
+            resources.memory_hard_ratio,
+        ) {
+            log::warn!("memory watermark not aligned with instance ratios: {reason}");
+        }
         Arc::new(MemoryAccounting::new(budget))
     }
 

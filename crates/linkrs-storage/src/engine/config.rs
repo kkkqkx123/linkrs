@@ -22,10 +22,13 @@ pub fn default_vertex_table_shards() -> usize {
         .next_power_of_two()
 }
 
-/// Configuration for flush operations
+/// Configuration for flush operations.
+///
+/// The dirty-operation count that arms a flush request lives in
+/// [`ResourceConfig::dirty_flush_operations`] so the count and the estimated
+/// byte triggers share one owner; only the cadence and codec live here.
 #[derive(Debug, Clone)]
 pub struct FlushConfig {
-    pub flush_threshold: usize,
     pub flush_interval: Duration,
     pub compression: CompressionType,
 }
@@ -33,7 +36,6 @@ pub struct FlushConfig {
 impl Default for FlushConfig {
     fn default() -> Self {
         Self {
-            flush_threshold: 50_000,
             flush_interval: Duration::from_secs(30),
             compression: CompressionType::Zstd { level: 3 },
         }
@@ -121,8 +123,8 @@ impl Default for ResourceConfig {
             operation_timeout: Duration::from_secs(30),
             dirty_flush_operations: 50_000,
             dirty_flush_bytes: 64 * 1024 * 1024,
-            cache_ttl: Some(Duration::from_secs(60)),
-            cache_tti: Some(Duration::from_secs(300)),
+            cache_ttl: Some(Duration::from_secs(300)),
+            cache_tti: Some(Duration::from_secs(60)),
             cache_eviction_sync: true,
             index_pool_capacity_bytes: 128 * 1024 * 1024,
             index_eviction_enabled: true,
@@ -187,6 +189,14 @@ impl ResourceConfig {
                 ));
             }
         }
+        if let (Some(ttl), Some(tti)) = (self.cache_ttl, self.cache_tti) {
+            if tti > ttl {
+                return Err(StorageError::new(
+                    StorageErrorKind::InvalidInput,
+                    "cache_tti must not exceed cache_ttl; otherwise the idle term can never bind",
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -240,11 +250,14 @@ impl FreezeConfig {
     ///
     /// Suitable for: Large deployments, long-running systems
     /// - Large freeze threshold (500K edges)
+    /// - Memory threshold stays at 62.5% of the instance soft limit (same
+    ///   share as the dev/small presets) so freezing runs before global
+    ///   memory pressure degrades the write path
     /// - Optimized for sustained high throughput
     pub fn production_large() -> Self {
         Self {
             delta_edge_threshold: 500_000,
-            delta_memory_threshold_bytes: 1_000_000_000, // 1GB
+            delta_memory_threshold_bytes: 512 * 1024 * 1024,
             deletion_threshold: 0.3,
         }
     }
@@ -304,6 +317,10 @@ pub struct PropertyGraphConfig {
     /// Safety margin subtracted from the GC watermark timestamp.
     /// Higher values are more conservative (keep more history).
     pub gc_safety_margin: Timestamp,
+    /// Write backpressure seeded into every edge table at creation: max
+    /// node-group CSR bytes before background compaction is requested.
+    /// Zero disables the trigger. Locked per table at creation time.
+    pub edge_max_mutable_csr_bytes: usize,
 }
 
 impl Default for PropertyGraphConfig {
@@ -317,6 +334,8 @@ impl Default for PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
+            edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
+                .max_mutable_csr_bytes,
         }
     }
 }
@@ -340,6 +359,8 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
+            edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
+                .max_mutable_csr_bytes,
         }
     }
 
@@ -357,6 +378,8 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
+            edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
+                .max_mutable_csr_bytes,
         }
     }
 
@@ -378,6 +401,8 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
+            edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
+                .max_mutable_csr_bytes,
         }
     }
 
@@ -390,13 +415,14 @@ impl PropertyGraphConfig {
             enable_cache: true,
             cache_memory: 8 * 1024 * 1024,
             flush_config: FlushConfig {
-                flush_threshold: 100000,
                 flush_interval: Duration::from_secs(3600),
                 ..Default::default()
             },
             resources: ResourceConfig {
                 max_memory_bytes: 64 * 1024 * 1024,
                 index_memory_bytes: 16 * 1024 * 1024,
+                // Relaxed flush cadence: tests drive persistence explicitly.
+                dirty_flush_operations: 100_000,
                 // Hermetic unit tests drive maintenance explicitly; no idle
                 // loop thread per test context.
                 background_idle_maintenance_interval: Duration::ZERO,
@@ -410,6 +436,8 @@ impl PropertyGraphConfig {
             auto_compact: AutoCompactConfig::default(),
             vertex_table_shards: default_vertex_table_shards(),
             gc_safety_margin: 1,
+            edge_max_mutable_csr_bytes: crate::edge::edge_table::config::EdgeTableConfig::default()
+                .max_mutable_csr_bytes,
         }
     }
 
@@ -421,18 +449,19 @@ impl PropertyGraphConfig {
                 "cache_memory must be > 0 when cache is enabled",
             ));
         }
-        if self.enable_cache && self.cache_memory as u64 > self.resources.max_memory_bytes {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "cache_memory cannot exceed max_memory_bytes",
-            ));
-        }
         self.resources.validate()?;
-        if self.flush_config.flush_threshold == 0 {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "flush_threshold must be > 0",
-            ));
+        if self.enable_cache {
+            // Cache must not starve data, index and MVCC: keep it within the
+            // memory soft limit instead of the full hard budget.
+            let soft_limit_bytes = (self.resources.max_memory_bytes as f64
+                * self.resources.memory_soft_ratio)
+                .round() as u64;
+            if self.cache_memory as u64 > soft_limit_bytes {
+                return Err(StorageError::new(
+                    StorageErrorKind::InvalidInput,
+                    "cache_memory cannot exceed the memory soft limit (max_memory_bytes * memory_soft_ratio)",
+                ));
+            }
         }
         if self.flush_config.flush_interval.is_zero() {
             return Err(StorageError::new(
@@ -441,6 +470,18 @@ impl PropertyGraphConfig {
             ));
         }
         self.freeze.validate()?;
+        // The freeze memory threshold is a per-table budget: keep it below
+        // the instance soft limit so one hot table cannot freeze only after
+        // global pressure already degraded the write path.
+        let soft_limit_bytes = (self.resources.max_memory_bytes as f64
+            * self.resources.memory_soft_ratio)
+            .round() as u64;
+        if self.freeze.delta_memory_threshold_bytes as u64 >= soft_limit_bytes {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "freeze delta_memory_threshold_bytes must stay below the memory soft limit",
+            ));
+        }
         if !(0.0..=1.0).contains(&self.auto_compact.min_hole_ratio) {
             return Err(StorageError::new(
                 StorageErrorKind::InvalidInput,
@@ -483,7 +524,7 @@ mod tests {
     fn test_freeze_config_production_large() {
         let config = FreezeConfig::production_large();
         assert_eq!(config.delta_edge_threshold, 500_000);
-        assert_eq!(config.delta_memory_threshold_bytes, 1_000_000_000);
+        assert_eq!(config.delta_memory_threshold_bytes, 512 * 1024 * 1024);
         assert_eq!(config.deletion_threshold, 0.3);
     }
 

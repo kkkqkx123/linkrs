@@ -542,7 +542,7 @@ fn count_hot_neighbors_batched(
 
 /// Internal page size for the default full scan: bounds the intermediate
 /// while the cursor stays the single scan implementation.
-const SCAN_PAGE: usize = 1024;
+pub(crate) const SCAN_PAGE: usize = 1024;
 
 pub(crate) fn scan_edges_by_type(
     ctx: &GraphStorageContext,

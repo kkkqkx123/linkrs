@@ -10,7 +10,7 @@
 //! - [`tests`] - unit tests for the whole module
 
 mod codec;
-mod config;
+pub(crate) mod config;
 mod key;
 mod lookup;
 pub mod manager;

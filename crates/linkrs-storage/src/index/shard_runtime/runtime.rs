@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// Default chunked-index pool capacity per generation runtime.
+pub(crate) const DEFAULT_POOL_CAPACITY: u64 = 64 * 1024 * 1024;
+
 pub(crate) struct IndexRuntime {
     generations: RwLock<HashMap<IndexGeneration, Arc<GenerationRuntime>>>,
     barrier_lsn: AtomicU64,
@@ -16,7 +19,6 @@ pub(crate) struct IndexRuntime {
 
 impl IndexRuntime {
     pub(crate) fn new(manifest: &IndexManifest) -> Self {
-        const DEFAULT_POOL_CAPACITY: u64 = 64 * 1024 * 1024;
         Self::new_with_pool_capacity(manifest, DEFAULT_POOL_CAPACITY)
     }
 

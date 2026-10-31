@@ -14,7 +14,7 @@ pub(crate) struct RangeBloom {
 }
 
 /// Queries after which a never-filtering bloom is bypassed.
-const SATURATION_QUERIES: u64 = 1024;
+pub(crate) const SATURATION_QUERIES: u64 = 1024;
 
 impl RangeBloom {
     pub(crate) fn new() -> Self {

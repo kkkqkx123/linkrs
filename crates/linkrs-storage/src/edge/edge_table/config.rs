@@ -1,7 +1,33 @@
 use linkrs_core::types::Timestamp;
 use linkrs_core::Value;
+use std::sync::RwLock;
 
 use crate::edge::RecordFormPreference;
+
+/// Process-wide creation template for tables built via `EdgeStore::new`
+/// without explicit config. The storage engine seeds it from the validated
+/// `PropertyGraphConfig` at construction; later calls replace the template
+/// (last writer wins). Tables built with `EdgeStore::with_config` are
+/// unaffected.
+static DEFAULT_TEMPLATE: RwLock<Option<EdgeTableConfig>> = RwLock::new(None);
+
+/// Replace the creation template used by `EdgeStore::new`.
+pub fn set_default_template(config: EdgeTableConfig) {
+    let mut guard = match DEFAULT_TEMPLATE.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *guard = Some(config);
+}
+
+/// The current creation template, falling back to [`EdgeTableConfig::default`].
+pub fn default_template() -> EdgeTableConfig {
+    let guard = match DEFAULT_TEMPLATE.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.clone().unwrap_or_default()
+}
 
 /// Thresholds deciding when a bundled-eligible table is narrow and
 /// read-heavy enough for the inline form.

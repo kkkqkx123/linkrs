@@ -5,12 +5,12 @@ use linkrs_transaction::types::WriteSet;
 
 /// Maximum retained committed write sets. Bounds certification memory while
 /// covering recent concurrent commits.
-const COMMITTED_WRITE_SET_CAPACITY: usize = 512;
+pub(crate) const COMMITTED_WRITE_SET_CAPACITY: usize = 512;
 
 /// Maximum entities of a single write set admitted into the window. Larger
 /// bulk statements skip publishing (their own commit still certifies against
 /// the window); this keeps a bulk load from evicting the whole OLTP history.
-const MAX_PUBLISHED_WRITE_SET_SIZE: usize = 8192;
+pub(crate) const MAX_PUBLISHED_WRITE_SET_SIZE: usize = 8192;
 
 /// Recently committed write sets for auto-commit commit-time certification.
 ///

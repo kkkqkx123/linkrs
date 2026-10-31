@@ -18,6 +18,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// WAL size below which `flush` appends entries instead of checkpointing.
+pub(crate) const WAL_CHECKPOINT_THRESHOLD: u64 = 1024 * 1024; // 1MB
+
 pub(crate) struct ShardRuntime {
     pub(crate) checkpoint_file: PathBuf,
     pub(crate) pool_capacity: u64,
@@ -562,7 +565,6 @@ impl ShardRuntime {
             return Ok(());
         }
         // If WAL is small, just append entries; otherwise checkpoint
-        const WAL_CHECKPOINT_THRESHOLD: u64 = 1024 * 1024; // 1MB
         if self.wal_size() < WAL_CHECKPOINT_THRESHOLD {
             self.flush_wal()?;
             self.dirty.store(false, Ordering::Release);

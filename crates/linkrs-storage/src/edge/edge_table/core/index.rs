@@ -16,6 +16,11 @@ use std::sync::Arc;
 
 use super::super::iterator::EdgeTableScanIterator;
 
+/// Large-hit cutover for point-lookup back-checks: past this many candidate
+/// ids, back-checking costs more than a segment scan, so the caller falls
+/// back to the segment path instead of materializing a huge candidate set.
+pub(crate) const INDEX_SEGMENT_CUTOVER: usize = 8192;
+
 /// Point-in-time secondary index observability snapshot.
 ///
 /// Lets operators poll one value instead of racing several counters: the lag
@@ -318,7 +323,6 @@ impl EdgeStore {
         // while a segment scan costs O(rows). Past the cutover the index wins
         // nothing, so fall back to the segment path instead of materializing
         // a huge candidate set.
-        const INDEX_SEGMENT_CUTOVER: usize = 8192;
         if predicates.is_empty() {
             return None;
         }

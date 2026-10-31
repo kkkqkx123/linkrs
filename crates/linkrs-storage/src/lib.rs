@@ -28,6 +28,9 @@ pub(crate) mod vertex;
 #[cfg(any(test, feature = "test-support"))]
 mod test_mock;
 
+#[cfg(test)]
+mod threshold_registry;
+
 pub use batch_ops::AutoCommitBatchOps;
 pub use batch_ops::AutoCommitGroupOps;
 pub use client::{
@@ -43,7 +46,7 @@ pub use cursor::{
     PredicateRange, PropertyColumn, RequiredProperty, ScanOptions, ScanPredicate, ScanTarget,
     ShardSlice, VecEdgeCursor, VecVertexCursor, VertexColumnBatch, VertexCursor,
 };
-pub use engine::config::{PropertyGraphConfig, ResourceConfig};
+pub use engine::config::{FreezeConfig, PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::{
     AutoCommitBatchWindow, BulkLoadSession, GraphStorage, WriteGateStats,
 };

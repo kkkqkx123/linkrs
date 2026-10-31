@@ -13,7 +13,7 @@
 //! - Used by ChunkedIndex for index chunk caching
 
 mod buffer_pool;
-mod config;
+pub(crate) mod config;
 mod record_cache;
 mod types;
 

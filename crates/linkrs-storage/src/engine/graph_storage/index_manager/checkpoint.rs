@@ -14,12 +14,14 @@ use linkrs_core::{StorageError, StorageResult, Value};
 use super::stable_hash;
 use super::IndexDataMaps;
 
+/// Chunked-index pool capacity for forward/reverse checkpoint writes.
+pub(crate) const POOL_CAPACITY: u64 = 64 * 1024 * 1024;
+
 pub(crate) fn write_generation_checkpoint(
     gen_dir: &Path,
     forward: &BTreeMap<Vec<u8>, IndexRecord>,
     reverse: &BTreeMap<Vec<u8>, IndexRecord>,
 ) -> StorageResult<()> {
-    const POOL_CAPACITY: u64 = 64 * 1024 * 1024;
     let fwd_dir = gen_dir.join("forward_chunks");
     let rev_dir = gen_dir.join("reverse_chunks");
     let fwd = ChunkedIndex::from_btree(vec![], forward, POOL_CAPACITY);

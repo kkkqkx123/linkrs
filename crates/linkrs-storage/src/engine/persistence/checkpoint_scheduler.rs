@@ -18,7 +18,7 @@ use crate::thread_pool::{BackgroundTaskHandle, StorageThreadPool};
 /// Default when no operation timeout is supplied; the scheduler prefers the
 /// storage `operation_timeout` so tuning stays in one place.
 #[allow(dead_code)]
-const CHECKPOINT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const CHECKPOINT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Dedicated checkpoint execution threads. One poll driver plus one
 /// execution lane is the fixed default; larger values are only for tests.

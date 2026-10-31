@@ -13,8 +13,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 impl EdgeStore {
+    /// Build a table from the process-wide creation template seeded by the
+    /// storage engine. Use [`EdgeStore::with_config`] to override it.
     pub fn new(schema: EdgeSchema) -> StorageResult<Self> {
-        Self::with_config(schema, EdgeTableConfig::default())
+        Self::with_config(schema, super::super::config::default_template())
     }
 
     pub fn with_config(schema: EdgeSchema, config: EdgeTableConfig) -> StorageResult<Self> {

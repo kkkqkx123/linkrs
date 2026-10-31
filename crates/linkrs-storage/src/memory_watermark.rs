@@ -16,6 +16,14 @@
 //! acceleration structures. Storage-side eviction must use the instance
 //! [`crate::engine::resource_budget::MemoryPressureLevel`] derived from the
 //! aggregate snapshot, never this process watermark.
+//!
+//! Pressure alignment: the process watermarks sit slightly *below* the
+//! instance soft/hard ratios on purpose — query accelerations degrade
+//! before storage admission starts rejecting work. By default the pair is
+//! derived from the instance ratios through [`configure_from_instance_ratios`]
+//! (`high = soft - 10pp`, `critical = hard - 5pp`, reproducing the 70/90
+//! pair from the 0.80/0.95 instance defaults), so both tracks read from one
+//! source of truth instead of drifting apart.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -23,6 +31,21 @@ use std::sync::OnceLock;
 /// Default process budget (2 GiB): generous headroom for single-node use,
 /// overridable via [`set_process_budget`] at startup.
 pub const DEFAULT_PROCESS_BUDGET_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Default high watermark as a percentage of the process budget.
+pub const DEFAULT_HIGH_PCT: u64 = 70;
+
+/// Default critical watermark as a percentage of the process budget.
+pub const DEFAULT_CRITICAL_PCT: u64 = 90;
+
+/// Gap between the instance soft ratio and the query-side high watermark
+/// (fraction of budget). Query accelerations shed before storage admission
+/// pressure begins.
+pub(crate) const HIGH_MARGIN: f64 = 0.10;
+
+/// Gap between the instance hard ratio and the query-side critical
+/// watermark (fraction of budget).
+pub(crate) const CRITICAL_MARGIN: f64 = 0.05;
 
 /// Aggregated memory pressure level derived from reserved/budget ratio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +69,8 @@ impl Pressure {
 struct Watermark {
     budget_bytes: AtomicU64,
     reserved_bytes: AtomicU64,
+    high_pct: AtomicU64,
+    critical_pct: AtomicU64,
 }
 
 static WATERMARK: OnceLock<Watermark> = OnceLock::new();
@@ -54,6 +79,8 @@ fn watermark() -> &'static Watermark {
     WATERMARK.get_or_init(|| Watermark {
         budget_bytes: AtomicU64::new(DEFAULT_PROCESS_BUDGET_BYTES),
         reserved_bytes: AtomicU64::new(0),
+        high_pct: AtomicU64::new(DEFAULT_HIGH_PCT),
+        critical_pct: AtomicU64::new(DEFAULT_CRITICAL_PCT),
     })
 }
 
@@ -63,6 +90,45 @@ fn watermark() -> &'static Watermark {
 /// never revoked, they just may exceed the new budget until released.
 pub fn set_process_budget(bytes: u64) {
     watermark().budget_bytes.store(bytes, Ordering::Relaxed);
+}
+
+/// Override the pressure watermarks as percentages of the process budget.
+///
+/// Requires `0 < high < critical <= 100`. Later calls take effect for every
+/// subsequent [`pressure`] read; reservations are never revoked.
+pub fn set_pressure_watermarks(high_pct: u64, critical_pct: u64) -> Result<(), &'static str> {
+    if high_pct == 0 || high_pct >= critical_pct || critical_pct > 100 {
+        return Err("pressure watermarks must satisfy 0 < high < critical <= 100");
+    }
+    let w = watermark();
+    w.high_pct.store(high_pct, Ordering::Relaxed);
+    w.critical_pct.store(critical_pct, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Derive the query-side watermarks from the instance memory ratios so both
+/// pressure tracks share one source of truth.
+///
+/// `high = soft - 10pp` and `critical = hard - 5pp` keep query-side
+/// degradation strictly ahead of storage admission; with the instance
+/// defaults (0.80 / 0.95) this reproduces the historical 70 / 90 pair.
+/// Results are clamped into `0 < high < critical <= 100`.
+pub fn configure_from_instance_ratios(soft_ratio: f64, hard_ratio: f64) -> Result<(), &'static str> {
+    if !soft_ratio.is_finite() || !hard_ratio.is_finite() {
+        return Err("instance memory ratios must be finite");
+    }
+    let high = ((soft_ratio - HIGH_MARGIN) * 100.0).round() as i64;
+    let critical = ((hard_ratio - CRITICAL_MARGIN) * 100.0).round() as i64;
+    let high = high.clamp(1, 98) as u64;
+    let critical = critical.clamp((high + 1) as i64, 99) as u64;
+    set_pressure_watermarks(high, critical)
+}
+
+/// Reset the pressure watermarks to their compiled-in defaults.
+pub fn reset_pressure_watermarks() {
+    let w = watermark();
+    w.high_pct.store(DEFAULT_HIGH_PCT, Ordering::Relaxed);
+    w.critical_pct.store(DEFAULT_CRITICAL_PCT, Ordering::Relaxed);
 }
 
 /// Bytes currently reserved through this coordinator.
@@ -107,12 +173,12 @@ pub fn pressure() -> Pressure {
     let w = watermark();
     let budget = w.budget_bytes.load(Ordering::Relaxed).max(1);
     let used = w.reserved_bytes.load(Ordering::Relaxed);
+    let high_pct = w.high_pct.load(Ordering::Relaxed);
+    let critical_pct = w.critical_pct.load(Ordering::Relaxed);
     // Percentages computed without floats to stay exact near boundaries.
-    const HIGH_PCT: u64 = 70;
-    const CRITICAL_PCT: u64 = 90;
-    if used.saturating_mul(100) >= budget.saturating_mul(CRITICAL_PCT) {
+    if used.saturating_mul(100) >= budget.saturating_mul(critical_pct) {
         Pressure::Critical
-    } else if used.saturating_mul(100) >= budget.saturating_mul(HIGH_PCT) {
+    } else if used.saturating_mul(100) >= budget.saturating_mul(high_pct) {
         Pressure::High
     } else {
         Pressure::Low
@@ -166,6 +232,52 @@ mod tests {
         assert!(!pressure().allows_columnar());
         release(990);
         assert!(pressure().allows_columnar());
+        set_process_budget(DEFAULT_PROCESS_BUDGET_BYTES);
+    }
+
+    #[test]
+    fn pressure_watermarks_are_configurable() {
+        set_process_budget(1000);
+        release(reserved());
+        set_pressure_watermarks(40, 60).expect("valid watermark pair");
+
+        try_reserve(300); // 30%
+        assert_eq!(pressure(), Pressure::Low);
+        try_reserve(150); // 45%
+        assert_eq!(pressure(), Pressure::High);
+        try_reserve(150); // 60%
+        assert_eq!(pressure(), Pressure::Critical);
+
+        release(reserved());
+        reset_pressure_watermarks();
+        set_process_budget(DEFAULT_PROCESS_BUDGET_BYTES);
+    }
+
+    #[test]
+    fn pressure_watermarks_reject_invalid_pairs() {
+        assert!(set_pressure_watermarks(0, 90).is_err());
+        assert!(set_pressure_watermarks(90, 90).is_err());
+        assert!(set_pressure_watermarks(95, 90).is_err());
+        assert!(set_pressure_watermarks(70, 101).is_err());
+        assert!(set_pressure_watermarks(70, 90).is_ok());
+        reset_pressure_watermarks();
+    }
+
+    #[test]
+    fn instance_ratios_reproduce_default_watermarks() {
+        configure_from_instance_ratios(0.80, 0.95).expect("instance defaults derive");
+        set_process_budget(1000);
+        release(reserved());
+
+        try_reserve(690); // 69% < 70%
+        assert_eq!(pressure(), Pressure::Low);
+        try_reserve(100); // 79%
+        assert_eq!(pressure(), Pressure::High);
+        try_reserve(150); // 94%
+        assert_eq!(pressure(), Pressure::Critical);
+
+        release(reserved());
+        reset_pressure_watermarks();
         set_process_budget(DEFAULT_PROCESS_BUDGET_BYTES);
     }
 }

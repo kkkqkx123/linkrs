@@ -144,7 +144,7 @@ pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
 }
 
 /// Maximum accepted WAL entry payload: bounds memory during scans.
-const MAX_ENTRY_LEN: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_ENTRY_LEN: usize = 64 * 1024 * 1024;
 
 /// Scan one WAL image, returning the valid prefix boundary, the operation
 /// count inside it, and the first tail failure if any.

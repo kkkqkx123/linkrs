@@ -805,11 +805,21 @@ fn property_graph_config_from_config(
     storage: &crate::config::StorageConfig,
 ) -> PropertyGraphConfig {
     let mut config = PropertyGraphConfig::default();
-    let cache_memory = match usize::try_from(storage.max_memory_bytes) {
-        Ok(value) => value.min(config.cache_memory),
-        Err(_) => config.cache_memory,
+    config.cache_memory = usize::try_from(storage.cache_memory_bytes)
+        .unwrap_or(config.cache_memory);
+    config.freeze = linkrs_storage::FreezeConfig {
+        delta_edge_threshold: storage.freeze_delta_edge_threshold,
+        delta_memory_threshold_bytes: storage.freeze_delta_memory_threshold_bytes,
+        deletion_threshold: storage.freeze_deletion_threshold,
     };
-    config.cache_memory = cache_memory;
+    config.auto_compact = linkrs_core::types::AutoCompactConfig {
+        min_holes: storage.auto_compact_min_holes,
+        min_hole_ratio: storage.auto_compact_min_hole_ratio as f32,
+        min_interval_secs: storage.auto_compact_min_interval_secs,
+        ..config.auto_compact
+    };
+    config.edge_max_mutable_csr_bytes = usize::try_from(storage.edge_max_mutable_csr_bytes)
+        .unwrap_or(config.edge_max_mutable_csr_bytes);
     config.resources = ResourceConfig {
         max_memory_bytes: storage.max_memory_bytes,
         index_memory_bytes: storage.index_memory_bytes,

@@ -10,7 +10,7 @@ use super::GraphStorage;
 /// Rows deleted between flushes inside a purge. Bounds the working set of the
 /// delete loop instead of collecting every expired id up front, so a large
 /// table cannot spike memory. Per-schema deletions stay sequential.
-const PURGE_DELETE_BATCH: usize = 1024;
+pub(crate) const PURGE_DELETE_BATCH: usize = 1024;
 
 /// TTL check over a raw property slice — the shared primitive for read
 /// paths that hold `VertexRecord`/`EdgeRecord` slices instead of a
