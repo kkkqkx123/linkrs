@@ -2,8 +2,6 @@
 //!
 //! Provides common assertion functions in tests
 
-#![allow(dead_code)]
-
 /// Assertion results in success, return internal value
 pub fn assert_ok<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
     result.expect("Operation should succeed")

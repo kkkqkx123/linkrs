@@ -2,8 +2,6 @@
 //!
 //! Provide auxiliary functions for storage layer testing
 
-#![allow(dead_code)]
-
 use crate::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
 use crate::core::DataType;
 use crate::storage::GraphStorage;

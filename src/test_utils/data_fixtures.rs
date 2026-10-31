@@ -2,19 +2,17 @@
 //!
 //! Provide various test data generation functions
 
-#![allow(dead_code)]
-
 use crate::core::types::VertexId;
 use crate::core::vertex_edge_path::{Edge, Tag, Vertex};
 use crate::core::Value;
 use std::collections::HashMap;
 
 /// Create simple vertices (with only one label)
-pub fn create_simple_vertex(vid: i64, _tag_name: &str, name: &str, age: i64) -> Vertex {
+pub fn create_simple_vertex(vid: i64, tag_name: &str, name: &str, age: i64) -> Vertex {
     let mut props = HashMap::new();
     props.insert("name".into(), Value::string(name));
     props.insert("age".into(), Value::Int(age as i32));
-    let tag = Tag::new("Person".into(), props);
+    let tag = Tag::new(tag_name.to_string(), props);
     create_vertex(VertexId::try_from_int64(vid).expect("test vertex id"), tag)
 }
 

@@ -2196,6 +2196,7 @@ dependencies = [
  "flexi_logger",
  "futures",
  "libc",
+ "linkrs",
  "linkrs-api",
  "linkrs-config",
  "linkrs-core",

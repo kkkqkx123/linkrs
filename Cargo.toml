@@ -230,6 +230,11 @@ vector-qdrant = ["vector", "dep:vector-client", "linkrs-api/vector-qdrant", "lin
 grpc = ["linkrs-server/grpc"]
 embedded = ["linkrs-api/embedded", "linkrs-api/c_api", "linkrs-config/embedded"]
 c_api = ["linkrs-api/embedded", "linkrs-api/c_api", "linkrs-config/embedded"]
+# Compile the `test_utils` helpers into the lib for integration tests.
+# Unit tests inside the crate see the module via `cfg(test)`; this feature
+# exists so `tests/` targets can enable it through the self dev-dependency
+# below, while release consumers never get the test helpers.
+test-utils = []
 
 [profile.dev]
 opt-level = 0
@@ -279,4 +284,7 @@ toml = "1.1"
 reqwest = { version = "0.13", features = ["json"] }
 postcard.workspace = true
 linkrs-wire = { version = "0.1.0", path = "crates/linkrs-wire" }
+# Self dev-dependency: enables the `test-utils` feature when building
+# integration tests, without exposing test helpers in release builds.
+linkrs = { path = ".", features = ["test-utils"] }
 linkrs-storage = { version = "0.1.0", path = "crates/linkrs-storage", features = ["test-support"] }

@@ -3,11 +3,12 @@ set -e
 
 systemctl daemon-reload >/dev/null 2>&1 || true
 
-# Enable only according to the distribution preset; never start in chroot/build.
-if [ -z "${DPKG_MAINTSCRIPT_PACKAGE:-}" ] || [ -z "${DPKG_RUNNING_VERSION:-}" ]; then
-    :
+# Skip systemctl in chroot/build environments (no running PID 1 systemd).
+if [ ! -d /run/systemd/system ]; then
+    exit 0
 fi
 
+# Enable only according to the distribution preset.
 if command -v systemctl >/dev/null 2>&1; then
     systemctl preset linkrs.service >/dev/null 2>&1 || true
 fi

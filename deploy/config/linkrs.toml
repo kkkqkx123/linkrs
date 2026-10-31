@@ -1,0 +1,29 @@
+# Linkrs server configuration template for system deployments (DEB/RPM or
+# install-service.sh). Installed to /etc/linkrs/config.toml.
+#
+# Only deployment-relevant keys are listed; every other knob keeps its
+# built-in default (see the repository-root config.toml for the full
+# annotated reference). Unknown sections/keys fail startup.
+#
+# Relative paths resolve against this file's directory; `~` expands to the
+# user home directory.
+
+[database]
+# Data directory owned by the linkrs service account
+storage_path = "/var/lib/linkrs/data"
+
+[log]
+# Directory scanned by /etc/logrotate.d/linkrs
+dir = "/var/log/linkrs"
+basename = "linkrs"
+# Keep stdout off under systemd; logs go to files + journald
+stdout = false
+
+[http]
+# Management API binds to loopback by default; widen explicitly if needed
+bind_address = "127.0.0.1"
+port = 9758
+
+[grpc]
+bind_address = "127.0.0.1"
+port = 9669

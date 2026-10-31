@@ -1,19 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PREFIX="${PREFIX:-/usr/local}"
+PREFIX="${PREFIX:-/usr}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/linkrs}"
 DATA_DIR="${DATA_DIR:-/var/lib/linkrs}"
 LOG_DIR="${LOG_DIR:-/var/log/linkrs}"
 SERVICE_NAME="linkrs"
-UNIT_SRC="$(cd "$(dirname "$0")/.." && pwd)/systemd/${SERVICE_NAME}.service"
+DEPLOY_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+UNIT_SRC="${DEPLOY_ROOT}/systemd/${SERVICE_NAME}.service"
+# Default config shipped with the deployment resources
+CONFIG_TEMPLATE="${CONFIG_TEMPLATE:-${DEPLOY_ROOT}/config/linkrs.toml}"
 
 SERVICE_USER="${SERVICE_USER:-linkrs}"
 SERVICE_GROUP="${SERVICE_GROUP:-linkrs}"
 
-ENABLE_SERVICE="${ENABLE_SERVICE:-no}"   # yes|no
-START_SERVICE="${START_SERVICE:-no}"     # yes|no
-FORCE="${FORCE:-no}"                    # yes|no
+ENABLE_SERVICE="${ENABLE_SERVICE:-no}"   # yes|no: force enable/disable
+START_SERVICE="${START_SERVICE:-no}"     # yes|no: start after install
+
+normalize() {
+    # Strip trailing slashes so "${PREFIX}/bin" stays well-formed
+    while [[ $# -gt 0 ]]; do
+        printf '%s\n' "${1%/}"
+        shift
+    done
+}
+PREFIX="$(normalize "$PREFIX")"
+CONFIG_DIR="$(normalize "$CONFIG_DIR")"
+DATA_DIR="$(normalize "$DATA_DIR")"
+LOG_DIR="$(normalize "$LOG_DIR")"
+BIN_PATH="${PREFIX}/bin/linkrs-server"
 
 if [[ "$(id -u)" -ne 0 ]]; then
     echo "ERROR: must run as root" >&2
@@ -22,6 +37,11 @@ fi
 
 if [[ ! -f "$UNIT_SRC" ]]; then
     echo "ERROR: unit file not found: $UNIT_SRC" >&2
+    exit 1
+fi
+
+if [[ "$START_SERVICE" == "yes" && ! -x "$BIN_PATH" ]]; then
+    echo "ERROR: START_SERVICE=yes but binary not found: $BIN_PATH" >&2
     exit 1
 fi
 
@@ -37,34 +57,37 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 
 # Create directories
-install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$CONFIG_DIR"
-install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$DATA_DIR"
-install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$LOG_DIR"
+install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
 
-# Install binary if present in ./bin or current directory
+# Install binary if present in ./bin or the current directory
 BIN_SRC=""
-for candidate in "./bin/linkrs-server" "./linkrs-server" "${PREFIX}/bin/linkrs-server"; do
+for candidate in "./bin/linkrs-server" "./linkrs-server" "$BIN_PATH"; do
     if [[ -x "$candidate" ]]; then
         BIN_SRC="$candidate"
         break
     fi
 done
-if [[ -n "$BIN_SRC" && "$BIN_SRC" != "${PREFIX}/bin/linkrs-server" ]]; then
-    install -m 0755 "$BIN_SRC" "${PREFIX}/bin/linkrs-server"
+if [[ -n "$BIN_SRC" && "$BIN_SRC" != "$BIN_PATH" ]]; then
+    install -d -m 0755 "${PREFIX}/bin"
+    install -m 0755 "$BIN_SRC" "$BIN_PATH"
     echo "Installed binary from $BIN_SRC"
 else
-    if [[ ! -x "${PREFIX}/bin/linkrs-server" ]]; then
-        echo "WARNING: ${PREFIX}/bin/linkrs-server not found; install binary manually" >&2
+    if [[ ! -x "$BIN_PATH" ]]; then
+        echo "WARNING: ${BIN_PATH} not found; install the binary manually" >&2
     fi
 fi
 
-# Install default config if missing
+# Install default config if missing (template -> config dir)
 if [[ ! -f "${CONFIG_DIR}/config.toml" ]]; then
-    if [[ -f "./config.toml" ]]; then
+    if [[ -f "$CONFIG_TEMPLATE" ]]; then
+        install -m 0640 "$CONFIG_TEMPLATE" "${CONFIG_DIR}/config.toml"
+        chown "$SERVICE_USER:$SERVICE_GROUP" "${CONFIG_DIR}/config.toml"
+        echo "Installed config template from $CONFIG_TEMPLATE"
+    elif [[ -f "./config.toml" ]]; then
         install -m 0640 "./config.toml" "${CONFIG_DIR}/config.toml"
         chown "$SERVICE_USER:$SERVICE_GROUP" "${CONFIG_DIR}/config.toml"
     else
-        echo "WARNING: no config.toml found; create ${CONFIG_DIR}/config.toml manually" >&2
+        echo "WARNING: no config template found; create ${CONFIG_DIR}/config.toml manually" >&2
     fi
 fi
 
@@ -78,16 +101,8 @@ echo "Installed /etc/systemd/system/${SERVICE_NAME}.service"
 if [[ "$ENABLE_SERVICE" == "yes" ]]; then
     systemctl enable "$SERVICE_NAME"
     echo "Enabled $SERVICE_NAME (autostart on boot)"
-else
-    # Ensure explicit disabled state if previously enabled
-    if systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1; then
-        if [[ "$FORCE" == "yes" ]]; then
-            systemctl disable "$SERVICE_NAME"
-            echo "Disabled $SERVICE_NAME"
-        else
-            echo "Service already enabled; pass ENABLE_SERVICE=no FORCE=yes to disable"
-        fi
-    fi
+elif [[ "$ENABLE_SERVICE" == "no" ]]; then
+    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
 fi
 
 if [[ "$START_SERVICE" == "yes" ]]; then

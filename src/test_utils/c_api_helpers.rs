@@ -2,8 +2,6 @@
 //!
 //! Provide public functions and structures for testing the C API.
 
-#![allow(dead_code)]
-
 use std::ffi::CString;
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -5,13 +5,16 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
+# Type=exec: verifies exec() succeeded. The server does not implement
+# sd_notify yet; switch back to Type=notify once READY=1 is reported.
+Type=exec
 User=linkrs
 Group=linkrs
 WorkingDirectory=/var/lib/linkrs
 Environment=LINKRS_CONFIG=/etc/linkrs/config.toml
-ExecStart=/usr/local/bin/linkrs-server serve --config /etc/linkrs/config.toml
-ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/bin/linkrs-server serve --config /etc/linkrs/config.toml
+# No ExecReload: the server does not handle SIGHUP, so reload would kill
+# the process. Use `systemctl restart linkrs` until HUP reload is implemented.
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

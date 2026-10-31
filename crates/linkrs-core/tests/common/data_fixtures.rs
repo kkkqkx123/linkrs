@@ -5,11 +5,11 @@ use linkrs_core::value::Value;
 use linkrs_core::vertex_edge_path::{Edge, Tag, Vertex};
 use std::collections::HashMap;
 
-pub fn create_simple_vertex(vid: i64, _tag_name: &str, name: &str, age: i64) -> Vertex {
+pub fn create_simple_vertex(vid: i64, tag_name: &str, name: &str, age: i64) -> Vertex {
     let mut props = HashMap::new();
     props.insert("name".into(), Value::string(name));
     props.insert("age".into(), Value::Int(age as i32));
-    let tag = Tag::new("Person".to_string(), props);
+    let tag = Tag::new(tag_name.to_string(), props);
     create_vertex(VertexId::try_from_int64(vid).expect("test vertex id"), tag)
 }
 

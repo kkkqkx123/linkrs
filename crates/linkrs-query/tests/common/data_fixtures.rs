@@ -11,11 +11,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Create simple vertices (with only one label)
-pub fn create_simple_vertex(vid: i64, _tag_name: &str, name: &str, age: i64) -> Vertex {
+pub fn create_simple_vertex(vid: i64, tag_name: &str, name: &str, age: i64) -> Vertex {
     let mut props: HashMap<Arc<str>, Value> = HashMap::new();
     props.insert(Arc::from("name"), Value::string(name));
     props.insert(Arc::from("age"), Value::Int(age as i32));
-    let tag = Tag::new("Person".to_string(), props);
+    let tag = Tag::new(tag_name.to_string(), props);
     create_vertex(VertexId::try_from_int64(vid).expect("test vertex id"), tag)
 }
 

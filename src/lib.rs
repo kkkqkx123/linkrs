@@ -11,4 +11,9 @@ pub use linkrs_transaction as transaction;
 #[cfg(feature = "c_api")]
 pub mod c_api;
 
+/// Test-only helpers shared by unit and integration tests. Compiled for
+/// in-crate unit tests and for integration tests via the `test-utils`
+/// feature (enabled by the self dev-dependency); never part of the
+/// released library API.
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

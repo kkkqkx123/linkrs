@@ -2,7 +2,6 @@
 //!
 //! Provide test infrastructure and helper functions for fulltext integration tests
 
-#![allow(dead_code)]
 #![cfg(feature = "fulltext")]
 
 use crate::core::Value;

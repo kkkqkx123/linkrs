@@ -1,5 +1,7 @@
 Package: linkrs
-Version: 1.0.0
+# Version is kept in sync with the workspace version by
+# deploy/packaging/gen_metadata.sh; do not edit by hand.
+Version: 0.1.0
 Section: database
 Priority: optional
 Architecture: amd64
