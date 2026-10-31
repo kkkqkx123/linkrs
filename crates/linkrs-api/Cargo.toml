@@ -47,7 +47,7 @@ fulltext = [
     "linkrs-sync/fulltext",
     "linkrs-query/fulltext",
 ]
-c_api = []
+c_api = ["embedded"]
 embedded = []
 
 [dev-dependencies]

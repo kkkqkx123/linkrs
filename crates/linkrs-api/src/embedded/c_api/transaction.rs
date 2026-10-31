@@ -3,13 +3,14 @@
 //! Provides transaction management functionality, including transaction start, commit, rollback, and savepoints
 
 use crate::api_core::types::TransactionHandle;
+use crate::embedded::c_api::database::LinkrsHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
 };
 use crate::embedded::c_api::result::LinkrsResultHandle;
 use crate::embedded::c_api::session::LinkrsSessionHandle;
-use crate::embedded::c_api::types::{linkrs_result_t, linkrs_session_t, linkrs_txn_t};
-use std::ffi::{c_char, c_int, CStr};
+use crate::embedded::c_api::types::{linkrs_result_t, linkrs_session_t, linkrs_t, linkrs_txn_t};
+use std::ffi::{c_char, c_int, CStr, CString};
 use std::ptr;
 
 /// Internal structure of transaction handles
@@ -550,6 +551,107 @@ pub unsafe extern "C" fn linkrs_txn_free(txn: *mut linkrs_txn_t) {
     }
 }
 
+/// List currently active transactions (`Database::list_transactions` over FFI).
+///
+/// Returns a heap JSON array; each entry carries the same fields as the
+/// HTTP `GET /v1/transactions` response (`transaction_id`, `state`,
+/// `owner`, `read_timestamp`, `write_timestamp`, `elapsed_ms`,
+/// `last_activity_ms`, `rollback_only`, `staged_bytes`, `undo_bytes`,
+/// `blocking_reason`).
+///
+/// # Arguments
+/// - `db`: Database handle
+///
+/// # Returns
+/// - JSON array string (UTF-8 encoded), returns NULL on error
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_transaction_list(db: *mut linkrs_t) -> *mut c_char {
+    if db.is_null() {
+        return ptr::null_mut();
+    }
+
+    let handle = &*(db as *mut LinkrsHandle);
+    let transactions: Vec<serde_json::Value> = handle
+        .inner
+        .list_transactions()
+        .into_iter()
+        .map(|info| {
+            serde_json::json!({
+                "transaction_id": info.id.as_u64(),
+                "state": info.state.to_string(),
+                "owner": info.owner,
+                "read_timestamp": info.read_timestamp,
+                "write_timestamp": info.write_timestamp,
+                "elapsed_ms": info.elapsed.as_millis(),
+                "last_activity_ms": info.last_activity.as_millis(),
+                "rollback_only": info.rollback_only,
+                "staged_bytes": info.staged_bytes,
+                "undo_bytes": info.undo_bytes,
+                "blocking_reason": info.blocking_reason,
+            })
+        })
+        .collect();
+
+    match serde_json::to_string(&transactions) {
+        Ok(json) => match CString::new(json) {
+            Ok(c_json) => c_json.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
+        Err(e) => {
+            set_last_error_message(format!("failed to serialize transaction list: {e}"));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Snapshot transaction counters and resource gauges
+/// (`Database::transaction_metrics` over FFI).
+///
+/// Returns a heap JSON object with the `TransactionMetrics` fields:
+/// `begun`, `active`, `committed`, `aborted`, `active_statements`,
+/// `active_snapshots`, `pending_writes`, `staged_wal_bytes`, `undo_bytes`.
+///
+/// # Arguments
+/// - `db`: Database handle
+///
+/// # Returns
+/// - JSON object string (UTF-8 encoded), returns NULL on error
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `db` must be a valid database handle created by `linkrs_open` or `linkrs_open_with_config`
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_transaction_metrics(db: *mut linkrs_t) -> *mut c_char {
+    if db.is_null() {
+        return ptr::null_mut();
+    }
+
+    let handle = &*(db as *mut LinkrsHandle);
+    let metrics = handle.inner.transaction_metrics();
+    match serde_json::to_string(&metrics) {
+        Ok(json) => match CString::new(json) {
+            Ok(c_json) => c_json.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
+        Err(e) => {
+            set_last_error_message(format!("failed to serialize transaction metrics: {e}"));
+            ptr::null_mut()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +678,89 @@ mod tests {
     fn test_txn_rollback_null() {
         let result = unsafe { linkrs_txn_rollback(ptr::null_mut()) };
         assert_eq!(result, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+    }
+
+    fn open_memory_db() -> *mut linkrs_t {
+        use crate::embedded::c_api::config::linkrs_config_memory;
+        use crate::embedded::c_api::database::linkrs_open_with_config;
+
+        unsafe {
+            let config = linkrs_config_memory();
+            let mut db: *mut linkrs_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_open_with_config(config, &mut db),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert!(!db.is_null());
+            db
+        }
+    }
+
+    #[test]
+    fn test_transaction_list_empty_and_metrics() {
+        use crate::embedded::c_api::database::{linkrs_close, linkrs_free_string};
+
+        unsafe {
+            let db = open_memory_db();
+
+            let list = linkrs_transaction_list(db);
+            assert!(!list.is_null());
+            let json = CStr::from_ptr(list).to_str().expect("utf8").to_string();
+            linkrs_free_string(list);
+            let parsed: serde_json::Value = serde_json::from_str(&json).expect("list json");
+            assert_eq!(parsed, serde_json::json!([]));
+
+            let metrics = linkrs_transaction_metrics(db);
+            assert!(!metrics.is_null());
+            let json = CStr::from_ptr(metrics).to_str().expect("utf8").to_string();
+            linkrs_free_string(metrics);
+            let parsed: serde_json::Value = serde_json::from_str(&json).expect("metrics json");
+            assert!(parsed.get("begun").is_some());
+            assert!(parsed.get("active").is_some());
+            assert!(parsed.get("committed").is_some());
+            assert!(parsed.get("active_statements").is_some());
+
+            assert!(linkrs_transaction_list(ptr::null_mut()).is_null());
+            assert!(linkrs_transaction_metrics(ptr::null_mut()).is_null());
+
+            assert_eq!(linkrs_close(db), 0);
+        }
+    }
+
+    #[test]
+    fn test_transaction_list_active_transaction() {
+        use crate::embedded::c_api::database::{linkrs_close, linkrs_free_string};
+        use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
+
+        unsafe {
+            let db = open_memory_db();
+
+            let mut session: *mut linkrs_session_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_session_create(db, &mut session),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut txn: *mut linkrs_txn_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_txn_begin(session, &mut txn),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let list = linkrs_transaction_list(db);
+            assert!(!list.is_null());
+            let json = CStr::from_ptr(list).to_str().expect("utf8").to_string();
+            linkrs_free_string(list);
+            let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).expect("list json");
+            assert_eq!(parsed.len(), 1);
+            assert!(parsed[0].get("transaction_id").is_some());
+
+            assert_eq!(
+                linkrs_txn_rollback(txn),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            linkrs_txn_free(txn);
+            linkrs_session_close(session);
+            assert_eq!(linkrs_close(db), 0);
+        }
     }
 }
