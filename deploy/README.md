@@ -17,6 +17,12 @@ deploy/
 │   ├── prerm                   # DEB 卸载前钩子
 │   └── postrm                  # DEB 卸载后钩子
 ├── logrotate/linkrs            # 日志轮转配置
+├── windows/                    # Windows 部署（NSSM 服务包装）
+│   ├── config/linkrs.toml      # Windows 默认配置模板
+│   └── scripts/
+│       ├── install-service.ps1
+│       ├── uninstall-service.ps1
+│       └── service-status.ps1
 └── scripts/
     ├── install-service.sh      # 一键安装服务（含用户/目录/配置/单元）
     ├── uninstall-service.sh    # 卸载服务
@@ -132,6 +138,50 @@ sudo systemctl restart linkrs     # 配置变更后重启（SIGHUP 热重载暂�
 sudo ./deploy/scripts/uninstall-service.sh
 ```
 
-## Windows
+## Windows（NSSM 方案）
 
-暂不提供 Windows 服务注册。Windows 下以前台方式运行；如需服务化，可用 NSSM 等服务包装器临时替代。完整分析与两阶段方案（PowerShell 脚本 + 服务端内建 SCM dispatcher）见 `docs/plan/deployment_design_review.md`。
+Windows 下通过 [NSSM](https://nssm.cc/)（Non-Sucking Service Manager）把控制台程序包装为 Windows 服务：NSSM 负责与 SCM（服务控制管理器）交互并转发 start/stop 控制到进程，`linkrs-server` 无需内建 SCM 代码即可服务化。需要管理员权限的 PowerShell。
+
+### 前置条件
+
+- `nssm.exe`：放在脚本目录、`scripts\bin\`、`C:\Program Files\linkrs\`、PATH 之一，或用 `-NssmPath` 指定。
+- `linkrs-server.exe`（release 构建）：查找顺序同上，或用 `-ServerPath` 指定。
+
+### 目录约定（可用参数覆盖）
+
+| 内容 | 默认路径 |
+|---|---|
+| 配置 | `C:\ProgramData\linkrs\config.toml`（由 `windows\config\linkrs.toml` 模板安装） |
+| 数据 | `C:\ProgramData\linkrs\data` |
+| 日志 | `C:\ProgramData\linkrs\logs` |
+| 程序 | `C:\Program Files\linkrs` |
+
+### 安装（deploy/windows/scripts/install-service.ps1）
+
+```powershell
+# 仅安装（手动启动）
+.\install-service.ps1
+
+# 安装 + 开机自启 + 立即启动
+.\install-service.ps1 -EnableService -StartService
+```
+
+服务配置（由 NSSM 设置）：`AppDirectory` 为数据目录；stdout/stderr 重定向到 `logs\service-out.log` / `service-err.log`，并启用 NSSM 内建轮转（单文件 10MB，保留 5 份）；异常退出自动重启，间隔 5 秒；启动类型默认 Manual，`-EnableService` 时为 Automatic。重复执行会先卸载旧服务再重装；已存在 `config.toml` 时不覆盖。
+
+### 卸载（uninstall-service.ps1）
+
+```powershell
+.\uninstall-service.ps1                # 仅移除服务，保留配置/数据/日志
+.\uninstall-service.ps1 -PurgeData     # 另删 data 与 logs
+.\uninstall-service.ps1 -PurgeConfig   # 另删整个 ProgramData\linkrs
+```
+
+二进制不会被删除，需手动移除。
+
+### 状态诊断（service-status.ps1）
+
+输出服务状态、NSSM 参数 dump 与最近的日志文件列表。
+
+### 局限与后续
+
+NSSM 是外部包装器，SCM 交互在 NSSM 进程内完成；服务端内建 Windows Service dispatcher（`windows-service` crate，SCM stop 接入现有优雅停机路径、`--service` 参数安装/卸载）的完整方案见 `docs/plan/deployment_design_review.md` 第四节，待产品确认支持 Windows 服务后实施。

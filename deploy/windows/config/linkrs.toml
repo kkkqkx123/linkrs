@@ -1,0 +1,26 @@
+# Linkrs server configuration template for Windows deployments (NSSM service
+# or foreground runs). Installed to C:\ProgramData\linkrs\config.toml.
+#
+# Only deployment-relevant keys are listed; every other knob keeps its
+# built-in default (see the repository-root config.toml for the full
+# annotated reference). Unknown sections/keys fail startup.
+
+[database]
+# Data directory under ProgramData, owned by the service
+storage_path = "C:/ProgramData/linkrs/data"
+
+[log]
+# Directory scanned by the log rotation setup
+dir = "C:/ProgramData/linkrs/logs"
+basename = "linkrs"
+# Keep stdout off when running as a service; logs go to files
+stdout = false
+
+[http]
+# Management API binds to loopback by default; widen explicitly if needed
+bind_address = "127.0.0.1"
+port = 9758
+
+[grpc]
+bind_address = "127.0.0.1"
+port = 9669
