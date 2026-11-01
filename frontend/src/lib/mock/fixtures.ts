@@ -26,7 +26,7 @@ export const demoTags = [
 	{
 		id: 1,
 		name: 'person',
-		properties: [
+		fields: [
 			{
 				name: 'name',
 				data_type: 'STRING',
@@ -41,7 +41,7 @@ export const demoTags = [
 	{
 		id: 2,
 		name: 'company',
-		properties: [
+		fields: [
 			{
 				name: 'title',
 				data_type: 'STRING',
@@ -58,7 +58,7 @@ export const demoEdgeTypes = [
 	{
 		id: 1,
 		name: 'knows',
-		properties: [
+		fields: [
 			{
 				name: 'since',
 				data_type: 'DATETIME',
@@ -72,7 +72,7 @@ export const demoEdgeTypes = [
 	{
 		id: 2,
 		name: 'works_at',
-		properties: [],
+		fields: [],
 		comment: '',
 		created_at: 1735689710,
 	},

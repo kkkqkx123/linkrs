@@ -36,24 +36,30 @@ function toSpace(row: Record<string, unknown>): Space {
 }
 
 function toTag(row: Record<string, unknown>): Tag {
+	const fields = Array.isArray(row.fields)
+		? row.fields
+		: Array.isArray(row.properties)
+			? row.properties
+			: [];
 	return {
 		id: typeof row.id === 'number' ? row.id : 0,
 		name: typeof row.name === 'string' ? row.name : '',
-		properties: Array.isArray(row.properties)
-			? (row.properties as Tag['properties'])
-			: [],
+		properties: fields as Tag['properties'],
 		comment: typeof row.comment === 'string' ? row.comment : undefined,
 		created_at: typeof row.created_at === 'number' ? row.created_at : 0,
 	};
 }
 
 function toEdgeType(row: Record<string, unknown>): EdgeType {
+	const fields = Array.isArray(row.fields)
+		? row.fields
+		: Array.isArray(row.properties)
+			? row.properties
+			: [];
 	return {
 		id: typeof row.id === 'number' ? row.id : 0,
 		name: typeof row.name === 'string' ? row.name : '',
-		properties: Array.isArray(row.properties)
-			? (row.properties as EdgeType['properties'])
-			: [],
+		properties: fields as EdgeType['properties'],
 		comment: typeof row.comment === 'string' ? row.comment : undefined,
 		created_at: typeof row.created_at === 'number' ? row.created_at : 0,
 	};
@@ -76,16 +82,18 @@ function toIndexInfo(row: Record<string, unknown>): IndexInfoSchema {
 export const schemaService = {
 	spaces: {
 		list: async (): Promise<Space[]> => {
-			const payload = await call<unknown>(client.GET('/v1/schema/spaces'));
+			const payload = await call<Schemas['SpaceListResponse']>(
+				client.GET('/v1/schema/spaces'),
+			);
 			return pickList(payload, ['spaces']).map(toSpace);
 		},
 		create: async (
 			params: CreateSpaceRequest,
-		): Promise<{ message: string; space_name: string }> => {
-			const payload = await call<unknown>(
+		): Promise<Schemas['SpaceCreateResponse']> => {
+			const payload = await call<Schemas['SpaceCreateResponse']>(
 				client.POST('/v1/schema/spaces', { body: params }),
 			);
-			const record = isRecord(payload) ? payload : {};
+			const record = payload as unknown as Record<string, unknown>;
 			return {
 				message: typeof record.message === 'string' ? record.message : '',
 				space_name:
@@ -111,13 +119,13 @@ export const schemaService = {
 		},
 		delete: async (
 			name: string,
-		): Promise<{ message: string; space_name: string }> => {
-			const payload = await call<unknown>(
+		): Promise<Schemas['SpaceDeleteResponse']> => {
+			const payload = await call<Schemas['SpaceDeleteResponse']>(
 				client.DELETE('/v1/schema/spaces/{name}', {
 					params: { path: { name } },
 				}),
 			);
-			const record = isRecord(payload) ? payload : {};
+			const record = payload as unknown as Record<string, unknown>;
 			return {
 				message: typeof record.message === 'string' ? record.message : '',
 				space_name:
@@ -127,7 +135,7 @@ export const schemaService = {
 	},
 	tags: {
 		list: async (spaceName: string): Promise<Tag[]> => {
-			const payload = await call<unknown>(
+			const payload = await call<Schemas['TagListResponse']>(
 				client.GET('/v1/schema/spaces/{name}/tags', {
 					params: { path: { name: spaceName } },
 				}),
@@ -137,12 +145,12 @@ export const schemaService = {
 		create: async (
 			spaceName: string,
 			params: CreateTagParams,
-		): Promise<unknown> => {
+		): Promise<Schemas['TagCreateResponse']> => {
 			const body: CreateTagRequest = {
 				name: params.name,
 				properties: params.properties,
 			};
-			return call(
+			return call<Schemas['TagCreateResponse']>(
 				client.POST('/v1/schema/spaces/{name}/tags', {
 					params: { path: { name: spaceName } },
 					body,
@@ -170,7 +178,7 @@ export const schemaService = {
 	},
 	edgeTypes: {
 		list: async (spaceName: string): Promise<EdgeType[]> => {
-			const payload = await call<unknown>(
+			const payload = await call<Schemas['EdgeListResponse']>(
 				client.GET('/v1/schema/spaces/{name}/edge-types', {
 					params: { path: { name: spaceName } },
 				}),
@@ -180,12 +188,12 @@ export const schemaService = {
 		create: async (
 			spaceName: string,
 			params: CreateEdgeTypeParams,
-		): Promise<unknown> => {
+		): Promise<Schemas['EdgeCreateResponse']> => {
 			const body: CreateEdgeTypeRequest = {
 				name: params.name,
 				properties: params.properties,
 			};
-			return call(
+			return call<Schemas['EdgeCreateResponse']>(
 				client.POST('/v1/schema/spaces/{name}/edge-types', {
 					params: { path: { name: spaceName } },
 					body,

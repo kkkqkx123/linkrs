@@ -13,14 +13,20 @@ use super::common::parse_data_type;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+use crate::value::from_json as json_to_core;
 use crate::web::{
     error::{WebError, WebResult},
     models::{
-        schema::{PropertyDef, TagDetail, TagSummary, UpdateTagRequest},
+        schema::{PropertyDef, TagDetail, UpdateTagRequest},
         ApiResponse,
     },
     WebState,
 };
+use linkrs_wire::schema::{
+    CreateTagRequest, FieldInfo, TagCreateResponse, TagDeleteResponse, TagInfo, TagListResponse,
+    TagUpdateResponse,
+};
+use linkrs_api::api_core::PropertyDef as CorePropertyDef;
 // ==================== Tag Handlers ====================
 
 /// List all tags in a space
@@ -31,7 +37,7 @@ use crate::web::{
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
     responses(
-        (status = 200, description = "Tag list", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Tag list", body = ApiResponse<TagListResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -48,7 +54,7 @@ pub async fn list_tags<
 >(
     State(web_state): State<WebState<S>>,
     Path(space_name): Path<String>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<TagListResponse>>> {
     let result = task::spawn_blocking(move || {
         let storage = web_state.core_state.server.get_storage();
         let storage = storage.read();
@@ -63,22 +69,27 @@ pub async fn list_tags<
             .list_tags(&space_name)
             .map_err(|e| WebError::Storage(e.to_string()))?;
 
-        let tag_list: Vec<TagSummary> = tags
+        let tag_list: Vec<TagInfo> = tags
             .into_iter()
-            .enumerate()
-            .map(|(idx, t)| TagSummary {
-                id: idx as i64 + 1,
+            .map(|t| TagInfo {
                 name: t.tag_name,
-                property_count: t.properties.len() as i64,
-                index_count: 0,
-                created_at: 0,
+                fields: t
+                    .properties
+                    .iter()
+                    .map(|p| FieldInfo {
+                        name: p.name.clone(),
+                        data_type: format!("{:?}", p.data_type),
+                        nullable: p.nullable,
+                        default_value: None,
+                    })
+                    .collect(),
             })
             .collect();
 
-        Ok::<_, WebError>(serde_json::json!({
-            "space": space_name,
-            "tags": tag_list,
-        }))
+        Ok::<_, WebError>(TagListResponse {
+            tags: tag_list,
+            space_name,
+        })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;
@@ -93,9 +104,9 @@ pub async fn list_tags<
     path = "/api/v1/schema/spaces/{name}/tags",
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
-    request_body = serde_json::Value,
+    request_body = CreateTagRequest,
     responses(
-        (status = 200, description = "Tag created", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Tag created", body = ApiResponse<TagCreateResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -113,38 +124,23 @@ pub async fn create_tag<
     Extension(_session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Path(space_name): Path<String>,
-    Json(request): Json<serde_json::Value>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
-    let tag_name = request
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| WebError::BadRequest("Tag name is required".to_string()))?
-        .to_string();
-
-    // Parse properties before spawn_blocking
-    let properties: Vec<linkrs_api::api_core::PropertyDef> = request
-        .get("properties")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|p| {
-                    let name = p.get("name")?.as_str()?;
-                    let data_type_str = p.get("data_type")?.as_str()?;
-                    let data_type = parse_data_type(data_type_str)?;
-                    Some(linkrs_api::api_core::PropertyDef {
-                        name: name.to_string(),
-                        data_type,
-                        nullable: p.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true),
-                        default_value: None,
-                        comment: p
-                            .get("comment")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                    })
-                })
-                .collect()
+    Json(request): Json<CreateTagRequest>,
+) -> WebResult<(StatusCode, Json<ApiResponse<TagCreateResponse>>)> {
+    if request.name.trim().is_empty() {
+        return Err(WebError::BadRequest("Tag name is required".to_string()));
+    }
+    let tag_name = request.name.clone();
+    let properties: Vec<CorePropertyDef> = request
+        .properties
+        .into_iter()
+        .map(|p| CorePropertyDef {
+            name: p.name,
+            data_type: parse_data_type(&p.data_type).unwrap_or(linkrs_core::DataType::String),
+            nullable: p.nullable,
+            default_value: p.default_value.map(|v| json_to_core(&v)),
+            comment: p.comment,
         })
-        .unwrap_or_default();
+        .collect();
 
     let result = task::spawn_blocking(move || {
         let schema_api = web_state.core_state.server.get_schema_api();
@@ -158,11 +154,11 @@ pub async fn create_tag<
             .create_tag(space_id, &tag_name, properties)
             .map_err(|e| WebError::Internal(format!("Failed to create tag: {}", e)))?;
 
-        Ok::<_, WebError>(serde_json::json!({
-            "id": 0,
-            "name": tag_name,
-            "space": space_name,
-        }))
+        Ok::<_, WebError>(TagCreateResponse {
+            message: "Tag created successfully".to_string(),
+            tag_name,
+            space_name,
+        })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;
@@ -248,7 +244,7 @@ pub async fn get_tag<
     ),
     request_body = UpdateTagRequest,
     responses(
-        (status = 200, description = "Tag updated", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Tag updated", body = ApiResponse<TagUpdateResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -267,7 +263,7 @@ pub async fn update_tag<
     State(web_state): State<WebState<S>>,
     Path((space_name, tag_name)): Path<(String, String)>,
     Json(request): Json<UpdateTagRequest>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<TagUpdateResponse>>> {
     let result = task::spawn_blocking(move || {
         let schema_api = web_state.core_state.server.get_schema_api();
 
@@ -282,7 +278,7 @@ pub async fn update_tag<
                 let data_type = parse_data_type(&p.data_type).ok_or_else(|| {
                     WebError::BadRequest(format!("Invalid data type: {}", p.data_type))
                 })?;
-                core_props.push(linkrs_api::api_core::PropertyDef {
+                core_props.push(CorePropertyDef {
                     name: p.name,
                     data_type,
                     nullable: p.nullable,
@@ -301,10 +297,11 @@ pub async fn update_tag<
             .alter_tag(space_id, &tag_name, additions, deletions)
             .map_err(|e| WebError::Internal(format!("Failed to update tag: {}", e)))?;
 
-        Ok::<_, WebError>(serde_json::json!({
-            "updated": true,
-            "name": tag_name,
-        }))
+        Ok::<_, WebError>(TagUpdateResponse {
+            message: "Tag updated successfully".to_string(),
+            tag_name,
+            space_name,
+        })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;
@@ -322,7 +319,7 @@ pub async fn update_tag<
         ("tag_name" = String, Path, description = "Tag name")
     ),
     responses(
-        (status = 200, description = "Tag deleted", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Tag deleted", body = ApiResponse<TagDeleteResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -340,7 +337,7 @@ pub async fn delete_tag<
     Extension(_session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Path((space_name, tag_name)): Path<(String, String)>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
+) -> WebResult<(StatusCode, Json<ApiResponse<TagDeleteResponse>>)> {
     let result = task::spawn_blocking(move || {
         let schema_api = web_state.core_state.server.get_schema_api();
 
@@ -352,10 +349,11 @@ pub async fn delete_tag<
             .drop_tag(space_id, &tag_name)
             .map_err(|e| WebError::Internal(format!("Failed to delete tag: {}", e)))?;
 
-        Ok::<_, WebError>(serde_json::json!({
-            "deleted": true,
-            "name": tag_name,
-        }))
+        Ok::<_, WebError>(TagDeleteResponse {
+            message: "Tag deleted successfully".to_string(),
+            tag_name,
+            space_name,
+        })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;

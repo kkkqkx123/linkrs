@@ -90,7 +90,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_PaginatedResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_EdgePage"
                 }
               }
             }
@@ -181,7 +181,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_PaginatedResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_VertexPage"
                 }
               }
             }
@@ -247,7 +247,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_EdgeDetailData"
                 }
               }
             }
@@ -292,7 +292,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_VertexDetailData"
                 }
               }
             }
@@ -355,7 +355,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_NeighborListData"
                 }
               }
             }
@@ -411,7 +411,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_FavoriteItem"
                 }
               }
             }
@@ -435,7 +435,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_FavoriteClearResponse"
                 }
               }
             }
@@ -470,7 +470,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_FavoriteItem"
                 }
               }
             }
@@ -516,7 +516,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_FavoriteItem"
                 }
               }
             }
@@ -552,7 +552,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_FavoriteDeleteResponse"
                 }
               }
             }
@@ -631,7 +631,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_HistoryItem"
                 }
               }
             }
@@ -655,7 +655,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_HistoryClearResponse"
                 }
               }
             }
@@ -690,7 +690,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_HistoryDeleteResponse"
                 }
               }
             }
@@ -717,7 +717,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_SpaceListResponse"
                 }
               }
             }
@@ -790,7 +790,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_EdgeListResponse"
                 }
               }
             }
@@ -823,7 +823,9 @@
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": {}
+              "schema": {
+                "$ref": "#/components/schemas/CreateEdgeTypeRequest"
+              }
             }
           },
           "required": true
@@ -834,7 +836,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_EdgeCreateResponse"
                 }
               }
             }
@@ -936,7 +938,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_EdgeUpdateResponse"
                 }
               }
             }
@@ -981,7 +983,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_EdgeDeleteResponse"
                 }
               }
             }
@@ -1368,7 +1370,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_TagListResponse"
                 }
               }
             }
@@ -1401,7 +1403,9 @@
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": {}
+              "schema": {
+                "$ref": "#/components/schemas/CreateTagRequest"
+              }
             }
           },
           "required": true
@@ -1412,7 +1416,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_TagCreateResponse"
                 }
               }
             }
@@ -1514,7 +1518,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_TagUpdateResponse"
                 }
               }
             }
@@ -1559,7 +1563,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiResponse_Value"
+                  "$ref": "#/components/schemas/ApiResponse_TagDeleteResponse"
                 }
               }
             }
@@ -6295,6 +6299,222 @@
           }
         }
       },
+      "ApiResponse_EdgeCreateResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Edge type creation receipt.",
+            "required": [
+              "message",
+              "edge_type_name",
+              "space_name"
+            ],
+            "properties": {
+              "edge_type_name": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "space_name": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_EdgeDeleteResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Edge type deletion receipt.",
+            "required": [
+              "message",
+              "edge_type_name",
+              "space_name"
+            ],
+            "properties": {
+              "edge_type_name": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "space_name": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_EdgeDetailData": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Edge detail with schema overlay.",
+            "required": [
+              "edge"
+            ],
+            "properties": {
+              "edge": {
+                "$ref": "#/components/schemas/CellValue"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_EdgeListResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Edge type listing payload.",
+            "required": [
+              "space_name"
+            ],
+            "properties": {
+              "edge_types": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EdgeTypeInfo"
+                }
+              },
+              "space_name": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_EdgePage": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Edge page with schema overlay.",
+            "required": [
+              "items",
+              "total",
+              "limit",
+              "offset"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/CellValue"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                }
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_EdgeTypeDetail": {
         "type": "object",
         "description": "Standard API response wrapper",
@@ -6353,6 +6573,172 @@
           }
         }
       },
+      "ApiResponse_EdgeUpdateResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Edge type update receipt.",
+            "required": [
+              "message",
+              "edge_type_name",
+              "space_name"
+            ],
+            "properties": {
+              "edge_type_name": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "space_name": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_FavoriteClearResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Favorite clear receipt.",
+            "required": [
+              "cleared"
+            ],
+            "properties": {
+              "cleared": {
+                "type": "boolean"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_FavoriteDeleteResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Favorite deletion receipt.",
+            "required": [
+              "deleted"
+            ],
+            "properties": {
+              "deleted": {
+                "type": "boolean"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_FavoriteItem": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Query favorite item",
+            "required": [
+              "id",
+              "session_id",
+              "name",
+              "query",
+              "created_at"
+            ],
+            "properties": {
+              "created_at": {
+                "type": "string"
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_FavoriteListResponse": {
         "type": "object",
         "description": "Standard API response wrapper",
@@ -6372,6 +6758,140 @@
                 "items": {
                   "$ref": "#/components/schemas/FavoriteItem"
                 }
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_HistoryClearResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "History clear receipt.",
+            "required": [
+              "cleared"
+            ],
+            "properties": {
+              "cleared": {
+                "type": "boolean"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_HistoryDeleteResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "History item deletion receipt.",
+            "required": [
+              "deleted"
+            ],
+            "properties": {
+              "deleted": {
+                "type": "boolean"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_HistoryItem": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Query history item",
+            "required": [
+              "id",
+              "session_id",
+              "query",
+              "executed_at",
+              "execution_time_ms",
+              "rows_returned",
+              "success"
+            ],
+            "properties": {
+              "error_message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "executed_at": {
+                "type": "string"
+              },
+              "execution_time_ms": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "id": {
+                "type": "string"
+              },
+              "query": {
+                "type": "string"
+              },
+              "rows_returned": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
               }
             }
           },
@@ -6498,7 +7018,7 @@
           }
         }
       },
-      "ApiResponse_PaginatedResponse_Value": {
+      "ApiResponse_NeighborListData": {
         "type": "object",
         "description": "Standard API response wrapper",
         "required": [
@@ -6507,29 +7027,34 @@
         "properties": {
           "data": {
             "type": "object",
-            "description": "Paginated response",
+            "description": "Neighbor list with schema overlay.",
             "required": [
-              "items",
-              "total",
-              "limit",
-              "offset"
+              "vid",
+              "space",
+              "direction",
+              "neighbors"
             ],
             "properties": {
-              "items": {
+              "direction": {
+                "type": "string"
+              },
+              "edge_type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "neighbors": {
                 "type": "array",
-                "items": {}
+                "items": {
+                  "$ref": "#/components/schemas/CellValue"
+                }
               },
-              "limit": {
-                "type": "integer",
-                "minimum": 0
+              "space": {
+                "type": "string"
               },
-              "offset": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "total": {
-                "type": "integer",
-                "format": "int64"
+              "vid": {
+                "type": "string"
               }
             }
           },
@@ -6617,6 +7142,40 @@
           }
         }
       },
+      "ApiResponse_SpaceListResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Space listing payload.",
+            "properties": {
+              "spaces": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SpaceInfo"
+                }
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_SpaceStatistics": {
         "type": "object",
         "description": "Standard API response wrapper",
@@ -6654,6 +7213,90 @@
               "tag_count": {
                 "type": "integer",
                 "format": "int64"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_TagCreateResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Tag creation receipt.",
+            "required": [
+              "message",
+              "tag_name",
+              "space_name"
+            ],
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "space_name": {
+                "type": "string"
+              },
+              "tag_name": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_TagDeleteResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Tag deletion receipt.",
+            "required": [
+              "message",
+              "tag_name",
+              "space_name"
+            ],
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "space_name": {
+                "type": "string"
+              },
+              "tag_name": {
+                "type": "string"
               }
             }
           },
@@ -6730,6 +7373,88 @@
           }
         }
       },
+      "ApiResponse_TagListResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Tag listing payload.",
+            "required": [
+              "space_name"
+            ],
+            "properties": {
+              "space_name": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TagInfo"
+                }
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_TagUpdateResponse": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Tag update receipt.",
+            "required": [
+              "message",
+              "tag_name",
+              "space_name"
+            ],
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "space_name": {
+                "type": "string"
+              },
+              "tag_name": {
+                "type": "string"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiResponse_Value": {
         "type": "object",
         "description": "Standard API response wrapper",
@@ -6738,6 +7463,98 @@
         ],
         "properties": {
           "data": {},
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_VertexDetailData": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Vertex detail with schema overlay.",
+            "required": [
+              "vertex"
+            ],
+            "properties": {
+              "vertex": {
+                "$ref": "#/components/schemas/CellValue"
+              }
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApiError"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiResponse_VertexPage": {
+        "type": "object",
+        "description": "Standard API response wrapper",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Vertex page with schema overlay.\n\nRuntime rows stay plain JSON values; the schema exposes them as maps of\nthe restricted attribute value so documents show candidate branches\ninstead of an unknown value.",
+            "required": [
+              "items",
+              "total",
+              "limit",
+              "offset"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/CellValue"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                }
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
           "error": {
             "oneOf": [
               {
@@ -7652,7 +8469,9 @@
                 "properties": {
                   "values": {
                     "type": "array",
-                    "items": {}
+                    "items": {
+                      "$ref": "#/components/schemas/FilterValue"
+                    }
                   }
                 }
               }
@@ -8765,6 +9584,18 @@
           }
         }
       },
+      "EdgeDetailData": {
+        "type": "object",
+        "description": "Edge detail with schema overlay.",
+        "required": [
+          "edge"
+        ],
+        "properties": {
+          "edge": {
+            "$ref": "#/components/schemas/CellValue"
+          }
+        }
+      },
       "EdgeDetailResponse": {
         "type": "object",
         "description": "Edge type detail payload.",
@@ -8814,6 +9645,42 @@
           },
           "space_name": {
             "type": "string"
+          }
+        }
+      },
+      "EdgePage": {
+        "type": "object",
+        "description": "Edge page with schema overlay.",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/CellValue"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -8880,6 +9747,26 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "EdgeUpdateResponse": {
+        "type": "object",
+        "description": "Edge type update receipt.",
+        "required": [
+          "message",
+          "edge_type_name",
+          "space_name"
+        ],
+        "properties": {
+          "edge_type_name": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
           }
         }
       },
@@ -9043,6 +9930,30 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "FavoriteClearResponse": {
+        "type": "object",
+        "description": "Favorite clear receipt.",
+        "required": [
+          "cleared"
+        ],
+        "properties": {
+          "cleared": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FavoriteDeleteResponse": {
+        "type": "object",
+        "description": "Favorite deletion receipt.",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean"
           }
         }
       },
@@ -9210,6 +10121,49 @@
             "type": "string"
           }
         }
+      },
+      "FilterValue": {
+        "oneOf": [
+          {
+            "type": "null",
+            "default": null
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FilterValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FilterValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Restricted filter value for OpenAPI documentation.\n\nThe JSON wire shape is identical to a plain JSON value. The untagged\nrepresentation keeps runtime payloads unchanged while letting the schema\nexpose candidate branches instead of an unknown array item."
       },
       "FreezeStatsResponse": {
         "type": "object",
@@ -9661,6 +10615,30 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "HistoryClearResponse": {
+        "type": "object",
+        "description": "History clear receipt.",
+        "required": [
+          "cleared"
+        ],
+        "properties": {
+          "cleared": {
+            "type": "boolean"
+          }
+        }
+      },
+      "HistoryDeleteResponse": {
+        "type": "object",
+        "description": "History item deletion receipt.",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean"
           }
         }
       },
@@ -10403,6 +11381,39 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "NeighborListData": {
+        "type": "object",
+        "description": "Neighbor list with schema overlay.",
+        "required": [
+          "vid",
+          "space",
+          "direction",
+          "neighbors"
+        ],
+        "properties": {
+          "direction": {
+            "type": "string"
+          },
+          "edge_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "neighbors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CellValue"
+            }
+          },
+          "space": {
+            "type": "string"
+          },
+          "vid": {
+            "type": "string"
           }
         }
       },
@@ -12892,6 +13903,26 @@
           }
         }
       },
+      "TagUpdateResponse": {
+        "type": "object",
+        "description": "Tag update receipt.",
+        "required": [
+          "message",
+          "tag_name",
+          "space_name"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          },
+          "tag_name": {
+            "type": "string"
+          }
+        }
+      },
       "TargetSyncDiagnostics": {
         "type": "object",
         "description": "Health of one synchronization target.",
@@ -14019,6 +15050,54 @@
           "vid": {
             "$ref": "#/components/schemas/CellValue",
             "description": "Vertex ID"
+          }
+        }
+      },
+      "VertexDetailData": {
+        "type": "object",
+        "description": "Vertex detail with schema overlay.",
+        "required": [
+          "vertex"
+        ],
+        "properties": {
+          "vertex": {
+            "$ref": "#/components/schemas/CellValue"
+          }
+        }
+      },
+      "VertexPage": {
+        "type": "object",
+        "description": "Vertex page with schema overlay.\n\nRuntime rows stay plain JSON values; the schema exposes them as maps of\nthe restricted attribute value so documents show candidate branches\ninstead of an unknown value.",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/CellValue"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       }

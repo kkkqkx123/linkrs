@@ -19,7 +19,7 @@ use crate::storage::{
 use crate::web::{
     error::WebResult,
     handlers::common::execute_in_space,
-    models::{ApiResponse, PaginatedResponse},
+    models::{ApiResponse, EdgePage, VertexPage},
     WebState,
 };
 use linkrs_core::Value;
@@ -80,7 +80,7 @@ pub struct DataFilterParams {
         ("sort_order" = Option<String>, Query, description = "Sort order")
     ),
     responses(
-        (status = 200, description = "Vertex page", body = ApiResponse<PaginatedResponse<serde_json::Value>>),
+        (status = 200, description = "Vertex page", body = ApiResponse<VertexPage>),
         (status = 500, description = "Internal error")
     )
 )]
@@ -98,7 +98,7 @@ async fn list_vertices_by_tag<
     Extension(caller_session_id): Extension<i64>,
     Path((space_name, tag_name)): Path<(String, String)>,
     Query(params): Query<DataFilterParams>,
-) -> WebResult<Json<ApiResponse<PaginatedResponse<serde_json::Value>>>> {
+) -> WebResult<Json<ApiResponse<VertexPage>>> {
     // Build filter clause for both count and data queries
     let filter_clause = params
         .filter
@@ -145,12 +145,12 @@ async fn list_vertices_by_tag<
         .map(|val| serde_json::json!({"vertex": val}))
         .collect();
 
-    Ok(Json(ApiResponse::success(PaginatedResponse::new(
-        rows,
+    Ok(Json(ApiResponse::success(VertexPage {
+        items: rows,
         total,
-        params.limit,
-        params.offset,
-    ))))
+        limit: params.limit,
+        offset: params.offset,
+    })))
 }
 
 /// List edges by type
@@ -168,7 +168,7 @@ async fn list_vertices_by_tag<
         ("sort_order" = Option<String>, Query, description = "Sort order")
     ),
     responses(
-        (status = 200, description = "Edge page", body = ApiResponse<PaginatedResponse<serde_json::Value>>),
+        (status = 200, description = "Edge page", body = ApiResponse<EdgePage>),
         (status = 500, description = "Internal error")
     )
 )]
@@ -186,7 +186,7 @@ async fn list_edges_by_type<
     Extension(caller_session_id): Extension<i64>,
     Path((space_name, edge_name)): Path<(String, String)>,
     Query(params): Query<DataFilterParams>,
-) -> WebResult<Json<ApiResponse<PaginatedResponse<serde_json::Value>>>> {
+) -> WebResult<Json<ApiResponse<EdgePage>>> {
     // Build filter clause for both count and data queries
     let filter_clause = params
         .filter
@@ -233,10 +233,10 @@ async fn list_edges_by_type<
         .map(|val| serde_json::json!({"edge": val}))
         .collect();
 
-    Ok(Json(ApiResponse::success(PaginatedResponse::new(
-        rows,
+    Ok(Json(ApiResponse::success(EdgePage {
+        items: rows,
         total,
-        params.limit,
-        params.offset,
-    ))))
+        limit: params.limit,
+        offset: params.offset,
+    })))
 }

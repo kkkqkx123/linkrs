@@ -61,6 +61,30 @@ pub struct FavoriteListResponse {
     pub items: Vec<FavoriteItem>,
 }
 
+/// History item deletion receipt.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct HistoryDeleteResponse {
+    pub deleted: bool,
+}
+
+/// History clear receipt.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct HistoryClearResponse {
+    pub cleared: bool,
+}
+
+/// Favorite deletion receipt.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct FavoriteDeleteResponse {
+    pub deleted: bool,
+}
+
+/// Favorite clear receipt.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct FavoriteClearResponse {
+    pub cleared: bool,
+}
+
 /// History list response
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct HistoryListResponse {

@@ -76,3 +76,53 @@ impl<T> PaginatedResponse<T> {
         }
     }
 }
+
+/// Vertex page with schema overlay.
+///
+/// Runtime rows stay plain JSON values; the schema exposes them as maps of
+/// the restricted attribute value so documents show candidate branches
+/// instead of an unknown value.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct VertexPage {
+    #[schema(value_type = Vec<std::collections::HashMap<String, linkrs_wire::query::CellValue>>)]
+    pub items: Vec<serde_json::Value>,
+    pub total: i64,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+/// Edge page with schema overlay.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct EdgePage {
+    #[schema(value_type = Vec<std::collections::HashMap<String, linkrs_wire::query::CellValue>>)]
+    pub items: Vec<serde_json::Value>,
+    pub total: i64,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+/// Vertex detail with schema overlay.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct VertexDetailData {
+    #[schema(value_type = linkrs_wire::query::CellValue)]
+    pub vertex: serde_json::Value,
+}
+
+/// Edge detail with schema overlay.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct EdgeDetailData {
+    #[schema(value_type = linkrs_wire::query::CellValue)]
+    pub edge: serde_json::Value,
+}
+
+/// Neighbor list with schema overlay.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct NeighborListData {
+    pub vid: String,
+    pub space: String,
+    pub direction: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_type: Option<String>,
+    #[schema(value_type = Vec<linkrs_wire::query::CellValue>)]
+    pub neighbors: Vec<serde_json::Value>,
+}

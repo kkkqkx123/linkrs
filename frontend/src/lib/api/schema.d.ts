@@ -2228,6 +2228,62 @@ export interface components {
             message: string;
         };
         /** @description Standard API response wrapper */
+        ApiResponse_EdgeCreateResponse: {
+            /** @description Edge type creation receipt. */
+            data?: {
+                edge_type_name: string;
+                message: string;
+                space_name: string;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_EdgeDeleteResponse: {
+            /** @description Edge type deletion receipt. */
+            data?: {
+                edge_type_name: string;
+                message: string;
+                space_name: string;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_EdgeDetailData: {
+            /** @description Edge detail with schema overlay. */
+            data?: {
+                edge: components["schemas"]["CellValue"];
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_EdgeListResponse: {
+            /** @description Edge type listing payload. */
+            data?: {
+                edge_types?: components["schemas"]["EdgeTypeInfo"][];
+                space_name: string;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_EdgePage: {
+            /** @description Edge page with schema overlay. */
+            data?: {
+                items: {
+                    [key: string]: components["schemas"]["CellValue"];
+                }[];
+                limit: number;
+                offset: number;
+                /** Format: int64 */
+                total: number;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
         ApiResponse_EdgeTypeDetail: {
             /** @description Edge type detail */
             data?: {
@@ -2243,10 +2299,89 @@ export interface components {
             success: boolean;
         };
         /** @description Standard API response wrapper */
+        ApiResponse_EdgeUpdateResponse: {
+            /** @description Edge type update receipt. */
+            data?: {
+                edge_type_name: string;
+                message: string;
+                space_name: string;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_FavoriteClearResponse: {
+            /** @description Favorite clear receipt. */
+            data?: {
+                cleared: boolean;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_FavoriteDeleteResponse: {
+            /** @description Favorite deletion receipt. */
+            data?: {
+                deleted: boolean;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_FavoriteItem: {
+            /** @description Query favorite item */
+            data?: {
+                created_at: string;
+                description?: string | null;
+                id: string;
+                name: string;
+                query: string;
+                session_id: string;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
         ApiResponse_FavoriteListResponse: {
             /** @description Favorite list response */
             data?: {
                 items: components["schemas"]["FavoriteItem"][];
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_HistoryClearResponse: {
+            /** @description History clear receipt. */
+            data?: {
+                cleared: boolean;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_HistoryDeleteResponse: {
+            /** @description History item deletion receipt. */
+            data?: {
+                deleted: boolean;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_HistoryItem: {
+            /** @description Query history item */
+            data?: {
+                error_message?: string | null;
+                executed_at: string;
+                /** Format: int64 */
+                execution_time_ms: number;
+                id: string;
+                query: string;
+                /** Format: int64 */
+                rows_returned: number;
+                session_id: string;
+                success: boolean;
             };
             error?: null | components["schemas"]["ApiError"];
             success: boolean;
@@ -2281,14 +2416,14 @@ export interface components {
             success: boolean;
         };
         /** @description Standard API response wrapper */
-        ApiResponse_PaginatedResponse_Value: {
-            /** @description Paginated response */
+        ApiResponse_NeighborListData: {
+            /** @description Neighbor list with schema overlay. */
             data?: {
-                items: unknown[];
-                limit: number;
-                offset: number;
-                /** Format: int64 */
-                total: number;
+                direction: string;
+                edge_type?: string | null;
+                neighbors: components["schemas"]["CellValue"][];
+                space: string;
+                vid: string;
             };
             error?: null | components["schemas"]["ApiError"];
             success: boolean;
@@ -2314,6 +2449,15 @@ export interface components {
             success: boolean;
         };
         /** @description Standard API response wrapper */
+        ApiResponse_SpaceListResponse: {
+            /** @description Space listing payload. */
+            data?: {
+                spaces?: components["schemas"]["SpaceInfo"][];
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
         ApiResponse_SpaceStatistics: {
             /** @description Space statistics */
             data?: {
@@ -2327,6 +2471,28 @@ export interface components {
                 index_count: number;
                 /** Format: int64 */
                 tag_count: number;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_TagCreateResponse: {
+            /** @description Tag creation receipt. */
+            data?: {
+                message: string;
+                space_name: string;
+                tag_name: string;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_TagDeleteResponse: {
+            /** @description Tag deletion receipt. */
+            data?: {
+                message: string;
+                space_name: string;
+                tag_name: string;
             };
             error?: null | components["schemas"]["ApiError"];
             success: boolean;
@@ -2347,8 +2513,59 @@ export interface components {
             success: boolean;
         };
         /** @description Standard API response wrapper */
+        ApiResponse_TagListResponse: {
+            /** @description Tag listing payload. */
+            data?: {
+                space_name: string;
+                tags?: components["schemas"]["TagInfo"][];
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_TagUpdateResponse: {
+            /** @description Tag update receipt. */
+            data?: {
+                message: string;
+                space_name: string;
+                tag_name: string;
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
         ApiResponse_Value: {
             data?: unknown;
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_VertexDetailData: {
+            /** @description Vertex detail with schema overlay. */
+            data?: {
+                vertex: components["schemas"]["CellValue"];
+            };
+            error?: null | components["schemas"]["ApiError"];
+            success: boolean;
+        };
+        /** @description Standard API response wrapper */
+        ApiResponse_VertexPage: {
+            /**
+             * @description Vertex page with schema overlay.
+             *
+             *     Runtime rows stay plain JSON values; the schema exposes them as maps of
+             *     the restricted attribute value so documents show candidate branches
+             *     instead of an unknown value.
+             */
+            data?: {
+                items: {
+                    [key: string]: components["schemas"]["CellValue"];
+                }[];
+                limit: number;
+                offset: number;
+                /** Format: int64 */
+                total: number;
+            };
             error?: null | components["schemas"]["ApiError"];
             success: boolean;
         };
@@ -2658,7 +2875,7 @@ export interface components {
         } | {
             /** @description Match any of the given values (OR semantics). */
             MatchAny: {
-                values: unknown[];
+                values: components["schemas"]["FilterValue"][];
             };
         } | {
             /** @description Numeric range over the field value. */
@@ -3002,6 +3219,10 @@ export interface components {
             message: string;
             space_name: string;
         };
+        /** @description Edge detail with schema overlay. */
+        EdgeDetailData: {
+            edge: components["schemas"]["CellValue"];
+        };
         /** @description Edge type detail payload. */
         EdgeDetailResponse: {
             dst_tag?: string | null;
@@ -3014,6 +3235,16 @@ export interface components {
         EdgeListResponse: {
             edge_types?: components["schemas"]["EdgeTypeInfo"][];
             space_name: string;
+        };
+        /** @description Edge page with schema overlay. */
+        EdgePage: {
+            items: {
+                [key: string]: components["schemas"]["CellValue"];
+            }[];
+            limit: number;
+            offset: number;
+            /** Format: int64 */
+            total: number;
         };
         /** @description Edge type detail */
         EdgeTypeDetail: {
@@ -3031,6 +3262,12 @@ export interface components {
             fields?: components["schemas"]["FieldInfo"][];
             name: string;
             src_tag?: string | null;
+        };
+        /** @description Edge type update receipt. */
+        EdgeUpdateResponse: {
+            edge_type_name: string;
+            message: string;
+            space_name: string;
         };
         /** @description Text-to-vector embedding call counters. */
         EmbeddingSection: {
@@ -3089,6 +3326,14 @@ export interface components {
                 [key: string]: components["schemas"]["CellValue"];
             };
         };
+        /** @description Favorite clear receipt. */
+        FavoriteClearResponse: {
+            cleared: boolean;
+        };
+        /** @description Favorite deletion receipt. */
+        FavoriteDeleteResponse: {
+            deleted: boolean;
+        };
         /** @description Query favorite item */
         FavoriteItem: {
             created_at: string;
@@ -3132,6 +3377,16 @@ export interface components {
         FilterCondition: {
             condition: components["schemas"]["ConditionType"];
             field: string;
+        };
+        /**
+         * @description Restricted filter value for OpenAPI documentation.
+         *
+         *     The JSON wire shape is identical to a plain JSON value. The untagged
+         *     representation keeps runtime payloads unchanged while letting the schema
+         *     expose candidate branches instead of an unknown array item.
+         */
+        FilterValue: null | boolean | number | string | components["schemas"]["FilterValue"][] | {
+            [key: string]: components["schemas"]["FilterValue"];
         };
         /**
          * @description Background freeze statistics payload. Disabled deployments report
@@ -3294,6 +3549,14 @@ export interface components {
             service: string;
             status: string;
             version: string;
+        };
+        /** @description History clear receipt. */
+        HistoryClearResponse: {
+            cleared: boolean;
+        };
+        /** @description History item deletion receipt. */
+        HistoryDeleteResponse: {
+            deleted: boolean;
         };
         /** @description Query history item */
         HistoryItem: {
@@ -3510,6 +3773,14 @@ export interface components {
             memory_cache_size: number;
             /** Format: int64 */
             slow_query_threshold_ms: number;
+        };
+        /** @description Neighbor list with schema overlay. */
+        NeighborListData: {
+            direction: string;
+            edge_type?: string | null;
+            neighbors: components["schemas"]["CellValue"][];
+            space: string;
+            vid: string;
         };
         /** @description Open a forward-only cursor over a single statement's result. */
         OpenCursorRequest: {
@@ -4317,6 +4588,12 @@ export interface components {
             space_name: string;
             tags?: components["schemas"]["TagInfo"][];
         };
+        /** @description Tag update receipt. */
+        TagUpdateResponse: {
+            message: string;
+            space_name: string;
+            tag_name: string;
+        };
         /** @description Health of one synchronization target. */
         TargetSyncDiagnostics: {
             /** Format: int64 */
@@ -4693,6 +4970,26 @@ export interface components {
             /** @description Vertex ID */
             vid: components["schemas"]["CellValue"];
         };
+        /** @description Vertex detail with schema overlay. */
+        VertexDetailData: {
+            vertex: components["schemas"]["CellValue"];
+        };
+        /**
+         * @description Vertex page with schema overlay.
+         *
+         *     Runtime rows stay plain JSON values; the schema exposes them as maps of
+         *     the restricted attribute value so documents show candidate branches
+         *     instead of an unknown value.
+         */
+        VertexPage: {
+            items: {
+                [key: string]: components["schemas"]["CellValue"];
+            }[];
+            limit: number;
+            offset: number;
+            /** Format: int64 */
+            total: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -4733,7 +5030,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_PaginatedResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_EdgePage"];
                 };
             };
             /** @description Internal error */
@@ -4776,7 +5073,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_PaginatedResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_VertexPage"];
                 };
             };
             /** @description Internal error */
@@ -4809,7 +5106,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_EdgeDetailData"];
                 };
             };
             /** @description Not found */
@@ -4848,7 +5145,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_VertexDetailData"];
                 };
             };
             /** @description Not found */
@@ -4891,7 +5188,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_NeighborListData"];
                 };
             };
             /** @description Internal error */
@@ -4949,7 +5246,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_FavoriteItem"];
                 };
             };
             /** @description Internal error */
@@ -4976,7 +5273,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_FavoriteClearResponse"];
                 };
             };
             /** @description Internal error */
@@ -5006,7 +5303,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_FavoriteItem"];
                 };
             };
             /** @description Not found */
@@ -5047,7 +5344,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_FavoriteItem"];
                 };
             };
             /** @description Not found */
@@ -5084,7 +5381,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_FavoriteDeleteResponse"];
                 };
             };
             /** @description Not found */
@@ -5152,7 +5449,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_HistoryItem"];
                 };
             };
             /** @description Internal error */
@@ -5179,7 +5476,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_HistoryClearResponse"];
                 };
             };
             /** @description Internal error */
@@ -5209,7 +5506,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_HistoryDeleteResponse"];
                 };
             };
             /** @description Not found */
@@ -5243,7 +5540,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_SpaceListResponse"];
                 };
             };
             /** @description Internal error */
@@ -5310,7 +5607,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_EdgeListResponse"];
                 };
             };
             /** @description Not found */
@@ -5341,7 +5638,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": unknown;
+                "application/json": components["schemas"]["CreateEdgeTypeRequest"];
             };
         };
         responses: {
@@ -5351,7 +5648,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_EdgeCreateResponse"];
                 };
             };
             /** @description Not found */
@@ -5433,7 +5730,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_EdgeUpdateResponse"];
                 };
             };
             /** @description Not found */
@@ -5472,7 +5769,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_EdgeDeleteResponse"];
                 };
             };
             /** @description Not found */
@@ -5805,7 +6102,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_TagListResponse"];
                 };
             };
             /** @description Not found */
@@ -5836,7 +6133,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": unknown;
+                "application/json": components["schemas"]["CreateTagRequest"];
             };
         };
         responses: {
@@ -5846,7 +6143,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_TagCreateResponse"];
                 };
             };
             /** @description Not found */
@@ -5928,7 +6225,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_TagUpdateResponse"];
                 };
             };
             /** @description Not found */
@@ -5967,7 +6264,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiResponse_Value"];
+                    "application/json": components["schemas"]["ApiResponse_TagDeleteResponse"];
                 };
             };
             /** @description Not found */

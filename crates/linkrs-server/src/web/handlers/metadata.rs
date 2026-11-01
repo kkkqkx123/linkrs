@@ -15,8 +15,9 @@ use crate::web::{
     error::WebResult,
     models::{
         metadata::{
-            AddFavoriteRequest, AddHistoryRequest, FavoriteListResponse, HistoryListResponse,
-            UpdateFavoriteRequest,
+            AddFavoriteRequest, AddHistoryRequest, FavoriteClearResponse, FavoriteDeleteResponse,
+            FavoriteItem, FavoriteListResponse, HistoryClearResponse, HistoryDeleteResponse,
+            HistoryItem, HistoryListResponse, UpdateFavoriteRequest,
         },
         ApiResponse, PaginationParams,
     },
@@ -56,7 +57,7 @@ pub fn create_routes<
     tag = "WebHistory",
     request_body = AddHistoryRequest,
     responses(
-        (status = 200, description = "History item recorded", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "History item recorded", body = ApiResponse<HistoryItem>),
         (status = 500, description = "Internal error")
     )
 )]
@@ -73,23 +74,13 @@ async fn add_history<
     Extension(session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Json(request): Json<AddHistoryRequest>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
+) -> WebResult<(StatusCode, Json<ApiResponse<HistoryItem>>)> {
     let session_id_str = session_id.to_string();
 
     let service = MetadataService::new(web_state.metadata_storage.clone());
     let item = service.add_history(&session_id_str, request).await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(ApiResponse::success(serde_json::json!({
-            "id": item.id,
-            "query": item.query,
-            "executed_at": item.executed_at,
-            "execution_time_ms": item.execution_time_ms,
-            "rows_returned": item.rows_returned,
-            "success": item.success,
-        }))),
-    ))
+    Ok((StatusCode::CREATED, Json(ApiResponse::success(item))))
 }
 
 /// List query history
@@ -137,7 +128,7 @@ async fn list_history<
     tag = "WebHistory",
     params(("id" = String, Path, description = "History item id")),
     responses(
-        (status = 200, description = "History item deleted", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "History item deleted", body = ApiResponse<HistoryDeleteResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -155,7 +146,7 @@ async fn delete_history<
     Extension(session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Path(id): Path<String>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
+) -> WebResult<(StatusCode, Json<ApiResponse<HistoryDeleteResponse>>)> {
     let session_id_str = session_id.to_string();
 
     let service = MetadataService::new(web_state.metadata_storage.clone());
@@ -163,7 +154,7 @@ async fn delete_history<
 
     Ok((
         StatusCode::OK,
-        Json(ApiResponse::success(serde_json::json!({"deleted": true}))),
+        Json(ApiResponse::success(HistoryDeleteResponse { deleted: true })),
     ))
 }
 
@@ -173,7 +164,7 @@ async fn delete_history<
     path = "/api/v1/queries/history/clear",
     tag = "WebHistory",
     responses(
-        (status = 200, description = "History cleared", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "History cleared", body = ApiResponse<HistoryClearResponse>),
         (status = 500, description = "Internal error")
     )
 )]
@@ -189,7 +180,7 @@ async fn clear_history<
 >(
     Extension(session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
+) -> WebResult<(StatusCode, Json<ApiResponse<HistoryClearResponse>>)> {
     let session_id_str = session_id.to_string();
 
     let service = MetadataService::new(web_state.metadata_storage.clone());
@@ -197,7 +188,7 @@ async fn clear_history<
 
     Ok((
         StatusCode::OK,
-        Json(ApiResponse::success(serde_json::json!({"cleared": true}))),
+        Json(ApiResponse::success(HistoryClearResponse { cleared: true })),
     ))
 }
 
@@ -208,7 +199,7 @@ async fn clear_history<
     tag = "WebHistory",
     request_body = AddFavoriteRequest,
     responses(
-        (status = 200, description = "Favorite recorded", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Favorite recorded", body = ApiResponse<FavoriteItem>),
         (status = 500, description = "Internal error")
     )
 )]
@@ -225,22 +216,13 @@ async fn add_favorite<
     Extension(session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Json(request): Json<AddFavoriteRequest>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
+) -> WebResult<(StatusCode, Json<ApiResponse<FavoriteItem>>)> {
     let session_id_str = session_id.to_string();
 
     let service = MetadataService::new(web_state.metadata_storage.clone());
     let item = service.add_favorite(&session_id_str, request).await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(ApiResponse::success(serde_json::json!({
-            "id": item.id,
-            "name": item.name,
-            "query": item.query,
-            "description": item.description,
-            "created_at": item.created_at,
-        }))),
-    ))
+    Ok((StatusCode::CREATED, Json(ApiResponse::success(item))))
 }
 
 /// List all favorites
@@ -281,7 +263,7 @@ async fn list_favorites<
     tag = "WebHistory",
     params(("id" = String, Path, description = "Favorite id")),
     responses(
-        (status = 200, description = "Favorite detail", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Favorite detail", body = ApiResponse<FavoriteItem>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -299,19 +281,13 @@ async fn get_favorite<
     Extension(session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Path(id): Path<String>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<FavoriteItem>>> {
     let session_id_str = session_id.to_string();
 
     let service = MetadataService::new(web_state.metadata_storage.clone());
     let item = service.get_favorite(&id, &session_id_str).await?;
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "id": item.id,
-        "name": item.name,
-        "query": item.query,
-        "description": item.description,
-        "created_at": item.created_at,
-    }))))
+    Ok(Json(ApiResponse::success(item)))
 }
 
 /// Update a favorite
@@ -322,7 +298,7 @@ async fn get_favorite<
     params(("id" = String, Path, description = "Favorite id")),
     request_body = UpdateFavoriteRequest,
     responses(
-        (status = 200, description = "Favorite updated", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Favorite updated", body = ApiResponse<FavoriteItem>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -341,7 +317,7 @@ async fn update_favorite<
     State(web_state): State<WebState<S>>,
     Path(id): Path<String>,
     Json(request): Json<UpdateFavoriteRequest>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<FavoriteItem>>> {
     let session_id_str = session_id.to_string();
 
     let service = MetadataService::new(web_state.metadata_storage.clone());
@@ -349,13 +325,7 @@ async fn update_favorite<
         .update_favorite(&id, &session_id_str, request)
         .await?;
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "id": item.id,
-        "name": item.name,
-        "query": item.query,
-        "description": item.description,
-        "created_at": item.created_at,
-    }))))
+    Ok(Json(ApiResponse::success(item)))
 }
 
 /// Delete a favorite
@@ -365,7 +335,7 @@ async fn update_favorite<
     tag = "WebHistory",
     params(("id" = String, Path, description = "Favorite id")),
     responses(
-        (status = 200, description = "Favorite deleted", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Favorite deleted", body = ApiResponse<FavoriteDeleteResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -383,7 +353,7 @@ async fn delete_favorite<
     Extension(session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Path(id): Path<String>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
+) -> WebResult<(StatusCode, Json<ApiResponse<FavoriteDeleteResponse>>)> {
     let session_id_str = session_id.to_string();
 
     let service = MetadataService::new(web_state.metadata_storage.clone());
@@ -391,7 +361,7 @@ async fn delete_favorite<
 
     Ok((
         StatusCode::OK,
-        Json(ApiResponse::success(serde_json::json!({"deleted": true}))),
+        Json(ApiResponse::success(FavoriteDeleteResponse { deleted: true })),
     ))
 }
 
@@ -401,7 +371,7 @@ async fn delete_favorite<
     path = "/api/v1/queries/favorites/clear",
     tag = "WebHistory",
     responses(
-        (status = 200, description = "Favorites cleared", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Favorites cleared", body = ApiResponse<FavoriteClearResponse>),
         (status = 500, description = "Internal error")
     )
 )]
@@ -417,7 +387,7 @@ async fn clear_favorites<
 >(
     Extension(session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
+) -> WebResult<(StatusCode, Json<ApiResponse<FavoriteClearResponse>>)> {
     let session_id_str = session_id.to_string();
 
     let service = MetadataService::new(web_state.metadata_storage.clone());
@@ -425,6 +395,6 @@ async fn clear_favorites<
 
     Ok((
         StatusCode::OK,
-        Json(ApiResponse::success(serde_json::json!({"cleared": true}))),
+        Json(ApiResponse::success(FavoriteClearResponse { cleared: true })),
     ))
 }

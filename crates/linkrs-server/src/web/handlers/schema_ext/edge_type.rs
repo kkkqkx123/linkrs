@@ -13,14 +13,20 @@ use super::common::parse_data_type;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+use crate::value::from_json as json_to_core;
 use crate::web::{
     error::{WebError, WebResult},
     models::{
-        schema::{EdgeTypeDetail, EdgeTypeSummary, PropertyDef, UpdateEdgeTypeRequest},
+        schema::{EdgeTypeDetail, PropertyDef, UpdateEdgeTypeRequest},
         ApiResponse,
     },
     WebState,
 };
+use linkrs_wire::schema::{
+    CreateEdgeTypeRequest, EdgeCreateResponse, EdgeDeleteResponse, EdgeListResponse,
+    EdgeTypeInfo, EdgeUpdateResponse, FieldInfo,
+};
+use linkrs_api::api_core::PropertyDef as CorePropertyDef;
 // ==================== Edge Type Handlers ====================
 
 /// List all edge types in a space
@@ -31,7 +37,7 @@ use crate::web::{
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
     responses(
-        (status = 200, description = "Edge type list", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Edge type list", body = ApiResponse<EdgeListResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -48,7 +54,7 @@ pub async fn list_edge_types<
 >(
     State(web_state): State<WebState<S>>,
     Path(space_name): Path<String>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<EdgeListResponse>>> {
     let result = task::spawn_blocking(move || {
         let storage = web_state.core_state.server.get_storage();
         let storage = storage.read();
@@ -63,22 +69,29 @@ pub async fn list_edge_types<
             .list_edge_types(&space_name)
             .map_err(|e| WebError::Storage(e.to_string()))?;
 
-        let edge_type_list: Vec<EdgeTypeSummary> = edge_types
+        let edge_type_list: Vec<EdgeTypeInfo> = edge_types
             .into_iter()
-            .enumerate()
-            .map(|(idx, e)| EdgeTypeSummary {
-                id: idx as i64 + 1,
+            .map(|e| EdgeTypeInfo {
                 name: e.edge_type_name,
-                property_count: e.properties.len() as i64,
-                index_count: 0,
-                created_at: 0,
+                fields: e
+                    .properties
+                    .iter()
+                    .map(|p| FieldInfo {
+                        name: p.name.clone(),
+                        data_type: format!("{:?}", p.data_type),
+                        nullable: p.nullable,
+                        default_value: None,
+                    })
+                    .collect(),
+                src_tag: Some(e.src_tag_name),
+                dst_tag: Some(e.dst_tag_name),
             })
             .collect();
 
-        Ok::<_, WebError>(serde_json::json!({
-            "space": space_name,
-            "edge_types": edge_type_list,
-        }))
+        Ok::<_, WebError>(EdgeListResponse {
+            edge_types: edge_type_list,
+            space_name,
+        })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;
@@ -93,9 +106,9 @@ pub async fn list_edge_types<
     path = "/api/v1/schema/spaces/{name}/edge-types",
     tag = "WebSchema",
     params(("name" = String, Path, description = "Space name")),
-    request_body = serde_json::Value,
+    request_body = CreateEdgeTypeRequest,
     responses(
-        (status = 200, description = "Edge type created", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Edge type created", body = ApiResponse<EdgeCreateResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -113,38 +126,25 @@ pub async fn create_edge_type<
     Extension(_session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Path(space_name): Path<String>,
-    Json(request): Json<serde_json::Value>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
-    let edge_name = request
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| WebError::BadRequest("Edge type name is required".to_string()))?
-        .to_string();
-
-    // Parse properties before spawn_blocking
-    let properties: Vec<linkrs_api::api_core::PropertyDef> = request
-        .get("properties")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|p| {
-                    let name = p.get("name")?.as_str()?;
-                    let data_type_str = p.get("data_type")?.as_str()?;
-                    let data_type = parse_data_type(data_type_str)?;
-                    Some(linkrs_api::api_core::PropertyDef {
-                        name: name.to_string(),
-                        data_type,
-                        nullable: p.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true),
-                        default_value: None,
-                        comment: p
-                            .get("comment")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                    })
-                })
-                .collect()
+    Json(request): Json<CreateEdgeTypeRequest>,
+) -> WebResult<(StatusCode, Json<ApiResponse<EdgeCreateResponse>>)> {
+    if request.name.trim().is_empty() {
+        return Err(WebError::BadRequest(
+            "Edge type name is required".to_string(),
+        ));
+    }
+    let edge_name = request.name.clone();
+    let properties: Vec<CorePropertyDef> = request
+        .properties
+        .into_iter()
+        .map(|p| CorePropertyDef {
+            name: p.name,
+            data_type: parse_data_type(&p.data_type).unwrap_or(linkrs_core::DataType::String),
+            nullable: p.nullable,
+            default_value: p.default_value.map(|v| json_to_core(&v)),
+            comment: p.comment,
         })
-        .unwrap_or_default();
+        .collect();
 
     let result = task::spawn_blocking(move || {
         let schema_api = web_state.core_state.server.get_schema_api();
@@ -157,11 +157,11 @@ pub async fn create_edge_type<
             .create_edge_type(space_id, &edge_name, properties)
             .map_err(|e| WebError::Internal(format!("Failed to create edge type: {}", e)))?;
 
-        Ok::<_, WebError>(serde_json::json!({
-            "id": 0,
-            "name": edge_name,
-            "space": space_name,
-        }))
+        Ok::<_, WebError>(EdgeCreateResponse {
+            message: "Edge type created successfully".to_string(),
+            edge_type_name: edge_name,
+            space_name,
+        })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;
@@ -247,7 +247,7 @@ pub async fn get_edge_type<
     ),
     request_body = UpdateEdgeTypeRequest,
     responses(
-        (status = 200, description = "Edge type updated", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Edge type updated", body = ApiResponse<EdgeUpdateResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -266,7 +266,7 @@ pub async fn update_edge_type<
     State(web_state): State<WebState<S>>,
     Path((space_name, edge_name)): Path<(String, String)>,
     Json(request): Json<UpdateEdgeTypeRequest>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<EdgeUpdateResponse>>> {
     let result = task::spawn_blocking(move || {
         let schema_api = web_state.core_state.server.get_schema_api();
 
@@ -281,7 +281,7 @@ pub async fn update_edge_type<
                 let data_type = parse_data_type(&p.data_type).ok_or_else(|| {
                     WebError::BadRequest(format!("Invalid data type: {}", p.data_type))
                 })?;
-                core_props.push(linkrs_api::api_core::PropertyDef {
+                core_props.push(CorePropertyDef {
                     name: p.name,
                     data_type,
                     nullable: p.nullable,
@@ -300,10 +300,11 @@ pub async fn update_edge_type<
             .alter_edge_type(space_id, &edge_name, additions, deletions)
             .map_err(|e| WebError::Internal(format!("Failed to update edge type: {}", e)))?;
 
-        Ok::<_, WebError>(serde_json::json!({
-            "updated": true,
-            "name": edge_name,
-        }))
+        Ok::<_, WebError>(EdgeUpdateResponse {
+            message: "Edge type updated successfully".to_string(),
+            edge_type_name: edge_name,
+            space_name,
+        })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;
@@ -321,7 +322,7 @@ pub async fn update_edge_type<
         ("edge_name" = String, Path, description = "Edge type name")
     ),
     responses(
-        (status = 200, description = "Edge type deleted", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Edge type deleted", body = ApiResponse<EdgeDeleteResponse>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -339,7 +340,7 @@ pub async fn delete_edge_type<
     Extension(_session_id): Extension<i64>,
     State(web_state): State<WebState<S>>,
     Path((space_name, edge_name)): Path<(String, String)>,
-) -> WebResult<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
+) -> WebResult<(StatusCode, Json<ApiResponse<EdgeDeleteResponse>>)> {
     let result = task::spawn_blocking(move || {
         let schema_api = web_state.core_state.server.get_schema_api();
 
@@ -351,10 +352,11 @@ pub async fn delete_edge_type<
             .drop_edge_type(space_id, &edge_name)
             .map_err(|e| WebError::Internal(format!("Failed to delete edge type: {}", e)))?;
 
-        Ok::<_, WebError>(serde_json::json!({
-            "deleted": true,
-            "name": edge_name,
-        }))
+        Ok::<_, WebError>(EdgeDeleteResponse {
+            message: "Edge type deleted successfully".to_string(),
+            edge_type_name: edge_name,
+            space_name,
+        })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;

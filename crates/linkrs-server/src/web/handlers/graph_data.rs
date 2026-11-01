@@ -19,7 +19,7 @@ use crate::storage::{
 use crate::web::{
     error::{WebError, WebResult},
     handlers::common::{execute_in_space, vid_literal},
-    models::ApiResponse,
+    models::{ApiResponse, EdgeDetailData, NeighborListData, VertexDetailData},
     WebState,
 };
 
@@ -56,7 +56,7 @@ pub struct GetVertexParams {
         GetVertexParams
     ),
     responses(
-        (status = 200, description = "Vertex detail", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Vertex detail", body = ApiResponse<VertexDetailData>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -75,7 +75,7 @@ async fn get_vertex<
     Extension(caller_session_id): Extension<i64>,
     Path(vid): Path<String>,
     Query(params): Query<GetVertexParams>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<VertexDetailData>>> {
     // A vertex detail request has no tag qualifier, and the FETCH planner
     // requires one; an unlabeled MATCH scans every tag in the space.
     let id = vid_literal(&web_state, &params.space, &vid)?;
@@ -83,9 +83,10 @@ async fn get_vertex<
 
     let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
     if let Some(vertex) = result.first_value() {
-        return Ok(Json(ApiResponse::success(
-            serde_json::json!({"vertex": vertex}),
-        )));
+        return Ok(Json(ApiResponse::success(VertexDetailData {
+            vertex: serde_json::to_value(vertex)
+                .unwrap_or(serde_json::Value::Null),
+        })));
     }
 
     Err(WebError::NotFound(format!(
@@ -112,7 +113,7 @@ pub struct GetEdgeParams {
     tag = "WebGraph",
     params(GetEdgeParams),
     responses(
-        (status = 200, description = "Edge detail", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Edge detail", body = ApiResponse<EdgeDetailData>),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -130,7 +131,7 @@ async fn get_edge<
     State(web_state): State<WebState<S>>,
     Extension(caller_session_id): Extension<i64>,
     Query(params): Query<GetEdgeParams>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<EdgeDetailData>>> {
     // Build query to fetch edge
     let query = format!(
         "FETCH PROP ON {} \"{}\" -> \"{}\"@{} YIELD edge AS e",
@@ -139,9 +140,9 @@ async fn get_edge<
 
     let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
     if let Some(edge) = result.first_value() {
-        return Ok(Json(ApiResponse::success(
-            serde_json::json!({"edge": edge}),
-        )));
+        return Ok(Json(ApiResponse::success(EdgeDetailData {
+            edge: serde_json::to_value(edge).unwrap_or(serde_json::Value::Null),
+        })));
     }
 
     Err(WebError::NotFound(format!(
@@ -175,7 +176,7 @@ fn default_direction() -> String {
         GetNeighborsParams
     ),
     responses(
-        (status = 200, description = "Neighbor list", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Neighbor list", body = ApiResponse<NeighborListData>),
         (status = 500, description = "Internal error")
     )
 )]
@@ -193,7 +194,7 @@ async fn get_neighbors<
     Extension(caller_session_id): Extension<i64>,
     Path(vid): Path<String>,
     Query(params): Query<GetNeighborsParams>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<NeighborListData>>> {
     // An edge token carries the edge type after a colon; a bare name is read as
     // the type itself. With no filter the bracket pair matches any type.
     let edge = match &params.edge_type {
@@ -220,11 +221,11 @@ async fn get_neighbors<
         })
         .collect();
 
-    Ok(Json(ApiResponse::success(serde_json::json!({
-        "vid": vid,
-        "space": params.space,
-        "direction": params.direction,
-        "edge_type": params.edge_type,
-        "neighbors": neighbors,
-    }))))
+    Ok(Json(ApiResponse::success(NeighborListData {
+        vid,
+        space: params.space,
+        direction: params.direction,
+        edge_type: params.edge_type,
+        neighbors,
+    })))
 }

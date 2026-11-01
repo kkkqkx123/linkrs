@@ -8,7 +8,9 @@ import type {
 import type { components } from '$lib/api/schema';
 import { stringifyId, asRecord } from '$utils/graphData';
 
-type Envelope = components['schemas']['ApiResponse_Value'];
+type VertexEnvelope = components['schemas']['ApiResponse_VertexDetailData'];
+type EdgeEnvelope = components['schemas']['ApiResponse_EdgeDetailData'];
+type NeighborEnvelope = components['schemas']['ApiResponse_NeighborListData'];
 
 // Extract { vid, tag, properties } from a raw neighbor payload. The graph API
 // nests each neighbor as { vertex: { vid, tag } } where tag is
@@ -62,6 +64,13 @@ function toVertexDetail(payload: unknown, vid: string | number): VertexDetail {
 	for (const [key, value] of Object.entries(tags)) {
 		normalized[key] = asRecord(value) ?? {};
 	}
+	if (Object.keys(normalized).length === 0) {
+		const singleTag = typeof vertex.tag === 'string' ? vertex.tag : null;
+		const props = asRecord(vertex.properties);
+		if (singleTag && props) {
+			normalized[singleTag] = props;
+		}
+	}
 	return {
 		vid: stringifyId(vertex.vid ?? vid) ?? String(vid),
 		tags: normalized,
@@ -72,7 +81,7 @@ export const graphService = {
 	vertices: {
 		get: async (vid: string | number, space: string): Promise<VertexDetail> => {
 			const payload = unwrap(
-				await call<Envelope>(
+				await call<VertexEnvelope>(
 					client.GET('/api/v1/graph/vertices/{vid}', {
 						params: { path: { vid: String(vid) }, query: { space } },
 					}),
@@ -86,7 +95,7 @@ export const graphService = {
 			params?: NeighborParams,
 		): Promise<NeighborInfo[]> => {
 			const payload = unwrap(
-				await call<Envelope>(
+				await call<NeighborEnvelope>(
 					client.GET('/api/v1/graph/vertices/{vid}/neighbors', {
 						params: {
 							path: { vid: String(vid) },
@@ -99,7 +108,7 @@ export const graphService = {
 					}),
 				),
 			);
-			const record = asRecord(payload);
+			const record = asRecord(payload as unknown);
 			const raw =
 				record && Array.isArray(record.neighbors) ? record.neighbors : [];
 			return (raw as unknown[])
@@ -116,7 +125,7 @@ export const graphService = {
 			rank?: number,
 		): Promise<WireEdgeDetail> => {
 			const payload = unwrap(
-				await call<Envelope>(
+				await call<EdgeEnvelope>(
 					client.GET('/api/v1/graph/edges', {
 						params: {
 							query: {
@@ -130,7 +139,7 @@ export const graphService = {
 					}),
 				),
 			);
-			const record = asRecord(payload) ?? {};
+			const record = asRecord(payload as unknown) ?? {};
 			const edge = asRecord(record.edge) ?? record;
 			return {
 				src: edge.src ?? src,

@@ -19,6 +19,7 @@ use crate::web::{
     },
     WebState,
 };
+use linkrs_wire::schema::{SpaceInfo, SpaceListResponse};
 
 // ==================== Space Handlers ====================
 
@@ -29,7 +30,7 @@ use crate::web::{
     path = "/api/v1/schema/spaces",
     tag = "WebSchema",
     responses(
-        (status = 200, description = "Space list", body = ApiResponse<serde_json::Value>),
+        (status = 200, description = "Space list", body = ApiResponse<SpaceListResponse>),
         (status = 500, description = "Internal error")
     )
 )]
@@ -44,7 +45,7 @@ pub async fn list_spaces<
         + 'static,
 >(
     State(web_state): State<WebState<S>>,
-) -> WebResult<Json<ApiResponse<serde_json::Value>>> {
+) -> WebResult<Json<ApiResponse<SpaceListResponse>>> {
     // Get storage reference before spawn_blocking
     let storage = web_state.core_state.server.get_storage();
 
@@ -55,20 +56,17 @@ pub async fn list_spaces<
             .list_spaces()
             .map_err(|e| WebError::Storage(e.to_string()))?;
 
-        let space_list: Vec<serde_json::Value> = spaces
+        let space_list: Vec<SpaceInfo> = spaces
             .into_iter()
-            .map(|s| {
-                serde_json::json!({
-                    "id": s.space_id,
-                    "name": s.space_name,
-                    "vid_type": format!("{:?}", s.vid_type),
-                })
+            .map(|s| SpaceInfo {
+                id: s.space_id,
+                name: s.space_name,
+                vid_type: format!("{:?}", s.vid_type),
+                comment: None,
             })
             .collect();
 
-        Ok::<_, WebError>(serde_json::json!({
-            "spaces": space_list,
-        }))
+        Ok::<_, WebError>(SpaceListResponse { spaces: space_list })
     })
     .await
     .map_err(|e| WebError::Internal(format!("Task execution failed: {}", e)))?;

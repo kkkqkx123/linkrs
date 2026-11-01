@@ -214,6 +214,7 @@ struct CoreDoc;
         crate::core::vector::MinShouldCondition,
         crate::core::vector::FilterCondition,
         crate::core::vector::ConditionType,
+        crate::core::vector::FilterValue,
         crate::core::vector::RangeCondition,
         crate::core::vector::GeoRadius,
         crate::core::vector::GeoBoundingBox,

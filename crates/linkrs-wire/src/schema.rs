@@ -180,6 +180,14 @@ pub struct TagDeleteResponse {
     pub space_name: String,
 }
 
+/// Tag update receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TagUpdateResponse {
+    pub message: String,
+    pub tag_name: String,
+    pub space_name: String,
+}
+
 /// Edge type creation receipt.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EdgeCreateResponse {
@@ -212,6 +220,14 @@ pub struct EdgeDetailResponse {
 /// Edge type deletion receipt.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EdgeDeleteResponse {
+    pub message: String,
+    pub edge_type_name: String,
+    pub space_name: String,
+}
+
+/// Edge type update receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EdgeUpdateResponse {
     pub message: String,
     pub edge_type_name: String,
     pub space_name: String,
