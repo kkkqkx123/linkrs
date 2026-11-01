@@ -112,11 +112,13 @@ pub enum BatchItem {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct VertexData {
     /// Vertex ID
+    #[schema(value_type = crate::query::CellValue)]
     pub vid: serde_json::Value,
     /// Single label tag name (single-label vertices carry exactly one tag)
     pub tag: String,
     /// Properties
     #[serde(default)]
+    #[schema(value_type = std::collections::HashMap<String, crate::query::CellValue>)]
     pub properties: HashMap<String, serde_json::Value>,
 }
 
@@ -126,11 +128,14 @@ pub struct EdgeData {
     /// Edge type
     pub edge_type: String,
     /// Source vertex ID
+    #[schema(value_type = crate::query::CellValue)]
     pub src_vid: serde_json::Value,
     /// Target vertex ID
+    #[schema(value_type = crate::query::CellValue)]
     pub dst_vid: serde_json::Value,
     /// Properties
     #[serde(default)]
+    #[schema(value_type = std::collections::HashMap<String, crate::query::CellValue>)]
     pub properties: HashMap<String, serde_json::Value>,
 }
 
@@ -140,14 +145,17 @@ pub struct UpdateEdgeData {
     /// Edge type
     pub edge_type: String,
     /// Source vertex ID
+    #[schema(value_type = crate::query::CellValue)]
     pub src_vid: serde_json::Value,
     /// Target vertex ID
+    #[schema(value_type = crate::query::CellValue)]
     pub dst_vid: serde_json::Value,
     /// Edge rank within (src, dst, type)
     #[serde(default)]
     pub rank: i64,
     /// Properties
     #[serde(default)]
+    #[schema(value_type = std::collections::HashMap<String, crate::query::CellValue>)]
     pub properties: HashMap<String, serde_json::Value>,
 }
 
@@ -155,6 +163,7 @@ pub struct UpdateEdgeData {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DeleteVertexData {
     /// Vertex ID
+    #[schema(value_type = crate::query::CellValue)]
     pub vid: serde_json::Value,
     /// Tag names to delete the vertex from (incident edges are removed too)
     #[serde(default)]
@@ -167,8 +176,10 @@ pub struct DeleteEdgeData {
     /// Edge type
     pub edge_type: String,
     /// Source vertex ID
+    #[schema(value_type = crate::query::CellValue)]
     pub src_vid: serde_json::Value,
     /// Target vertex ID
+    #[schema(value_type = crate::query::CellValue)]
     pub dst_vid: serde_json::Value,
     /// Edge rank within (src, dst, type)
     #[serde(default)]

@@ -104,6 +104,7 @@ pub struct VectorSearchResult {
     pub doc_id: String,
     pub score: f32,
     pub vector: Option<Vec<f32>>,
+    #[schema(value_type = Option<std::collections::HashMap<String, linkrs_wire::query::CellValue>>)]
     pub payload: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
@@ -615,6 +616,7 @@ pub struct SetPayloadRequest {
     pub tag_name: String,
     pub field_name: String,
     pub point_ids: Vec<String>,
+    #[schema(value_type = std::collections::HashMap<String, linkrs_wire::query::CellValue>)]
     pub payload: serde_json::Map<String, serde_json::Value>,
 }
 

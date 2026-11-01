@@ -12,17 +12,12 @@ use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+use linkrs_wire::schema::{
+    BreakingChangesResponse, SchemaChangeEntry, SchemaChangesResponse, SchemaVersionEntry,
+    VersionHistoryResponse,
+};
 
 // ==================== Schema Versioning ====================
-
-use serde::Serialize;
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct ChangeInfo {
-    pub change_type: String,
-    pub description: String,
-    pub details: std::collections::HashMap<String, String>,
-}
 
 /// Parse is_edge query parameter, failing on invalid values
 pub(crate) fn parse_is_edge_param(
@@ -41,6 +36,16 @@ pub(crate) fn parse_is_edge_param(
     }
 }
 
+fn to_change_entry(change_type: String, description: String) -> SchemaChangeEntry {
+    let mut details = std::collections::HashMap::new();
+    details.insert("description".to_string(), description.clone());
+    SchemaChangeEntry {
+        change_type,
+        description,
+        details,
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/v1/schema/versions/{space}/{label}",
@@ -51,7 +56,7 @@ pub(crate) fn parse_is_edge_param(
         ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Schema version history"),
+        (status = 200, body = VersionHistoryResponse, description = "Schema version history"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -69,7 +74,7 @@ pub async fn get_version_history<
     State(state): State<AppState<S>>,
     Path((space, label)): Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<VersionHistoryResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
 
     let result = task::spawn_blocking(move || {
@@ -99,38 +104,30 @@ pub async fn get_version_history<
                             .map(|c| c.timestamp_ms)
                             .max()
                             .unwrap_or(0);
-                        let changes: Vec<_> = version_changes
+                        let changes: Vec<SchemaChangeEntry> = version_changes
                             .into_iter()
-                            .map(|change| ChangeInfo {
-                                change_type: format!("{:?}", change.details),
-                                description: change.details.description(),
-                                details: {
-                                    let mut d = std::collections::HashMap::new();
-                                    d.insert(
-                                        "description".to_string(),
-                                        change.details.description(),
-                                    );
-                                    d
-                                },
+                            .map(|change| {
+                                let description = change.details.description();
+                                to_change_entry(format!("{:?}", change.details), description)
                             })
                             .collect();
 
-                        serde_json::json!({
-                            "version": version,
-                            "timestamp_ms": timestamp_ms,
-                            "changes": changes,
-                        })
+                        SchemaVersionEntry {
+                            version,
+                            timestamp_ms,
+                            changes,
+                        }
                     })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
 
-        Ok::<_, HttpError>(serde_json::json!({
-            "space": space,
-            "label": label,
-            "is_edge": is_edge,
-            "versions": versions,
-        }))
+        Ok::<_, HttpError>(VersionHistoryResponse {
+            space,
+            label,
+            is_edge,
+            versions,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -150,7 +147,7 @@ pub async fn get_version_history<
         ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Schema changes between versions"),
+        (status = 200, body = SchemaChangesResponse, description = "Schema changes between versions"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -168,7 +165,7 @@ pub async fn get_schema_changes<
     State(state): State<AppState<S>>,
     Path((space, label, from_version, to_version)): Path<(String, String, u64, u64)>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<SchemaChangesResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
 
     // Validate version range: from_version must be <= to_version
@@ -190,28 +187,22 @@ pub async fn get_schema_changes<
         }
         .map_err(|e| HttpError::InternalError(format!("Failed to get schema changes: {}", e)))?;
 
-        let change_list: Vec<_> = changes
+        let change_list: Vec<SchemaChangeEntry> = changes
             .iter()
             .map(|change| {
-                let mut details_map: std::collections::HashMap<&str, String> =
-                    std::collections::HashMap::new();
-                details_map.insert("description", change.details.description());
-                serde_json::json!({
-                    "change_type": format!("{:?}", change.details),
-                    "description": change.details.description(),
-                    "details": details_map,
-                })
+                let description = change.details.description();
+                to_change_entry(format!("{:?}", change.details), description)
             })
             .collect();
 
-        Ok::<_, HttpError>(serde_json::json!({
-            "space": space,
-            "label": label,
-            "is_edge": is_edge,
-            "from_version": from_version,
-            "to_version": to_version,
-            "changes": change_list,
-        }))
+        Ok::<_, HttpError>(SchemaChangesResponse {
+            space,
+            label,
+            is_edge,
+            from_version,
+            to_version,
+            changes: change_list,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -225,13 +216,13 @@ pub async fn get_schema_changes<
     tag = "Schema",
     params(
         ("space" = String, Path, description = "Space name"),
-        ("label" = String, Path, description = "Tag or edge type name"),
+        ("label" = String, Path, description = "Label or edge type name"),
         ("from_version" = u64, Path, description = "Start schema version"),
         ("to_version" = u64, Path, description = "End schema version"),
         ("is_edge" = Option<bool>, Query, description = "Whether the label is an edge type")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Breaking change report"),
+        (status = 200, body = BreakingChangesResponse, description = "Breaking change report"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -249,7 +240,7 @@ pub async fn detect_breaking_changes<
     State(state): State<AppState<S>>,
     Path((space, label, from_version, to_version)): Path<(String, String, u64, u64)>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<BreakingChangesResponse>, HttpError> {
     let is_edge = parse_is_edge_param(&query)?;
 
     // Validate version range: from_version must be <= to_version
@@ -274,17 +265,11 @@ pub async fn detect_breaking_changes<
         })?;
 
         let has_breaking = !changes.is_empty();
-        let change_list: Vec<_> = changes
+        let change_list: Vec<SchemaChangeEntry> = changes
             .iter()
             .map(|change| {
-                let mut details_map: std::collections::HashMap<&str, String> =
-                    std::collections::HashMap::new();
-                details_map.insert("description", change.details.description());
-                serde_json::json!({
-                    "change_type": format!("{:?}", change.details),
-                    "description": change.details.description(),
-                    "details": details_map,
-                })
+                let description = change.details.description();
+                to_change_entry(format!("{:?}", change.details), description)
             })
             .collect();
 
@@ -297,16 +282,16 @@ pub async fn detect_breaking_changes<
             "No breaking changes detected".to_string()
         };
 
-        Ok::<_, HttpError>(serde_json::json!({
-            "space": space,
-            "label": label,
-            "is_edge": is_edge,
-            "from_version": from_version,
-            "to_version": to_version,
-            "has_breaking_changes": has_breaking,
-            "changes": change_list,
-            "recommendation": recommendation,
-        }))
+        Ok::<_, HttpError>(BreakingChangesResponse {
+            space,
+            label,
+            is_edge,
+            from_version,
+            to_version,
+            has_breaking_changes: has_breaking,
+            changes: change_list,
+            recommendation,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;

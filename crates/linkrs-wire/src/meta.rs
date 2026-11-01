@@ -173,6 +173,7 @@ pub struct SavepointResponse {
 pub struct UpdateConfigRequest {
     pub section: String,
     pub key: String,
+    #[schema(value_type = crate::query::CellValue)]
     pub value: serde_json::Value,
 }
 
@@ -198,13 +199,170 @@ pub struct ConfigSection {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ConfigItem {
     pub key: String,
+    #[schema(value_type = crate::query::CellValue)]
     pub value: serde_json::Value,
     #[serde(default)]
+    #[schema(value_type = Option<crate::query::CellValue>)]
     pub default_value: Option<serde_json::Value>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub mutable: bool,
+}
+
+/// Database section of the configuration snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DatabaseConfigSnapshot {
+    pub host: String,
+    pub port: u16,
+    pub storage_path: String,
+    pub max_sessions: usize,
+}
+
+/// Transaction section of the configuration snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionConfigSnapshot {
+    pub default_timeout: u64,
+    pub max_concurrent_transactions: usize,
+    pub auto_commit: bool,
+}
+
+/// Log section of the configuration snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LogConfigSnapshot {
+    pub level: String,
+    pub dir: String,
+    pub basename: String,
+    pub max_file_size_mb: u64,
+    pub max_files: usize,
+    pub stdout: bool,
+    pub json_format: bool,
+}
+
+/// Auth section of the configuration snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AuthConfigSnapshot {
+    pub enable_authorize: bool,
+    pub failed_login_attempts: u32,
+    pub session_idle_timeout_secs: u64,
+    pub force_change_default_password: bool,
+    pub default_username: String,
+    pub bcrypt_cost: u32,
+}
+
+/// Bootstrap section of the configuration snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BootstrapConfigSnapshot {
+    pub auto_create_default_space: bool,
+    pub default_space_name: String,
+    pub single_user_mode: bool,
+}
+
+/// Optimizer section of the configuration snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct OptimizerConfigSnapshot {
+    pub max_iteration_rounds: usize,
+    pub max_exploration_rounds: usize,
+    pub enable_cost_model: bool,
+    pub enable_multi_plan: bool,
+    pub enable_property_pruning: bool,
+    pub enable_adaptive_iteration: bool,
+    pub stable_threshold: usize,
+    pub min_iteration_rounds: usize,
+    pub statistics_sample_limit: usize,
+    pub statistics_min_epoch_delta: u64,
+    pub storage_cost_profile: String,
+    #[serde(default)]
+    pub space_cost_profiles: std::collections::HashMap<String, String>,
+}
+
+/// Monitoring section of the configuration snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct MonitoringConfigSnapshot {
+    pub enabled: bool,
+    pub memory_cache_size: usize,
+    pub slow_query_threshold_ms: u64,
+}
+
+/// Full configuration snapshot served by the management endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ConfigSnapshot {
+    pub database: DatabaseConfigSnapshot,
+    pub transaction: TransactionConfigSnapshot,
+    pub log: LogConfigSnapshot,
+    pub auth: AuthConfigSnapshot,
+    pub bootstrap: BootstrapConfigSnapshot,
+    pub optimizer: OptimizerConfigSnapshot,
+    pub monitoring: MonitoringConfigSnapshot,
+}
+
+/// Bulk configuration update receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ConfigUpdateReceipt {
+    #[serde(default)]
+    pub updated: Vec<String>,
+    #[serde(default)]
+    pub requires_restart: Vec<String>,
+    pub persisted: bool,
+    pub message: String,
+}
+
+/// Single configuration item payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ConfigItemResponse {
+    pub section: String,
+    pub key: String,
+    #[schema(value_type = crate::query::CellValue)]
+    pub value: serde_json::Value,
+}
+
+/// Single configuration item write receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ConfigItemWriteReceipt {
+    pub section: String,
+    pub key: String,
+    #[schema(value_type = crate::query::CellValue)]
+    pub value: serde_json::Value,
+    pub requires_restart: bool,
+    pub persisted: bool,
+    pub message: String,
+}
+
+/// Dependency checks embedded in health responses.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct HealthChecks {
+    pub process: String,
+    pub storage: String,
+    pub transaction_manager: String,
+    pub listeners: String,
+}
+
+/// Optional component markers embedded in health responses.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct HealthOptional {
+    pub vector: String,
+    pub fulltext: String,
+}
+
+/// Service health payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct HealthResponse {
+    pub status: String,
+    pub service: String,
+    pub version: String,
+    pub ready: bool,
+    pub live: bool,
+    pub checks: HealthChecks,
+    pub optional: HealthOptional,
+}
+
+/// Liveness probe payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LiveResponse {
+    pub status: String,
+    pub service: String,
+    pub version: String,
+    pub live: bool,
 }
 
 // ── Statistics ────────────────────────────────────────────────────────────
@@ -800,6 +958,7 @@ pub struct SessionDetailResponse {
 pub struct VariableSnapshotResponse {
     pub session_id: i64,
     #[serde(default)]
+    #[schema(value_type = std::collections::HashMap<String, crate::query::CellValue>)]
     pub variables: std::collections::HashMap<String, serde_json::Value>,
 }
 
@@ -808,6 +967,7 @@ pub struct VariableSnapshotResponse {
 pub struct SetVariableRequest {
     pub name: String,
     #[serde(default)]
+    #[schema(value_type = Option<crate::query::CellValue>)]
     pub value: Option<serde_json::Value>,
 }
 
@@ -817,6 +977,7 @@ pub struct SetVariableResponse {
     pub session_id: i64,
     pub name: String,
     #[serde(default)]
+    #[schema(value_type = Option<crate::query::CellValue>)]
     pub value: Option<serde_json::Value>,
 }
 

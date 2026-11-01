@@ -6,16 +6,15 @@ use axum::{
 };
 use parking_lot::RwLock;
 use serde::Deserialize;
-use serde_json;
 
 use crate::http::{error::HttpError, state::AppState};
 use crate::query::executor::expression::functions::{FunctionRegistry, UdfError};
+use crate::storage::{
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
+};
 use linkrs_wire::meta::{
     FunctionDetailResponse, FunctionListItem, FunctionListResponse, FunctionRegisterResponse,
     FunctionUnregisterResponse,
-};
-use crate::storage::{
-    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 /// Transport-neutral function registry mutation failure.
@@ -144,15 +143,7 @@ pub async fn register<
     Json(request): Json<RegisterFunctionRequest>,
 ) -> Result<JsonResponse<FunctionRegisterResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
-    let implementation = match &request.implementation {
-        Some(serde_json::Value::String(path)) => path.clone(),
-        Some(other) => {
-            return Err(HttpError::bad_request(format!(
-                "implementation must be a local UDF library path string, got {other}"
-            )));
-        }
-        None => String::new(),
-    };
+    let implementation = request.implementation.clone().unwrap_or_default();
     let registry = state.server.get_function_registry();
     let registered_name = register_udf_from_source(&registry, &request.name, &implementation)
         .map_err(op_error_to_http)?;
@@ -326,5 +317,5 @@ pub struct RegisterFunctionRequest {
     #[serde(rename = "return_type", default)]
     pub return_type: String,
     pub description: Option<String>,
-    pub implementation: Option<serde_json::Value>,
+    pub implementation: Option<String>,
 }

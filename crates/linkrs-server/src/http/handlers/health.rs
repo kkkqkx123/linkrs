@@ -1,5 +1,6 @@
 use axum::{http::StatusCode, response::Json};
-use serde_json::json;
+use linkrs_wire::meta::{HealthChecks, HealthOptional, HealthResponse, LiveResponse};
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static READY: AtomicBool = AtomicBool::new(false);
@@ -20,20 +21,35 @@ pub fn is_ready() -> bool {
     READY.load(Ordering::SeqCst) && !STOPPING.load(Ordering::SeqCst)
 }
 
-fn dependency_status() -> serde_json::Value {
-    json!({
-        "process": "ok",
-        "storage": if is_ready() { "ok" } else { "unavailable" },
-        "transaction_manager": if is_ready() { "ok" } else { "unavailable" },
-        "listeners": if is_ready() { "ok" } else { "starting" },
-    })
+fn dependency_status() -> HealthChecks {
+    let status = if is_ready() { "ok" } else { "unavailable" };
+    let listeners = if is_ready() { "ok" } else { "starting" };
+    HealthChecks {
+        process: "ok".to_string(),
+        storage: status.to_string(),
+        transaction_manager: status.to_string(),
+        listeners: listeners.to_string(),
+    }
 }
 
-fn optional_components() -> serde_json::Value {
-    json!({
-        "vector": "optional",
-        "fulltext": "optional",
-    })
+fn optional_components() -> HealthOptional {
+    HealthOptional {
+        vector: "optional".to_string(),
+        fulltext: "optional".to_string(),
+    }
+}
+
+fn full_health() -> HealthResponse {
+    let ready = is_ready();
+    HealthResponse {
+        status: if ready { "healthy" } else { "not_ready" }.to_string(),
+        service: "linkrs".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        ready,
+        live: true,
+        checks: dependency_status(),
+        optional: optional_components(),
+    }
 }
 
 #[utoipa::path(
@@ -41,29 +57,18 @@ fn optional_components() -> serde_json::Value {
     path = "/v1/health",
     tag = "Health",
     responses(
-        (status = 200, body = serde_json::Value, description = "Service health status"),
+        (status = 200, body = HealthResponse, description = "Service health status"),
         (status = 500, description = "Internal error")
     )
 )]
-pub async fn check() -> (StatusCode, Json<serde_json::Value>) {
-    let ready = is_ready();
-    let status = if ready {
+pub async fn check() -> (StatusCode, Json<HealthResponse>) {
+    let body = full_health();
+    let status = if body.ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    (
-        status,
-        Json(json!({
-            "status": if ready { "healthy" } else { "not_ready" },
-            "service": "linkrs",
-            "version": env!("CARGO_PKG_VERSION"),
-            "ready": ready,
-            "live": true,
-            "checks": dependency_status(),
-            "optional": optional_components(),
-        })),
-    )
+    (status, Json(body))
 }
 
 /// Liveness probe: the process is alive and its main loop is not blocked.
@@ -72,19 +77,19 @@ pub async fn check() -> (StatusCode, Json<serde_json::Value>) {
     path = "/v1/health/live",
     tag = "Health",
     responses(
-        (status = 200, body = serde_json::Value, description = "Process is alive"),
+        (status = 200, body = LiveResponse, description = "Process is alive"),
         (status = 500, description = "Internal error")
     )
 )]
-pub async fn live() -> (StatusCode, Json<serde_json::Value>) {
+pub async fn live() -> (StatusCode, Json<LiveResponse>) {
     (
         StatusCode::OK,
-        Json(json!({
-            "status": "alive",
-            "service": "linkrs",
-            "version": env!("CARGO_PKG_VERSION"),
-            "live": true,
-        })),
+        Json(LiveResponse {
+            status: "alive".to_string(),
+            service: "linkrs".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            live: true,
+        }),
     )
 }
 
@@ -94,27 +99,16 @@ pub async fn live() -> (StatusCode, Json<serde_json::Value>) {
     path = "/v1/health/ready",
     tag = "Health",
     responses(
-        (status = 200, body = serde_json::Value, description = "Service readiness status"),
+        (status = 200, body = HealthResponse, description = "Service readiness status"),
         (status = 500, description = "Internal error")
     )
 )]
-pub async fn ready() -> (StatusCode, Json<serde_json::Value>) {
-    let ready = is_ready();
-    let status = if ready {
+pub async fn ready() -> (StatusCode, Json<HealthResponse>) {
+    let body = full_health();
+    let status = if body.ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    (
-        status,
-        Json(json!({
-            "status": if ready { "healthy" } else { "not_ready" },
-            "service": "linkrs",
-            "version": env!("CARGO_PKG_VERSION"),
-            "ready": ready,
-            "live": true,
-            "checks": dependency_status(),
-            "optional": optional_components(),
-        })),
-    )
+    (status, Json(body))
 }

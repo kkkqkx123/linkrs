@@ -2352,6 +2352,18 @@ export interface components {
             error?: null | components["schemas"]["ApiError"];
             success: boolean;
         };
+        /** @description Auth section of the configuration snapshot. */
+        AuthConfigSnapshot: {
+            /** Format: int32 */
+            bcrypt_cost: number;
+            default_username: string;
+            enable_authorize: boolean;
+            /** Format: int32 */
+            failed_login_attempts: number;
+            force_change_default_password: boolean;
+            /** Format: int64 */
+            session_idle_timeout_secs: number;
+        };
         /** @description Current user response for role-aware clients. */
         AuthMeResponse: {
             display_role?: string | null;
@@ -2418,7 +2430,7 @@ export interface components {
         BatchQueryRequest: {
             /** @description Query parameters bound to `@name` references in every statement. */
             parameters?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             /** Format: int64 */
             session_id: number;
@@ -2427,7 +2439,7 @@ export interface components {
              *     When omitted, the session-managed snapshot is used.
              */
             session_variables?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             statements: string[];
         };
@@ -2489,6 +2501,25 @@ export interface components {
             /** Format: int64 */
             timeout_seconds?: number | null;
         };
+        /** @description Bootstrap section of the configuration snapshot. */
+        BootstrapConfigSnapshot: {
+            auto_create_default_space: boolean;
+            default_space_name: string;
+            single_user_mode: boolean;
+        };
+        /** @description Breaking change report. */
+        BreakingChangesResponse: {
+            changes?: components["schemas"]["SchemaChangeEntry"][];
+            /** Format: int64 */
+            from_version: number;
+            has_breaking_changes: boolean;
+            is_edge: boolean;
+            label: string;
+            recommendation: string;
+            space: string;
+            /** Format: int64 */
+            to_version: number;
+        };
         CacheSection: {
             /** Format: int64 */
             hit_count: number;
@@ -2496,6 +2527,18 @@ export interface components {
             hit_rate: number;
             /** Format: int64 */
             miss_count: number;
+        };
+        /**
+         * @description Restricted property value for OpenAPI documentation.
+         *
+         *     The JSON wire shape is identical to a plain JSON value: large integers
+         *     arrive as strings through the `json-bigint` path, times and binaries
+         *     arrive as strings. The untagged representation keeps runtime payloads
+         *     unchanged while letting the schema expose candidate branches instead
+         *     of an unknown value.
+         */
+        CellValue: null | boolean | number | string | components["schemas"]["CellValue"][] | {
+            [key: string]: components["schemas"]["CellValue"];
         };
         /** @description Checkpoint summary embedded in database storage sections. */
         CheckpointSummary: {
@@ -2639,6 +2682,38 @@ export interface components {
                 value: string;
             };
         };
+        /** @description Single configuration item payload. */
+        ConfigItemResponse: {
+            key: string;
+            section: string;
+            value: components["schemas"]["CellValue"];
+        };
+        /** @description Single configuration item write receipt. */
+        ConfigItemWriteReceipt: {
+            key: string;
+            message: string;
+            persisted: boolean;
+            requires_restart: boolean;
+            section: string;
+            value: components["schemas"]["CellValue"];
+        };
+        /** @description Full configuration snapshot served by the management endpoint. */
+        ConfigSnapshot: {
+            auth: components["schemas"]["AuthConfigSnapshot"];
+            bootstrap: components["schemas"]["BootstrapConfigSnapshot"];
+            database: components["schemas"]["DatabaseConfigSnapshot"];
+            log: components["schemas"]["LogConfigSnapshot"];
+            monitoring: components["schemas"]["MonitoringConfigSnapshot"];
+            optimizer: components["schemas"]["OptimizerConfigSnapshot"];
+            transaction: components["schemas"]["TransactionConfigSnapshot"];
+        };
+        /** @description Bulk configuration update receipt. */
+        ConfigUpdateReceipt: {
+            message: string;
+            persisted: boolean;
+            requires_restart?: string[];
+            updated?: string[];
+        };
         /** @description Connection counters shared by system responses. */
         ConnectionStats: {
             active: number;
@@ -2736,6 +2811,14 @@ export interface components {
              */
             tag_name: string;
             vector_size: number;
+        };
+        /** @description Database section of the configuration snapshot. */
+        DatabaseConfigSnapshot: {
+            host: string;
+            max_sessions: number;
+            /** Format: int32 */
+            port: number;
+            storage_path: string;
         };
         /** @description Database overview response mirroring the handler JSON keys. */
         DatabaseOverviewResponse: {
@@ -2848,7 +2931,7 @@ export interface components {
         /** @description Edge delete data */
         DeleteEdgeData: {
             /** @description Target vertex ID */
-            dst_vid: unknown;
+            dst_vid: components["schemas"]["CellValue"];
             /** @description Edge type */
             edge_type: string;
             /**
@@ -2857,7 +2940,7 @@ export interface components {
              */
             rank?: number;
             /** @description Source vertex ID */
-            src_vid: unknown;
+            src_vid: components["schemas"]["CellValue"];
         };
         /** @description Delete payload request */
         DeletePayloadRequest: {
@@ -2890,22 +2973,47 @@ export interface components {
             /** @description Tag names to delete the vertex from (incident edges are removed too) */
             tag_names?: string[];
             /** @description Vertex ID */
-            vid: unknown;
+            vid: components["schemas"]["CellValue"];
         };
         /** @enum {string} */
         DistanceMetric: "Cosine" | "Euclid" | "Dot" | "Manhattan";
+        /** @description Edge type creation receipt. */
+        EdgeCreateResponse: {
+            edge_type_name: string;
+            message: string;
+            space_name: string;
+        };
         /** @description Edge data */
         EdgeData: {
             /** @description Target vertex ID */
-            dst_vid: unknown;
+            dst_vid: components["schemas"]["CellValue"];
             /** @description Edge type */
             edge_type: string;
             /** @description Properties */
             properties?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             /** @description Source vertex ID */
-            src_vid: unknown;
+            src_vid: components["schemas"]["CellValue"];
+        };
+        /** @description Edge type deletion receipt. */
+        EdgeDeleteResponse: {
+            edge_type_name: string;
+            message: string;
+            space_name: string;
+        };
+        /** @description Edge type detail payload. */
+        EdgeDetailResponse: {
+            dst_tag?: string | null;
+            fields?: components["schemas"]["FieldInfo"][];
+            name: string;
+            space_name: string;
+            src_tag?: string | null;
+        };
+        /** @description Edge type listing payload. */
+        EdgeListResponse: {
+            edge_types?: components["schemas"]["EdgeTypeInfo"][];
+            space_name: string;
         };
         /** @description Edge type detail */
         EdgeTypeDetail: {
@@ -2916,6 +3024,13 @@ export interface components {
             indexes: components["schemas"]["IndexInfo"][];
             name: string;
             properties: components["schemas"]["PropertyDef"][];
+        };
+        /** @description Edge type information */
+        EdgeTypeInfo: {
+            dst_tag?: string | null;
+            fields?: components["schemas"]["FieldInfo"][];
+            name: string;
+            src_tag?: string | null;
         };
         /** @description Text-to-vector embedding call counters. */
         EmbeddingSection: {
@@ -2964,14 +3079,14 @@ export interface components {
         ExplainRequest: {
             /** @description Query parameters bound to `@name` references in the statement. */
             parameters?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             query: string;
             /** Format: int64 */
             session_id: number;
             /** @description Session variables bound to `$name` references in the statement. */
             session_variables?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
         };
         /** @description Query favorite item */
@@ -3001,10 +3116,17 @@ export interface components {
             has_more: boolean;
             returned: number;
             rows?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             }[];
             stages?: null | components["schemas"]["QueryStageTimings"];
             trace_id?: string | null;
+        };
+        /** @description Field information */
+        FieldInfo: {
+            data_type: string;
+            default_value?: string | null;
+            name: string;
+            nullable: boolean;
         };
         /** @description A single filter condition: field plus its predicate. */
         FilterCondition: {
@@ -3151,6 +3273,28 @@ export interface components {
             role: string;
             space: string;
         };
+        /** @description Dependency checks embedded in health responses. */
+        HealthChecks: {
+            listeners: string;
+            process: string;
+            storage: string;
+            transaction_manager: string;
+        };
+        /** @description Optional component markers embedded in health responses. */
+        HealthOptional: {
+            fulltext: string;
+            vector: string;
+        };
+        /** @description Service health payload. */
+        HealthResponse: {
+            checks: components["schemas"]["HealthChecks"];
+            live: boolean;
+            optional: components["schemas"]["HealthOptional"];
+            ready: boolean;
+            service: string;
+            status: string;
+            version: string;
+        };
         /** @description Query history item */
         HistoryItem: {
             error_message?: string | null;
@@ -3245,6 +3389,24 @@ export interface components {
         ListVectorIndexesResponse: {
             count: number;
             indexes: string[];
+        };
+        /** @description Liveness probe payload. */
+        LiveResponse: {
+            live: boolean;
+            service: string;
+            status: string;
+            version: string;
+        };
+        /** @description Log section of the configuration snapshot. */
+        LogConfigSnapshot: {
+            basename: string;
+            dir: string;
+            json_format: boolean;
+            level: string;
+            /** Format: int64 */
+            max_file_size_mb: number;
+            max_files: number;
+            stdout: boolean;
         };
         /** @description Login request */
         LoginRequest: {
@@ -3342,6 +3504,13 @@ export interface components {
             conditions: components["schemas"]["FilterCondition"][];
             min_count: number;
         };
+        /** @description Monitoring section of the configuration snapshot. */
+        MonitoringConfigSnapshot: {
+            enabled: boolean;
+            memory_cache_size: number;
+            /** Format: int64 */
+            slow_query_threshold_ms: number;
+        };
         /** @description Open a forward-only cursor over a single statement's result. */
         OpenCursorRequest: {
             query: string;
@@ -3353,6 +3522,24 @@ export interface components {
             columns?: string[];
             /** Format: int64 */
             cursor_id: number;
+        };
+        /** @description Optimizer section of the configuration snapshot. */
+        OptimizerConfigSnapshot: {
+            enable_adaptive_iteration: boolean;
+            enable_cost_model: boolean;
+            enable_multi_plan: boolean;
+            enable_property_pruning: boolean;
+            max_exploration_rounds: number;
+            max_iteration_rounds: number;
+            min_iteration_rounds: number;
+            space_cost_profiles?: {
+                [key: string]: string;
+            };
+            stable_threshold: number;
+            /** Format: int64 */
+            statistics_min_epoch_delta: number;
+            statistics_sample_limit: number;
+            storage_cost_profile: string;
         };
         OverviewErrors: {
             /** Format: int64 */
@@ -3428,7 +3615,7 @@ export interface components {
             columns?: string[];
             row_count?: number;
             rows?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             }[];
         };
         /** @description Query error. */
@@ -3507,7 +3694,7 @@ export interface components {
             minimum_lsn?: number | null;
             /** @description Query parameters bound to `@name` references in the statement. */
             parameters?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             query: string;
             /** Format: int64 */
@@ -3518,7 +3705,7 @@ export interface components {
              *     is used.
              */
             session_variables?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
         };
         /** @description Query response (structured) */
@@ -3668,7 +3855,7 @@ export interface components {
          */
         RegisterFunctionRequest: {
             description?: string | null;
-            implementation?: unknown;
+            implementation?: string | null;
             name: string;
             parameters?: string[];
             return_type?: string;
@@ -3763,6 +3950,33 @@ export interface components {
             savepoint_id: number;
             /** Format: int64 */
             transaction_id: number;
+        };
+        /** @description One schema change entry. */
+        SchemaChangeEntry: {
+            change_type: string;
+            description: string;
+            details?: {
+                [key: string]: string;
+            };
+        };
+        /** @description Schema changes between two versions. */
+        SchemaChangesResponse: {
+            changes?: components["schemas"]["SchemaChangeEntry"][];
+            /** Format: int64 */
+            from_version: number;
+            is_edge: boolean;
+            label: string;
+            space: string;
+            /** Format: int64 */
+            to_version: number;
+        };
+        /** @description One schema version with its changes. */
+        SchemaVersionEntry: {
+            changes?: components["schemas"]["SchemaChangeEntry"][];
+            /** Format: int64 */
+            timestamp_ms: number;
+            /** Format: int64 */
+            version: number;
         };
         /** @description Scroll request */
         ScrollRequest: {
@@ -3881,7 +4095,7 @@ export interface components {
         SetPayloadRequest: {
             field_name: string;
             payload: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             point_ids: string[];
             /** Format: int64 */
@@ -3891,14 +4105,14 @@ export interface components {
         /** @description Assign one session variable. */
         SetVariableRequest: {
             name: string;
-            value?: unknown;
+            value?: null | components["schemas"]["CellValue"];
         };
         /** @description Variable assignment receipt. */
         SetVariableResponse: {
             name: string;
             /** Format: int64 */
             session_id: number;
-            value?: unknown;
+            value?: null | components["schemas"]["CellValue"];
         };
         /** @description Information about a slow query */
         SlowQueryInfo: {
@@ -3913,6 +4127,16 @@ export interface components {
             started_at_secs?: number | null;
             status: string;
             trace_id: string;
+        };
+        /** @description Space creation receipt. */
+        SpaceCreateResponse: {
+            message: string;
+            space_name: string;
+        };
+        /** @description Space deletion receipt. */
+        SpaceDeleteResponse: {
+            message: string;
+            space_name: string;
         };
         /** @description Space detail response */
         SpaceDetail: {
@@ -3929,6 +4153,22 @@ export interface components {
             statistics: components["schemas"]["SpaceStatistics"];
             vid_type: string;
         };
+        /** @description Space detail payload. */
+        SpaceDetailResponse: {
+            space: components["schemas"]["SpaceSummary"];
+        };
+        /** @description Space information */
+        SpaceInfo: {
+            comment?: string | null;
+            /** Format: int64 */
+            id: number;
+            name: string;
+            vid_type: string;
+        };
+        /** @description Space listing payload. */
+        SpaceListResponse: {
+            spaces?: components["schemas"]["SpaceInfo"][];
+        };
         /** @description Space statistics */
         SpaceStatistics: {
             /** Format: int64 */
@@ -3941,6 +4181,14 @@ export interface components {
             index_count: number;
             /** Format: int64 */
             tag_count: number;
+        };
+        /** @description Compact space summary embedded in detail responses. */
+        SpaceSummary: {
+            comment?: string | null;
+            /** Format: int64 */
+            id: number;
+            name: string;
+            vid_type?: string | null;
         };
         /**
          * @description Streaming query request (SSE `/stream` endpoint).
@@ -3964,7 +4212,7 @@ export interface components {
              *     (batch-streaming mode only).
              */
             parameters?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             query: string;
             /** Format: int64 */
@@ -3975,7 +4223,7 @@ export interface components {
              *     snapshot is used, same as [`BatchQueryRequest`].
              */
             session_variables?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             /** @description Batch-streaming statements. Empty means single-statement mode. */
             statements?: string[];
@@ -4031,6 +4279,18 @@ export interface components {
             /** Format: int64 */
             wal_dir_size_bytes?: number | null;
         };
+        /** @description Tag creation receipt. */
+        TagCreateResponse: {
+            message: string;
+            space_name: string;
+            tag_name: string;
+        };
+        /** @description Tag deletion receipt. */
+        TagDeleteResponse: {
+            message: string;
+            space_name: string;
+            tag_name: string;
+        };
         /** @description Tag detail */
         TagDetail: {
             /** Format: int64 */
@@ -4040,6 +4300,22 @@ export interface components {
             indexes: components["schemas"]["IndexInfo"][];
             name: string;
             properties: components["schemas"]["PropertyDef"][];
+        };
+        /** @description Tag detail payload. */
+        TagDetailResponse: {
+            fields?: components["schemas"]["FieldInfo"][];
+            name: string;
+            space_name: string;
+        };
+        /** @description Tag information */
+        TagInfo: {
+            fields?: components["schemas"]["FieldInfo"][];
+            name: string;
+        };
+        /** @description Tag listing payload. */
+        TagListResponse: {
+            space_name: string;
+            tags?: components["schemas"]["TagInfo"][];
         };
         /** @description Health of one synchronization target. */
         TargetSyncDiagnostics: {
@@ -4065,6 +4341,13 @@ export interface components {
             message: string;
             /** Format: int64 */
             transaction_id: number;
+        };
+        /** @description Transaction section of the configuration snapshot. */
+        TransactionConfigSnapshot: {
+            auto_commit: boolean;
+            /** Format: int64 */
+            default_timeout: number;
+            max_concurrent_transactions: number;
         };
         /** @description Transaction kill receipt. */
         TransactionKillResponse: {
@@ -4162,17 +4445,17 @@ export interface components {
         };
         /** @description Update Configuration Request */
         UpdateConfigRequest: {
-            value: unknown;
+            value: components["schemas"]["CellValue"];
         };
         /** @description Edge update data (edge identity includes rank, unlike inserts) */
         UpdateEdgeData: {
             /** @description Target vertex ID */
-            dst_vid: unknown;
+            dst_vid: components["schemas"]["CellValue"];
             /** @description Edge type */
             edge_type: string;
             /** @description Properties */
             properties?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             /**
              * Format: int64
@@ -4180,7 +4463,7 @@ export interface components {
              */
             rank?: number;
             /** @description Source vertex ID */
-            src_vid: unknown;
+            src_vid: components["schemas"]["CellValue"];
         };
         /** @description Update edge type request */
         UpdateEdgeTypeRequest: {
@@ -4244,7 +4527,7 @@ export interface components {
             /** Format: int64 */
             session_id: number;
             variables?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
         };
         /** @description Vector point count payload. */
@@ -4288,7 +4571,7 @@ export interface components {
         VectorPoint: {
             id: string;
             payload?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             } | null;
             vector?: number[] | null;
         };
@@ -4365,7 +4648,7 @@ export interface components {
         VectorSearchResult: {
             doc_id: string;
             payload?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             } | null;
             /** Format: float */
             score: number;
@@ -4392,16 +4675,23 @@ export interface components {
             /** Format: int64 */
             upsert_errors: number;
         };
+        /** @description Version history payload. */
+        VersionHistoryResponse: {
+            is_edge: boolean;
+            label: string;
+            space: string;
+            versions?: components["schemas"]["SchemaVersionEntry"][];
+        };
         /** @description Vertex data */
         VertexData: {
             /** @description Properties */
             properties?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["CellValue"];
             };
             /** @description Single label tag name (single-label vertices carry exactly one tag) */
             tag: string;
             /** @description Vertex ID */
-            vid: unknown;
+            vid: components["schemas"]["CellValue"];
         };
     };
     responses: never;
@@ -6049,7 +6339,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ConfigSnapshot"];
                 };
             };
             /** @description Internal error */
@@ -6070,7 +6360,11 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": unknown;
+                "application/json": {
+                    [key: string]: {
+                        [key: string]: unknown;
+                    };
+                };
             };
         };
         responses: {
@@ -6080,7 +6374,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ConfigUpdateReceipt"];
                 };
             };
             /** @description Internal error */
@@ -6112,7 +6406,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ConfigItemResponse"];
                 };
             };
             /** @description Internal error */
@@ -6148,7 +6442,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ConfigItemWriteReceipt"];
                 };
             };
             /** @description Internal error */
@@ -6180,7 +6474,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ConfigItemWriteReceipt"];
                 };
             };
             /** @description Internal error */
@@ -6573,7 +6867,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["HealthResponse"];
                 };
             };
             /** @description Internal error */
@@ -6600,7 +6894,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["LiveResponse"];
                 };
             };
             /** @description Internal error */
@@ -6627,7 +6921,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["HealthResponse"];
                 };
             };
             /** @description Internal error */
@@ -7259,7 +7553,7 @@ export interface operations {
             path: {
                 /** @description Space name */
                 space: string;
-                /** @description Tag or edge type name */
+                /** @description Label or edge type name */
                 label: string;
                 /** @description Start schema version */
                 from_version: number;
@@ -7276,7 +7570,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BreakingChangesResponse"];
                 };
             };
             /** @description Internal error */
@@ -7315,7 +7609,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SchemaChangesResponse"];
                 };
             };
             /** @description Internal error */
@@ -7342,7 +7636,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SpaceListResponse"];
                 };
             };
             /** @description Internal error */
@@ -7373,7 +7667,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SpaceCreateResponse"];
                 };
             };
             /** @description Internal error */
@@ -7403,7 +7697,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SpaceDetailResponse"];
                 };
             };
             /** @description Internal error */
@@ -7433,7 +7727,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SpaceDeleteResponse"];
                 };
             };
             /** @description Internal error */
@@ -7463,7 +7757,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["EdgeListResponse"];
                 };
             };
             /** @description Internal error */
@@ -7497,7 +7791,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["EdgeCreateResponse"];
                 };
             };
             /** @description Internal error */
@@ -7529,7 +7823,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["EdgeDetailResponse"];
                 };
             };
             /** @description Edge type not found */
@@ -7568,7 +7862,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["EdgeDeleteResponse"];
                 };
             };
             /** @description Edge type not found */
@@ -7605,7 +7899,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TagListResponse"];
                 };
             };
             /** @description Internal error */
@@ -7639,7 +7933,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TagCreateResponse"];
                 };
             };
             /** @description Internal error */
@@ -7671,7 +7965,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TagDetailResponse"];
                 };
             };
             /** @description Tag not found */
@@ -7710,7 +8004,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TagDeleteResponse"];
                 };
             };
             /** @description Tag not found */
@@ -7752,7 +8046,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["VersionHistoryResponse"];
                 };
             };
             /** @description Internal error */

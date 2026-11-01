@@ -23,7 +23,7 @@ pub struct SpaceInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TagInfo {
     pub name: String,
-    #[serde(default)]
+    #[serde(default, alias = "properties")]
     pub fields: Vec<FieldInfo>,
 }
 
@@ -31,8 +31,12 @@ pub struct TagInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EdgeTypeInfo {
     pub name: String,
-    #[serde(default)]
+    #[serde(default, alias = "properties")]
     pub fields: Vec<FieldInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dst_tag: Option<String>,
 }
 
 /// Field information
@@ -54,6 +58,7 @@ pub struct PropertyDef {
     #[serde(default)]
     pub nullable: bool,
     #[serde(default)]
+    #[schema(value_type = Option<crate::query::CellValue>)]
     pub default_value: Option<serde_json::Value>,
     #[serde(default)]
     pub comment: Option<String>,
@@ -102,6 +107,168 @@ pub struct CreateEdgeTypeRequest {
     pub name: String,
     #[serde(default)]
     pub properties: Vec<PropertyDef>,
+}
+
+/// Space creation receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SpaceCreateResponse {
+    pub message: String,
+    pub space_name: String,
+}
+
+/// Space deletion receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SpaceDeleteResponse {
+    pub message: String,
+    pub space_name: String,
+}
+
+/// Space listing payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SpaceListResponse {
+    #[serde(default)]
+    pub spaces: Vec<SpaceInfo>,
+}
+
+/// Compact space summary embedded in detail responses.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SpaceSummary {
+    pub id: u64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vid_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+/// Space detail payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SpaceDetailResponse {
+    pub space: SpaceSummary,
+}
+
+/// Tag creation receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TagCreateResponse {
+    pub message: String,
+    pub tag_name: String,
+    pub space_name: String,
+}
+
+/// Tag listing payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TagListResponse {
+    #[serde(default)]
+    pub tags: Vec<TagInfo>,
+    pub space_name: String,
+}
+
+/// Tag detail payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TagDetailResponse {
+    pub name: String,
+    pub space_name: String,
+    #[serde(default)]
+    pub fields: Vec<FieldInfo>,
+}
+
+/// Tag deletion receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TagDeleteResponse {
+    pub message: String,
+    pub tag_name: String,
+    pub space_name: String,
+}
+
+/// Edge type creation receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EdgeCreateResponse {
+    pub message: String,
+    pub edge_type_name: String,
+    pub space_name: String,
+}
+
+/// Edge type listing payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EdgeListResponse {
+    #[serde(default)]
+    pub edge_types: Vec<EdgeTypeInfo>,
+    pub space_name: String,
+}
+
+/// Edge type detail payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EdgeDetailResponse {
+    pub name: String,
+    pub space_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dst_tag: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<FieldInfo>,
+}
+
+/// Edge type deletion receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EdgeDeleteResponse {
+    pub message: String,
+    pub edge_type_name: String,
+    pub space_name: String,
+}
+
+/// One schema change entry.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SchemaChangeEntry {
+    pub change_type: String,
+    pub description: String,
+    #[serde(default)]
+    pub details: std::collections::HashMap<String, String>,
+}
+
+/// One schema version with its changes.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SchemaVersionEntry {
+    pub version: u64,
+    pub timestamp_ms: u64,
+    #[serde(default)]
+    pub changes: Vec<SchemaChangeEntry>,
+}
+
+/// Version history payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VersionHistoryResponse {
+    pub space: String,
+    pub label: String,
+    pub is_edge: bool,
+    #[serde(default)]
+    pub versions: Vec<SchemaVersionEntry>,
+}
+
+/// Schema changes between two versions.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SchemaChangesResponse {
+    pub space: String,
+    pub label: String,
+    pub is_edge: bool,
+    pub from_version: u64,
+    pub to_version: u64,
+    #[serde(default)]
+    pub changes: Vec<SchemaChangeEntry>,
+}
+
+/// Breaking change report.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BreakingChangesResponse {
+    pub space: String,
+    pub label: String,
+    pub is_edge: bool,
+    pub from_version: u64,
+    pub to_version: u64,
+    pub has_breaking_changes: bool,
+    #[serde(default)]
+    pub changes: Vec<SchemaChangeEntry>,
+    pub recommendation: String,
 }
 
 #[cfg(test)]

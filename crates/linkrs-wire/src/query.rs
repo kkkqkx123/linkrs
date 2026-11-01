@@ -7,6 +7,27 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Restricted property value for OpenAPI documentation.
+///
+/// The JSON wire shape is identical to a plain JSON value: large integers
+/// arrive as strings through the `json-bigint` path, times and binaries
+/// arrive as strings. The untagged representation keeps runtime payloads
+/// unchanged while letting the schema expose candidate branches instead
+/// of an unknown value.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(untagged)]
+#[schema(no_recursion)]
+pub enum CellValue {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    UInteger(u64),
+    Float(f64),
+    String(String),
+    Array(Vec<CellValue>),
+    Object(HashMap<String, CellValue>),
+}
+
 /// Query request
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct QueryRequest {
@@ -14,11 +35,13 @@ pub struct QueryRequest {
     pub session_id: i64,
     /// Query parameters bound to `@name` references in the statement.
     #[serde(default)]
+    #[schema(value_type = HashMap<String, CellValue>)]
     pub parameters: HashMap<String, serde_json::Value>,
     /// Session variables bound to `$name` references in the statement.
     /// When omitted, the session-managed snapshot (set via `LET $name = expr`)
     /// is used.
     #[serde(default)]
+    #[schema(value_type = HashMap<String, CellValue>)]
     pub session_variables: HashMap<String, serde_json::Value>,
     /// Consistency level: None = eventual (default), Some("read_your_writes") enables RYW.
     #[serde(default)]
@@ -37,10 +60,12 @@ pub struct BatchQueryRequest {
     pub statements: Vec<String>,
     /// Query parameters bound to `@name` references in every statement.
     #[serde(default)]
+    #[schema(value_type = HashMap<String, CellValue>)]
     pub parameters: HashMap<String, serde_json::Value>,
     /// Session variables bound to `$name` references in every statement.
     /// When omitted, the session-managed snapshot is used.
     #[serde(default)]
+    #[schema(value_type = HashMap<String, CellValue>)]
     pub session_variables: HashMap<String, serde_json::Value>,
 }
 
@@ -68,6 +93,7 @@ pub struct QueryData {
     #[serde(default)]
     pub columns: Vec<String>,
     #[serde(default)]
+    #[schema(value_type = Vec<HashMap<String, CellValue>>)]
     pub rows: Vec<HashMap<String, serde_json::Value>>,
     #[serde(default)]
     pub row_count: usize,
@@ -147,9 +173,11 @@ pub struct ExplainRequest {
     pub session_id: i64,
     /// Query parameters bound to `@name` references in the statement.
     #[serde(default)]
+    #[schema(value_type = HashMap<String, CellValue>)]
     pub parameters: HashMap<String, serde_json::Value>,
     /// Session variables bound to `$name` references in the statement.
     #[serde(default)]
+    #[schema(value_type = HashMap<String, CellValue>)]
     pub session_variables: HashMap<String, serde_json::Value>,
 }
 
@@ -185,11 +213,13 @@ pub struct StreamQueryRequest {
     /// Query parameters bound to `@name` references in every statement
     /// (batch-streaming mode only).
     #[serde(default)]
+    #[schema(value_type = HashMap<String, CellValue>)]
     pub parameters: HashMap<String, serde_json::Value>,
     /// Session variables bound to `$name` references in every statement
     /// (batch-streaming mode only). When omitted, the session-managed
     /// snapshot is used, same as [`BatchQueryRequest`].
     #[serde(default)]
+    #[schema(value_type = HashMap<String, CellValue>)]
     pub session_variables: HashMap<String, serde_json::Value>,
     /// Stop the batch at the first failing statement (default true).
     /// Already produced statements are kept either way.
@@ -231,6 +261,7 @@ pub struct FetchCursorResponse {
     #[serde(default)]
     pub columns: Vec<String>,
     #[serde(default)]
+    #[schema(value_type = Vec<HashMap<String, CellValue>>)]
     pub rows: Vec<HashMap<String, serde_json::Value>>,
     pub has_more: bool,
     pub returned: usize,

@@ -6,7 +6,10 @@ use axum::{
     extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
-use linkrs_wire::schema::CreateTagRequest;
+use linkrs_wire::schema::{
+    CreateTagRequest, FieldInfo, TagCreateResponse, TagDeleteResponse, TagDetailResponse, TagInfo,
+    TagListResponse,
+};
 use tokio::task;
 
 use super::common::parse_data_type;
@@ -27,7 +30,7 @@ use linkrs_api::api_core::PropertyDef as CorePropertyDef;
     params(("name" = String, Path, description = "Space name")),
     request_body = CreateTagRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Tag created"),
+        (status = 200, body = TagCreateResponse, description = "Tag created"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -46,7 +49,7 @@ pub async fn create_tag<
     Extension(session_id): Extension<i64>,
     Path(space_name): Path<String>,
     Json(request): Json<CreateTagRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<TagCreateResponse>, HttpError> {
     super::super::authz::require_schema_write_session(&state, session_id, &space_name)?;
     let result = task::spawn_blocking(move || {
         let schema_api = state.server.get_schema_api();
@@ -69,11 +72,11 @@ pub async fn create_tag<
 
         schema_api.create_tag(space_id, &request.name, properties)?;
 
-        Ok::<_, HttpError>(serde_json::json!({
-            "message": "Tag created successfully",
-            "tag_name": request.name,
-            "space_name": space_name,
-        }))
+        Ok::<_, HttpError>(TagCreateResponse {
+            message: "Tag created successfully".to_string(),
+            tag_name: request.name,
+            space_name,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -88,7 +91,7 @@ pub async fn create_tag<
     tag = "Schema",
     params(("name" = String, Path, description = "Space name")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Tag list"),
+        (status = 200, body = TagListResponse, description = "Tag list"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -105,32 +108,33 @@ pub async fn list_tags<
 >(
     State(state): State<AppState<S>>,
     Path(space_name): Path<String>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<TagListResponse>, HttpError> {
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let storage = storage.read();
         let tags = storage
             .list_tags(&space_name)
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
-        let tag_list: Vec<serde_json::Value> = tags
+        let tag_list: Vec<TagInfo> = tags
             .into_iter()
-            .map(|tag| {
-                serde_json::json!({
-                    "name": tag.tag_name,
-                    "properties": tag.properties.iter().map(|p| {
-                        serde_json::json!({
-                            "name": p.name,
-                            "data_type": format!("{:?}", p.data_type),
-                            "nullable": p.nullable,
-                        })
-                    }).collect::<Vec<_>>(),
-                })
+            .map(|tag| TagInfo {
+                name: tag.tag_name,
+                fields: tag
+                    .properties
+                    .iter()
+                    .map(|p| FieldInfo {
+                        name: p.name.clone(),
+                        data_type: format!("{:?}", p.data_type),
+                        nullable: p.nullable,
+                        default_value: None,
+                    })
+                    .collect(),
             })
             .collect();
-        Ok::<_, HttpError>(serde_json::json!({
-            "tags": tag_list,
-            "space_name": space_name,
-        }))
+        Ok::<_, HttpError>(TagListResponse {
+            tags: tag_list,
+            space_name,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -148,7 +152,7 @@ pub async fn list_tags<
         ("tag" = String, Path, description = "Tag name")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Tag details"),
+        (status = 200, body = TagDetailResponse, description = "Tag details"),
         (status = 404, description = "Tag not found"),
         (status = 500, description = "Internal error")
     )
@@ -166,7 +170,7 @@ pub async fn get_tag<
 >(
     State(state): State<AppState<S>>,
     Path((space_name, tag_name)): Path<(String, String)>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<TagDetailResponse>, HttpError> {
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
         let storage = storage.read();
@@ -179,17 +183,20 @@ pub async fn get_tag<
                     tag_name, space_name
                 ))
             })?;
-        Ok::<_, HttpError>(serde_json::json!({
-            "name": tag.tag_name,
-            "space_name": space_name,
-            "properties": tag.properties.iter().map(|p| {
-                serde_json::json!({
-                    "name": p.name,
-                    "data_type": format!("{:?}", p.data_type),
-                    "nullable": p.nullable,
+        Ok::<_, HttpError>(TagDetailResponse {
+            name: tag.tag_name,
+            space_name,
+            fields: tag
+                .properties
+                .iter()
+                .map(|p| FieldInfo {
+                    name: p.name.clone(),
+                    data_type: format!("{:?}", p.data_type),
+                    nullable: p.nullable,
+                    default_value: None,
                 })
-            }).collect::<Vec<_>>(),
-        }))
+                .collect(),
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;
@@ -207,7 +214,7 @@ pub async fn get_tag<
         ("tag" = String, Path, description = "Tag name")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Tag deleted"),
+        (status = 200, body = TagDeleteResponse, description = "Tag deleted"),
         (status = 404, description = "Tag not found"),
         (status = 500, description = "Internal error")
     )
@@ -226,7 +233,7 @@ pub async fn drop_tag<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Path((space_name, tag_name)): Path<(String, String)>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<TagDeleteResponse>, HttpError> {
     super::super::authz::require_schema_write_session(&state, session_id, &space_name)?;
     let result = task::spawn_blocking(move || {
         let storage = state.server.get_storage();
@@ -240,11 +247,11 @@ pub async fn drop_tag<
                 tag_name, space_name
             )));
         }
-        Ok::<_, HttpError>(serde_json::json!({
-            "message": "Tag deleted successfully",
-            "tag_name": tag_name,
-            "space_name": space_name,
-        }))
+        Ok::<_, HttpError>(TagDeleteResponse {
+            message: "Tag deleted successfully".to_string(),
+            tag_name,
+            space_name,
+        })
     })
     .await
     .map_err(|e| HttpError::InternalError(format!("Task execution failed: {}", e)))?;

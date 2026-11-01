@@ -112,6 +112,7 @@ pub struct VectorPoint {
     #[serde(default)]
     pub vector: Option<Vec<f32>>,
     #[serde(default)]
+    #[schema(value_type = Option<std::collections::HashMap<String, crate::query::CellValue>>)]
     pub payload: Option<serde_json::Map<String, serde_json::Value>>,
 }
 

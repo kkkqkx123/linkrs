@@ -23,4 +23,4 @@ pub use migration::{
 };
 pub use space::{create_space, drop_space, get_space, list_spaces};
 pub use tag::{create_tag, drop_tag, get_tag, list_tags};
-pub use version::{detect_breaking_changes, get_schema_changes, get_version_history, ChangeInfo};
+pub use version::{detect_breaking_changes, get_schema_changes, get_version_history};

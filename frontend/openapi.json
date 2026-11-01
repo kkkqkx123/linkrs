@@ -1942,7 +1942,9 @@
             "description": "Current configuration",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSnapshot"
+                }
               }
             }
           },
@@ -1960,7 +1962,19 @@
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": {}
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
             }
           },
           "required": true
@@ -1970,7 +1984,9 @@
             "description": "Configuration update receipt",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigUpdateReceipt"
+                }
               }
             }
           },
@@ -2012,7 +2028,9 @@
             "description": "Configuration item",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigItemResponse"
+                }
               }
             }
           },
@@ -2062,7 +2080,9 @@
             "description": "Configuration item updated",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigItemWriteReceipt"
+                }
               }
             }
           },
@@ -2102,7 +2122,9 @@
             "description": "Configuration reset to default",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigItemWriteReceipt"
+                }
               }
             }
           },
@@ -2514,7 +2536,9 @@
             "description": "Service health status",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
               }
             }
           },
@@ -2536,7 +2560,9 @@
             "description": "Process is alive",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LiveResponse"
+                }
               }
             }
           },
@@ -2558,7 +2584,9 @@
             "description": "Service readiness status",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
               }
             }
           },
@@ -3293,7 +3321,7 @@
           {
             "name": "label",
             "in": "path",
-            "description": "Tag or edge type name",
+            "description": "Label or edge type name",
             "required": true,
             "schema": {
               "type": "string"
@@ -3336,7 +3364,9 @@
             "description": "Breaking change report",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BreakingChangesResponse"
+                }
               }
             }
           },
@@ -3409,7 +3439,9 @@
             "description": "Schema changes between versions",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaChangesResponse"
+                }
               }
             }
           },
@@ -3431,7 +3463,9 @@
             "description": "Space list",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceListResponse"
+                }
               }
             }
           },
@@ -3461,7 +3495,9 @@
             "description": "Space created",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceCreateResponse"
+                }
               }
             }
           },
@@ -3494,7 +3530,9 @@
             "description": "Space details",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceDetailResponse"
+                }
               }
             }
           },
@@ -3525,7 +3563,9 @@
             "description": "Space deleted",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SpaceDeleteResponse"
+                }
               }
             }
           },
@@ -3558,7 +3598,9 @@
             "description": "Edge type list",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeListResponse"
+                }
               }
             }
           },
@@ -3599,7 +3641,9 @@
             "description": "Edge type created",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeCreateResponse"
+                }
               }
             }
           },
@@ -3641,7 +3685,9 @@
             "description": "Edge type details",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeDetailResponse"
+                }
               }
             }
           },
@@ -3684,7 +3730,9 @@
             "description": "Edge type deleted",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeDeleteResponse"
+                }
               }
             }
           },
@@ -3720,7 +3768,9 @@
             "description": "Tag list",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TagListResponse"
+                }
               }
             }
           },
@@ -3761,7 +3811,9 @@
             "description": "Tag created",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TagCreateResponse"
+                }
               }
             }
           },
@@ -3803,7 +3855,9 @@
             "description": "Tag details",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TagDetailResponse"
+                }
               }
             }
           },
@@ -3846,7 +3900,9 @@
             "description": "Tag deleted",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TagDeleteResponse"
+                }
               }
             }
           },
@@ -3900,7 +3956,9 @@
             "description": "Schema version history",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VersionHistoryResponse"
+                }
               }
             }
           },
@@ -6695,6 +6753,44 @@
           }
         }
       },
+      "AuthConfigSnapshot": {
+        "type": "object",
+        "description": "Auth section of the configuration snapshot.",
+        "required": [
+          "enable_authorize",
+          "failed_login_attempts",
+          "session_idle_timeout_secs",
+          "force_change_default_password",
+          "default_username",
+          "bcrypt_cost"
+        ],
+        "properties": {
+          "bcrypt_cost": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "default_username": {
+            "type": "string"
+          },
+          "enable_authorize": {
+            "type": "boolean"
+          },
+          "failed_login_attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "force_change_default_password": {
+            "type": "boolean"
+          },
+          "session_idle_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "AuthMeResponse": {
         "type": "object",
         "description": "Current user response for role-aware clients.",
@@ -6954,7 +7050,9 @@
           "parameters": {
             "type": "object",
             "description": "Query parameters bound to `@name` references in every statement.",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -6966,7 +7064,9 @@
           "session_variables": {
             "type": "object",
             "description": "Session variables bound to `$name` references in every statement.\nWhen omitted, the session-managed snapshot is used.",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -7142,6 +7242,72 @@
           }
         }
       },
+      "BootstrapConfigSnapshot": {
+        "type": "object",
+        "description": "Bootstrap section of the configuration snapshot.",
+        "required": [
+          "auto_create_default_space",
+          "default_space_name",
+          "single_user_mode"
+        ],
+        "properties": {
+          "auto_create_default_space": {
+            "type": "boolean"
+          },
+          "default_space_name": {
+            "type": "string"
+          },
+          "single_user_mode": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BreakingChangesResponse": {
+        "type": "object",
+        "description": "Breaking change report.",
+        "required": [
+          "space",
+          "label",
+          "is_edge",
+          "from_version",
+          "to_version",
+          "has_breaking_changes",
+          "recommendation"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchemaChangeEntry"
+            }
+          },
+          "from_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "has_breaking_changes": {
+            "type": "boolean"
+          },
+          "is_edge": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "recommendation": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          },
+          "to_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "CacheSection": {
         "type": "object",
         "required": [
@@ -7165,6 +7331,49 @@
             "minimum": 0
           }
         }
+      },
+      "CellValue": {
+        "oneOf": [
+          {
+            "type": "null",
+            "default": null
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CellValue"
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Restricted property value for OpenAPI documentation.\n\nThe JSON wire shape is identical to a plain JSON value: large integers\narrive as strings through the `json-bigint` path, times and binaries\narrive as strings. The untagged representation keeps runtime payloads\nunchanged while letting the schema expose candidate branches instead\nof an unknown value."
       },
       "CheckpointSummary": {
         "type": "object",
@@ -7570,6 +7779,122 @@
         ],
         "description": "Predicate of a [`FilterCondition`]."
       },
+      "ConfigItemResponse": {
+        "type": "object",
+        "description": "Single configuration item payload.",
+        "required": [
+          "section",
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/CellValue"
+          }
+        }
+      },
+      "ConfigItemWriteReceipt": {
+        "type": "object",
+        "description": "Single configuration item write receipt.",
+        "required": [
+          "section",
+          "key",
+          "value",
+          "requires_restart",
+          "persisted",
+          "message"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "persisted": {
+            "type": "boolean"
+          },
+          "requires_restart": {
+            "type": "boolean"
+          },
+          "section": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/CellValue"
+          }
+        }
+      },
+      "ConfigSnapshot": {
+        "type": "object",
+        "description": "Full configuration snapshot served by the management endpoint.",
+        "required": [
+          "database",
+          "transaction",
+          "log",
+          "auth",
+          "bootstrap",
+          "optimizer",
+          "monitoring"
+        ],
+        "properties": {
+          "auth": {
+            "$ref": "#/components/schemas/AuthConfigSnapshot"
+          },
+          "bootstrap": {
+            "$ref": "#/components/schemas/BootstrapConfigSnapshot"
+          },
+          "database": {
+            "$ref": "#/components/schemas/DatabaseConfigSnapshot"
+          },
+          "log": {
+            "$ref": "#/components/schemas/LogConfigSnapshot"
+          },
+          "monitoring": {
+            "$ref": "#/components/schemas/MonitoringConfigSnapshot"
+          },
+          "optimizer": {
+            "$ref": "#/components/schemas/OptimizerConfigSnapshot"
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/TransactionConfigSnapshot"
+          }
+        }
+      },
+      "ConfigUpdateReceipt": {
+        "type": "object",
+        "description": "Bulk configuration update receipt.",
+        "required": [
+          "persisted",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "persisted": {
+            "type": "boolean"
+          },
+          "requires_restart": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updated": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ConnectionStats": {
         "type": "object",
         "description": "Connection counters shared by system responses.",
@@ -7861,6 +8186,33 @@
           "vector_size": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "DatabaseConfigSnapshot": {
+        "type": "object",
+        "description": "Database section of the configuration snapshot.",
+        "required": [
+          "host",
+          "port",
+          "storage_path",
+          "max_sessions"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "max_sessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "storage_path": {
+            "type": "string"
           }
         }
       },
@@ -8206,6 +8558,7 @@
         ],
         "properties": {
           "dst_vid": {
+            "$ref": "#/components/schemas/CellValue",
             "description": "Target vertex ID"
           },
           "edge_type": {
@@ -8218,6 +8571,7 @@
             "description": "Edge rank within (src, dst, type)"
           },
           "src_vid": {
+            "$ref": "#/components/schemas/CellValue",
             "description": "Source vertex ID"
           }
         }
@@ -8324,6 +8678,7 @@
             "description": "Tag names to delete the vertex from (incident edges are removed too)"
           },
           "vid": {
+            "$ref": "#/components/schemas/CellValue",
             "description": "Vertex ID"
           }
         }
@@ -8337,6 +8692,26 @@
           "Manhattan"
         ]
       },
+      "EdgeCreateResponse": {
+        "type": "object",
+        "description": "Edge type creation receipt.",
+        "required": [
+          "message",
+          "edge_type_name",
+          "space_name"
+        ],
+        "properties": {
+          "edge_type_name": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          }
+        }
+      },
       "EdgeData": {
         "type": "object",
         "description": "Edge data",
@@ -8347,6 +8722,7 @@
         ],
         "properties": {
           "dst_vid": {
+            "$ref": "#/components/schemas/CellValue",
             "description": "Target vertex ID"
           },
           "edge_type": {
@@ -8356,13 +8732,88 @@
           "properties": {
             "type": "object",
             "description": "Properties",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
           },
           "src_vid": {
+            "$ref": "#/components/schemas/CellValue",
             "description": "Source vertex ID"
+          }
+        }
+      },
+      "EdgeDeleteResponse": {
+        "type": "object",
+        "description": "Edge type deletion receipt.",
+        "required": [
+          "message",
+          "edge_type_name",
+          "space_name"
+        ],
+        "properties": {
+          "edge_type_name": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          }
+        }
+      },
+      "EdgeDetailResponse": {
+        "type": "object",
+        "description": "Edge type detail payload.",
+        "required": [
+          "name",
+          "space_name"
+        ],
+        "properties": {
+          "dst_tag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldInfo"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          },
+          "src_tag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "EdgeListResponse": {
+        "type": "object",
+        "description": "Edge type listing payload.",
+        "required": [
+          "space_name"
+        ],
+        "properties": {
+          "edge_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EdgeTypeInfo"
+            }
+          },
+          "space_name": {
+            "type": "string"
           }
         }
       },
@@ -8399,6 +8850,36 @@
             "items": {
               "$ref": "#/components/schemas/PropertyDef"
             }
+          }
+        }
+      },
+      "EdgeTypeInfo": {
+        "type": "object",
+        "description": "Edge type information",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "dst_tag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldInfo"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "src_tag": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -8539,7 +9020,9 @@
           "parameters": {
             "type": "object",
             "description": "Query parameters bound to `@name` references in the statement.",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -8554,7 +9037,9 @@
           "session_variables": {
             "type": "object",
             "description": "Session variables bound to `$name` references in the statement.",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -8658,7 +9143,9 @@
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": {},
+              "additionalProperties": {
+                "$ref": "#/components/schemas/CellValue"
+              },
               "propertyNames": {
                 "type": "string"
               }
@@ -8679,6 +9166,32 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "FieldInfo": {
+        "type": "object",
+        "description": "Field information",
+        "required": [
+          "name",
+          "data_type",
+          "nullable"
+        ],
+        "properties": {
+          "data_type": {
+            "type": "string"
+          },
+          "default_value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "nullable": {
+            "type": "boolean"
           }
         }
       },
@@ -9075,6 +9588,82 @@
           }
         }
       },
+      "HealthChecks": {
+        "type": "object",
+        "description": "Dependency checks embedded in health responses.",
+        "required": [
+          "process",
+          "storage",
+          "transaction_manager",
+          "listeners"
+        ],
+        "properties": {
+          "listeners": {
+            "type": "string"
+          },
+          "process": {
+            "type": "string"
+          },
+          "storage": {
+            "type": "string"
+          },
+          "transaction_manager": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthOptional": {
+        "type": "object",
+        "description": "Optional component markers embedded in health responses.",
+        "required": [
+          "vector",
+          "fulltext"
+        ],
+        "properties": {
+          "fulltext": {
+            "type": "string"
+          },
+          "vector": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "description": "Service health payload.",
+        "required": [
+          "status",
+          "service",
+          "version",
+          "ready",
+          "live",
+          "checks",
+          "optional"
+        ],
+        "properties": {
+          "checks": {
+            "$ref": "#/components/schemas/HealthChecks"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "optional": {
+            "$ref": "#/components/schemas/HealthOptional"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "HistoryItem": {
         "type": "object",
         "description": "Query history item",
@@ -9395,6 +9984,69 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "LiveResponse": {
+        "type": "object",
+        "description": "Liveness probe payload.",
+        "required": [
+          "status",
+          "service",
+          "version",
+          "live"
+        ],
+        "properties": {
+          "live": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "LogConfigSnapshot": {
+        "type": "object",
+        "description": "Log section of the configuration snapshot.",
+        "required": [
+          "level",
+          "dir",
+          "basename",
+          "max_file_size_mb",
+          "max_files",
+          "stdout",
+          "json_format"
+        ],
+        "properties": {
+          "basename": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "json_format": {
+            "type": "boolean"
+          },
+          "level": {
+            "type": "string"
+          },
+          "max_file_size_mb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_files": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stdout": {
+            "type": "boolean"
           }
         }
       },
@@ -9731,6 +10383,29 @@
           }
         }
       },
+      "MonitoringConfigSnapshot": {
+        "type": "object",
+        "description": "Monitoring section of the configuration snapshot.",
+        "required": [
+          "enabled",
+          "memory_cache_size",
+          "slow_query_threshold_ms"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "memory_cache_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "slow_query_threshold_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "OpenCursorRequest": {
         "type": "object",
         "description": "Open a forward-only cursor over a single statement's result.",
@@ -9765,6 +10440,74 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "OptimizerConfigSnapshot": {
+        "type": "object",
+        "description": "Optimizer section of the configuration snapshot.",
+        "required": [
+          "max_iteration_rounds",
+          "max_exploration_rounds",
+          "enable_cost_model",
+          "enable_multi_plan",
+          "enable_property_pruning",
+          "enable_adaptive_iteration",
+          "stable_threshold",
+          "min_iteration_rounds",
+          "statistics_sample_limit",
+          "statistics_min_epoch_delta",
+          "storage_cost_profile"
+        ],
+        "properties": {
+          "enable_adaptive_iteration": {
+            "type": "boolean"
+          },
+          "enable_cost_model": {
+            "type": "boolean"
+          },
+          "enable_multi_plan": {
+            "type": "boolean"
+          },
+          "enable_property_pruning": {
+            "type": "boolean"
+          },
+          "max_exploration_rounds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_iteration_rounds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "min_iteration_rounds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "space_cost_profiles": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "stable_threshold": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "statistics_min_epoch_delta": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "statistics_sample_limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "storage_cost_profile": {
+            "type": "string"
           }
         }
       },
@@ -10016,7 +10759,9 @@
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": {},
+              "additionalProperties": {
+                "$ref": "#/components/schemas/CellValue"
+              },
               "propertyNames": {
                 "type": "string"
               }
@@ -10297,7 +11042,9 @@
           "parameters": {
             "type": "object",
             "description": "Query parameters bound to `@name` references in the statement.",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -10312,7 +11059,9 @@
           "session_variables": {
             "type": "object",
             "description": "Session variables bound to `$name` references in the statement.\nWhen omitted, the session-managed snapshot (set via `LET $name = expr`)\nis used.",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -10695,7 +11444,12 @@
               "null"
             ]
           },
-          "implementation": {},
+          "implementation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -10996,6 +11750,95 @@
             "minimum": 0
           },
           "transaction_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SchemaChangeEntry": {
+        "type": "object",
+        "description": "One schema change entry.",
+        "required": [
+          "change_type",
+          "description"
+        ],
+        "properties": {
+          "change_type": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SchemaChangesResponse": {
+        "type": "object",
+        "description": "Schema changes between two versions.",
+        "required": [
+          "space",
+          "label",
+          "is_edge",
+          "from_version",
+          "to_version"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchemaChangeEntry"
+            }
+          },
+          "from_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "is_edge": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          },
+          "to_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SchemaVersionEntry": {
+        "type": "object",
+        "description": "One schema version with its changes.",
+        "required": [
+          "version",
+          "timestamp_ms"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchemaChangeEntry"
+            }
+          },
+          "timestamp_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -11378,7 +12221,9 @@
           },
           "payload": {
             "type": "object",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -11409,7 +12254,16 @@
           "name": {
             "type": "string"
           },
-          "value": {}
+          "value": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CellValue"
+              }
+            ]
+          }
         }
       },
       "SetVariableResponse": {
@@ -11427,7 +12281,16 @@
             "type": "integer",
             "format": "int64"
           },
-          "value": {}
+          "value": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CellValue"
+              }
+            ]
+          }
         }
       },
       "SlowQueryInfo": {
@@ -11485,6 +12348,38 @@
           }
         }
       },
+      "SpaceCreateResponse": {
+        "type": "object",
+        "description": "Space creation receipt.",
+        "required": [
+          "message",
+          "space_name"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          }
+        }
+      },
+      "SpaceDeleteResponse": {
+        "type": "object",
+        "description": "Space deletion receipt.",
+        "required": [
+          "message",
+          "space_name"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          }
+        }
+      },
       "SpaceDetail": {
         "type": "object",
         "description": "Space detail response",
@@ -11532,6 +12427,58 @@
           }
         }
       },
+      "SpaceDetailResponse": {
+        "type": "object",
+        "description": "Space detail payload.",
+        "required": [
+          "space"
+        ],
+        "properties": {
+          "space": {
+            "$ref": "#/components/schemas/SpaceSummary"
+          }
+        }
+      },
+      "SpaceInfo": {
+        "type": "object",
+        "description": "Space information",
+        "required": [
+          "id",
+          "name",
+          "vid_type"
+        ],
+        "properties": {
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "vid_type": {
+            "type": "string"
+          }
+        }
+      },
+      "SpaceListResponse": {
+        "type": "object",
+        "description": "Space listing payload.",
+        "properties": {
+          "spaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpaceInfo"
+            }
+          }
+        }
+      },
       "SpaceStatistics": {
         "type": "object",
         "description": "Space statistics",
@@ -11565,6 +12512,36 @@
           }
         }
       },
+      "SpaceSummary": {
+        "type": "object",
+        "description": "Compact space summary embedded in detail responses.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "vid_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "StreamQueryRequest": {
         "type": "object",
         "description": "Streaming query request (SSE `/stream` endpoint).\n\nSingle-statement mode uses `query`. Batch-streaming mode uses\n`statements` (with shared `parameters` / `session_variables`, mirroring\n[`BatchQueryRequest`]) and emits one `statement_begin` /\n`statement_end` event pair per statement. The two modes are mutually\nexclusive: a non-empty `query` together with non-empty `statements` is\nrejected by the server.",
@@ -11584,7 +12561,9 @@
           "parameters": {
             "type": "object",
             "description": "Query parameters bound to `@name` references in every statement\n(batch-streaming mode only).",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -11599,7 +12578,9 @@
           "session_variables": {
             "type": "object",
             "description": "Session variables bound to `$name` references in every statement\n(batch-streaming mode only). When omitted, the session-managed\nsnapshot is used, same as [`BatchQueryRequest`].",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -11777,6 +12758,46 @@
           }
         }
       },
+      "TagCreateResponse": {
+        "type": "object",
+        "description": "Tag creation receipt.",
+        "required": [
+          "message",
+          "tag_name",
+          "space_name"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          },
+          "tag_name": {
+            "type": "string"
+          }
+        }
+      },
+      "TagDeleteResponse": {
+        "type": "object",
+        "description": "Tag deletion receipt.",
+        "required": [
+          "message",
+          "tag_name",
+          "space_name"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          },
+          "tag_name": {
+            "type": "string"
+          }
+        }
+      },
       "TagDetail": {
         "type": "object",
         "description": "Tag detail",
@@ -11809,6 +12830,64 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PropertyDef"
+            }
+          }
+        }
+      },
+      "TagDetailResponse": {
+        "type": "object",
+        "description": "Tag detail payload.",
+        "required": [
+          "name",
+          "space_name"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldInfo"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "space_name": {
+            "type": "string"
+          }
+        }
+      },
+      "TagInfo": {
+        "type": "object",
+        "description": "Tag information",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldInfo"
+            }
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "TagListResponse": {
+        "type": "object",
+        "description": "Tag listing payload.",
+        "required": [
+          "space_name"
+        ],
+        "properties": {
+          "space_name": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagInfo"
             }
           }
         }
@@ -11887,6 +12966,29 @@
           "transaction_id": {
             "type": "integer",
             "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TransactionConfigSnapshot": {
+        "type": "object",
+        "description": "Transaction section of the configuration snapshot.",
+        "required": [
+          "default_timeout",
+          "max_concurrent_transactions",
+          "auto_commit"
+        ],
+        "properties": {
+          "auto_commit": {
+            "type": "boolean"
+          },
+          "default_timeout": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_concurrent_transactions": {
+            "type": "integer",
             "minimum": 0
           }
         }
@@ -12147,7 +13249,9 @@
           "value"
         ],
         "properties": {
-          "value": {}
+          "value": {
+            "$ref": "#/components/schemas/CellValue"
+          }
         }
       },
       "UpdateEdgeData": {
@@ -12160,6 +13264,7 @@
         ],
         "properties": {
           "dst_vid": {
+            "$ref": "#/components/schemas/CellValue",
             "description": "Target vertex ID"
           },
           "edge_type": {
@@ -12169,7 +13274,9 @@
           "properties": {
             "type": "object",
             "description": "Properties",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -12180,6 +13287,7 @@
             "description": "Edge rank within (src, dst, type)"
           },
           "src_vid": {
+            "$ref": "#/components/schemas/CellValue",
             "description": "Source vertex ID"
           }
         }
@@ -12394,7 +13502,9 @@
           },
           "variables": {
             "type": "object",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -12556,7 +13666,9 @@
               "object",
               "null"
             ],
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -12772,7 +13884,9 @@
               "object",
               "null"
             ],
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -12854,6 +13968,32 @@
           }
         }
       },
+      "VersionHistoryResponse": {
+        "type": "object",
+        "description": "Version history payload.",
+        "required": [
+          "space",
+          "label",
+          "is_edge"
+        ],
+        "properties": {
+          "is_edge": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "space": {
+            "type": "string"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchemaVersionEntry"
+            }
+          }
+        }
+      },
       "VertexData": {
         "type": "object",
         "description": "Vertex data",
@@ -12865,7 +14005,9 @@
           "properties": {
             "type": "object",
             "description": "Properties",
-            "additionalProperties": {},
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CellValue"
+            },
             "propertyNames": {
               "type": "string"
             }
@@ -12875,6 +14017,7 @@
             "description": "Single label tag name (single-label vertices carry exactly one tag)"
           },
           "vid": {
+            "$ref": "#/components/schemas/CellValue",
             "description": "Vertex ID"
           }
         }
