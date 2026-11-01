@@ -2,7 +2,7 @@
 //!
 //! Provide a registration function for custom scalar functions and aggregate functions.
 
-use crate::embedded::c_api::error::linkrs_error_code_t;
+use crate::embedded::c_api::error::{linkrs_error_code_t, set_last_error_message};
 use crate::embedded::c_api::session::LinkrsSessionHandle;
 use crate::embedded::c_api::types::{linkrs_session_t, linkrs_value_t, linkrs_value_type_t};
 use linkrs_query::executor::expression::functions::{
@@ -10,7 +10,8 @@ use linkrs_query::executor::expression::functions::{
     ScalarFunctionCallback,
 };
 use log::error;
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ptr;
 
 /// Scalar function callback type
 #[allow(non_camel_case_types)]
@@ -472,4 +473,195 @@ pub unsafe extern "C" fn linkrs_reload_extension(
         }
     }
     linkrs_error_code_t::LINKRS_OK as c_int
+}
+
+/// List all loaded dynamic UDF extensions as JSON.
+///
+/// Projection of `Session::list_extensions`: returns a heap JSON array
+/// ordered by name; each entry carries `name`, `path`, `description`,
+/// `min_arity`, `max_arity` and `is_pure`.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `out_json`: Output parameter, heap JSON array string
+///
+/// # Returns
+/// - Success: LINKRS_OK (`*out_json` holds the JSON array)
+/// - Failure: Error code (`*out_json` is NULL)
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+/// - `out_json` must be a valid pointer to store the result
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_list_extensions(
+    session: *mut linkrs_session_t,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if session.is_null() || out_json.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    *out_json = ptr::null_mut();
+
+    let handle = &*(session as *mut LinkrsSessionHandle);
+    let extensions: Vec<serde_json::Value> = handle
+        .inner
+        .list_extensions()
+        .into_iter()
+        .map(|info| {
+            serde_json::json!({
+                "name": info.name,
+                "path": info.path,
+                "description": info.description,
+                "min_arity": info.min_arity,
+                "max_arity": info.max_arity,
+                "is_pure": info.is_pure,
+            })
+        })
+        .collect();
+    match serde_json::to_string(&extensions) {
+        Ok(json) => match CString::new(json) {
+            Ok(c_json) => {
+                *out_json = c_json.into_raw();
+                linkrs_error_code_t::LINKRS_OK as c_int
+            }
+            Err(_) => linkrs_error_code_t::LINKRS_ERROR as c_int,
+        },
+        Err(e) => {
+            set_last_error_message(format!("failed to serialize extension list: {e}"));
+            linkrs_error_code_t::LINKRS_ERROR as c_int
+        }
+    }
+}
+
+/// Install a UDF extension from a source string.
+///
+/// Projection of `Session::install_extension`: local file paths load
+/// directly; remote sources follow the embedded semantics (unsupported
+/// sources fail with LINKRS_ERROR). On success `*out_name` holds the heap
+/// registered extension name.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `source`: Extension source (UTF-8 encoded)
+/// - `out_name`: Output parameter, heap registered name string
+///
+/// # Returns
+/// - Success: LINKRS_OK (`*out_name` holds the name)
+/// - Failure: Error code (`*out_name` is NULL)
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+/// - `source` must be a valid pointer to a null-terminated UTF-8 string
+/// - `out_name` must be a valid pointer to store the result
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_install_extension(
+    session: *mut linkrs_session_t,
+    source: *const c_char,
+    out_name: *mut *mut c_char,
+) -> c_int {
+    if session.is_null() || source.is_null() || out_name.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    *out_name = ptr::null_mut();
+
+    let source_str = match CStr::from_ptr(source).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+    let handle = &*(session as *mut LinkrsSessionHandle);
+    match handle.inner.install_extension(source_str) {
+        Ok(name) => match CString::new(name) {
+            Ok(c_name) => {
+                *out_name = c_name.into_raw();
+                linkrs_error_code_t::LINKRS_OK as c_int
+            }
+            Err(_) => linkrs_error_code_t::LINKRS_ERROR as c_int,
+        },
+        Err(e) => {
+            error!("Install extension failed: {:?}", e);
+            set_last_error_message(format!("{e}"));
+            linkrs_error_code_t::LINKRS_ERROR as c_int
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embedded::c_api::config::linkrs_config_memory;
+    use crate::embedded::c_api::database::{
+        linkrs_close, linkrs_free_string, linkrs_open_with_config,
+    };
+    use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
+    use crate::embedded::c_api::types::{linkrs_session_t, linkrs_t};
+    use std::ffi::CString;
+
+    fn create_test_session() -> (*mut linkrs_t, *mut linkrs_session_t) {
+        unsafe {
+            let config = linkrs_config_memory();
+            let mut db: *mut linkrs_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_open_with_config(config, &mut db),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut session: *mut linkrs_session_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_session_create(db, &mut session),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            (db, session)
+        }
+    }
+
+    #[test]
+    fn test_list_extensions_empty_and_null() {
+        unsafe {
+            let (db, session) = create_test_session();
+
+            let mut out: *mut c_char = ptr::null_mut();
+            assert_eq!(
+                linkrs_list_extensions(session, &mut out),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert!(!out.is_null());
+            let text = CStr::from_ptr(out).to_str().expect("utf8").to_string();
+            linkrs_free_string(out);
+            assert_eq!(text, "[]");
+
+            assert_eq!(
+                linkrs_list_extensions(ptr::null_mut(), &mut out),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            assert_eq!(
+                linkrs_list_extensions(session, ptr::null_mut()),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            // A missing library file deterministically fails the install.
+            let missing = CString::new("/definitely/not/here.so").unwrap();
+            let mut name: *mut c_char = ptr::null_mut();
+            assert_eq!(
+                linkrs_install_extension(session, missing.as_ptr(), &mut name),
+                linkrs_error_code_t::LINKRS_ERROR as c_int
+            );
+            assert!(name.is_null());
+            assert_eq!(
+                linkrs_install_extension(ptr::null_mut(), missing.as_ptr(), &mut name),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            linkrs_session_close(session);
+            linkrs_close(db);
+        }
+    }
 }

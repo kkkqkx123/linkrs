@@ -642,6 +642,28 @@ pub unsafe extern "C" fn linkrs_connection_clear_interrupt(
     linkrs_error_code_t::LINKRS_OK as c_int
 }
 
+/// Query whether a session interrupt is currently requested.
+///
+/// Polling companion to `linkrs_connection_interrupt` /
+/// `linkrs_connection_clear_interrupt` for loops that must cooperatively
+/// observe cancellation without issuing another query.
+///
+/// # Returns
+/// - 1 when an interrupt is pending, 0 when execution may proceed,
+///   -1 on a null handle
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_connection_is_interrupted(session: *mut linkrs_session_t) -> c_int {
+    if session.is_null() {
+        return -1;
+    }
+
+    let handle = &*(session as *const LinkrsSessionHandle);
+    c_int::from(handle.inner.is_interrupted())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,6 +703,33 @@ mod tests {
         assert!(!db.is_null());
 
         db
+    }
+
+    #[test]
+    fn test_connection_interrupt_query() {
+        let db = create_test_db();
+        let mut session: *mut linkrs_session_t = ptr::null_mut();
+        let rc = unsafe { linkrs_session_create(db, &mut session) };
+        assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
+
+        assert_eq!(unsafe { linkrs_connection_is_interrupted(session) }, 0);
+        assert_eq!(
+            unsafe { linkrs_connection_interrupt(session) },
+            linkrs_error_code_t::LINKRS_OK as c_int
+        );
+        assert_eq!(unsafe { linkrs_connection_is_interrupted(session) }, 1);
+        assert_eq!(
+            unsafe { linkrs_connection_clear_interrupt(session) },
+            linkrs_error_code_t::LINKRS_OK as c_int
+        );
+        assert_eq!(unsafe { linkrs_connection_is_interrupted(session) }, 0);
+        assert_eq!(
+            unsafe { linkrs_connection_is_interrupted(ptr::null_mut()) },
+            -1
+        );
+
+        unsafe { linkrs_session_close(session) };
+        unsafe { linkrs_close(db) };
     }
 
     #[test]

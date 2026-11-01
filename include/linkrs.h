@@ -517,6 +517,44 @@ int linkrs_batch_add_edge(struct linkrs_batch_t *batch,
                           const char *edge_type);
 
 /**
+ * Add many vertices to the batch in one call.
+ *
+ * Every entry shares one tag (exactly one non-empty label, same rule as
+ * `linkrs_batch_add_vertex`) and converts with the same vertex-id rule.
+ * Entries buffer in order with the same batch-window auto-flush; the walk
+ * stops at the first failing entry and reports it.
+ *
+ * # Safety
+ * - `batch` must be a valid batch handle
+ * - When `count` is nonzero, `vids` must point to at least `count` valid
+ *   `linkrs_value_t` elements
+ * - `tags` must be a non-null single tag name
+ */
+int linkrs_batch_add_vertices(struct linkrs_batch_t *batch,
+                              const struct linkrs_value_t *vids,
+                              uintptr_t count,
+                              const char *tags);
+
+/**
+ * Add many edges to the batch in one call.
+ *
+ * `src_vids[i]` and `dst_vids[i]` form the i-th edge; all edges share one
+ * edge type. Conversion, ordering and auto-flush mirror
+ * `linkrs_batch_add_edge`; the walk stops at the first failing entry.
+ *
+ * # Safety
+ * - `batch` must be a valid batch handle
+ * - When `count` is nonzero, `src_vids` and `dst_vids` must each point to
+ *   at least `count` valid `linkrs_value_t` elements
+ * - `edge_type` must be a valid null-terminated UTF-8 string
+ */
+int linkrs_batch_add_edges(struct linkrs_batch_t *batch,
+                           const struct linkrs_value_t *src_vids,
+                           const struct linkrs_value_t *dst_vids,
+                           uintptr_t count,
+                           const char *edge_type);
+
+/**
  * Execute batch operation (flush all buffered data)
  *
  * # Parameters
@@ -586,6 +624,21 @@ int linkrs_batch_buffered_vertices(struct linkrs_batch_t *batch);
  * - Number of buffered edges, or -1 if batch is null
  */
 int linkrs_batch_buffered_edges(struct linkrs_batch_t *batch);
+
+/**
+ * Summarize batch progress as JSON.
+ *
+ * `linkrs_batch_execute` only reports success or failure, so this query
+ * exposes the counters the handle already keeps: inserted vertices and
+ * edges, still-buffered vertices and edges, the flush error count and the
+ * recorded error messages. The handle stays usable after the query.
+ *
+ * # Safety
+ * - `batch` must be a valid batch handle
+ * - `out_json` must be a valid pointer to store the result
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+int linkrs_batch_result_json(struct linkrs_batch_t *batch, char **out_json);
 
 /**
  * Create a new busy handler
@@ -853,6 +906,65 @@ int linkrs_config_set_enable_wal(struct linkrs_config_t *config, int enable);
 int linkrs_config_set_sync_mode(struct linkrs_config_t *config, int mode);
 
 /**
+ * Enable or disable the vector subsystem on a configuration handle.
+ *
+ * The flag is read when the database opens; in-memory databases without an
+ * explicit local directory keep vectors disabled regardless of this flag.
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ */
+int linkrs_config_set_vector_enabled(struct linkrs_config_t *config, int enable);
+
+/**
+ * Set an explicit data directory for the local vector engine.
+ *
+ * When unset, the engine derives the directory from the database path.
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ * - `dir` must be a valid pointer to a null-terminated UTF-8 string
+ */
+int linkrs_config_set_vector_local_dir(struct linkrs_config_t *config, const char *dir);
+
+/**
+ * Select the remote Qdrant engine with a JSON client configuration.
+ *
+ * Only available in `vector-qdrant` builds; without that feature the symbol
+ * is absent and linking it fails.
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ * - `client_json` must be a valid pointer to a null-terminated UTF-8 string
+ */
+int linkrs_config_set_vector_qdrant(struct linkrs_config_t *config, const char *client_json);
+
+/**
+ * Query whether a configuration handle describes an in-memory database.
+ *
+ * # Returns
+ * - 1 when the configuration has no path (in-memory), 0 when it names a
+ *   file, -1 on a null handle
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ */
+int linkrs_config_is_memory(struct linkrs_config_t *config);
+
+/**
+ * Read back the database path of a configuration handle.
+ *
+ * # Returns
+ * - Heap path string (UTF-8 encoded), NULL for in-memory configurations,
+ *   null handles or non-UTF-8 paths
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+char *linkrs_config_get_path(struct linkrs_config_t *config);
+
+/**
  * Open database
  *
  * # Arguments
@@ -891,6 +1003,19 @@ int linkrs_open(const char *path, struct linkrs_t **db);
  * - The caller is responsible for closing the database using `linkrs_close` when done
  */
 int linkrs_open_with_config(struct linkrs_config_t *config, struct linkrs_t **db);
+
+/**
+ * Open an in-memory database.
+ *
+ * Same two-step path as `linkrs_config_memory` plus `linkrs_open_with_config`,
+ * without requiring a configuration handle. The database vanishes when the
+ * last handle closes.
+ *
+ * # Safety
+ * - `db` must be a valid pointer to store the database handle
+ * - The caller is responsible for closing the database using `linkrs_close` when done
+ */
+int linkrs_open_memory(struct linkrs_t **db);
 
 /**
  * Closing the database
@@ -1229,6 +1354,36 @@ int linkrs_unload_extension(struct linkrs_session_t *session, const char *name);
 int linkrs_reload_extension(struct linkrs_session_t *session, const char *name, int *reloaded);
 
 /**
+ * List all loaded dynamic UDF extensions as JSON.
+ *
+ * Returns a heap JSON array ordered by name; each entry carries `name`,
+ * `path`, `description`, `min_arity`, `max_arity` and `is_pure`.
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ * - `out_json` must be a valid pointer to store the result
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+int linkrs_list_extensions(struct linkrs_session_t *session, char **out_json);
+
+/**
+ * Install a UDF extension from a source string.
+ *
+ * Local file paths load directly; remote sources follow the embedded
+ * semantics (unsupported sources fail). On success `*out_name` holds the
+ * heap registered extension name.
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ * - `source` must be a valid pointer to a null-terminated UTF-8 string
+ * - `out_name` must be a valid pointer to store the result
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+int linkrs_install_extension(struct linkrs_session_t *session,
+                             const char *source,
+                             char **out_name);
+
+/**
  * Execute a migration plan given as JSON.
  *
  * Runs through the shared online orchestration: writes stall only across
@@ -1350,6 +1505,55 @@ int linkrs_execute_params(struct linkrs_session_t *session,
                           const struct linkrs_value_t *params,
                           uintptr_t param_count,
                           struct linkrs_result_t **result);
+
+/**
+ * Execute a query with named parameters.
+ *
+ * Unlike the positional `linkrs_execute_params` (`@param_{i}`), each entry
+ * binds by name: `names[i]` (without the `@` sigil) fills `@names[i]` in
+ * the statement, the same rule `linkrs_stmt_bind` uses.
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ * - `query` must be a valid pointer to a null-terminated UTF-8 string
+ * - `result` must be a valid pointer to store the result handle
+ * - When `param_count` is nonzero, `names` must point to at least
+ *   `param_count` valid name pointers and `values` to at least
+ *   `param_count` valid `linkrs_value_t` elements
+ * - The caller is responsible for freeing the result handle using `linkrs_result_free` when done
+ */
+int linkrs_execute_named_params(struct linkrs_session_t *session,
+                                const char *query,
+                                const char **names,
+                                const struct linkrs_value_t *values,
+                                uintptr_t param_count,
+                                struct linkrs_result_t **result);
+
+/**
+ * Execute a query with named parameters and client-supplied session variables.
+ *
+ * `@name` references resolve from the parameter map, `$name` references from
+ * the variable map. The two channels are fully independent, so a parameter
+ * and a session variable may share the same name without conflict.
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ * - `query` must be a valid pointer to a null-terminated UTF-8 string
+ * - `result` must be a valid pointer to store the result handle
+ * - Each name array must point to at least its count of valid name
+ *   pointers (or be NULL when the matching count is 0), and each value
+ *   array to at least its count of valid `linkrs_value_t` elements
+ * - The caller is responsible for freeing the result handle using `linkrs_result_free` when done
+ */
+int linkrs_execute_with_variables(struct linkrs_session_t *session,
+                                  const char *query,
+                                  const char **param_names,
+                                  const struct linkrs_value_t *params,
+                                  uintptr_t param_count,
+                                  const char **var_names,
+                                  const struct linkrs_value_t *vars,
+                                  uintptr_t var_count,
+                                  struct linkrs_result_t **result);
 
 /**
  * Releasing the result set
@@ -1490,6 +1694,34 @@ char *linkrs_get_string(struct linkrs_result_t *result,
  * - The returned pointer is only valid as long as the result set is not freed
  */
 const uint8_t *linkrs_get_blob(struct linkrs_result_t *result, int row, const char *col, int *len);
+
+/**
+ * Get Boolean value (by column name).
+ *
+ * Only an explicit boolean cell succeeds; any other type (including NULL)
+ * reports a mismatch.
+ *
+ * # Safety
+ * - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+ * - `col` must be a valid pointer to a null-terminated UTF-8 string
+ * - `value` must be a valid pointer to store the result
+ * - `row` must be a valid row index (0 <= row < row count)
+ */
+int linkrs_get_bool(struct linkrs_result_t *result, int row, const char *col, bool *value);
+
+/**
+ * Get floating point value (by column name).
+ *
+ * Both engine float widths read back through this accessor, matching the
+ * by-index behavior.
+ *
+ * # Safety
+ * - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+ * - `col` must be a valid pointer to a null-terminated UTF-8 string
+ * - `value` must be a valid pointer to store the result
+ * - `row` must be a valid row index (0 <= row < row count)
+ */
+int linkrs_get_float(struct linkrs_result_t *result, int row, const char *col, double *value);
 
 /**
  * Get integer values (indexed by column)
@@ -1655,6 +1887,33 @@ int linkrs_result_execution_time_ms(struct linkrs_result_t *result, uint64_t *ou
  * - `out_rows` must be a valid pointer to store the result
  */
 int linkrs_result_rows_scanned(struct linkrs_result_t *result, uint64_t *out_rows);
+
+/**
+ * Export one result row as compact JSON.
+ *
+ * Escape hatch for value kinds without a typed getter (vertex, edge, path,
+ * list, map): every value serializes in the engine `Value` serde encoding.
+ *
+ * # Safety
+ * - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+ * - `out_json` must be a valid pointer to store the result
+ * - `row` must be a valid row index (0 <= row < row count)
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+int linkrs_row_to_json(struct linkrs_result_t *result, int row, char **out_json);
+
+/**
+ * Export the whole result set as compact JSON.
+ *
+ * Same encoding escape hatch as `linkrs_row_to_json`. The result handle
+ * stays usable after the export.
+ *
+ * # Safety
+ * - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+ * - `out_json` must be a valid pointer to store the result
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+int linkrs_result_to_json(struct linkrs_result_t *result, char **out_json);
 
 /**
  * Create a session
@@ -1917,6 +2176,22 @@ void *linkrs_update_hook(struct linkrs_session_t *session,
 int linkrs_connection_interrupt(struct linkrs_session_t *session);
 
 /**
+ * Query whether a session interrupt is currently requested.
+ *
+ * Polling companion to `linkrs_connection_interrupt` /
+ * `linkrs_connection_clear_interrupt` for loops that must cooperatively
+ * observe cancellation without issuing another query.
+ *
+ * # Returns
+ * - 1 when an interrupt is pending, 0 when execution may proceed,
+ *   -1 on a null handle
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ */
+int linkrs_connection_is_interrupted(struct linkrs_session_t *session);
+
+/**
  * Clear a previously requested session interrupt.
  *
  * # Safety
@@ -2042,6 +2317,27 @@ int linkrs_txn_begin(struct linkrs_session_t *session, struct linkrs_txn_t **txn
 int linkrs_txn_begin_readonly(struct linkrs_session_t *session, struct linkrs_txn_t **txn);
 
 /**
+ * Begin a transaction with explicit options.
+ *
+ * `config_json` carries the transaction option fields: `read_only` (bool),
+ * `timeout_ms` / `query_timeout_ms` / `statement_timeout_ms` /
+ * `idle_timeout_ms` (nonnegative integers, 0 or absent means unset),
+ * `durability` (`"none"` / `"async"` / `"sync"`, default sync) and
+ * `isolation` (`"repeatable_read"` / `"read_committed"` /
+ * `"serializable"`, default repeatable read), all case-insensitive. A NULL
+ * pointer selects the defaults (same as `linkrs_txn_begin`).
+ *
+ * # Safety
+ * - `session` must be a valid session handle created by `linkrs_session_create`
+ * - `config_json` must be NULL or a valid pointer to a null-terminated UTF-8 string
+ * - `txn` must be a valid pointer to store the transaction handle
+ * - The caller is responsible for freeing the transaction using `linkrs_txn_free` when done
+ */
+int linkrs_txn_begin_with_config(struct linkrs_session_t *session,
+                                 const char *config_json,
+                                 struct linkrs_txn_t **txn);
+
+/**
  * Executing queries in a transaction
  *
  * # Parameters
@@ -2156,6 +2452,53 @@ int linkrs_txn_release_savepoint(struct linkrs_txn_t *txn,
  */
 int linkrs_txn_rollback_to_savepoint(struct linkrs_txn_t *txn,
                                      int64_t savepoint_id);
+
+/**
+ * Describe one live transaction as JSON.
+ *
+ * The object carries the same fields as one entry of
+ * `linkrs_transaction_list` (`transaction_id`, `state`, `owner`,
+ * `read_timestamp`, `write_timestamp`, `elapsed_ms`, `last_activity_ms`,
+ * `rollback_only`, `staged_bytes`, `undo_bytes`, `blocking_reason`).
+ * Querying a committed or rolled back handle fails with LINKRS_MISUSE; a
+ * handle whose transaction already vanished fails with LINKRS_NOTFOUND.
+ *
+ * # Safety
+ * - `txn` must be a valid transaction handle
+ * - `out_json` must be a valid pointer to store the result
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+int linkrs_txn_info(struct linkrs_txn_t *txn, char **out_json);
+
+/**
+ * List the active savepoints of a transaction as JSON.
+ *
+ * Returns a heap JSON array; each entry carries `id`, `name` (null for
+ * unnamed savepoints) and `sequence` (creation order).
+ *
+ * # Safety
+ * - `txn` must be a valid transaction handle
+ * - `out_json` must be a valid pointer to store the result
+ * - The transaction must not have been committed or rolled back
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+int linkrs_txn_list_savepoints(struct linkrs_txn_t *txn, char **out_json);
+
+/**
+ * Find a savepoint by name.
+ *
+ * Savepoint names are unique per transaction, so at most one entry matches.
+ *
+ * # Returns
+ * - Savepoint ID on success, -1 when the transaction is finished, the
+ *   session is gone, or no savepoint carries this name
+ *
+ * # Safety
+ * - `txn` must be a valid transaction handle
+ * - `name` must be a valid pointer to a null-terminated UTF-8 string
+ * - The transaction must not have been committed or rolled back
+ */
+int64_t linkrs_txn_find_savepoint(struct linkrs_txn_t *txn, const char *name);
 
 /**
  * Free the transaction handle
@@ -2375,6 +2718,37 @@ int linkrs_stmt_execute_repeated(struct linkrs_stmt_t *stmt,
                                  uint64_t *out_total_rows);
 
 /**
+ * Bind many `@name` parameters at once.
+ *
+ * Merges into the existing bindings like repeated `linkrs_stmt_bind` calls;
+ * a later entry with the same name replaces the earlier one. The walk stops
+ * at the first invalid entry; bindings collected before the failure stay.
+ *
+ * # Safety
+ * - `stmt` must be a valid statement handle created by `linkrs_prepare`
+ * - When `count` is nonzero, `names` must point to at least `count` valid
+ *   null-terminated UTF-8 string pointers and `values` to at least `count`
+ *   valid `linkrs_value_t` elements
+ * - The associated session must still be valid
+ */
+int linkrs_stmt_bind_many(struct linkrs_stmt_t *stmt,
+                          const char **names,
+                          const struct linkrs_value_t *values,
+                          uintptr_t count);
+
+/**
+ * Read back the SQL text a statement was prepared from.
+ *
+ * # Returns
+ * - Heap SQL text (UTF-8 encoded), NULL on a null handle
+ *
+ * # Safety
+ * - `stmt` must be a valid statement handle created by `linkrs_prepare`
+ * - The returned pointer must be freed by the caller using `linkrs_free_string`
+ */
+char *linkrs_stmt_query(struct linkrs_stmt_t *stmt);
+
+/**
  * Executing a parameterized query in a transaction.
  *
  * Positional binding mirrors `linkrs_execute_params`: `params[i]` binds to the `@param_{i}`
@@ -2393,6 +2767,55 @@ int linkrs_txn_execute_params(struct linkrs_txn_t *txn,
                               const struct linkrs_value_t *params,
                               uintptr_t param_count,
                               struct linkrs_result_t **result);
+
+/**
+ * Execute a named-parameter query in a transaction.
+ *
+ * Named binding mirrors `linkrs_execute_named_params`: `names[i]` (without
+ * the `@` sigil) fills `@names[i]` in the statement.
+ *
+ * # Safety
+ * - `txn` must be a valid transaction handle created by `linkrs_txn_begin` or `linkrs_txn_begin_readonly`
+ * - `query` must be a valid pointer to a null-terminated UTF-8 string
+ * - `result` must be a valid pointer to store the result handle
+ * - When `param_count` is nonzero, `names` must point to at least
+ *   `param_count` valid name pointers and `values` to at least
+ *   `param_count` valid `linkrs_value_t` elements
+ * - The transaction must not have been committed or rolled back
+ * - The caller is responsible for freeing the result using `linkrs_result_free` when done
+ */
+int linkrs_txn_execute_named_params(struct linkrs_txn_t *txn,
+                                    const char *query,
+                                    const char **names,
+                                    const struct linkrs_value_t *values,
+                                    uintptr_t param_count,
+                                    struct linkrs_result_t **result);
+
+/**
+ * Execute a query with named parameters and session variables in a transaction.
+ *
+ * `@name` references resolve from the parameter map and `$name` references
+ * from the variable map, independently.
+ *
+ * # Safety
+ * - `txn` must be a valid transaction handle created by `linkrs_txn_begin` or `linkrs_txn_begin_readonly`
+ * - `query` must be a valid pointer to a null-terminated UTF-8 string
+ * - `result` must be a valid pointer to store the result handle
+ * - Each name array must point to at least its count of valid name
+ *   pointers (or be NULL when the matching count is 0), and each value
+ *   array to at least its count of valid `linkrs_value_t` elements
+ * - The transaction must not have been committed or rolled back
+ * - The caller is responsible for freeing the result using `linkrs_result_free` when done
+ */
+int linkrs_txn_execute_with_variables(struct linkrs_txn_t *txn,
+                                      const char *query,
+                                      const char **param_names,
+                                      const struct linkrs_value_t *params,
+                                      uintptr_t param_count,
+                                      const char **var_names,
+                                      const struct linkrs_value_t *vars,
+                                      uintptr_t var_count,
+                                      struct linkrs_result_t **result);
 
 /**
  * Test whether a cell holds an explicit NULL.

@@ -812,9 +812,321 @@ pub unsafe extern "C" fn linkrs_cell_is_null(
     }
 }
 
+/// Get Boolean value
+///
+/// Mirrors `linkrs_get_bool_by_index` with a column-name lookup, closing
+/// the gap with the by-name `linkrs_get_int` / `linkrs_get_string` /
+/// `linkrs_get_blob` getters: only an explicit boolean cell succeeds, any
+/// other type (including NULL) reports a mismatch.
+///
+/// # Arguments
+/// - `result`: Result set handle
+/// - `row`: Row index (starting from 0)
+/// - `col`: Column name (UTF-8 encoded)
+/// - `value`: Output parameter, boolean value
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+/// - `col` must be a valid pointer to a null-terminated UTF-8 string
+/// - `value` must be a valid pointer to store the result
+/// - `row` must be a valid row index (0 <= row < row count)
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_get_bool(
+    result: *mut linkrs_result_t,
+    row: c_int,
+    col: *const c_char,
+    value: *mut bool,
+) -> c_int {
+    if result.is_null() || col.is_null() || value.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let col_str = match CStr::from_ptr(col).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &*(result as *mut LinkrsResultHandle);
+
+    match handle.inner.get(row as usize) {
+        Some(row_data) => match row_data.get(col_str) {
+            Some(linkrs_core::Value::Bool(b)) => {
+                *value = *b;
+                linkrs_error_code_t::LINKRS_OK as c_int
+            }
+            Some(_) => linkrs_error_code_t::LINKRS_MISMATCH as c_int,
+            None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
+        },
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
+    }
+}
+
+/// Get floating point value
+///
+/// Mirrors `linkrs_get_float_by_index` with a column-name lookup, closing
+/// the gap with the by-name `linkrs_get_int` / `linkrs_get_string` /
+/// `linkrs_get_blob` getters. Both engine float widths read back through
+/// this accessor, matching the by-index behavior.
+///
+/// # Arguments
+/// - `result`: Result set handle
+/// - `row`: Row index (starting from 0)
+/// - `col`: Column name (UTF-8 encoded)
+/// - `value`: Output parameter, float value
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+/// - `col` must be a valid pointer to a null-terminated UTF-8 string
+/// - `value` must be a valid pointer to store the result
+/// - `row` must be a valid row index (0 <= row < row count)
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_get_float(
+    result: *mut linkrs_result_t,
+    row: c_int,
+    col: *const c_char,
+    value: *mut f64,
+) -> c_int {
+    if result.is_null() || col.is_null() || value.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let col_str = match CStr::from_ptr(col).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &*(result as *mut LinkrsResultHandle);
+
+    match handle.inner.get(row as usize) {
+        Some(row_data) => match row_data.get(col_str) {
+            Some(v) => match value_as_f64(v) {
+                Some(f) => {
+                    *value = f;
+                    linkrs_error_code_t::LINKRS_OK as c_int
+                }
+                None => linkrs_error_code_t::LINKRS_MISMATCH as c_int,
+            },
+            None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
+        },
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
+    }
+}
+
+/// Export one result row as compact JSON.
+///
+/// This is the escape hatch for value kinds without a typed getter
+/// (vertex, edge, path, list, map): every value serializes in the engine
+/// `Value` serde encoding, the same encoding `linkrs_session_get_variable`
+/// produces.
+///
+/// # Arguments
+/// - `result`: Result set handle
+/// - `row`: Row index (starting from 0)
+/// - `out_json`: Output parameter, heap JSON string of the row
+///
+/// # Returns
+/// - Success: LINKRS_OK (`*out_json` holds the JSON string)
+/// - Failure: Error code (`*out_json` is NULL)
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+/// - `out_json` must be a valid pointer to store the result
+/// - `row` must be a valid row index (0 <= row < row count)
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_row_to_json(
+    result: *mut linkrs_result_t,
+    row: c_int,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if result.is_null() || out_json.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    *out_json = ptr::null_mut();
+
+    let handle = &*(result as *mut LinkrsResultHandle);
+    match handle.inner.get(row as usize) {
+        Some(row_data) => match serde_json::to_string(row_data) {
+            Ok(json) => match CString::new(json) {
+                Ok(c_json) => {
+                    *out_json = c_json.into_raw();
+                    linkrs_error_code_t::LINKRS_OK as c_int
+                }
+                Err(_) => linkrs_error_code_t::LINKRS_ERROR as c_int,
+            },
+            Err(_) => linkrs_error_code_t::LINKRS_ERROR as c_int,
+        },
+        None => linkrs_error_code_t::LINKRS_NOTFOUND as c_int,
+    }
+}
+
+/// Export the whole result set as compact JSON.
+///
+/// Same encoding escape hatch as `linkrs_row_to_json` for one call that
+/// must carry complex columns. The result handle stays usable after the
+/// export.
+///
+/// # Arguments
+/// - `result`: Result set handle
+/// - `out_json`: Output parameter, heap JSON string of the result set
+///
+/// # Returns
+/// - Success: LINKRS_OK (`*out_json` holds the JSON string)
+/// - Failure: Error code (`*out_json` is NULL)
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+/// - `out_json` must be a valid pointer to store the result
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_result_to_json(
+    result: *mut linkrs_result_t,
+    out_json: *mut *mut c_char,
+) -> c_int {
+    if result.is_null() || out_json.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    *out_json = ptr::null_mut();
+
+    let handle = &*(result as *mut LinkrsResultHandle);
+    match handle.inner.to_json_compact() {
+        Ok(json) => match CString::new(json) {
+            Ok(c_json) => {
+                *out_json = c_json.into_raw();
+                linkrs_error_code_t::LINKRS_OK as c_int
+            }
+            Err(_) => linkrs_error_code_t::LINKRS_ERROR as c_int,
+        },
+        Err(_) => linkrs_error_code_t::LINKRS_ERROR as c_int,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_named_bool_float_getters_and_json_exports() {
+        use crate::embedded::c_api::config::linkrs_config_memory;
+        use crate::embedded::c_api::database::{
+            linkrs_close, linkrs_free_string, linkrs_open_with_config,
+        };
+        use crate::embedded::c_api::query::linkrs_execute;
+        use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
+        use crate::embedded::c_api::types::{linkrs_session_t, linkrs_t};
+        use std::ffi::CString;
+
+        unsafe {
+            let config = linkrs_config_memory();
+            let mut db: *mut linkrs_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_open_with_config(config, &mut db),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut session: *mut linkrs_session_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_session_create(db, &mut session),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let query = CString::new("RETURN true AS flag, 1.5 AS ratio, 1 AS n").unwrap();
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_execute(session, query.as_ptr(), &mut result),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let flag_col = CString::new("flag").unwrap();
+            let ratio_col = CString::new("ratio").unwrap();
+            let mut flag = false;
+            assert_eq!(
+                linkrs_get_bool(result, 0, flag_col.as_ptr(), &mut flag),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert!(flag);
+            let mut ratio = 0.0;
+            assert_eq!(
+                linkrs_get_float(result, 0, ratio_col.as_ptr(), &mut ratio),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert!((ratio - 1.5).abs() < f64::EPSILON);
+
+            // Mismatch and not-found paths mirror the by-index getters.
+            let n_col = CString::new("n").unwrap();
+            let mut dummy_bool = false;
+            assert_eq!(
+                linkrs_get_bool(result, 0, n_col.as_ptr(), &mut dummy_bool),
+                linkrs_error_code_t::LINKRS_MISMATCH as c_int
+            );
+            let missing_col = CString::new("missing").unwrap();
+            assert_eq!(
+                linkrs_get_bool(result, 0, missing_col.as_ptr(), &mut dummy_bool),
+                linkrs_error_code_t::LINKRS_NOTFOUND as c_int
+            );
+            let mut dummy_float = 0.0;
+            assert_eq!(
+                linkrs_get_float(result, 7, ratio_col.as_ptr(), &mut dummy_float),
+                linkrs_error_code_t::LINKRS_NOTFOUND as c_int
+            );
+            assert_eq!(
+                linkrs_get_bool(ptr::null_mut(), 0, flag_col.as_ptr(), &mut dummy_bool),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            let mut row_json: *mut c_char = ptr::null_mut();
+            assert_eq!(
+                linkrs_row_to_json(result, 0, &mut row_json),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert!(!row_json.is_null());
+            let row_text = CStr::from_ptr(row_json).to_str().unwrap();
+            assert!(row_text.contains("flag"));
+            linkrs_free_string(row_json);
+            assert_eq!(
+                linkrs_row_to_json(result, 7, &mut row_json),
+                linkrs_error_code_t::LINKRS_NOTFOUND as c_int
+            );
+            assert!(row_json.is_null());
+            assert_eq!(
+                linkrs_row_to_json(ptr::null_mut(), 0, &mut row_json),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            let mut result_json: *mut c_char = ptr::null_mut();
+            assert_eq!(
+                linkrs_result_to_json(result, &mut result_json),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert!(!result_json.is_null());
+            let result_text = CStr::from_ptr(result_json).to_str().unwrap();
+            assert!(result_text.contains("ratio"));
+            linkrs_free_string(result_json);
+            assert_eq!(
+                linkrs_result_to_json(ptr::null_mut(), &mut result_json),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            linkrs_result_free(result);
+            linkrs_session_close(session);
+            linkrs_close(db);
+        }
+    }
 
     #[test]
     fn test_result_null_params() {

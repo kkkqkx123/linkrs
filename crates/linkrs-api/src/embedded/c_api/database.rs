@@ -125,6 +125,52 @@ pub unsafe extern "C" fn linkrs_open_with_config(
     }
 }
 
+/// Open an in-memory database.
+///
+/// Thin wrapper over `GraphDatabase::open_in_memory`: the same two-step
+/// path as `linkrs_config_memory` plus `linkrs_open_with_config`, without
+/// requiring a configuration handle. The database vanishes when the last
+/// handle closes.
+///
+/// # Arguments
+/// - `db`: Output parameter, database handle
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `db` must be a valid pointer to store the database handle
+/// - The caller is responsible for closing the database using `linkrs_close` when done
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_open_memory(db: *mut *mut linkrs_t) -> c_int {
+    if db.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    match GraphDatabase::open_in_memory() {
+        Ok(linkrs) => {
+            let handle = Box::new(LinkrsHandle {
+                inner: Arc::new(linkrs),
+                last_error: None,
+            });
+            unsafe {
+                *db = Box::into_raw(handle) as *mut linkrs_t;
+            }
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
+        Err(e) => {
+            let (error_code, _) = error_code_from_core_error(&e);
+            let error_msg = format!("{}", e);
+            set_last_error_message(error_msg);
+            unsafe {
+                *db = ptr::null_mut();
+            }
+            error_code
+        }
+    }
+}
+
 /// Closing the database
 ///
 /// # Arguments
@@ -457,6 +503,42 @@ mod tests {
         }
 
         db_path
+    }
+
+    #[test]
+    fn test_linkrs_open_memory() {
+        use crate::embedded::c_api::query::linkrs_execute;
+        use crate::embedded::c_api::result::linkrs_result_free;
+        use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
+
+        unsafe {
+            assert_eq!(
+                linkrs_open_memory(ptr::null_mut()),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            let mut db: *mut linkrs_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_open_memory(&mut db),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert!(!db.is_null());
+
+            let mut session: *mut linkrs_session_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_session_create(db, &mut session),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let query = CString::new("RETURN 1").unwrap();
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_execute(session, query.as_ptr(), &mut result),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            linkrs_result_free(result);
+            linkrs_session_close(session);
+            assert_eq!(linkrs_close(db), linkrs_error_code_t::LINKRS_OK as c_int);
+        }
     }
 
     #[test]

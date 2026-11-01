@@ -8,7 +8,7 @@ use crate::embedded::c_api::error::{
     error_code_from_core_error, extended_error_code_from_core_error, linkrs_error_code_t,
     set_last_error_message,
 };
-use crate::embedded::c_api::query::convert_c_value_to_rust;
+use crate::embedded::c_api::query::{collect_named_params, convert_c_value_to_rust};
 use crate::embedded::c_api::result::LinkrsResultHandle;
 use crate::embedded::c_api::session::LinkrsSessionHandle;
 use crate::embedded::c_api::types::{
@@ -487,6 +487,87 @@ pub unsafe extern "C" fn linkrs_stmt_execute_repeated(
     linkrs_error_code_t::LINKRS_OK as c_int
 }
 
+/// Bind many `@name` parameters at once.
+///
+/// Merges into the existing bindings like repeated `linkrs_stmt_bind`
+/// calls; a later entry with the same name replaces the earlier one. The
+/// walk stops at the first invalid entry (null or empty name) and reports
+/// it; bindings collected before the failure stay in place.
+///
+/// # Arguments
+/// - `stmt`: Prepared statement handle
+/// - `names`: Parameter name array (without the `@` sigil; may be NULL
+///   only when `count` is 0)
+/// - `values`: Parameter value array (may be NULL only when `count` is 0)
+/// - `count`: Number of parameters
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `stmt` must be a valid statement handle created by `linkrs_prepare`
+/// - When `count` is nonzero, `names` must point to at least `count` valid
+///   null-terminated UTF-8 string pointers and `values` to at least `count`
+///   valid `linkrs_value_t` elements
+/// - The associated session must still be valid
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_stmt_bind_many(
+    stmt: *mut linkrs_stmt_t,
+    names: *const *const c_char,
+    values: *const linkrs_value_t,
+    count: usize,
+) -> c_int {
+    if stmt.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    let bindings = match collect_named_params(names, values, count) {
+        Some(map) => map,
+        None => {
+            let e = crate::api_core::error::CoreError::InvalidParameter(
+                "parameter name must not be empty".to_string(),
+            );
+            let (error_code, _) = error_code_from_core_error(&e);
+            set_last_error_message(format!("{e}"));
+            return error_code;
+        }
+    };
+
+    let handle = &mut *(stmt as *mut LinkrsStmtHandle);
+    if handle.session.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    handle.params.extend(bindings);
+    linkrs_error_code_t::LINKRS_OK as c_int
+}
+
+/// Read back the SQL text a statement was prepared from.
+///
+/// # Arguments
+/// - `stmt`: Prepared statement handle
+///
+/// # Returns
+/// - Heap SQL text (UTF-8 encoded), NULL on a null handle
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `stmt` must be a valid statement handle created by `linkrs_prepare`
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_stmt_query(stmt: *mut linkrs_stmt_t) -> *mut c_char {
+    if stmt.is_null() {
+        return ptr::null_mut();
+    }
+    let handle = &*(stmt as *mut LinkrsStmtHandle);
+    match CString::new(handle.query.as_str()) {
+        Ok(c_query) => c_query.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
 /// Free a prepared statement handle.
 ///
 /// # Arguments
@@ -508,7 +589,9 @@ pub unsafe extern "C" fn linkrs_stmt_free(stmt: *mut linkrs_stmt_t) {
 mod tests {
     use super::*;
     use crate::embedded::c_api::config::linkrs_config_memory;
-    use crate::embedded::c_api::database::{linkrs_close, linkrs_open_with_config};
+    use crate::embedded::c_api::database::{
+        linkrs_close, linkrs_free_string, linkrs_open_with_config,
+    };
     use crate::embedded::c_api::result::{linkrs_get_int_by_index, linkrs_result_free};
     use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
     use crate::embedded::c_api::types::{linkrs_t, linkrs_value_data_t, linkrs_value_type_t};
@@ -583,6 +666,66 @@ mod tests {
             assert_eq!(
                 linkrs_stmt_reset(stmt),
                 linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            linkrs_stmt_free(stmt);
+            linkrs_session_close(session);
+            linkrs_close(db);
+        }
+    }
+
+    #[test]
+    fn test_stmt_bind_many_and_query() {
+        unsafe {
+            let (db, session) = create_test_session();
+
+            let sql = CString::new("RETURN @a + @b").expect("sql CString");
+            let mut stmt: *mut linkrs_stmt_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_prepare(session, sql.as_ptr(), &mut stmt),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            // The prepared text reads back verbatim.
+            let text = linkrs_stmt_query(stmt);
+            assert!(!text.is_null());
+            assert_eq!(
+                CStr::from_ptr(text).to_str().expect("utf8"),
+                "RETURN @a + @b"
+            );
+            linkrs_free_string(text);
+            assert!(linkrs_stmt_query(ptr::null_mut()).is_null());
+
+            let name_a = CString::new("a").expect("name CString");
+            let name_b = CString::new("b").expect("name CString");
+            let names = [name_a.as_ptr(), name_b.as_ptr()];
+            let values = [int_value(20), int_value(22)];
+            assert_eq!(
+                linkrs_stmt_bind_many(stmt, names.as_ptr(), values.as_ptr(), 2),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_stmt_execute(stmt, &mut result),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut out: i64 = 0;
+            assert_eq!(
+                linkrs_get_int_by_index(result, 0, 0, &mut out),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(out, 42);
+            linkrs_result_free(result);
+
+            // Null names fail the whole batch.
+            assert_eq!(
+                linkrs_stmt_bind_many(stmt, ptr::null(), values.as_ptr(), 1),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            assert_eq!(
+                linkrs_stmt_bind_many(ptr::null_mut(), names.as_ptr(), values.as_ptr(), 2),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
             );
 
             linkrs_stmt_free(stmt);

@@ -301,6 +301,167 @@ pub unsafe extern "C" fn linkrs_config_set_sync_mode(
     linkrs_error_code_t::LINKRS_OK as c_int
 }
 
+/// Enable or disable the vector subsystem on a configuration handle.
+///
+/// Mirrors `DatabaseConfig::with_vector_enabled`. The flag is read when the
+/// database opens; in-memory databases without an explicit local directory
+/// keep vectors disabled regardless of this flag.
+///
+/// # Arguments
+/// - `config`: Configuration handle
+/// - `enable`: Enable flag (nonzero enables)
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `config` must be a valid configuration handle
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_set_vector_enabled(
+    config: *mut linkrs_config_t,
+    enable: c_int,
+) -> c_int {
+    if config.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
+    handle.inner = handle.inner.clone().with_vector_enabled(enable != 0);
+    linkrs_error_code_t::LINKRS_OK as c_int
+}
+
+/// Set an explicit data directory for the local vector engine.
+///
+/// Mirrors `DatabaseConfig::with_vector_local_dir`. When unset, the engine
+/// derives the directory from the database path.
+///
+/// # Arguments
+/// - `config`: Configuration handle
+/// - `dir`: Directory path (UTF-8 encoded)
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `config` must be a valid configuration handle
+/// - `dir` must be a valid pointer to a null-terminated UTF-8 string
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_set_vector_local_dir(
+    config: *mut linkrs_config_t,
+    dir: *const c_char,
+) -> c_int {
+    if config.is_null() || dir.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    let dir_str = match CStr::from_ptr(dir).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
+    handle.inner = handle.inner.clone().with_vector_local_dir(dir_str);
+    linkrs_error_code_t::LINKRS_OK as c_int
+}
+
+/// Select the remote Qdrant engine with a JSON client configuration.
+///
+/// Mirrors `DatabaseConfig::with_vector_qdrant`: `client_json` parses as
+/// the engine `VectorClientConfig` serde document. Only compiled with the
+/// `vector-qdrant` feature; without it the symbol is absent.
+///
+/// # Arguments
+/// - `config`: Configuration handle
+/// - `client_json`: Qdrant client configuration document (UTF-8 encoded)
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code (MISUSE on null handles or unparsable documents)
+///
+/// # Safety
+/// - `config` must be a valid configuration handle
+/// - `client_json` must be a valid pointer to a null-terminated UTF-8 string
+#[cfg(feature = "vector-qdrant")]
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_set_vector_qdrant(
+    config: *mut linkrs_config_t,
+    client_json: *const c_char,
+) -> c_int {
+    if config.is_null() || client_json.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    let raw = match CStr::from_ptr(client_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+    let client_config: vector_client::VectorClientConfig = match serde_json::from_str(raw) {
+        Ok(config) => config,
+        Err(e) => {
+            set_last_error_message(format!("invalid qdrant client config: {e}"));
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
+    };
+
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
+    handle.inner = handle.inner.clone().with_vector_qdrant(client_config);
+    linkrs_error_code_t::LINKRS_OK as c_int
+}
+
+/// Query whether a configuration handle describes an in-memory database.
+///
+/// # Arguments
+/// - `config`: Configuration handle
+///
+/// # Returns
+/// - 1 when the configuration has no path (in-memory), 0 when it names a
+///   file, -1 on a null handle
+///
+/// # Safety
+/// - `config` must be a valid configuration handle
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_is_memory(config: *mut linkrs_config_t) -> c_int {
+    if config.is_null() {
+        return -1;
+    }
+    let handle = &*(config as *mut LinkrsConfigHandle);
+    c_int::from(handle.inner.is_memory())
+}
+
+/// Read back the database path of a configuration handle.
+///
+/// # Arguments
+/// - `config`: Configuration handle
+///
+/// # Returns
+/// - Heap path string (UTF-8 encoded), NULL for in-memory configurations,
+///   null handles or non-UTF-8 paths
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string` to avoid memory leaks.
+///
+/// # Safety
+/// - `config` must be a valid configuration handle
+/// - The returned pointer must be freed by the caller to avoid memory leaks
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_get_path(config: *mut linkrs_config_t) -> *mut c_char {
+    if config.is_null() {
+        return std::ptr::null_mut();
+    }
+    let handle = &*(config as *mut LinkrsConfigHandle);
+    match handle.inner.path() {
+        Some(path) => match path.to_str() {
+            Some(s) => match CString::new(s) {
+                Ok(c_path) => c_path.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            },
+            None => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// Read one runtime `section.key` configuration value
 /// (`Database::get_config_value` over FFI).
 ///
@@ -511,6 +672,68 @@ pub unsafe extern "C" fn linkrs_config_bulk_update(
 mod tests {
     use super::*;
     use std::ffi::CString;
+
+    #[test]
+    fn test_config_vector_and_path_queries() {
+        use crate::embedded::c_api::database::linkrs_free_string;
+
+        unsafe {
+            let config = linkrs_config_memory();
+            assert!(!config.is_null());
+            assert_eq!(linkrs_config_is_memory(config), 1);
+            assert!(linkrs_config_get_path(config).is_null());
+            assert_eq!(linkrs_config_is_memory(std::ptr::null_mut()), -1);
+            assert!(linkrs_config_get_path(std::ptr::null_mut()).is_null());
+
+            let dir = CString::new("/tmp/linkrs_vectors").unwrap();
+            assert_eq!(
+                linkrs_config_set_vector_enabled(config, 1),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(
+                linkrs_config_set_vector_local_dir(config, dir.as_ptr()),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(
+                linkrs_config_set_vector_enabled(std::ptr::null_mut(), 1),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            assert_eq!(
+                linkrs_config_set_vector_local_dir(config, std::ptr::null()),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            assert_eq!(linkrs_config_free(config), 0);
+
+            let path = CString::new("probe.db").unwrap();
+            let file_config = linkrs_config_file(path.as_ptr());
+            assert!(!file_config.is_null());
+            assert_eq!(linkrs_config_is_memory(file_config), 0);
+            let probed = linkrs_config_get_path(file_config);
+            assert!(!probed.is_null());
+            assert_eq!(CStr::from_ptr(probed).to_str().expect("utf8"), "probe.db");
+            linkrs_free_string(probed);
+            assert_eq!(linkrs_config_free(file_config), 0);
+        }
+    }
+
+    #[cfg(feature = "vector-qdrant")]
+    #[test]
+    fn test_config_set_vector_qdrant_rejects_garbage() {
+        unsafe {
+            let config = linkrs_config_memory();
+            assert!(!config.is_null());
+            let garbage = CString::new("{not json").unwrap();
+            assert_eq!(
+                linkrs_config_set_vector_qdrant(config, garbage.as_ptr()),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            assert_eq!(
+                linkrs_config_set_vector_qdrant(config, std::ptr::null()),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            assert_eq!(linkrs_config_free(config), 0);
+        }
+    }
 
     #[test]
     fn test_config_new() {

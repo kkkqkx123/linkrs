@@ -332,6 +332,220 @@ pub unsafe fn convert_c_value_to_rust(c_value: &linkrs_value_t) -> Value {
     }
 }
 
+/// Collect parallel name/value arrays into a parameter map.
+///
+/// Shared by the named-parameter entry points on sessions, transactions
+/// and prepared statements. A zero `count` yields an empty map without
+/// touching the arrays; any null name pointer, non-UTF-8 name or empty
+/// name fails the whole collection.
+///
+/// # Safety
+/// - When `count` is nonzero, `names` must point to at least `count`
+///   valid null-terminated UTF-8 string pointers and `values` to at least
+///   `count` valid `linkrs_value_t` elements.
+/// - When `count` is zero both pointers may be NULL.
+pub(crate) unsafe fn collect_named_params(
+    names: *const *const c_char,
+    values: *const linkrs_value_t,
+    count: usize,
+) -> Option<HashMap<String, Value>> {
+    let mut map = HashMap::with_capacity(count);
+    if count == 0 {
+        return Some(map);
+    }
+    if names.is_null() || values.is_null() {
+        return None;
+    }
+    for i in 0..count {
+        let name_ptr = *names.add(i);
+        if name_ptr.is_null() {
+            return None;
+        }
+        let name = match CStr::from_ptr(name_ptr).to_str() {
+            Ok(s) if !s.is_empty() => s.to_string(),
+            _ => return None,
+        };
+        let value = convert_c_value_to_rust(&*values.add(i));
+        map.insert(name, value);
+    }
+    Some(map)
+}
+
+/// Run a session query with named parameters and optional session variables.
+///
+/// Trace, error-slot and update-hook handling match `linkrs_execute_params`;
+/// only the parameter source differs. `variables` selects between
+/// `execute_with_params` and `execute_with_params_and_variables`.
+unsafe fn run_session_named_execution(
+    handle: &mut LinkrsSessionHandle,
+    query_str: &str,
+    params: HashMap<String, Value>,
+    variables: Option<HashMap<String, Value>>,
+    out_result: *mut *mut linkrs_result_t,
+) -> c_int {
+    handle.trace(query_str);
+
+    let outcome = match variables {
+        Some(vars) => handle
+            .inner
+            .execute_with_params_and_variables(query_str, params, vars),
+        None => handle.inner.execute_with_params(query_str, params),
+    };
+    match outcome {
+        Ok(query_result) => {
+            handle.clear_error();
+
+            if handle.has_update_hook() || handle.inner.has_dml_observers() {
+                let rows = query_result.metadata().rows_returned as u64;
+                if let Some(op) = handle.inner.notify_dml(query_str, rows) {
+                    if handle.has_update_hook() {
+                        let operation = match op {
+                            linkrs_query::DmlOp::Insert => 1,
+                            linkrs_query::DmlOp::Update => 2,
+                            linkrs_query::DmlOp::Delete => 3,
+                        };
+                        let space_name_owned = handle.inner.current_space();
+                        let space_name = space_name_owned.as_deref().unwrap_or("default");
+                        handle.invoke_update_hook(operation, space_name, rows as i64);
+                    }
+                }
+            }
+
+            let result_handle = Box::new(LinkrsResultHandle {
+                inner: query_result,
+            });
+            *out_result = Box::into_raw(result_handle) as *mut linkrs_result_t;
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
+        Err(e) => {
+            let (error_code, _) = error_code_from_core_error(&e);
+            let error_msg = format!("{}", e);
+            let offset = e.error_offset();
+            let extended_code = Some(extended_error_code_from_core_error(&e));
+            handle.set_error(error_msg, offset, extended_code);
+            *out_result = ptr::null_mut();
+            error_code
+        }
+    }
+}
+
+/// Execute a query with named parameters.
+///
+/// Unlike the positional `linkrs_execute_params` (`@param_{i}`), each entry
+/// binds by name: `names[i]` (without the `@` sigil) fills `@names[i]` in
+/// the statement, the same rule `linkrs_stmt_bind` uses.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `query`: Query statement (UTF-8 encoded)
+/// - `names`: Parameter name array (may be NULL when `param_count` is 0)
+/// - `values`: Parameter value array (may be NULL when `param_count` is 0)
+/// - `param_count`: Number of parameters
+/// - `result`: Output parameter, result set handle
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+/// - `query` must be a valid pointer to a null-terminated UTF-8 string
+/// - `result` must be a valid pointer to store the result handle
+/// - When `param_count` is nonzero, `names` must point to at least
+///   `param_count` valid name pointers and `values` to at least
+///   `param_count` valid `linkrs_value_t` elements
+/// - The caller is responsible for freeing the result handle using `linkrs_result_free` when done
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_execute_named_params(
+    session: *mut linkrs_session_t,
+    query: *const c_char,
+    names: *const *const c_char,
+    values: *const linkrs_value_t,
+    param_count: usize,
+    result: *mut *mut linkrs_result_t,
+) -> c_int {
+    if session.is_null() || query.is_null() || result.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let query_str = match CStr::from_ptr(query).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let params = match collect_named_params(names, values, param_count) {
+        Some(map) => map,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
+    run_session_named_execution(handle, query_str, params, None, result)
+}
+
+/// Execute a query with named parameters and client-supplied session variables.
+///
+/// Projection of `Session::execute_with_params_and_variables`: `@name`
+/// references resolve from the parameter map, `$name` references from the
+/// variable map. The two channels are fully independent, so a parameter
+/// and a session variable may share the same name without conflict.
+///
+/// # Arguments
+/// - `session`: Session handle
+/// - `query`: Query statement (UTF-8 encoded)
+/// - `param_names`: Parameter name array (may be NULL when `param_count` is 0)
+/// - `params`: Parameter value array (may be NULL when `param_count` is 0)
+/// - `param_count`: Number of parameters
+/// - `var_names`: Session variable name array (may be NULL when `var_count` is 0)
+/// - `vars`: Session variable value array (may be NULL when `var_count` is 0)
+/// - `var_count`: Number of session variables
+/// - `result`: Output parameter, result set handle
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `session` must be a valid session handle created by `linkrs_session_create`
+/// - `query` must be a valid pointer to a null-terminated UTF-8 string
+/// - `result` must be a valid pointer to store the result handle
+/// - Each name array must point to at least its count of valid name
+///   pointers (or be NULL when the matching count is 0), and each value
+///   array to at least its count of valid `linkrs_value_t` elements
+/// - The caller is responsible for freeing the result handle using `linkrs_result_free` when done
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_execute_with_variables(
+    session: *mut linkrs_session_t,
+    query: *const c_char,
+    param_names: *const *const c_char,
+    params: *const linkrs_value_t,
+    param_count: usize,
+    var_names: *const *const c_char,
+    vars: *const linkrs_value_t,
+    var_count: usize,
+    result: *mut *mut linkrs_result_t,
+) -> c_int {
+    if session.is_null() || query.is_null() || result.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let query_str = match CStr::from_ptr(query).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let params_map = match collect_named_params(param_names, params, param_count) {
+        Some(map) => map,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+    let vars_map = match collect_named_params(var_names, vars, var_count) {
+        Some(map) => map,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &mut *(session as *mut LinkrsSessionHandle);
+    run_session_named_execution(handle, query_str, params_map, Some(vars_map), result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +573,123 @@ mod tests {
         assert!(!db.is_null());
 
         db
+    }
+
+    #[test]
+    fn test_named_params_and_variables() {
+        use crate::embedded::c_api::result::{linkrs_get_int_by_index, linkrs_result_free};
+        use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
+        use crate::embedded::c_api::types::{
+            linkrs_value_data_t, linkrs_value_t, linkrs_value_type_t,
+        };
+
+        let db = create_test_db();
+        let mut session: *mut linkrs_session_t = ptr::null_mut();
+        assert_eq!(
+            unsafe { linkrs_session_create(db, &mut session) },
+            linkrs_error_code_t::LINKRS_OK as c_int
+        );
+
+        unsafe {
+            // Named binding: `names[i]` fills `@names[i]`.
+            let query = CString::new("RETURN @greeting").unwrap();
+            let name = CString::new("greeting").unwrap();
+            let names = [name.as_ptr()];
+            let value = linkrs_value_t {
+                type_: linkrs_value_type_t::LINKRS_INT,
+                data: linkrs_value_data_t { integer: 7 },
+            };
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_execute_named_params(
+                    session,
+                    query.as_ptr(),
+                    names.as_ptr(),
+                    &value,
+                    1,
+                    &mut result
+                ),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut got: i64 = 0;
+            assert_eq!(
+                linkrs_get_int_by_index(result, 0, 0, &mut got),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(got, 7);
+            linkrs_result_free(result);
+
+            // Parameters and session variables coexist under one name.
+            let query = CString::new("RETURN @x + $v").unwrap();
+            let param_name = CString::new("x").unwrap();
+            let var_name = CString::new("v").unwrap();
+            let param_names = [param_name.as_ptr()];
+            let var_names = [var_name.as_ptr()];
+            let param = linkrs_value_t {
+                type_: linkrs_value_type_t::LINKRS_INT,
+                data: linkrs_value_data_t { integer: 40 },
+            };
+            let var = linkrs_value_t {
+                type_: linkrs_value_type_t::LINKRS_INT,
+                data: linkrs_value_data_t { integer: 2 },
+            };
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_execute_with_variables(
+                    session,
+                    query.as_ptr(),
+                    param_names.as_ptr(),
+                    &param,
+                    1,
+                    var_names.as_ptr(),
+                    &var,
+                    1,
+                    &mut result
+                ),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut got: i64 = 0;
+            assert_eq!(
+                linkrs_get_int_by_index(result, 0, 0, &mut got),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(got, 42);
+            linkrs_result_free(result);
+
+            // Null or empty names fail the whole call.
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            let null_names: *const *const c_char = ptr::null();
+            assert_eq!(
+                linkrs_execute_named_params(
+                    session,
+                    query.as_ptr(),
+                    null_names,
+                    &param,
+                    1,
+                    &mut result
+                ),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            let empty = CString::new("").unwrap();
+            let empty_names = [empty.as_ptr()];
+            assert_eq!(
+                linkrs_execute_with_variables(
+                    session,
+                    query.as_ptr(),
+                    empty_names.as_ptr(),
+                    &param,
+                    1,
+                    var_names.as_ptr(),
+                    &var,
+                    1,
+                    &mut result
+                ),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            linkrs_session_close(session);
+            linkrs_close(db);
+        }
     }
 
     #[test]
