@@ -15,7 +15,7 @@ use crate::storage::{
     path = "/v1/statistics/freeze",
     tag = "Statistics",
     responses(
-        (status = 200, body = serde_json::Value, description = "Background freeze statistics"),
+        (status = 200, body = linkrs_wire::meta::FreezeStatsResponse, description = "Background freeze statistics"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -32,7 +32,7 @@ pub async fn freeze_stats<
         + 'static,
 >(
     State(state): State<AppState<S>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::FreezeStatsResponse>, HttpError> {
     let storage = state.server.get_storage();
 
     let freeze_stats = {
@@ -46,16 +46,22 @@ pub async fn freeze_stats<
     };
 
     match freeze_stats {
-        Some(stats) => Ok(JsonResponse(serde_json::json!({
-            "freeze_count": stats.freeze_count,
-            "total_frozen_edges": stats.total_frozen_edges,
-            "last_freeze_duration_ms": stats.last_freeze_duration_ms,
-            "current_delta_edges": stats.current_delta_edges,
-        }))),
-        None => Ok(JsonResponse(serde_json::json!({
-            "enabled": false,
-            "message": "Background freeze manager not configured",
-        }))),
+        Some(stats) => Ok(JsonResponse(linkrs_wire::meta::FreezeStatsResponse {
+            enabled: true,
+            freeze_count: stats.freeze_count,
+            total_frozen_edges: stats.total_frozen_edges,
+            last_freeze_duration_ms: stats.last_freeze_duration_ms,
+            current_delta_edges: stats.current_delta_edges,
+            message: None,
+        })),
+        None => Ok(JsonResponse(linkrs_wire::meta::FreezeStatsResponse {
+            enabled: false,
+            freeze_count: 0,
+            total_frozen_edges: 0,
+            last_freeze_duration_ms: 0,
+            current_delta_edges: 0,
+            message: Some("Background freeze manager not configured".to_string()),
+        })),
     }
 }
 
@@ -64,7 +70,7 @@ pub async fn freeze_stats<
     path = "/v1/statistics/freeze",
     tag = "Statistics",
     responses(
-        (status = 200, body = serde_json::Value, description = "Background freeze triggered"),
+        (status = 200, body = linkrs_wire::meta::FreezeTriggerResponse, description = "Background freeze triggered"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -81,7 +87,7 @@ pub async fn trigger_freeze<
         + 'static,
 >(
     State(state): State<AppState<S>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::FreezeTriggerResponse>, HttpError> {
     let storage = state.server.get_storage();
 
     let result = {
@@ -95,10 +101,10 @@ pub async fn trigger_freeze<
     };
 
     match result {
-        Ok(()) => Ok(JsonResponse(serde_json::json!({
-            "status": "ok",
-            "message": "Background freeze triggered successfully",
-        }))),
+        Ok(()) => Ok(JsonResponse(linkrs_wire::meta::FreezeTriggerResponse {
+            status: "ok".to_string(),
+            message: "Background freeze triggered successfully".to_string(),
+        })),
         Err(e) => Err(HttpError::internal(format!(
             "Background freeze failed: {}",
             e

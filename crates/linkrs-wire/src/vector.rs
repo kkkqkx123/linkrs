@@ -2,10 +2,6 @@
 //!
 //! Transport-independent request/response shapes for vector index management,
 //! shared between the server handlers and CLI clients.
-//!
-//! Only the shapes actually served over HTTP live here: async rebuild/clear
-//! tasks. Search, scroll, payload, and index listing travel as plain JSON
-//! values because the server handlers define their own response shapes.
 
 use serde::{Deserialize, Serialize};
 
@@ -92,4 +88,54 @@ pub struct ClearVectorIndexResponse {
     pub tag_name: String,
     /// Field name
     pub field_name: String,
+}
+
+/// Vector index creation receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VectorIndexCreatedResponse {
+    pub success: bool,
+    pub message: String,
+    pub collection_name: String,
+}
+
+/// Vector index drop receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VectorIndexDroppedResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// One vector point.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VectorPoint {
+    pub id: String,
+    #[serde(default)]
+    pub vector: Option<Vec<f32>>,
+    #[serde(default)]
+    pub payload: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// Vector point lookup payload. Missing points report success with
+/// a message instead of a point.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VectorPointResponse {
+    pub success: bool,
+    #[serde(default)]
+    pub point: Option<VectorPoint>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Vector point count payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VectorCountResponse {
+    pub success: bool,
+    pub count: u64,
+}
+
+/// Payload mutation receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PayloadMutationResponse {
+    pub success: bool,
+    pub message: String,
 }

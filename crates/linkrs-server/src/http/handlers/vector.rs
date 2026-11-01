@@ -9,6 +9,10 @@ use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use linkrs_sync::vector_sync::SearchOptions;
+use linkrs_wire::vector::{
+    PayloadMutationResponse, VectorCountResponse, VectorIndexCreatedResponse,
+    VectorIndexDroppedResponse, VectorPoint, VectorPointResponse,
+};
 use simvec::{DistanceMetric, VectorFilter};
 
 /// Vector index creation request
@@ -129,7 +133,7 @@ pub struct VectorIndexDetailsResponse {
     tag = "Vector",
     request_body = CreateVectorIndexRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Vector index created"),
+        (status = 200, body = VectorIndexCreatedResponse, description = "Vector index created"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -147,7 +151,7 @@ pub async fn create_index<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Json(request): Json<CreateVectorIndexRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<VectorIndexCreatedResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
@@ -225,11 +229,11 @@ pub async fn create_index<
             .await
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
-        Ok(JsonResponse(serde_json::json!({
-            "success": true,
-            "message": "Vector index created successfully",
-            "collection_name": collection_name
-        })))
+        Ok(JsonResponse(VectorIndexCreatedResponse {
+            success: true,
+            message: "Vector index created successfully".to_string(),
+            collection_name,
+        }))
     } else {
         Err(HttpError::InternalError(
             "Vector API is not available".to_string(),
@@ -247,7 +251,7 @@ pub async fn create_index<
         ("field_name" = String, Path, description = "Vector field name")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Vector index dropped"),
+        (status = 200, body = VectorIndexDroppedResponse, description = "Vector index dropped"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -265,7 +269,7 @@ pub async fn drop_index<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<VectorIndexDroppedResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
@@ -276,10 +280,10 @@ pub async fn drop_index<
             .await
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
-        Ok(JsonResponse(serde_json::json!({
-            "success": true,
-            "message": "Vector index dropped successfully"
-        })))
+        Ok(JsonResponse(VectorIndexDroppedResponse {
+            success: true,
+            message: "Vector index dropped successfully".to_string(),
+        }))
     } else {
         Err(HttpError::InternalError(
             "Vector API is not available".to_string(),
@@ -493,7 +497,7 @@ pub async fn search<
         ("point_id" = String, Path, description = "Vector point id")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Vector point"),
+        (status = 200, body = VectorPointResponse, description = "Vector point"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -511,7 +515,7 @@ pub async fn get_vector<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Path((space_id, tag_name, field_name, point_id)): Path<(u64, String, String, String)>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<VectorPointResponse>, HttpError> {
     super::authz::require_space_read(&state, session_id, space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
@@ -525,18 +529,25 @@ pub async fn get_vector<
             })?;
 
         match point {
-            Some(p) => Ok(JsonResponse(serde_json::json!({
-                "success": true,
-                "point": {
-                    "id": p.id,
-                    "vector": p.vector,
-                    "payload": p.payload.map(|payload| serde_json::to_value(payload).unwrap_or(serde_json::Value::Null))
-                }
-            }))),
-            None => Ok(JsonResponse(serde_json::json!({
-                "success": false,
-                "message": "Vector point not found"
-            }))),
+            Some(p) => Ok(JsonResponse(VectorPointResponse {
+                success: true,
+                point: Some(VectorPoint {
+                    id: p.id.to_string(),
+                    vector: Some(p.vector),
+                    payload: p.payload.map(|payload| {
+                        serde_json::to_value(payload)
+                            .ok()
+                            .and_then(|v| v.as_object().cloned())
+                            .unwrap_or_default()
+                    }),
+                }),
+                message: None,
+            })),
+            None => Ok(JsonResponse(VectorPointResponse {
+                success: false,
+                point: None,
+                message: Some("Vector point not found".to_string()),
+            })),
         }
     } else {
         Err(HttpError::InternalError(
@@ -555,7 +566,7 @@ pub async fn get_vector<
         ("field_name" = String, Path, description = "Vector field name")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Vector point count"),
+        (status = 200, body = VectorCountResponse, description = "Vector point count"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -573,7 +584,7 @@ pub async fn count<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Path((space_id, tag_name, field_name)): Path<(u64, String, String)>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<VectorCountResponse>, HttpError> {
     super::authz::require_space_read(&state, session_id, space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
@@ -586,10 +597,10 @@ pub async fn count<
                 HttpError::InternalError(e.to_string())
             })?;
 
-        Ok(JsonResponse(serde_json::json!({
-            "success": true,
-            "count": count
-        })))
+        Ok(JsonResponse(VectorCountResponse {
+            success: true,
+            count,
+        }))
     } else {
         Err(HttpError::InternalError(
             "Vector API is not available".to_string(),
@@ -643,7 +654,7 @@ pub struct ScrollResponse {
     tag = "Vector",
     request_body = SetPayloadRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Payload set"),
+        (status = 200, body = PayloadMutationResponse, description = "Payload set"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -661,7 +672,7 @@ pub async fn set_payload<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Json(request): Json<SetPayloadRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<PayloadMutationResponse>, HttpError> {
     super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
@@ -680,10 +691,10 @@ pub async fn set_payload<
             .await
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
-        Ok(JsonResponse(serde_json::json!({
-            "success": true,
-            "message": "Payload set successfully"
-        })))
+        Ok(JsonResponse(PayloadMutationResponse {
+            success: true,
+            message: "Payload set successfully".to_string(),
+        }))
     } else {
         Err(HttpError::InternalError(
             "Vector API is not available".to_string(),
@@ -697,7 +708,7 @@ pub async fn set_payload<
     tag = "Vector",
     request_body = SetPayloadRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Payload fields merged"),
+        (status = 200, body = PayloadMutationResponse, description = "Payload fields merged"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -715,7 +726,7 @@ pub async fn set_payload_fields<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Json(request): Json<SetPayloadRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<PayloadMutationResponse>, HttpError> {
     super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
@@ -734,10 +745,10 @@ pub async fn set_payload_fields<
             .await
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
-        Ok(JsonResponse(serde_json::json!({
-            "success": true,
-            "message": "Payload fields merged successfully"
-        })))
+        Ok(JsonResponse(PayloadMutationResponse {
+            success: true,
+            message: "Payload fields merged successfully".to_string(),
+        }))
     } else {
         Err(HttpError::InternalError(
             "Vector API is not available".to_string(),
@@ -751,7 +762,7 @@ pub async fn set_payload_fields<
     tag = "Vector",
     request_body = DeletePayloadRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Payload keys deleted"),
+        (status = 200, body = PayloadMutationResponse, description = "Payload keys deleted"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -769,7 +780,7 @@ pub async fn delete_payload<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Json(request): Json<DeletePayloadRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<PayloadMutationResponse>, HttpError> {
     super::authz::require_space_write(&state, session_id, request.space_id as i64)?;
     let graph_service = state.server.get_graph_service();
     let vector_api = graph_service.vector_api();
@@ -788,10 +799,10 @@ pub async fn delete_payload<
             .await
             .map_err(|e| HttpError::InternalError(e.to_string()))?;
 
-        Ok(JsonResponse(serde_json::json!({
-            "success": true,
-            "message": "Payload keys deleted successfully"
-        })))
+        Ok(JsonResponse(PayloadMutationResponse {
+            success: true,
+            message: "Payload keys deleted successfully".to_string(),
+        }))
     } else {
         Err(HttpError::InternalError(
             "Vector API is not available".to_string(),

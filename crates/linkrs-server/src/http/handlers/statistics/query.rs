@@ -28,7 +28,7 @@ use linkrs_wire::query::QueryStageTimings;
     tag = "Statistics",
     params(("id" = i64, Path, description = "Session id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Session statistics"),
+        (status = 200, body = linkrs_wire::meta::SessionStatsResponse, description = "Session statistics"),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -46,7 +46,7 @@ pub async fn session<
 >(
     State(state): State<AppState<S>>,
     Path(session_id): Path<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::SessionStatsResponse>, HttpError> {
     let session_manager = state.server.get_session_manager();
     let stats_manager = state.server.get_stats_manager();
 
@@ -76,17 +76,17 @@ pub async fn session<
     let last_insert_vertex_id = session_stats.last_insert_vertex_id();
     let last_insert_edge_id = session_stats.last_insert_edge_id();
 
-    Ok(JsonResponse(serde_json::json!({
-        "session_id": session_id,
-        "username": session.user(),
-        "statistics": {
-            "total_queries": total_queries,
-            "total_changes": total_changes,
-            "last_insert_vertex_id": last_insert_vertex_id,
-            "last_insert_edge_id": last_insert_edge_id,
-            "avg_execution_time_ms": avg_execution_time_ms,
+    Ok(JsonResponse(linkrs_wire::meta::SessionStatsResponse {
+        session_id,
+        username: session.user(),
+        statistics: linkrs_wire::meta::SessionStatsDetail {
+            total_queries,
+            total_changes,
+            last_insert_vertex_id,
+            last_insert_edge_id,
+            avg_execution_time_ms,
         },
-    })))
+    }))
 }
 
 #[utoipa::path(

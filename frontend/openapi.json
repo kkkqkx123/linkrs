@@ -1794,7 +1794,9 @@
             "description": "Batch task deleted",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BatchActionReceipt"
+                }
               }
             }
           },
@@ -1830,7 +1832,9 @@
             "description": "Batch task cancelled",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BatchActionReceipt"
+                }
               }
             }
           },
@@ -2189,7 +2193,9 @@
             "description": "Fulltext indexes",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FulltextIndexListResponse"
+                }
               }
             }
           },
@@ -2246,7 +2252,9 @@
             "description": "Inconsistent fulltext indexes",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InconsistentFulltextResponse"
+                }
               }
             }
           },
@@ -2377,7 +2385,9 @@
             "description": "Function list",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionListResponse"
+                }
               }
             }
           },
@@ -2407,7 +2417,9 @@
             "description": "Function registered",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionRegisterResponse"
+                }
               }
             }
           },
@@ -2440,7 +2452,9 @@
             "description": "Function details",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionDetailResponse"
+                }
               }
             }
           },
@@ -2474,7 +2488,9 @@
             "description": "Function unregistered",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionUnregisterResponse"
+                }
               }
             }
           },
@@ -2603,8 +2619,8 @@
               }
             }
           },
-          "500": {
-            "description": "Internal error"
+          "404": {
+            "description": "Unknown import job"
           }
         }
       }
@@ -2972,7 +2988,9 @@
             "description": "Running queries",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
               }
             }
           },
@@ -3903,7 +3921,9 @@
             "description": "Session list",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionListResponse"
+                }
               }
             }
           },
@@ -3976,7 +3996,9 @@
             "description": "Session details",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDetailResponse"
+                }
               }
             }
           },
@@ -4050,7 +4072,9 @@
             "description": "Query killed",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResponse"
+                }
               }
             }
           },
@@ -4088,7 +4112,9 @@
             "description": "Variable snapshot",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VariableSnapshotResponse"
+                }
               }
             }
           },
@@ -4116,12 +4142,24 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetVariableRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Variable assigned",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SetVariableResponse"
+                }
               }
             }
           },
@@ -4164,7 +4202,9 @@
             "description": "Variable removed",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteVariableResponse"
+                }
               }
             }
           },
@@ -4210,7 +4250,9 @@
             "description": "Background freeze statistics",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FreezeStatsResponse"
+                }
               }
             }
           },
@@ -4230,7 +4272,9 @@
             "description": "Background freeze triggered",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FreezeTriggerResponse"
+                }
               }
             }
           },
@@ -4252,7 +4296,9 @@
             "description": "Migration statistics",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationStatsResponse"
+                }
               }
             }
           },
@@ -4416,7 +4462,9 @@
             "description": "Session statistics",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStatsResponse"
+                }
               }
             }
           },
@@ -4517,7 +4565,9 @@
             "description": "Dead letter entries",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeadLetterListResponse"
+                }
               }
             }
           },
@@ -4548,7 +4598,9 @@
             "description": "Degraded range cleared",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ClearDegradedResponse"
+                }
               }
             }
           },
@@ -4602,7 +4654,9 @@
             "description": "Degraded ranges",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DegradedRangeListResponse"
+                }
               }
             }
           },
@@ -4624,7 +4678,9 @@
             "description": "Outbox diagnostics",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SyncDiagnosticsResponse"
+                }
               }
             }
           },
@@ -4655,7 +4711,9 @@
             "description": "Dead letters requeued",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RequeueResponse"
+                }
               }
             }
           },
@@ -4686,7 +4744,9 @@
             "description": "Retention pass completed",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionRunResponse"
+                }
               }
             }
           },
@@ -4707,7 +4767,9 @@
             "description": "Retention watermark",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionStatusResponse"
+                }
               }
             }
           },
@@ -4729,7 +4791,9 @@
             "description": "Outbox delivery retried",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RetryOutboxResponse"
+                }
               }
             }
           },
@@ -4777,7 +4841,9 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": {}
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionListItem"
+                  }
                 }
               }
             }
@@ -4832,7 +4898,9 @@
             "description": "Transaction outcome and resource gauges",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionMetricsResponse"
+                }
               }
             }
           },
@@ -4867,7 +4935,9 @@
             "description": "Transaction committed",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionCommitResponse"
+                }
               }
             }
           },
@@ -4902,7 +4972,9 @@
             "description": "Transaction killed",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionKillResponse"
+                }
               }
             }
           },
@@ -4938,7 +5010,9 @@
             "description": "Outbox projection retried (global replay)",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionOutboxRetryResponse"
+                }
               }
             }
           },
@@ -4973,7 +5047,9 @@
             "description": "Transaction rolled back",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionRollbackResponse"
+                }
               }
             }
           },
@@ -5010,7 +5086,9 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": {}
+                  "items": {
+                    "$ref": "#/components/schemas/SavepointListItem"
+                  }
                 }
               }
             }
@@ -5102,7 +5180,9 @@
             "description": "Savepoint released",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SavepointReleaseResponse"
+                }
               }
             }
           },
@@ -5148,7 +5228,9 @@
             "description": "Rolled back to savepoint",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SavepointRollbackResponse"
+                }
               }
             }
           },
@@ -5522,7 +5604,9 @@
             "description": "Vector index created",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VectorIndexCreatedResponse"
+                }
               }
             }
           },
@@ -5702,7 +5786,9 @@
             "description": "Vector index dropped",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VectorIndexDroppedResponse"
+                }
               }
             }
           },
@@ -5734,7 +5820,9 @@
             "description": "Payload set",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadMutationResponse"
+                }
               }
             }
           },
@@ -5766,7 +5854,9 @@
             "description": "Payload keys deleted",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadMutationResponse"
+                }
               }
             }
           },
@@ -5798,7 +5888,9 @@
             "description": "Payload fields merged",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadMutationResponse"
+                }
               }
             }
           },
@@ -5957,7 +6049,9 @@
             "description": "Vector point count",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VectorCountResponse"
+                }
               }
             }
           },
@@ -6019,7 +6113,9 @@
             "description": "Vector point",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VectorPointResponse"
+                }
               }
             }
           },
@@ -6629,6 +6725,22 @@
           }
         }
       },
+      "BatchActionReceipt": {
+        "type": "object",
+        "description": "Batch cancel or delete receipt.",
+        "required": [
+          "batch_id",
+          "message"
+        ],
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "BatchErrorData": {
         "type": "object",
         "description": "Batch error data",
@@ -7126,6 +7238,18 @@
           },
           "target": {
             "type": "string"
+          }
+        }
+      },
+      "ClearDegradedResponse": {
+        "type": "object",
+        "description": "Degraded range clear receipt.",
+        "required": [
+          "cleared"
+        ],
+        "properties": {
+          "cleared": {
+            "type": "boolean"
           }
         }
       },
@@ -7954,6 +8078,124 @@
           }
         }
       },
+      "DeadLetterListResponse": {
+        "type": "object",
+        "description": "Dead-letter listing payload.",
+        "properties": {
+          "dead_letters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeadLetterRow"
+            }
+          }
+        }
+      },
+      "DeadLetterRow": {
+        "type": "object",
+        "description": "One dead-letter row joined with its event metadata.",
+        "required": [
+          "event_id",
+          "target",
+          "index_id",
+          "generation",
+          "commit_lsn",
+          "retry_count",
+          "failed_at_ms"
+        ],
+        "properties": {
+          "commit_lsn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failed_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "index_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "retry_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "DegradedRangeListResponse": {
+        "type": "object",
+        "description": "Degraded range listing payload.",
+        "properties": {
+          "degraded_ranges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DegradedRangeRow"
+            }
+          }
+        }
+      },
+      "DegradedRangeRow": {
+        "type": "object",
+        "description": "One degraded range entry.",
+        "required": [
+          "target",
+          "index_id",
+          "generation",
+          "start_lsn",
+          "end_lsn"
+        ],
+        "properties": {
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "end_lsn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "index_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
+          },
+          "start_lsn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
       "DeleteEdgeData": {
         "type": "object",
         "description": "Edge delete data",
@@ -8043,6 +8285,27 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "DeleteVariableResponse": {
+        "type": "object",
+        "description": "Variable removal receipt.",
+        "required": [
+          "session_id",
+          "name",
+          "removed"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -8435,6 +8698,67 @@
           }
         }
       },
+      "FreezeStatsResponse": {
+        "type": "object",
+        "description": "Background freeze statistics payload. Disabled deployments report\nthe enabled flag with an explanatory message.",
+        "properties": {
+          "current_delta_edges": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "freeze_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_freeze_duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_frozen_edges": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FreezeTriggerResponse": {
+        "type": "object",
+        "description": "Manual freeze trigger receipt.",
+        "required": [
+          "status",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "FulltextIndexListResponse": {
+        "type": "object",
+        "description": "Fulltext index listing payload. Entries stay generic because index\ndescriptors span engine-specific shapes.",
+        "properties": {
+          "indexes": {
+            "type": "array",
+            "items": {}
+          }
+        }
+      },
       "FulltextRebuildStatusResponse": {
         "type": "object",
         "description": "Fulltext rebuild task status.",
@@ -8567,6 +8891,119 @@
           "total_hits": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "FunctionDetailResponse": {
+        "type": "object",
+        "description": "Function detail payload.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "is_builtin": {
+            "type": "boolean"
+          },
+          "is_custom": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "registered_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "return_type": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "FunctionListItem": {
+        "type": "object",
+        "description": "One function row.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "FunctionListResponse": {
+        "type": "object",
+        "description": "Function listing payload.",
+        "properties": {
+          "functions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FunctionListItem"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FunctionRegisterResponse": {
+        "type": "object",
+        "description": "Function registration receipt.",
+        "required": [
+          "function_id",
+          "name",
+          "function_type",
+          "return_type",
+          "status",
+          "message"
+        ],
+        "properties": {
+          "function_id": {
+            "type": "string"
+          },
+          "function_type": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "return_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "FunctionUnregisterResponse": {
+        "type": "object",
+        "description": "Function removal receipt.",
+        "required": [
+          "name",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -8706,11 +9143,15 @@
         "type": "object",
         "required": [
           "success",
+          "job_id",
           "message",
           "rows_imported",
           "rows_failed"
         ],
         "properties": {
+          "job_id": {
+            "type": "string"
+          },
           "message": {
             "type": "string"
           },
@@ -8761,6 +9202,21 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "InconsistentFulltextResponse": {
+        "type": "object",
+        "description": "Inconsistent fulltext index payload.",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "inconsistent": {
+            "type": "array",
+            "items": {}
           }
         }
       },
@@ -8835,6 +9291,58 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "IndexSyncDiagnostics": {
+        "type": "object",
+        "description": "Health of one secondary index generation.",
+        "required": [
+          "target",
+          "index_id",
+          "generation",
+          "state",
+          "applied_lsn",
+          "frontier_lag",
+          "degraded"
+        ],
+        "properties": {
+          "applied_lsn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "barrier_lsn": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "degraded": {
+            "type": "boolean"
+          },
+          "frontier_lag": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "index_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
           }
         }
       },
@@ -8975,6 +9483,37 @@
           }
         }
       },
+      "MigrationEngineStats": {
+        "type": "object",
+        "description": "Migration engine counters.",
+        "properties": {
+          "failed_migrations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "successful_migrations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_migrations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_rows_migrated": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "MigrationExecuteRequest": {
         "type": "object",
         "required": [
@@ -9054,6 +9593,41 @@
           }
         }
       },
+      "MigrationManagerStats": {
+        "type": "object",
+        "description": "Manager-level migration counters.",
+        "properties": {
+          "active_migrations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "avg_duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rows_migrated": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_migrations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "MigrationPlanResponse": {
         "type": "object",
         "required": [
@@ -9075,6 +9649,18 @@
         "properties": {
           "plan_json": {
             "type": "string"
+          }
+        }
+      },
+      "MigrationStatsResponse": {
+        "type": "object",
+        "description": "Migration statistics payload.",
+        "properties": {
+          "migration_metrics": {
+            "$ref": "#/components/schemas/MigrationEngineStats"
+          },
+          "stats_manager": {
+            "$ref": "#/components/schemas/MigrationManagerStats"
           }
         }
       },
@@ -9367,6 +9953,22 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "PayloadMutationResponse": {
+        "type": "object",
+        "description": "Payload mutation receipt.",
+        "required": [
+          "success",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "success": {
+            "type": "boolean"
           }
         }
       },
@@ -10155,6 +10757,20 @@
           }
         }
       },
+      "RequeueResponse": {
+        "type": "object",
+        "description": "Dead-letter requeue receipt.",
+        "required": [
+          "requeued"
+        ],
+        "properties": {
+          "requeued": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "RerankSection": {
         "type": "object",
         "description": "Rerank provider call counters.",
@@ -10219,6 +10835,64 @@
           }
         }
       },
+      "RetentionRunResponse": {
+        "type": "object",
+        "description": "Retention pass receipt.",
+        "required": [
+          "pruned",
+          "archived",
+          "retention_lsn"
+        ],
+        "properties": {
+          "archived": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pruned": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "retention_lsn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RetentionStatusResponse": {
+        "type": "object",
+        "description": "Retention watermark payload.",
+        "required": [
+          "retention_lsn"
+        ],
+        "properties": {
+          "retention_lsn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "RetryOutboxResponse": {
+        "type": "object",
+        "description": "Outbox retry receipt.",
+        "required": [
+          "delivered",
+          "status"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "RevokeRoleRequest": {
         "type": "object",
         "description": "Revoke role request for the admin channel.",
@@ -10228,6 +10902,53 @@
         "properties": {
           "space": {
             "type": "string"
+          }
+        }
+      },
+      "SavepointListItem": {
+        "type": "object",
+        "description": "One savepoint row.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SavepointReleaseResponse": {
+        "type": "object",
+        "description": "Savepoint release receipt.",
+        "required": [
+          "transaction_id",
+          "savepoint_id",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "savepoint_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -10244,6 +10965,30 @@
               "string",
               "null"
             ]
+          },
+          "savepoint_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SavepointRollbackResponse": {
+        "type": "object",
+        "description": "Rollback-to-savepoint receipt.",
+        "required": [
+          "transaction_id",
+          "savepoint_id",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
           },
           "savepoint_id": {
             "type": "integer",
@@ -10457,6 +11202,88 @@
           }
         }
       },
+      "SessionDetailResponse": {
+        "type": "object",
+        "description": "Session detail payload.",
+        "required": [
+          "session_id",
+          "username"
+        ],
+        "properties": {
+          "graph_addr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "space_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timezone": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionListItem": {
+        "type": "object",
+        "description": "One session row.",
+        "required": [
+          "session_id",
+          "username"
+        ],
+        "properties": {
+          "active_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "graph_addr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "space_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionListResponse": {
+        "type": "object",
+        "description": "Session listing payload.",
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionListItem"
+            }
+          }
+        }
+      },
       "SessionResponse": {
         "type": "object",
         "description": "Session response",
@@ -10473,6 +11300,62 @@
           "session_id": {
             "type": "integer",
             "format": "int64"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionStatsDetail": {
+        "type": "object",
+        "description": "Session statistics detail payload.",
+        "properties": {
+          "avg_execution_time_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "last_insert_edge_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_insert_vertex_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_changes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_queries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SessionStatsResponse": {
+        "type": "object",
+        "description": "Session statistics payload.",
+        "required": [
+          "session_id",
+          "username"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "statistics": {
+            "$ref": "#/components/schemas/SessionStatsDetail"
           },
           "username": {
             "type": "string"
@@ -10514,6 +11397,37 @@
           "tag_name": {
             "type": "string"
           }
+        }
+      },
+      "SetVariableRequest": {
+        "type": "object",
+        "description": "Assign one session variable.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {}
+        }
+      },
+      "SetVariableResponse": {
+        "type": "object",
+        "description": "Variable assignment receipt.",
+        "required": [
+          "session_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "value": {}
         }
       },
       "SlowQueryInfo": {
@@ -10702,6 +11616,37 @@
       "String": {
         "type": "string"
       },
+      "SyncDiagnosticsResponse": {
+        "type": "object",
+        "description": "Outbox diagnostics snapshot across targets and indexes.",
+        "required": [
+          "materialized_lsn"
+        ],
+        "properties": {
+          "indexes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IndexSyncDiagnostics"
+            }
+          },
+          "materialized_lsn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TargetSyncDiagnostics"
+            }
+          },
+          "vector_disabled_skips": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "SyncStatusResponse": {
         "type": "object",
         "description": "Sync status response",
@@ -10868,6 +11813,297 @@
           }
         }
       },
+      "TargetSyncDiagnostics": {
+        "type": "object",
+        "description": "Health of one synchronization target.",
+        "required": [
+          "target",
+          "applied_lsn",
+          "frontier_lag",
+          "pending",
+          "retrying",
+          "leased",
+          "dead_lettered",
+          "degraded"
+        ],
+        "properties": {
+          "applied_lsn": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "dead_lettered": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "degraded": {
+            "type": "boolean"
+          },
+          "frontier_lag": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "leased": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "oldest_event_age_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "retrying": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "TransactionCommitResponse": {
+        "type": "object",
+        "description": "Transaction commit receipt.",
+        "required": [
+          "transaction_id",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TransactionKillResponse": {
+        "type": "object",
+        "description": "Transaction kill receipt.",
+        "required": [
+          "transaction_id",
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TransactionListItem": {
+        "type": "object",
+        "description": "One active transaction row.",
+        "required": [
+          "transaction_id",
+          "state"
+        ],
+        "properties": {
+          "blocking_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_activity_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "read_timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rollback_only": {
+            "type": "boolean"
+          },
+          "staged_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "undo_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "write_timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TransactionMetricsResponse": {
+        "type": "object",
+        "description": "Transaction outcome and resource gauges.",
+        "properties": {
+          "outcomes": {
+            "$ref": "#/components/schemas/TransactionOutcomes"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/TransactionResources"
+          }
+        }
+      },
+      "TransactionOutboxRetryResponse": {
+        "type": "object",
+        "description": "Per-transaction outbox retry receipt. The engine replays the global\ndurable queue, so the scope marker stays explicit.",
+        "required": [
+          "transaction_id",
+          "delivered",
+          "scope",
+          "status"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "scope": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TransactionOutcomes": {
+        "type": "object",
+        "description": "Transaction outcome counters.",
+        "properties": {
+          "aborted": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "active": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "begun": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "cleanup_failure": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "committed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "conflict": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "disconnect": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "recovery_abort": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "timeout": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TransactionResources": {
+        "type": "object",
+        "description": "Transaction resource gauges.",
+        "properties": {
+          "active_snapshots": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "active_statements": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "checkpoint_drain_time_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "committed_frontier_lag": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pending_writes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "staged_wal_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "undo_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "TransactionResponse": {
         "type": "object",
         "description": "Transaction response",
@@ -10877,6 +12113,24 @@
         ],
         "properties": {
           "status": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TransactionRollbackResponse": {
+        "type": "object",
+        "description": "Transaction rollback receipt.",
+        "required": [
+          "transaction_id",
+          "message"
+        ],
+        "properties": {
+          "message": {
             "type": "string"
           },
           "transaction_id": {
@@ -11127,6 +12381,44 @@
           }
         }
       },
+      "VariableSnapshotResponse": {
+        "type": "object",
+        "description": "Session variable snapshot payload.",
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "variables": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VectorCountResponse": {
+        "type": "object",
+        "description": "Vector point count payload.",
+        "required": [
+          "success",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "VectorFilter": {
         "type": "object",
         "description": "Top-level payload filter with Qdrant-style clause groups.",
@@ -11170,6 +12462,26 @@
           }
         }
       },
+      "VectorIndexCreatedResponse": {
+        "type": "object",
+        "description": "Vector index creation receipt.",
+        "required": [
+          "success",
+          "message",
+          "collection_name"
+        ],
+        "properties": {
+          "collection_name": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
       "VectorIndexDetailsResponse": {
         "type": "object",
         "description": "Vector index details response",
@@ -11210,6 +12522,82 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "VectorIndexDroppedResponse": {
+        "type": "object",
+        "description": "Vector index drop receipt.",
+        "required": [
+          "success",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VectorPoint": {
+        "type": "object",
+        "description": "One vector point.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "payload": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "vector": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "float"
+            }
+          }
+        }
+      },
+      "VectorPointResponse": {
+        "type": "object",
+        "description": "Vector point lookup payload. Missing points report success with\na message instead of a point.",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "point": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorPoint"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
           }
         }
       },

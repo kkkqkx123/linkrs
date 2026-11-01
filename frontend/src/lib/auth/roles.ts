@@ -9,7 +9,12 @@
 export type UiRole = 'admin' | 'operator' | 'viewer';
 
 export type Capability =
-	'manageUsers' | 'write' | 'alterSchema' | 'dropSpace' | 'manageConfig';
+	| 'manageUsers'
+	| 'write'
+	| 'alterSchema'
+	| 'dropSpace'
+	| 'manageConfig'
+	| 'manageBatch';
 
 const RANK: Record<UiRole, number> = {
 	viewer: 0,
@@ -108,6 +113,8 @@ export function can(capability: Capability, role: UiRole | null): boolean {
 		case 'dropSpace':
 			return role === 'admin';
 		case 'manageConfig':
+			return role === 'admin';
+		case 'manageBatch':
 			return role === 'admin';
 		default:
 			return false;

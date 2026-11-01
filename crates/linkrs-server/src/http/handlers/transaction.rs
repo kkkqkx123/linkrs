@@ -108,7 +108,7 @@ pub async fn begin<
     tag = "Transaction",
     params(("id" = u64, Path, description = "Transaction id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Transaction committed"),
+        (status = 200, body = linkrs_wire::meta::TransactionCommitResponse, description = "Transaction committed"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -126,7 +126,7 @@ pub async fn commit<
     State(state): State<AppState<S>>,
     Path(txn_id): Path<u64>,
     headers: HeaderMap,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::TransactionCommitResponse>, HttpError> {
     let owner = headers
         .get("x-transaction-owner")
         .and_then(|value| value.to_str().ok())
@@ -137,10 +137,10 @@ pub async fn commit<
             .get_txn_manager()
             .commit_transaction_as_owner(txn_id.into(), owner.as_deref())
         {
-            Ok(()) => Ok::<_, HttpError>(serde_json::json!({
-                "message": "Transaction committed successfully",
-                "transaction_id": txn_id,
-            })),
+            Ok(()) => Ok::<_, HttpError>(linkrs_wire::meta::TransactionCommitResponse {
+                transaction_id: txn_id,
+                message: "Transaction committed successfully".to_string(),
+            }),
             Err(e) => Err(HttpError::transaction_message(format!(
                 "Failed to commit transaction: {}",
                 e
@@ -159,7 +159,7 @@ pub async fn commit<
     tag = "Transaction",
     params(("id" = u64, Path, description = "Transaction id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Transaction rolled back"),
+        (status = 200, body = linkrs_wire::meta::TransactionRollbackResponse, description = "Transaction rolled back"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -177,7 +177,7 @@ pub async fn rollback<
     State(state): State<AppState<S>>,
     Path(txn_id): Path<u64>,
     headers: HeaderMap,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::TransactionRollbackResponse>, HttpError> {
     let owner = headers
         .get("x-transaction-owner")
         .and_then(|value| value.to_str().ok())
@@ -188,10 +188,10 @@ pub async fn rollback<
             .get_txn_manager()
             .abort_transaction_as_owner(txn_id.into(), owner.as_deref())
         {
-            Ok(()) => Ok::<_, HttpError>(serde_json::json!({
-                "message": "Transaction rolled back successfully",
-                "transaction_id": txn_id,
-            })),
+            Ok(()) => Ok::<_, HttpError>(linkrs_wire::meta::TransactionRollbackResponse {
+                transaction_id: txn_id,
+                message: "Transaction rolled back successfully".to_string(),
+            }),
             Err(e) => Err(HttpError::transaction_message(format!(
                 "Failed to rollback transaction: {}",
                 e
@@ -281,7 +281,7 @@ pub async fn create_savepoint<
     tag = "Transaction",
     params(("id" = u64, Path, description = "Transaction id")),
     responses(
-        (status = 200, body = Vec<serde_json::Value>, description = "Savepoint list"),
+        (status = 200, body = Vec<linkrs_wire::meta::SavepointListItem>, description = "Savepoint list"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -299,7 +299,7 @@ pub async fn get_savepoints<
     State(state): State<AppState<S>>,
     Path(txn_id): Path<u64>,
     headers: HeaderMap,
-) -> Result<JsonResponse<Vec<serde_json::Value>>, HttpError> {
+) -> Result<JsonResponse<Vec<linkrs_wire::meta::SavepointListItem>>, HttpError> {
     let owner = headers
         .get("x-transaction-owner")
         .and_then(|value| value.to_str().ok())
@@ -317,12 +317,10 @@ pub async fn get_savepoints<
             Ok(savepoints) => Ok::<_, HttpError>(
                 savepoints
                     .into_iter()
-                    .map(|sp| {
-                        serde_json::json!({
-                            "id": sp.id,
-                            "name": sp.name,
-                            "created_at": format!("{:?}", sp.created_at),
-                        })
+                    .map(|sp| linkrs_wire::meta::SavepointListItem {
+                        id: sp.id,
+                        name: sp.name,
+                        created_at: format!("{:?}", sp.created_at),
                     })
                     .collect(),
             ),
@@ -347,7 +345,7 @@ pub async fn get_savepoints<
         ("sid" = u64, Path, description = "Savepoint id")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Rolled back to savepoint"),
+        (status = 200, body = linkrs_wire::meta::SavepointRollbackResponse, description = "Rolled back to savepoint"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -366,7 +364,7 @@ pub async fn rollback_to_savepoint<
     State(state): State<AppState<S>>,
     Path((txn_id, savepoint_id)): Path<(u64, u64)>,
     headers: HeaderMap,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::SavepointRollbackResponse>, HttpError> {
     let owner = headers
         .get("x-transaction-owner")
         .and_then(|value| value.to_str().ok())
@@ -385,11 +383,11 @@ pub async fn rollback_to_savepoint<
             .check_transaction_owner(txn_id.into(), owner.as_deref())
             .map_err(|error| HttpError::transaction_message(error.to_string()))?;
         match txn_api.rollback_to_savepoint(handle, sp_id, storage_ref) {
-            Ok(()) => Ok::<_, HttpError>(serde_json::json!({
-                "message": "Rolled back to savepoint successfully",
-                "transaction_id": txn_id,
-                "savepoint_id": savepoint_id,
-            })),
+            Ok(()) => Ok::<_, HttpError>(linkrs_wire::meta::SavepointRollbackResponse {
+                transaction_id: txn_id,
+                savepoint_id,
+                message: "Rolled back to savepoint successfully".to_string(),
+            }),
             Err(e) => Err(HttpError::transaction_message(format!(
                 "Failed to rollback to savepoint: {}",
                 e
@@ -411,7 +409,7 @@ pub async fn rollback_to_savepoint<
         ("sid" = u64, Path, description = "Savepoint id")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Savepoint released"),
+        (status = 200, body = linkrs_wire::meta::SavepointReleaseResponse, description = "Savepoint released"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -429,7 +427,7 @@ pub async fn release_savepoint<
     State(state): State<AppState<S>>,
     Path((txn_id, savepoint_id)): Path<(u64, u64)>,
     headers: HeaderMap,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::SavepointReleaseResponse>, HttpError> {
     let owner = headers
         .get("x-transaction-owner")
         .and_then(|value| value.to_str().ok())
@@ -445,11 +443,11 @@ pub async fn release_savepoint<
             .check_transaction_owner(txn_id.into(), owner.as_deref())
             .map_err(|error| HttpError::transaction_message(error.to_string()))?;
         match txn_api.release_savepoint(handle, sp_id) {
-            Ok(()) => Ok::<_, HttpError>(serde_json::json!({
-                "message": "Savepoint released successfully",
-                "transaction_id": txn_id,
-                "savepoint_id": savepoint_id,
-            })),
+            Ok(()) => Ok::<_, HttpError>(linkrs_wire::meta::SavepointReleaseResponse {
+                transaction_id: txn_id,
+                savepoint_id,
+                message: "Savepoint released successfully".to_string(),
+            }),
             Err(e) => Err(HttpError::transaction_message(format!(
                 "Failed to release savepoint: {}",
                 e
@@ -467,7 +465,7 @@ pub async fn release_savepoint<
     path = "/v1/transactions",
     tag = "Transaction",
     responses(
-        (status = 200, body = Vec<serde_json::Value>, description = "Active transaction list"),
+        (status = 200, body = Vec<linkrs_wire::meta::TransactionListItem>, description = "Active transaction list"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -483,25 +481,23 @@ pub async fn list_transactions<
         + 'static,
 >(
     State(state): State<AppState<S>>,
-) -> Result<JsonResponse<Vec<serde_json::Value>>, HttpError> {
+) -> Result<JsonResponse<Vec<linkrs_wire::meta::TransactionListItem>>, HttpError> {
     let manager = state.server.get_txn_manager();
     let transactions = manager
         .list_transactions()
         .into_iter()
-        .map(|info| {
-            serde_json::json!({
-                "transaction_id": info.id.as_u64(),
-                "state": info.state.to_string(),
-                "owner": info.owner,
-                "read_timestamp": info.read_timestamp,
-                "write_timestamp": info.write_timestamp,
-                "elapsed_ms": info.elapsed.as_millis(),
-                "last_activity_ms": info.last_activity.as_millis(),
-                "rollback_only": info.rollback_only,
-                "staged_bytes": info.staged_bytes,
-                "undo_bytes": info.undo_bytes,
-                "blocking_reason": info.blocking_reason,
-            })
+        .map(|info| linkrs_wire::meta::TransactionListItem {
+            transaction_id: info.id.as_u64(),
+            state: info.state.to_string(),
+            owner: info.owner,
+            read_timestamp: info.read_timestamp,
+            write_timestamp: info.write_timestamp,
+            elapsed_ms: info.elapsed.as_millis() as u64,
+            last_activity_ms: info.last_activity.as_millis() as u64,
+            rollback_only: info.rollback_only,
+            staged_bytes: info.staged_bytes,
+            undo_bytes: info.undo_bytes,
+            blocking_reason: info.blocking_reason,
         })
         .collect();
     Ok(JsonResponse(transactions))
@@ -512,7 +508,7 @@ pub async fn list_transactions<
     path = "/v1/transactions/metrics",
     tag = "Transaction",
     responses(
-        (status = 200, body = serde_json::Value, description = "Transaction outcome and resource gauges"),
+        (status = 200, body = linkrs_wire::meta::TransactionMetricsResponse, description = "Transaction outcome and resource gauges"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -528,32 +524,32 @@ pub async fn metrics<
         + 'static,
 >(
     State(state): State<AppState<S>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::TransactionMetricsResponse>, HttpError> {
     let manager = state.server.get_txn_manager();
     let stats = manager.stats();
     let resources = manager.resource_metrics();
-    Ok(JsonResponse(serde_json::json!({
-        "outcomes": {
-            "begun": stats.total_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            "active": stats.active_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            "committed": stats.committed_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            "aborted": stats.aborted_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            "timeout": stats.timeout_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            "conflict": stats.conflict_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            "disconnect": stats.disconnect_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            "recovery_abort": stats.recovery_abort_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            "cleanup_failure": stats.cleanup_failure_transactions.load(std::sync::atomic::Ordering::Relaxed),
+    Ok(JsonResponse(linkrs_wire::meta::TransactionMetricsResponse {
+        outcomes: linkrs_wire::meta::TransactionOutcomes {
+            begun: stats.total_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            active: stats.active_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            committed: stats.committed_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            aborted: stats.aborted_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            timeout: stats.timeout_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            conflict: stats.conflict_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            disconnect: stats.disconnect_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            recovery_abort: stats.recovery_abort_transactions.load(std::sync::atomic::Ordering::Relaxed),
+            cleanup_failure: stats.cleanup_failure_transactions.load(std::sync::atomic::Ordering::Relaxed),
         },
-        "resources": {
-            "active_statements": stats.active_statements.load(std::sync::atomic::Ordering::Relaxed),
-            "active_snapshots": resources.active_snapshots,
-            "pending_writes": resources.pending_writes,
-            "committed_frontier_lag": resources.committed_frontier_lag,
-            "staged_wal_bytes": resources.staged_wal_bytes,
-            "undo_bytes": resources.undo_bytes,
-            "checkpoint_drain_time_ms": resources.checkpoint_drain_time.as_millis(),
+        resources: linkrs_wire::meta::TransactionResources {
+            active_statements: stats.active_statements.load(std::sync::atomic::Ordering::Relaxed),
+            active_snapshots: resources.active_snapshots,
+            pending_writes: resources.pending_writes.max(0) as u64,
+            committed_frontier_lag: resources.committed_frontier_lag,
+            staged_wal_bytes: resources.staged_wal_bytes,
+            undo_bytes: resources.undo_bytes,
+            checkpoint_drain_time_ms: resources.checkpoint_drain_time.as_millis() as u64,
         },
-    })))
+    }))
 }
 
 #[utoipa::path(
@@ -562,7 +558,7 @@ pub async fn metrics<
     tag = "Transaction",
     params(("id" = u64, Path, description = "Transaction id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Transaction killed"),
+        (status = 200, body = linkrs_wire::meta::TransactionKillResponse, description = "Transaction killed"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -580,7 +576,7 @@ pub async fn kill_transaction<
     State(state): State<AppState<S>>,
     Path(txn_id): Path<u64>,
     headers: HeaderMap,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::TransactionKillResponse>, HttpError> {
     let owner = headers
         .get("x-transaction-owner")
         .and_then(|value| value.to_str().ok());
@@ -589,10 +585,10 @@ pub async fn kill_transaction<
         .get_txn_manager()
         .kill_transaction(txn_id.into(), owner)
         .map_err(|error| HttpError::transaction_message(error.to_string()))?;
-    Ok(JsonResponse(serde_json::json!({
-        "transaction_id": txn_id,
-        "status": "Aborted",
-    })))
+    Ok(JsonResponse(linkrs_wire::meta::TransactionKillResponse {
+        transaction_id: txn_id,
+        status: "Aborted".to_string(),
+    }))
 }
 
 #[utoipa::path(
@@ -601,7 +597,7 @@ pub async fn kill_transaction<
     tag = "Transaction",
     params(("id" = u64, Path, description = "Transaction id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Outbox projection retried (global replay)"),
+        (status = 200, body = linkrs_wire::meta::TransactionOutboxRetryResponse, description = "Outbox projection retried (global replay)"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -624,7 +620,7 @@ pub async fn retry_transaction_outbox<
     State(state): State<AppState<S>>,
     Path(txn_id): Path<u64>,
     headers: HeaderMap,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::TransactionOutboxRetryResponse>, HttpError> {
     let owner = headers
         .get("x-transaction-owner")
         .and_then(|value| value.to_str().ok());
@@ -648,10 +644,10 @@ pub async fn retry_transaction_outbox<
     let delivered = manager
         .retry_outbox_projection()
         .map_err(|error| HttpError::transaction_message(error.to_string()))?;
-    Ok(JsonResponse(serde_json::json!({
-        "transaction_id": txn_id,
-        "delivered": delivered,
-        "scope": "global",
-        "status": "completed",
-    })))
+    Ok(JsonResponse(linkrs_wire::meta::TransactionOutboxRetryResponse {
+        transaction_id: txn_id,
+        delivered: delivered as u64,
+        scope: "global".to_string(),
+        status: "completed".to_string(),
+    }))
 }

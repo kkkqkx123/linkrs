@@ -315,4 +315,7 @@ export const currentRole = derived(connectionStore, ($s) => $s.role);
 export const canManageUsers = derived(connectionStore, ($s) =>
 	can('manageUsers', $s.role),
 );
+export const canManageBatch = derived(connectionStore, ($s) =>
+	can('manageBatch', $s.role),
+);
 export const canWrite = derived(connectionStore, ($s) => can('write', $s.role));

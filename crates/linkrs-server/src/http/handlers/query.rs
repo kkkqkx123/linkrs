@@ -629,7 +629,7 @@ pub(crate) fn result_size_limit<
     path = "/v1/queries",
     tag = "Query",
     responses(
-        (status = 200, body = serde_json::Value, description = "Running queries"),
+        (status = 200, body = QueryResponse, description = "Running queries"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -644,15 +644,13 @@ pub async fn list_queries<
         + 'static,
 >(
     State(state): State<AppState<S>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<QueryResponse>, HttpError> {
     let graph_service = state.server.get_graph_service();
     let result = graph_service
         .serve_show_queries()
         .map_err(|e| HttpError::internal(e.message().to_string()))?;
     let response = query_result_to_response(result, None, "list-queries", 0);
-    Ok(JsonResponse(
-        serde_json::to_value(&response).unwrap_or_default(),
-    ))
+    Ok(JsonResponse(response))
 }
 
 /// Cancel a running query by `(session_id, query_id)`.
@@ -671,7 +669,7 @@ pub async fn list_queries<
         ("qid" = i64, Path, description = "Query id from SHOW QUERIES")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Query killed"),
+        (status = 200, body = QueryResponse, description = "Query killed"),
         (status = 404, description = "Session or query not found"),
         (status = 500, description = "Internal error")
     )
@@ -688,7 +686,7 @@ pub async fn kill_query<
 >(
     State(state): State<AppState<S>>,
     Path((session_id, query_id)): Path<(i64, i64)>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<QueryResponse>, HttpError> {
     let graph_service = state.server.get_graph_service();
     let result = graph_service
         .serve_kill_query(session_id, query_id)
@@ -701,9 +699,7 @@ pub async fn kill_query<
             }
         })?;
     let response = query_result_to_response(result, None, "kill-query", 0);
-    Ok(JsonResponse(
-        serde_json::to_value(&response).unwrap_or_default(),
-    ))
+    Ok(JsonResponse(response))
 }
 
 /// Convert an HTTP request's JSON parameter map to core `Value` bindings.

@@ -2359,6 +2359,11 @@ export interface components {
             roles?: string[];
             username: string;
         };
+        /** @description Batch cancel or delete receipt. */
+        BatchActionReceipt: {
+            batch_id: string;
+            message: string;
+        };
         /** @description Batch error data */
         BatchErrorData: {
             /** @description Error message */
@@ -2519,6 +2524,10 @@ export interface components {
             /** Format: int64 */
             start_lsn: number;
             target: string;
+        };
+        /** @description Degraded range clear receipt. */
+        ClearDegradedResponse: {
+            cleared: boolean;
         };
         /**
          * @description Clear a fulltext index request.
@@ -2796,6 +2805,46 @@ export interface components {
             /** Format: int64 */
             wasted_bytes?: number;
         };
+        /** @description Dead-letter listing payload. */
+        DeadLetterListResponse: {
+            dead_letters?: components["schemas"]["DeadLetterRow"][];
+        };
+        /** @description One dead-letter row joined with its event metadata. */
+        DeadLetterRow: {
+            /** Format: int64 */
+            commit_lsn: number;
+            error?: string;
+            /** Format: int64 */
+            event_id: number;
+            /** Format: int64 */
+            failed_at_ms: number;
+            /** Format: int64 */
+            generation: number;
+            /** Format: int64 */
+            index_id: number;
+            /** Format: int64 */
+            retry_count: number;
+            target: string;
+        };
+        /** @description Degraded range listing payload. */
+        DegradedRangeListResponse: {
+            degraded_ranges?: components["schemas"]["DegradedRangeRow"][];
+        };
+        /** @description One degraded range entry. */
+        DegradedRangeRow: {
+            /** Format: int64 */
+            created_at_ms?: number;
+            /** Format: int64 */
+            end_lsn: number;
+            /** Format: int64 */
+            generation: number;
+            /** Format: int64 */
+            index_id: number;
+            reason?: string;
+            /** Format: int64 */
+            start_lsn: number;
+            target: string;
+        };
         /** @description Edge delete data */
         DeleteEdgeData: {
             /** @description Target vertex ID */
@@ -2828,6 +2877,13 @@ export interface components {
             total_latency_ms: number;
             /** Format: int64 */
             total_operations: number;
+        };
+        /** @description Variable removal receipt. */
+        DeleteVariableResponse: {
+            name: string;
+            removed: boolean;
+            /** Format: int64 */
+            session_id: number;
         };
         /** @description Vertex delete data */
         DeleteVertexData: {
@@ -2955,6 +3011,34 @@ export interface components {
             condition: components["schemas"]["ConditionType"];
             field: string;
         };
+        /**
+         * @description Background freeze statistics payload. Disabled deployments report
+         *     the enabled flag with an explanatory message.
+         */
+        FreezeStatsResponse: {
+            /** Format: int64 */
+            current_delta_edges?: number;
+            enabled?: boolean;
+            /** Format: int64 */
+            freeze_count?: number;
+            /** Format: int64 */
+            last_freeze_duration_ms?: number;
+            message?: string | null;
+            /** Format: int64 */
+            total_frozen_edges?: number;
+        };
+        /** @description Manual freeze trigger receipt. */
+        FreezeTriggerResponse: {
+            message: string;
+            status: string;
+        };
+        /**
+         * @description Fulltext index listing payload. Entries stay generic because index
+         *     descriptors span engine-specific shapes.
+         */
+        FulltextIndexListResponse: {
+            indexes?: unknown[];
+        };
         /** @description Fulltext rebuild task status. */
         FulltextRebuildStatusResponse: {
             /**
@@ -3007,6 +3091,40 @@ export interface components {
             results: components["schemas"]["FulltextSearchHit"][];
             total_hits: number;
         };
+        /** @description Function detail payload. */
+        FunctionDetailResponse: {
+            is_builtin?: boolean;
+            is_custom?: boolean;
+            name: string;
+            parameters?: string[];
+            registered_at?: string | null;
+            return_type?: string;
+            type?: string;
+        };
+        /** @description One function row. */
+        FunctionListItem: {
+            name: string;
+        };
+        /** @description Function listing payload. */
+        FunctionListResponse: {
+            functions?: components["schemas"]["FunctionListItem"][];
+            /** Format: int64 */
+            total?: number;
+        };
+        /** @description Function registration receipt. */
+        FunctionRegisterResponse: {
+            function_id: string;
+            function_type: string;
+            message: string;
+            name: string;
+            return_type: string;
+            status: string;
+        };
+        /** @description Function removal receipt. */
+        FunctionUnregisterResponse: {
+            message: string;
+            name: string;
+        };
         /** @description Lat/lon bounding-box filter. */
         GeoBoundingBox: {
             bottom_right: components["schemas"]["GeoPoint"];
@@ -3053,6 +3171,7 @@ export interface components {
             total: number;
         };
         ImportResponse: {
+            job_id: string;
             message: string;
             rows_failed: number;
             rows_imported: number;
@@ -3065,6 +3184,12 @@ export interface components {
             rows_imported: number;
             started_at?: string | null;
             status: string;
+        };
+        /** @description Inconsistent fulltext index payload. */
+        InconsistentFulltextResponse: {
+            /** Format: int64 */
+            count?: number;
+            inconsistent?: unknown[];
         };
         /** @description Index information */
         IndexInfo: {
@@ -3088,6 +3213,22 @@ export interface components {
             total_latency_ms: number;
             /** Format: int64 */
             total_operations: number;
+        };
+        /** @description Health of one secondary index generation. */
+        IndexSyncDiagnostics: {
+            /** Format: int64 */
+            applied_lsn: number;
+            /** Format: int64 */
+            barrier_lsn?: number | null;
+            degraded: boolean;
+            /** Format: int64 */
+            frontier_lag: number;
+            /** Format: int64 */
+            generation: number;
+            /** Format: int64 */
+            index_id: number;
+            state: string;
+            target: string;
         };
         /** @description Latency percentiles in microseconds. */
         LatencyPercentilesUs: {
@@ -3129,6 +3270,19 @@ export interface components {
             /** Format: int64 */
             used_bytes: number;
         };
+        /** @description Migration engine counters. */
+        MigrationEngineStats: {
+            /** Format: int64 */
+            failed_migrations?: number;
+            /** Format: int64 */
+            successful_migrations?: number;
+            /** Format: int64 */
+            total_duration_ms?: number;
+            /** Format: int64 */
+            total_migrations?: number;
+            /** Format: int64 */
+            total_rows_migrated?: number;
+        };
         MigrationExecuteRequest: {
             plan_json: string;
         };
@@ -3147,12 +3301,32 @@ export interface components {
             label: string;
             space: string;
         };
+        /** @description Manager-level migration counters. */
+        MigrationManagerStats: {
+            /** Format: int64 */
+            active_migrations?: number;
+            /** Format: double */
+            avg_duration_ms?: number;
+            /** Format: int64 */
+            duration_ms?: number;
+            /** Format: int64 */
+            errors?: number;
+            /** Format: int64 */
+            rows_migrated?: number;
+            /** Format: int64 */
+            total_migrations?: number;
+        };
         MigrationPlanResponse: {
             plan: unknown;
             plan_json: string;
         };
         MigrationRollbackRequest: {
             plan_json: string;
+        };
+        /** @description Migration statistics payload. */
+        MigrationStatsResponse: {
+            migration_metrics?: components["schemas"]["MigrationEngineStats"];
+            stats_manager?: components["schemas"]["MigrationManagerStats"];
         };
         MigrationStatusResponse: {
             applied_versions: number[];
@@ -3236,6 +3410,11 @@ export interface components {
             committed: number;
             /** Format: int64 */
             rolled_back: number;
+        };
+        /** @description Payload mutation receipt. */
+        PayloadMutationResponse: {
+            message: string;
+            success: boolean;
         };
         /** @description Property definition */
         PropertyDef: {
@@ -3504,6 +3683,11 @@ export interface components {
             limit?: number | null;
             target?: string | null;
         };
+        /** @description Dead-letter requeue receipt. */
+        RequeueResponse: {
+            /** Format: int64 */
+            requeued: number;
+        };
         /** @description Rerank provider call counters. */
         RerankSection: {
             /** Format: double */
@@ -3525,13 +3709,56 @@ export interface components {
             /** Format: int64 */
             max_age_ms?: number | null;
         };
+        /** @description Retention pass receipt. */
+        RetentionRunResponse: {
+            /** Format: int64 */
+            archived: number;
+            /** Format: int64 */
+            pruned: number;
+            /** Format: int64 */
+            retention_lsn: number;
+        };
+        /** @description Retention watermark payload. */
+        RetentionStatusResponse: {
+            /** Format: int64 */
+            retention_lsn: number;
+        };
+        /** @description Outbox retry receipt. */
+        RetryOutboxResponse: {
+            /** Format: int64 */
+            delivered: number;
+            status: string;
+        };
         /** @description Revoke role request for the admin channel. */
         RevokeRoleRequest: {
             space: string;
         };
+        /** @description One savepoint row. */
+        SavepointListItem: {
+            created_at?: string;
+            /** Format: int64 */
+            id: number;
+            name?: string | null;
+        };
+        /** @description Savepoint release receipt. */
+        SavepointReleaseResponse: {
+            message: string;
+            /** Format: int64 */
+            savepoint_id: number;
+            /** Format: int64 */
+            transaction_id: number;
+        };
         /** @description Savepoint descriptor returned by the server. */
         SavepointResponse: {
             name?: string | null;
+            /** Format: int64 */
+            savepoint_id: number;
+            /** Format: int64 */
+            transaction_id: number;
+        };
+        /** @description Rollback-to-savepoint receipt. */
+        SavepointRollbackResponse: {
+            message: string;
             /** Format: int64 */
             savepoint_id: number;
             /** Format: int64 */
@@ -3598,12 +3825,56 @@ export interface components {
             /** @description Vector engine queries and writes. Scalar-only deployments report zeros. */
             vector?: components["schemas"]["VectorSearchSection"];
         };
+        /** @description Session detail payload. */
+        SessionDetailResponse: {
+            graph_addr?: string | null;
+            /** Format: int64 */
+            session_id: number;
+            space_name?: string | null;
+            /** Format: int32 */
+            timezone?: number | null;
+            username: string;
+        };
+        /** @description One session row. */
+        SessionListItem: {
+            /** Format: int64 */
+            active_queries?: number;
+            graph_addr?: string | null;
+            /** Format: int64 */
+            session_id: number;
+            space_name?: string | null;
+            username: string;
+        };
+        /** @description Session listing payload. */
+        SessionListResponse: {
+            sessions?: components["schemas"]["SessionListItem"][];
+        };
         /** @description Session response */
         SessionResponse: {
             /** Format: int64 */
             created_at?: number;
             /** Format: int64 */
             session_id: number;
+            username: string;
+        };
+        /** @description Session statistics detail payload. */
+        SessionStatsDetail: {
+            /** Format: double */
+            avg_execution_time_ms?: number;
+            /** Format: int64 */
+            last_insert_edge_id?: number | null;
+            /** Format: int64 */
+            last_insert_vertex_id?: number | null;
+            /** Format: int64 */
+            total_changes?: number;
+            /** Format: int64 */
+            total_queries?: number;
+        };
+        /** @description Session statistics payload. */
+        SessionStatsResponse: {
+            /** Format: int64 */
+            session_id: number;
+            statistics?: components["schemas"]["SessionStatsDetail"];
             username: string;
         };
         /** @description Set payload request */
@@ -3616,6 +3887,18 @@ export interface components {
             /** Format: int64 */
             space_id: number;
             tag_name: string;
+        };
+        /** @description Assign one session variable. */
+        SetVariableRequest: {
+            name: string;
+            value?: unknown;
+        };
+        /** @description Variable assignment receipt. */
+        SetVariableResponse: {
+            name: string;
+            /** Format: int64 */
+            session_id: number;
+            value?: unknown;
         };
         /** @description Information about a slow query */
         SlowQueryInfo: {
@@ -3698,6 +3981,15 @@ export interface components {
             statements?: string[];
         };
         String: string;
+        /** @description Outbox diagnostics snapshot across targets and indexes. */
+        SyncDiagnosticsResponse: {
+            indexes?: components["schemas"]["IndexSyncDiagnostics"][];
+            /** Format: int64 */
+            materialized_lsn: number;
+            targets?: components["schemas"]["TargetSyncDiagnostics"][];
+            /** Format: int64 */
+            vector_disabled_skips?: number;
+        };
         /** @description Sync status response */
         SyncStatusResponse: {
             /**
@@ -3749,9 +4041,122 @@ export interface components {
             name: string;
             properties: components["schemas"]["PropertyDef"][];
         };
+        /** @description Health of one synchronization target. */
+        TargetSyncDiagnostics: {
+            /** Format: int64 */
+            applied_lsn: number;
+            /** Format: int64 */
+            dead_lettered: number;
+            degraded: boolean;
+            /** Format: int64 */
+            frontier_lag: number;
+            /** Format: int64 */
+            leased: number;
+            /** Format: int64 */
+            oldest_event_age_ms?: number | null;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            retrying: number;
+            target: string;
+        };
+        /** @description Transaction commit receipt. */
+        TransactionCommitResponse: {
+            message: string;
+            /** Format: int64 */
+            transaction_id: number;
+        };
+        /** @description Transaction kill receipt. */
+        TransactionKillResponse: {
+            status: string;
+            /** Format: int64 */
+            transaction_id: number;
+        };
+        /** @description One active transaction row. */
+        TransactionListItem: {
+            blocking_reason?: string | null;
+            /** Format: int64 */
+            elapsed_ms?: number;
+            /** Format: int64 */
+            last_activity_ms?: number;
+            owner?: string | null;
+            /** Format: int64 */
+            read_timestamp?: number;
+            rollback_only?: boolean;
+            /** Format: int64 */
+            staged_bytes?: number;
+            state: string;
+            /** Format: int64 */
+            transaction_id: number;
+            /** Format: int64 */
+            undo_bytes?: number;
+            /** Format: int64 */
+            write_timestamp?: number;
+        };
+        /** @description Transaction outcome and resource gauges. */
+        TransactionMetricsResponse: {
+            outcomes?: components["schemas"]["TransactionOutcomes"];
+            resources?: components["schemas"]["TransactionResources"];
+        };
+        /**
+         * @description Per-transaction outbox retry receipt. The engine replays the global
+         *     durable queue, so the scope marker stays explicit.
+         */
+        TransactionOutboxRetryResponse: {
+            /** Format: int64 */
+            delivered: number;
+            scope: string;
+            status: string;
+            /** Format: int64 */
+            transaction_id: number;
+        };
+        /** @description Transaction outcome counters. */
+        TransactionOutcomes: {
+            /** Format: int64 */
+            aborted?: number;
+            /** Format: int64 */
+            active?: number;
+            /** Format: int64 */
+            begun?: number;
+            /** Format: int64 */
+            cleanup_failure?: number;
+            /** Format: int64 */
+            committed?: number;
+            /** Format: int64 */
+            conflict?: number;
+            /** Format: int64 */
+            disconnect?: number;
+            /** Format: int64 */
+            recovery_abort?: number;
+            /** Format: int64 */
+            timeout?: number;
+        };
+        /** @description Transaction resource gauges. */
+        TransactionResources: {
+            /** Format: int64 */
+            active_snapshots?: number;
+            /** Format: int64 */
+            active_statements?: number;
+            /** Format: int64 */
+            checkpoint_drain_time_ms?: number;
+            /** Format: int64 */
+            committed_frontier_lag?: number;
+            /** Format: int64 */
+            pending_writes?: number;
+            /** Format: int64 */
+            staged_wal_bytes?: number;
+            /** Format: int64 */
+            undo_bytes?: number;
+        };
         /** @description Transaction response */
         TransactionResponse: {
             status: string;
+            /** Format: int64 */
+            transaction_id: number;
+        };
+        /** @description Transaction rollback receipt. */
+        TransactionRollbackResponse: {
+            message: string;
             /** Format: int64 */
             transaction_id: number;
         };
@@ -3834,12 +4239,32 @@ export interface components {
             /** Format: int64 */
             lte?: number | null;
         };
+        /** @description Session variable snapshot payload. */
+        VariableSnapshotResponse: {
+            /** Format: int64 */
+            session_id: number;
+            variables?: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description Vector point count payload. */
+        VectorCountResponse: {
+            /** Format: int64 */
+            count: number;
+            success: boolean;
+        };
         /** @description Top-level payload filter with Qdrant-style clause groups. */
         VectorFilter: {
             min_should?: null | components["schemas"]["MinShouldCondition"];
             must?: components["schemas"]["FilterCondition"][] | null;
             must_not?: components["schemas"]["FilterCondition"][] | null;
             should?: components["schemas"]["FilterCondition"][] | null;
+        };
+        /** @description Vector index creation receipt. */
+        VectorIndexCreatedResponse: {
+            collection_name: string;
+            message: string;
+            success: boolean;
         };
         /** @description Vector index details response */
         VectorIndexDetailsResponse: {
@@ -3853,6 +4278,28 @@ export interface components {
             vector_size: number;
             /** Format: int64 */
             vectors_count: number;
+        };
+        /** @description Vector index drop receipt. */
+        VectorIndexDroppedResponse: {
+            message: string;
+            success: boolean;
+        };
+        /** @description One vector point. */
+        VectorPoint: {
+            id: string;
+            payload?: {
+                [key: string]: unknown;
+            } | null;
+            vector?: number[] | null;
+        };
+        /**
+         * @description Vector point lookup payload. Missing points report success with
+         *     a message instead of a point.
+         */
+        VectorPointResponse: {
+            message?: string | null;
+            point?: null | components["schemas"]["VectorPoint"];
+            success: boolean;
         };
         /** @description Vector rebuild task status. */
         VectorRebuildStatusResponse: {
@@ -5460,7 +5907,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BatchActionReceipt"];
                 };
             };
             /** @description Not found */
@@ -5497,7 +5944,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BatchActionReceipt"];
                 };
             };
             /** @description Internal error */
@@ -5803,7 +6250,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FulltextIndexListResponse"];
                 };
             };
             /** @description Internal error */
@@ -5861,7 +6308,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["InconsistentFulltextResponse"];
                 };
             };
             /** @description Internal error */
@@ -5994,7 +6441,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FunctionListResponse"];
                 };
             };
             /** @description Internal error */
@@ -6025,7 +6472,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FunctionRegisterResponse"];
                 };
             };
             /** @description Internal error */
@@ -6055,7 +6502,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FunctionDetailResponse"];
                 };
             };
             /** @description Not found */
@@ -6092,7 +6539,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FunctionUnregisterResponse"];
                 };
             };
             /** @description Not found */
@@ -6240,8 +6687,8 @@ export interface operations {
                     "application/json": components["schemas"]["ImportStatusResponse"];
                 };
             };
-            /** @description Internal error */
-            500: {
+            /** @description Unknown import job */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6521,7 +6968,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["QueryResponse"];
                 };
             };
             /** @description Internal error */
@@ -7332,7 +7779,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SessionListResponse"];
                 };
             };
             /** @description Forbidden */
@@ -7414,7 +7861,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SessionDetailResponse"];
                 };
             };
             /** @description Not found */
@@ -7481,7 +7928,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["QueryResponse"];
                 };
             };
             /** @description Session or query not found */
@@ -7518,7 +7965,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["VariableSnapshotResponse"];
                 };
             };
             /** @description Session not found */
@@ -7540,7 +7987,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetVariableRequest"];
+            };
+        };
         responses: {
             /** @description Variable assigned */
             200: {
@@ -7548,7 +7999,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SetVariableResponse"];
                 };
             };
             /** @description Session not found */
@@ -7580,7 +8031,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteVariableResponse"];
                 };
             };
             /** @description Session or variable not found */
@@ -7634,7 +8085,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FreezeStatsResponse"];
                 };
             };
             /** @description Internal error */
@@ -7661,7 +8112,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FreezeTriggerResponse"];
                 };
             };
             /** @description Internal error */
@@ -7688,7 +8139,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["MigrationStatsResponse"];
                 };
             };
             /** @description Internal error */
@@ -7841,7 +8292,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SessionStatsResponse"];
                 };
             };
             /** @description Not found */
@@ -7913,7 +8364,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeadLetterListResponse"];
                 };
             };
             /** @description Internal error */
@@ -7944,7 +8395,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ClearDegradedResponse"];
                 };
             };
             /** @description Internal error */
@@ -7978,7 +8429,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DegradedRangeListResponse"];
                 };
             };
             /** @description Internal error */
@@ -8005,7 +8456,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SyncDiagnosticsResponse"];
                 };
             };
             /** @description Internal error */
@@ -8036,7 +8487,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RequeueResponse"];
                 };
             };
             /** @description Internal error */
@@ -8067,7 +8518,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RetentionRunResponse"];
                 };
             };
             /** @description Internal error */
@@ -8094,7 +8545,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RetentionStatusResponse"];
                 };
             };
             /** @description Internal error */
@@ -8121,7 +8572,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["RetryOutboxResponse"];
                 };
             };
             /** @description Internal error */
@@ -8175,7 +8626,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown[];
+                    "application/json": components["schemas"]["TransactionListItem"][];
                 };
             };
             /** @description Internal error */
@@ -8233,7 +8684,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TransactionMetricsResponse"];
                 };
             };
             /** @description Internal error */
@@ -8263,7 +8714,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TransactionCommitResponse"];
                 };
             };
             /** @description Internal error */
@@ -8293,7 +8744,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TransactionKillResponse"];
                 };
             };
             /** @description Internal error */
@@ -8323,7 +8774,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TransactionOutboxRetryResponse"];
                 };
             };
             /** @description Internal error */
@@ -8353,7 +8804,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["TransactionRollbackResponse"];
                 };
             };
             /** @description Internal error */
@@ -8383,7 +8834,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown[];
+                    "application/json": components["schemas"]["SavepointListItem"][];
                 };
             };
             /** @description Internal error */
@@ -8449,7 +8900,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SavepointReleaseResponse"];
                 };
             };
             /** @description Internal error */
@@ -8481,7 +8932,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SavepointRollbackResponse"];
                 };
             };
             /** @description Internal error */
@@ -8964,7 +9415,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["VectorIndexCreatedResponse"];
                 };
             };
             /** @description Internal error */
@@ -9108,7 +9559,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["VectorIndexDroppedResponse"];
                 };
             };
             /** @description Internal error */
@@ -9139,7 +9590,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PayloadMutationResponse"];
                 };
             };
             /** @description Internal error */
@@ -9170,7 +9621,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PayloadMutationResponse"];
                 };
             };
             /** @description Internal error */
@@ -9201,7 +9652,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PayloadMutationResponse"];
                 };
             };
             /** @description Internal error */
@@ -9334,7 +9785,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["VectorCountResponse"];
                 };
             };
             /** @description Internal error */
@@ -9370,7 +9821,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["VectorPointResponse"];
                 };
             };
             /** @description Internal error */

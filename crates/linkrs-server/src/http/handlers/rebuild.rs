@@ -377,7 +377,7 @@ pub async fn clear_fulltext<
     path = "/v1/fulltext/indexes/inconsistent",
     tag = "Fulltext",
     responses(
-        (status = 200, body = serde_json::Value, description = "Inconsistent fulltext indexes"),
+        (status = 200, body = linkrs_wire::meta::InconsistentFulltextResponse, description = "Inconsistent fulltext indexes"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -399,7 +399,7 @@ pub async fn inconsistent_fulltext<
 >(
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::InconsistentFulltextResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let sync_manager = sync_manager_or_error(&state, "fulltext")?;
     let inconsistent = sync_manager.inconsistent_fulltext_indexes();
@@ -409,10 +409,13 @@ pub async fn inconsistent_fulltext<
         .get_graph_service()
         .get_stats_manager()
         .record_inconsistent_index_count(count);
-    Ok(JsonResponse(serde_json::json!({
-        "inconsistent": inconsistent,
-        "count": count,
-    })))
+    Ok(JsonResponse(linkrs_wire::meta::InconsistentFulltextResponse {
+        inconsistent: inconsistent
+            .into_iter()
+            .map(|v| serde_json::to_value(v).unwrap_or(serde_json::Value::Null))
+            .collect(),
+        count,
+    }))
 }
 
 #[utoipa::path(
@@ -420,7 +423,7 @@ pub async fn inconsistent_fulltext<
     path = "/v1/fulltext/indexes",
     tag = "Fulltext",
     responses(
-        (status = 200, body = serde_json::Value, description = "Fulltext indexes"),
+        (status = 200, body = linkrs_wire::meta::FulltextIndexListResponse, description = "Fulltext indexes"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -438,19 +441,29 @@ pub async fn list_fulltext_indexes<
 >(
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::FulltextIndexListResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     if let Some(api) = graph_service.fulltext_api() {
         let indexes = api.list_index_descriptors();
-        return Ok(JsonResponse(serde_json::json!({ "indexes": indexes })));
+        return Ok(JsonResponse(linkrs_wire::meta::FulltextIndexListResponse {
+            indexes: indexes
+                .into_iter()
+                .map(|v| serde_json::to_value(v).unwrap_or(serde_json::Value::Null))
+                .collect(),
+        }));
     }
     let sync_manager = sync_manager_or_error(&state, "fulltext")?;
     let manager = sync_manager
         .fulltext_manager_opt()
         .ok_or_else(|| HttpError::InternalError("fulltext target is not configured".to_string()))?;
     let indexes = manager.list_indexes();
-    Ok(JsonResponse(serde_json::json!({ "indexes": indexes })))
+    Ok(JsonResponse(linkrs_wire::meta::FulltextIndexListResponse {
+        indexes: indexes
+            .into_iter()
+            .map(|v| serde_json::to_value(v).unwrap_or(serde_json::Value::Null))
+            .collect(),
+    }))
 }
 
 // ── Vector ────────────────────────────────────────────────────────────────

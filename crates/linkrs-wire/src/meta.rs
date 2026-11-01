@@ -625,6 +625,382 @@ pub struct QueryProfileExecutor {
     pub memory_bytes: usize,
 }
 
+// ── Transaction inspection ────────────────────────────────────────────────
+
+/// One active transaction row.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionListItem {
+    pub transaction_id: u64,
+    pub state: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub read_timestamp: u64,
+    #[serde(default)]
+    pub write_timestamp: u64,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub last_activity_ms: u64,
+    #[serde(default)]
+    pub rollback_only: bool,
+    #[serde(default)]
+    pub staged_bytes: u64,
+    #[serde(default)]
+    pub undo_bytes: u64,
+    #[serde(default)]
+    pub blocking_reason: Option<String>,
+}
+
+/// Transaction outcome counters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionOutcomes {
+    #[serde(default)]
+    pub begun: u64,
+    #[serde(default)]
+    pub active: u64,
+    #[serde(default)]
+    pub committed: u64,
+    #[serde(default)]
+    pub aborted: u64,
+    #[serde(default)]
+    pub timeout: u64,
+    #[serde(default)]
+    pub conflict: u64,
+    #[serde(default)]
+    pub disconnect: u64,
+    #[serde(default)]
+    pub recovery_abort: u64,
+    #[serde(default)]
+    pub cleanup_failure: u64,
+}
+
+/// Transaction resource gauges.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionResources {
+    #[serde(default)]
+    pub active_statements: u64,
+    #[serde(default)]
+    pub active_snapshots: u64,
+    #[serde(default)]
+    pub pending_writes: u64,
+    #[serde(default)]
+    pub committed_frontier_lag: u64,
+    #[serde(default)]
+    pub staged_wal_bytes: u64,
+    #[serde(default)]
+    pub undo_bytes: u64,
+    #[serde(default)]
+    pub checkpoint_drain_time_ms: u64,
+}
+
+/// Transaction outcome and resource gauges.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionMetricsResponse {
+    #[serde(default)]
+    pub outcomes: TransactionOutcomes,
+    #[serde(default)]
+    pub resources: TransactionResources,
+}
+
+/// Transaction commit receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionCommitResponse {
+    pub transaction_id: u64,
+    pub message: String,
+}
+
+/// Transaction rollback receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionRollbackResponse {
+    pub transaction_id: u64,
+    pub message: String,
+}
+
+/// Transaction kill receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionKillResponse {
+    pub transaction_id: u64,
+    pub status: String,
+}
+
+/// Per-transaction outbox retry receipt. The engine replays the global
+/// durable queue, so the scope marker stays explicit.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TransactionOutboxRetryResponse {
+    pub transaction_id: u64,
+    pub delivered: u64,
+    pub scope: String,
+    pub status: String,
+}
+
+/// One savepoint row.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SavepointListItem {
+    pub id: u64,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+/// Rollback-to-savepoint receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SavepointRollbackResponse {
+    pub transaction_id: u64,
+    pub savepoint_id: u64,
+    pub message: String,
+}
+
+/// Savepoint release receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SavepointReleaseResponse {
+    pub transaction_id: u64,
+    pub savepoint_id: u64,
+    pub message: String,
+}
+
+// ── Session inspection ────────────────────────────────────────────────────
+
+/// One session row.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SessionListItem {
+    pub session_id: i64,
+    pub username: String,
+    #[serde(default)]
+    pub space_name: Option<String>,
+    #[serde(default)]
+    pub graph_addr: Option<String>,
+    #[serde(default)]
+    pub active_queries: u64,
+}
+
+/// Session listing payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SessionListResponse {
+    #[serde(default)]
+    pub sessions: Vec<SessionListItem>,
+}
+
+/// Session detail payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SessionDetailResponse {
+    pub session_id: i64,
+    pub username: String,
+    #[serde(default)]
+    pub space_name: Option<String>,
+    #[serde(default)]
+    pub graph_addr: Option<String>,
+    #[serde(default)]
+    pub timezone: Option<i32>,
+}
+
+/// Session variable snapshot payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VariableSnapshotResponse {
+    pub session_id: i64,
+    #[serde(default)]
+    pub variables: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Assign one session variable.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SetVariableRequest {
+    pub name: String,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+}
+
+/// Variable assignment receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SetVariableResponse {
+    pub session_id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+}
+
+/// Variable removal receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeleteVariableResponse {
+    pub session_id: i64,
+    pub name: String,
+    pub removed: bool,
+}
+
+// ── Function registry ─────────────────────────────────────────────────────
+
+/// One function row.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FunctionListItem {
+    pub name: String,
+}
+
+/// Function listing payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FunctionListResponse {
+    #[serde(default)]
+    pub functions: Vec<FunctionListItem>,
+    #[serde(default)]
+    pub total: u64,
+}
+
+/// Function detail payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FunctionDetailResponse {
+    pub name: String,
+    #[serde(default, rename = "type")]
+    pub function_type: String,
+    #[serde(default)]
+    pub is_builtin: bool,
+    #[serde(default)]
+    pub is_custom: bool,
+    #[serde(default)]
+    pub parameters: Vec<String>,
+    #[serde(default)]
+    pub return_type: String,
+    #[serde(default)]
+    pub registered_at: Option<String>,
+}
+
+/// Function registration receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FunctionRegisterResponse {
+    pub function_id: String,
+    pub name: String,
+    pub function_type: String,
+    pub return_type: String,
+    pub status: String,
+    pub message: String,
+}
+
+/// Function removal receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FunctionUnregisterResponse {
+    pub name: String,
+    pub message: String,
+}
+
+// ── Statistics inspection ─────────────────────────────────────────────────
+
+/// Session statistics detail payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SessionStatsDetail {
+    #[serde(default)]
+    pub total_queries: u64,
+    #[serde(default)]
+    pub total_changes: u64,
+    #[serde(default)]
+    pub last_insert_vertex_id: Option<u64>,
+    #[serde(default)]
+    pub last_insert_edge_id: Option<u64>,
+    #[serde(default)]
+    pub avg_execution_time_ms: f64,
+}
+
+/// Session statistics payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SessionStatsResponse {
+    pub session_id: i64,
+    pub username: String,
+    #[serde(default)]
+    pub statistics: SessionStatsDetail,
+}
+
+/// Background freeze statistics payload. Disabled deployments report
+/// the enabled flag with an explanatory message.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FreezeStatsResponse {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub freeze_count: u64,
+    #[serde(default)]
+    pub total_frozen_edges: u64,
+    #[serde(default)]
+    pub last_freeze_duration_ms: u64,
+    #[serde(default)]
+    pub current_delta_edges: u64,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Manual freeze trigger receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FreezeTriggerResponse {
+    pub status: String,
+    pub message: String,
+}
+
+/// Migration engine counters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct MigrationEngineStats {
+    #[serde(default)]
+    pub total_migrations: u64,
+    #[serde(default)]
+    pub successful_migrations: u64,
+    #[serde(default)]
+    pub failed_migrations: u64,
+    #[serde(default)]
+    pub total_rows_migrated: u64,
+    #[serde(default)]
+    pub total_duration_ms: u64,
+}
+
+/// Manager-level migration counters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct MigrationManagerStats {
+    #[serde(default)]
+    pub total_migrations: u64,
+    #[serde(default)]
+    pub active_migrations: u64,
+    #[serde(default)]
+    pub rows_migrated: u64,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub avg_duration_ms: f64,
+    #[serde(default)]
+    pub errors: u64,
+}
+
+/// Migration statistics payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct MigrationStatsResponse {
+    #[serde(default)]
+    pub stats_manager: MigrationManagerStats,
+    #[serde(default)]
+    pub migration_metrics: MigrationEngineStats,
+}
+
+// ── Batch receipts ────────────────────────────────────────────────────────
+
+/// Batch cancel or delete receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BatchActionReceipt {
+    pub batch_id: String,
+    pub message: String,
+}
+
+// ── Fulltext listings ─────────────────────────────────────────────────────
+
+/// Fulltext index listing payload. Entries stay generic because index
+/// descriptors span engine-specific shapes.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct FulltextIndexListResponse {
+    #[serde(default)]
+    pub indexes: Vec<serde_json::Value>,
+}
+
+/// Inconsistent fulltext index payload.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct InconsistentFulltextResponse {
+    #[serde(default)]
+    pub inconsistent: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub count: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

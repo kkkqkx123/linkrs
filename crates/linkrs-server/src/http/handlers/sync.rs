@@ -95,7 +95,7 @@ pub async fn status<
     path = "/v1/sync/outbox/retry",
     tag = "Sync",
     responses(
-        (status = 200, body = serde_json::Value, description = "Outbox delivery retried"),
+        (status = 200, body = linkrs_wire::sync::RetryOutboxResponse, description = "Outbox delivery retried"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -112,7 +112,7 @@ pub async fn retry_outbox<
 >(
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::sync::RetryOutboxResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
@@ -121,10 +121,10 @@ pub async fn retry_outbox<
     let delivered = sync_api
         .retry_outbox_projection()
         .map_err(HttpError::from)?;
-    Ok(JsonResponse(serde_json::json!({
-        "delivered": delivered,
-        "status": "completed",
-    })))
+    Ok(JsonResponse(linkrs_wire::sync::RetryOutboxResponse {
+        delivered: delivered as u64,
+        status: "completed".to_string(),
+    }))
 }
 
 #[utoipa::path(
@@ -132,7 +132,7 @@ pub async fn retry_outbox<
     path = "/v1/sync/outbox/diagnostics",
     tag = "Sync",
     responses(
-        (status = 200, body = serde_json::Value, description = "Outbox diagnostics"),
+        (status = 200, body = linkrs_wire::sync::SyncDiagnosticsResponse, description = "Outbox diagnostics"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -149,14 +149,46 @@ pub async fn diagnostics<
 >(
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::sync::SyncDiagnosticsResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
         .ok_or_else(|| HttpError::bad_request("Synchronization is not configured"))?;
     let diag = sync_api.sync_diagnostics().map_err(HttpError::from)?;
-    Ok(JsonResponse(serde_json::json!(diag)))
+    Ok(JsonResponse(linkrs_wire::sync::SyncDiagnosticsResponse {
+        materialized_lsn: diag.materialized_lsn.get(),
+        targets: diag
+            .targets
+            .into_iter()
+            .map(|t| linkrs_wire::sync::TargetSyncDiagnostics {
+                target: t.target,
+                applied_lsn: t.applied_lsn.get(),
+                frontier_lag: t.frontier_lag,
+                pending: t.pending,
+                retrying: t.retrying,
+                leased: t.leased,
+                dead_lettered: t.dead_lettered,
+                oldest_event_age_ms: t.oldest_event_age_ms,
+                degraded: t.degraded,
+            })
+            .collect(),
+        indexes: diag
+            .indexes
+            .into_iter()
+            .map(|i| linkrs_wire::sync::IndexSyncDiagnostics {
+                target: i.target,
+                index_id: i.index_id,
+                generation: i.generation,
+                state: i.state,
+                barrier_lsn: i.barrier_lsn.map(|v| v.get()),
+                applied_lsn: i.applied_lsn.get(),
+                frontier_lag: i.frontier_lag,
+                degraded: i.degraded,
+            })
+            .collect(),
+        vector_disabled_skips: diag.vector_disabled_skips,
+    }))
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -180,7 +212,7 @@ pub struct DeadLetterQuery {
         ("offset" = Option<usize>, Query, description = "Rows to skip")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Dead letter entries"),
+        (status = 200, body = linkrs_wire::sync::DeadLetterListResponse, description = "Dead letter entries"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -197,7 +229,7 @@ pub async fn dead_letters<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Query(params): Query<DeadLetterQuery>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::sync::DeadLetterListResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
@@ -217,7 +249,21 @@ pub async fn dead_letters<
             params.offset.unwrap_or(0),
         )
         .map_err(HttpError::from)?;
-    Ok(JsonResponse(serde_json::json!({ "dead_letters": rows })))
+    Ok(JsonResponse(linkrs_wire::sync::DeadLetterListResponse {
+        dead_letters: rows
+            .into_iter()
+            .map(|r| linkrs_wire::sync::DeadLetterRow {
+                event_id: r.event_id,
+                target: r.target,
+                index_id: r.index_id,
+                generation: r.generation,
+                commit_lsn: r.commit_lsn.get(),
+                retry_count: r.retry_count,
+                failed_at_ms: r.failed_at_ms,
+                error: r.error,
+            })
+            .collect(),
+    }))
 }
 
 #[derive(Debug, Deserialize, Serialize, utoipa::ToSchema)]
@@ -235,7 +281,7 @@ pub struct RequeueRequest {
     tag = "Sync",
     request_body = RequeueRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Dead letters requeued"),
+        (status = 200, body = linkrs_wire::sync::RequeueResponse, description = "Dead letters requeued"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -252,7 +298,7 @@ pub async fn requeue<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Json(payload): Json<RequeueRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::sync::RequeueResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
@@ -265,7 +311,9 @@ pub async fn requeue<
                 requeued += 1;
             }
         }
-        return Ok(JsonResponse(serde_json::json!({ "requeued": requeued })));
+        return Ok(JsonResponse(linkrs_wire::sync::RequeueResponse {
+            requeued: requeued as u64,
+        }));
     }
     let target = payload
         .target
@@ -280,7 +328,9 @@ pub async fn requeue<
             payload.limit.unwrap_or(100),
         )
         .map_err(HttpError::from)?;
-    Ok(JsonResponse(serde_json::json!({ "requeued": requeued })))
+    Ok(JsonResponse(linkrs_wire::sync::RequeueResponse {
+        requeued: requeued as u64,
+    }))
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -300,7 +350,7 @@ pub struct DegradedQuery {
         ("generation" = Option<u64>, Query, description = "Generation filter")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Degraded ranges"),
+        (status = 200, body = linkrs_wire::sync::DegradedRangeListResponse, description = "Degraded ranges"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -317,7 +367,7 @@ pub async fn degraded_ranges<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Query(params): Query<DegradedQuery>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::sync::DegradedRangeListResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
@@ -331,7 +381,20 @@ pub async fn degraded_ranges<
     let rows = sync_api
         .list_degraded_ranges(target.as_ref(), params.index_id, params.generation)
         .map_err(HttpError::from)?;
-    Ok(JsonResponse(serde_json::json!({ "degraded_ranges": rows })))
+    Ok(JsonResponse(linkrs_wire::sync::DegradedRangeListResponse {
+        degraded_ranges: rows
+            .into_iter()
+            .map(|r| linkrs_wire::sync::DegradedRangeRow {
+                target: r.target,
+                index_id: r.index_id,
+                generation: r.generation,
+                start_lsn: r.start_lsn.get(),
+                end_lsn: r.end_lsn.get(),
+                reason: r.reason,
+                created_at_ms: r.created_at_ms,
+            })
+            .collect(),
+    }))
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -349,7 +412,7 @@ pub struct ClearDegradedRequest {
     tag = "Sync",
     request_body = ClearDegradedRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Degraded range cleared"),
+        (status = 200, body = linkrs_wire::sync::ClearDegradedResponse, description = "Degraded range cleared"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -366,7 +429,7 @@ pub async fn degraded_clear<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Json(payload): Json<ClearDegradedRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::sync::ClearDegradedResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
@@ -383,7 +446,9 @@ pub async fn degraded_clear<
             linkrs_core::types::CommitLsn::new(payload.end_lsn),
         )
         .map_err(HttpError::from)?;
-    Ok(JsonResponse(serde_json::json!({ "cleared": cleared })))
+    Ok(JsonResponse(linkrs_wire::sync::ClearDegradedResponse {
+        cleared,
+    }))
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -398,7 +463,7 @@ pub struct RetentionRunRequest {
     tag = "Sync",
     request_body = RetentionRunRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Retention pass completed"),
+        (status = 200, body = linkrs_wire::sync::RetentionRunResponse, description = "Retention pass completed"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -415,7 +480,7 @@ pub async fn retention_run<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Json(payload): Json<RetentionRunRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::sync::RetentionRunResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
@@ -426,11 +491,11 @@ pub async fn retention_run<
     let (pruned, archived, retention_lsn) = sync_api
         .run_retention_once(grace, max_age)
         .map_err(HttpError::from)?;
-    Ok(JsonResponse(serde_json::json!({
-        "pruned": pruned,
-        "archived": archived,
-        "retention_lsn": retention_lsn,
-    })))
+    Ok(JsonResponse(linkrs_wire::sync::RetentionRunResponse {
+        pruned,
+        archived,
+        retention_lsn,
+    }))
 }
 
 #[utoipa::path(
@@ -438,7 +503,7 @@ pub async fn retention_run<
     path = "/v1/sync/outbox/retention/status",
     tag = "Sync",
     responses(
-        (status = 200, body = serde_json::Value, description = "Retention watermark"),
+        (status = 200, body = linkrs_wire::sync::RetentionStatusResponse, description = "Retention watermark"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -454,14 +519,14 @@ pub async fn retention_status<
 >(
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::sync::RetentionStatusResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let graph_service = state.server.get_graph_service();
     let sync_api = graph_service
         .sync_api()
         .ok_or_else(|| HttpError::bad_request("Synchronization is not configured"))?;
     let retention = sync_api.retention_lsn().map_err(HttpError::from)?;
-    Ok(JsonResponse(
-        serde_json::json!({ "retention_lsn": retention.get() }),
-    ))
+    Ok(JsonResponse(linkrs_wire::sync::RetentionStatusResponse {
+        retention_lsn: retention.get(),
+    }))
 }

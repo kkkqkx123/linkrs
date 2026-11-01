@@ -10,6 +10,10 @@ use serde_json;
 
 use crate::http::{error::HttpError, state::AppState};
 use crate::query::executor::expression::functions::{FunctionRegistry, UdfError};
+use linkrs_wire::meta::{
+    FunctionDetailResponse, FunctionListItem, FunctionListResponse, FunctionRegisterResponse,
+    FunctionUnregisterResponse,
+};
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
@@ -120,7 +124,7 @@ pub(crate) fn op_error_to_http(error: FunctionOpError) -> HttpError {
     tag = "Function",
     request_body = RegisterFunctionRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Function registered"),
+        (status = 200, body = FunctionRegisterResponse, description = "Function registered"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -138,7 +142,7 @@ pub async fn register<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Json(request): Json<RegisterFunctionRequest>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<FunctionRegisterResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let implementation = match &request.implementation {
         Some(serde_json::Value::String(path)) => path.clone(),
@@ -158,14 +162,14 @@ pub async fn register<
         .map(|t| format!("{t:?}"))
         .unwrap_or_else(|| "unknown".to_string());
 
-    Ok(JsonResponse(serde_json::json!({
-        "function_id": registered_name,
-        "name": registered_name,
-        "function_type": "custom",
-        "return_type": return_type,
-        "status": "registered",
-        "message": "Function registered successfully",
-    })))
+    Ok(JsonResponse(FunctionRegisterResponse {
+        function_id: registered_name.clone(),
+        name: registered_name,
+        function_type: "custom".to_string(),
+        return_type,
+        status: "registered".to_string(),
+        message: "Function registered successfully".to_string(),
+    }))
 }
 
 #[utoipa::path(
@@ -173,7 +177,7 @@ pub async fn register<
     path = "/v1/functions",
     tag = "Function",
     responses(
-        (status = 200, body = serde_json::Value, description = "Function list"),
+        (status = 200, body = FunctionListResponse, description = "Function list"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -189,24 +193,20 @@ pub async fn list<
         + 'static,
 >(
     State(state): State<AppState<S>>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<FunctionListResponse>, HttpError> {
     let registry = state.server.get_function_registry();
     let registry_guard = registry.read();
 
     let function_names = registry_guard.function_names();
-    let functions: Vec<serde_json::Value> = function_names
+    let functions: Vec<FunctionListItem> = function_names
         .iter()
-        .map(|name| {
-            serde_json::json!({
-                "name": name,
-            })
+        .map(|name| FunctionListItem {
+            name: (*name).to_string(),
         })
         .collect();
+    let total = functions.len() as u64;
 
-    Ok(JsonResponse(serde_json::json!({
-        "functions": functions,
-        "total": functions.len(),
-    })))
+    Ok(JsonResponse(FunctionListResponse { functions, total }))
 }
 
 #[utoipa::path(
@@ -215,7 +215,7 @@ pub async fn list<
     tag = "Function",
     params(("name" = String, Path, description = "Function name")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Function details"),
+        (status = 200, body = FunctionDetailResponse, description = "Function details"),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -233,7 +233,7 @@ pub async fn info<
 >(
     State(state): State<AppState<S>>,
     Path(name): Path<String>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<FunctionDetailResponse>, HttpError> {
     let registry = state.server.get_function_registry();
     let registry_guard = registry.read();
 
@@ -264,15 +264,15 @@ pub async fn info<
         .dynamic_udf_mtime(&name)
         .map(|mtime| chrono::DateTime::<chrono::Utc>::from(mtime).to_rfc3339());
 
-    Ok(JsonResponse(serde_json::json!({
-        "name": name,
-        "type": function_type,
-        "is_builtin": is_builtin,
-        "is_custom": is_custom,
-        "parameters": [],
-        "return_type": return_type,
-        "registered_at": registered_at,
-    })))
+    Ok(JsonResponse(FunctionDetailResponse {
+        name,
+        function_type: function_type.to_string(),
+        is_builtin,
+        is_custom,
+        parameters: Vec::new(),
+        return_type,
+        registered_at,
+    }))
 }
 
 #[utoipa::path(
@@ -281,7 +281,7 @@ pub async fn info<
     tag = "Function",
     params(("name" = String, Path, description = "Function name")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Function unregistered"),
+        (status = 200, body = FunctionUnregisterResponse, description = "Function unregistered"),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -300,15 +300,15 @@ pub async fn unregister<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Path(name): Path<String>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<FunctionUnregisterResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let registry = state.server.get_function_registry();
     unregister_udf_by_name(&registry, &name).map_err(op_error_to_http)?;
 
-    Ok(JsonResponse(serde_json::json!({
-        "message": "Function unregistered",
-        "name": name,
-    })))
+    Ok(JsonResponse(FunctionUnregisterResponse {
+        name,
+        message: "Function unregistered".to_string(),
+    }))
 }
 
 /// Registration function request.

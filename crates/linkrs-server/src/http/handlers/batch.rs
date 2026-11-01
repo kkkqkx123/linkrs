@@ -4,7 +4,6 @@ use axum::{
     extract::{Extension, Json, Path, State},
     response::Json as JsonResponse,
 };
-use serde_json;
 
 use crate::batch::{
     AddBatchItemsRequest, AddBatchItemsResponse, BatchStatusResponse, CreateBatchRequest,
@@ -234,7 +233,7 @@ pub async fn execute<
     tag = "Batch",
     params(("id" = String, Path, description = "Batch task id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Batch task cancelled"),
+        (status = 200, body = linkrs_wire::meta::BatchActionReceipt, description = "Batch task cancelled"),
         (status = 500, description = "Internal error")
     )
 )]
@@ -252,15 +251,15 @@ pub async fn cancel<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Path(batch_id): Path<String>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::BatchActionReceipt>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let batch_manager = state.server.get_batch_manager();
 
     match batch_manager.cancel_task(&batch_id) {
-        Ok(()) => Ok(JsonResponse(serde_json::json!({
-            "message": "Batch task cancelled",
-            "batch_id": batch_id,
-        }))),
+        Ok(()) => Ok(JsonResponse(linkrs_wire::meta::BatchActionReceipt {
+            batch_id,
+            message: "Batch task cancelled".to_string(),
+        })),
         Err(e) => Err(HttpError::BadRequest(format!(
             "Failed to cancel the batch task: {}",
             e
@@ -274,7 +273,7 @@ pub async fn cancel<
     tag = "Batch",
     params(("id" = String, Path, description = "Batch task id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Batch task deleted"),
+        (status = 200, body = linkrs_wire::meta::BatchActionReceipt, description = "Batch task deleted"),
         (status = 404, description = "Not found"),
         (status = 500, description = "Internal error")
     )
@@ -293,15 +292,15 @@ pub async fn delete<
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
     Path(batch_id): Path<String>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<linkrs_wire::meta::BatchActionReceipt>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let batch_manager = state.server.get_batch_manager();
 
     match batch_manager.remove_task(&batch_id) {
-        Ok(()) => Ok(JsonResponse(serde_json::json!({
-            "message": "Batch task deleted",
-            "batch_id": batch_id,
-        }))),
+        Ok(()) => Ok(JsonResponse(linkrs_wire::meta::BatchActionReceipt {
+            batch_id,
+            message: "Batch task deleted".to_string(),
+        })),
         Err(e) => Err(HttpError::NotFound(format!(
             "Failed to delete batch tasks: {}",
             e

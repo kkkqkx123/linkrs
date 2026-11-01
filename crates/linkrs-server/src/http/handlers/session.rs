@@ -3,7 +3,11 @@ use axum::{
     http::StatusCode,
     response::Json as JsonResponse,
 };
-use linkrs_wire::meta::{CreateSessionRequest, SessionResponse};
+use linkrs_wire::meta::{
+    CreateSessionRequest, DeleteVariableResponse, SessionDetailResponse, SessionListItem,
+    SessionListResponse, SessionResponse, SetVariableRequest, SetVariableResponse,
+    VariableSnapshotResponse,
+};
 
 use crate::http::{error::HttpError, state::AppState};
 use crate::storage::{
@@ -100,7 +104,7 @@ pub async fn create<
     path = "/v1/sessions",
     tag = "Session",
     responses(
-        (status = 200, body = serde_json::Value, description = "Session list"),
+        (status = 200, body = SessionListResponse, description = "Session list"),
         (status = 403, description = "Forbidden"),
         (status = 500, description = "Internal error")
     )
@@ -117,22 +121,20 @@ pub async fn list_sessions<
 >(
     State(state): State<AppState<S>>,
     Extension(session_id): Extension<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<SessionListResponse>, HttpError> {
     super::authz::require_admin_session(&state, session_id)?;
     let sessions = state.server.get_graph_service().list_sessions().await;
-    let items: Vec<serde_json::Value> = sessions
+    let items: Vec<SessionListItem> = sessions
         .into_iter()
-        .map(|info| {
-            serde_json::json!({
-                "session_id": info.session_id,
-                "username": info.user_name,
-                "space_name": info.space_name,
-                "graph_addr": info.graph_addr,
-                "active_queries": info.active_queries,
-            })
+        .map(|info| SessionListItem {
+            session_id: info.session_id,
+            username: info.user_name,
+            space_name: info.space_name,
+            graph_addr: info.graph_addr,
+            active_queries: info.active_queries as u64,
         })
         .collect();
-    Ok(JsonResponse(serde_json::json!({ "sessions": items })))
+    Ok(JsonResponse(SessionListResponse { sessions: items }))
 }
 
 #[utoipa::path(
@@ -141,7 +143,7 @@ pub async fn list_sessions<
     tag = "Session",
     params(("id" = i64, Path, description = "Session id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Session details"),
+        (status = 200, body = SessionDetailResponse, description = "Session details"),
         (status = 404, description = "Not found"),
         (status = 500, description = "Not found")
     )
@@ -159,7 +161,7 @@ pub async fn get_session<
     State(state): State<AppState<S>>,
     Extension(caller_session_id): Extension<i64>,
     Path(session_id): Path<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<SessionDetailResponse>, HttpError> {
     let caller = super::authz::find_session(&state, caller_session_id)?;
     let graph_service = state.server.get_graph_service();
     let session_manager = state.server.get_session_manager();
@@ -173,13 +175,13 @@ pub async fn get_session<
         return Err(HttpError::forbidden("Admin permission required"));
     }
 
-    Ok(JsonResponse(serde_json::json!({
-        "session_id": session.id(),
-        "username": session.user(),
-        "space_name": session.space_name(),
-        "graph_addr": session.graph_addr(),
-        "timezone": session.timezone(),
-    })))
+    Ok(JsonResponse(SessionDetailResponse {
+        session_id: session.id(),
+        username: session.user(),
+        space_name: session.space_name(),
+        graph_addr: session.graph_addr(),
+        timezone: session.timezone(),
+    }))
 }
 
 #[utoipa::path(
@@ -236,7 +238,7 @@ pub async fn delete_session<
     tag = "Session",
     params(("id" = i64, Path, description = "Session id")),
     responses(
-        (status = 200, body = serde_json::Value, description = "Variable snapshot"),
+        (status = 200, body = VariableSnapshotResponse, description = "Variable snapshot"),
         (status = 404, description = "Session not found")
     )
 )]
@@ -253,7 +255,7 @@ pub async fn list_variables<
     State(state): State<AppState<S>>,
     Extension(caller_session_id): Extension<i64>,
     Path(session_id): Path<i64>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<VariableSnapshotResponse>, HttpError> {
     let caller = super::authz::find_session(&state, caller_session_id)?;
     let manager = state.server.get_session_manager();
     let target = manager
@@ -271,10 +273,10 @@ pub async fn list_variables<
         .into_iter()
         .map(|(k, v)| (k, crate::value::to_json(v)))
         .collect();
-    Ok(JsonResponse(serde_json::json!({
-        "session_id": session_id,
-        "variables": variables,
-    })))
+    Ok(JsonResponse(VariableSnapshotResponse {
+        session_id,
+        variables,
+    }))
 }
 
 /// Assign one session variable (`$name`) on a session.
@@ -287,8 +289,9 @@ pub async fn list_variables<
     path = "/v1/sessions/{id}/variables",
     tag = "Session",
     params(("id" = i64, Path, description = "Session id")),
+    request_body = SetVariableRequest,
     responses(
-        (status = 200, body = serde_json::Value, description = "Variable assigned"),
+        (status = 200, body = SetVariableResponse, description = "Variable assigned"),
         (status = 404, description = "Session not found")
     )
 )]
@@ -305,8 +308,8 @@ pub async fn set_variable<
     State(state): State<AppState<S>>,
     Extension(caller_session_id): Extension<i64>,
     Path(session_id): Path<i64>,
-    Json(body): Json<serde_json::Value>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    Json(body): Json<SetVariableRequest>,
+) -> Result<JsonResponse<SetVariableResponse>, HttpError> {
     let caller = super::authz::find_session(&state, caller_session_id)?;
     let manager = state.server.get_session_manager();
     let target = manager
@@ -319,21 +322,14 @@ pub async fn set_variable<
     if !is_admin && target.user() != caller.user() {
         return Err(HttpError::forbidden("Admin permission required"));
     }
-    let name = body
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| HttpError::BadRequest("field 'name' is required".to_string()))?;
-    let value_json = body
-        .get("value")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    let value_json = body.value.clone().unwrap_or(serde_json::Value::Null);
     let value = crate::value::from_json(&value_json);
-    target.set_variable(name.to_string(), value);
-    Ok(JsonResponse(serde_json::json!({
-        "session_id": session_id,
-        "name": name,
-        "value": value_json,
-    })))
+    target.set_variable(body.name.clone(), value);
+    Ok(JsonResponse(SetVariableResponse {
+        session_id,
+        name: body.name,
+        value: Some(value_json),
+    }))
 }
 
 /// Remove one session variable (`$name`) from a session.
@@ -346,7 +342,7 @@ pub async fn set_variable<
         ("name" = String, Path, description = "Variable name")
     ),
     responses(
-        (status = 200, body = serde_json::Value, description = "Variable removed"),
+        (status = 200, body = DeleteVariableResponse, description = "Variable removed"),
         (status = 404, description = "Session or variable not found")
     )
 )]
@@ -363,7 +359,7 @@ pub async fn delete_variable<
     State(state): State<AppState<S>>,
     Extension(caller_session_id): Extension<i64>,
     Path((session_id, name)): Path<(i64, String)>,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+) -> Result<JsonResponse<DeleteVariableResponse>, HttpError> {
     let caller = super::authz::find_session(&state, caller_session_id)?;
     let manager = state.server.get_session_manager();
     let target = manager
@@ -379,9 +375,9 @@ pub async fn delete_variable<
     if !target.remove_variable(&name) {
         return Err(HttpError::NotFound(format!("Variable '{name}' not found")));
     }
-    Ok(JsonResponse(serde_json::json!({
-        "session_id": session_id,
-        "name": name,
-        "removed": true,
-    })))
+    Ok(JsonResponse(DeleteVariableResponse {
+        session_id,
+        name,
+        removed: true,
+    }))
 }

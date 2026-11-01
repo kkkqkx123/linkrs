@@ -15,4 +15,5 @@ pub mod meta;
 pub mod migration;
 pub mod query;
 pub mod schema;
+pub mod sync;
 pub mod vector;
