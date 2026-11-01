@@ -1,6 +1,13 @@
 //! C API Busy Handler Module
 //!
-//! Provides concurrency control mechanism for multi-threaded environments
+//! Caller-driven retry accounting for multi-threaded environments.
+//!
+//! A busy handler is not installed into storage: the engine never calls it
+//! on its own. Instead the C caller runs its own retry loop and asks the
+//! handler (via `linkrs_busy_handler_handle`) whether to keep waiting.
+//! Cancellation of a running operation goes through
+//! `linkrs_connection_interrupt` and `linkrs_kill_transaction`, not through
+//! this handle.
 
 use crate::embedded::busy_handler::BusyHandler;
 use crate::embedded::c_api::error::linkrs_error_code_t;

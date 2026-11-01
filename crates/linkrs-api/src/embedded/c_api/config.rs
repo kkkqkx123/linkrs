@@ -240,6 +240,35 @@ pub unsafe extern "C" fn linkrs_config_set_enable_wal(
     linkrs_error_code_t::LINKRS_OK as c_int
 }
 
+/// Set whether closing the database writes one final checkpoint.
+///
+/// Mirrors `DatabaseConfig::with_checkpoint_on_close`; the flag only takes
+/// effect on file databases at close time.
+///
+/// # Arguments
+/// - `config`: Configuration handle
+/// - `enable`: Enable flag
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `config` must be a valid configuration handle
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_config_set_checkpoint_on_close(
+    config: *mut linkrs_config_t,
+    enable: c_int,
+) -> c_int {
+    if config.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let handle = &mut *(config as *mut LinkrsConfigHandle);
+    handle.inner = handle.inner.clone().with_checkpoint_on_close(enable != 0);
+    linkrs_error_code_t::LINKRS_OK as c_int
+}
+
 /// Set the synchronization mode (mirrors `SyncMode`).
 ///
 /// # Arguments
@@ -525,6 +554,20 @@ mod tests {
         unsafe {
             let config = linkrs_config_memory();
             assert_eq!(linkrs_config_set_timeout(config, 5000), 0);
+            assert_eq!(linkrs_config_free(config), 0);
+        }
+    }
+
+    #[test]
+    fn test_config_set_checkpoint_on_close() {
+        unsafe {
+            let config = linkrs_config_memory();
+            assert_eq!(linkrs_config_set_checkpoint_on_close(config, 1), 0);
+            assert_eq!(linkrs_config_set_checkpoint_on_close(config, 0), 0);
+            assert_eq!(
+                linkrs_config_set_checkpoint_on_close(std::ptr::null_mut(), 1),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
             assert_eq!(linkrs_config_free(config), 0);
         }
     }

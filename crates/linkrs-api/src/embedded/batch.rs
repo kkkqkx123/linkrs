@@ -33,7 +33,7 @@ use linkrs_storage::StorageClient;
 /// // Add vertices
 /// for i in 0..1000 {
 ///     let vertex = Vertex::new(VertexId::try_from_int64(i).expect("test vertex id"), Tag::new("test".into(), std::collections::HashMap::new()));
-///     inserter.add_vertex(vertex);
+///     inserter.add_vertex(vertex)?;
 /// }
 ///
 /// // Perform batch insertion
@@ -45,6 +45,7 @@ use linkrs_storage::StorageClient;
 pub struct BatchInserter<'sess, S: StorageClient + Clone + Send + Sync + 'static> {
     session: &'sess Session<S>,
     core_operation: CoreBatchOperation,
+    completed: BatchResult,
 }
 
 /// Batch operation results
@@ -151,91 +152,91 @@ impl<'sess, S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::U
         Self {
             session,
             core_operation: CoreBatchOperation::new(config),
+            completed: BatchResult::default(),
         }
     }
 
     /// Adding Vertices
+    ///
+    /// Flushes automatically once the buffer reaches the configured batch
+    /// size; flushed counts accumulate into the final result. A flush
+    /// failure surfaces here so partially written batches cannot pass
+    /// silently.
     ///
     /// # Parameters
     /// - `vertex` - the vertex to be inserted
     ///
     /// # Back
     /// - Return to itself, supporting chain calls
-    pub fn add_vertex(&mut self, vertex: Vertex) -> &mut Self {
+    pub fn add_vertex(&mut self, vertex: Vertex) -> CoreResult<&mut Self> {
         self.core_operation.add_vertex(vertex);
 
-        // Automatically flushes if batch size is reached
         if self.core_operation.should_flush() {
-            let _ = self.flush();
+            self.flush()?;
         }
 
-        self
+        Ok(self)
     }
 
     /// Add Edge
+    ///
+    /// Flushes automatically once the buffer reaches the configured batch
+    /// size; flushed counts accumulate into the final result. A flush
+    /// failure surfaces here so partially written batches cannot pass
+    /// silently.
     ///
     /// # Parameters
     /// - `edge` - the edge to be inserted
     ///
     /// # Back
     /// Return itself, supporting chained calls.
-    pub fn add_edge(&mut self, edge: Edge) -> &mut Self {
+    pub fn add_edge(&mut self, edge: Edge) -> CoreResult<&mut Self> {
         self.core_operation.add_edge(edge);
 
-        // Automatically flushes if batch size is reached
         if self.core_operation.should_flush() {
-            let _ = self.flush();
+            self.flush()?;
         }
 
-        self
+        Ok(self)
     }
 
     /// Adding multiple vertices
     ///
     /// # Parameters
     /// - `vertices` - a list of vertices to be inserted
-    pub fn add_vertices(&mut self, vertices: Vec<Vertex>) -> &mut Self {
+    pub fn add_vertices(&mut self, vertices: Vec<Vertex>) -> CoreResult<&mut Self> {
         for vertex in vertices {
-            self.add_vertex(vertex);
+            self.add_vertex(vertex)?;
         }
-        self
+        Ok(self)
     }
 
     /// Adding multiple edges
     ///
     /// # Parameters
     /// - `edges` - a list of edges to be inserted
-    pub fn add_edges(&mut self, edges: Vec<Edge>) -> &mut Self {
+    pub fn add_edges(&mut self, edges: Vec<Edge>) -> CoreResult<&mut Self> {
         for edge in edges {
-            self.add_edge(edge);
+            self.add_edge(edge)?;
         }
-        self
+        Ok(self)
     }
 
     /// Perform batch insertion
     ///
-    /// Flush all buffered data and return results
+    /// Flush all buffered data and return the accumulated results, including
+    /// every automatic flush triggered while buffering.
     ///
     /// # Return
     /// - Returns batch operation results on success
     /// - Return error on failure
     pub fn execute(mut self) -> CoreResult<BatchResult> {
-        // Get current space name
-        let space_name = self
-            .session
-            .space_name()
-            .ok_or_else(|| CoreError::InvalidParameter("No graph space selected".to_string()))?;
-
-        // Execute batch operation using core API
-        let mut storage = self.session.storage_mut();
-        let core_result = self
-            .core_operation
-            .execute_sync(&mut *storage, &space_name)?;
-
-        Ok(core_result.into())
+        self.flush()?;
+        Ok(self.completed)
     }
 
-    /// Flush the current buffer
+    /// Flush the current buffer, merging its counts into the accumulated
+    /// result so earlier automatic flushes are not lost.
     fn flush(&mut self) -> CoreResult<()> {
         if self.core_operation.is_empty() {
             return Ok(());
@@ -249,9 +250,11 @@ impl<'sess, S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::U
 
         // Execute batch operation using core API
         let mut storage = self.session.storage_mut();
-        let _ = self
+        let core_result: BatchResult = self
             .core_operation
-            .execute_sync(&mut *storage, &space_name)?;
+            .execute_sync(&mut *storage, &space_name)?
+            .into();
+        self.completed.merge(core_result);
 
         Ok(())
     }
@@ -263,14 +266,12 @@ impl<'sess, S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::U
 
     /// Get the number of vertices in the current buffer.
     pub fn buffered_vertices(&self) -> usize {
-        // Note: This is an approximation since core API doesn't expose this detail
-        self.core_operation.len()
+        self.core_operation.vertex_count()
     }
 
     /// Get the number of edges in the current buffer.
     pub fn buffered_edges(&self) -> usize {
-        // Note: This is an approximation since core API doesn't expose this detail
-        self.core_operation.len()
+        self.core_operation.edge_count()
     }
 
     /// Get the batch size

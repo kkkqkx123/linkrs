@@ -37,11 +37,11 @@ pub fn execute(&mut self) -> CoreResult<QueryResult>
 pub fn execute_update(&mut self) -> CoreResult<usize>
 ```
 
-#### execute_batch()
-批量执行。
+#### execute_repeated()
+重复执行：按参数组逐条顺序执行，首个失败即停，不共享批量窗口，并非批量加载路径。
 
 ```rust
-pub fn execute_batch(
+pub fn execute_repeated(
     &mut self,
     param_batches: &[HashMap<String, Value>]
 ) -> CoreResult<Vec<QueryResult>>
@@ -63,7 +63,7 @@ let batches = vec![
     },
 ];
 
-let results = stmt.execute_batch(&batches)?;
+let results = stmt.execute_repeated(&batches)?;
 ```
 
 #### reset()

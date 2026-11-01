@@ -371,6 +371,13 @@ pub unsafe extern "C" fn linkrs_session_get_autocommit(session: *mut linkrs_sess
 
 /// Setting the busy wait timeout
 ///
+/// Advisory session-level suggestion only: the value is recorded on the
+/// handle (and defaults to the database `timeout.default_ms`) but the
+/// engine does not enforce lock-wait timeouts from it. Cross-thread
+/// cancellation goes through `linkrs_connection_interrupt` and
+/// `linkrs_kill_transaction`; caller-driven retries use the
+/// `linkrs_busy_handler_*` family.
+///
 /// # Arguments
 /// - `session`: Session handle
 /// - `timeout_ms`: Timeout in milliseconds
@@ -396,7 +403,10 @@ pub unsafe extern "C" fn linkrs_busy_timeout(
     linkrs_error_code_t::LINKRS_OK as c_int
 }
 
-/// Busy wait timeout has occurred.
+/// Read back the advisory busy wait timeout.
+///
+/// Returns the value stored by `linkrs_busy_timeout`, not a measured wait:
+/// the engine does not enforce this timeout on storage operations.
 ///
 /// # Arguments
 /// - `session`: Session handle

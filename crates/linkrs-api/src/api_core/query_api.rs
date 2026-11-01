@@ -368,9 +368,12 @@ where
             results.push(self.execute_with_operation_storage(query, batch_ctx, stmt_storage));
         }
 
-        if let Err(error) = base_storage.read().finalize_auto_commit_batch(&window) {
-            results.push(Err(CoreError::StorageError(error.to_string())));
-        }
+        // The batch window carries no commit semantics of its own: every
+        // statement already committed through its bound storage, and the
+        // finalize step only releases the shared gate. Its outcome must not
+        // change the per-statement results, so a failure here leaves the
+        // vector untouched and preserves the one-result-per-statement shape.
+        let _ = base_storage.read().finalize_auto_commit_batch(&window);
         results
     }
 
@@ -397,9 +400,10 @@ where
     /// `group_size` is clamped to >= 1; each consecutive group of statements
     /// shares one write timestamp, one WAL fsync, and one commit point.
     /// Statement results are returned per statement, in order, exactly like
-    /// `execute_batch`; failed statements roll back only their own writes.
-    /// DDL / transaction statements / USE must not be mixed in (same contract
-    /// as `execute_batch`).
+    /// `execute_batch`; failed statements roll back only their own writes,
+    /// while a group commit failure rolls the whole group back and marks
+    /// every statement of that group failed. DDL / transaction statements /
+    /// USE must not be mixed in (same contract as `execute_batch`).
     pub fn execute_batch_grouped(
         &mut self,
         queries: &[String],
@@ -443,8 +447,18 @@ where
                 results.push(self.execute_with_operation_storage(query, batch_ctx, stmt_storage));
             }
 
+            // A group finalize failure rolls the whole group back, so every
+            // statement of the group that looked successful must surface the
+            // finalize error instead; per-statement errors stay untouched.
+            // The vector length always matches the input chunk.
             if let Err(error) = base_storage.read().finalize_auto_commit_group(&window) {
-                results.push(Err(CoreError::StorageError(error.to_string())));
+                let message = error.to_string();
+                let chunk_start = results.len() - chunk.len();
+                for slot in results.iter_mut().skip(chunk_start) {
+                    if matches!(slot, Ok(_)) {
+                        *slot = Err(CoreError::StorageError(message.clone()));
+                    }
+                }
             }
         }
         results

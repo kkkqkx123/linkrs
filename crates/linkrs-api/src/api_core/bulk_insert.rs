@@ -152,6 +152,22 @@ impl BulkInsertOperation {
         self.items.len()
     }
 
+    /// Number of buffered vertices
+    pub fn vertex_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| matches!(item, BulkInsertItem::Vertex(_)))
+            .count()
+    }
+
+    /// Number of buffered edges
+    pub fn edge_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| matches!(item, BulkInsertItem::Edge(_)))
+            .count()
+    }
+
     /// Whether the buffer is empty
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()

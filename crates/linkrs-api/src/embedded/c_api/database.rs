@@ -6,7 +6,9 @@ use crate::embedded::c_api::config::LinkrsConfigHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
 };
-use crate::embedded::c_api::types::{linkrs_config_t, linkrs_t};
+use crate::embedded::c_api::result::LinkrsResultHandle;
+use crate::embedded::c_api::session::LinkrsSessionHandle;
+use crate::embedded::c_api::types::{linkrs_config_t, linkrs_result_t, linkrs_session_t, linkrs_t};
 use crate::embedded::GraphDatabase;
 use linkrs_storage::GraphStorage;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -351,6 +353,71 @@ pub unsafe extern "C" fn linkrs_export_to_file(
     }
 }
 
+/// Write an already-executed result to a file
+/// (`Session::export_result_to_file` over FFI).
+///
+/// Unlike `linkrs_export_to_file`, which re-executes a query, this entry
+/// point exports a live result handle, so callers reuse one execution for
+/// both reading and archiving.
+///
+/// # Arguments
+/// - `session`: Session handle that produced `result`
+/// - `result`: Result set handle to export
+/// - `path`: Output file path (UTF-8 encoded)
+/// - `format`: Export format: 0 = CSV, 1 = JSONL
+/// - `out_rows`: Output parameter, number of rows written (excluding the
+///   CSV header row)
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code (an out-of-range `format` fails with LINKRS_MISUSE)
+///
+/// # Safety
+/// - `session` and `result` must be valid handles from the same execution path
+/// - `path` must be a valid pointer to a null-terminated UTF-8 string
+/// - `out_rows` must be a valid pointer to store the result
+/// - The result handle stays usable after the export
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_export_result_to_file(
+    session: *mut linkrs_session_t,
+    result: *mut linkrs_result_t,
+    path: *const c_char,
+    format: c_int,
+    out_rows: *mut u64,
+) -> c_int {
+    if session.is_null() || result.is_null() || path.is_null() || out_rows.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let export_format = match format {
+        0 => crate::embedded::session::export::ExportFormat::Csv,
+        1 => crate::embedded::session::export::ExportFormat::Jsonl,
+        _ => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let session_handle = &*(session as *mut LinkrsSessionHandle);
+    let result_handle = &*(result as *mut LinkrsResultHandle);
+    match session_handle
+        .inner
+        .export_result_to_file(&result_handle.inner, path_str, export_format)
+    {
+        Ok(rows) => {
+            *out_rows = rows as u64;
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
+        Err(e) => {
+            let (error_code, _) = error_code_from_core_error(&e);
+            set_last_error_message(format!("{e}"));
+            error_code
+        }
+    }
+}
+
 /// Freeing memory (memory allocated by Linkrs)
 ///
 /// # Arguments
@@ -530,5 +597,55 @@ mod tests {
 
         std::fs::remove_file(&csv_path).ok();
         std::fs::remove_file(&jsonl_path).ok();
+    }
+
+    #[test]
+    fn test_export_result_to_file() {
+        use crate::embedded::c_api::query::linkrs_execute;
+        use crate::embedded::c_api::result::linkrs_result_free;
+        use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
+        use crate::embedded::c_api::types::{linkrs_result_t, linkrs_session_t};
+
+        let query = CString::new("RETURN 1").expect("query CString");
+        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let temp_dir = std::env::temp_dir().join("linkrs_c_api_test");
+        std::fs::create_dir_all(&temp_dir).ok();
+        let csv_path = temp_dir.join(format!("result_{}_{}.csv", std::process::id(), counter));
+        let csv_c =
+            CString::new(csv_path.to_str().expect("invalid csv path")).expect("csv path CString");
+
+        unsafe {
+            let db = open_memory_db();
+            let mut session: *mut linkrs_session_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_session_create(db, &mut session),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_execute(session, query.as_ptr(), &mut result),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let mut rows: u64 = 0;
+            let rc = linkrs_export_result_to_file(session, result, csv_c.as_ptr(), 0, &mut rows);
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as c_int);
+            assert_eq!(rows, 1);
+            let content =
+                std::fs::read_to_string(&csv_path).expect("result export file was not written");
+            assert!(!content.trim().is_empty());
+
+            let rc = linkrs_export_result_to_file(session, result, csv_c.as_ptr(), 7, &mut rows);
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+            let rc =
+                linkrs_export_result_to_file(ptr::null_mut(), result, csv_c.as_ptr(), 0, &mut rows);
+            assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+
+            linkrs_result_free(result);
+            linkrs_session_close(session);
+            assert_eq!(linkrs_close(db), linkrs_error_code_t::LINKRS_OK as c_int);
+        }
+
+        std::fs::remove_file(&csv_path).ok();
     }
 }

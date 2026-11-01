@@ -7,9 +7,14 @@ use crate::embedded::c_api::database::LinkrsHandle;
 use crate::embedded::c_api::error::{
     error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
 };
+use crate::embedded::c_api::query::convert_c_value_to_rust;
 use crate::embedded::c_api::result::LinkrsResultHandle;
 use crate::embedded::c_api::session::LinkrsSessionHandle;
-use crate::embedded::c_api::types::{linkrs_result_t, linkrs_session_t, linkrs_t, linkrs_txn_t};
+use crate::embedded::c_api::types::{
+    linkrs_result_t, linkrs_session_t, linkrs_t, linkrs_txn_t, linkrs_value_t,
+};
+use linkrs_core::Value;
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::ptr;
 
@@ -231,6 +236,107 @@ pub unsafe extern "C" fn linkrs_txn_execute(
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
             let error_msg = format!("{}", e);
+            set_last_error_message(error_msg);
+            *result = ptr::null_mut();
+            error_code
+        }
+    }
+}
+
+/// Executing a parameterized query in a transaction
+///
+/// Positional binding mirrors `linkrs_execute_params`: `params[i]` binds to
+/// the `@param_{i}` query parameter. The transaction state machine is
+/// unchanged: calling on a committed or rolled back transaction fails with
+/// LINKRS_MISUSE.
+///
+/// # Parameters
+/// - `txn`: Transaction handle
+/// - `query`: Query statement (UTF-8 encoding)
+/// - `params`: Parameter array (may be NULL when `param_count` is 0)
+/// - `param_count`: Number of parameters
+/// - `result`: Output parameter, result set handle
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `txn` must be a valid transaction handle created by `linkrs_txn_begin` or `linkrs_txn_begin_readonly`
+/// - `query` must be a valid pointer to a null-terminated UTF-8 string
+/// - `result` must be a valid pointer to store the result handle
+/// - If `params` is not NULL, it must point to at least `param_count` valid `linkrs_value_t` elements
+/// - The transaction must not have been committed or rolled back
+/// - The caller is responsible for freeing the result using `linkrs_result_free` when done
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_txn_execute_params(
+    txn: *mut linkrs_txn_t,
+    query: *const c_char,
+    params: *const linkrs_value_t,
+    param_count: usize,
+    result: *mut *mut linkrs_result_t,
+) -> c_int {
+    if txn.is_null() || query.is_null() || result.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let query_str = match CStr::from_ptr(query).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let handle = &mut *(txn as *mut LinkrsTxnHandle);
+
+    if handle.committed || handle.rolled_back {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+
+    let session = match handle.get_session() {
+        Some(s) => s,
+        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+
+    let txn_handle = match handle.txn_handle.as_ref() {
+        Some(h) => h,
+        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
+    };
+
+    let mut params_map: HashMap<String, Value> = HashMap::new();
+    if !params.is_null() && param_count > 0 {
+        for i in 0..param_count {
+            let param = &*params.add(i);
+            let param_name = format!("param_{i}");
+            let value = convert_c_value_to_rust(param);
+            params_map.insert(param_name, value);
+        }
+    }
+
+    let ctx = crate::api_core::QueryRequest {
+        space_id: session.inner.space_id(),
+        space_name: session.inner.space_name().map(|s| s.to_string()),
+        auto_commit: false,
+        transaction_id: Some(txn_handle.0),
+        parameters: Some(params_map),
+        session_variables: None,
+        query_id: None,
+        isolation_level: None,
+        parsed_statement: None,
+        consistency: Default::default(),
+    };
+
+    let mut query_api = session.inner.query_api_mut();
+    match query_api.execute(query_str, ctx) {
+        Ok(core_result) => {
+            let query_result = crate::embedded::result::QueryResult::from_core(core_result);
+            let result_handle = Box::new(LinkrsResultHandle {
+                inner: query_result,
+            });
+            *result = Box::into_raw(result_handle) as *mut linkrs_result_t;
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
+        Err(e) => {
+            let (error_code, _) = error_code_from_core_error(&e);
+            let error_msg = format!("{e}");
             set_last_error_message(error_msg);
             *result = ptr::null_mut();
             error_code
@@ -678,6 +784,61 @@ mod tests {
     fn test_txn_rollback_null() {
         let result = unsafe { linkrs_txn_rollback(ptr::null_mut()) };
         assert_eq!(result, linkrs_error_code_t::LINKRS_MISUSE as c_int);
+    }
+
+    #[test]
+    fn test_txn_execute_params_positional_binding() {
+        use crate::embedded::c_api::database::linkrs_close;
+        use crate::embedded::c_api::result::{linkrs_get_int_by_index, linkrs_result_free};
+        use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
+        use crate::embedded::c_api::types::{
+            linkrs_session_t, linkrs_value_data_t, linkrs_value_t, linkrs_value_type_t,
+        };
+
+        unsafe {
+            let db = open_memory_db();
+            let mut session: *mut linkrs_session_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_session_create(db, &mut session),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut txn: *mut linkrs_txn_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_txn_begin(session, &mut txn),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let query = CString::new("RETURN @param_0").unwrap();
+            let param = linkrs_value_t {
+                type_: linkrs_value_type_t::LINKRS_INT,
+                data: linkrs_value_data_t { integer: 41 },
+            };
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_txn_execute_params(txn, query.as_ptr(), &param, 1, &mut result),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut value: i64 = 0;
+            assert_eq!(
+                linkrs_get_int_by_index(result, 0, 0, &mut value),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(value, 41);
+            linkrs_result_free(result);
+
+            assert_eq!(
+                linkrs_txn_execute_params(ptr::null_mut(), query.as_ptr(), &param, 1, &mut result),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            assert_eq!(
+                linkrs_txn_rollback(txn),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            linkrs_txn_free(txn);
+            linkrs_session_close(session);
+            assert_eq!(linkrs_close(db), 0);
+        }
     }
 
     fn open_memory_db() -> *mut linkrs_t {

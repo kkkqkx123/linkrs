@@ -14,7 +14,7 @@
 | 会话管理 | ✅ `session()` | ✅ `/sessions/*`（含变量子资源，见下） | ✅ `Create/Get/Close/List/KillSession` | —（经 `/v1` 代理执行） | ✅ 会话方法 | ✅ `\connect`, `\sessions` |
 | 会话变量（`$name`） | ✅ `set/remove/variable_value/variables_snapshot`（事务感知） | ✅ `/sessions/{id}/variables*`（GET/POST/DELETE） | ✅ `List/Set/DeleteSessionVariables` | — | ✅ `list/set/delete_session_variables` | ⚠️ 本地 `\set` + 远程 `LET`（未自动同步，见说明） |
 | 查询执行 | ✅ `execute` + `execute_with_params*` | ✅ `/query` | ✅ `ExecuteQuery` | —（经 `/v1` 代理执行） | ✅ `execute_query*` | ✅ SQL 输入 |
-| 预编译语句 | ✅ `prepare`/`PreparedStatement`（`bind/execute/execute_batch`，本地校验复用） | —（用带参查询代替） | —（用带参查询代替） | — | — | —（CLI 用带参输入代替） |
+| 预编译语句 | ✅ `prepare`/`PreparedStatement`（`bind/execute/execute_repeated`，本地校验复用） | —（用带参查询代替） | —（用带参查询代替） | — | — | —（CLI 用带参输入代替） |
 | 查询管理（运行中查询） | —（单进程用 `interrupt()` 协作取消） | ✅ `/queries` + `/sessions/{id}/queries/{qid}/kill` | ✅ `ListQueries`/`KillQuery` | — | ✅ `list_queries`/`kill_query` | ✅ `\queries list|kill` |
 | 流式查询 | —（`QueryResult` 直接返回，无需 SSE） | ✅ `/query/stream` | ✅ `ExecuteQueryStream` | — | ✅ `execute_query_stream` | ✅ `\stream` |
 | 结果游标 | —（内存分页/迭代代替） | ✅ `/query/cursor/*` | ✅ `Open/Fetch/CloseCursor` | — | ✅ `open/fetch/close_cursor` | ✅ `\cursor-*` |
@@ -33,7 +33,7 @@
 | 同步/Outbox | — | ✅ `/sync/*`（status/outbox/diagnostics/dead/requeue/degraded/retention） | ✅ `GetSyncStatus`, `RetryOutbox`, degraded/retention 系列 | — | ✅ 同步方法集（outbox/diagnostics/dead/requeue/degraded/retention） | ✅ `\sync` |
 | 导入/导出 | ⚠️ `export_query_to_file` + `BatchInserter`（文件导入走服务端） | ✅ `/import`, `/export` | ✅ `ImportData`, `ExportData`, `GetImportStatus` | — | ✅ `server_import_file`, `server_export_*` | ✅ `\import --server`, `\export --server` |
 | Web 管理 | — | —（`/api` 挂载 Web 后端，见说明） | — | ✅ `/api/v1/queries|schema|data|graph`（历史/收藏/数据浏览/图查询；执行经 `/v1`） | — | — |
-| C API（FFI） | ⚠️ 嵌入式 API 的 FFI 投影：查询/事务/保存点/预编译/会话变量/批量/UDF/扩展/配置（构造+运行时）/迁移/统计/hooks/导出/overview/validate/explain/kill（`c_api` 特性门控，隐含 `embedded`；Schema 经 DDL 文本；缺向量/全文/版本历史读） | — | — | — | — | — |
+| C API（FFI） | ⚠️ 嵌入式 API 的 FFI 投影（`c_api` 特性门控，隐含 `embedded`，约 150 个导出符号）：库/会话/结果句柄生命周期、查询（含位置带参/`validate`/`explain`）、事务（含只读/保存点/带参执行/`kill`/`list`/`metrics`）、预编译（`prepare`/`bind`/`clear`/`reset`/`execute[_update]`/参数元信息/批量执行）、会话变量、批量、UDF（含聚合/扩展加载）、配置（构造期 + 运行期 `get/update/reset/bulk`，含检查点开关 setter）、迁移（`plan`/`execute`/`rollback`）、版本历史读、结构化 Schema（空间/标签/边类型 `create/drop/list/get`，属性定义走 JSON）、统计（`changes`/`last-id`/`statistics`/`overview`）、hooks（`trace`/`commit`/`rollback`/`update`）/中断、向量/全文/混合搜索（运行时门控，见说明）、结果空值判断、结果句柄直接导出、错误槽（`errcode/errmsg/errstr/offset/extended`）、调用方自驱动的 `busy_handler` + 建议式 `busy_timeout` | — | — | — | — | — |
 | 输出/脚本/分页 | — | — | — | — | — | ✅ CLI 本地能力（脚本/变量/pager/输出重定向） |
 
 ## 说明
@@ -65,9 +65,33 @@
 - 向量（`vector`）与全文（`fulltext`）路由受特性门控编译；未启用特性时对应 HTTP/gRPC/嵌入式能力不可用。
 - Web 列指 Web 后端 `/api/*`（历史/收藏/数据浏览/图数据/Schema 扩展只读查询）；实际查询执行仍经 `/v1`，
   版本/迁移历史在 Web 侧只读。
-- C API（`crates/linkrs-api/src/embedded/c_api/`，`c_api` 特性门控并隐含 `embedded`）
-  是嵌入式 Rust API 的 FFI 投影：查询/事务/保存点/预编译语句/会话变量/批量/UDF/扩展加载/
-  配置（构造期 + 运行时 get/update/reset/bulk）/迁移/会话统计/hooks/`validate`/`explain`/
-  `kill_transaction`/`list_transactions`/`transaction_metrics`/`database_overview`/
-  `export_to_file`。Schema 管理经 `linkrs_execute` 执行 DDL 文本，无结构化 schema FFI；
-  向量/全文搜索与版本历史读暂未投影；不覆盖用户管理、同步运维、Web 管理。
+- C API（`crates/linkrs-api/src/embedded/c_api/`，`c_api` 特性门控并隐含 `embedded`，约 120 个导出符号）
+  是嵌入式 Rust API 的 FFI 投影，按模块盘点如下：
+  库生命周期 `open/open_with_config/close/libversion/free[_string]`；
+  会话 `session_create/close`、`use_space/current_space`、`set/get_autocommit`、
+  `busy_timeout[_get]`、`trace/commit_hook/rollback_hook/update_hook`、
+  `connection_interrupt/clear_interrupt`；
+  查询 `execute/execute_params`（位置绑定 `@param_{i}`）、`validate_query`、`explain_query`；
+  结果 `result_free`、`column_count/row_count/column_name/column_type`、
+  `get_int/string/blob` 与 `get_*_by_index`（含 `bool/float`）、`execution_time_ms/rows_scanned`；
+  事务 `txn_begin[_readonly]/txn_execute/commit/rollback/free`、
+  `txn_savepoint/release_savepoint/rollback_to_savepoint`、
+  `kill_transaction/transaction_count/transaction_list/transaction_metrics`（后两者返回堆上 JSON）；
+  预编译 `prepare/stmt_bind/stmt_clear_bindings/stmt_reset/stmt_execute/stmt_execute_update/stmt_free`；
+  会话变量 `set/remove/get/variables_snapshot`；批量 `batch_inserter_create/free/add_vertex/add_edge/execute` +
+  `vertices/edges_inserted/buffered_*` 计数；UDF `create_function/create_aggregate/delete_function` +
+  `context_*`（`set_result/result_type/set_error/get_arg/arg_count`）+ `load/unload/reload_extension`；
+  配置构造器 `config_new/file/memory/free` + 类型化 setter（`cache_size/timeout/read_only/create_if_missing/enable_wal/sync_mode`）+
+  运行期 `config_get/update/reset/bulk_update_value`（`bulk` 以 JSON 对象传 `section.key->value`）；
+  迁移 `migration_plan_json/execute/rollback/report_free`（在线编排，阻塞式）；
+  统计 `session_changes/total_changes/last_insert_vertex/edge_id/get_statistics` +
+  `database_overview`（堆上 JSON：空间数/事务指标/`StatsManager` 计数器子集）；
+  错误 `errcode/errmsg/errstr/error_offset/extended_errcode`；`busy_handler_*` 为调用方自驱动的重试记账
+  （引擎不自动调用），`busy_timeout[_get]` 为建议式会话超时（引擎不据此强制锁等待，取消走中断与事务终止）。
+  新增：结构化 Schema（`create/drop/list/get` 九组，`get_*` 不存在返回空而非报错；属性定义为 JSON 数组，
+  无属性 tag 按引擎主键规则被拒绝并透出存储错误）、版本历史读（`label_version_history/applied_versions`，
+  未知标签返回空）、预编译参数元信息（`param_count/param_name`）与批量执行（`execute_repeated`，按行参数集合 JSON，
+  值用引擎 `Value` serde 编码，遇错即停）、事务内带参执行（与会话侧同为位置绑定）、向量（索引创建/删除/相似搜索，
+  `threshold` 为负表示无截断）/全文/混合搜索（请求与结果走 JSON，阻塞式桥接，特性未编译时报未实现错误）、
+  `cell_is_null` 空值判断（结果集仍整体物化，不引入游标）、结果句柄直接导出、`checkpoint_on_close` 类型化 setter。
+  有意不覆盖用户管理、同步运维、流式/游标、Web 管理。设计见 `docs/plan/c_api_gap_remediation.md`，已全部落地。

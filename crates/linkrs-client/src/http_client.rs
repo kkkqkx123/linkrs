@@ -730,8 +730,8 @@ impl HttpClient {
     /// Upload a data file for server-side import (`POST /v1/import`, multipart).
     ///
     /// Unlike the local row-by-row importer, the server parses the file and
-    /// loads it through the group-commit batch window, amortizing WAL fsync
-    /// across rows. `format` is `csv`, `json` or `jsonl`; `target_type` is
+    /// loads it through the core bulk insert path, bypassing the statement
+    /// pipeline. `format` is `csv`, `json` or `jsonl`; `target_type` is
     /// `tag`/`vertex` or `edge`.
     pub async fn server_import_file(
         &self,
@@ -769,9 +769,8 @@ impl HttpClient {
 
     /// Query a server-side import job (`GET /v1/import/{id}`).
     ///
-    /// Imports run synchronously today, so this reports the compatibility
-    /// contract rather than live progress; it stays available for polling
-    /// loops that must not assume synchronous completion.
+    /// The server records a finished job per import; unknown ids report
+    /// a missing-job error.
     pub async fn import_status(&self, job_id: &str) -> Result<serde_json::Value> {
         let url = format!("{}/import/{}", self.base_url, job_id);
         let response = self.authed(self.inner.get(&url)).send().await?;

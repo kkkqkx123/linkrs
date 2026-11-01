@@ -36,9 +36,24 @@ impl<
             .read()
             .get_space_id(&req.space_name)
             .map_err(|_| Status::not_found(format!("space '{}' not found", req.space_name)))?;
+        let batch_type = match req.batch_type.trim().to_lowercase().as_str() {
+            "" | "mixed" => crate::batch::BatchType::Mixed,
+            "vertex" => crate::batch::BatchType::Vertex,
+            "edge" => crate::batch::BatchType::Edge,
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "unknown batch_type: {other} (expected vertex|edge|mixed)"
+                )))
+            }
+        };
+        let batch_size = if req.batch_size == 0 {
+            1000
+        } else {
+            req.batch_size as usize
+        };
         let batch_manager = self.app_state.server.get_batch_manager();
         let task = batch_manager
-            .create_task(space_id, crate::batch::BatchType::Mixed, 1000)
+            .create_task(space_id, batch_type, batch_size)
             .map_err(|e| Status::internal(format!("failed to create batch task: {e}")))?;
         Ok(Response::new(CreateBatchResponse {
             success: true,

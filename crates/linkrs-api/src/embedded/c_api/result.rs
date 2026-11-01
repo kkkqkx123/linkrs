@@ -773,6 +773,45 @@ pub unsafe extern "C" fn linkrs_result_rows_scanned(
     linkrs_error_code_t::LINKRS_OK as c_int
 }
 
+/// Test whether a cell holds an explicit NULL.
+///
+/// The typed getters report a type mismatch for NULL cells, so without this
+/// probe callers cannot tell NULL apart from zero-like values. The result
+/// set stays fully materialized; this is random access, not a cursor.
+///
+/// # Arguments
+/// - `result`: Result set handle
+/// - `row`: Row index (starting from 0)
+/// - `col`: Column index (starting from 0)
+///
+/// # Returns
+/// - 1 when the cell is NULL, 0 when it holds a value, -1 on error
+///   (null handle, negative or out-of-range indexes)
+///
+/// # Safety
+/// - `result` must be a valid result handle created by `linkrs_execute` or `linkrs_execute_params`
+/// - `row` must satisfy 0 <= row < row count
+/// - `col` must satisfy 0 <= col < column count
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_cell_is_null(
+    result: *mut linkrs_result_t,
+    row: c_int,
+    col: c_int,
+) -> c_int {
+    if result.is_null() || row < 0 || col < 0 {
+        return -1;
+    }
+    let handle = &*(result as *mut LinkrsResultHandle);
+    match handle.inner.get(row as usize) {
+        Some(row_data) => match row_data.get_by_index(col as usize) {
+            Some(linkrs_core::Value::Null(_)) => 1,
+            Some(_) => 0,
+            None => -1,
+        },
+        None => -1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -790,5 +829,61 @@ mod tests {
 
         let name = unsafe { linkrs_column_name(ptr::null_mut(), 0) };
         assert!(name.is_null());
+    }
+
+    #[test]
+    fn test_cell_is_null() {
+        use crate::embedded::c_api::config::linkrs_config_memory;
+        use crate::embedded::c_api::database::{linkrs_close, linkrs_open_with_config};
+        use crate::embedded::c_api::query::{linkrs_execute, linkrs_execute_params};
+        use crate::embedded::c_api::session::{linkrs_session_close, linkrs_session_create};
+        use crate::embedded::c_api::types::{
+            linkrs_session_t, linkrs_t, linkrs_value_data_t, linkrs_value_t, linkrs_value_type_t,
+        };
+        use std::ffi::CString;
+
+        unsafe {
+            let config = linkrs_config_memory();
+            let mut db: *mut linkrs_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_open_with_config(config, &mut db),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            let mut session: *mut linkrs_session_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_session_create(db, &mut session),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            // A bound NULL stays NULL through evaluation.
+            let query = CString::new("RETURN @param_0").unwrap();
+            let null_value = linkrs_value_t {
+                type_: linkrs_value_type_t::LINKRS_NULL,
+                data: linkrs_value_data_t { integer: 0 },
+            };
+            let mut result: *mut linkrs_result_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_execute_params(session, query.as_ptr(), &null_value, 1, &mut result),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(linkrs_cell_is_null(result, 0, 0), 1);
+            linkrs_result_free(result);
+
+            let one = CString::new("RETURN 1").unwrap();
+            assert_eq!(
+                linkrs_execute(session, one.as_ptr(), &mut result),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(linkrs_cell_is_null(result, 0, 0), 0);
+            assert_eq!(linkrs_cell_is_null(result, 7, 0), -1);
+            assert_eq!(linkrs_cell_is_null(result, 0, 7), -1);
+            linkrs_result_free(result);
+
+            assert_eq!(linkrs_cell_is_null(ptr::null_mut(), 0, 0), -1);
+            assert_eq!(linkrs_cell_is_null(ptr::null_mut(), -1, 0), -1);
+
+            linkrs_session_close(session);
+            linkrs_close(db);
+        }
     }
 }

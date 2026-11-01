@@ -112,7 +112,7 @@ pub async fn execute_export(
 /// Server-side import via `POST /v1/import`.
 ///
 /// The file is uploaded as multipart and parsed by the server, which loads
-/// rows through the group-commit batch window instead of one statement per
+/// rows through the core bulk insert path instead of one statement per
 /// round trip. Falls back to nothing: callers pick this path explicitly
 /// with `\import ... --server`.
 async fn execute_server_import(

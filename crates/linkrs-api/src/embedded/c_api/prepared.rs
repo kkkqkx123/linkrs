@@ -16,7 +16,7 @@ use crate::embedded::c_api::types::{
 };
 use linkrs_core::Value;
 use std::collections::HashMap;
-use std::ffi::{c_char, c_int, CStr};
+use std::ffi::{c_char, c_int, CStr, CString};
 use std::ptr;
 
 /// Internal structure of prepared statement handles.
@@ -30,6 +30,39 @@ pub struct LinkrsStmtHandle {
     pub(crate) session: *mut LinkrsSessionHandle,
     pub(crate) query: String,
     pub(crate) params: HashMap<String, Value>,
+    /// `@name` references found in the statement text at prepare time.
+    pub(crate) param_names: Vec<String>,
+}
+
+/// Run one bound execution: trace, execute with bindings, DML notify.
+///
+/// Shared by single and repeated execution so hooks and tracing behave the
+/// same on every pass. Errors are returned unmapped; the caller records
+/// them in the session error slot.
+fn run_bound_statement(
+    session: &mut LinkrsSessionHandle,
+    query: &str,
+    params: HashMap<String, Value>,
+) -> crate::api_core::CoreResult<crate::embedded::result::QueryResult> {
+    session.trace(query);
+    let query_result = session.inner.execute_with_params(query, params)?;
+    session.clear_error();
+    if session.has_update_hook() || session.inner.has_dml_observers() {
+        let rows = query_result.metadata().rows_returned as u64;
+        if let Some(op) = session.inner.notify_dml(query, rows) {
+            if session.has_update_hook() {
+                let operation = match op {
+                    linkrs_query::DmlOp::Insert => 1,
+                    linkrs_query::DmlOp::Update => 2,
+                    linkrs_query::DmlOp::Delete => 3,
+                };
+                let space_name_owned = session.inner.current_space();
+                let space_name = space_name_owned.as_deref().unwrap_or("default");
+                session.invoke_update_hook(operation, space_name, rows as i64);
+            }
+        }
+    }
+    Ok(query_result)
 }
 
 /// Prepare a statement for repeated execution with different bindings.
@@ -83,6 +116,7 @@ pub unsafe extern "C" fn linkrs_prepare(
                 session: session as *mut LinkrsSessionHandle,
                 query: query_str.to_string(),
                 params: HashMap::new(),
+                param_names: validation.parameter_names,
             });
             *out_stmt = Box::into_raw(stmt) as *mut linkrs_stmt_t;
             linkrs_error_code_t::LINKRS_OK as c_int
@@ -244,31 +278,8 @@ pub unsafe extern "C" fn linkrs_stmt_execute(
     let params = handle.params.clone();
     let session = &mut *handle.session;
 
-    // Calling the SQL tracing callback (matches `linkrs_execute`).
-    session.trace(&query_str);
-
-    match session.inner.execute_with_params(&query_str, params) {
+    match run_bound_statement(session, &query_str, params) {
         Ok(query_result) => {
-            session.clear_error();
-
-            // Statement-level DML notification (bus) + legacy update hook,
-            // matching `linkrs_execute_params`.
-            if session.has_update_hook() || session.inner.has_dml_observers() {
-                let rows = query_result.metadata().rows_returned as u64;
-                if let Some(op) = session.inner.notify_dml(&query_str, rows) {
-                    if session.has_update_hook() {
-                        let operation = match op {
-                            linkrs_query::DmlOp::Insert => 1,
-                            linkrs_query::DmlOp::Update => 2,
-                            linkrs_query::DmlOp::Delete => 3,
-                        };
-                        let space_name_owned = session.inner.current_space();
-                        let space_name = space_name_owned.as_deref().unwrap_or("default");
-                        session.invoke_update_hook(operation, space_name, rows as i64);
-                    }
-                }
-            }
-
             let result_handle = Box::new(LinkrsResultHandle {
                 inner: query_result,
             });
@@ -320,6 +331,159 @@ pub unsafe extern "C" fn linkrs_stmt_execute_update(
 
     let result_handle = Box::from_raw(result as *mut LinkrsResultHandle);
     *out_changes = result_handle.inner.len() as u64;
+    linkrs_error_code_t::LINKRS_OK as c_int
+}
+
+/// Query the number of `@name` parameters in the prepared statement.
+///
+/// The names are collected from the statement text at `linkrs_prepare` time
+/// (the same list reported by `linkrs_validate_query`); binding a name not
+/// in this list is still accepted and simply never used.
+///
+/// # Arguments
+/// - `stmt`: Prepared statement handle
+/// - `out_count`: Output parameter, number of distinct parameter names
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code
+///
+/// # Safety
+/// - `stmt` must be a valid statement handle created by `linkrs_prepare`
+/// - `out_count` must be a valid pointer to store the result
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_stmt_param_count(
+    stmt: *mut linkrs_stmt_t,
+    out_count: *mut c_int,
+) -> c_int {
+    if stmt.is_null() || out_count.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    let handle = &*(stmt as *mut LinkrsStmtHandle);
+    *out_count = handle.param_names.len() as c_int;
+    linkrs_error_code_t::LINKRS_OK as c_int
+}
+
+/// Query one parameter name by position (prepare-text order).
+///
+/// # Arguments
+/// - `stmt`: Prepared statement handle
+/// - `index`: Parameter position (starting from 0)
+///
+/// # Returns
+/// - Heap parameter name (UTF-8, without the `@` sigil), NULL when
+///   `index` is out of range
+///
+/// # Memory Management
+/// The returned string is dynamically allocated and must be freed by the
+/// caller using `linkrs_free_string`.
+///
+/// # Safety
+/// - `stmt` must be a valid statement handle created by `linkrs_prepare`
+/// - `index` must satisfy 0 <= index < parameter count
+/// - The returned pointer must be freed by the caller
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_stmt_param_name(
+    stmt: *mut linkrs_stmt_t,
+    index: c_int,
+) -> *mut c_char {
+    if stmt.is_null() || index < 0 {
+        return ptr::null_mut();
+    }
+    let handle = &*(stmt as *mut LinkrsStmtHandle);
+    match handle.param_names.get(index as usize) {
+        Some(name) => match CString::new(name.as_str()) {
+            Ok(c_name) => c_name.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
+        None => ptr::null_mut(),
+    }
+}
+
+/// Execute the statement once per parameter set, in order.
+///
+/// `batches_json` is a JSON array of objects mapping each `@name` parameter
+/// (without the `@` sigil) to its value in the engine `Value` serde
+/// encoding, the same shape `linkrs_session_get_variable` produces, for
+/// example `[{"x": {"BigInt": 1}}, {"x": {"BigInt": 2}}]`. Execution
+/// stops at the first failure; `*out_total_rows` accumulates the rows
+/// returned by the successful passes. Trace and update-hook callbacks fire
+/// once per pass, exactly like repeated single executions. Session variables
+/// (`$name`) resolve from the live session snapshot at each pass.
+///
+/// # Arguments
+/// - `stmt`: Prepared statement handle
+/// - `batches_json`: JSON array of per-pass parameter objects (UTF-8)
+/// - `out_total_rows`: Output parameter, total rows returned
+///
+/// # Returns
+/// - Success: LINKRS_OK
+/// - Failure: Error code (details in the session error slot)
+///
+/// # Safety
+/// - `stmt` must be a valid statement handle created by `linkrs_prepare`
+/// - `batches_json` must be a valid null-terminated UTF-8 string
+/// - `out_total_rows` must be a valid pointer to store the result
+/// - The associated session must still be valid
+#[no_mangle]
+pub unsafe extern "C" fn linkrs_stmt_execute_repeated(
+    stmt: *mut linkrs_stmt_t,
+    batches_json: *const c_char,
+    out_total_rows: *mut u64,
+) -> c_int {
+    if stmt.is_null() || batches_json.is_null() || out_total_rows.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    let handle = &mut *(stmt as *mut LinkrsStmtHandle);
+    if handle.session.is_null() {
+        return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+    }
+    let raw = match CStr::from_ptr(batches_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+    };
+    let batches: Vec<HashMap<String, serde_json::Value>> = match serde_json::from_str(raw) {
+        Ok(b) => b,
+        Err(e) => {
+            let session = &mut *handle.session;
+            session.set_error(format!("invalid batches_json: {e}"), None, None);
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
+    };
+    *out_total_rows = 0;
+    let query_str = handle.query.clone();
+    let session = &mut *handle.session;
+    for batch in batches {
+        let mut params = HashMap::with_capacity(batch.len());
+        for (name, json_value) in batch {
+            match serde_json::from_value::<Value>(json_value) {
+                Ok(v) => {
+                    params.insert(name, v);
+                }
+                Err(e) => {
+                    session.set_error(
+                        format!("invalid value for parameter '{name}': {e}"),
+                        None,
+                        None,
+                    );
+                    return linkrs_error_code_t::LINKRS_MISMATCH as c_int;
+                }
+            }
+        }
+        match run_bound_statement(session, &query_str, params) {
+            Ok(query_result) => {
+                *out_total_rows += query_result.len() as u64;
+            }
+            Err(e) => {
+                let (error_code, _) = error_code_from_core_error(&e);
+                let error_msg = format!("{e}");
+                let offset = e.error_offset();
+                let extended_code = Some(extended_error_code_from_core_error(&e));
+                session.set_error(error_msg, offset, extended_code);
+                return error_code;
+            }
+        }
+    }
     linkrs_error_code_t::LINKRS_OK as c_int
 }
 
@@ -524,6 +688,96 @@ mod tests {
                 linkrs_error_code_t::LINKRS_MISUSE as c_int
             );
             linkrs_stmt_free(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn test_stmt_param_metadata() {
+        use crate::embedded::c_api::database::linkrs_free_string;
+        unsafe {
+            let (db, session) = create_test_session();
+
+            let sql = CString::new("RETURN @x").expect("sql CString");
+            let mut stmt: *mut linkrs_stmt_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_prepare(session, sql.as_ptr(), &mut stmt),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let mut count: c_int = -1;
+            assert_eq!(
+                linkrs_stmt_param_count(stmt, &mut count),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(count, 1);
+
+            let name_ptr = linkrs_stmt_param_name(stmt, 0);
+            assert!(!name_ptr.is_null());
+            let name = CStr::from_ptr(name_ptr).to_str().expect("utf8").to_string();
+            linkrs_free_string(name_ptr);
+            assert_eq!(name, "x");
+
+            assert!(linkrs_stmt_param_name(stmt, 1).is_null());
+            assert!(linkrs_stmt_param_name(stmt, -1).is_null());
+            assert!(linkrs_stmt_param_name(ptr::null_mut(), 0).is_null());
+            assert_eq!(
+                linkrs_stmt_param_count(ptr::null_mut(), &mut count),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            linkrs_stmt_free(stmt);
+            linkrs_session_close(session);
+            linkrs_close(db);
+        }
+    }
+
+    #[test]
+    fn test_stmt_execute_repeated() {
+        unsafe {
+            let (db, session) = create_test_session();
+
+            let sql = CString::new("RETURN @x").expect("sql CString");
+            let mut stmt: *mut linkrs_stmt_t = ptr::null_mut();
+            assert_eq!(
+                linkrs_prepare(session, sql.as_ptr(), &mut stmt),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+
+            let batches = CString::new(r#"[{"x": {"BigInt": 1}}, {"x": {"BigInt": 2}}]"#)
+                .expect("batches CString");
+            let mut total: u64 = 0;
+            assert_eq!(
+                linkrs_stmt_execute_repeated(stmt, batches.as_ptr(), &mut total),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(total, 2);
+
+            let empty = CString::new("[]").expect("empty CString");
+            total = 99;
+            assert_eq!(
+                linkrs_stmt_execute_repeated(stmt, empty.as_ptr(), &mut total),
+                linkrs_error_code_t::LINKRS_OK as c_int
+            );
+            assert_eq!(total, 0);
+
+            let bad_shape = CString::new("{}").expect("bad CString");
+            assert_eq!(
+                linkrs_stmt_execute_repeated(stmt, bad_shape.as_ptr(), &mut total),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+            let bad_value = CString::new(r#"[{"x": 1}]"#).expect("bad value CString");
+            assert_eq!(
+                linkrs_stmt_execute_repeated(stmt, bad_value.as_ptr(), &mut total),
+                linkrs_error_code_t::LINKRS_MISMATCH as c_int
+            );
+            assert_eq!(
+                linkrs_stmt_execute_repeated(ptr::null_mut(), batches.as_ptr(), &mut total),
+                linkrs_error_code_t::LINKRS_MISUSE as c_int
+            );
+
+            linkrs_stmt_free(stmt);
+            linkrs_session_close(session);
+            linkrs_close(db);
         }
     }
 }

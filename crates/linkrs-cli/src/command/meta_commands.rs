@@ -442,7 +442,7 @@ fn show_topic_help(topic: &str) -> String {
             s.push_str("  tag, vertex  - Import as vertices\n");
             s.push_str("  edge         - Import as edges\n\n");
             s.push_str("Options:\n");
-            s.push_str("  --server     - Server-side import via POST /v1/import (group-commit)\n\n");
+            s.push_str("  --server     - Server-side import via POST /v1/import (bulk insert path)\n\n");
             s.push_str("Examples:\n");
             s.push_str("  \\import csv data.csv tag person 100\n");
             s.push_str("  \\import json data.json vertex person\n");

@@ -552,6 +552,23 @@ pub async fn start_service_with_config_path(
     ));
     info!("HTTP server created");
 
+    // Batch task snapshots live next to the storage data so finished tasks
+    // stay queryable and interrupted runs are marked after a restart.
+    {
+        let snapshot_dir = std::path::PathBuf::from(config.common.database.storage_path.as_str())
+            .join("batch_tasks");
+        let manager = http_server.get_batch_manager();
+        manager.set_snapshot_dir(snapshot_dir).map_err(|error| {
+            linkrs_core::DBError::storage(format!("Cannot enable batch snapshots: {error}"))
+        })?;
+        let loaded = manager.load_snapshots().map_err(|error| {
+            linkrs_core::DBError::storage(format!("Cannot load batch snapshots: {error}"))
+        })?;
+        if loaded > 0 {
+            info!("Restored {} batch tasks from snapshots", loaded);
+        }
+    }
+
     let http_enabled = config.server.http.enabled;
     let grpc_enabled = {
         #[cfg(feature = "grpc")]

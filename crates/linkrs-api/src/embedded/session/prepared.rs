@@ -19,7 +19,7 @@ where
     ///
     /// Validates the query text once (same checks as `validate_query`) and
     /// returns a handle whose bindings can be set via `bind`/`bind_many`
-    /// and run via `execute`/`execute_update`/`execute_batch`.
+    /// and run via `execute`/`execute_update`/`execute_repeated`.
     /// Session variables (`$name`) still resolve from the live session
     /// snapshot at each execution.
     pub fn prepare(&self, query: &str) -> CoreResult<PreparedStatement<'_, S>> {
@@ -103,8 +103,10 @@ where
         Ok(self.execute()?.len())
     }
 
-    /// Execute the statement once per parameter batch.
-    pub fn execute_batch(
+    /// Execute the statement once per parameter set, sequentially and in
+    /// order, stopping at the first failure. Executions do not share a
+    /// batch window: this is repeated execution, not a bulk-load path.
+    pub fn execute_repeated(
         &self,
         param_batches: &[HashMap<String, Value>],
     ) -> CoreResult<Vec<QueryResult>> {

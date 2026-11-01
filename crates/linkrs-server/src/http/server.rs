@@ -42,6 +42,7 @@ pub struct HttpServer<
     /// written back here; `None` means memory-only updates.
     config_path: Option<std::path::PathBuf>,
     rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry,
+    import_jobs: super::handlers::import::ImportJobRegistry,
 }
 
 impl<
@@ -76,6 +77,7 @@ impl<
             config: Arc::new(RwLock::new(config.clone())),
             config_path,
             rebuild_tasks: super::handlers::rebuild::RebuildTaskRegistry::default(),
+            import_jobs: super::handlers::import::ImportJobRegistry::default(),
         }
     }
 
@@ -174,5 +176,10 @@ impl<
     /// Async index rebuild task registry.
     pub fn rebuild_tasks(&self) -> super::handlers::rebuild::RebuildTaskRegistry {
         self.rebuild_tasks.clone()
+    }
+
+    /// Finished import job registry.
+    pub fn import_jobs(&self) -> super::handlers::import::ImportJobRegistry {
+        self.import_jobs.clone()
     }
 }

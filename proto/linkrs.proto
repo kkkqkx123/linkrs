@@ -797,6 +797,10 @@ message CreateBatchRequest {
   // batch executor is continue-on-error best-effort with no transaction or
   // timeout support, so no such options exist to set.
   reserved 2;
+  // Payload kind: vertex, edge, or mixed. Empty defaults to mixed.
+  string batch_type = 3;
+  // Execution shard size; zero defaults to 1000.
+  uint32 batch_size = 4;
 }
 
 message CreateBatchResponse {

@@ -373,6 +373,17 @@ typedef struct linkrs_result_t {
 } linkrs_result_t;
 
 /**
+ * Prepared statement handles (opaque pointers).
+ *
+ * Created by `linkrs_prepare`, released with `linkrs_stmt_free`. The
+ * handle does not keep its session alive: free it before closing the
+ * session it was prepared on.
+ */
+typedef struct linkrs_stmt_t {
+  uint8_t _dummy;
+} linkrs_stmt_t;
+
+/**
  * SQL Trace Callback Types
  */
 typedef void (*linkrs_trace_callback)(const char *sql, void *user_data);
@@ -2158,6 +2169,359 @@ int linkrs_txn_rollback_to_savepoint(struct linkrs_txn_t *txn,
  * - After calling this function, the handle is invalid and must not be used again
  */
 void linkrs_txn_free(struct linkrs_txn_t *txn);
+
+/**
+ * Create a graph space.
+ *
+ * `vid_type` and `comment` are nullable: NULL selects the engine default vertex id type
+ * and no comment. A non-NULL `vid_type` must name an engine data type (for example
+ * `"String"` or `"BigInt"`); unknown names fail with LINKRS_MISUSE.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `name` must be a valid null-terminated UTF-8 string
+ * - `vid_type` / `comment` must be NULL or valid null-terminated UTF-8 strings
+ */
+int linkrs_create_space(struct linkrs_t *db,
+                        const char *name,
+                        int partition_num,
+                        int replica_factor,
+                        const char *vid_type,
+                        const char *comment);
+
+/**
+ * Drop a graph space. Dropping an unknown space is an error, matching DDL semantics.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `name` must be a valid null-terminated UTF-8 string
+ */
+int linkrs_drop_space(struct linkrs_t *db, const char *name);
+
+/**
+ * List all graph space names as a heap JSON array (`[]` when empty).
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_list_spaces(struct linkrs_t *db);
+
+/**
+ * Describe a graph space as heap JSON, or NULL when the space is unknown.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `name` must be a valid null-terminated UTF-8 string
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_get_space(struct linkrs_t *db, const char *name);
+
+/**
+ * Create a tag in `space`.
+ *
+ * `properties_json` is nullable (NULL means no properties); otherwise it must be a JSON
+ * array of property definitions in the engine serde shape. The engine needs at least the
+ * primary-key property, so a property-less tag fails with the storage error.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` / `name` must be valid null-terminated UTF-8 strings
+ * - `properties_json` must be NULL or a valid null-terminated UTF-8 string
+ */
+int linkrs_create_tag(struct linkrs_t *db,
+                      const char *space,
+                      const char *name,
+                      const char *properties_json);
+
+/**
+ * Drop a tag from `space`. Dropping an unknown tag is an error, matching DDL semantics.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` / `name` must be valid null-terminated UTF-8 strings
+ */
+int linkrs_drop_tag(struct linkrs_t *db, const char *space, const char *name);
+
+/**
+ * List tag names in `space` as a heap JSON array (`[]` when empty).
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` must be a valid null-terminated UTF-8 string
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_list_tags(struct linkrs_t *db, const char *space);
+
+/**
+ * Describe tag `name` in `space` as heap JSON, or NULL when unknown.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` / `name` must be valid null-terminated UTF-8 strings
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_get_tag(struct linkrs_t *db, const char *space, const char *name);
+
+/**
+ * Create an edge type in `space`. `properties_json` follows the same nullable JSON-array
+ * convention as `linkrs_create_tag`.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` / `name` must be valid null-terminated UTF-8 strings
+ * - `properties_json` must be NULL or a valid null-terminated UTF-8 string
+ */
+int linkrs_create_edge_type(struct linkrs_t *db,
+                            const char *space,
+                            const char *name,
+                            const char *properties_json);
+
+/**
+ * Drop an edge type from `space`. Dropping an unknown edge type is an error.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` / `name` must be valid null-terminated UTF-8 strings
+ */
+int linkrs_drop_edge_type(struct linkrs_t *db, const char *space, const char *name);
+
+/**
+ * List edge type names in `space` as a heap JSON array (`[]` when empty).
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` must be a valid null-terminated UTF-8 string
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_list_edge_types(struct linkrs_t *db, const char *space);
+
+/**
+ * Describe edge type `name` in `space` as heap JSON, or NULL when unknown.
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` / `name` must be valid null-terminated UTF-8 strings
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_get_edge_type(struct linkrs_t *db, const char *space, const char *name);
+
+/**
+ * Read the schema version history of a label as heap JSON, or NULL when unknown.
+ *
+ * `is_edge` selects edge types (non-zero) over vertex tags (zero).
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` / `label` must be valid null-terminated UTF-8 strings
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_label_version_history(struct linkrs_t *db,
+                                   const char *space,
+                                   const char *label,
+                                   int is_edge);
+
+/**
+ * List schema versions applied to a label as a heap JSON array.
+ *
+ * `is_edge` selects edge types (non-zero) over vertex tags (zero).
+ *
+ * # Safety
+ * - `db` must be a valid database handle
+ * - `space` / `label` must be valid null-terminated UTF-8 strings
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_applied_versions(struct linkrs_t *db,
+                              const char *space,
+                              const char *label,
+                              int is_edge);
+
+/**
+ * Query the number of `@name` parameters in the prepared statement.
+ *
+ * # Safety
+ * - `stmt` must be a valid statement handle created by `linkrs_prepare`
+ * - `out_count` must be a valid pointer to store the result
+ */
+int linkrs_stmt_param_count(struct linkrs_stmt_t *stmt, int *out_count);
+
+/**
+ * Query one parameter name by position (prepare-text order).
+ *
+ * # Returns
+ * - Heap parameter name (UTF-8, without the `@` sigil), NULL when `index` is out of range
+ *
+ * # Safety
+ * - `stmt` must be a valid statement handle created by `linkrs_prepare`
+ * - The returned pointer must be freed with `linkrs_free_string`
+ */
+char *linkrs_stmt_param_name(struct linkrs_stmt_t *stmt, int index);
+
+/**
+ * Execute the statement once per parameter set, in order.
+ *
+ * `batches_json` is a JSON array of objects mapping each `@name` parameter to its value
+ * in the engine `Value` serde encoding. Execution stops at the first failure;
+ * `*out_total_rows` accumulates the rows returned by the successful passes.
+ *
+ * # Safety
+ * - `stmt` must be a valid statement handle created by `linkrs_prepare`
+ * - `batches_json` must be a valid null-terminated UTF-8 string
+ * - `out_total_rows` must be a valid pointer to store the result
+ * - The associated session must still be valid
+ */
+int linkrs_stmt_execute_repeated(struct linkrs_stmt_t *stmt,
+                                 const char *batches_json,
+                                 uint64_t *out_total_rows);
+
+/**
+ * Executing a parameterized query in a transaction.
+ *
+ * Positional binding mirrors `linkrs_execute_params`: `params[i]` binds to the `@param_{i}`
+ * query parameter.
+ *
+ * # Safety
+ * - `txn` must be a valid transaction handle created by `linkrs_txn_begin`
+ * - `query` must be a valid pointer to a null-terminated UTF-8 string
+ * - `result` must be a valid pointer to store the result handle
+ * - If `params` is not NULL, it must point to at least `param_count` valid elements
+ * - The transaction must not have been committed or rolled back
+ * - The caller is responsible for freeing the result using `linkrs_result_free` when done
+ */
+int linkrs_txn_execute_params(struct linkrs_txn_t *txn,
+                              const char *query,
+                              const struct linkrs_value_t *params,
+                              uintptr_t param_count,
+                              struct linkrs_result_t **result);
+
+/**
+ * Test whether a cell holds an explicit NULL.
+ *
+ * # Returns
+ * - 1 when the cell is NULL, 0 when it holds a value, -1 on error
+ *
+ * # Safety
+ * - `result` must be a valid result handle
+ * - `row` must satisfy 0 <= row < row count
+ * - `col` must satisfy 0 <= col < column count
+ */
+int linkrs_cell_is_null(struct linkrs_result_t *result, int row, int col);
+
+/**
+ * Write an already-executed result to a file.
+ *
+ * Unlike `linkrs_export_to_file`, which re-executes a query, this entry point exports a
+ * live result handle. `format`: 0 = CSV, 1 = JSONL.
+ *
+ * # Safety
+ * - `session` and `result` must be valid handles from the same execution path
+ * - `path` must be a valid pointer to a null-terminated UTF-8 string
+ * - `out_rows` must be a valid pointer to store the result
+ */
+int linkrs_export_result_to_file(struct linkrs_session_t *session,
+                                 struct linkrs_result_t *result,
+                                 const char *path,
+                                 int format,
+                                 uint64_t *out_rows);
+
+/**
+ * Set whether closing the database writes one final checkpoint.
+ *
+ * # Safety
+ * - `config` must be a valid configuration handle
+ */
+int linkrs_config_set_checkpoint_on_close(struct linkrs_config_t *config, int enable);
+
+/**
+ * Create a vector index over `(tag, field)`.
+ *
+ * `distance` names the metric (`cosine`, `euclid`, `dot`, `manhattan`, case-insensitive).
+ * Without the `vector` feature, or without a configured vector backend, the call fails
+ * with LINKRS_NOT_IMPLEMENTED or the embedded error.
+ *
+ * # Safety
+ * - `session` must be a valid session handle with a space selected
+ * - `tag` / `field` / `distance` must be valid null-terminated UTF-8 strings
+ * - `out_collection` must be NULL or a valid out-pointer freed with `linkrs_free_string`
+ */
+int linkrs_vector_create_index(struct linkrs_session_t *session,
+                               const char *tag,
+                               const char *field,
+                               uint64_t vector_size,
+                               const char *distance,
+                               char **out_collection);
+
+/**
+ * Drop the vector index over `(tag, field)`.
+ *
+ * # Safety
+ * - `session` must be a valid session handle with a space selected
+ * - `tag` / `field` must be valid null-terminated UTF-8 strings
+ */
+int linkrs_vector_drop_index(struct linkrs_session_t *session,
+                             const char *tag,
+                             const char *field);
+
+/**
+ * Search the vector index over `(tag, field)`.
+ *
+ * `vector_json` is a JSON array of floats; `threshold` below zero disables the similarity
+ * cutoff. `*out_json` receives a heap JSON array of `{"doc_id","score","vector","payload"}`.
+ *
+ * # Safety
+ * - `session` must be a valid session handle with a space selected
+ * - `tag` / `field` / `vector_json` must be valid null-terminated UTF-8 strings
+ * - `out_json` must be a valid out-pointer; the result must be freed with `linkrs_free_string`
+ */
+int linkrs_vector_search(struct linkrs_session_t *session,
+                         const char *tag,
+                         const char *field,
+                         const char *vector_json,
+                         uint64_t limit,
+                         float threshold,
+                         char **out_json);
+
+/**
+ * Search the fulltext index over `(tag, field)` with a plain query string.
+ *
+ * `*out_json` receives a heap JSON array of
+ * `{"doc_id","score","highlights","matched_fields"}`.
+ *
+ * # Safety
+ * - `session` must be a valid session handle with a space selected
+ * - `tag` / `field` / `query` must be valid null-terminated UTF-8 strings
+ * - `out_json` must be a valid out-pointer; the result must be freed with `linkrs_free_string`
+ */
+int linkrs_fulltext_search(struct linkrs_session_t *session,
+                           const char *tag,
+                           const char *field,
+                           const char *query,
+                           uint64_t limit,
+                           char **out_json);
+
+/**
+ * Fused hybrid fulltext + vector search over `(tag, field)`.
+ *
+ * `strategy` is `rrf` or `weighted` (blend controlled by `alpha`); `yield_fields_json` is a
+ * JSON array of field names; `vector_json` is a JSON array of floats. Needs both fulltext
+ * and vector support compiled in and configured.
+ *
+ * # Safety
+ * - `session` must be a valid session handle with a space selected
+ * - all string arguments must be valid null-terminated UTF-8 strings
+ * - `out_json` must be a valid out-pointer; the result must be freed with `linkrs_free_string`
+ */
+int linkrs_hybrid_search(struct linkrs_session_t *session,
+                         const char *tag,
+                         const char *field,
+                         const char *strategy,
+                         float alpha,
+                         uint64_t per_branch_limit,
+                         uint64_t fused_limit,
+                         const char *yield_fields_json,
+                         const char *query_text,
+                         const char *vector_json,
+                         char **out_json);
 
 #ifdef __cplusplus
 }  // extern "C"

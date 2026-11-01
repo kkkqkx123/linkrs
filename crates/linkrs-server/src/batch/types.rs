@@ -11,7 +11,10 @@ pub use linkrs_wire::batch::{
 };
 
 /// Batch task information (for internal use)
-#[derive(Debug, Clone)]
+///
+/// Serializable so the manager can snapshot tasks to disk and reload them
+/// after a restart without losing buffered items or results.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BatchTask {
     /// Task ID
     pub id: BatchId,

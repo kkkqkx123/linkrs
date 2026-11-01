@@ -193,7 +193,7 @@ fn prepared_statement_example() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
 
-    let results = stmt.execute_batch(&batches)?;
+    let results = stmt.execute_repeated(&batches)?;
     println!("批量执行完成，共 {} 个结果", results.len());
 
     Ok(())
