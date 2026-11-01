@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(stats.get_value(MetricType::VectorUpsertOps), Some(5));
 
         // New activity is picked up incrementally.
-        engine.delete("col", "0").unwrap();
+        engine.delete("col", &simvec::PointId::from("0")).unwrap();
         sampler.sample_once();
         assert_eq!(stats.get_value(MetricType::VectorDeleteOps), Some(1));
     }

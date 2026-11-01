@@ -17,7 +17,11 @@ pub fn parse_set(arg: &str) -> Result<MetaCommand, String> {
     } else {
         let name = set_parts[0].to_string();
         let value = set_parts.get(1).map(|s| s.to_string());
-        Ok(MetaCommand::Set { name, value, remote })
+        Ok(MetaCommand::Set {
+            name,
+            value,
+            remote,
+        })
     }
 }
 

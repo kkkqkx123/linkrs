@@ -15,7 +15,7 @@ use linkrs_sync::{
     VectorBackend, VectorChangeContext, VectorChangeType, VectorPointData, VectorSyncCoordinator,
 };
 
-use simvec::{DistanceMetric, LocalVectorEngine, SearchQuery, TxnOp, VectorPoint};
+use simvec::{DistanceMetric, LocalVectorEngine, PointId, SearchQuery, TxnOp, VectorPoint};
 
 fn make_engine(root: &Path) -> Arc<LocalVectorEngine> {
     Arc::new(LocalVectorEngine::open(root).unwrap())
@@ -104,7 +104,7 @@ async fn test_batch_delivery_applies_upserts_and_deletes() {
         .unwrap();
     assert_eq!(engine.count("space_vec_1").unwrap(), 2);
     let got = engine
-        .get("space_vec_1", "v1_user_embedding")
+        .get("space_vec_1", &PointId::from("v1_user_embedding"))
         .unwrap()
         .unwrap();
     assert_eq!(got.vector, vec![1.0, 0.0, 0.0, 0.0]);
@@ -137,7 +137,7 @@ async fn test_batch_delivery_applies_upserts_and_deletes() {
         .unwrap();
     assert_eq!(engine.count("space_vec_1").unwrap(), 1);
     assert!(engine
-        .get("space_vec_1", "v1_user_embedding")
+        .get("space_vec_1", &PointId::from("v1_user_embedding"))
         .unwrap()
         .is_none());
 }
@@ -190,7 +190,10 @@ async fn test_batch_delivery_injects_group_id_payload() {
         .unwrap();
 
     assert_eq!(engine.count("space_vec_2").unwrap(), 1);
-    let got = engine.get("space_vec_2", "10_item_vec").unwrap().unwrap();
+    let got = engine
+        .get("space_vec_2", &PointId::from("10_item_vec"))
+        .unwrap()
+        .unwrap();
     assert_eq!(got.vector, vec![1.0, 0.0, 0.0]);
     assert_eq!(
         got.payload
@@ -251,7 +254,7 @@ async fn test_crash_recovery_replays_delivered_changes() {
     let recovered = make_engine(root.as_path());
     assert_eq!(recovered.count("space_vec_6").unwrap(), 3);
     let got = recovered
-        .get("space_vec_6", "v2_item_vec")
+        .get("space_vec_6", &PointId::from("v2_item_vec"))
         .unwrap()
         .expect("recovered point");
     assert_eq!(got.vector, vec![0.0, 1.0, 0.0, 0.0]);
@@ -320,11 +323,11 @@ async fn test_delete_then_compaction_keeps_search_consistent() {
 
     assert_eq!(engine.count("space_vec_8").unwrap(), 3);
     assert!(engine
-        .get("space_vec_8", "v1_user_embedding")
+        .get("space_vec_8", &PointId::from("v1_user_embedding"))
         .unwrap()
         .is_none());
     assert!(engine
-        .get("space_vec_8", "v3_user_embedding")
+        .get("space_vec_8", &PointId::from("v3_user_embedding"))
         .unwrap()
         .is_none());
 
@@ -351,7 +354,7 @@ async fn test_delete_then_compaction_keeps_search_consistent() {
     let recovered = make_engine(root.as_path());
     assert_eq!(recovered.count("space_vec_8").unwrap(), 3);
     assert!(recovered
-        .get("space_vec_8", "v2_user_embedding")
+        .get("space_vec_8", &PointId::from("v2_user_embedding"))
         .unwrap()
         .is_some());
 }

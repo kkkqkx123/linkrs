@@ -166,8 +166,11 @@ impl ConditionHandler for ProtoConditionHandler {
         }
     }
 
-    fn handle_has_id(&self, ids: &[String]) -> proto::Condition {
-        let proto_ids: Vec<proto::PointId> = ids.iter().map(|id| point_id_to_proto(id)).collect();
+    fn handle_has_id(&self, ids: &[PointId]) -> proto::Condition {
+        let proto_ids: Vec<proto::PointId> = ids
+            .iter()
+            .map(|id| point_id_to_proto(&id.to_string()))
+            .collect();
         proto::Condition {
             condition_one_of: Some(proto::condition::ConditionOneOf::HasId(
                 proto::HasIdCondition { has_id: proto_ids },

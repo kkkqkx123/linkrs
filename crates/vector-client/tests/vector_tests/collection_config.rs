@@ -49,10 +49,7 @@ async fn test_create_collection_with_scalar_quantization() {
         quantile: Some(0.99),
         always_ram: Some(true),
     };
-    let qc = QuantizationConfig {
-        enabled: true,
-        quant_type: Some(qt),
-    };
+    let qc = QuantizationConfig { quant_type: qt };
 
     let mut config = CollectionConfig::new(128, DistanceMetric::Euclid);
     config.quantization_config = Some(qc);
@@ -68,8 +65,7 @@ async fn test_create_collection_with_scalar_quantization() {
         .expect("metadata");
     let stored = &meta.config;
     let sq = stored.quantization_config.as_ref().expect("quant config");
-    assert!(sq.enabled);
-    let qt = sq.quant_type.as_ref().expect("quant type");
+    let qt = &sq.quant_type;
     match qt {
         QuantizationType::Scalar {
             quantile,
@@ -91,10 +87,7 @@ async fn test_create_collection_with_product_quantization() {
         compression: CompressionRatio::X8,
         always_ram: Some(false),
     };
-    let qc = QuantizationConfig {
-        enabled: true,
-        quant_type: Some(qt),
-    };
+    let qc = QuantizationConfig { quant_type: qt };
 
     let mut config = CollectionConfig::new(128, DistanceMetric::Dot);
     config.quantization_config = Some(qc);
@@ -110,7 +103,7 @@ async fn test_create_collection_with_product_quantization() {
         .expect("metadata");
     let stored = &meta.config;
     let sq = stored.quantization_config.as_ref().expect("quant config");
-    let qt = sq.quant_type.as_ref().expect("quant type");
+    let qt = &sq.quant_type;
     match qt {
         QuantizationType::Product {
             compression,
@@ -129,10 +122,7 @@ async fn test_create_collection_with_binary_quantization() {
     let ctx = VectorTestContext::with_dimension(128);
 
     let qt = QuantizationType::Binary { always_ram: None };
-    let qc = QuantizationConfig {
-        enabled: true,
-        quant_type: Some(qt),
-    };
+    let qc = QuantizationConfig { quant_type: qt };
 
     let mut config = CollectionConfig::new(128, DistanceMetric::Cosine);
     config.quantization_config = Some(qc);
@@ -148,7 +138,7 @@ async fn test_create_collection_with_binary_quantization() {
         .expect("metadata");
     let stored = &meta.config;
     let sq = stored.quantization_config.as_ref().expect("quant config");
-    let qt = sq.quant_type.as_ref().expect("quant type");
+    let qt = &sq.quant_type;
     match qt {
         QuantizationType::Binary { always_ram } => {
             assert_eq!(*always_ram, None);
@@ -169,10 +159,7 @@ async fn test_create_collection_full_config() {
         quantile: None,
         always_ram: Some(true),
     };
-    let qc = QuantizationConfig {
-        enabled: true,
-        quant_type: Some(qt),
-    };
+    let qc = QuantizationConfig { quant_type: qt };
 
     let mut config = CollectionConfig::new(256, DistanceMetric::Euclid);
     config.hnsw_config = Some(hnsw);

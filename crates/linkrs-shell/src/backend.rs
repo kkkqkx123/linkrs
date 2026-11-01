@@ -136,6 +136,8 @@ impl EmbeddedOps for EmbeddedBackend {
                         default_value: prop.default.map(|value| format!("{}", value)),
                     })
                     .collect(),
+                src_tag: Some(edge_type.src_tag_name),
+                dst_tag: Some(edge_type.dst_tag_name),
             })
             .collect())
     }

@@ -115,7 +115,7 @@ pub trait ConditionHandler {
     fn handle_range(&self, field: &str, range: &RangeCondition) -> Self::Condition;
     fn handle_is_empty(&self, field: &str) -> Self::Condition;
     fn handle_is_null(&self, field: &str) -> Self::Condition;
-    fn handle_has_id(&self, ids: &[String]) -> Self::Condition;
+    fn handle_has_id(&self, ids: &[PointId]) -> Self::Condition;
     fn handle_geo_radius(&self, field: &str, radius: &GeoRadius) -> Self::Condition;
     fn handle_geo_bounding_box(&self, field: &str, bbox: &GeoBoundingBox) -> Self::Condition;
     fn handle_values_count(&self, field: &str, count: &ValuesCountCondition) -> Self::Condition;
@@ -341,7 +341,7 @@ mod tests {
             }
         }
 
-        fn handle_has_id(&self, ids: &[String]) -> TestCondition {
+        fn handle_has_id(&self, ids: &[PointId]) -> TestCondition {
             TestCondition {
                 field: "_id".into(),
                 _cond_type: format!("has_id:{}", ids.len()),

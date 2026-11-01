@@ -349,6 +349,8 @@ fn test_schema_cache_with_data_integration() {
                 nullable: true,
                 default_value: None,
             }],
+            src_tag: None,
+            dst_tag: None,
         },
         EdgeTypeInfo {
             name: "WORKS_AT".to_string(),
@@ -358,6 +360,8 @@ fn test_schema_cache_with_data_integration() {
                 nullable: true,
                 default_value: None,
             }],
+            src_tag: None,
+            dst_tag: None,
         },
     ];
 

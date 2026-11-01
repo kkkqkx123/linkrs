@@ -85,10 +85,10 @@ impl ConditionHandler for JsonConditionHandler {
         json!({ "is_null": { "key": field } })
     }
 
-    fn handle_has_id(&self, ids: &[String]) -> Value {
+    fn handle_has_id(&self, ids: &[PointId]) -> Value {
         let point_ids: Vec<Value> = ids
             .iter()
-            .map(|id| crate::engine::common::utils::point_id_to_json(id))
+            .map(|id| crate::engine::common::utils::point_id_to_json(&id.to_string()))
             .collect();
         json!({ "has_id": point_ids })
     }

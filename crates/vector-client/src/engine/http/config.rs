@@ -69,11 +69,7 @@ fn build_vectors_json(
     }
 
     if let Some(ref quant) = quantization_config {
-        if quant.enabled {
-            if let Some(ref qt) = quant.quant_type {
-                vectors["quantization_config"] = build_quantization_json(qt);
-            }
-        }
+        vectors["quantization_config"] = build_quantization_json(&quant.quant_type);
     }
 
     Ok(vectors)

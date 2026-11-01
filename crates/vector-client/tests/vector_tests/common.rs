@@ -547,7 +547,7 @@ fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 
 fn matches_condition(condition: &FilterCondition, point: &VectorPoint) -> bool {
     if let ConditionType::HasId { ids } = &condition.condition {
-        return ids.contains(&point.id.to_string());
+        return ids.contains(&point.id);
     }
     if let ConditionType::IsEmpty = &condition.condition {
         return match &point.payload {

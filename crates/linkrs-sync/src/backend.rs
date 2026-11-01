@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use simvec::{
     CollectionConfig, HealthStatus, IndexMetadata, LocalVectorEngine, Payload, PayloadSchemaType,
-    SearchQuery, SearchResult, VectorFilter, VectorPoint,
+    PointId, SearchQuery, SearchResult, VectorFilter, VectorPoint,
 };
 
 #[cfg(feature = "vector-qdrant")]
@@ -281,13 +281,6 @@ impl VectorEngineHandle for LocalEngineHandle {
                 .index_type
                 .unwrap_or(simvec::types::IndexType::HNSW),
         );
-        let drop_quantization = effective
-            .quantization_config
-            .as_ref()
-            .is_some_and(|quantization| !quantization.enabled);
-        if drop_quantization {
-            effective.quantization_config = None;
-        }
         effective
     }
 
@@ -367,10 +360,8 @@ impl VectorEngineHandle for LocalEngineHandle {
         collection: &str,
         point_id: &str,
     ) -> VectorCoordinatorResult<Option<VectorPoint>> {
-        Ok(self
-            .0
-            .get(collection, point_id)
-            .map_err(VectorError::from)?)
+        let pid = PointId::from(point_id);
+        Ok(self.0.get(collection, &pid).map_err(VectorError::from)?)
     }
 
     async fn count(&self, collection: &str) -> VectorCoordinatorResult<u64> {
@@ -396,9 +387,8 @@ impl VectorEngineHandle for LocalEngineHandle {
     }
 
     async fn delete(&self, collection: &str, point_id: &str) -> VectorCoordinatorResult<()> {
-        self.0
-            .delete(collection, point_id)
-            .map_err(VectorError::from)?;
+        let pid = PointId::from(point_id);
+        self.0.delete(collection, &pid).map_err(VectorError::from)?;
         Ok(())
     }
 
@@ -407,7 +397,7 @@ impl VectorEngineHandle for LocalEngineHandle {
         collection: &str,
         point_ids: &[&str],
     ) -> VectorCoordinatorResult<()> {
-        let ids: Vec<String> = point_ids.iter().map(|s| s.to_string()).collect();
+        let ids: Vec<PointId> = point_ids.iter().map(|s| PointId::from(*s)).collect();
         self.0
             .delete_batch(collection, &ids)
             .map_err(VectorError::from)?;
@@ -432,8 +422,9 @@ impl VectorEngineHandle for LocalEngineHandle {
         payload: Payload,
     ) -> VectorCoordinatorResult<()> {
         for id in &point_ids {
+            let pid = PointId::from(*id);
             self.0
-                .set_payload(collection, id, payload.clone())
+                .set_payload(collection, &pid, payload.clone())
                 .map_err(VectorError::from)?;
         }
         Ok(())
@@ -446,8 +437,9 @@ impl VectorEngineHandle for LocalEngineHandle {
         fields: Payload,
     ) -> VectorCoordinatorResult<()> {
         for id in &point_ids {
+            let pid = PointId::from(*id);
             self.0
-                .set_payload_fields(collection, id, fields.clone())
+                .set_payload_fields(collection, &pid, fields.clone())
                 .map_err(VectorError::from)?;
         }
         Ok(())
@@ -461,8 +453,9 @@ impl VectorEngineHandle for LocalEngineHandle {
     ) -> VectorCoordinatorResult<()> {
         let owned_keys: Vec<String> = keys.iter().map(|s| s.to_string()).collect();
         for id in &point_ids {
+            let pid = PointId::from(*id);
             self.0
-                .delete_payload(collection, id, owned_keys.clone())
+                .delete_payload(collection, &pid, owned_keys.clone())
                 .map_err(VectorError::from)?;
         }
         Ok(())
@@ -476,10 +469,18 @@ impl VectorEngineHandle for LocalEngineHandle {
         with_payload: Option<bool>,
         with_vector: Option<bool>,
     ) -> VectorCoordinatorResult<(Vec<VectorPoint>, Option<String>)> {
-        Ok(self
+        let offset = offset.map(PointId::from);
+        let (points, next) = self
             .0
-            .scroll(collection, limit, offset, with_payload, with_vector)
-            .map_err(VectorError::from)?)
+            .scroll(
+                collection,
+                limit,
+                offset.as_ref(),
+                with_payload,
+                with_vector,
+            )
+            .map_err(VectorError::from)?;
+        Ok((points, next.map(|id| id.to_string())))
     }
 
     async fn delete_payload_index(
@@ -539,7 +540,7 @@ impl VectorEngineHandle for LocalEngineHandle {
     ) -> VectorCoordinatorResult<
         Pin<Box<dyn Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
     > {
-        let mut offset: Option<String> = None;
+        let mut offset: Option<PointId> = None;
         let mut all_points: Vec<VectorPoint> = Vec::new();
         loop {
             let (points, next) = self
@@ -547,7 +548,7 @@ impl VectorEngineHandle for LocalEngineHandle {
                 .scroll(
                     collection,
                     batch_size,
-                    offset.as_deref(),
+                    offset.as_ref(),
                     with_payload,
                     with_vector,
                 )

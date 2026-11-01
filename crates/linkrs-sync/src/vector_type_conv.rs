@@ -113,7 +113,9 @@ pub fn condition_to_ix(v: tx::ConditionType) -> ix::ConditionType {
         tx::ConditionType::Range(r) => ix::ConditionType::Range(range_to_ix(r)),
         tx::ConditionType::IsEmpty => ix::ConditionType::IsEmpty,
         tx::ConditionType::IsNull => ix::ConditionType::IsNull,
-        tx::ConditionType::HasId { ids } => ix::ConditionType::HasId { ids },
+        tx::ConditionType::HasId { ids } => ix::ConditionType::HasId {
+            ids: ids.into_iter().map(ix::PointId::from).collect(),
+        },
         tx::ConditionType::Nested { filter } => ix::ConditionType::Nested {
             filter: Box::new(vector_filter_to_ix(*filter)),
         },
@@ -133,7 +135,9 @@ pub fn condition_to_tx(v: ix::ConditionType) -> tx::ConditionType {
         ix::ConditionType::Range(r) => tx::ConditionType::Range(range_to_tx(r)),
         ix::ConditionType::IsEmpty => tx::ConditionType::IsEmpty,
         ix::ConditionType::IsNull => tx::ConditionType::IsNull,
-        ix::ConditionType::HasId { ids } => tx::ConditionType::HasId { ids },
+        ix::ConditionType::HasId { ids } => tx::ConditionType::HasId {
+            ids: ids.into_iter().map(|id| id.to_string()).collect(),
+        },
         ix::ConditionType::Nested { filter } => tx::ConditionType::Nested {
             filter: Box::new(vector_filter_to_tx(*filter)),
         },

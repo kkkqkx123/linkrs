@@ -669,7 +669,7 @@ impl VectorSyncCoordinator {
                         VectorChangeType::Delete => {
                             ops.push(simvec::engine::TxnOp::Delete {
                                 collection,
-                                point_id,
+                                point_id: PointId::from(point_id),
                             });
                         }
                     }

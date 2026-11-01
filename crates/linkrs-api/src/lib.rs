@@ -212,7 +212,6 @@ mod vector_config_tests {
             ..LocalVectorConfig::default()
         };
         let qc = local_quantization_config(&local).unwrap();
-        assert!(qc.enabled);
         assert_eq!(qc.quantile_or_default(), 0.95);
         assert!(!qc.always_ram());
 

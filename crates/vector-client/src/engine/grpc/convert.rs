@@ -182,52 +182,49 @@ pub fn collection_config_to_create(
             payload_m: hnsw.payload_m.map(|v| v as u64),
         });
 
-    let quantization_config: Option<proto::QuantizationConfig> =
-        cfg.quantization_config.as_ref().and_then(|qc| {
-            if !qc.enabled {
-                return None;
-            }
-            qc.quant_type.as_ref().map(|qt| match qt {
-                QuantizationType::Scalar {
-                    quantile,
-                    always_ram,
-                } => proto::QuantizationConfig {
-                    quantization: Some(proto::quantization_config::Quantization::Scalar(
-                        proto::ScalarQuantization {
-                            r#type: proto::QuantizationType::Int8 as i32,
-                            quantile: *quantile,
+    let quantization_config: Option<proto::QuantizationConfig> = cfg
+        .quantization_config
+        .as_ref()
+        .map(|qc| match &qc.quant_type {
+            QuantizationType::Scalar {
+                quantile,
+                always_ram,
+            } => proto::QuantizationConfig {
+                quantization: Some(proto::quantization_config::Quantization::Scalar(
+                    proto::ScalarQuantization {
+                        r#type: proto::QuantizationType::Int8 as i32,
+                        quantile: *quantile,
+                        always_ram: *always_ram,
+                    },
+                )),
+            },
+            QuantizationType::Product {
+                compression,
+                always_ram,
+            } => {
+                let ratio = match compression {
+                    CompressionRatio::X4 => proto::CompressionRatio::X4,
+                    CompressionRatio::X8 => proto::CompressionRatio::X8,
+                    CompressionRatio::X16 => proto::CompressionRatio::X16,
+                    CompressionRatio::X32 => proto::CompressionRatio::X32,
+                    CompressionRatio::X64 => proto::CompressionRatio::X64,
+                };
+                proto::QuantizationConfig {
+                    quantization: Some(proto::quantization_config::Quantization::Product(
+                        proto::ProductQuantization {
+                            compression: ratio as i32,
                             always_ram: *always_ram,
                         },
                     )),
-                },
-                QuantizationType::Product {
-                    compression,
-                    always_ram,
-                } => {
-                    let ratio = match compression {
-                        CompressionRatio::X4 => proto::CompressionRatio::X4,
-                        CompressionRatio::X8 => proto::CompressionRatio::X8,
-                        CompressionRatio::X16 => proto::CompressionRatio::X16,
-                        CompressionRatio::X32 => proto::CompressionRatio::X32,
-                        CompressionRatio::X64 => proto::CompressionRatio::X64,
-                    };
-                    proto::QuantizationConfig {
-                        quantization: Some(proto::quantization_config::Quantization::Product(
-                            proto::ProductQuantization {
-                                compression: ratio as i32,
-                                always_ram: *always_ram,
-                            },
-                        )),
-                    }
                 }
-                QuantizationType::Binary { always_ram } => proto::QuantizationConfig {
-                    quantization: Some(proto::quantization_config::Quantization::Binary(
-                        proto::BinaryQuantization {
-                            always_ram: *always_ram,
-                        },
-                    )),
-                },
-            })
+            }
+            QuantizationType::Binary { always_ram } => proto::QuantizationConfig {
+                quantization: Some(proto::quantization_config::Quantization::Binary(
+                    proto::BinaryQuantization {
+                        always_ram: *always_ram,
+                    },
+                )),
+            },
         });
 
     let vectors_config = proto::VectorsConfig {
@@ -439,31 +436,30 @@ fn hnsw_config_from_proto(diff: Option<&proto::HnswConfigDiff>) -> Option<HnswCo
 fn quantization_config_from_proto(
     config: Option<&proto::QuantizationConfig>,
 ) -> Option<QuantizationConfig> {
-    config.map(|qc| QuantizationConfig {
-        enabled: true,
-        quant_type: qc.quantization.as_ref().map(|q| match q {
-            proto::quantization_config::Quantization::Scalar(scalar) => QuantizationType::Scalar {
-                quantile: scalar.quantile,
-                always_ram: scalar.always_ram,
-            },
-            proto::quantization_config::Quantization::Product(product) => {
-                let compression = match product.compression() {
-                    proto::CompressionRatio::X8 => CompressionRatio::X8,
-                    proto::CompressionRatio::X16 => CompressionRatio::X16,
-                    proto::CompressionRatio::X32 => CompressionRatio::X32,
-                    proto::CompressionRatio::X64 => CompressionRatio::X64,
-                    _ => CompressionRatio::X4,
-                };
-                QuantizationType::Product {
-                    compression,
-                    always_ram: product.always_ram,
-                }
+    let quantization = config?.quantization.as_ref()?;
+    let quant_type = match quantization {
+        proto::quantization_config::Quantization::Scalar(scalar) => QuantizationType::Scalar {
+            quantile: scalar.quantile,
+            always_ram: scalar.always_ram,
+        },
+        proto::quantization_config::Quantization::Product(product) => {
+            let compression = match product.compression() {
+                proto::CompressionRatio::X8 => CompressionRatio::X8,
+                proto::CompressionRatio::X16 => CompressionRatio::X16,
+                proto::CompressionRatio::X32 => CompressionRatio::X32,
+                proto::CompressionRatio::X64 => CompressionRatio::X64,
+                _ => CompressionRatio::X4,
+            };
+            QuantizationType::Product {
+                compression,
+                always_ram: product.always_ram,
             }
-            proto::quantization_config::Quantization::Binary(binary) => QuantizationType::Binary {
-                always_ram: binary.always_ram,
-            },
-        }),
-    })
+        }
+        proto::quantization_config::Quantization::Binary(binary) => QuantizationType::Binary {
+            always_ram: binary.always_ram,
+        },
+    };
+    Some(QuantizationConfig { quant_type })
 }
 
 /// Rebuild collection configuration from the server-reported info.

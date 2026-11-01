@@ -408,10 +408,14 @@ mod tests {
             EdgeTypeInfo {
                 name: "FRIEND".to_string(),
                 fields: vec![],
+                src_tag: None,
+                dst_tag: None,
             },
             EdgeTypeInfo {
                 name: "WORKS_AT".to_string(),
                 fields: vec![],
+                src_tag: None,
+                dst_tag: None,
             },
         ];
         let names = cache.edge_names();

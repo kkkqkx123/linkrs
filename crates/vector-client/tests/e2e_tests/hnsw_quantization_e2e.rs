@@ -50,10 +50,7 @@ async fn quantization_supported(client: &vector_client::api::VectorClient) -> bo
         quantile: Some(0.99),
         always_ram: Some(true),
     };
-    let qc = QuantizationConfig {
-        enabled: true,
-        quant_type: Some(qt),
-    };
+    let qc = QuantizationConfig { quant_type: qt };
     let mut config = CollectionConfig::new(4, DistanceMetric::Euclid);
     config.quantization_config = Some(qc);
     let result = client.engine().create_collection(&collection, config).await;
@@ -78,10 +75,7 @@ async fn test_e2e_scalar_quantization_roundtrip() {
         quantile: Some(0.99),
         always_ram: Some(true),
     };
-    let qc = QuantizationConfig {
-        enabled: true,
-        quant_type: Some(qt),
-    };
+    let qc = QuantizationConfig { quant_type: qt };
 
     let mut config = CollectionConfig::new(4, DistanceMetric::Euclid);
     config.quantization_config = Some(qc);
@@ -127,10 +121,7 @@ async fn test_e2e_product_quantization_roundtrip() {
         compression: CompressionRatio::X8,
         always_ram: Some(false),
     };
-    let qc = QuantizationConfig {
-        enabled: true,
-        quant_type: Some(qt),
-    };
+    let qc = QuantizationConfig { quant_type: qt };
 
     let mut config = CollectionConfig::new(4, DistanceMetric::Dot);
     config.quantization_config = Some(qc);
@@ -169,10 +160,7 @@ async fn test_e2e_binary_quantization_roundtrip() {
     ensure_deleted(&client, &collection).await;
 
     let qt = QuantizationType::Binary { always_ram: None };
-    let qc = QuantizationConfig {
-        enabled: true,
-        quant_type: Some(qt),
-    };
+    let qc = QuantizationConfig { quant_type: qt };
 
     let mut config = CollectionConfig::new(4, DistanceMetric::Cosine);
     config.quantization_config = Some(qc);

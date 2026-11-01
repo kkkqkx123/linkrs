@@ -298,7 +298,7 @@ impl QdrantEngine {
                         quantization_config: v
                             .quantization_config
                             .as_ref()
-                            .map(parse_quantization_json),
+                            .and_then(parse_quantization_json),
                         ..Default::default()
                     })
             }))
@@ -306,7 +306,7 @@ impl QdrantEngine {
 }
 
 /// Rebuild a shared quantization config from its REST representation.
-fn parse_quantization_json(qc: &Value) -> QuantizationConfig {
+fn parse_quantization_json(qc: &Value) -> Option<QuantizationConfig> {
     let quant_type = qc
         .get("scalar")
         .map(|scalar| QuantizationType::Scalar {
@@ -341,10 +341,7 @@ fn parse_quantization_json(qc: &Value) -> QuantizationConfig {
             })
         });
 
-    QuantizationConfig {
-        enabled: true,
-        quant_type,
-    }
+    quant_type.map(|quant_type| QuantizationConfig { quant_type })
 }
 
 impl QdrantEngine {
