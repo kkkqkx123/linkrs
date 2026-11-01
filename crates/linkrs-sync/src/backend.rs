@@ -250,37 +250,26 @@ impl VectorEngineHandle for LocalEngineHandle {
     fn effective_collection_config(&self, config: &CollectionConfig) -> CollectionConfig {
         let engine = &self.0;
         let mut effective = config.clone();
-        match effective
-            .index_type
-            .unwrap_or(simvec::types::IndexType::HNSW)
-        {
-            simvec::types::IndexType::HNSW => {
-                if effective.hnsw_config.is_none() {
-                    effective.hnsw_config = engine
-                        .default_hnsw_config()
-                        .or(Some(simvec::types::HnswConfig::default()));
+        match &mut effective.index {
+            simvec::types::IndexConfig::Hnsw(cfg) => {
+                if *cfg == simvec::types::HnswConfig::default() {
+                    if let Some(default) = engine.default_hnsw_config() {
+                        *cfg = default;
+                    }
                 }
-                effective.ivf_config = None;
             }
-            simvec::types::IndexType::IVF => {
-                if effective.ivf_config.is_none() {
-                    effective.ivf_config = engine.default_ivf_config();
+            simvec::types::IndexConfig::Ivf(opt) => {
+                if opt.is_none() {
+                    if let Some(default) = engine.default_ivf_config() {
+                        *opt = Some(default);
+                    }
                 }
-                effective.hnsw_config = None;
             }
-            simvec::types::IndexType::FLAT => {
-                effective.hnsw_config = None;
-                effective.ivf_config = None;
-            }
+            simvec::types::IndexConfig::Flat => {}
         }
         if effective.quantization_config.is_none() {
             effective.quantization_config = engine.default_quantization_config();
         }
-        effective.index_type = Some(
-            effective
-                .index_type
-                .unwrap_or(simvec::types::IndexType::HNSW),
-        );
         effective
     }
 

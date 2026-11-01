@@ -1,6 +1,6 @@
 use crate::common::{create_e2e_client, ensure_deleted, test_collection};
 use vector_client::types::{
-    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, PayloadSchemaType,
+    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, IndexConfig, PayloadSchemaType,
     QuantizationConfig, QuantizationType, VectorPoint,
 };
 
@@ -18,7 +18,7 @@ async fn test_e2e_hnsw_config_roundtrip() {
         .with_on_disk(false);
 
     let mut config = CollectionConfig::new(4, DistanceMetric::Cosine);
-    config.hnsw_config = Some(hnsw);
+    config.index = IndexConfig::Hnsw(hnsw);
     config.on_disk_payload = Some(false);
     config.shard_number = Some(1);
 

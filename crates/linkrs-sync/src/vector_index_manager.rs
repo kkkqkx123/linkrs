@@ -18,27 +18,9 @@ use crate::vector_error::{VectorCoordinatorError, VectorCoordinatorResult, Vecto
 use linkrs_core::event_dispatch::{EventFilter, EventSubscriptions, SubscriptionId};
 use linkrs_core::index_events::{IndexEvent, IndexEventCallback};
 pub use simvec::types::{DistanceMetric, PointId, SearchQuery, SearchResult, VectorPoint};
-use simvec::{
-    types::validate_distance_metric, CollectionConfig, FilterCondition, IndexMetadata,
-    PayloadSchemaType, VectorFilter,
-};
+use simvec::{CollectionConfig, FilterCondition, IndexMetadata, PayloadSchemaType, VectorFilter};
 
 use super::vector_sync::{CollectionGranularity, SearchOptions, VectorIndexLocation};
-
-/// Validate a distance metric at the index-creation entry points.
-fn validate_metric(distance: DistanceMetric) -> VectorCoordinatorResult<()> {
-    validate_distance_metric(distance)
-        .map_err(|e| VectorCoordinatorError::Vector(VectorError::ConfigError(e)))
-}
-
-fn validate_metric_for_backend(
-    backend: &VectorBackend,
-    distance: DistanceMetric,
-) -> VectorCoordinatorResult<()> {
-    validate_metric(distance)?;
-    let _ = backend;
-    Ok(())
-}
 
 /// Manages vector index metadata, lifecycle, and search operations.
 ///
@@ -236,8 +218,6 @@ impl VectorIndexManager {
         vector_size: usize,
         distance: DistanceMetric,
     ) -> VectorCoordinatorResult<String> {
-        validate_metric_for_backend(&self.backend, distance)?;
-
         let loc = VectorIndexLocation::new(space_id, tag_name, field_name);
         let collection_name = self.collection_name_for(&loc);
         let logical_index_name = format!("vec_{space_id}_{tag_name}_{field_name}");
@@ -303,28 +283,20 @@ impl VectorIndexManager {
                 let existing = &existing_meta.config;
                 if existing.vector_size != vector_size
                     || existing.distance != distance
-                    || existing.index_type != config.index_type
-                    || format!("{:?}", existing.hnsw_config) != format!("{:?}", config.hnsw_config)
+                    || existing.index != config.index
                     || existing.quantization_config != config.quantization_config
-                    || format!("{:?}", existing.ivf_config) != format!("{:?}", config.ivf_config)
                 {
                     return Err(VectorCoordinatorError::CollectionConfigConflict {
                         collection_name: collection_name.clone(),
                         existing_size: existing.vector_size,
                         existing_dist: format!(
-                            "{:?}/{:?}/{:?}/{:?}",
-                            existing.distance,
-                            existing.index_type,
-                            existing.hnsw_config,
-                            existing.quantization_config
+                            "{:?}/{:?}/{:?}",
+                            existing.distance, existing.index, existing.quantization_config
                         ),
                         requested_size: vector_size,
                         requested_dist: format!(
-                            "{:?}/{:?}/{:?}/{:?}",
-                            distance,
-                            config.index_type,
-                            config.hnsw_config,
-                            config.quantization_config
+                            "{:?}/{:?}/{:?}",
+                            distance, config.index, config.quantization_config
                         ),
                     });
                 }
@@ -356,8 +328,6 @@ impl VectorIndexManager {
         field_name: &str,
         config: CollectionConfig,
     ) -> VectorCoordinatorResult<String> {
-        validate_metric_for_backend(&self.backend, config.distance)?;
-
         // See `create_vector_index`: compare and register the effective
         // config so engine/store-applied defaults do not false-conflict.
         let config = self.backend.effective_collection_config(&config);
@@ -397,28 +367,20 @@ impl VectorIndexManager {
                 let existing = &existing_meta.config;
                 if existing.vector_size != config.vector_size
                     || existing.distance != config.distance
-                    || existing.index_type != config.index_type
-                    || format!("{:?}", existing.hnsw_config) != format!("{:?}", config.hnsw_config)
+                    || existing.index != config.index
                     || existing.quantization_config != config.quantization_config
-                    || format!("{:?}", existing.ivf_config) != format!("{:?}", config.ivf_config)
                 {
                     return Err(VectorCoordinatorError::CollectionConfigConflict {
                         collection_name: collection_name.clone(),
                         existing_size: existing.vector_size,
                         existing_dist: format!(
-                            "{:?}/{:?}/{:?}/{:?}",
-                            existing.distance,
-                            existing.index_type,
-                            existing.hnsw_config,
-                            existing.quantization_config
+                            "{:?}/{:?}/{:?}",
+                            existing.distance, existing.index, existing.quantization_config
                         ),
                         requested_size: config.vector_size,
                         requested_dist: format!(
-                            "{:?}/{:?}/{:?}/{:?}",
-                            config.distance,
-                            config.index_type,
-                            config.hnsw_config,
-                            config.quantization_config
+                            "{:?}/{:?}/{:?}",
+                            config.distance, config.index, config.quantization_config
                         ),
                     });
                 }

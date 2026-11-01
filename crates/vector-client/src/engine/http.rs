@@ -285,16 +285,18 @@ impl QdrantEngine {
                     .map(|distance| CollectionConfig {
                         vector_size: v.size.unwrap_or_default() as usize,
                         distance,
-                        index_type: Some(IndexType::HNSW),
-                        hnsw_config: v.hnsw_config.map(|h| HnswConfig {
-                            m: h.m.unwrap_or_default() as usize,
-                            ef_construct: h.ef_construct.unwrap_or_default() as usize,
-                            full_scan_threshold: h.full_scan_threshold.map(|x| x as usize),
-                            max_indexing_threads: h.max_indexing_threads.map(|x| x as usize),
-                            on_disk: h.on_disk,
-                            payload_m: h.payload_m.map(|x| x as usize),
-                            ..Default::default()
-                        }),
+                        index: v.hnsw_config.map(|h| {
+                            IndexConfig::Hnsw(HnswConfig {
+                                m: h.m.unwrap_or_default() as usize,
+                                ef_construct: h.ef_construct.unwrap_or_default() as usize,
+                                full_scan_threshold: h.full_scan_threshold.map(|x| x as usize),
+                                max_indexing_threads: h.max_indexing_threads.map(|x| x as usize),
+                                on_disk: h.on_disk,
+                                payload_m: h.payload_m.map(|x| x as usize),
+                                ..Default::default()
+                            })
+                        })
+                        .unwrap_or_default(),
                         quantization_config: v
                             .quantization_config
                             .as_ref()
@@ -445,8 +447,7 @@ impl RemoteVectorEngine for QdrantEngine {
             name,
             cfg.vector_size,
             cfg.distance,
-            cfg.index_type,
-            &cfg.hnsw_config,
+            &cfg.index,
             &cfg.quantization_config,
             cfg.on_disk_payload,
             cfg.shard_number,

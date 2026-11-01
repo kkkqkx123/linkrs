@@ -743,7 +743,7 @@ where
 pub(crate) fn grpc_collection_config(
     options: Option<super::proto::VectorIndexOptions>,
 ) -> Result<simvec::CollectionConfig, Status> {
-    use simvec::IndexType;
+    use simvec::IndexConfig;
     let opts = options.ok_or_else(|| Status::invalid_argument("index options are required"))?;
     if opts.dimension <= 0 {
         return Err(Status::invalid_argument("dimension must be greater than 0"));
@@ -811,10 +811,10 @@ pub(crate) fn grpc_collection_config(
     .map_err(Status::invalid_argument)?;
     match kind.as_str() {
         "FLAT" => {
-            config = config.with_index_type(IndexType::FLAT);
+            config.index = IndexConfig::Flat;
         }
         "IVF" => {
-            config = config.with_index_type(IndexType::IVF);
+            config.index = IndexConfig::Ivf(None);
         }
         _ => {}
     }
@@ -824,11 +824,10 @@ pub(crate) fn grpc_collection_config(
 /// Render a collection config's index tier with its proto spelling.
 #[cfg(feature = "vector")]
 pub(crate) fn grpc_index_type_name(config: &simvec::CollectionConfig) -> String {
-    use simvec::IndexType;
-    match config.index_type {
-        Some(IndexType::FLAT) => "FLAT".to_string(),
-        Some(IndexType::IVF) => "IVF".to_string(),
-        Some(IndexType::HNSW) | None => "HNSW".to_string(),
+    match &config.index {
+        simvec::IndexConfig::Flat => "FLAT".to_string(),
+        simvec::IndexConfig::Ivf(_) => "IVF".to_string(),
+        simvec::IndexConfig::Hnsw(_) => "HNSW".to_string(),
     }
 }
 

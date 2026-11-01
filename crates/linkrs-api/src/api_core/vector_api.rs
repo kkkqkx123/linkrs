@@ -7,7 +7,7 @@ use linkrs_core::SearchIndexMetadata;
 use linkrs_sync::backend::VectorBackend;
 use linkrs_sync::vector_sync::{SearchOptions, VectorIndexLocation, VectorSyncCoordinator};
 use simvec::{
-    types::{validate_distance_metric, IndexMetadata, PointId},
+    types::{IndexConfig, IndexMetadata, PointId},
     CollectionConfig, DistanceMetric, VectorPoint,
 };
 use std::sync::Arc;
@@ -21,12 +21,6 @@ pub struct ScrollQuery<'a> {
     pub offset: Option<&'a str>,
     pub with_payload: Option<bool>,
     pub with_vector: Option<bool>,
-}
-
-/// Metrics every backend accepts at index-creation time; anything else is
-/// rejected up front instead of failing deep inside one engine.
-fn validate_metric(distance: DistanceMetric) -> CoreResult<()> {
-    validate_distance_metric(distance).map_err(CoreError::VectorError)
 }
 
 /// Vector search result
@@ -154,13 +148,12 @@ impl VectorApi {
         field_name: &str,
         config: CollectionConfig,
     ) -> CoreResult<String> {
-        validate_metric(config.distance)?;
         if let Some(qc) = &config.quantization_config {
             qc.validate(config.vector_size)
                 .map_err(|e| CoreError::VectorError(e.to_string()))?;
         }
 
-        if config.quantization_config.is_some() || config.hnsw_config.is_some() {
+        if config.quantization_config.is_some() || config.index != IndexConfig::default() {
             return self
                 .coordinator
                 .create_index_with_config(space_id, tag_name, field_name, config)

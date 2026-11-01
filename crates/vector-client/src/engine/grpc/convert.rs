@@ -172,15 +172,17 @@ pub fn collection_config_to_create(
 ) -> Result<proto::CreateCollection, VectorClientError> {
     let distance = distance_to_proto(cfg.distance)?;
 
-    let hnsw_config: Option<proto::HnswConfigDiff> =
-        cfg.hnsw_config.as_ref().map(|hnsw| proto::HnswConfigDiff {
+    let hnsw_config: Option<proto::HnswConfigDiff> = match &cfg.index {
+        IndexConfig::Hnsw(hnsw) => Some(proto::HnswConfigDiff {
             m: Some(hnsw.m as u64),
             ef_construct: Some(hnsw.ef_construct as u64),
             full_scan_threshold: hnsw.full_scan_threshold.map(|v| v as u64),
             max_indexing_threads: hnsw.max_indexing_threads.map(|v| v as u64),
             on_disk: hnsw.on_disk,
             payload_m: hnsw.payload_m.map(|v| v as u64),
-        });
+        }),
+        _ => None,
+    };
 
     let quantization_config: Option<proto::QuantizationConfig> = cfg
         .quantization_config
@@ -486,12 +488,14 @@ pub fn collection_info_from_proto(
     let proto_config = info.config.as_ref();
     let params = proto_config.and_then(|c| c.params.as_ref());
     // Qdrant indexes with HNSW; reflect that instead of reporting "unknown".
-    let index_type = proto_config.map(|_| IndexType::HNSW);
+    let index = match hnsw_config_from_proto(proto_config.and_then(|c| c.hnsw_config.as_ref())) {
+        Some(hnsw) => IndexConfig::Hnsw(hnsw),
+        None => IndexConfig::Hnsw(HnswConfig::default()),
+    };
     let config = CollectionConfig {
         vector_size,
         distance,
-        index_type,
-        hnsw_config: hnsw_config_from_proto(proto_config.and_then(|c| c.hnsw_config.as_ref())),
+        index,
         quantization_config: quantization_config_from_proto(
             proto_config.and_then(|c| c.quantization_config.as_ref()),
         ),
@@ -500,7 +504,6 @@ pub fn collection_info_from_proto(
             .and_then(|p| p.write_consistency_factor.map(|v| v as usize)),
         on_disk_payload: params.map(|p| p.on_disk_payload),
         shard_number: params.map(|p| p.shard_number as usize),
-        ivf_config: None,
         // Qdrant has no live-point admission cap concept; None = no cap.
         max_points: None,
     };

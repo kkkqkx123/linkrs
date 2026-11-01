@@ -335,7 +335,7 @@ impl VectorOperator {
                                 )
                                 .map_err(QueryError::execution)?;
                                 let res = if config.quantization_config.is_some()
-                                    || config.hnsw_config.is_some()
+                                    || config.index != simvec::IndexConfig::default()
                                 {
                                     crate::executor::streaming::helpers::runtime_bridge::wait(
                                         "Vector create",

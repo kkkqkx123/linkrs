@@ -1,7 +1,7 @@
 use super::common::VectorTestContext;
 use vector_client::types::{
-    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, QuantizationConfig,
-    QuantizationType,
+    CollectionConfig, CompressionRatio, DistanceMetric, HnswConfig, IndexConfig,
+    QuantizationConfig, QuantizationType,
 };
 
 /// Create collection with HNSW config and verify via collection_info
@@ -15,7 +15,7 @@ async fn test_create_collection_with_hnsw_config() {
         .with_on_disk(false);
 
     let mut config = CollectionConfig::new(128, DistanceMetric::Cosine);
-    config.hnsw_config = Some(hnsw);
+    config.index = IndexConfig::Hnsw(hnsw);
     config.on_disk_payload = Some(false);
 
     ctx.manager
@@ -31,7 +31,9 @@ async fn test_create_collection_with_hnsw_config() {
     assert_eq!(stored.vector_size, 128);
     assert_eq!(stored.distance, DistanceMetric::Cosine);
 
-    let h = stored.hnsw_config.as_ref().expect("hnsw config");
+    let IndexConfig::Hnsw(h) = &stored.index else {
+        panic!("expected HNSW tier");
+    };
     assert_eq!(h.m, 16);
     assert_eq!(h.ef_construct, 200);
     assert_eq!(h.full_scan_threshold, Some(10000));
@@ -162,7 +164,7 @@ async fn test_create_collection_full_config() {
     let qc = QuantizationConfig { quant_type: qt };
 
     let mut config = CollectionConfig::new(256, DistanceMetric::Euclid);
-    config.hnsw_config = Some(hnsw);
+    config.index = IndexConfig::Hnsw(hnsw);
     config.quantization_config = Some(qc);
     config.on_disk_payload = Some(true);
     config.shard_number = Some(2);
@@ -181,7 +183,7 @@ async fn test_create_collection_full_config() {
     let stored = &meta.config;
     assert_eq!(stored.vector_size, 256);
     assert_eq!(stored.distance, DistanceMetric::Euclid);
-    assert!(stored.hnsw_config.is_some());
+    assert!(matches!(stored.index, IndexConfig::Hnsw(_)));
     assert!(stored.quantization_config.is_some());
     assert_eq!(stored.on_disk_payload, Some(true));
     assert_eq!(stored.shard_number, Some(2));

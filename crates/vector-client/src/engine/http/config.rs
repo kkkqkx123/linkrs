@@ -2,8 +2,8 @@ use serde_json::{json, Value};
 
 use crate::error::VectorClientError;
 use crate::types::{
-    CompressionRatio, DistanceMetric, HnswConfig, IndexType, PayloadSchemaType, QuantizationConfig,
-    QuantizationType, DEFAULT_WITH_PAYLOAD,
+    CompressionRatio, DistanceMetric, HnswConfig, IndexConfig, PayloadSchemaType,
+    QuantizationConfig, QuantizationType, DEFAULT_WITH_PAYLOAD,
 };
 
 /// Translate a shared metric into Qdrant's REST spelling.
@@ -45,8 +45,7 @@ pub fn field_type_to_qdrant(schema: PayloadSchemaType) -> &'static str {
 fn build_vectors_json(
     vector_size: usize,
     distance: DistanceMetric,
-    index_type: Option<IndexType>,
-    hnsw_config: &Option<HnswConfig>,
+    index: &IndexConfig,
     quantization_config: &Option<QuantizationConfig>,
 ) -> Result<Value, VectorClientError> {
     let distance_str = distance_to_qdrant(distance)?;
@@ -55,15 +54,14 @@ fn build_vectors_json(
         "distance": distance_str
     });
 
-    if let Some(ref hnsw) = hnsw_config {
-        vectors["hnsw_config"] = build_hnsw_json(hnsw);
-    }
-
-    if let Some(s) = index_type {
-        if s != IndexType::HNSW {
+    match index {
+        IndexConfig::Hnsw(hnsw) => {
+            vectors["hnsw_config"] = build_hnsw_json(hnsw);
+        }
+        other => {
             tracing::warn!(
-                "Index type {:?} not supported by Qdrant, using HNSW with config",
-                s
+                "Index tier {:?} not supported by Qdrant, using HNSW with config",
+                other.index_type()
             );
         }
     }
@@ -141,21 +139,14 @@ pub fn build_create_collection_body(
     _name: &str,
     vector_size: usize,
     distance: DistanceMetric,
-    index_type: Option<IndexType>,
-    hnsw_config: &Option<HnswConfig>,
+    index: &IndexConfig,
     quantization_config: &Option<QuantizationConfig>,
     on_disk_payload: Option<bool>,
     shard_number: Option<usize>,
     replication_factor: Option<usize>,
     write_consistency_factor: Option<usize>,
 ) -> Result<Value, VectorClientError> {
-    let vectors = build_vectors_json(
-        vector_size,
-        distance,
-        index_type,
-        hnsw_config,
-        quantization_config,
-    )?;
+    let vectors = build_vectors_json(vector_size, distance, index, quantization_config)?;
 
     let mut body = serde_json::Map::new();
     body.insert("vectors".to_string(), vectors);
@@ -372,8 +363,7 @@ mod tests {
             "test",
             384,
             DistanceMetric::Cosine,
-            None,
-            &None,
+            &IndexConfig::default(),
             &None,
             None,
             None,
@@ -392,8 +382,7 @@ mod tests {
             "test",
             64,
             DistanceMetric::Manhattan,
-            None,
-            &None,
+            &IndexConfig::default(),
             &None,
             None,
             None,
@@ -413,8 +402,7 @@ mod tests {
             "test",
             128,
             DistanceMetric::Dot,
-            None,
-            &Some(hnsw),
+            &IndexConfig::Hnsw(hnsw),
             &None,
             None,
             None,
@@ -435,8 +423,7 @@ mod tests {
             "test",
             384,
             DistanceMetric::Cosine,
-            None,
-            &None,
+            &IndexConfig::default(),
             &None,
             None,
             Some(3),
@@ -453,8 +440,7 @@ mod tests {
             "test",
             384,
             DistanceMetric::Cosine,
-            None,
-            &None,
+            &IndexConfig::default(),
             &None,
             Some(true),
             None,
@@ -471,8 +457,7 @@ mod tests {
             "test",
             384,
             DistanceMetric::Cosine,
-            None,
-            &None,
+            &IndexConfig::default(),
             &None,
             None,
             None,
