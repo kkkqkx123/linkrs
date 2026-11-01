@@ -171,6 +171,24 @@ export const managementHandlers: MockRegistry = {
 
 	'POST /v1/vector/search': { results: [] } satisfies MockEntry,
 
+	'POST /v1/vector/scroll': { points: [], next_offset: null } satisfies MockEntry,
+
+	'GET /v1/vector/{space_id}/{tag_name}/{field_name}/count': {
+		count: 0,
+	} satisfies MockEntry,
+
+	'GET /v1/vector/{space_id}/{tag_name}/{field_name}/{point_id}': ((ctx) => ({
+		point_id: String(ctx.path.point_id ?? ''),
+		payload: {},
+		vector: [],
+	})) satisfies MockEntry,
+
+	'PUT /v1/vector/payload': { success: true } satisfies MockEntry,
+
+	'PUT /v1/vector/payload/fields': { success: true } satisfies MockEntry,
+
+	'POST /v1/vector/payload/delete': { success: true } satisfies MockEntry,
+
 	'POST /v1/vector/indexes/rebuild': {
 		rebuild_id: 'mock-vector-rebuild-1',
 		status: 'completed',
@@ -182,6 +200,10 @@ export const managementHandlers: MockRegistry = {
 	})) satisfies MockEntry,
 
 	'POST /v1/vector/indexes/clear': { ok: true } satisfies MockEntry,
+
+	'GET /v1/fulltext/indexes': { indexes: [] } satisfies MockEntry,
+
+	'POST /v1/fulltext/search': { results: [], total_hits: 0 } satisfies MockEntry,
 
 	'GET /v1/fulltext/indexes/inconsistent': {
 		indexes: scenarioIsEmpty()

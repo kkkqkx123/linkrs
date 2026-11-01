@@ -316,6 +316,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/schema/spaces/{name}/migrations/{label}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Migration history for a label (web read-only mirror of
+         *     `GET /v1/migration/history/{space}/{label}`).
+         */
+        get: operations["get_api_v1_schema_space_migration_history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema/spaces/{name}/migrations/{label}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Migration status for a label (web read-only mirror of
+         *     `GET /v1/migration/status/{space}/{label}`).
+         */
+        get: operations["get_api_v1_schema_space_migration_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/schema/spaces/{name}/statistics": {
         parameters: {
             query?: never;
@@ -365,6 +405,26 @@ export interface paths {
         post?: never;
         /** Delete tag */
         delete: operations["delete_tag"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/schema/spaces/{name}/versions/{label}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Version history for a tag or edge type (web read-only mirror of
+         *     `GET /v1/schema/versions/{space}/{label}`).
+         */
+        get: operations["get_api_v1_schema_space_versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -930,6 +990,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/queries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List currently running queries (`SHOW QUERIES` over HTTP).
+         * @description Returns the same `query_id / session_id / user_name / space_name /
+         *     status / duration_ms / query` rows as the Cypher `SHOW QUERIES`
+         *     statement so operators can discover `KILL QUERY` targets without
+         *     opening a query shell.
+         */
+        get: operations["get_v1_queries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/query": {
         parameters: {
             query?: never;
@@ -1150,6 +1233,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/schema/spaces/{name}/edge-types/{edge}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a single edge type by name */
+        get: operations["get_v1_schema_spaces_name_edge_types_edge"];
+        put?: never;
+        post?: never;
+        /** Drop a single edge type by name */
+        delete: operations["delete_v1_schema_spaces_name_edge_types_edge"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/schema/spaces/{name}/tags": {
         parameters: {
             query?: never;
@@ -1163,6 +1264,24 @@ export interface paths {
         /** Creating Tags */
         post: operations["post_v1_schema_spaces_name_tags"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/schema/spaces/{name}/tags/{tag}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a single tag by name */
+        get: operations["get_v1_schema_spaces_name_tags_tag"];
+        put?: never;
+        post?: never;
+        /** Drop a single tag by name */
+        delete: operations["delete_v1_schema_spaces_name_tags_tag"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1212,6 +1331,74 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["delete_session"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/queries/{qid}/kill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a running query by `(session_id, query_id)`.
+         * @description HTTP equivalent of the Cypher `KILL QUERY <session_id> <query_id>`
+         *     statement. Marks the tracked execution as killed and cancels the
+         *     shared execution token (plus a best-effort streaming cancel under the
+         *     same id). Returns `{session_id, query_id, status: "killed"}`.
+         */
+        post: operations["post_v1_sessions_queries_kill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List session variables (`$name` snapshot) for one session.
+         * @description HTTP equivalent of the embedded `Session::variables_snapshot`. Values
+         *     are rendered with the same JSON mapping as query results. Callers may
+         *     only read their own session unless they are admins.
+         */
+        get: operations["list_variables"];
+        put?: never;
+        /**
+         * Assign one session variable (`$name`) on a session.
+         * @description HTTP equivalent of the embedded `Session::set_variable` and the `LET`
+         *     statement. Assignments inside an explicit transaction join the
+         *     transaction overlay (rollback-aware), matching embedded semantics.
+         */
+        post: operations["set_variable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/variables/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove one session variable (`$name`) from a session. */
+        delete: operations["delete_variable"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1596,7 +1783,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Retry outbox projection for a specific transaction's pending intents. */
+        /**
+         * Retry outbox projection scoped to a transaction id.
+         * @description The `{id}` path only validates that the transaction exists and that the
+         *     caller owns it; the engine replays the global durable outbox queue, so the
+         *     `delivered` count may include other transactions' entries. The response
+         *     carries `scope: "global"` to make this explicit.
+         */
         post: operations["retry_transaction_outbox"];
         delete?: never;
         options?: never;
@@ -1631,7 +1824,12 @@ export interface paths {
         /** List all savepoints for a transaction */
         get: operations["get_savepoints"];
         put?: never;
-        /** Create a savepoint within a transaction */
+        /**
+         * ---------------------------------------------------------------------------
+         *     Savepoint endpoints
+         *     ---------------------------------------------------------------------------
+         *     Create a savepoint within a transaction
+         */
         post: operations["create_savepoint"];
         delete?: never;
         options?: never;
@@ -2473,11 +2671,7 @@ export interface components {
             index_type: string;
             name: string;
         };
-        /**
-         * @description ---------------------------------------------------------------------------
-         *     Savepoint endpoints
-         *     ---------------------------------------------------------------------------
-         */
+        /** @description Create savepoint request for an explicit server-side transaction. */
         CreateSavepointRequest: {
             name?: string | null;
         };
@@ -3335,6 +3529,7 @@ export interface components {
         RevokeRoleRequest: {
             space: string;
         };
+        /** @description Savepoint descriptor returned by the server. */
         SavepointResponse: {
             name?: string | null;
             /** Format: int64 */
@@ -3505,6 +3700,10 @@ export interface components {
         String: string;
         /** @description Sync status response */
         SyncStatusResponse: {
+            /**
+             * @description Compatibility alias of `outbox_dead_lettered` (durable dead letters).
+             *     Kept so existing clients keep working after the in-memory queue removal.
+             */
             dlq_size: number;
             is_running: boolean;
             outbox_dead_lettered: number;
@@ -3520,6 +3719,7 @@ export interface components {
             outbox_retries: number;
             /** Format: int64 */
             outbox_write_amplification_bytes: number;
+            /** @description Compatibility alias of `outbox_dead_lettered`. */
             unrecovered_dlq_size: number;
         };
         /** @description System resource response with stable keys plus process and disk detail. */
@@ -4749,6 +4949,70 @@ export interface operations {
             };
         };
     };
+    get_api_v1_schema_space_migration_history: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Space name */
+                name: string;
+                /** @description Tag or edge type name */
+                label: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Migration history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_Value"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_api_v1_schema_space_migration_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Space name */
+                name: string;
+                /** @description Tag or edge type name */
+                label: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Migration status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_Value"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_space_statistics: {
         parameters: {
             query?: never;
@@ -4975,6 +5239,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_api_v1_schema_space_versions: {
+        parameters: {
+            query?: {
+                /** @description Whether the label is an edge type */
+                is_edge?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Space name */
+                name: string;
+                /** @description Tag or edge type name */
+                label: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiResponse_Value"];
+                };
             };
             /** @description Internal error */
             500: {
@@ -6207,6 +6506,33 @@ export interface operations {
             };
         };
     };
+    get_v1_queries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Running queries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     post_v1_query: {
         parameters: {
             query?: never;
@@ -6736,6 +7062,84 @@ export interface operations {
             };
         };
     };
+    get_v1_schema_spaces_name_edge_types_edge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Space name */
+                name: string;
+                /** @description Edge type name */
+                edge: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Edge type details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Edge type not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_v1_schema_spaces_name_edge_types_edge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Space name */
+                name: string;
+                /** @description Edge type name */
+                edge: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Edge type deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Edge type not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_v1_schema_spaces_name_tags: {
         parameters: {
             query?: never;
@@ -6790,6 +7194,84 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_v1_schema_spaces_name_tags_tag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Space name */
+                name: string;
+                /** @description Tag name */
+                tag: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tag details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Tag not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_v1_schema_spaces_name_tags_tag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Space name */
+                name: string;
+                /** @description Tag name */
+                tag: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tag deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Tag not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Internal error */
             500: {
@@ -6972,6 +7454,137 @@ export interface operations {
             };
             /** @description Internal error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    post_v1_sessions_queries_kill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session id */
+                id: number;
+                /** @description Query id from SHOW QUERIES */
+                qid: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Query killed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Session or query not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_variables: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Variable snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Session not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    set_variable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session id */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Variable assigned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Session not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_variable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session id */
+                id: number;
+                /** @description Variable name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Variable removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Session or variable not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7704,7 +8317,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Outbox projection retried */
+            /** @description Outbox projection retried (global replay) */
             200: {
                 headers: {
                     [name: string]: unknown;

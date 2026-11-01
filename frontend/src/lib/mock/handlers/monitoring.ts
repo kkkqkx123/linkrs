@@ -323,6 +323,31 @@ export const monitoringHandlers: MockRegistry = {
 
 	'POST /v1/transactions/{id}/outbox/retry': { retried: 1, delivered: 1 } satisfies MockEntry,
 
+	'POST /v1/transactions/{id}/savepoints': ((ctx) => ({
+		savepoint_id: 1,
+		name: String((ctx.body as { name?: unknown } | undefined)?.name ?? ''),
+	})) satisfies MockEntry,
+
+	'GET /v1/transactions/{id}/savepoints': { savepoints: [] } satisfies MockEntry,
+
+	'POST /v1/transactions/{id}/savepoints/{sid}/rollback': {
+		success: true,
+	} satisfies MockEntry,
+
+	'DELETE /v1/transactions/{id}/savepoints/{sid}': {
+		success: true,
+	} satisfies MockEntry,
+
+	'GET /v1/statistics/sessions/{id}': ((ctx) => ({
+		session_id: Number(ctx.path.id ?? 0),
+	})) satisfies MockEntry,
+
+	'GET /v1/statistics/freeze': { frozen: false } satisfies MockEntry,
+
+	'POST /v1/statistics/freeze': { triggered: true } satisfies MockEntry,
+
+	'GET /v1/statistics/migration': { status: 'idle' } satisfies MockEntry,
+
 	'GET /v1/config': {
 		server: { bind: '127.0.0.1:9758', log_level: 'info' },
 		monitoring: { poll_interval_ms: 10000 },

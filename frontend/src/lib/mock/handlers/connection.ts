@@ -77,4 +77,17 @@ export const connectionHandlers: MockRegistry = {
 	})) satisfies MockEntry,
 
 	'DELETE /v1/sessions/{id}': { success: true } satisfies MockEntry,
+
+	'GET /v1/sessions/{id}/variables': { variables: {} } satisfies MockEntry,
+
+	'POST /v1/sessions/{id}/variables': ((ctx) => {
+		const body = (ctx.body ?? {}) as { name?: unknown; value?: unknown };
+		return {
+			session_id: Number(ctx.path.id ?? MOCK_SESSION_ID),
+			name: String(body.name ?? ''),
+			value: body.value ?? null,
+		};
+	}) satisfies MockEntry,
+
+	'DELETE /v1/sessions/{id}/variables/{name}': { success: true } satisfies MockEntry,
 };

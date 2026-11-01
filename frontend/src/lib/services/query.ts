@@ -316,6 +316,18 @@ export const queryService = {
 	explain: async (
 		params: ExecuteQueryParams,
 	): Promise<ExecuteQueryResponse> => runSingle('explain', params),
+
+	/** List currently running queries (`SHOW QUERIES` over HTTP). */
+	listRunning: async (): Promise<unknown> =>
+		call(client.GET('/v1/queries')),
+
+	/** Cancel a running query by `(session_id, query_id)`. */
+	killRunning: async (sessionId: number, queryId: number): Promise<unknown> =>
+		call(
+			client.POST('/v1/sessions/{id}/queries/{qid}/kill', {
+				params: { path: { id: sessionId, qid: queryId } },
+			}),
+		),
 };
 
 export default queryService;

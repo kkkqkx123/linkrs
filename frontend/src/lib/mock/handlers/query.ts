@@ -161,4 +161,12 @@ export const queryHandlers: MockRegistry = {
 	}) satisfies MockEntry,
 
 	'POST /v1/query/cursor/close': { success: true } satisfies MockEntry,
+
+	'GET /v1/queries': { queries: [] } satisfies MockEntry,
+
+	'POST /v1/sessions/{id}/queries/{qid}/kill': ((ctx) => ({
+		session_id: Number(ctx.path.id ?? 0),
+		query_id: Number(ctx.path.qid ?? 0),
+		status: 'killed',
+	})) satisfies MockEntry,
 };

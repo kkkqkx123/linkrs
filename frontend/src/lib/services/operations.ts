@@ -88,6 +88,35 @@ export const operationsService = {
 				params: { path: { id } },
 			}),
 		),
+
+	createSavepoint: async (id: number, name?: string): Promise<unknown> =>
+		call(
+			client.POST('/v1/transactions/{id}/savepoints', {
+				params: { path: { id } },
+				body: { name: name ?? null } as never,
+			}),
+		),
+
+	listSavepoints: async (id: number): Promise<unknown> =>
+		call(
+			client.GET('/v1/transactions/{id}/savepoints', {
+				params: { path: { id } },
+			}),
+		),
+
+	rollbackToSavepoint: async (id: number, sid: number): Promise<unknown> =>
+		call(
+			client.POST('/v1/transactions/{id}/savepoints/{sid}/rollback', {
+				params: { path: { id, sid } },
+			}),
+		),
+
+	releaseSavepoint: async (id: number, sid: number): Promise<unknown> =>
+		call(
+			client.DELETE('/v1/transactions/{id}/savepoints/{sid}', {
+				params: { path: { id, sid } },
+			}),
+		),
 };
 
 export default operationsService;

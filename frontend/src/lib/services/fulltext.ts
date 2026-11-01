@@ -6,6 +6,28 @@ import { call, client } from '$lib/api/client';
  * so this service only covers the management endpoints.
  */
 export const fulltextService = {
+	indexes: async (): Promise<unknown> =>
+		call(client.GET('/v1/fulltext/indexes')),
+
+	search: async (params: {
+		space_id: number;
+		tag_name: string;
+		field_name: string;
+		query: string;
+		limit?: number;
+	}): Promise<unknown> =>
+		call(
+			client.POST('/v1/fulltext/search', {
+				body: {
+					space_id: params.space_id,
+					tag_name: params.tag_name,
+					field_name: params.field_name,
+					query: params.query,
+					limit: params.limit ?? 10,
+				} as never,
+			}),
+		),
+
 	inconsistent: async (): Promise<unknown> =>
 		call(client.GET('/v1/fulltext/indexes/inconsistent')),
 

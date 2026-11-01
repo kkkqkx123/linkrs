@@ -119,6 +119,28 @@ pub fn validate(cx: &App, sql: &str) -> Task<Result<serde_json::Value, ClientErr
     })
 }
 
+/// List currently running queries across all sessions.
+pub fn list_running(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().list_queries().await
+    })
+}
+
+/// Cancel a running query by `(session_id, query_id)`.
+pub fn kill_running(
+    cx: &App,
+    session_id: i64,
+    query_id: i64,
+) -> Task<Result<serde_json::Value, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().kill_query(session_id, query_id).await
+    })
+}
+
 /// Explain a query.
 pub fn explain(cx: &App, sql: &str) -> Task<Result<QueryResult, ClientError>> {
     let manager = SessionStore::manager(cx);

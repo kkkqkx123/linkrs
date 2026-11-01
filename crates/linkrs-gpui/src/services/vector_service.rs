@@ -157,6 +157,60 @@ pub fn get_point(
     })
 }
 
+/// Overwrite payload for vector points.
+pub fn set_payload(
+    cx: &App,
+    space_id: u64,
+    tag_name: &str,
+    field_name: &str,
+    point_ids: Vec<String>,
+    payload: serde_json::Map<String, serde_json::Value>,
+) -> Task<Result<serde_json::Value, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let tag_name = tag_name.to_string();
+    let field_name = field_name.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().set_vector_payload(space_id, &tag_name, &field_name, &point_ids, payload).await
+    })
+}
+
+/// Merge payload fields for vector points.
+pub fn merge_payload_fields(
+    cx: &App,
+    space_id: u64,
+    tag_name: &str,
+    field_name: &str,
+    point_ids: Vec<String>,
+    payload: serde_json::Map<String, serde_json::Value>,
+) -> Task<Result<serde_json::Value, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let tag_name = tag_name.to_string();
+    let field_name = field_name.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().merge_vector_payload_fields(space_id, &tag_name, &field_name, &point_ids, payload).await
+    })
+}
+
+/// Delete payload keys from vector points.
+pub fn delete_payload(
+    cx: &App,
+    space_id: u64,
+    tag_name: &str,
+    field_name: &str,
+    point_ids: Vec<String>,
+    keys: Vec<String>,
+) -> Task<Result<serde_json::Value, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let tag_name = tag_name.to_string();
+    let field_name = field_name.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().delete_vector_payload(space_id, &tag_name, &field_name, &point_ids, &keys).await
+    })
+}
+
 /// Scroll vector points.
 pub fn scroll(
     cx: &App,

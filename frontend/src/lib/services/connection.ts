@@ -124,6 +124,32 @@ export const connectionService = {
 				client.DELETE('/v1/sessions/{id}', { params: { path: { id } } }),
 			);
 		},
+
+		listVariables: async (id: number): Promise<unknown> =>
+			call(
+				client.GET('/v1/sessions/{id}/variables', {
+					params: { path: { id } },
+				}),
+			),
+
+		setVariable: async (
+			id: number,
+			name: string,
+			value: unknown,
+		): Promise<unknown> =>
+			call(
+				client.POST('/v1/sessions/{id}/variables', {
+					params: { path: { id } },
+					body: { name, value } as never,
+				}),
+			),
+
+		deleteVariable: async (id: number, name: string): Promise<unknown> =>
+			call(
+				client.DELETE('/v1/sessions/{id}/variables/{name}', {
+					params: { path: { id, name } },
+				}),
+			),
 	},
 };
 

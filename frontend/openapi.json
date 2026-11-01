@@ -1218,6 +1218,94 @@
         }
       }
     },
+    "/api/v1/schema/spaces/{name}/migrations/{label}/history": {
+      "get": {
+        "tags": [
+          "WebSchema"
+        ],
+        "summary": "Migration history for a label (web read-only mirror of\n`GET /v1/migration/history/{space}/{label}`).",
+        "operationId": "get_api_v1_schema_space_migration_history",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Space name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "path",
+            "description": "Tag or edge type name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Migration history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Value"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/api/v1/schema/spaces/{name}/migrations/{label}/status": {
+      "get": {
+        "tags": [
+          "WebSchema"
+        ],
+        "summary": "Migration status for a label (web read-only mirror of\n`GET /v1/migration/status/{space}/{label}`).",
+        "operationId": "get_api_v1_schema_space_migration_status",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Space name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "path",
+            "description": "Tag or edge type name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Migration status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Value"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
     "/api/v1/schema/spaces/{name}/statistics": {
       "get": {
         "tags": [
@@ -1478,6 +1566,59 @@
           },
           "404": {
             "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/api/v1/schema/spaces/{name}/versions/{label}": {
+      "get": {
+        "tags": [
+          "WebSchema"
+        ],
+        "summary": "Version history for a tag or edge type (web read-only mirror of\n`GET /v1/schema/versions/{space}/{label}`).",
+        "operationId": "get_api_v1_schema_space_versions",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Space name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "path",
+            "description": "Tag or edge type name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "is_edge",
+            "in": "query",
+            "description": "Whether the label is an edge type",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Version history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_Value"
+                }
+              }
+            }
           },
           "500": {
             "description": "Internal error"
@@ -2818,6 +2959,29 @@
         }
       }
     },
+    "/v1/queries": {
+      "get": {
+        "tags": [
+          "Query"
+        ],
+        "summary": "List currently running queries (`SHOW QUERIES` over HTTP).",
+        "description": "Returns the same `query_id / session_id / user_name / space_name /\nstatus / duration_ms / query` rows as the Cypher `SHOW QUERIES`\nstatement so operators can discover `KILL QUERY` targets without\nopening a query shell.",
+        "operationId": "get_v1_queries",
+        "responses": {
+          "200": {
+            "description": "Running queries",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
     "/v1/query": {
       "post": {
         "tags": [
@@ -3427,6 +3591,94 @@
         }
       }
     },
+    "/v1/schema/spaces/{name}/edge-types/{edge}": {
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "summary": "Get a single edge type by name",
+        "operationId": "get_v1_schema_spaces_name_edge_types_edge",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Space name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "edge",
+            "in": "path",
+            "description": "Edge type name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Edge type details",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Edge type not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Schema"
+        ],
+        "summary": "Drop a single edge type by name",
+        "operationId": "delete_v1_schema_spaces_name_edge_types_edge",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Space name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "edge",
+            "in": "path",
+            "description": "Edge type name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Edge type deleted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Edge type not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
     "/v1/schema/spaces/{name}/tags": {
       "get": {
         "tags": [
@@ -3494,6 +3746,94 @@
                 "schema": {}
               }
             }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/schema/spaces/{name}/tags/{tag}": {
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "summary": "Get a single tag by name",
+        "operationId": "get_v1_schema_spaces_name_tags_tag",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Space name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "path",
+            "description": "Tag name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tag details",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Tag not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Schema"
+        ],
+        "summary": "Drop a single tag by name",
+        "operationId": "delete_v1_schema_spaces_name_tags_tag",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Space name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "path",
+            "description": "Tag name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tag deleted",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Tag not found"
           },
           "500": {
             "description": "Internal error"
@@ -3671,6 +4011,165 @@
           },
           "500": {
             "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}/queries/{qid}/kill": {
+      "post": {
+        "tags": [
+          "Query"
+        ],
+        "summary": "Cancel a running query by `(session_id, query_id)`.",
+        "description": "HTTP equivalent of the Cypher `KILL QUERY <session_id> <query_id>`\nstatement. Marks the tracked execution as killed and cancels the\nshared execution token (plus a best-effort streaming cancel under the\nsame id). Returns `{session_id, query_id, status: \"killed\"}`.",
+        "operationId": "post_v1_sessions_queries_kill",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "qid",
+            "in": "path",
+            "description": "Query id from SHOW QUERIES",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Query killed",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Session or query not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}/variables": {
+      "get": {
+        "tags": [
+          "Session"
+        ],
+        "summary": "List session variables (`$name` snapshot) for one session.",
+        "description": "HTTP equivalent of the embedded `Session::variables_snapshot`. Values\nare rendered with the same JSON mapping as query results. Callers may\nonly read their own session unless they are admins.",
+        "operationId": "list_variables",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Variable snapshot",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Session"
+        ],
+        "summary": "Assign one session variable (`$name`) on a session.",
+        "description": "HTTP equivalent of the embedded `Session::set_variable` and the `LET`\nstatement. Assignments inside an explicit transaction join the\ntransaction overlay (rollback-aware), matching embedded semantics.",
+        "operationId": "set_variable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Variable assigned",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}/variables/{name}": {
+      "delete": {
+        "tags": [
+          "Session"
+        ],
+        "summary": "Remove one session variable (`$name`) from a session.",
+        "operationId": "delete_variable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Variable name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Variable removed",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Session or variable not found"
           }
         }
       }
@@ -4418,7 +4917,8 @@
         "tags": [
           "Transaction"
         ],
-        "summary": "Retry outbox projection for a specific transaction's pending intents.",
+        "summary": "Retry outbox projection scoped to a transaction id.",
+        "description": "The `{id}` path only validates that the transaction exists and that the\ncaller owns it; the engine replays the global durable outbox queue, so the\n`delivered` count may include other transactions' entries. The response\ncarries `scope: \"global\"` to make this explicit.",
         "operationId": "retry_transaction_outbox",
         "parameters": [
           {
@@ -4435,7 +4935,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Outbox projection retried",
+            "description": "Outbox projection retried (global replay)",
             "content": {
               "application/json": {
                 "schema": {}
@@ -4524,7 +5024,7 @@
         "tags": [
           "Transaction"
         ],
-        "summary": "Create a savepoint within a transaction",
+        "summary": "---------------------------------------------------------------------------\nSavepoint endpoints\n---------------------------------------------------------------------------\nCreate a savepoint within a transaction",
         "operationId": "create_savepoint",
         "parameters": [
           {
@@ -7074,7 +7574,7 @@
       },
       "CreateSavepointRequest": {
         "type": "object",
-        "description": "---------------------------------------------------------------------------\nSavepoint endpoints\n---------------------------------------------------------------------------",
+        "description": "Create savepoint request for an explicit server-side transaction.",
         "properties": {
           "name": {
             "type": [
@@ -9733,6 +10233,7 @@
       },
       "SavepointResponse": {
         "type": "object",
+        "description": "Savepoint descriptor returned by the server.",
         "required": [
           "savepoint_id",
           "transaction_id"
@@ -10220,6 +10721,7 @@
         "properties": {
           "dlq_size": {
             "type": "integer",
+            "description": "Compatibility alias of `outbox_dead_lettered` (durable dead letters).\nKept so existing clients keep working after the in-memory queue removal.",
             "minimum": 0
           },
           "is_running": {
@@ -10264,6 +10766,7 @@
           },
           "unrecovered_dlq_size": {
             "type": "integer",
+            "description": "Compatibility alias of `outbox_dead_lettered`.",
             "minimum": 0
           }
         }

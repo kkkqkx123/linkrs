@@ -63,6 +63,106 @@ export const vectorService = {
 			}),
 		),
 
+	search: async (params: {
+		space_id: number;
+		tag_name: string;
+		field_name: string;
+		query_vector: number[];
+		limit?: number;
+	}): Promise<unknown> =>
+		call(
+			client.POST('/v1/vector/search', {
+				body: {
+					space_id: params.space_id,
+					tag_name: params.tag_name,
+					field_name: params.field_name,
+					query_vector: params.query_vector,
+					limit: params.limit ?? 10,
+				} as never,
+			}),
+		),
+
+	count: async (
+		spaceId: number,
+		tagName: string,
+		fieldName: string,
+	): Promise<unknown> =>
+		call(
+			client.GET('/v1/vector/{space_id}/{tag_name}/{field_name}/count', {
+				params: { path: { space_id: spaceId, tag_name: tagName, field_name: fieldName } },
+			}),
+		),
+
+	getPoint: async (
+		spaceId: number,
+		tagName: string,
+		fieldName: string,
+		pointId: string,
+	): Promise<unknown> =>
+		call(
+			client.GET('/v1/vector/{space_id}/{tag_name}/{field_name}/{point_id}', {
+				params: { path: { space_id: spaceId, tag_name: tagName, field_name: fieldName, point_id: pointId } },
+			}),
+		),
+
+	scroll: async (params: {
+		space_id: number;
+		tag_name: string;
+		field_name: string;
+		limit?: number;
+		offset?: string;
+	}): Promise<unknown> =>
+		call(
+			client.POST('/v1/vector/scroll', {
+				body: {
+					space_id: params.space_id,
+				tag_name: params.tag_name,
+				field_name: params.field_name,
+				limit: params.limit ?? 10,
+					offset: params.offset ?? null,
+				} as never,
+			}),
+		),
+
+	setPayload: async (params: {
+		space_id: number;
+		tag_name: string;
+		field_name: string;
+		point_ids: string[];
+		payload: Record<string, unknown>;
+	}): Promise<unknown> =>
+		call(
+			client.PUT('/v1/vector/payload', {
+				body: { ...params } as never,
+			}),
+		),
+
+	mergePayloadFields: async (params: {
+		space_id: number;
+		tag_name: string;
+		field_name: string;
+		point_ids: string[];
+		payload: Record<string, unknown>;
+	}): Promise<unknown> =>
+		call(
+			client.PUT('/v1/vector/payload/fields', {
+				body: { ...params } as never,
+			}),
+		),
+
+	deletePayload: async (params: {
+		space_id: number;
+		tag_name: string;
+		field_name: string;
+		point_ids: string[];
+		keys: string[];
+	}): Promise<unknown> =>
+		call(
+			client.POST('/v1/vector/payload/delete', {
+				body: { ...params } as never,
+			}),
+		),
+
 	rebuildStatus: async (id: string): Promise<unknown> =>
 		call(
 			client.GET('/v1/vector/rebuilds/{id}', {

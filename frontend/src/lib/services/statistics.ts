@@ -86,6 +86,22 @@ export const statisticsService = {
 
 	syncStatus: async (): Promise<SyncStatusResponse> =>
 		call(client.GET('/v1/sync/status')),
+
+	session: async (id: number): Promise<unknown> =>
+		call(
+			client.GET('/v1/statistics/sessions/{id}', {
+				params: { path: { id } },
+			}),
+		),
+
+	freeze: async (): Promise<unknown> =>
+		call(client.GET('/v1/statistics/freeze')),
+
+	triggerFreeze: async (): Promise<unknown> =>
+		call(client.POST('/v1/statistics/freeze')),
+
+	migration: async (): Promise<unknown> =>
+		call(client.GET('/v1/statistics/migration')),
 };
 
 export default statisticsService;
