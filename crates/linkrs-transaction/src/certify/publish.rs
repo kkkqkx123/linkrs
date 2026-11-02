@@ -182,7 +182,7 @@ impl Certifier {
     pub fn prune(&self, oldest_active_ts: Timestamp) {
         let previous = self
             .prune_countdown
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 Some(if remaining <= 1 {
                     super::PRUNE_INTERVAL
                 } else {

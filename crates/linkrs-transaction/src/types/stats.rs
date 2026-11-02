@@ -228,7 +228,7 @@ impl TransactionStats {
     pub fn end_statement(&self) {
         let _ =
             self.active_statements
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                     value.checked_sub(1)
                 });
     }

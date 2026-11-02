@@ -29,7 +29,6 @@ impl MappedFrozen {
         path: &Path,
         intent: crate::edge::edge_table::config::MemoryIntent,
     ) -> StorageResult<Self> {
-        use crate::edge::edge_table::config::MemoryIntent;
         let file = File::open(path)
             .map_err(|e| StorageError::io_error(format!("snapshot file open failed: {e}")))?;
         let map = unsafe { memmap2::Mmap::map(&file) }

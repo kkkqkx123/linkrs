@@ -81,7 +81,7 @@ impl IndexDataManagerImpl {
                     }
                     (true, false) => {
                         let _ =
-                            counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                            counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                                 Some(count.saturating_sub(1))
                             });
                     }

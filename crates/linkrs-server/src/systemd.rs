@@ -3,9 +3,6 @@
 //! These helpers are safe to call in non-systemd environments: when
 //! `NOTIFY_SOCKET` is unset they become no-ops.
 
-use log::debug;
-use std::env;
-
 #[cfg(unix)]
 use std::os::unix::net::UnixDatagram;
 

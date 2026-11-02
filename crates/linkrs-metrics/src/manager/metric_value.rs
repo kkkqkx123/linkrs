@@ -41,7 +41,7 @@ impl MetricValue {
     pub fn decrement(&self) {
         let _ = self
             .value
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                 if v > 0 {
                     Some(v - 1)
                 } else {
