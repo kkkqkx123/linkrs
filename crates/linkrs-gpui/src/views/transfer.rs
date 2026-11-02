@@ -24,6 +24,7 @@ pub struct TransferPanel {
     file_path: Entity<InputState>,
     export_query: Entity<InputState>,
     export_format_csv: bool,
+    server_side_export: bool,
     save_path: Entity<InputState>,
     busy: bool,
     message: Option<SharedString>,
@@ -61,6 +62,7 @@ impl TransferPanel {
             file_path,
             export_query,
             export_format_csv: true,
+            server_side_export: false,
             save_path,
             busy: false,
             message: None,
@@ -189,6 +191,10 @@ impl TransferPanel {
         } else {
             "jsonl"
         };
+        if self.server_side_export {
+            self.export_via_server_task(&query, format, &save_path, cx);
+            return;
+        }
         // Confirm the destination is writable before hitting the server.
         let receiver = cx.prompt_for_new_path(
             &std::path::PathBuf::from(&save_path)
@@ -241,6 +247,48 @@ impl TransferPanel {
         .detach();
     }
 
+    /// Server-side export that writes straight to `save_path` without a
+    /// file dialog; the client task streams `GET /v1/export` into the file.
+    fn export_via_server_task(
+        &mut self,
+        query: &str,
+        format: &str,
+        save_path: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+        let task = transfer_service::export_to_file(cx, query, format, None, save_path);
+        let save_path = save_path.to_string();
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match outcome {
+                    Ok(bytes) => {
+                        this.export_result = serde_json::json!({
+                            "path": save_path,
+                            "bytes": bytes,
+                        });
+                        this.message = Some(
+                            format!("Exported {bytes} byte(s) to {save_path}.").into(),
+                        );
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn render_import(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_2()
@@ -272,6 +320,7 @@ impl TransferPanel {
 
     fn render_export(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let csv = self.export_format_csv;
+        let server_side = self.server_side_export;
         v_flex()
             .gap_2()
             .p_3()
@@ -298,9 +347,28 @@ impl TransferPanel {
                         }))
                 }),
             ))
+            .child(gpui_kit::component::h_flex().gap_1().children(
+                [("bytes", "Bytes (dialog)"), ("server", "Server task")]
+                    .into_iter()
+                    .map(|(mode, label)| {
+                        let active = (mode == "server") == server_side;
+                        Button::new(format!("transfer-mode-{mode}"))
+                            .label(label)
+                            .xsmall()
+                            .selected(active)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.server_side_export = mode == "server";
+                                cx.notify();
+                            }))
+                    }),
+            ))
             .child(
                 Button::new("transfer-export")
-                    .label("Export to file")
+                    .label(if server_side {
+                        "Export via server task"
+                    } else {
+                        "Export to file"
+                    })
                     .icon(IconName::Download)
                     .xsmall()
                     .disabled(self.busy)

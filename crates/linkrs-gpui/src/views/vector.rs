@@ -14,15 +14,27 @@ use crate::components::{form_row, render_json_block};
 use crate::services::{connection_service, schema_service, vector_service};
 use crate::state::AppState;
 
-/// Vector index panel: create/drop/rebuild/count vector indexes and run
-/// similarity search, all rendered as raw JSON with the key result tables.
+/// How often the rebuild status is re-polled after a rebuild starts.
+const REBUILD_POLL_INTERVAL_SECS: u64 = 2;
+/// Upper bound for automatic rebuild polling before the user polls manually.
+const REBUILD_POLL_ATTEMPTS: usize = 15;
+
+/// Vector index panel: create/drop/rebuild/clear/count vector indexes, point
+/// browsing with scroll, payload management and similarity search.
 pub struct VectorPanel {
     space_id: Entity<InputState>,
     tag: Entity<InputState>,
     field: Entity<InputState>,
     size: Entity<InputState>,
     query_vector: Entity<InputState>,
+    point_id: Entity<InputState>,
+    payload: Entity<InputState>,
+    payload_keys: Entity<InputState>,
+    scroll_offset: Entity<InputState>,
+    rebuild_id: Entity<InputState>,
     busy: bool,
+    confirm_clear: bool,
+    rebuild_generation: u64,
     message: Option<SharedString>,
     error: Option<SharedString>,
     output: serde_json::Value,
@@ -41,6 +53,15 @@ impl VectorPanel {
         let field = cx.new(|cx| InputState::new(window, cx).placeholder("Field name"));
         let size = cx.new(|cx| InputState::new(window, cx).placeholder("Vector size"));
         let query_vector = cx.new(|cx| InputState::new(window, cx).placeholder("[0.1, 0.2, ...]"));
+        let point_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Point id (comma list for payload)"));
+        let payload =
+            cx.new(|cx| InputState::new(window, cx).placeholder("{\"key\": \"value\"}"));
+        let payload_keys =
+            cx.new(|cx| InputState::new(window, cx).placeholder("key1,key2"));
+        let scroll_offset =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Scroll offset (empty for first page)"));
+        let rebuild_id = cx.new(|cx| InputState::new(window, cx).placeholder("Rebuild id"));
         let state = AppState::global(cx);
         let last_space = state.read(cx).space.clone();
         cx.observe(&state, |this, _, cx| this.on_state_changed(cx))
@@ -51,7 +72,14 @@ impl VectorPanel {
             field,
             size,
             query_vector,
+            point_id,
+            payload,
+            payload_keys,
+            scroll_offset,
+            rebuild_id,
             busy: false,
+            confirm_clear: false,
+            rebuild_generation: 0,
             message: None,
             error: None,
             output: serde_json::Value::Null,
@@ -122,6 +150,35 @@ impl VectorPanel {
             return None;
         }
         Some((space, tag, field))
+    }
+
+    fn point_ids(&self, cx: &App) -> Vec<String> {
+        Self::text(&self.point_id, cx)
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn payload_map(&self, cx: &App) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let raw = Self::text(&self.payload, cx);
+        if raw.is_empty() {
+            return Some(serde_json::Map::new());
+        }
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()?
+            .as_object()
+            .cloned()
+    }
+
+    fn payload_keys(&self, cx: &App) -> Vec<String> {
+        Self::text(&self.payload_keys, cx)
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect()
     }
 
     fn show(&mut self, title: &str, value: serde_json::Value) {
@@ -270,7 +327,7 @@ impl VectorPanel {
         .detach();
     }
 
-    fn rebuild(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn rebuild(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
             self.error = Some("Space id, tag and field are required.".into());
             cx.notify();
@@ -279,9 +336,291 @@ impl VectorPanel {
         self.busy = true;
         cx.notify();
         let task = vector_service::rebuild(cx, space, &tag, &field);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.busy = false;
+                match outcome {
+                    Ok(value) => {
+                        if let Some(id) = rebuild_id_of(&value) {
+                            this.rebuild_id.update(cx, |field, cx| {
+                                field.set_value(id.clone(), window, cx);
+                            });
+                            this.show("Rebuild", value);
+                            this.message =
+                                Some(format!("Rebuild {id} started; polling status.").into());
+                            this.error = None;
+                            this.spawn_rebuild_poll(id, window, cx);
+                        } else {
+                            this.show("Rebuild", value);
+                            this.message = Some("Rebuild finished.".into());
+                            this.error = None;
+                        }
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Poll the rebuild status until it reaches a terminal state or the
+    /// attempt budget runs out; the latest payload stays in the result pane.
+    fn spawn_rebuild_poll(
+        &mut self,
+        rebuild_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.rebuild_generation += 1;
+        let generation = self.rebuild_generation;
+        let view = cx.entity().downgrade();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |_, cx| {
+            for _ in 0..REBUILD_POLL_ATTEMPTS {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(REBUILD_POLL_INTERVAL_SECS))
+                    .await;
+                let task = view.update(cx, |this, cx| {
+                    if this.rebuild_generation != generation {
+                        return None;
+                    }
+                    Some(vector_service::rebuild_status(cx, &rebuild_id))
+                });
+                let task = match task {
+                    Ok(Some(task)) => task,
+                    _ => break,
+                };
+                let outcome = task.await;
+                let done = view
+                    .update(cx, |this, cx| {
+                        if this.rebuild_generation != generation {
+                            return true;
+                        }
+                        match outcome {
+                            Ok(value) => {
+                                this.show("Rebuild status", value.clone());
+                                this.message =
+                                    Some(format!("Rebuild {rebuild_id} polled.").into());
+                                if rebuild_finished(&value) {
+                                    return true;
+                                }
+                            }
+                            Err(error) => {
+                                this.error = Some(error.to_string().into());
+                                return true;
+                            }
+                        }
+                        cx.notify();
+                        false
+                    })
+                    .unwrap_or(true);
+                if done {
+                    break;
+                }
+            }
+            let _ = window_handle;
+        })
+        .detach();
+    }
+
+    fn poll_rebuild_status(
+        &mut self,
+        _: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rebuild_id = Self::text(&self.rebuild_id, cx);
+        if rebuild_id.is_empty() {
+            self.error = Some("Rebuild id is required.".into());
+            cx.notify();
+            return;
+        }
+        self.busy = true;
+        cx.notify();
+        let task = vector_service::rebuild_status(cx, &rebuild_id);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Rebuild", outcome, |v| v))
+            this.update(cx, |this, cx| {
+                this.finish(cx, "Rebuild status", outcome, |v| v)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn clear(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some((space, tag, field)) = self.identity(cx) else {
+            self.error = Some("Space id, tag and field are required.".into());
+            cx.notify();
+            return;
+        };
+        if !self.confirm_clear {
+            self.confirm_clear = true;
+            self.message = Some("Press Clear again to confirm wiping all vectors.".into());
+            cx.notify();
+            return;
+        }
+        self.confirm_clear = false;
+        self.busy = true;
+        cx.notify();
+        let task = vector_service::clear(cx, space, &tag, &field, true);
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| this.finish(cx, "Clear", outcome, |v| v))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn get_point(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some((space, tag, field)) = self.identity(cx) else {
+            self.error = Some("Space id, tag and field are required.".into());
+            cx.notify();
+            return;
+        };
+        let ids = self.point_ids(cx);
+        let Some(point_id) = ids.first().cloned() else {
+            self.error = Some("Point id is required.".into());
+            cx.notify();
+            return;
+        };
+        self.busy = true;
+        cx.notify();
+        let task = vector_service::get_point(cx, space, &tag, &field, &point_id);
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| this.finish(cx, "Point", outcome, |v| v))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn scroll(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((space, tag, field)) = self.identity(cx) else {
+            self.error = Some("Space id, tag and field are required.".into());
+            cx.notify();
+            return;
+        };
+        let offset = Self::text(&self.scroll_offset, cx);
+        let offset = (!offset.is_empty()).then_some(offset);
+        self.busy = true;
+        cx.notify();
+        let task = vector_service::scroll(cx, space, &tag, &field, 20, offset.as_deref());
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.busy = false;
+                match outcome {
+                    Ok(value) => {
+                        if let Some(next) = scroll_next_offset(&value) {
+                            this.scroll_offset.update(cx, |field, cx| {
+                                field.set_value(next, window, cx);
+                            });
+                        }
+                        this.show("Scroll", value);
+                        this.message = Some("Scroll finished.".into());
+                        this.error = None;
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn set_payload(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some((space, tag, field)) = self.identity(cx) else {
+            self.error = Some("Space id, tag and field are required.".into());
+            cx.notify();
+            return;
+        };
+        let ids = self.point_ids(cx);
+        if ids.is_empty() {
+            self.error = Some("Point id is required.".into());
+            cx.notify();
+            return;
+        }
+        let Some(payload) = self.payload_map(cx) else {
+            self.error = Some("Payload must be a JSON object.".into());
+            cx.notify();
+            return;
+        };
+        self.busy = true;
+        cx.notify();
+        let task = vector_service::set_payload(cx, space, &tag, &field, ids, payload);
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| this.finish(cx, "Set payload", outcome, |v| v))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn merge_payload(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some((space, tag, field)) = self.identity(cx) else {
+            self.error = Some("Space id, tag and field are required.".into());
+            cx.notify();
+            return;
+        };
+        let ids = self.point_ids(cx);
+        if ids.is_empty() {
+            self.error = Some("Point id is required.".into());
+            cx.notify();
+            return;
+        }
+        let Some(payload) = self.payload_map(cx) else {
+            self.error = Some("Payload must be a JSON object.".into());
+            cx.notify();
+            return;
+        };
+        self.busy = true;
+        cx.notify();
+        let task = vector_service::merge_payload_fields(cx, space, &tag, &field, ids, payload);
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| this.finish(cx, "Merge payload", outcome, |v| v))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn delete_payload(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some((space, tag, field)) = self.identity(cx) else {
+            self.error = Some("Space id, tag and field are required.".into());
+            cx.notify();
+            return;
+        };
+        let ids = self.point_ids(cx);
+        if ids.is_empty() {
+            self.error = Some("Point id is required.".into());
+            cx.notify();
+            return;
+        }
+        let keys = self.payload_keys(cx);
+        if keys.is_empty() {
+            self.error = Some("Payload keys are required.".into());
+            cx.notify();
+            return;
+        }
+        self.busy = true;
+        cx.notify();
+        let task = vector_service::delete_payload(cx, space, &tag, &field, ids, keys);
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| this.finish(cx, "Delete payload", outcome, |v| v))
                 .ok();
         })
         .detach();
@@ -313,6 +652,7 @@ impl Render for VectorPanel {
         let theme = cx.theme().clone();
         let output_title = self.output_title.clone();
         let output = self.output.clone();
+        let confirm_clear = self.confirm_clear;
 
         v_flex()
             .id("vector-panel")
@@ -482,6 +822,81 @@ impl Render for VectorPanel {
                                             .xsmall()
                                             .disabled(self.busy)
                                             .on_click(cx.listener(Self::search)),
+                                    )
+                                    .child(form_row("Point id", self.point_id.clone(), cx))
+                                    .child(form_row("Payload (JSON)", self.payload.clone(), cx))
+                                    .child(form_row("Payload keys", self.payload_keys.clone(), cx))
+                                    .child(
+                                        h_flex()
+                                            .gap_1()
+                                            .child(
+                                                Button::new("vector-get-point")
+                                                    .label("Get point")
+                                                    .xsmall()
+                                                    .disabled(self.busy)
+                                                    .on_click(cx.listener(Self::get_point)),
+                                            )
+                                            .child(
+                                                Button::new("vector-set-payload")
+                                                    .label("Set")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .disabled(self.busy)
+                                                    .on_click(cx.listener(Self::set_payload)),
+                                            )
+                                            .child(
+                                                Button::new("vector-merge-payload")
+                                                    .label("Merge")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .disabled(self.busy)
+                                                    .on_click(cx.listener(Self::merge_payload)),
+                                            )
+                                            .child(
+                                                Button::new("vector-delete-payload")
+                                                    .label("Delete keys")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .disabled(self.busy)
+                                                    .on_click(cx.listener(Self::delete_payload)),
+                                            ),
+                                    )
+                                    .child(form_row("Offset", self.scroll_offset.clone(), cx))
+                                    .child(
+                                        Button::new("vector-scroll")
+                                            .label("Scroll points")
+                                            .icon(IconName::List)
+                                            .xsmall()
+                                            .disabled(self.busy)
+                                            .on_click(cx.listener(Self::scroll)),
+                                    )
+                                    .child(form_row("Rebuild id", self.rebuild_id.clone(), cx))
+                                    .child(
+                                        h_flex()
+                                            .gap_1()
+                                            .child(
+                                                Button::new("vector-rebuild-status")
+                                                    .label("Rebuild status")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .disabled(self.busy)
+                                                    .on_click(
+                                                        cx.listener(Self::poll_rebuild_status),
+                                                    ),
+                                            )
+                                            .child(
+                                                Button::new("vector-clear")
+                                                    .label(if confirm_clear {
+                                                        "Confirm clear"
+                                                    } else {
+                                                        "Clear"
+                                                    })
+                                                    .icon(IconName::Trash)
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .disabled(self.busy)
+                                                    .on_click(cx.listener(Self::clear)),
+                                            ),
                                     ),
                             ),
                     )
@@ -502,4 +917,57 @@ impl Render for VectorPanel {
                     ),
             )
     }
+}
+
+/// Best-effort rebuild id extraction across backend shapes.
+fn rebuild_id_of(value: &serde_json::Value) -> Option<String> {
+    for key in ["rebuild_id", "rebuildId", "job_id", "jobId", "id"] {
+        if let Some(id) = value.get(key).and_then(|v| v.as_str()) {
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+        if let Some(nested) = value.get("data").and_then(|v| v.get(key)) {
+            if let Some(id) = nested.as_str() {
+                if !id.is_empty() {
+                    return Some(id.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Whether a rebuild status payload reached a terminal state.
+fn rebuild_finished(value: &serde_json::Value) -> bool {
+    let status = value
+        .get("status")
+        .or_else(|| value.get("state"))
+        .or_else(|| value.get("data").and_then(|d| d.get("status")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        status.as_str(),
+        "completed" | "complete" | "done" | "succeeded" | "success" | "failed" | "error"
+    )
+}
+
+/// Best-effort next-page offset extraction for scroll responses.
+fn scroll_next_offset(value: &serde_json::Value) -> Option<String> {
+    for key in ["next_offset", "nextOffset", "offset", "cursor"] {
+        if let Some(next) = value.get(key).and_then(|v| v.as_str()) {
+            if !next.is_empty() {
+                return Some(next.to_string());
+            }
+        }
+        if let Some(nested) = value.get("data").and_then(|v| v.get(key)) {
+            if let Some(next) = nested.as_str() {
+                if !next.is_empty() {
+                    return Some(next.to_string());
+                }
+            }
+        }
+    }
+    None
 }

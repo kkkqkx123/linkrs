@@ -490,12 +490,12 @@ impl Render for GraphPanel {
                                             .child(SharedString::from("Edges")),
                                     )
                                     .children(self.model.edge_list().into_iter().map(
-                                        |(source, edge_type, target)| {
+                                        |(source, edge_type, rank, target)| {
                                             div()
                                                 .text_xs()
                                                 .text_color(theme.muted_foreground)
                                                 .child(SharedString::from(format!(
-                                                    "{source} -[{edge_type}]-> {target}"
+                                                    "{source} -[{edge_type} #{rank}]-> {target}"
                                                 )))
                                         },
                                     )),

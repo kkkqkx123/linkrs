@@ -14,13 +14,16 @@ use gpui_kit::{
 
 use crate::components::{empty_state, form_row, render_json_block};
 use crate::services::{connection_service, server_session_service};
+use crate::state::AppState;
 
 /// Session management panel (admin): live server sessions, termination,
-/// auto-refresh and per-session variable inspection.
+/// auto-refresh, per-session detail and variable inspection.
 pub struct SessionsPanel {
     sessions: Vec<serde_json::Value>,
     selected: Option<i64>,
+    detail: serde_json::Value,
     variables: serde_json::Value,
+    identity: serde_json::Value,
     var_name: Entity<InputState>,
     var_value: Entity<InputState>,
     auto_refresh: bool,
@@ -40,7 +43,9 @@ impl SessionsPanel {
         let mut panel = Self {
             sessions: Vec::new(),
             selected: None,
+            detail: serde_json::Value::Null,
             variables: serde_json::Value::Null,
+            identity: serde_json::Value::Null,
             var_name,
             var_value,
             auto_refresh: false,
@@ -51,6 +56,7 @@ impl SessionsPanel {
             focus_handle: cx.focus_handle(),
         };
         panel.refresh(cx);
+        panel.refresh_identity(cx);
         panel
     }
 
@@ -98,6 +104,7 @@ impl SessionsPanel {
                             !this.sessions.iter().any(|s| session_id(s) == Some(id))
                         }) {
                             this.selected = None;
+                            this.detail = serde_json::Value::Null;
                             this.variables = serde_json::Value::Null;
                         }
                     }
@@ -115,24 +122,78 @@ impl SessionsPanel {
         .detach();
     }
 
+    /// Refresh the current identity via `me` and mirror user/roles into the
+    /// global state so permission changes apply without re-login.
+    fn refresh_identity(&mut self, cx: &mut Context<Self>) {
+        let task = server_session_service::me(cx);
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| {
+                match outcome {
+                    Ok(me) => {
+                        this.identity = serde_json::to_value(&me)
+                            .unwrap_or(serde_json::Value::Null);
+                        AppState::global(cx).update(cx, |state, cx| {
+                            state.user = Some(me.username.clone().into());
+                            state.roles = me.roles.clone();
+                            cx.notify();
+                        });
+                        this.message = Some("Identity refreshed.".into());
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn select(&mut self, id: Option<i64>, cx: &mut Context<Self>) {
         self.selected = id;
+        self.detail = serde_json::Value::Null;
         self.variables = serde_json::Value::Null;
-        if let Some(id) = id {
-            let task = server_session_service::list_variables(cx, id);
-            cx.spawn(async move |this, cx| {
-                let outcome = task.await;
-                this.update(cx, |this, cx| {
-                    match outcome {
-                        Ok(value) => this.variables = value,
-                        Err(error) => this.error = Some(error.to_string().into()),
-                    }
-                    cx.notify();
-                })
-                .ok();
+        let Some(id) = id else {
+            cx.notify();
+            return;
+        };
+        let variables = server_session_service::list_variables(cx, id);
+        cx.spawn(async move |this, cx| {
+            let outcome = variables.await;
+            this.update(cx, |this, cx| {
+                if this.selected != Some(id) {
+                    return;
+                }
+                match outcome {
+                    Ok(value) => this.variables = value,
+                    Err(error) => this.error = Some(error.to_string().into()),
+                }
+                cx.notify();
             })
-            .detach();
-        }
+            .ok();
+        })
+        .detach();
+        let detail = server_session_service::get(cx, id);
+        cx.spawn(async move |this, cx| {
+            let outcome = detail.await;
+            this.update(cx, |this, cx| {
+                if this.selected != Some(id) {
+                    return;
+                }
+                match outcome {
+                    Ok(value) => this.detail = value,
+                    Err(error) => this.error = Some(error.to_string().into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -152,6 +213,7 @@ impl SessionsPanel {
                             cx,
                         );
                         this.selected = None;
+                        this.detail = serde_json::Value::Null;
                         this.refresh(cx);
                     }
                     Err(error) => {
@@ -190,6 +252,35 @@ impl SessionsPanel {
                     Ok(value) => {
                         this.variables = value;
                         this.message = Some(format!("Set {name}.").into());
+                    }
+                    Err(error) => this.error = Some(error.to_string().into()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn delete_variable(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else {
+            self.error = Some("Select a session first.".into());
+            cx.notify();
+            return;
+        };
+        let name = self.var_name.read(cx).value().trim().to_string();
+        if name.is_empty() {
+            self.error = Some("Variable name is required.".into());
+            cx.notify();
+            return;
+        }
+        let task = server_session_service::delete_variable(cx, id, &name);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, _, cx| {
+                match outcome {
+                    Ok(value) => {
+                        this.variables = value;
+                        this.message = Some(format!("Deleted {name}.").into());
                     }
                     Err(error) => this.error = Some(error.to_string().into()),
                 }
@@ -267,6 +358,16 @@ impl Render for SessionsPanel {
                                     this.spawn_loop(cx);
                                 }
                                 cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("sessions-identity")
+                            .label("Refresh identity")
+                            .icon(IconName::User)
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_identity(cx);
                             })),
                     )
                     .child(
@@ -371,28 +472,57 @@ impl Render for SessionsPanel {
                             ),
                     )
                     .child(
-                        v_flex()
+                        div()
+                            .id("sessions-detail-scroll")
                             .flex_1()
                             .min_w_0()
-                            .gap_2()
-                            .p_3()
+                            .overflow_y_scroll()
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(SharedString::from("Session variables")),
-                            )
-                            .child(form_row("Name", self.var_name.clone(), cx))
-                            .child(form_row("Value (JSON)", self.var_value.clone(), cx))
-                            .child(
-                                Button::new("sessions-set-var")
-                                    .label("Set variable")
-                                    .icon(IconName::Plus)
-                                    .xsmall()
-                                    .disabled(self.selected.is_none())
-                                    .on_click(cx.listener(Self::set_variable)),
-                            )
-                            .child(render_json_block(&self.variables, cx)),
+                                v_flex()
+                                    .gap_2()
+                                    .p_3()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(SharedString::from("Session detail")),
+                                    )
+                                    .child(render_json_block(&self.detail, cx))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(SharedString::from("Session variables")),
+                                    )
+                                    .child(form_row("Name", self.var_name.clone(), cx))
+                                    .child(form_row("Value (JSON)", self.var_value.clone(), cx))
+                                    .child(
+                                        h_flex().gap_1().child(
+                                            Button::new("sessions-set-var")
+                                                .label("Set variable")
+                                                .icon(IconName::Plus)
+                                                .xsmall()
+                                                .disabled(self.selected.is_none())
+                                                .on_click(cx.listener(Self::set_variable)),
+                                        ).child(
+                                            Button::new("sessions-delete-var")
+                                                .label("Delete variable")
+                                                .icon(IconName::Trash)
+                                                .xsmall()
+                                                .ghost()
+                                                .disabled(self.selected.is_none())
+                                                .on_click(cx.listener(Self::delete_variable)),
+                                        ),
+                                    )
+                                    .child(render_json_block(&self.variables, cx))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(SharedString::from("Current identity")),
+                                    )
+                                    .child(render_json_block(&self.identity, cx)),
+                            ),
                     ),
             )
     }

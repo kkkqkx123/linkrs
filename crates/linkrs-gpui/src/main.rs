@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 mod app;
 mod components;
 mod connection;

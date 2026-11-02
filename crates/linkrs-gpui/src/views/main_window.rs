@@ -1,4 +1,4 @@
-use std::{rc::Rc, time::Duration};
+use std::time::Duration;
 
 use anyhow::Context as _;
 use gpui_kit::assets::IconName;
@@ -84,10 +84,6 @@ pub struct MainWindow {
     fulltext: Entity<FulltextPanel>,
     /// Sidebar highlight: the panel last opened from the sidebar.
     active_panel: &'static str,
-    /// Kept for imperative dock controls (toggles, panel menus) added with
-    /// later views; the skin cannot be recovered from the area later.
-    #[allow(dead_code)]
-    skin: Rc<DockSkin>,
     theme_mode: ThemeModeSetting,
     last_saved_layout: Option<DockAreaState>,
     window_handle: AnyWindowHandle,
@@ -101,7 +97,7 @@ impl MainWindow {
         let window_handle = window.window_handle();
         let theme_mode = settings::global(cx).theme_mode.unwrap_or_default();
 
-        let (dock_area, skin) =
+        let (dock_area, _) =
             DockSkin::dock_area(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx);
 
         let console = cx.new(|cx| ConsolePanel::new(window, cx));
@@ -259,7 +255,6 @@ impl MainWindow {
             vector,
             fulltext,
             active_panel: ConsolePanel::PANEL_NAME,
-            skin,
             theme_mode,
             last_saved_layout: None,
             window_handle,

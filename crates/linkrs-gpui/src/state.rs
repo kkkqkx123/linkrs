@@ -113,11 +113,6 @@ impl AppState {
         self.status == ConnectionStatus::Connected && self.ui_role() == "admin"
     }
 
-    pub fn set_session_id(&mut self, session_id: Option<i64>, cx: &mut gpui_kit::Context<Self>) {
-        self.session_id = session_id;
-        cx.notify();
-    }
-
     pub fn set_unhealthy(&mut self, unhealthy: bool, cx: &mut gpui_kit::Context<Self>) {
         if self.status == ConnectionStatus::Connected && unhealthy {
             self.status = ConnectionStatus::Unhealthy;

@@ -37,13 +37,21 @@ pub fn connect(
         guard
             .connect_with_host(&host, port, &user, &password)
             .await?;
+        // Refresh identity via `me` so roles track server truth instead of
+        // only the login response payload.
+        let me = guard.client().auth_me().await.ok();
         let session = guard.session();
         let space = session.and_then(|s| s.current_space.clone());
         let session_id = session.map(|s| s.session_id);
-        let user_name = session
-            .map(|s| s.username.clone())
-            .unwrap_or_else(|| user.clone());
-        let roles = session.map(|s| s.roles.clone()).unwrap_or_default();
+        let (user_name, roles) = match me {
+            Some(me) => (me.username, me.roles),
+            None => (
+                session
+                    .map(|s| s.username.clone())
+                    .unwrap_or_else(|| user.clone()),
+                session.map(|s| s.roles.clone()).unwrap_or_default(),
+            ),
+        };
         Ok(ConnectedProfile {
             user: user_name.into(),
             space: space.map(Into::into),

@@ -33,25 +33,6 @@ pub fn vertex_detail(cx: &App, vid: &str) -> Task<Result<serde_json::Value, Clie
     })
 }
 
-/// Fetch 1-hop neighbors of one vertex. `direction` is `OUT`, `IN` or `BOTH`.
-pub fn neighbors(
-    cx: &App,
-    vid: &str,
-    direction: &str,
-    edge_type: Option<String>,
-) -> Task<Result<Vec<GraphNode>, ClientError>> {
-    let manager = SessionStore::manager(cx);
-    let vid = vid.to_string();
-    let direction = direction.to_string();
-    runtime::spawn(cx, async move {
-        let guard = manager.lock().await;
-        let raw = guard
-            .get_neighbors(&vid, &direction, edge_type.as_deref())
-            .await?;
-        Ok(raw.iter().map(normalize_neighbor).collect())
-    })
-}
-
 /// Discovered neighborhood returned by [`expand_neighborhood`].
 #[derive(Debug, Clone)]
 pub struct Neighborhood {

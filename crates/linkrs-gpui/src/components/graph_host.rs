@@ -64,6 +64,8 @@ pub struct GraphModel {
     index_of: HashMap<String, NodeIndex>,
     labels: HashMap<NodeIndex, String>,
     edge_labels: HashMap<(usize, usize), String>,
+    edge_ranks: HashMap<(usize, usize), i64>,
+    neighbor_props: HashMap<String, serde_json::Value>,
     details: HashMap<String, serde_json::Value>,
     node_count: usize,
     edge_count: usize,
@@ -91,6 +93,8 @@ impl GraphModel {
             index_of: HashMap::new(),
             labels: HashMap::new(),
             edge_labels: HashMap::new(),
+            edge_ranks: HashMap::new(),
+            neighbor_props: HashMap::new(),
             details: HashMap::new(),
             node_count: 0,
             edge_count: 0,
@@ -131,6 +135,8 @@ impl GraphModel {
         self.index_of.clear();
         self.labels.clear();
         self.edge_labels.clear();
+        self.edge_ranks.clear();
+        self.neighbor_props.clear();
         self.details.clear();
         self.selection.clear();
         self.selected = None;
@@ -142,6 +148,10 @@ impl GraphModel {
                 let index = store.add_node(cx, label.clone());
                 self.index_of.insert(node.vid.clone(), index);
                 self.labels.insert(index, label);
+                if !node.properties.is_null() {
+                    self.neighbor_props
+                        .insert(node.vid.clone(), node.properties.clone());
+                }
             }
             for edge in edges {
                 if edge.src.is_empty() || edge.dst.is_empty() {
@@ -151,9 +161,11 @@ impl GraphModel {
                     (self.index_of.get(&edge.src), self.index_of.get(&edge.dst))
                 {
                     store.add_edge(cx, *source, *target, 1.0);
+                    let key = (source.index(), target.index());
                     self.edge_labels
-                        .entry((source.index(), target.index()))
+                        .entry(key)
                         .or_insert_with(|| edge.edge_type.clone());
+                    self.edge_ranks.entry(key).or_insert(edge.rank);
                 }
             }
         });
@@ -216,14 +228,16 @@ impl GraphModel {
         rows
     }
 
-    /// `(source vid, edge type, target vid)` rows for the edge legend.
-    pub fn edge_list(&self) -> Vec<(String, String, String)> {
+    /// `(source vid, edge type, rank, target vid)` rows for the edge legend.
+    /// Rank comes from the neighbor payload so edge weights stay visible.
+    pub fn edge_list(&self) -> Vec<(String, String, i64, String)> {
         let mut back: HashMap<NodeIndex, &String> = HashMap::new();
         for (vid, node) in &self.index_of {
             back.insert(*node, vid);
         }
         let mut rows = Vec::new();
         for ((source, target), edge_type) in &self.edge_labels {
+            let rank = self.edge_ranks.get(&(*source, *target)).copied().unwrap_or(0);
             let source_vid = back
                 .get(&NodeIndex::new(*source))
                 .map(|vid| vid.to_string())
@@ -232,18 +246,25 @@ impl GraphModel {
                 .get(&NodeIndex::new(*target))
                 .map(|vid| vid.to_string())
                 .unwrap_or_default();
-            rows.push((source_vid, edge_type.clone(), target_vid));
+            rows.push((source_vid, edge_type.clone(), rank, target_vid));
         }
         rows.sort();
         rows
     }
 
-    /// Selected vertex with its display label and full record (if fetched).
+    /// Selected vertex with its display label and full record. Prefers the
+    /// fetched vertex detail, falling back to neighbor-discovered properties
+    /// so expanded nodes show attributes without an extra fetch.
     pub fn selected_detail(&self) -> Option<(String, String, serde_json::Value)> {
         let vid = self.selected.clone()?;
         let node = self.index_of.get(&vid)?;
         let label = self.labels.get(node).cloned().unwrap_or_default();
-        let detail = self.details.get(&vid).cloned().unwrap_or_default();
+        let detail = self
+            .details
+            .get(&vid)
+            .or_else(|| self.neighbor_props.get(&vid))
+            .cloned()
+            .unwrap_or_default();
         Some((vid, label, detail))
     }
 

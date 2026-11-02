@@ -1,23 +1,30 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::dock::PanelEvent;
-use gpui_kit::base::Disableable as _;
+use gpui_kit::base::{Disableable as _, Selectable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::InputState;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::{
-    div, prelude::FluentBuilder as _, px, App, Context, EventEmitter, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity, EventEmitter,
+    Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
+use linkrs_client::TransactionOptions;
 
-use crate::components::{empty_state, render_json_block};
+use crate::components::{empty_state, form_row, render_json_block};
 use crate::services::{connection_service, monitoring_service, transaction_service};
 
-/// Transaction management panel: outcome/resource gauges plus the live
-/// transaction table with kill and outbox-retry actions.
+/// Transaction management panel: explicit begin/commit/rollback, savepoint
+/// management plus the live transaction table with kill and outbox-retry.
 pub struct TransactionsPanel {
     overview: serde_json::Value,
     metrics: serde_json::Value,
     transactions: Vec<serde_json::Value>,
+    savepoints: serde_json::Value,
+    txn_id: Entity<InputState>,
+    savepoint_name: Entity<InputState>,
+    savepoint_id: Entity<InputState>,
+    read_only: bool,
     loading: bool,
     message: Option<SharedString>,
     error: Option<SharedString>,
@@ -29,10 +36,20 @@ impl TransactionsPanel {
     pub(crate) const PANEL_NAME: &'static str = "Transactions";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let txn_id = cx.new(|cx| InputState::new(window, cx).placeholder("Transaction id"));
+        let savepoint_name =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Savepoint name (optional)"));
+        let savepoint_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Savepoint id"));
         let mut panel = Self {
             overview: serde_json::Value::Null,
             metrics: serde_json::Value::Null,
             transactions: Vec::new(),
+            savepoints: serde_json::Value::Null,
+            txn_id,
+            savepoint_name,
+            savepoint_id,
+            read_only: false,
             loading: false,
             message: None,
             error: None,
@@ -71,6 +88,258 @@ impl TransactionsPanel {
                             "Failed to load transaction data; retry or check the connection."
                                 .into(),
                         );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn parse_txn_id(&self, cx: &App) -> Option<u64> {
+        self.txn_id.read(cx).value().trim().parse::<u64>().ok()
+    }
+
+    fn parse_savepoint_id(&self, cx: &App) -> Option<u64> {
+        self.savepoint_id
+            .read(cx)
+            .value()
+            .trim()
+            .parse::<u64>()
+            .ok()
+    }
+
+    fn begin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut options = TransactionOptions::new();
+        if self.read_only {
+            options = options.read_only();
+        }
+        let task = transaction_service::begin(cx, options);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                match outcome {
+                    Ok(response) => {
+                        this.message = Some(
+                            format!(
+                                "Began transaction {} ({})",
+                                response.transaction_id, response.status
+                            )
+                            .into(),
+                        );
+                        this.txn_id.update(cx, |field, cx| {
+                            field.set_value(response.transaction_id.to_string(), window, cx);
+                        });
+                        this.refresh(window, cx);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(txn_id) = self.parse_txn_id(cx) else {
+            self.error = Some("Transaction id must be a number.".into());
+            cx.notify();
+            return;
+        };
+        let task = transaction_service::commit(cx, txn_id);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                match outcome {
+                    Ok(()) => {
+                        this.message =
+                            Some(format!("Committed transaction {txn_id}.").into());
+                        this.refresh(window, cx);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn rollback(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(txn_id) = self.parse_txn_id(cx) else {
+            self.error = Some("Transaction id must be a number.".into());
+            cx.notify();
+            return;
+        };
+        let task = transaction_service::rollback(cx, txn_id);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                match outcome {
+                    Ok(()) => {
+                        this.message =
+                            Some(format!("Rolled back transaction {txn_id}.").into());
+                        this.refresh(window, cx);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn create_savepoint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(txn_id) = self.parse_txn_id(cx) else {
+            self.error = Some("Transaction id must be a number.".into());
+            cx.notify();
+            return;
+        };
+        let name = self
+            .savepoint_name
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let name = (!name.is_empty()).then_some(name);
+        let task = transaction_service::create_savepoint(cx, txn_id, name.clone());
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                match outcome {
+                    Ok(response) => {
+                        this.message = Some(
+                            format!(
+                                "Created savepoint {} for transaction {txn_id}.",
+                                response.savepoint_id
+                            )
+                            .into(),
+                        );
+                        this.savepoint_id.update(cx, |field, cx| {
+                            field.set_value(response.savepoint_id.to_string(), window, cx);
+                        });
+                        this.list_savepoints_inner(txn_id, cx);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                        cx.notify();
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn list_savepoints_inner(&mut self, txn_id: u64, cx: &mut Context<Self>) {
+        let task = transaction_service::list_savepoints(cx, txn_id);
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| {
+                match outcome {
+                    Ok(rows) => {
+                        this.savepoints = serde_json::to_value(&rows)
+                            .unwrap_or(serde_json::Value::Null);
+                    }
+                    Err(error) => {
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn list_savepoints(&mut self, _: &Window, cx: &mut Context<Self>) {
+        let Some(txn_id) = self.parse_txn_id(cx) else {
+            self.error = Some("Transaction id must be a number.".into());
+            cx.notify();
+            return;
+        };
+        self.list_savepoints_inner(txn_id, cx);
+    }
+
+    fn rollback_to_savepoint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(txn_id), Some(savepoint_id)) =
+            (self.parse_txn_id(cx), self.parse_savepoint_id(cx))
+        else {
+            self.error = Some("Transaction id and savepoint id must be numbers.".into());
+            cx.notify();
+            return;
+        };
+        let task = transaction_service::rollback_to_savepoint(cx, txn_id, savepoint_id);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                match outcome {
+                    Ok(_) => {
+                        this.message = Some(
+                            format!(
+                                "Rolled back transaction {txn_id} to savepoint {savepoint_id}."
+                            )
+                            .into(),
+                        );
+                        this.refresh(window, cx);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn release_savepoint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(txn_id), Some(savepoint_id)) =
+            (self.parse_txn_id(cx), self.parse_savepoint_id(cx))
+        else {
+            self.error = Some("Transaction id and savepoint id must be numbers.".into());
+            cx.notify();
+            return;
+        };
+        let task = transaction_service::release_savepoint(cx, txn_id, savepoint_id);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, _, cx| {
+                match outcome {
+                    Ok(_) => {
+                        this.message = Some(
+                            format!(
+                                "Released savepoint {savepoint_id} of transaction {txn_id}."
+                            )
+                            .into(),
+                        );
+                        this.list_savepoints_inner(txn_id, cx);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.error = Some(error.to_string().into());
                     }
                 }
                 cx.notify();
@@ -124,6 +393,123 @@ impl TransactionsPanel {
             });
         })
         .detach();
+    }
+
+    fn render_explicit(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let read_only = self.read_only;
+        v_flex()
+            .flex_shrink_0()
+            .gap_2()
+            .px_2()
+            .py_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(SharedString::from("Explicit transactions")),
+            )
+            .child(form_row("Txn id", self.txn_id.clone(), cx))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .flex_wrap()
+                    .child(
+                        Button::new("transactions-begin")
+                            .label("Begin")
+                            .icon(IconName::Plus)
+                            .xsmall()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.begin(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("transactions-read-only")
+                            .label("Read-only")
+                            .xsmall()
+                            .ghost()
+                            .selected(read_only)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.read_only = !this.read_only;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("transactions-commit")
+                            .label("Commit")
+                            .xsmall()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.commit(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("transactions-rollback")
+                            .label("Rollback")
+                            .xsmall()
+                            .ghost()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.rollback(window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(SharedString::from("Savepoints")),
+            )
+            .child(form_row("Name", self.savepoint_name.clone(), cx))
+            .child(form_row("Savepoint id", self.savepoint_id.clone(), cx))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .flex_wrap()
+                    .child(
+                        Button::new("transactions-savepoint-create")
+                            .label("Create")
+                            .xsmall()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.create_savepoint(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("transactions-savepoint-list")
+                            .label("List")
+                            .xsmall()
+                            .ghost()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.list_savepoints(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("transactions-savepoint-rollback")
+                            .label("Rollback to")
+                            .xsmall()
+                            .ghost()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.rollback_to_savepoint(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("transactions-savepoint-release")
+                            .label("Release")
+                            .xsmall()
+                            .ghost()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.release_savepoint(window, cx);
+                            })),
+                    ),
+            )
+            .child(render_json_block(&self.savepoints, cx))
     }
 
     fn render_gauges(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -278,39 +664,42 @@ impl Render for TransactionsPanel {
                         ),
                 )
             })
-            .child(self.render_gauges(cx))
             .child(
-                v_flex()
+                div()
+                    .id("transactions-scroll")
                     .flex_1()
                     .min_h_0()
-                    .px_2()
-                    .py_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from(format!(
-                                "Active transactions ({})",
-                                self.transactions.len()
-                            ))),
-                    )
+                    .overflow_y_scroll()
+                    .child(self.render_explicit(cx))
+                    .child(self.render_gauges(cx))
                     .child(
                         v_flex()
-                            .id("transactions-list")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .children(self.transactions.iter().map(|txn| {
-                                render_transaction_row(txn, &theme, self.confirm_kill, cx)
-                            }))
-                            .when(self.transactions.is_empty(), |list| {
-                                list.child(empty_state(
-                                    IconName::Inbox,
-                                    "No active transactions",
-                                    Some("The server reports no running transactions.".into()),
-                                    cx,
-                                ))
-                            }),
+                            .flex_shrink_0()
+                            .px_2()
+                            .py_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.foreground)
+                                    .child(SharedString::from(format!(
+                                        "Active transactions ({})",
+                                        self.transactions.len()
+                                    ))),
+                            )
+                            .child(
+                                v_flex().children(self.transactions.iter().map(|txn| {
+                                    render_transaction_row(txn, &theme, self.confirm_kill, cx)
+                                })).when(self.transactions.is_empty(), |list| {
+                                    list.child(empty_state(
+                                        IconName::Inbox,
+                                        "No active transactions",
+                                        Some(
+                                            "The server reports no running transactions.".into(),
+                                        ),
+                                        cx,
+                                    ))
+                                }),
+                            ),
                     ),
             )
     }
