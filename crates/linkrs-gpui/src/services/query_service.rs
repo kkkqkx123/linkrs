@@ -2,8 +2,8 @@ use gpui_kit::{App, Task};
 use linkrs_client::{ClientError, QueryResult};
 
 use crate::connection::SessionStore;
-use crate::state::AppState;
 use crate::runtime;
+use crate::state::AppState;
 
 /// Execute one statement (or script) through the session. `raw` skips the
 /// client-side variable substitution performed by `execute_query`.
@@ -94,7 +94,6 @@ pub fn split_statements(script: &str) -> Vec<String> {
     statements
 }
 
-
 /// Execute a query in streaming mode.
 pub fn execute_stream(cx: &App, sql: &str) -> Task<Result<QueryResult, ClientError>> {
     let manager = SessionStore::manager(cx);
@@ -150,6 +149,19 @@ pub fn explain(cx: &App, sql: &str) -> Task<Result<QueryResult, ClientError>> {
         let guard = manager.lock().await;
         let id = session_id.ok_or(ClientError::NotConnected)?;
         guard.client().explain_query(&sql, id).await
+    })
+}
+
+/// Fetch the server-side portrait for a finished query by trace id.
+pub fn profile(
+    cx: &App,
+    trace_id: &str,
+) -> Task<Result<linkrs_wire::meta::QueryProfileDetailResponse, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let trace_id = trace_id.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().get_query_profile_detail(&trace_id).await
     })
 }
 

@@ -15,7 +15,10 @@ use gpui_kit::{
 };
 
 use crate::components::render_json_block;
-use crate::services::{connection_service, monitoring_service};
+use crate::services::{
+    config_service, connection_service, fulltext_service, monitoring_service, stats_service,
+    vector_service,
+};
 
 /// Seconds between monitoring polls when auto-refresh is on.
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -41,6 +44,12 @@ pub struct MonitoringPanel {
     system: serde_json::Value,
     queries: serde_json::Value,
     database: serde_json::Value,
+    search: serde_json::Value,
+    freeze: serde_json::Value,
+    session: serde_json::Value,
+    migration: serde_json::Value,
+    retrieval: serde_json::Value,
+    confirm_freeze: bool,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -59,6 +68,12 @@ impl MonitoringPanel {
             system: serde_json::Value::Null,
             queries: serde_json::Value::Null,
             database: serde_json::Value::Null,
+            search: serde_json::Value::Null,
+            freeze: serde_json::Value::Null,
+            session: serde_json::Value::Null,
+            migration: serde_json::Value::Null,
+            retrieval: serde_json::Value::Null,
+            confirm_freeze: false,
             focus_handle: cx.focus_handle(),
         };
         panel.refresh(cx);
@@ -101,12 +116,28 @@ impl MonitoringPanel {
         let system = monitoring_service::system(cx);
         let queries = monitoring_service::query_stats(cx);
         let database = monitoring_service::database(cx);
+        let search = stats_service::search(cx);
+        let freeze = stats_service::freeze(cx);
+        let session = stats_service::session(cx);
+        let migration = stats_service::migration(cx);
+        let config = config_service::get(cx);
+        let vector_indexes = vector_service::list_indexes(cx);
+        let fulltext_inconsistent = fulltext_service::list_inconsistent(cx);
 
         cx.spawn(async move |this, cx| {
             let overview = overview.await;
             let system = system.await;
             let queries = queries.await;
             let database = database.await;
+            let search = search.await;
+            let freeze = freeze.await;
+            let session = session
+                .await
+                .map(|stats| serde_json::to_value(&stats).unwrap_or(serde_json::Value::Null));
+            let migration = migration.await;
+            let config = config.await.ok();
+            let vector_indexes = vector_indexes.await.ok();
+            let fulltext_inconsistent = fulltext_inconsistent.await.ok();
             this.update(cx, |this, cx| {
                 this.loading = false;
                 let mut failed: Option<String> = None;
@@ -138,6 +169,25 @@ impl MonitoringPanel {
                     Ok(value) => this.database = value,
                     Err(error) => failed = failed.or_else(|| Some(error.to_string())),
                 }
+                // Best-effort extras: a failing section keeps its previous
+                // payload instead of failing the whole refresh.
+                if let Ok(value) = search {
+                    this.search = value;
+                }
+                if let Ok(value) = freeze {
+                    this.freeze = value;
+                }
+                if let Ok(value) = session {
+                    this.session = value;
+                }
+                if let Ok(value) = migration {
+                    this.migration = value;
+                }
+                this.retrieval = retrieval_snapshot(
+                    config.as_ref(),
+                    vector_indexes.as_ref(),
+                    fulltext_inconsistent.as_ref(),
+                );
                 if let Some(error) = failed.as_deref() {
                     this.message = Some(error.to_string().into());
                 } else {
@@ -146,6 +196,30 @@ impl MonitoringPanel {
                 cx.notify();
             })
             .ok();
+        })
+        .detach();
+    }
+
+    fn trigger_freeze(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_freeze = false;
+        let task = stats_service::trigger_freeze(cx);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, _window, cx| {
+                match outcome {
+                    Ok(value) => {
+                        this.freeze = value;
+                        this.message = Some("Freeze triggered.".into());
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.message = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -382,6 +456,114 @@ impl Render for MonitoringPanel {
                                             .child(SharedString::from("Overview payload")),
                                     )
                                     .child(render_json_block(&self.overview, cx)),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(SharedString::from("Search statistics")),
+                                    )
+                                    .child(render_json_block(&self.search, cx)),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_sm()
+                                                    .text_color(theme.foreground)
+                                                    .child(SharedString::from("Freeze statistics")),
+                                            )
+                                            .child(
+                                                Button::new("monitoring-freeze")
+                                                    .label("Trigger freeze")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .disabled(self.loading)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.confirm_freeze = true;
+                                                        cx.notify();
+                                                    })),
+                                            ),
+                                    )
+                                    .when(self.confirm_freeze, |area| {
+                                        area.child(
+                                            h_flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .text_xs()
+                                                        .text_color(theme.warning)
+                                                        .child(SharedString::from(
+                                                            "Trigger a freeze now?",
+                                                        )),
+                                                )
+                                                .child(
+                                                    Button::new("monitoring-freeze-confirm")
+                                                        .label("Confirm")
+                                                        .xsmall()
+                                                        .on_click(cx.listener(
+                                                            |this, _, window, cx| {
+                                                                this.trigger_freeze(window, cx);
+                                                            },
+                                                        )),
+                                                )
+                                                .child(
+                                                    Button::new("monitoring-freeze-cancel")
+                                                        .label("Cancel")
+                                                        .xsmall()
+                                                        .ghost()
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.confirm_freeze = false;
+                                                            cx.notify();
+                                                        })),
+                                                ),
+                                        )
+                                    })
+                                    .child(render_json_block(&self.freeze, cx)),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(SharedString::from("Current session")),
+                                    )
+                                    .child(render_json_block(&self.session, cx)),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(SharedString::from("Migration statistics")),
+                                    )
+                                    .child(render_json_block(&self.migration, cx)),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(SharedString::from("Retrieval snapshot")),
+                                    )
+                                    .child(render_json_block(&self.retrieval, cx)),
                             ),
                     ),
             )
@@ -419,4 +601,51 @@ fn pick(payload: &serde_json::Value, keys: &[&str]) -> Option<f64> {
 
 fn number(payload: &serde_json::Value, keys: &[&str]) -> Option<i64> {
     pick(payload, keys).map(|value| value as i64)
+}
+
+/// Best-effort retrieval health snapshot, mirroring the frontend retrieval
+/// service: config sections decide enabled/disabled, the index listings
+/// double as reachability probes. Unknown backends stay `null`.
+fn retrieval_snapshot(
+    config: Option<&serde_json::Value>,
+    vector: Option<&serde_json::Value>,
+    fulltext: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let section = |name: &str| config.and_then(|config| config.get(name));
+    let enabled = |name: &str| {
+        section(name)
+            .and_then(|section| section.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+    };
+    let count = |payload: Option<&serde_json::Value>| {
+        let payload = payload?;
+        if let Some(count) = payload.get("count").and_then(serde_json::Value::as_u64) {
+            return Some(count);
+        }
+        if let Some(indexes) = payload.get("indexes").and_then(|value| value.as_array()) {
+            return Some(indexes.len() as u64);
+        }
+        payload.as_array().map(|rows| rows.len() as u64)
+    };
+    let probe = |is_enabled: Option<bool>, listed: bool| match (is_enabled, listed) {
+        (Some(false), _) => "disabled",
+        (_, true) => "reachable",
+        (Some(true), false) => "unreachable",
+        (None, false) => "unknown",
+    };
+    let vector_enabled = enabled("vector");
+    let fulltext_enabled = enabled("fulltext");
+    serde_json::json!({
+        "vector": {
+            "enabled": vector_enabled,
+            "engine": section("vector").and_then(|s| s.get("engine")),
+            "index_count": count(vector),
+            "probe": probe(vector_enabled, vector.is_some()),
+        },
+        "fulltext": {
+            "enabled": fulltext_enabled,
+            "inconsistent_count": count(fulltext),
+            "probe": probe(fulltext_enabled, fulltext.is_some()),
+        },
+    })
 }

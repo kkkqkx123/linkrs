@@ -6,30 +6,32 @@ use gpui_kit::base::dock::{register_panel, Panel as BasePanel, PanelId};
 use gpui_kit::base::Selectable as _;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
+    command::{Command, CommandGroup, CommandItem, CommandState},
     dock::{panel_handle, DockArea, DockAreaState, DockEvent, DockLayout, DockPlacement, DockSkin},
     h_flex,
     sidebar::{Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
     status_bar::StatusBar,
-    v_flex, ActiveTheme as _, Icon, Sizable as _, Theme,
+    v_flex, ActiveTheme as _, Icon, IndexPath, Sizable as _, Theme,
 };
 use gpui_kit::{
-    div, px, AnyWindowHandle, App, AppContext as _, ClickEvent, Context, Entity,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Task, WeakEntity, Window,
+    div, prelude::FluentBuilder as _, px, AnyWindowHandle, App, AppContext as _, ClickEvent,
+    Context, Entity, Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, SharedString, Styled as _, Task, WeakEntity, Window,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::app::{to_theme_mode, Quit, ThemeDark, ThemeLight, ThemeSystem};
+use crate::app::{to_theme_mode, Quit, ThemeDark, ThemeLight, ThemeSystem, TogglePalette};
 use crate::services::connection_service;
 use crate::settings::{self, ThemeModeSetting, WindowGeometry};
 use crate::state::{self, AppState, ConnectionStatus};
 use crate::views::{
-    BatchPanel, ConsolePanel, DataBrowserPanel, FulltextPanel, GraphPanel, MigrationPanel,
-    MonitoringPanel, SchemaPanel, SessionsPanel, TransferPanel, UsersPanel, VectorPanel,
+    BatchPanel, ConfigPanel, ConsolePanel, DataBrowserPanel, FulltextPanel, FunctionsPanel,
+    GraphPanel, MigrationPanel, MonitoringPanel, SchemaPanel, SessionsPanel, SyncPanel,
+    TransactionsPanel, TransferPanel, UsersPanel, VectorPanel,
 };
 
 /// Bump when the default layout changes so stale persisted layouts reset.
-const MAIN_DOCK_VERSION: usize = 3;
+const MAIN_DOCK_VERSION: usize = 4;
 const MAIN_DOCK_ID: &str = "main-dock";
 /// Debounce window before a layout change is written to disk.
 const LAYOUT_SAVE_DELAY: Duration = Duration::from_secs(1);
@@ -49,6 +51,10 @@ pub struct MainWindow {
     data_browser: Entity<DataBrowserPanel>,
     graph: Entity<GraphPanel>,
     monitoring: Entity<MonitoringPanel>,
+    transactions: Entity<TransactionsPanel>,
+    sync: Entity<SyncPanel>,
+    functions: Entity<FunctionsPanel>,
+    config: Entity<ConfigPanel>,
     batch: Entity<BatchPanel>,
     transfer: Entity<TransferPanel>,
     users: Entity<UsersPanel>,
@@ -66,6 +72,8 @@ pub struct MainWindow {
     last_saved_layout: Option<DockAreaState>,
     window_handle: AnyWindowHandle,
     _save_layout_task: Option<Task<()>>,
+    palette_open: bool,
+    palette_state: Entity<CommandState>,
 }
 
 impl MainWindow {
@@ -81,6 +89,10 @@ impl MainWindow {
         let data_browser = cx.new(|cx| DataBrowserPanel::new(window, cx));
         let graph = cx.new(|cx| GraphPanel::new(window, cx));
         let monitoring = cx.new(|cx| MonitoringPanel::new(window, cx));
+        let transactions = cx.new(|cx| TransactionsPanel::new(window, cx));
+        let sync = cx.new(|cx| SyncPanel::new(window, cx));
+        let functions = cx.new(|cx| FunctionsPanel::new(window, cx));
+        let config = cx.new(|cx| ConfigPanel::new(window, cx));
         let batch = cx.new(|cx| BatchPanel::new(window, cx));
         let transfer = cx.new(|cx| TransferPanel::new(window, cx));
         let users = cx.new(|cx| UsersPanel::new(window, cx));
@@ -88,6 +100,7 @@ impl MainWindow {
         let migration = cx.new(|cx| MigrationPanel::new(window, cx));
         let vector = cx.new(|cx| VectorPanel::new(window, cx));
         let fulltext = cx.new(|cx| FulltextPanel::new(window, cx));
+        let palette_state = cx.new(|cx| CommandState::new(window, cx));
 
         // The registry rebuilds panels when a persisted layout is restored;
         // handing it the live entities keeps panel identities stable across
@@ -111,6 +124,22 @@ impl MainWindow {
         register_panel(cx, MonitoringPanel::PANEL_NAME, {
             let monitoring = monitoring.clone();
             move |_, _, _| panel_handle(monitoring.clone())
+        });
+        register_panel(cx, TransactionsPanel::PANEL_NAME, {
+            let transactions = transactions.clone();
+            move |_, _, _| panel_handle(transactions.clone())
+        });
+        register_panel(cx, SyncPanel::PANEL_NAME, {
+            let sync = sync.clone();
+            move |_, _, _| panel_handle(sync.clone())
+        });
+        register_panel(cx, FunctionsPanel::PANEL_NAME, {
+            let functions = functions.clone();
+            move |_, _, _| panel_handle(functions.clone())
+        });
+        register_panel(cx, ConfigPanel::PANEL_NAME, {
+            let config = config.clone();
+            move |_, _, _| panel_handle(config.clone())
         });
         register_panel(cx, BatchPanel::PANEL_NAME, {
             let batch = batch.clone();
@@ -148,6 +177,10 @@ impl MainWindow {
                 data_browser.clone(),
                 graph.clone(),
                 monitoring.clone(),
+                transactions.clone(),
+                sync.clone(),
+                functions.clone(),
+                config.clone(),
                 batch.clone(),
                 transfer.clone(),
                 users.clone(),
@@ -196,6 +229,10 @@ impl MainWindow {
             data_browser,
             graph,
             monitoring,
+            transactions,
+            sync,
+            functions,
+            config,
             batch,
             transfer,
             users,
@@ -209,6 +246,8 @@ impl MainWindow {
             last_saved_layout: None,
             window_handle,
             _save_layout_task: None,
+            palette_open: false,
+            palette_state,
         }
     }
 
@@ -276,6 +315,196 @@ impl MainWindow {
     fn on_monitoring(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.monitoring.clone();
         self.activate_panel(panel, MonitoringPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_transactions(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.transactions.clone();
+        self.activate_panel(panel, TransactionsPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_sync(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.sync.clone();
+        self.activate_panel(panel, SyncPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_functions(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.functions.clone();
+        self.activate_panel(panel, FunctionsPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_config(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.config.clone();
+        self.activate_panel(panel, ConfigPanel::PANEL_NAME, window, cx);
+    }
+
+    // -- Command palette (Ctrl+K) --------------------------------------------
+
+    fn on_toggle_palette(
+        &mut self,
+        _: &TogglePalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.palette_open = !self.palette_open;
+        if self.palette_open {
+            let state = self.palette_state.clone();
+            window.defer(cx, move |window, cx| {
+                state.read(cx).focus_handle(cx).focus(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, cx: &mut Context<Self>) {
+        self.palette_open = false;
+        cx.notify();
+    }
+
+    /// Activate the palette row at `index`: panels by position, then the two
+    /// console actions. Theme rows dispatch their own actions.
+    fn confirm_palette(&mut self, index: IndexPath, window: &mut Window, cx: &mut Context<Self>) {
+        match (index.section, index.row) {
+            (0, row) => self.activate_palette_panel(row, window, cx),
+            (1, 0) => {
+                let console = self.console.clone();
+                self.activate_panel(console.clone(), ConsolePanel::PANEL_NAME, window, cx);
+                _ = console.update(cx, |console, cx| console.run_now(window, cx));
+            }
+            (1, 1) => {
+                let console = self.console.clone();
+                self.activate_panel(console.clone(), ConsolePanel::PANEL_NAME, window, cx);
+                console.update(cx, |console, cx| console.toggle_stream(cx));
+            }
+            _ => {}
+        }
+        self.close_palette(cx);
+    }
+
+    fn activate_palette_panel(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        match row {
+            0 => self.activate_panel(self.console.clone(), ConsolePanel::PANEL_NAME, window, cx),
+            1 => self.activate_panel(self.schema.clone(), SchemaPanel::PANEL_NAME, window, cx),
+            2 => self.activate_panel(
+                self.data_browser.clone(),
+                DataBrowserPanel::PANEL_NAME,
+                window,
+                cx,
+            ),
+            3 => self.activate_panel(self.graph.clone(), GraphPanel::PANEL_NAME, window, cx),
+            4 => self.activate_panel(
+                self.monitoring.clone(),
+                MonitoringPanel::PANEL_NAME,
+                window,
+                cx,
+            ),
+            5 => self.activate_panel(
+                self.transactions.clone(),
+                TransactionsPanel::PANEL_NAME,
+                window,
+                cx,
+            ),
+            6 => self.activate_panel(self.sync.clone(), SyncPanel::PANEL_NAME, window, cx),
+            7 => self.activate_panel(
+                self.functions.clone(),
+                FunctionsPanel::PANEL_NAME,
+                window,
+                cx,
+            ),
+            8 => self.activate_panel(self.config.clone(), ConfigPanel::PANEL_NAME, window, cx),
+            9 => self.activate_panel(self.batch.clone(), BatchPanel::PANEL_NAME, window, cx),
+            10 => self.activate_panel(self.transfer.clone(), TransferPanel::PANEL_NAME, window, cx),
+            11 => self.activate_panel(self.users.clone(), UsersPanel::PANEL_NAME, window, cx),
+            12 => self.activate_panel(self.sessions.clone(), SessionsPanel::PANEL_NAME, window, cx),
+            13 => self.activate_panel(
+                self.migration.clone(),
+                MigrationPanel::PANEL_NAME,
+                window,
+                cx,
+            ),
+            14 => self.activate_panel(self.vector.clone(), VectorPanel::PANEL_NAME, window, cx),
+            15 => self.activate_panel(self.fulltext.clone(), FulltextPanel::PANEL_NAME, window, cx),
+            _ => {}
+        }
+    }
+
+    fn render_palette(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let state = self.palette_state.clone();
+        let owner = cx.entity().downgrade();
+        let cancel_owner = cx.entity().downgrade();
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_start()
+            .justify_center()
+            .bg(theme.overlay)
+            .child(
+                div()
+                    .w(px(560.))
+                    .mt(px(96.))
+                    .rounded(theme.radius)
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.background)
+                    .child(
+                        Command::new(&state)
+                            .placeholder("Type a command or search…")
+                            .group(CommandGroup::new().label("Panels").items(vec![
+                                palette_item("Console", IconName::SquareTerminal, "console"),
+                                palette_item("Schema", IconName::FolderOpen, "schema"),
+                                palette_item("Data Browser", IconName::HardDrive, "data"),
+                                palette_item("Graph", IconName::Network, "graph"),
+                                palette_item("Monitoring", IconName::Cpu, "monitoring"),
+                                palette_item("Transactions", IconName::Repeat, "transactions"),
+                                palette_item("Sync", IconName::ArrowLeftRight, "sync"),
+                                palette_item("Functions", IconName::Braces, "functions"),
+                                palette_item("Config", IconName::SlidersHorizontal, "config"),
+                                palette_item("Batch", IconName::Inbox, "batch"),
+                                palette_item("Transfer", IconName::ExternalLink, "transfer"),
+                                palette_item("Users", IconName::User, "users"),
+                                palette_item("Sessions", IconName::Globe, "sessions"),
+                                palette_item("Migration", IconName::FileText, "migration"),
+                                palette_item("Vector", IconName::MemoryStick, "vector"),
+                                palette_item("Fulltext", IconName::Search, "fulltext"),
+                            ]))
+                            .group(CommandGroup::new().label("Console").items(vec![
+                                    CommandItem::new()
+                                        .label("Run editor query")
+                                        .icon(IconName::Play)
+                                        .keywords(["run", "execute"]),
+                                    CommandItem::new()
+                                        .label("Toggle streaming execution")
+                                        .icon(IconName::Zap)
+                                        .keywords(["stream", "sse"]),
+                                ]))
+                            .group(CommandGroup::new().label("Theme").items(vec![
+                                    CommandItem::new()
+                                        .label("Light theme")
+                                        .icon(IconName::Sun)
+                                        .action(Box::new(ThemeLight)),
+                                    CommandItem::new()
+                                        .label("Dark theme")
+                                        .icon(IconName::Moon)
+                                        .action(Box::new(ThemeDark)),
+                                    CommandItem::new()
+                                        .label("System theme")
+                                        .icon(IconName::Monitor)
+                                        .action(Box::new(ThemeSystem)),
+                                ]))
+                            .on_confirm(move |index, window, cx| {
+                                _ = owner.update(cx, |this, cx| {
+                                    this.confirm_palette(index, window, cx);
+                                });
+                            })
+                            .on_cancel(move |_, cx| {
+                                _ = cancel_owner.update(cx, |this, cx| {
+                                    this.close_palette(cx);
+                                });
+                            }),
+                    ),
+            )
     }
 
     fn on_batch(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -521,6 +750,42 @@ impl MainWindow {
                             cx,
                         )
                         .on_click(cx.listener(Self::on_sessions)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Transactions",
+                                icon: IconName::Repeat,
+                            },
+                            active == TransactionsPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_transactions)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Sync",
+                                icon: IconName::ArrowLeftRight,
+                            },
+                            active == SyncPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_sync)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Functions",
+                                icon: IconName::Braces,
+                            },
+                            active == FunctionsPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_functions)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Config",
+                                icon: IconName::SlidersHorizontal,
+                            },
+                            active == ConfigPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_config)),
                     ]),
                 ),
             )
@@ -624,6 +889,7 @@ impl Render for MainWindow {
             .on_action(cx.listener(Self::on_theme_light))
             .on_action(cx.listener(Self::on_theme_dark))
             .on_action(cx.listener(Self::on_theme_system))
+            .on_action(cx.listener(Self::on_toggle_palette))
             .child(
                 h_flex()
                     .flex_1()
@@ -631,8 +897,19 @@ impl Render for MainWindow {
                     .child(self.render_sidebar(cx))
                     .child(div().flex_1().min_w_0().child(self.dock_area.clone())),
             )
+            .when(self.palette_open, |root| {
+                root.child(self.render_palette(cx))
+            })
             .child(self.render_status_bar(cx))
     }
+}
+
+/// One palette row: label, icon and a search keyword.
+fn palette_item(label: &'static str, icon: IconName, keyword: &'static str) -> CommandItem {
+    CommandItem::new()
+        .label(label)
+        .icon(icon)
+        .keywords([keyword])
 }
 
 // -- Dock layout persistence --------------------------------------------------
@@ -687,6 +964,10 @@ fn reset_default_layout(
     data_browser: Entity<DataBrowserPanel>,
     graph: Entity<GraphPanel>,
     monitoring: Entity<MonitoringPanel>,
+    transactions: Entity<TransactionsPanel>,
+    sync: Entity<SyncPanel>,
+    functions: Entity<FunctionsPanel>,
+    config: Entity<ConfigPanel>,
     batch: Entity<BatchPanel>,
     transfer: Entity<TransferPanel>,
     users: Entity<UsersPanel>,
@@ -704,6 +985,10 @@ fn reset_default_layout(
         .panel(data_browser)
         .panel(graph)
         .panel(monitoring)
+        .panel(transactions)
+        .panel(sync)
+        .panel(functions)
+        .panel(config)
         .panel(batch)
         .panel(transfer)
         .panel(users)

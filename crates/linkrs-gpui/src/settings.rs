@@ -29,9 +29,57 @@ impl LastConnection {
     }
 }
 
-/// Cap on how many distinct connections and recent queries are persisted.
+/// Cap on how many distinct connections, history entries and favorites are persisted.
 const MAX_RECENT_CONNECTIONS: usize = 8;
 const MAX_QUERY_HISTORY: usize = 50;
+const MAX_QUERY_FAVORITES: usize = 30;
+
+/// Execution path of a recorded statement, mirroring the frontend history model.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HistoryPath {
+    #[default]
+    Materialized,
+    Stream,
+}
+
+/// One executed statement with its outcome, newest first in `query_history`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryHistoryItem {
+    pub sql: String,
+    #[serde(default)]
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub row_count: usize,
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub path: HistoryPath,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub trace_id: Option<String>,
+    #[serde(default)]
+    pub timestamp_ms: u64,
+}
+
+/// A named saved query with an optional preferred execution path.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryFavoriteItem {
+    pub name: String,
+    pub sql: String,
+    #[serde(default)]
+    pub preferred_path: Option<HistoryPath>,
+    #[serde(default)]
+    pub created_at_ms: u64,
+}
+
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duty| duty.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Window position and size in logical pixels.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -51,9 +99,12 @@ pub struct Settings {
     /// Distinct recent connections, newest first, without passwords.
     #[serde(default)]
     pub recent_connections: Vec<LastConnection>,
-    /// Recently executed SQL scripts, newest first.
+    /// Recently executed statements with outcomes, newest first.
     #[serde(default)]
-    pub query_history: Vec<String>,
+    pub query_history: Vec<QueryHistoryItem>,
+    /// Named saved queries.
+    #[serde(default)]
+    pub favorites: Vec<QueryFavoriteItem>,
 }
 
 impl Settings {
@@ -164,19 +215,78 @@ pub fn record_connection(cx: &mut App, host: &str, port: u16, user: &str) {
     });
 }
 
-/// Record an executed script in the local query history (deduplicated, capped).
-pub fn record_query(cx: &mut App, sql: &str) {
-    let sql = sql.trim();
-    if sql.is_empty() {
+/// Record one executed statement in the local query history (deduplicated by
+/// statement text with newest first, capped). Both materialized and streaming
+/// runs are recorded, including failures with their error codes.
+pub fn record_query(cx: &mut App, item: QueryHistoryItem) {
+    if item.sql.trim().is_empty() {
         return;
     }
     update(cx, |settings| {
         settings
             .query_history
             .iter()
-            .position(|existing| existing == sql)
+            .position(|existing| existing.sql == item.sql)
             .map(|ix| settings.query_history.remove(ix));
-        settings.query_history.insert(0, sql.to_string());
+        settings.query_history.insert(0, item);
         settings.query_history.truncate(MAX_QUERY_HISTORY);
+    });
+}
+
+/// Drop all local query history entries.
+pub fn clear_history(cx: &mut App) {
+    update(cx, |settings| {
+        settings.query_history.clear();
+    });
+}
+
+/// Save the current editor content as a named favorite. Names must be unique
+/// (case-insensitive) and non-empty, mirroring the frontend validation.
+pub fn add_favorite(
+    cx: &mut App,
+    name: &str,
+    sql: &str,
+    preferred_path: Option<HistoryPath>,
+) -> Result<(), String> {
+    let name = name.trim();
+    let sql = sql.trim();
+    if name.is_empty() {
+        return Err("Favorite name is required.".to_string());
+    }
+    if sql.is_empty() {
+        return Err("Favorite query is required.".to_string());
+    }
+    let mut outcome = Ok(());
+    update(cx, |settings| {
+        if settings
+            .favorites
+            .iter()
+            .any(|existing| existing.name.to_lowercase() == name.to_lowercase())
+        {
+            outcome = Err("A favorite with this name already exists.".to_string());
+            return;
+        }
+        if settings.favorites.len() >= MAX_QUERY_FAVORITES {
+            outcome = Err("Favorite limit reached.".to_string());
+            return;
+        }
+        settings.favorites.push(QueryFavoriteItem {
+            name: name.to_string(),
+            sql: sql.to_string(),
+            preferred_path,
+            created_at_ms: now_ms(),
+        });
+    });
+    outcome
+}
+
+/// Remove the favorite with the given name (case-insensitive).
+pub fn remove_favorite(cx: &mut App, name: &str) {
+    update(cx, |settings| {
+        settings
+            .favorites
+            .iter()
+            .position(|existing| existing.name.to_lowercase() == name.to_lowercase())
+            .map(|ix| settings.favorites.remove(ix));
     });
 }

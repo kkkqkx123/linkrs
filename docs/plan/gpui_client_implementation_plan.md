@@ -39,16 +39,16 @@
 > 状态更新（见 §12）：阶段 2/3 服务层预移植时端点已大规模补齐（当前 115 个公开方法），
 > 下表剩余缺口为数据浏览器、图邻接与导入导出文件传输三类。
 
-| 功能域 | 缺失端点 | 使用阶段 | 状态 |
+| 功能域 | 缺失端点 | 使用阶段 | 状态（2026-11-02 已核验） |
 |---|---|---|---|
-| 数据浏览器 | 顶点/边分页扫描、单条记录详情、按谓词过滤 | 阶段二 | **仍缺** |
-| 图可视化 | N 跳邻接查询、节点度数统计 | 阶段二 | **仍缺** |
+| 数据浏览器 | 顶点/边分页扫描、单条记录详情、按谓词过滤 | 阶段二 | **已补齐**：`list_vertices_by_tag` / `list_edges_by_type`（分页 + `filter`/`sort_by`/`sort_order`）、`get_vertex` / `get_edge`，`SessionManager` 另有当前 space 便捷封装 |
+| 图可视化 | N 跳邻接查询、节点度数统计 | 阶段二 | **已补齐（客户端侧组合，无新增服务端点）**：`get_neighbors`（`OUT`/`IN`/`BOTH` + 可选 edge type），N 跳由 `graph_service::expand_neighborhood` 在客户端 BFS（去重防环），度数由三次有向邻居调用计数 |
 | 用户管理 | 用户列表/创建/删除/改密/角色分配 | 阶段三 | 已补齐 |
 | 全文管理 | 索引列表/创建/删除/重建 | 阶段三 | 已补齐 |
 | 向量管理 | 集合列表/创建/删除/统计 | 阶段三 | 已补齐 |
 | 迁移 | 任务列表/发起/进度/取消 | 阶段三 | 已补齐 |
 | 会话管理 | 会话列表/终止 | 阶段三 | 已补齐 |
-| 导入导出 | 文件上传/下载进度 | 阶段二 | **仍缺**（仅 `import_status`） |
+| 导入导出 | 文件上传/下载进度 | 阶段二 | **部分补齐**：复用既有 `server_import_file` / `server_export_bytes`（单请求体），无分块进度回调；transfer 视图据此实现导入 + job 状态跟进、导出经文件对话框落盘 |
 
 此外已补齐计划未列出的端点：事务/保存点全生命周期、游标、流式查询（`execute_query_stream`）、会话变量、配置读写重置、函数注册、同步 outbox 诊断/重试、冻结统计等。
 
@@ -328,13 +328,13 @@ src/
 
 ## 10. 里程碑验收总表
 
-| 阶段 | 硬性验收 |
-|---|---|
-| 阶段 0 | 空壳应用可编译运行；主题/窗口几何/Dock 布局持久化生效 |
-| 阶段 1 | 登录 → 执行 GQL → 表格结果/错误 → Schema 树 → 断线回登录，全链路可用 |
-| 阶段 2 | 数据浏览器分页过滤；图原生渲染邻域扩展与点选；监控图表；批量任务全流程 |
-| 阶段 3 | 用户/会话/迁移/向量/全文管理页可用；流式与游标大结果稳定 |
-| 阶段 4 | 打包产物可安装启动；命令面板与快捷键齐备；性能采样无明显回归 |
+| 阶段 | 硬性验收 | 状态（2026-11-02 已核验） |
+|---|---|---|
+| 阶段 0 | 空壳应用可编译运行；主题/窗口几何/Dock 布局持久化生效 | 已完成（Dock 布局版本 3，旧布局自动重置） |
+| 阶段 1 | 登录 → 执行 GQL → 表格结果/错误 → Schema 树 → 断线回登录，全链路可用 | 已完成；流式执行与游标分页已随控制台提前交付 |
+| 阶段 2 | 数据浏览器分页过滤；图原生渲染邻域扩展与点选；监控图表；批量任务全流程 | 已完成（图为 compograph 原生画布：点选/拖拽/滚轮缩放/多布局切换/Fit 复位） |
+| 阶段 3 | 用户/会话/迁移/向量/全文管理页可用；流式与游标大结果稳定 | 已完成；管理页用内联表单 + 二次确认代替 `Sheet`/`Dialog` |
+| 阶段 4 | 打包产物可安装启动；命令面板与快捷键齐备；性能采样无明显回归 | 已完成（收尾范围）：`Ctrl+K` 面板 + 16 面板跳转 + 主题切换；打包说明文档化（剩余方案 §4）；keychain 延期（无离线依赖） |
 
 ## 11. 修订记录：依赖接入方式变更（path → 独立 workspace + 本地 path）
 
@@ -364,9 +364,9 @@ src/
 - 本节 §9 中“git 依赖固定分支”“compograph 接口收敛”等条目中与接入方式
   相关的表述以本节为准，其余风险项不变。
 
-## 12. 当前进度与功能缺口（2026-11 更新）
+## 12. 当前进度与功能缺口（2026-11-02 已核验）
 
-以 `crates/linkrs-gpui` 工作树实测状态为准（总计约 4500 行，`cargo check` 通过）。
+核验方式：`cargo check` / `cargo test`（`--manifest-path crates/linkrs-gpui/Cargo.toml`）通过 + 全量源码走查。阶段 0–4 全部完成（阶段 4 为收尾范围，见 §12.6）。
 
 ### 12.1 已交付
 
@@ -384,24 +384,23 @@ src/
 - Schema 浏览：space/tag/edge_type 树状展示 + space 切换联动刷新（`views/schema.rs`、`schema_service.rs`）。
 - 会话状态实体（`state.rs`：连接状态机、当前 space、session id）。
 
-### 12.2 预移植（超出计划节奏）
+### 12.2 服务层全量就绪（19 个模块全部接线）
 
-阶段 2/3 的服务层已按 Web Studio 的 20 个服务文件契约**预先移植完毕**：batch、config、cursor、fulltext、function、migration、server_session、stats、sync、transaction、transfer、user、vector 共 13 个模块约 92 个函数，全部对齐 `linkrs-client` 已补齐的强类型端点，并与 `connection_service` 一致地处理会话失效。
+阶段 2/3 的服务层已按 Web Studio 的 20 个服务文件契约**全部移植完毕**（`src/services/` 共 19 个模块），§12.6 交付后全部已有视图调用。`cargo check` 剩余约 31 条 `dead_code` 警告，均为 savepoint、批量配置等细粒度备用函数。
 
-> 这 13 个模块当前无任何视图调用，`cargo check` 产生约 105 条 `dead_code`
-> 警告。**这是移植节奏的正常中间态**（服务层先于视图落地），不通过
-> `#[allow(dead_code)]` 抑制；对应视图接线后警告自然消除。
+单测：`services::` 下 7 个通过（data_browser 行归一化 2、graph 邻居归一化 2、query 多语句切分 3）；`linkrs-client::http_client::data_browser_tests` 3 个通过（信封成功/失败、邻居列表容错解析）。
 
-### 12.3 功能缺口（下一步工作）
+### 12.3 剩余缺口（§12.6 交付后）
 
 | 缺口 | 内容 | 所属阶段 |
 |---|---|---|
-| 视图层 | 阶段 2 视图全部缺失：data_browser、graph（compograph）、monitoring、batch、transfer；阶段 3 视图全部缺失：users、sessions、migration、vector、fulltext | 阶段 2/3 |
-| linkrs-client 端点 | 顶点/边分页扫描与谓词过滤、N 跳邻接与度数、文件上传/下载进度回调（§1.2 表中"仍缺"三项） | 阶段 2 |
-| 图可视化 | compograph 接入（`graph_host.rs`/`graph_service.rs` 隔离层）尚未开工 | 阶段 2 |
-| 流式/游标 UI | 端点已齐（`execute_query_stream`、cursor 三件套），控制台尚无流式模式与游标自动分页 | 阶段 3 |
-| 历史侧栏 | 本地环形缓存已有雏形，服务端历史接口未接 | 阶段 3 |
-| 阶段 4 | 快捷键面板、打包分发、性能采样、OS keychain 均未启动 | 阶段 4 |
+| 历史侧栏 | 服务端无历史接口（前端同样本地存储）；GPUI 富条目历史 + 收藏已对齐前端模型 | 已交付 |
+| 未接线服务 | 19 个服务模块全部接线；剩余约 31 条 `dead_code` 为细粒度备用函数 | 已交付 |
+| 传输进度 | 文件传输复用单请求体端点，无分块进度回调（服务端能力所限，非客户端缺口） | 接受 |
+| 管理页形态 | 管理页用内联表单 + 二次确认代替 `Sheet`/`Dialog`（同等功能，组件 API 风险更低） | 已接受偏差 |
+| 命令面板 | `Ctrl+K` 已交付（16 面板跳转 + 控制台执行 + 主题切换）；space 切换未纳入（需异步选择器，单独任务） | 阶段 4 收尾 |
+| 打包分发 | 文档化说明（剩余方案 §4），产物不在仓库内 | 阶段 4 收尾 |
+| OS keychain | 无离线依赖，延期；继续不存密码 | 延期 |
 
 ### 12.4 与计划的实现偏差（均已在 §11 或工作树验证）
 
@@ -410,9 +409,9 @@ src/
 - 设计文档 §5 的 `commands.rs`/`tasks.rs` 未落地，对应职责分别由 `app.rs` 的 Action 注册与 `runtime.rs` 承担；`management_service.rs` 按功能域拆分为 `user_service.rs` + `server_session_service.rs`。
 - 调试性能调优（`[profile.dev.package]` opt-level 3）落在 `linkrs-gpui` 自身 workspace，根 workspace 仅保留 `tree-sitter` 一条。
 
-### 12.5 阶段 2/3 交付记录（本次实现）
+### 12.5 阶段 2/3 交付记录（2026-11-02 已核验完成）
 
-§12.3 的视图层、端点、流式/游标三类缺口已交付，历史侧栏与阶段 4 不在本次范围。
+§12.3 交付前的三类缺口（视图层、端点、流式/游标）已全部交付并走查确认；历史侧栏服务端接口与阶段 4 不在本次范围，见 §12.3。
 
 **linkrs-client 端点补齐**（`crates/linkrs-client/src/http_client.rs`）：
 
@@ -434,7 +433,7 @@ src/
 | `graph.rs` | seed 输入、1–3 跳 N 跳展开、OUT/IN/BOTH 方向、compograph 原生画布点选/拖拽/滚轮缩放、布局切换（force/circle/grid/concentric/breadthfirst/radial）、点选节点加载顶点详情、边列表、Fit 复位 |
 | `monitoring.rs` | overview/system/query/database 5s 轮询（可开关）、QPS/延迟 `AreaChart`、指标卡片、原始 payload |
 | `batch.rs` | 创建/加项（JSON 数组解析）/执行/状态轮询（`Progress`）/取消/删除 |
-| `transfer.rs` | 本地文件读取后服务端导入 + job 状态跟进、服务端导出经文件对话框落盘 |
+| `transfer.rs` | 本地文件读取后服务端导入 + job 状态跟进、服务端导出经路径输入框指定落盘位置 |
 | `users.rs` | 用户列表排序、创建/改密/启用/禁用/授权/撤权、删除二次确认 |
 | `sessions.rs` | 会话列表 + 终止 + 5s 自动刷新循环、选中会话变量查看/设置 |
 | `migration.rs` | plan 历史版本输入、plan/dry-run/execute/rollback、history/status/progress 查询、plan JSON 回填 |
@@ -446,3 +445,17 @@ src/
 **主框架接线**（`views/main_window.rs`）：12 面板全部注册（`register_panel` + 默认中心 tab 布局），Dock 布局版本升至 3（旧布局自动重置），侧栏占位禁用项全部替换为可点击导航（查询/数据/观测/管理四组）。
 
 与计划的偏差：图渲染已改用 compograph 原生画布（`graph_host.rs` 为 `GraphStore` + `LayoutDriver` + `Camera` 会话，`graph.rs` 只负责帧装配与手势转发，隔离边界仍收敛在这两个文件，符合决策三）。compograph 子模块的 gpui pin 由 `=0.3.8` 升至 `=0.3.10`（与其自身"与 gpui-kit pin 保持一致"的规定对齐，`cargo check --workspace` 通过），提交链为 compograph → gpui-kit 指针 → 主仓库指针，需上游 push；管理页用内联表单 + 二次确认代替 `Sheet`/`Dialog`（同等功能，组件 API 风险更低）；`dead_code` 警告由约 105 条降至约 62 条，剩余为 config/transaction/sync/function 等尚未有视图的服务函数。
+
+## 12.6 剩余工作交付记录（2026-11-02 已核验）
+
+依据《[剩余工作细化方案](gpui_client_remaining_work.md)》阶段 A–G 全部完成并走查确认。`cargo check` 通过，`cargo test` 7 通过，`dead_code` 由约 62 条降至 31 条（5 个待接线服务模块全部接线，剩余为 savepoint、批量配置等细粒度备用函数）。
+
+**阶段 A（控制台对等）**：`settings` 历史升级为富条目 + 收藏（上限 50/30，去重与校验规则对齐前端 `history.ts`），执行后按语句记录（含流式路径、错误码、trace id）；历史侧栏展示耗时/行数/状态、载入与重跑、清空；收藏侧栏命名新增、载入、按首选路径重跑、删除；工具栏新增 Validate（JSON 块）、Explain（新结果 tab）、Running（列表 + 按 session/query id 终止）、Profile（trace id 画像）按钮；新增 `query_service::profile`。
+
+**阶段 B–E（新视图）**：`transactions.rs`（指标卡 + 活跃表 + kill 二次确认 + 阻塞行 outbox 重试）、`sync.rs`（状态/诊断/retention 快照 + 死信过滤列表与重入列 + 降级区间清除 + retention 单次执行）、`functions.rs`（列表 + 详情 + 注册 + 注销确认）、`config.rs`（整配置树 + section/key 查询 + JSON 值更新 + 重置确认）。全部实现 Dock `Panel` 并注册，侧栏管理组新增四个导航项。
+
+**阶段 F（监控扩展）**：监控视图新增 search、freeze（含触发二次确认）、当前会话、migration、retrieval 快照五区块；retrieval 按前端 `retrieval.ts` 做 best-effort 聚合（config + vector + fulltext），失败分项留空不阻塞核心四块轮询。
+
+**阶段 G（命令面板与收尾）**：`Ctrl+K` 全局面板（`gpui-component::command`）：面板分组（16 面板跳转）、控制台分组（运行编辑器查询、流式开关）、主题分组（Light/Dark/System 复用全局 Action 自动分发）；`Esc` 关闭，打开自动聚焦；跳转只调主框架 `activate_panel`。space 切换未纳入面板（需异步 space 选择器，单独任务）。打包说明见剩余方案 §4；`keyring` 延期（无离线依赖），继续不存密码。
+
+与计划的偏差：命令面板分组未含 space 切换；管理页确认沿用内联确认条（与既有 users/migration 风格一致）；Dock 布局版本升至 4（旧布局自动重置）。

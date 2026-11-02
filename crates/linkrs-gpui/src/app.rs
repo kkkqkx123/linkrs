@@ -11,7 +11,10 @@ use crate::state;
 use crate::views::{RunQuery, Shell};
 
 pub mod actions {
-    gpui_kit::actions!(linkrs, [Quit, ThemeLight, ThemeDark, ThemeSystem]);
+    gpui_kit::actions!(
+        linkrs,
+        [Quit, ThemeLight, ThemeDark, ThemeSystem, TogglePalette]
+    );
 }
 
 pub use actions::*;
@@ -84,6 +87,7 @@ fn start_heartbeat(cx: &mut App) {
 fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("ctrl-k", TogglePalette, None),
         KeyBinding::new("secondary-shift-l", ThemeLight, None),
         KeyBinding::new("secondary-shift-d", ThemeDark, None),
         KeyBinding::new("secondary-shift-s", ThemeSystem, None),

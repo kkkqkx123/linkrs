@@ -7,8 +7,7 @@ use gpui_kit::base::Selectable as _;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Editor, EditorState},
-    list::ListItem,
+    input::{Editor, EditorState, InputState},
     notification::Notification,
     tab::{Tab, TabBar},
     table::{DataTable, TableState},
@@ -22,10 +21,11 @@ use gpui_kit::{
 use linkrs_client::{ClientError, QueryErrorInfo};
 
 use crate::components::{
-    empty_state, new_table_state, on_copy_row, QueryTableData, QueryTableDelegate,
+    empty_state, form_row, new_table_state, on_copy_row, render_json_block, QueryTableData,
+    QueryTableDelegate,
 };
 use crate::services::{connection_service, cursor_service, query_service};
-use crate::settings;
+use crate::settings::{self, HistoryPath, QueryHistoryItem};
 
 actions!(linkrs, [RunQuery, CancelQuery]);
 
@@ -42,6 +42,14 @@ struct ResultTab {
     table: Entity<TableState<QueryTableDelegate>>,
     error: Option<QueryErrorInfo>,
     elapsed_ms: u64,
+    trace_id: Option<String>,
+}
+
+/// Title plus payload for the Validate / profile / running-queries inspector.
+#[derive(Clone)]
+struct InspectOutput {
+    title: String,
+    payload: serde_json::Value,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -60,6 +68,17 @@ pub struct ConsolePanel {
     active_tab: Option<usize>,
     running: Option<Task<()>>,
     history_open: bool,
+    favorites_open: bool,
+    fav_name: Entity<InputState>,
+    fav_path: Option<HistoryPath>,
+    inspect: Option<InspectOutput>,
+    inspect_loading: bool,
+    running_open: bool,
+    running_payload: serde_json::Value,
+    kill_session: Entity<InputState>,
+    kill_query: Entity<InputState>,
+    /// Execution path captured at run start for history recording.
+    run_stream: bool,
     /// When set, statements run through the SSE streaming endpoint.
     stream: bool,
     /// Forward-only cursor pager state (`None` when no cursor is open).
@@ -76,12 +95,25 @@ impl ConsolePanel {
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let editor = cx.new(|cx| EditorState::new(window, cx).language("sql"));
+        let fav_name = cx.new(|cx| InputState::new(window, cx).placeholder("Favorite name"));
+        let kill_session = cx.new(|cx| InputState::new(window, cx).placeholder("Session id"));
+        let kill_query = cx.new(|cx| InputState::new(window, cx).placeholder("Query id"));
         Self {
             editor,
             tabs: Vec::new(),
             active_tab: None,
             running: None,
             history_open: false,
+            favorites_open: false,
+            fav_name,
+            fav_path: None,
+            inspect: None,
+            inspect_loading: false,
+            running_open: false,
+            running_payload: serde_json::Value::Null,
+            kill_session,
+            kill_query,
+            run_stream: false,
             stream: false,
             cursor_id: None,
             cursor_tab: None,
@@ -100,6 +132,17 @@ impl ConsolePanel {
 
     fn on_cancel_query(&mut self, _: &CancelQuery, _: &mut Window, cx: &mut Context<Self>) {
         self.cancel(cx);
+    }
+
+    /// Run the editor content; used by the command palette.
+    pub(crate) fn run_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run(window, cx);
+    }
+
+    /// Flip the streaming execution toggle; used by the command palette.
+    pub(crate) fn toggle_stream(&mut self, cx: &mut Context<Self>) {
+        self.stream = !self.stream;
+        cx.notify();
     }
 
     fn on_copy_row(
@@ -143,6 +186,7 @@ impl ConsolePanel {
                     table,
                     error: None,
                     elapsed_ms: 0,
+                    trace_id: None,
                 }
             })
             .collect();
@@ -153,6 +197,7 @@ impl ConsolePanel {
         self.cursor_tab = None;
         self.cursor_has_more = false;
         self.cursor_error = None;
+        self.run_stream = self.stream;
         let stream = self.stream;
 
         let task = cx.spawn_in(window, async move |this, cx| {
@@ -214,18 +259,53 @@ impl ConsolePanel {
             return false;
         };
         tab.elapsed_ms = elapsed_ms;
+        let path = if self.run_stream {
+            HistoryPath::Stream
+        } else {
+            HistoryPath::Materialized
+        };
 
         match result {
             Ok(result) => match result.error {
                 None => {
+                    let row_count = result.row_count;
+                    let trace_id = result.trace_id.clone();
                     *tab.data.borrow_mut() = QueryTableData::from_result(&result);
                     tab.status = TabStatus::Ok;
+                    tab.trace_id = trace_id.clone();
                     tab.table.update(cx, |_, cx| cx.notify());
+                    settings::record_query(
+                        cx,
+                        QueryHistoryItem {
+                            sql: tab.sql.clone(),
+                            elapsed_ms,
+                            row_count,
+                            success: true,
+                            path,
+                            error_code: None,
+                            trace_id,
+                            timestamp_ms: settings::now_ms(),
+                        },
+                    );
                     true
                 }
                 Some(error) => {
+                    let code = error.code.clone();
                     tab.error = Some(error);
                     tab.status = TabStatus::Failed;
+                    settings::record_query(
+                        cx,
+                        QueryHistoryItem {
+                            sql: tab.sql.clone(),
+                            elapsed_ms,
+                            row_count: 0,
+                            success: false,
+                            path,
+                            error_code: Some(code),
+                            trace_id: None,
+                            timestamp_ms: settings::now_ms(),
+                        },
+                    );
                     false
                 }
             },
@@ -239,6 +319,19 @@ impl ConsolePanel {
                     details: None,
                 });
                 tab.status = TabStatus::Failed;
+                settings::record_query(
+                    cx,
+                    QueryHistoryItem {
+                        sql: tab.sql.clone(),
+                        elapsed_ms,
+                        row_count: 0,
+                        success: false,
+                        path,
+                        error_code: Some("CLIENT_ERROR".to_string()),
+                        trace_id: None,
+                        timestamp_ms: settings::now_ms(),
+                    },
+                );
                 window.push_notification(
                     Notification::error(user_message(&error)).title("Query failed"),
                     cx,
@@ -254,8 +347,6 @@ impl ConsolePanel {
             cx.notify();
             return;
         }
-        let sql = self.editor.read(cx).text().to_string();
-        settings::record_query(cx, &sql);
         let (rows, elapsed) = self.tabs.iter().fold((0usize, 0u64), |(rows, time), tab| {
             (rows + tab.data.borrow().row_count(), time + tab.elapsed_ms)
         });
@@ -279,6 +370,245 @@ impl ConsolePanel {
                 }
             }
             cx.notify();
+        }
+    }
+
+    // -- Validate / explain / running queries / profile ---------------------
+
+    /// First editor statement; the single-statement helpers all target it.
+    fn first_statement(&self, cx: &App) -> Option<String> {
+        query_service::split_statements(&self.editor.read(cx).text().to_string())
+            .into_iter()
+            .next()
+    }
+
+    fn inspect_result(
+        &mut self,
+        title: String,
+        outcome: Result<serde_json::Value, ClientError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.inspect_loading = false;
+        match outcome {
+            Ok(payload) => {
+                self.inspect = Some(InspectOutput { title, payload });
+            }
+            Err(error) => {
+                if connection_service::is_session_expired(&error) {
+                    connection_service::invalidate_session(cx);
+                }
+                window.push_notification(
+                    Notification::error(user_message(&error)).title("Inspection failed"),
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    /// Validate the first statement without executing it.
+    fn validate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(sql) = self.first_statement(cx) else {
+            window.push_notification(
+                Notification::info("The editor holds no statement to validate."),
+                cx,
+            );
+            return;
+        };
+        self.inspect_loading = true;
+        cx.notify();
+        let task = query_service::validate(cx, &sql);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.inspect_result("Validate".to_string(), outcome, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Explain the first statement and open the plan as a new result tab.
+    fn explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.running.is_some() {
+            return;
+        }
+        let Some(sql) = self.first_statement(cx) else {
+            window.push_notification(
+                Notification::info("The editor holds no statement to explain."),
+                cx,
+            );
+            return;
+        };
+        self.inspect_loading = true;
+        cx.notify();
+        let task = query_service::explain(cx, &sql);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.inspect_loading = false;
+                match outcome {
+                    Ok(result) => {
+                        let label = format!("EXPLAIN {sql}");
+                        let data = Rc::new(RefCell::new(QueryTableData::from_result(&result)));
+                        let table = new_table_state(&data, window, cx);
+                        let trace_id = result.trace_id.clone();
+                        this.tabs.push(ResultTab {
+                            sql: label,
+                            status: TabStatus::Ok,
+                            data,
+                            table,
+                            error: result.error,
+                            elapsed_ms: result.execution_time_ms,
+                            trace_id,
+                        });
+                        this.active_tab = Some(this.tabs.len() - 1);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        window.push_notification(
+                            Notification::error(user_message(&error)).title("Explain failed"),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Load the server-side running-query list into the inspector.
+    fn load_running(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.running_open = true;
+        self.inspect_loading = true;
+        cx.notify();
+        let task = query_service::list_running(cx);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.inspect_loading = false;
+                match outcome {
+                    Ok(payload) => this.running_payload = payload,
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        window.push_notification(
+                            Notification::error(user_message(&error))
+                                .title("Running queries failed"),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Terminate one running query by (session id, query id).
+    fn kill_running_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let session_id: Option<i64> = self.kill_session.read(cx).value().trim().parse().ok();
+        let query_id: Option<i64> = self.kill_query.read(cx).value().trim().parse().ok();
+        let (Some(session_id), Some(query_id)) = (session_id, query_id) else {
+            window.push_notification(
+                Notification::info("Enter numeric session and query ids first."),
+                cx,
+            );
+            return;
+        };
+        let task = query_service::kill_running(cx, session_id, query_id);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                match outcome {
+                    Ok(payload) => {
+                        this.running_payload = payload;
+                        window.push_notification(
+                            Notification::success(format!(
+                                "Terminated query {query_id} on session {session_id}."
+                            )),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        window.push_notification(
+                            Notification::error(user_message(&error)).title("Terminate failed"),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Fetch the server-side portrait for the active tab's trace id.
+    fn profile_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let trace_id = self
+            .active_tab
+            .and_then(|ix| self.tabs.get(ix))
+            .and_then(|tab| tab.trace_id.clone());
+        let Some(trace_id) = trace_id else {
+            window.push_notification(Notification::info("The active result has no trace id."), cx);
+            return;
+        };
+        self.inspect_loading = true;
+        cx.notify();
+        let task = query_service::profile(cx, &trace_id);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task
+                .await
+                .map(|detail| serde_json::to_value(&detail).unwrap_or(serde_json::Value::Null));
+            _ = this.update_in(window, |this, window, cx| {
+                this.inspect_result(format!("Profile {trace_id}"), outcome, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    // -- Favorites -----------------------------------------------------------
+
+    /// Save the editor content under the entered favorite name.
+    fn save_favorite(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.fav_name.read(cx).value().to_string();
+        let sql = self.editor.read(cx).text().to_string();
+        match settings::add_favorite(cx, &name, &sql, self.fav_path) {
+            Ok(()) => {
+                self.fav_name.update(cx, |state, cx| {
+                    state.set_value(String::new(), window, cx);
+                });
+                cx.notify();
+            }
+            Err(message) => {
+                window.push_notification(Notification::error(message).title("Save favorite"), cx)
+            }
+        }
+    }
+
+    /// Load a history entry or favorite into the editor, optionally running it.
+    fn load_sql(
+        &mut self,
+        sql: &str,
+        run_after: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor.update(cx, |state, cx| {
+            state.set_value(sql.to_string(), window, cx);
+        });
+        self.history_open = false;
+        self.favorites_open = false;
+        cx.notify();
+        if run_after {
+            self.run(window, cx);
         }
     }
 
@@ -346,6 +676,7 @@ impl ConsolePanel {
             table,
             error: None,
             elapsed_ms: 0,
+            trace_id: None,
         });
         self.cursor_tab = Some(ix);
         self.active_tab = Some(ix);
@@ -478,6 +809,9 @@ impl ConsolePanel {
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let running = self.running.is_some();
         let history_open = self.history_open;
+        let favorites_open = self.favorites_open;
+        let running_open = self.running_open;
+        let inspect_busy = self.inspect_loading;
         let stream = self.stream;
         let cursor_open = self.cursor_id.is_some();
         let cursor_busy = self.cursor_loading;
@@ -587,6 +921,58 @@ impl ConsolePanel {
                 )
             })
             .child(
+                Button::new("validate")
+                    .label("Validate")
+                    .icon(IconName::Check)
+                    .xsmall()
+                    .ghost()
+                    .disabled(running || inspect_busy)
+                    .accessibility_label("Validate the first statement without executing")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.validate(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("explain")
+                    .label("Explain")
+                    .icon(IconName::Info)
+                    .xsmall()
+                    .ghost()
+                    .disabled(running || inspect_busy)
+                    .accessibility_label("Explain the first statement into a new tab")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.explain(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("profile")
+                    .label("Profile")
+                    .icon(IconName::Activity)
+                    .xsmall()
+                    .ghost()
+                    .disabled(running || inspect_busy)
+                    .accessibility_label("Fetch the server portrait for the active result")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.profile_active(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("toggle-running")
+                    .label("Running")
+                    .icon(IconName::List)
+                    .xsmall()
+                    .ghost()
+                    .selected(running_open)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.running_open {
+                            this.running_open = false;
+                            cx.notify();
+                        } else {
+                            this.load_running(window, cx);
+                        }
+                    })),
+            )
+            .child(
                 Button::new("toggle-history")
                     .label("History")
                     .icon(IconName::Clock)
@@ -598,6 +984,96 @@ impl ConsolePanel {
                         cx.notify();
                     })),
             )
+            .child(
+                Button::new("toggle-favorites")
+                    .label("Favorites")
+                    .icon(IconName::Star)
+                    .xsmall()
+                    .ghost()
+                    .selected(favorites_open)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.favorites_open = !this.favorites_open;
+                        cx.notify();
+                    })),
+            )
+    }
+
+    /// One history row: status icon, statement text (click loads), outcome
+    /// summary and a rerun button. The text area and the button are siblings
+    /// so load and rerun never both fire for one click.
+    fn history_row(
+        item: QueryHistoryItem,
+        ix: usize,
+        view: &Entity<Self>,
+        theme: &gpui_kit::component::Theme,
+    ) -> impl IntoElement {
+        let load_sql = item.sql.clone();
+        let rerun_sql = item.sql.clone();
+        let path = item.path;
+        let summary = if item.success {
+            format!("{} rows · {} ms", item.row_count, item.elapsed_ms)
+        } else {
+            item.error_code
+                .clone()
+                .unwrap_or_else(|| "failed".to_string())
+        };
+        let view_load = view.clone();
+        let view_rerun = view.clone();
+        let status_icon = if item.success {
+            Icon::new(IconName::Check).text_color(theme.success)
+        } else {
+            Icon::new(IconName::CircleX).text_color(theme.danger)
+        };
+        h_flex()
+            .gap_1()
+            .items_center()
+            .px_1()
+            .py_1()
+            .child(
+                div()
+                    .id(("history-load", ix))
+                    .flex_1()
+                    .min_w_0()
+                    .on_click(move |_, window, cx| {
+                        let sql = load_sql.clone();
+                        view_load.update(cx, |this, cx| {
+                            this.load_sql(&sql, false, window, cx);
+                        });
+                    })
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .min_w_0()
+                            .child(status_icon)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(ConsolePanel::tab_label(&item.sql)),
+                            ),
+                    )
+                    .child(div().text_xs().child(SharedString::from(summary))),
+            )
+            .child(
+                Button::new(("history-rerun", ix))
+                    .icon(IconName::Play)
+                    .xsmall()
+                    .ghost()
+                    .accessibility_label("Load and rerun this statement")
+                    .on_click(move |_, window, cx| {
+                        let sql = rerun_sql.clone();
+                        view_rerun.update(cx, |this, cx| {
+                            if path == HistoryPath::Stream {
+                                this.stream = true;
+                            }
+                            this.load_sql(&sql, true, window, cx);
+                        });
+                    }),
+            )
     }
 
     fn render_history(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -606,7 +1082,83 @@ impl ConsolePanel {
         let view = cx.entity();
 
         v_flex()
-            .w(px(280.))
+            .w(px(300.))
+            .flex_shrink_0()
+            .border_r_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .items_center()
+                    .px_3()
+                    .py_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(format!(
+                                "History ({} entries, newest first)",
+                                history.len()
+                            ))),
+                    )
+                    .child(
+                        Button::new("history-clear")
+                            .label("Clear")
+                            .xsmall()
+                            .ghost()
+                            .disabled(history.is_empty())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                settings::clear_history(cx);
+                                this.history_open = false;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .id("history-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_1()
+                    .children(
+                        history
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, item)| Self::history_row(item.clone(), ix, &view, &theme)),
+                    )
+                    .when(history.is_empty(), |list| {
+                        list.child(empty_state(
+                            IconName::Clock,
+                            "No history yet",
+                            Some("Executed statements land here with timings.".into()),
+                            cx,
+                        ))
+                    }),
+            )
+    }
+
+    fn render_favorites(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let favorites = settings::global(cx).favorites;
+        let view = cx.entity();
+        let fav_path = self.fav_path;
+
+        let path_button = |id: &'static str, label: &'static str, value: Option<HistoryPath>| {
+            Button::new(id)
+                .label(label)
+                .xsmall()
+                .ghost()
+                .selected(fav_path == value)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.fav_path = value;
+                    cx.notify();
+                }))
+                .into_any_element()
+        };
+
+        v_flex()
+            .w(px(300.))
             .flex_shrink_0()
             .border_r_1()
             .border_color(theme.border)
@@ -617,52 +1169,285 @@ impl ConsolePanel {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(SharedString::from(format!(
-                        "History ({} entries, newest first)",
-                        history.len()
+                        "Favorites ({} saved)",
+                        favorites.len()
                     ))),
             )
             .child(
                 v_flex()
-                    .id("history-list")
+                    .gap_1()
+                    .px_2()
+                    .pb_2()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(form_row("Name", self.fav_name.clone(), cx))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(SharedString::from("Rerun path")),
+                            )
+                            .child(path_button("fav-path-auto", "Auto", None))
+                            .child(path_button(
+                                "fav-path-materialized",
+                                "Results",
+                                Some(HistoryPath::Materialized),
+                            ))
+                            .child(path_button(
+                                "fav-path-stream",
+                                "Stream",
+                                Some(HistoryPath::Stream),
+                            )),
+                    )
+                    .child(
+                        Button::new("fav-save")
+                            .label("Save current editor")
+                            .icon(IconName::Star)
+                            .xsmall()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.save_favorite(window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .id("favorites-list")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .px_1()
-                    .children(history.iter().enumerate().map(|(ix, sql)| {
-                        let sql = sql.clone();
-                        let view = view.clone();
-                        ListItem::new(("history-entry", ix))
+                    .children(favorites.iter().enumerate().map(|(ix, fav)| {
+                        let load_sql = fav.sql.clone();
+                        let rerun_sql = fav.sql.clone();
+                        let preferred = fav.preferred_path;
+                        let name = fav.name.clone();
+                        let delete_name = fav.name.clone();
+                        let view_load = view.clone();
+                        let view_rerun = view.clone();
+                        let view_delete = view.clone();
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .px_1()
+                            .py_1()
                             .child(
-                                h_flex()
-                                    .gap_2()
-                                    .items_center()
+                                div()
+                                    .id(("fav-load", ix))
+                                    .flex_1()
                                     .min_w_0()
+                                    .on_click(move |_, window, cx| {
+                                        let sql = load_sql.clone();
+                                        view_load.update(cx, |this, cx| {
+                                            this.load_sql(&sql, false, window, cx);
+                                        });
+                                    })
                                     .child(
-                                        Icon::new(IconName::FileText)
-                                            .text_color(theme.muted_foreground),
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .min_w_0()
+                                            .child(
+                                                Icon::new(IconName::Star)
+                                                    .text_color(theme.muted_foreground),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .min_w_0()
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .text_ellipsis()
+                                                    .child(SharedString::from(name)),
+                                            ),
                                     )
                                     .child(
                                         div()
-                                            .text_sm()
-                                            .min_w_0()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
                                             .overflow_hidden()
                                             .whitespace_nowrap()
                                             .text_ellipsis()
-                                            .child(ConsolePanel::tab_label(&sql)),
+                                            .child(ConsolePanel::tab_label(&fav.sql)),
                                     ),
                             )
-                            .on_click(move |_, window, cx| {
-                                let sql = sql.clone();
-                                view.update(cx, |this, cx| {
-                                    this.editor.update(cx, |state, cx| {
-                                        state.set_value(sql, window, cx);
-                                    });
-                                    this.history_open = false;
-                                    cx.notify();
-                                });
-                            })
-                    })),
+                            .child(
+                                Button::new(("fav-rerun", ix))
+                                    .icon(IconName::Play)
+                                    .xsmall()
+                                    .ghost()
+                                    .accessibility_label("Load and rerun this favorite")
+                                    .on_click(move |_, window, cx| {
+                                        let sql = rerun_sql.clone();
+                                        view_rerun.update(cx, |this, cx| {
+                                            match preferred {
+                                                Some(HistoryPath::Stream) => {
+                                                    this.stream = true;
+                                                }
+                                                Some(HistoryPath::Materialized) => {
+                                                    this.stream = false;
+                                                }
+                                                None => {}
+                                            }
+                                            this.load_sql(&sql, true, window, cx);
+                                        });
+                                    }),
+                            )
+                            .child(
+                                Button::new(("fav-delete", ix))
+                                    .icon(IconName::Trash)
+                                    .xsmall()
+                                    .ghost()
+                                    .accessibility_label("Delete this favorite")
+                                    .on_click(move |_, _, cx| {
+                                        let name = delete_name.clone();
+                                        view_delete.update(cx, |_, cx| {
+                                            settings::remove_favorite(cx, &name);
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                    }))
+                    .when(favorites.is_empty(), |list| {
+                        list.child(empty_state(
+                            IconName::Star,
+                            "No favorites yet",
+                            Some("Name the current editor above to save it.".into()),
+                            cx,
+                        ))
+                    }),
             )
+    }
+
+    fn render_inspect(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        if self.inspect_loading && self.inspect.is_none() {
+            return div()
+                .flex_shrink_0()
+                .px_3()
+                .py_2()
+                .border_b_1()
+                .border_color(theme.border)
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(SharedString::from("Loading…"))
+                .into_any_element();
+        }
+        let Some(inspect) = self.inspect.clone() else {
+            return div().into_any_element();
+        };
+        v_flex()
+            .flex_shrink_0()
+            .h(px(220.))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .child(SharedString::from(inspect.title)),
+                    )
+                    .child(
+                        Button::new("inspect-close")
+                            .icon(IconName::X)
+                            .xsmall()
+                            .ghost()
+                            .accessibility_label("Close inspector")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.inspect = None;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .px_2()
+                    .child(render_json_block(&inspect.payload, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn render_running(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.running_open {
+            return div().into_any_element();
+        }
+        let theme = cx.theme().clone();
+        v_flex()
+            .flex_shrink_0()
+            .h(px(220.))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .child(SharedString::from("Running queries")),
+                    )
+                    .child(
+                        Button::new("running-refresh")
+                            .icon(IconName::RefreshCw)
+                            .xsmall()
+                            .ghost()
+                            .accessibility_label("Refresh running queries")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.load_running(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("running-close")
+                            .icon(IconName::X)
+                            .xsmall()
+                            .ghost()
+                            .accessibility_label("Close running queries")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.running_open = false;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .px_2()
+                    .child(form_row("Session id", self.kill_session.clone(), cx))
+                    .child(form_row("Query id", self.kill_query.clone(), cx))
+                    .child(
+                        Button::new("running-kill")
+                            .label("Terminate")
+                            .icon(IconName::Ban)
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.kill_running_query(window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .px_2()
+                    .child(render_json_block(&self.running_payload, cx)),
+            )
+            .into_any_element()
     }
 
     fn render_results(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -870,6 +1655,9 @@ impl Render for ConsolePanel {
                     .flex_1()
                     .min_h_0()
                     .when(self.history_open, |row| row.child(self.render_history(cx)))
+                    .when(self.favorites_open, |row| {
+                        row.child(self.render_favorites(cx))
+                    })
                     .child(
                         v_flex()
                             .flex_1()
@@ -882,6 +1670,8 @@ impl Render for ConsolePanel {
                                     .border_color(theme.border)
                                     .child(Editor::new(&self.editor)),
                             )
+                            .child(self.render_inspect(cx))
+                            .child(self.render_running(cx))
                             .child(self.render_results(cx)),
                     ),
             )
