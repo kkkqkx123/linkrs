@@ -1,6 +1,7 @@
 use gpui_kit::base::Disableable as _;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     input::{Input, InputState},
     notification::Notification,
     v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -12,6 +13,7 @@ use gpui_kit::{
 };
 use linkrs_client::ClientError;
 
+use super::credentials;
 use crate::app::Quit;
 use crate::services::connection_service;
 use crate::settings::{self, LastConnection};
@@ -31,6 +33,10 @@ pub struct LoginView {
     recent: Vec<LastConnection>,
     busy: bool,
     message: Option<SharedString>,
+    /// Whether a successful login stores the password in the OS keychain.
+    remember: bool,
+    /// Endpoint whose password is currently known to be stored.
+    remembered_endpoint: Option<LastConnection>,
 }
 
 impl LoginView {
@@ -59,7 +65,7 @@ impl LoginView {
         });
         let password_field = cx.new(|cx| InputState::new(window, cx).masked(true));
 
-        Self {
+        let view = Self {
             host: host_field,
             port: port_field,
             user: user_field,
@@ -68,7 +74,48 @@ impl LoginView {
             recent: settings::global(cx).recent_connections,
             busy: false,
             message: None,
-        }
+            remember: false,
+            remembered_endpoint: None,
+        };
+        view.prefill_remembered(window, cx);
+        view
+    }
+
+    /// Silently prefill a remembered password for the last used endpoint.
+    /// The blocking store read runs on the background executor; the UI
+    /// thread never waits on platform IPC. Nothing is overwritten when the
+    /// user already typed a password meanwhile.
+    fn prefill_remembered(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let saved = settings::global(cx).last_connection.clone();
+        let Some(endpoint) =
+            saved.filter(|entry| !entry.host.trim().is_empty() && !entry.user.trim().is_empty())
+        else {
+            return;
+        };
+        let bg = cx.background_executor().clone();
+        let load_host = endpoint.host.clone();
+        let load_port = endpoint.port;
+        let load_user = endpoint.user.clone();
+        cx.spawn_in(window, async move |this, window| {
+            let stored = bg
+                .spawn(async move { credentials::load(&load_host, load_port, &load_user) })
+                .await;
+            _ = this.update_in(window, |this, window, cx| {
+                let Some(password) = stored else {
+                    return;
+                };
+                if !this.password.read(cx).value().is_empty() {
+                    return;
+                }
+                this.password.update(cx, |field, cx| {
+                    field.set_value(password, window, cx);
+                });
+                this.remember = true;
+                this.remembered_endpoint = Some(endpoint);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Submit the form: run the connect call and flip global state on success.
@@ -99,6 +146,13 @@ impl LoginView {
 
         crate::state::AppState::global(cx).update(cx, |state, cx| state.set_connecting(cx));
 
+        let remember = self.remember;
+        let endpoint = LastConnection {
+            host: host.trim().to_string(),
+            port,
+            user: user.trim().to_string(),
+        };
+        let bg = cx.background_executor().clone();
         let task = connection_service::connect(cx, host.trim(), port, user.trim(), &password);
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
@@ -107,8 +161,44 @@ impl LoginView {
                 match outcome {
                     Ok(profile) => {
                         settings::record_connection(cx, host.trim(), port, user.trim());
+                        // Sync the keychain entry in the background without
+                        // blocking the login completion. Logout and session
+                        // expiry never touch the stored password.
+                        if remember && !password.is_empty() {
+                            this.remember = true;
+                            this.remembered_endpoint = Some(endpoint.clone());
+                            bg.clone()
+                                .spawn(async move {
+                                    credentials::save(
+                                        &endpoint.host,
+                                        endpoint.port,
+                                        &endpoint.user,
+                                        &password,
+                                    );
+                                })
+                                .detach();
+                        } else {
+                            if this.remembered_endpoint.as_ref() == Some(&endpoint) {
+                                this.remembered_endpoint = None;
+                            }
+                            bg.clone()
+                                .spawn(async move {
+                                    credentials::delete(
+                                        &endpoint.host,
+                                        endpoint.port,
+                                        &endpoint.user,
+                                    );
+                                })
+                                .detach();
+                        }
                         crate::state::AppState::global(cx).update(cx, |state, cx| {
-                            state.set_connected(profile.user, profile.space, profile.session_id, profile.roles, cx);
+                            state.set_connected(
+                                profile.user,
+                                profile.space,
+                                profile.session_id,
+                                profile.roles,
+                                cx,
+                            );
                         });
                         window.push_notification(
                             Notification::success(format!("Connected to {host}:{port}")),
@@ -132,7 +222,9 @@ impl LoginView {
         .detach();
     }
 
-    /// Prefill the form from a recent connection entry.
+    /// Prefill the form from a recent connection entry, then submit once a
+    /// remembered password (if any) has been loaded in the background. The
+    /// submit itself always runs through the single [`Self::submit`] path.
     fn apply_recent(
         &mut self,
         entry: &LastConnection,
@@ -151,7 +243,101 @@ impl LoginView {
         self.password.update(cx, |field, cx| {
             field.set_value("", window, cx);
         });
+        self.remember = false;
+        self.remembered_endpoint = None;
+        self.busy = true;
+        self.message = None;
         cx.notify();
+        let endpoint = entry.clone();
+        let bg = cx.background_executor().clone();
+        let load_host = endpoint.host.clone();
+        let load_port = endpoint.port;
+        let load_user = endpoint.user.clone();
+        cx.spawn_in(window, async move |this, window| {
+            let stored = bg
+                .spawn(async move { credentials::load(&load_host, load_port, &load_user) })
+                .await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.busy = false;
+                if let Some(password) = stored {
+                    this.password.update(cx, |field, cx| {
+                        field.set_value(password, window, cx);
+                    });
+                    this.remember = true;
+                    this.remembered_endpoint = Some(endpoint);
+                }
+                this.submit(window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Endpoint described by the current form values, if the form is valid.
+    fn current_endpoint(&self, cx: &App) -> Option<LastConnection> {
+        let host = self.host.read(cx).value().trim().to_string();
+        let user = self.user.read(cx).value().trim().to_string();
+        let port = self.port.read(cx).value().trim().parse::<u16>().ok()?;
+        if host.is_empty() || user.is_empty() {
+            return None;
+        }
+        Some(LastConnection { host, port, user })
+    }
+
+    /// Delete the stored password for the current form endpoint without
+    /// logging in. Clears the password field and the remember choice.
+    fn forget_stored(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(endpoint) = self.current_endpoint(cx) else {
+            return;
+        };
+        if self.remembered_endpoint.as_ref() == Some(&endpoint) {
+            self.remembered_endpoint = None;
+        }
+        self.remember = false;
+        self.password.update(cx, |field, cx| {
+            field.set_value("", window, cx);
+        });
+        let bg = cx.background_executor().clone();
+        bg.spawn(async move {
+            credentials::delete(&endpoint.host, endpoint.port, &endpoint.user);
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Remember-me checkbox with a forget action. The forget action only
+    /// shows while the form points at an endpoint with a stored password.
+    fn remember_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let forget_visible = self
+            .remembered_endpoint
+            .as_ref()
+            .is_some_and(|stored| self.current_endpoint(cx).as_ref() == Some(stored));
+        let busy = self.busy;
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                Checkbox::new("remember-password")
+                    .label("Remember password on this device")
+                    .checked(self.remember)
+                    .disabled(busy)
+                    .on_change(cx.listener(|this, checked: &bool, _, cx| {
+                        this.remember = *checked;
+                        cx.notify();
+                    })),
+            )
+            .when(forget_visible, |row| {
+                row.child(
+                    Button::new("forget-password")
+                        .label("Forget")
+                        .xsmall()
+                        .ghost()
+                        .disabled(busy)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.forget_stored(window, cx);
+                        })),
+                )
+            })
     }
 
     fn form_row(
@@ -236,6 +422,7 @@ impl Render for LoginView {
                     .child(self.form_row("Port", self.port.clone(), cx))
                     .child(self.form_row("User", self.user.clone(), cx))
                     .child(self.form_row("Password", self.password.clone(), cx))
+                    .child(self.remember_row(cx))
                     .when_some(self.message.clone(), |card, message| {
                         card.child(
                             div()
@@ -282,7 +469,6 @@ impl Render for LoginView {
                                         .disabled(self.busy)
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.apply_recent(&entry, window, cx);
-                                            this.submit(window, cx);
                                         }))
                                 })),
                         )

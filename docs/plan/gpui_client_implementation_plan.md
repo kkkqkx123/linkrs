@@ -303,7 +303,7 @@ src/
 2. **主题**：引入 gpui-kit `themes/*.json` 中的 2–3 套预设；高亮主题同步切换。
 3. **打包分发**：Linux（AppImage/deb）、macOS（app bundle + 签名占位）、Windows；图标、版本号注入。
 4. **性能**：大表 `VirtualList`/`DataTable` 虚拟化核查；轮询任务统一调度避免多页并发拉取；`profiler` feature 采样一轮。
-5. **凭据与恢复**：评估 OS keychain（macOS Keychain / libsecret）存凭据，可选交付；Dock 布局崩溃恢复（布局序列化已有）。
+5. **凭据与恢复**：OS keychain 存凭据已交付（记住密码 opt-in，会话 id 仍只驻内存），详见凭据存储方案；Dock 布局崩溃恢复（布局序列化已有）。
 6. **compograph 交互深化**：跟踪 gpui-kit 上游 compograph 进展，按需补齐布局算法选项、节点聚合与性能上限测试；compograph 依赖只出现在 `graph_host.rs`/`graph_service.rs`，不扩散到其他模块。
 
 ## 8. 测试策略
@@ -334,7 +334,7 @@ src/
 | 阶段 1 | 登录 → 执行 GQL → 表格结果/错误 → Schema 树 → 断线回登录，全链路可用 | 已完成；流式执行与游标分页已随控制台提前交付 |
 | 阶段 2 | 数据浏览器分页过滤；图原生渲染邻域扩展与点选；监控图表；批量任务全流程 | 已完成（图为 compograph 原生画布：点选/拖拽/滚轮缩放/多布局切换/Fit 复位） |
 | 阶段 3 | 用户/会话/迁移/向量/全文管理页可用；流式与游标大结果稳定 | 已完成；管理页用内联表单 + 二次确认代替 `Sheet`/`Dialog` |
-| 阶段 4 | 打包产物可安装启动；命令面板与快捷键齐备；性能采样无明显回归 | 已完成（收尾范围）：`Ctrl+K` 面板 + 16 面板跳转 + 主题切换；打包说明文档化（剩余方案 §4）；keychain 延期（无离线依赖） |
+| 阶段 4 | 打包产物可安装启动；命令面板与快捷键齐备；性能采样无明显回归 | 已完成（收尾范围）：`Ctrl+K` 面板 + 16 面板跳转 + 主题切换；打包说明文档化（剩余方案 §4）；keychain 已单独交付 |
 
 ## 11. 修订记录：依赖接入方式变更（path → 独立 workspace + 本地 path）
 
@@ -400,7 +400,7 @@ src/
 | 管理页形态 | 管理页用内联表单 + 二次确认代替 `Sheet`/`Dialog`（同等功能，组件 API 风险更低） | 已接受偏差 |
 | 命令面板 | `Ctrl+K` 已交付（16 面板跳转 + 控制台执行 + 主题切换）；space 切换未纳入（需异步选择器，单独任务） | 阶段 4 收尾 |
 | 打包分发 | 文档化说明（剩余方案 §4），产物不在仓库内 | 阶段 4 收尾 |
-| OS keychain | 无离线依赖，延期；继续不存密码 | 延期 |
+| OS keychain | 已交付（记住密码 opt-in，默认仍不存密码，会话 id 只驻内存） | 已交付 |
 
 ### 12.4 与计划的实现偏差（均已在 §11 或工作树验证）
 
@@ -456,6 +456,6 @@ src/
 
 **阶段 F（监控扩展）**：监控视图新增 search、freeze（含触发二次确认）、当前会话、migration、retrieval 快照五区块；retrieval 按前端 `retrieval.ts` 做 best-effort 聚合（config + vector + fulltext），失败分项留空不阻塞核心四块轮询。
 
-**阶段 G（命令面板与收尾）**：`Ctrl+K` 全局面板（`gpui-component::command`）：面板分组（16 面板跳转）、控制台分组（运行编辑器查询、流式开关）、主题分组（Light/Dark/System 复用全局 Action 自动分发）；`Esc` 关闭，打开自动聚焦；跳转只调主框架 `activate_panel`。space 切换未纳入面板（需异步 space 选择器，单独任务）。打包说明见剩余方案 §4；`keyring` 延期（无离线依赖），继续不存密码。
+**阶段 G（命令面板与收尾）**：`Ctrl+K` 全局面板（`gpui-component::command`）：面板分组（16 面板跳转）、控制台分组（运行编辑器查询、流式开关）、主题分组（Light/Dark/System 复用全局 Action 自动分发）；`Esc` 关闭，打开自动聚焦；跳转只调主框架 `activate_panel`。space 切换未纳入面板（需异步 space 选择器，单独任务）。打包说明见剩余方案 §4；`keyring` 已单独交付（记住密码 opt-in），默认仍不存密码。
 
 与计划的偏差：命令面板分组未含 space 切换；管理页确认沿用内联确认条（与既有 users/migration 风格一致）；Dock 布局版本升至 4（旧布局自动重置）。

@@ -7,7 +7,7 @@
 
 - 历史记录走服务端接口：前端历史同样是本地 `localStorage`（`stores/history.ts`），服务端无历史接口，GPUI 保持本地持久化，只需对齐前端的数据模型。
 - 文件传输分块进度：服务端为单请求体端点，无分块能力，不做客户端假进度。
-- OS keychain：无可用的离线依赖（`keyring` 不在本地 cargo 缓存），继续不存密码，会话 id 只驻内存；待网络恢复后单独引入。
+- OS keychain：已交付，详见《[凭据存储方案](gpui_keyring_credentials.md)》。默认仍不存密码，会话 id 只驻内存；仅用户勾选记住密码时经系统凭据存储按端点保存。
 - 管理页坚持内联表单 + 二次确认，不引入 `Sheet`/`Dialog`。
 
 ## 1. 对照结论：前端有、GPUI 缺的
@@ -64,13 +64,13 @@
 - 监控视图新增 search、freeze、当前会话、migration 四块 JSON/键值区；freeze 区附带单次触发按钮（二次确认）。
 - retrieval 聚合（config + vector + fulltext）按前端 `retrieval.ts` 做 best-effort 快照，失败分项标注 unknown，不阻塞其它区块。
 
-### 阶段 G：命令面板与收尾——已交付（打包为文档说明，keyring 仍延期）
+### 阶段 G：命令面板与收尾——已交付（打包为文档说明，keyring 已单独交付）
 
 - `Ctrl+K` 全局面板（`gpui-component::command`）：分组为面板跳转（全部已注册面板）、控制台执行、space 切换；面板跳转复用主框架激活逻辑。
   已交付：面板跳转（16 面板）、运行编辑器查询、流式开关、主题切换（Light/Dark/System，复用全局 Action 自动分发）；`Esc` 经 `on_cancel` 关闭，打开时自动聚焦搜索框。space 切换未纳入（需先拉取 space 列表的异步选择器，单独任务）。
 - 打包说明文档化（Linux AppImage/deb、macOS bundle、Windows）：清单与构建命令，不含二进制产物。
   已交付为构建说明（见下 §4）；产物本身不在仓库内。
-- 性能：大表已虚拟化，复查各视图轮询并发度；`keyring` 引入条件记录（需恢复网络后单独任务）。
+- 性能：大表已虚拟化，复查各视图轮询并发度；`keyring` 已单独交付（见凭据存储方案）。
 - 实施计划 §12 更新为本方案交付记录。
   已交付：见《[实施计划](gpui_client_implementation_plan.md)》§12.6。
 
@@ -98,4 +98,4 @@ cargo build --manifest-path crates/linkrs-gpui/Cargo.toml --release
 - macOS：按 `Linkrs.app/Contents/MacOS/linkrs-gpui` 布局组装 bundle，签名与公证位单独任务。
 - Windows：单 exe 分发；原生窗口边框由 gpui-kit 处理。
 
-`keyring`（OS 凭据存储）引入条件：恢复外部网络后单独任务，当前继续不存密码、会话 id 只驻内存。
+`keyring`（OS 凭据存储）：已交付。`linkrs-gpui` workspace 依赖 `keyring` 3 系（Linux 同步 Secret Service、macOS Keychain、Windows 凭据管理器），默认仍不存密码、会话 id 只驻内存，记住密码为显式 opt-in，详见凭据存储方案。
