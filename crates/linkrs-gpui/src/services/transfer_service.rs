@@ -5,23 +5,31 @@ use crate::connection::SessionStore;
 use crate::runtime;
 use crate::state::AppState;
 
+/// Request payload for one server-side import.
+#[derive(Clone, Debug)]
+pub struct ImportRequest {
+    pub space: String,
+    pub format: String,
+    pub target_type: String,
+    pub target_name: String,
+    pub batch_size: Option<usize>,
+    pub file_name: String,
+    pub file_bytes: Vec<u8>,
+}
+
 /// Upload a local file for server-side import.
 pub fn import_file(
     cx: &App,
-    space: &str,
-    format: &str,
-    target_type: &str,
-    target_name: &str,
-    batch_size: Option<usize>,
-    file_name: &str,
-    file_bytes: Vec<u8>,
+    request: ImportRequest,
 ) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
-    let space = space.to_string();
-    let format = format.to_string();
-    let target_type = target_type.to_string();
-    let target_name = target_name.to_string();
-    let file_name = file_name.to_string();
+    let space = request.space;
+    let format = request.format;
+    let target_type = request.target_type;
+    let target_name = request.target_name;
+    let batch_size = request.batch_size;
+    let file_name = request.file_name;
+    let file_bytes = request.file_bytes;
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
         guard

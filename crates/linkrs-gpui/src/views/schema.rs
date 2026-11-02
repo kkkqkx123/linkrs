@@ -62,19 +62,19 @@ struct SchemaTarget {
 /// Destructive action awaiting inline confirmation.
 #[derive(Debug, Clone)]
 enum PendingOp {
-    DropSpace(String),
-    DropTag { space: String, name: String },
-    DropEdge { space: String, name: String },
+    Space(String),
+    Tag { space: String, name: String },
+    Edge { space: String, name: String },
 }
 
 impl PendingOp {
     fn label(&self) -> String {
         match self {
-            Self::DropSpace(space) => format!("Drop space {space}? This cannot be undone."),
-            Self::DropTag { name, .. } => {
+            Self::Space(space) => format!("Drop space {space}? This cannot be undone."),
+            Self::Tag { name, .. } => {
                 format!("Drop tag {name}? This cannot be undone.")
             }
-            Self::DropEdge { name, .. } => {
+            Self::Edge { name, .. } => {
                 format!("Drop edge type {name}? This cannot be undone.")
             }
         }
@@ -393,7 +393,7 @@ impl SchemaPanel {
 
     fn drop_current_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.pending.clone() {
-            Some(PendingOp::DropSpace(space)) => {
+            Some(PendingOp::Space(space)) => {
                 let task = schema_service::drop_space(cx, &space);
                 self.run_write(window, cx, "Drop space", task);
             }
@@ -403,7 +403,7 @@ impl SchemaPanel {
                     cx.notify();
                     return;
                 };
-                self.pending = Some(PendingOp::DropSpace(space));
+                self.pending = Some(PendingOp::Space(space));
                 cx.notify();
             }
         }
@@ -445,11 +445,11 @@ impl SchemaPanel {
 
     fn drop_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.pending.clone() {
-            Some(PendingOp::DropTag { space, name }) => {
+            Some(PendingOp::Tag { space, name }) => {
                 let task = schema_service::drop_tag(cx, &space, &name);
                 self.run_write(window, cx, "Drop tag", task);
             }
-            Some(PendingOp::DropEdge { space, name }) => {
+            Some(PendingOp::Edge { space, name }) => {
                 let task = schema_service::drop_edge_type(cx, &space, &name);
                 self.run_write(window, cx, "Drop edge type", task);
             }
@@ -465,12 +465,12 @@ impl SchemaPanel {
                     return;
                 };
                 self.pending = Some(if target.is_edge {
-                    PendingOp::DropEdge {
+                    PendingOp::Edge {
                         space,
                         name: target.name,
                     }
                 } else {
-                    PendingOp::DropTag {
+                    PendingOp::Tag {
                         space,
                         name: target.name,
                     }
@@ -714,7 +714,7 @@ impl SchemaPanel {
                     .child(
                         Button::new("schema-drop-space")
                             .label(match &self.pending {
-                                Some(PendingOp::DropSpace(_)) => "Confirm drop",
+                                Some(PendingOp::Space(_)) => "Confirm drop",
                                 _ => "Drop current",
                             })
                             .xsmall()
@@ -770,8 +770,8 @@ impl SchemaPanel {
                     .child(
                         Button::new("schema-drop-entry")
                             .label(match &self.pending {
-                                Some(PendingOp::DropTag { .. })
-                                | Some(PendingOp::DropEdge { .. }) => "Confirm drop",
+                                Some(PendingOp::Tag { .. })
+                                | Some(PendingOp::Edge { .. }) => "Confirm drop",
                                 _ => "Drop selected",
                             })
                             .xsmall()
@@ -909,7 +909,7 @@ impl SchemaPanel {
             (self.version_title.clone(), self.version_output.clone())
         {
             section = section.child(render_properties(
-                &title.to_string(),
+                title.as_str(),
                 None,
                 &output,
                 cx,

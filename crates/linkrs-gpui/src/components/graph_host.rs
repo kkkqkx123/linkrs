@@ -164,7 +164,7 @@ impl GraphModel {
         let store = self.store.clone();
         self.layout = cx.new(|cx| LayoutDriver::new(cx, &store, engine));
 
-        let view: &dyn GraphView = &*self.store.read(cx);
+        let view: &dyn GraphView = self.store.read(cx);
         self.node_count = view.node_count();
         self.edge_count = view.edge_count();
         self.positions_seen = u64::MAX;

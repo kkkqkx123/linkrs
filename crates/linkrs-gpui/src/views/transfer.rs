@@ -108,13 +108,15 @@ impl TransferPanel {
         cx.notify();
         let task = transfer_service::import_file(
             cx,
-            &space,
-            &format,
-            &target_type,
-            &target_name,
-            None,
-            &file_name,
-            bytes,
+            transfer_service::ImportRequest {
+                space,
+                format,
+                target_type,
+                target_name,
+                batch_size: None,
+                file_name: file_name.clone(),
+                file_bytes: bytes,
+            },
         );
         cx.spawn(async move |this, cx| {
             let outcome = task.await;

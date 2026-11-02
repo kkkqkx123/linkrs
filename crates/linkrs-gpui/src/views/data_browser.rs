@@ -342,7 +342,7 @@ impl DataBrowserPanel {
             .read(cx)
             .selected_row()
             .unwrap_or(0)
-            .min(self.raw_rows.len().saturating_sub(1).max(0));
+            .min(self.raw_rows.len().saturating_sub(1));
         self.raw_rows.get(row).cloned()
     }
 
@@ -528,7 +528,7 @@ impl DataBrowserPanel {
             .read(cx)
             .selected_row()
             .unwrap_or(0)
-            .min(self.raw_rows.len().saturating_sub(1).max(0));
+            .min(self.raw_rows.len().saturating_sub(1));
         match self.raw_rows.get(row) {
             Some(payload) => {
                 let (id, _, properties) = data_browser_service::normalize_row(payload);
@@ -595,7 +595,7 @@ impl DataBrowserPanel {
 
     fn render_detail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (detail_title, detail_value) = self.selected_detail(cx);
-        let detail_subtitle = (!detail_title.is_empty()).then(|| detail_title.as_str());
+        let detail_subtitle = (!detail_title.is_empty()).then_some(detail_title.as_str());
         let writing = self.writing;
         let confirm = self.confirm_delete;
         let editing = self.edit_open;

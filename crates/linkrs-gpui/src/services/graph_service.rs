@@ -52,6 +52,13 @@ pub fn neighbors(
     })
 }
 
+/// Discovered neighborhood returned by [`expand_neighborhood`].
+#[derive(Debug, Clone)]
+pub struct Neighborhood {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
 /// Expand the neighborhood of `seed` breadth-first up to `depth` hops.
 /// Single-hop endpoint calls run sequentially on the tokio runtime; visited
 /// vids are skipped so cyclic graphs terminate. Returns the discovered
@@ -62,7 +69,7 @@ pub fn expand_neighborhood(
     depth: usize,
     direction: &str,
     edge_type: Option<String>,
-) -> Task<Result<(Vec<GraphNode>, Vec<GraphEdge>), ClientError>> {
+) -> Task<Result<Neighborhood, ClientError>> {
     let manager = SessionStore::manager(cx);
     let seed = seed.to_string();
     let direction = direction.to_string();
@@ -117,7 +124,7 @@ pub fn expand_neighborhood(
         // through a cycle; otherwise keep the placeholder.
         let mut ordered: Vec<GraphNode> = nodes.into_values().collect();
         ordered.sort_by(|a, b| a.vid.cmp(&b.vid));
-        Ok((ordered, edges))
+        Ok(Neighborhood { nodes: ordered, edges })
     })
 }
 

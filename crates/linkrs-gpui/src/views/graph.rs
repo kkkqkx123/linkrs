@@ -100,8 +100,8 @@ impl GraphPanel {
             this.update(cx, |this, cx| {
                 this.loading = false;
                 match outcome {
-                    Ok((nodes, edges)) => {
-                        this.model.set_graph(&nodes, &edges, cx);
+                    Ok(neighborhood) => {
+                        this.model.set_graph(&neighborhood.nodes, &neighborhood.edges, cx);
                         this.degree = degree;
                         if this.model.is_empty() {
                             this.message = Some("No neighbors found for this seed.".into());

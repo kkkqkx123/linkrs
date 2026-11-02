@@ -44,6 +44,26 @@ struct NavEntry {
 
 // -- Main window --------------------------------------------------------------
 
+/// Panel entities needed to build the default dock layout.
+struct DefaultLayoutPanels {
+    console: Entity<ConsolePanel>,
+    schema: Entity<SchemaPanel>,
+    data_browser: Entity<DataBrowserPanel>,
+    graph: Entity<GraphPanel>,
+    monitoring: Entity<MonitoringPanel>,
+    transactions: Entity<TransactionsPanel>,
+    sync: Entity<SyncPanel>,
+    functions: Entity<FunctionsPanel>,
+    config: Entity<ConfigPanel>,
+    batch: Entity<BatchPanel>,
+    transfer: Entity<TransferPanel>,
+    users: Entity<UsersPanel>,
+    sessions: Entity<SessionsPanel>,
+    migration: Entity<MigrationPanel>,
+    vector: Entity<VectorPanel>,
+    fulltext: Entity<FulltextPanel>,
+}
+
 pub struct MainWindow {
     dock_area: Entity<DockArea>,
     console: Entity<ConsolePanel>,
@@ -171,27 +191,25 @@ impl MainWindow {
         });
 
         if load_layout(&dock_area, window, cx).is_err() {
-            reset_default_layout(
-                console.clone(),
-                schema.clone(),
-                data_browser.clone(),
-                graph.clone(),
-                monitoring.clone(),
-                transactions.clone(),
-                sync.clone(),
-                functions.clone(),
-                config.clone(),
-                batch.clone(),
-                transfer.clone(),
-                users.clone(),
-                sessions.clone(),
-                migration.clone(),
-                vector.clone(),
-                fulltext.clone(),
-                dock_area.downgrade(),
-                window,
-                cx,
-            );
+            let panels = DefaultLayoutPanels {
+                console: console.clone(),
+                schema: schema.clone(),
+                data_browser: data_browser.clone(),
+                graph: graph.clone(),
+                monitoring: monitoring.clone(),
+                transactions: transactions.clone(),
+                sync: sync.clone(),
+                functions: functions.clone(),
+                config: config.clone(),
+                batch: batch.clone(),
+                transfer: transfer.clone(),
+                users: users.clone(),
+                sessions: sessions.clone(),
+                migration: migration.clone(),
+                vector: vector.clone(),
+                fulltext: fulltext.clone(),
+            };
+            reset_default_layout(panels, dock_area.downgrade(), window, cx);
         }
 
         cx.subscribe_in(
@@ -368,7 +386,7 @@ impl MainWindow {
             (1, 0) => {
                 let console = self.console.clone();
                 self.activate_panel(console.clone(), ConsolePanel::PANEL_NAME, window, cx);
-                _ = console.update(cx, |console, cx| console.run_now(window, cx));
+                console.update(cx, |console, cx| console.run_now(window, cx));
             }
             (1, 1) => {
                 let console = self.console.clone();
@@ -1001,45 +1019,29 @@ fn load_layout(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn reset_default_layout(
-    console: Entity<ConsolePanel>,
-    schema: Entity<SchemaPanel>,
-    data_browser: Entity<DataBrowserPanel>,
-    graph: Entity<GraphPanel>,
-    monitoring: Entity<MonitoringPanel>,
-    transactions: Entity<TransactionsPanel>,
-    sync: Entity<SyncPanel>,
-    functions: Entity<FunctionsPanel>,
-    config: Entity<ConfigPanel>,
-    batch: Entity<BatchPanel>,
-    transfer: Entity<TransferPanel>,
-    users: Entity<UsersPanel>,
-    sessions: Entity<SessionsPanel>,
-    migration: Entity<MigrationPanel>,
-    vector: Entity<VectorPanel>,
-    fulltext: Entity<FulltextPanel>,
+    panels: DefaultLayoutPanels,
     dock_area: WeakEntity<DockArea>,
     window: &mut Window,
     cx: &mut App,
 ) {
     let center = DockLayout::tabs()
-        .panel(console)
-        .panel(schema)
-        .panel(data_browser)
-        .panel(graph)
-        .panel(monitoring)
-        .panel(transactions)
-        .panel(sync)
-        .panel(functions)
-        .panel(config)
-        .panel(batch)
-        .panel(transfer)
-        .panel(users)
-        .panel(sessions)
-        .panel(migration)
-        .panel(vector)
-        .panel(fulltext)
+        .panel(panels.console)
+        .panel(panels.schema)
+        .panel(panels.data_browser)
+        .panel(panels.graph)
+        .panel(panels.monitoring)
+        .panel(panels.transactions)
+        .panel(panels.sync)
+        .panel(panels.functions)
+        .panel(panels.config)
+        .panel(panels.batch)
+        .panel(panels.transfer)
+        .panel(panels.users)
+        .panel(panels.sessions)
+        .panel(panels.migration)
+        .panel(panels.vector)
+        .panel(panels.fulltext)
         .active_index(0);
 
     _ = dock_area.update(cx, |area, cx| {

@@ -62,6 +62,13 @@ enum TabStatus {
 
 /// Query console panel: SQL editor, multi-statement execution, result tabs,
 /// CSV/JSON export, and the local query history.
+/// Parsed query parameters and session variables.
+#[derive(Clone, Debug)]
+struct ParsedBindings {
+    parameters: std::collections::HashMap<String, serde_json::Value>,
+    session_variables: std::collections::HashMap<String, serde_json::Value>,
+}
+
 pub struct ConsolePanel {
     editor: Entity<EditorState>,
     tabs: Vec<ResultTab>,
@@ -222,7 +229,7 @@ impl ConsolePanel {
             }
         };
         self.params_error = None;
-        let bound = !bindings.0.is_empty() || !bindings.1.is_empty();
+        let bound = !bindings.parameters.is_empty() || !bindings.session_variables.is_empty();
 
         let task = cx.spawn_in(window, async move |this, cx| {
             let count = this
@@ -239,12 +246,12 @@ impl ConsolePanel {
                     if stream {
                         query_service::execute_stream(cx, &sql)
                     } else if bound {
-                        let (parameters, session_variables) = bindings.clone();
+                        let bindings = bindings.clone();
                         query_service::execute_with_options(
                             cx,
                             &sql,
-                            parameters,
-                            session_variables,
+                            bindings.parameters,
+                            bindings.session_variables,
                         )
                     } else {
                         query_service::execute(cx, &sql, false)
@@ -413,13 +420,7 @@ impl ConsolePanel {
     fn parse_bindings(
         &self,
         cx: &App,
-    ) -> Result<
-        (
-            std::collections::HashMap<String, serde_json::Value>,
-            std::collections::HashMap<String, serde_json::Value>,
-        ),
-        String,
-    > {
+    ) -> Result<ParsedBindings, String> {
         let parse = |field: &Entity<InputState>, what: &str| {
             let raw = field.read(cx).value().trim().to_string();
             if raw.is_empty() {
@@ -432,10 +433,10 @@ impl ConsolePanel {
                 .map(|object| object.iter().map(|(key, item)| (key.clone(), item.clone())).collect())
                 .ok_or_else(|| format!("{what} must be a JSON object."))
         };
-        Ok((
-            parse(&self.params, "Parameters")?,
-            parse(&self.session_vars, "Session variables")?,
-        ))
+        Ok(ParsedBindings {
+            parameters: parse(&self.params, "Parameters")?,
+            session_variables: parse(&self.session_vars, "Session variables")?,
+        })
     }
 
     fn first_statement(&self, cx: &App) -> Option<String> {

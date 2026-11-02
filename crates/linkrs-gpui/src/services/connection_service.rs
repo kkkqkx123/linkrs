@@ -121,10 +121,10 @@ pub fn start_heartbeat(cx: &mut App) -> Task<()> {
 /// is no longer valid. The server-side logout is attempted but ignored.
 pub fn invalidate_session(cx: &mut App) {
     let manager = SessionStore::manager(cx);
-    let _ = runtime::spawn(cx, async move {
+    drop(runtime::spawn(cx, async move {
         let mut guard = manager.lock().await;
         let _ = guard.disconnect().await;
         Ok(())
-    });
+    }));
     AppState::global(cx).update(cx, |state, cx| state.set_disconnected(cx));
 }
