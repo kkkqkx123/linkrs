@@ -15,6 +15,7 @@ pub struct ConnectedProfile {
     pub user: SharedString,
     pub space: Option<SharedString>,
     pub session_id: Option<i64>,
+    pub roles: Vec<String>,
 }
 
 /// Connect (and authenticate) against `host:port`. Runs on the tokio runtime;
@@ -42,10 +43,12 @@ pub fn connect(
         let user_name = session
             .map(|s| s.username.clone())
             .unwrap_or_else(|| user.clone());
+        let roles = session.map(|s| s.roles.clone()).unwrap_or_default();
         Ok(ConnectedProfile {
             user: user_name.into(),
             space: space.map(Into::into),
             session_id,
+            roles,
         })
     })
 }

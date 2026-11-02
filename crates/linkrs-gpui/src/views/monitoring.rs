@@ -6,18 +6,20 @@ use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::base::{Disableable as _, Selectable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::chart::AreaChart;
+use gpui_kit::component::input::InputState;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _};
 use gpui_kit::{
-    div, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, App, Context,
-    EventEmitter, Focusable, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, App,
+    AppContext as _, Context, Entity, EventEmitter, Focusable, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Window,
 };
 
-use crate::components::render_json_block;
+use crate::components::{form_row, render_json_block};
 use crate::services::{
-    config_service, connection_service, fulltext_service, monitoring_service, stats_service,
-    vector_service,
+    config_service, connection_service, fulltext_service, monitoring_service, query_service,
+    stats_service, vector_service,
 };
 
 /// Seconds between monitoring polls when auto-refresh is on.
@@ -50,13 +52,19 @@ pub struct MonitoringPanel {
     migration: serde_json::Value,
     retrieval: serde_json::Value,
     confirm_freeze: bool,
+    cpu_threshold: Entity<InputState>,
+    mem_threshold: Entity<InputState>,
+    slow_threshold: Entity<InputState>,
+    portrait_trace: Option<String>,
+    portrait: serde_json::Value,
+    portrait_loading: bool,
     focus_handle: gpui_kit::FocusHandle,
 }
 
 impl MonitoringPanel {
     pub(crate) const PANEL_NAME: &'static str = "Monitoring";
 
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut panel = Self {
             auto_refresh: true,
             generation: 0,
@@ -74,6 +82,21 @@ impl MonitoringPanel {
             migration: serde_json::Value::Null,
             retrieval: serde_json::Value::Null,
             confirm_freeze: false,
+            cpu_threshold: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("80")
+            }),
+            mem_threshold: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("80")
+            }),
+            slow_threshold: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("100")
+            }),
+            portrait_trace: None,
+            portrait: serde_json::Value::Null,
+            portrait_loading: false,
             focus_handle: cx.focus_handle(),
         };
         panel.refresh(cx);
@@ -224,6 +247,72 @@ impl MonitoringPanel {
         .detach();
     }
 
+    fn threshold(&self, field: &Entity<InputState>, cx: &App, default: f64) -> f64 {
+        field
+            .read(cx)
+            .value()
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| *value > 0.0)
+            .unwrap_or(default)
+    }
+
+    /// Slow queries at or above the configured millisecond threshold.
+    fn slow_rows(&self, cx: &App) -> Vec<(String, i64, String, f64, String)> {
+        let min_ms = self.threshold(&self.slow_threshold, cx, 100.0);
+        self.queries
+            .get("slow_queries")
+            .and_then(|rows| rows.as_array())
+            .map(|rows| {
+                rows
+                    .iter()
+                    .filter_map(|row| {
+                        let duration = row.get("duration_ms")?.as_f64()?;
+                        if duration < min_ms {
+                            return None;
+                        }
+                        Some((
+                            row.get("trace_id")?.as_str()?.to_string(),
+                            row.get("session_id")?.as_i64().unwrap_or(0),
+                            row.get("query")?.as_str().unwrap_or("").to_string(),
+                            duration,
+                            row.get("status")?.as_str().unwrap_or("").to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Fetch the server portrait for one slow-query trace.
+    fn view_portrait(&mut self, window: &mut Window, cx: &mut Context<Self>, trace_id: String) {
+        self.portrait_trace = Some(trace_id.clone());
+        self.portrait_loading = true;
+        cx.notify();
+        let task = query_service::profile(cx, &trace_id);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, move |this, _window, cx| {
+                this.portrait_loading = false;
+                match outcome {
+                    Ok(detail) => {
+                        this.portrait = serde_json::to_value(&detail)
+                            .unwrap_or(serde_json::Value::Null);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.message = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn render_chart(
         &self,
         title: &str,
@@ -271,6 +360,141 @@ impl MonitoringPanel {
                     ))
                     .tick_margin(15),
             )
+    }
+
+    fn render_slow_queries(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let rows = self.slow_rows(cx);
+        let count = rows.len();
+        let mut section = v_flex().gap_1().child(
+            div()
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(SharedString::from(format!("Slow queries ({count})"))),
+        );
+        if rows.is_empty() {
+            section = section.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("No slow queries above the threshold."),
+            );
+        } else {
+            section = section.child(v_flex().gap_1().children(rows.into_iter().enumerate().map(
+                |(ix, (trace_id, session_id, query, duration, status))| {
+                    let label = trace_id.clone();
+                    let selected = self.portrait_trace.as_deref() == Some(trace_id.as_str());
+                    let summary = if query.chars().count() > 80 {
+                        format!("{}…", query.chars().take(80).collect::<String>())
+                    } else {
+                        query
+                    };
+                    h_flex()
+                        .id(("slow-row", ix))
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded(theme.radius)
+                        .border_1()
+                        .border_color(if selected { theme.info } else { theme.border })
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.foreground)
+                                .child(SharedString::from(format!(
+                                    "{duration:.1}ms · session {session_id} · {status}"
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(SharedString::from(summary)),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.view_portrait(window, cx, label.clone());
+                        }))
+                },
+            )));
+        }
+        if self.portrait_trace.is_some() {
+            let title = self
+                .portrait_trace
+                .clone()
+                .map(|trace| format!("Portrait: {trace}"))
+                .unwrap_or_default();
+            section = section.child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(SharedString::from(title)),
+                    )
+                    .child(if self.portrait_loading {
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Loading portrait…")
+                            .into_any_element()
+                    } else {
+                        render_json_block(&self.portrait, cx).into_any_element()
+                    }),
+            );
+        }
+        section
+    }
+
+    fn render_thresholds(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let cpu = pick(&self.system, &["cpu_usage_percent"]);
+        let mem_ratio = self
+            .system
+            .get("memory_usage")
+            .and_then(|usage| {
+                let used = usage.get("used_bytes")?.as_f64()?;
+                let total = usage.get("total_bytes")?.as_f64()?;
+                (total > 0.0).then(|| used / total * 100.0)
+            })
+            .or_else(|| pick(&self.system, &["memory_usage_percent"]));
+        let cpu_limit = self.threshold(&self.cpu_threshold, cx, 80.0);
+        let mem_limit = self.threshold(&self.mem_threshold, cx, 80.0);
+        let mut exceeded = Vec::new();
+        if cpu.map(|value| value > cpu_limit).unwrap_or(false) {
+            exceeded.push(format!("CPU {:.1}% > {cpu_limit:.0}%", cpu.unwrap_or(0.0)));
+        }
+        if mem_ratio.map(|value| value > mem_limit).unwrap_or(false) {
+            exceeded.push(format!("Memory {:.1}% > {mem_limit:.0}%", mem_ratio.unwrap_or(0.0)));
+        }
+        h_flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_2()
+            .flex_wrap()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child("Thresholds"),
+            )
+            .child(form_row("CPU % >", self.cpu_threshold.clone(), cx))
+            .child(form_row("Memory % >", self.mem_threshold.clone(), cx))
+            .child(form_row("Slow ms >", self.slow_threshold.clone(), cx))
+            .when(!exceeded.is_empty(), |row| {
+                row.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.danger)
+                        .child(SharedString::from(exceeded.join(" · "))),
+                )
+            })
     }
 
     fn render_stat_cards(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -428,6 +652,8 @@ impl Render for MonitoringPanel {
                         v_flex()
                             .gap_3()
                             .child(self.render_stat_cards(cx))
+                            .child(self.render_thresholds(cx))
+                            .child(self.render_slow_queries(cx))
                             .child(
                                 h_flex()
                                     .gap_3()

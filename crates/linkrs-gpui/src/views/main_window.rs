@@ -542,6 +542,11 @@ impl MainWindow {
         self.activate_panel(panel, FulltextPanel::PANEL_NAME, window, cx);
     }
 
+    fn on_space_jump(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.schema.clone();
+        self.activate_panel(panel, SchemaPanel::PANEL_NAME, window, cx);
+    }
+
     /// End the session server-side and drop back to the sign-in screen. The
     /// local session is cleared even when the server cannot be reached.
     fn on_logout(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -587,7 +592,12 @@ impl MainWindow {
     }
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let user = state::AppState::global(cx).read(cx).user.clone();
+        let (user, can_manage, role) = {
+            let state = state::AppState::global(cx).read(cx);
+            (state.user.clone(), state.can_manage(), state.ui_role())
+        };
+        let role_badge: Option<SharedString> =
+            user.as_ref().map(|_| SharedString::from(role));
         let active = self.active_panel;
 
         Sidebar::new("main-sidebar")
@@ -684,9 +694,10 @@ impl MainWindow {
                         .on_click(cx.listener(Self::on_monitoring))]),
                 ),
             )
-            .child(
-                SidebarGroup::new("Management").child(
-                    SidebarMenu::new().children([
+            .child({
+                let mut items = Vec::new();
+                if can_manage {
+                    items.push(
                         self.nav_item(
                             NavEntry {
                                 label: "Users",
@@ -696,51 +707,65 @@ impl MainWindow {
                             cx,
                         )
                         .on_click(cx.listener(Self::on_users)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Batch",
-                                icon: IconName::Inbox,
-                            },
-                            active == BatchPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_batch)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Transfer",
-                                icon: IconName::ExternalLink,
-                            },
-                            active == TransferPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_transfer)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Migration",
-                                icon: IconName::FileText,
-                            },
-                            active == MigrationPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_migration)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Vector",
-                                icon: IconName::MemoryStick,
-                            },
-                            active == VectorPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_vector)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Fulltext",
-                                icon: IconName::Search,
-                            },
-                            active == FulltextPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_fulltext)),
+                    );
+                }
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Batch",
+                            icon: IconName::Inbox,
+                        },
+                        active == BatchPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_batch)),
+                );
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Transfer",
+                            icon: IconName::ExternalLink,
+                        },
+                        active == TransferPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_transfer)),
+                );
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Migration",
+                            icon: IconName::FileText,
+                        },
+                        active == MigrationPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_migration)),
+                );
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Vector",
+                            icon: IconName::MemoryStick,
+                        },
+                        active == VectorPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_vector)),
+                );
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Fulltext",
+                            icon: IconName::Search,
+                        },
+                        active == FulltextPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_fulltext)),
+                );
+                if can_manage {
+                    items.push(
                         self.nav_item(
                             NavEntry {
                                 label: "Sessions",
@@ -750,45 +775,54 @@ impl MainWindow {
                             cx,
                         )
                         .on_click(cx.listener(Self::on_sessions)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Transactions",
-                                icon: IconName::Repeat,
-                            },
-                            active == TransactionsPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_transactions)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Sync",
-                                icon: IconName::ArrowLeftRight,
-                            },
-                            active == SyncPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_sync)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Functions",
-                                icon: IconName::Braces,
-                            },
-                            active == FunctionsPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_functions)),
-                        self.nav_item(
-                            NavEntry {
-                                label: "Config",
-                                icon: IconName::SlidersHorizontal,
-                            },
-                            active == ConfigPanel::PANEL_NAME,
-                            cx,
-                        )
-                        .on_click(cx.listener(Self::on_config)),
-                    ]),
-                ),
-            )
+                    );
+                }
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Transactions",
+                            icon: IconName::Repeat,
+                        },
+                        active == TransactionsPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_transactions)),
+                );
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Sync",
+                            icon: IconName::ArrowLeftRight,
+                        },
+                        active == SyncPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_sync)),
+                );
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Functions",
+                            icon: IconName::Braces,
+                        },
+                        active == FunctionsPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_functions)),
+                );
+                items.push(
+                    self.nav_item(
+                        NavEntry {
+                            label: "Config",
+                            icon: IconName::SlidersHorizontal,
+                        },
+                        active == ConfigPanel::PANEL_NAME,
+                        cx,
+                    )
+                    .on_click(cx.listener(Self::on_config)),
+                );
+                SidebarGroup::new("Management").child(SidebarMenu::new().children(items))
+            })
             .footer(
                 SidebarFooter::new().child(
                     h_flex()
@@ -798,6 +832,14 @@ impl MainWindow {
                         .child(SharedString::from(
                             user.as_deref().unwrap_or("Not signed in"),
                         ))
+                        .when_some(role_badge, |row, role| {
+                            row.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(SharedString::from(format!("({role})"))),
+                            )
+                        })
                         .child(div().flex_1())
                         .child(
                             Button::new("logout")
@@ -846,10 +888,12 @@ impl MainWindow {
                     .child(div().text_xs().child(SharedString::from(status.label()))),
             )
             .left(h_flex().gap_2().items_center().children(space.map(|space| {
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(SharedString::from(format!("space: {space}")))
+                Button::new("status-space")
+                    .label(format!("space: {space}"))
+                    .xsmall()
+                    .ghost()
+                    .accessibility_label("Open the schema panel to switch spaces")
+                    .on_click(cx.listener(Self::on_space_jump))
             })))
             .right(
                 h_flex()

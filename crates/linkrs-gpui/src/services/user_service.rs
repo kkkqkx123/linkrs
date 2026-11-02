@@ -78,6 +78,36 @@ pub fn grant_role(cx: &App, name: &str, role: &str, space: &str) -> Task<Result<
     })
 }
 
+/// Change the signed-in user's own password through a `CHANGE PASSWORD`
+/// statement, mirroring the web studio behavior.
+pub fn change_own_password(
+    cx: &App,
+    old_password: &str,
+    new_password: &str,
+) -> Task<Result<(), ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let statement = format!(
+        "CHANGE PASSWORD {} TO {}",
+        quote_literal(old_password),
+        quote_literal(new_password)
+    );
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        let outcome = guard.execute_query(&statement).await?;
+        match outcome.error {
+            Some(info) => Err(ClientError::QueryError(info.message)),
+            None => Ok(()),
+        }
+    })
+}
+
+fn quote_literal(raw: &str) -> String {
+    format!(
+        "\"{}\"",
+        raw.replace('\\', "\\\\").replace('"', "\\\"")
+    )
+}
+
 /// Revoke a user's role in a space.
 pub fn revoke_role(cx: &App, name: &str, space: &str) -> Task<Result<(), ClientError>> {
     let manager = SessionStore::manager(cx);

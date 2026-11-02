@@ -94,6 +94,96 @@ pub fn create_edge_type(
     })
 }
 
+/// Drop a vertex tag from a space.
+pub fn drop_tag(cx: &App, space: &str, name: &str) -> Task<Result<(), ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let space = space.to_string();
+    let name = name.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().drop_tag(&space, &name).await
+    })
+}
+
+/// Drop an edge type from a space.
+pub fn drop_edge_type(cx: &App, space: &str, name: &str) -> Task<Result<(), ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let space = space.to_string();
+    let name = name.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().drop_edge_type(&space, &name).await
+    })
+}
+
+/// Alter a vertex tag by adding properties and dropping existing ones.
+/// Runs through an `ALTER TAG` statement in the session's current space.
+pub fn alter_tag(
+    cx: &App,
+    name: &str,
+    added: Vec<PropertyDef>,
+    dropped: Vec<String>,
+) -> Task<Result<(), ClientError>> {
+    alter_entity(cx, "TAG", name, added, dropped)
+}
+
+/// Alter an edge type by adding properties and dropping existing ones.
+/// Runs through an `ALTER EDGE` statement in the session's current space.
+pub fn alter_edge_type(
+    cx: &App,
+    name: &str,
+    added: Vec<PropertyDef>,
+    dropped: Vec<String>,
+) -> Task<Result<(), ClientError>> {
+    alter_entity(cx, "EDGE", name, added, dropped)
+}
+
+fn alter_entity(
+    cx: &App,
+    kind: &str,
+    name: &str,
+    added: Vec<PropertyDef>,
+    dropped: Vec<String>,
+) -> Task<Result<(), ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let statement = alter_statement(kind, name, &added, &dropped);
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        let outcome = guard.execute_query(&statement).await?;
+        match outcome.error {
+            Some(info) => Err(ClientError::QueryError(info.message)),
+            None => Ok(()),
+        }
+    })
+}
+
+fn alter_statement(
+    kind: &str,
+    name: &str,
+    added: &[PropertyDef],
+    dropped: &[String],
+) -> String {
+    let mut parts = Vec::new();
+    if !added.is_empty() {
+        let fields = added
+            .iter()
+            .map(|field| {
+                let mut text = format!("{} {}", field.name, field.data_type);
+                if let Some(default) = field.default_value.as_ref() {
+                    text.push_str(&format!(" DEFAULT {default}"));
+                }
+                text
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("ADD ({fields})"));
+    }
+    if !dropped.is_empty() {
+        parts.push(format!("DROP ({})", dropped.join(", ")));
+    }
+    format!("ALTER {kind} {name} {}", parts.join(" "))
+}
+
 /// Schema version history.
 pub fn version_history(
     cx: &App,

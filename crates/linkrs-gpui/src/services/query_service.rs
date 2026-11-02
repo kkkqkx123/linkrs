@@ -5,6 +5,27 @@ use crate::connection::SessionStore;
 use crate::runtime;
 use crate::state::AppState;
 
+/// Execute one statement with explicit parameters and session variables.
+/// Both maps bind by name; empty JSON objects mean no bindings.
+pub fn execute_with_options(
+    cx: &App,
+    sql: &str,
+    parameters: std::collections::HashMap<String, serde_json::Value>,
+    session_variables: std::collections::HashMap<String, serde_json::Value>,
+) -> Task<Result<QueryResult, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let sql = sql.to_string();
+    let session_id = AppState::global(cx).read(cx).session_id;
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        let id = session_id.ok_or(ClientError::NotConnected)?;
+        guard
+            .client()
+            .execute_query_with_options(&sql, id, parameters, session_variables)
+            .await
+    })
+}
+
 /// Execute one statement (or script) through the session. `raw` skips the
 /// client-side variable substitution performed by `execute_query`.
 pub fn execute(cx: &App, sql: &str, raw: bool) -> Task<Result<QueryResult, ClientError>> {

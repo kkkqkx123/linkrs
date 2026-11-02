@@ -77,6 +77,10 @@ pub struct ConsolePanel {
     running_payload: serde_json::Value,
     kill_session: Entity<InputState>,
     kill_query: Entity<InputState>,
+    params_open: bool,
+    params: Entity<InputState>,
+    session_vars: Entity<InputState>,
+    params_error: Option<SharedString>,
     /// Execution path captured at run start for history recording.
     run_stream: bool,
     /// When set, statements run through the SSE streaming endpoint.
@@ -98,6 +102,12 @@ impl ConsolePanel {
         let fav_name = cx.new(|cx| InputState::new(window, cx).placeholder("Favorite name"));
         let kill_session = cx.new(|cx| InputState::new(window, cx).placeholder("Session id"));
         let kill_query = cx.new(|cx| InputState::new(window, cx).placeholder("Query id"));
+        let params = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("{\"name\": value}")
+        });
+        let session_vars = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("{\"name\": value}")
+        });
         Self {
             editor,
             tabs: Vec::new(),
@@ -113,6 +123,10 @@ impl ConsolePanel {
             running_payload: serde_json::Value::Null,
             kill_session,
             kill_query,
+            params_open: false,
+            params,
+            session_vars,
+            params_error: None,
             run_stream: false,
             stream: false,
             cursor_id: None,
@@ -199,6 +213,16 @@ impl ConsolePanel {
         self.cursor_error = None;
         self.run_stream = self.stream;
         let stream = self.stream;
+        let bindings = match self.parse_bindings(cx) {
+            Ok(bindings) => bindings,
+            Err(message) => {
+                self.params_error = Some(message.into());
+                cx.notify();
+                return;
+            }
+        };
+        self.params_error = None;
+        let bound = !bindings.0.is_empty() || !bindings.1.is_empty();
 
         let task = cx.spawn_in(window, async move |this, cx| {
             let count = this
@@ -214,6 +238,14 @@ impl ConsolePanel {
                     let sql = this.tabs[ix].sql.clone();
                     if stream {
                         query_service::execute_stream(cx, &sql)
+                    } else if bound {
+                        let (parameters, session_variables) = bindings.clone();
+                        query_service::execute_with_options(
+                            cx,
+                            &sql,
+                            parameters,
+                            session_variables,
+                        )
                     } else {
                         query_service::execute(cx, &sql, false)
                     }
@@ -376,6 +408,36 @@ impl ConsolePanel {
     // -- Validate / explain / running queries / profile ---------------------
 
     /// First editor statement; the single-statement helpers all target it.
+    /// Parse the parameter bindings: empty input means no bindings,
+    /// otherwise a JSON object of name to value.
+    fn parse_bindings(
+        &self,
+        cx: &App,
+    ) -> Result<
+        (
+            std::collections::HashMap<String, serde_json::Value>,
+            std::collections::HashMap<String, serde_json::Value>,
+        ),
+        String,
+    > {
+        let parse = |field: &Entity<InputState>, what: &str| {
+            let raw = field.read(cx).value().trim().to_string();
+            if raw.is_empty() {
+                return Ok(std::collections::HashMap::new());
+            }
+            let value: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|_| format!("{what} must be a JSON object."))?;
+            value
+                .as_object()
+                .map(|object| object.iter().map(|(key, item)| (key.clone(), item.clone())).collect())
+                .ok_or_else(|| format!("{what} must be a JSON object."))
+        };
+        Ok((
+            parse(&self.params, "Parameters")?,
+            parse(&self.session_vars, "Session variables")?,
+        ))
+    }
+
     fn first_statement(&self, cx: &App) -> Option<String> {
         query_service::split_statements(&self.editor.read(cx).text().to_string())
             .into_iter()
@@ -996,6 +1058,41 @@ impl ConsolePanel {
                         cx.notify();
                     })),
             )
+            .child(
+                Button::new("toggle-params")
+                    .label("Params")
+                    .icon(IconName::Braces)
+                    .xsmall()
+                    .ghost()
+                    .selected(self.params_open)
+                    .disabled(running)
+                    .accessibility_label("Query parameters and session variables")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.params_open = !this.params_open;
+                        cx.notify();
+                    })),
+            )
+    }
+
+    fn render_params(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let params_error = self.params_error.clone();
+        v_flex()
+            .flex_shrink_0()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(form_row("Parameters", self.params.clone(), cx))
+            .child(form_row("Session vars", self.session_vars.clone(), cx))
+            .when_some(params_error, |panel, message| {
+                panel.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .child(message),
+                )
+            })
     }
 
     /// One history row: status icon, statement text (click loads), outcome
@@ -1631,6 +1728,7 @@ impl Render for ConsolePanel {
             .on_action(cx.listener(Self::on_cancel_query))
             .on_action(cx.listener(Self::on_copy_row))
             .child(self.render_toolbar(cx))
+            .when(self.params_open, |panel| panel.child(self.render_params(cx)))
             .when_some(self.cursor_error.clone(), |panel, message| {
                 panel.child(
                     h_flex()

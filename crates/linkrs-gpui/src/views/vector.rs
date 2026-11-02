@@ -11,7 +11,8 @@ use gpui_kit::{
 };
 
 use crate::components::{form_row, render_json_block};
-use crate::services::{connection_service, vector_service};
+use crate::services::{connection_service, schema_service, vector_service};
+use crate::state::AppState;
 
 /// Vector index panel: create/drop/rebuild/count vector indexes and run
 /// similarity search, all rendered as raw JSON with the key result tables.
@@ -26,6 +27,8 @@ pub struct VectorPanel {
     error: Option<SharedString>,
     output: serde_json::Value,
     output_title: String,
+    last_space: Option<SharedString>,
+    resolved_space: Option<(SharedString, u64)>,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -38,7 +41,11 @@ impl VectorPanel {
         let field = cx.new(|cx| InputState::new(window, cx).placeholder("Field name"));
         let size = cx.new(|cx| InputState::new(window, cx).placeholder("Vector size"));
         let query_vector = cx.new(|cx| InputState::new(window, cx).placeholder("[0.1, 0.2, ...]"));
-        Self {
+        let state = AppState::global(cx);
+        let last_space = state.read(cx).space.clone();
+        cx.observe(&state, |this, _, cx| this.on_state_changed(cx))
+            .detach();
+        let mut panel = Self {
             space_id,
             tag,
             field,
@@ -49,8 +56,55 @@ impl VectorPanel {
             error: None,
             output: serde_json::Value::Null,
             output_title: String::new(),
+            last_space,
+            resolved_space: None,
             focus_handle: cx.focus_handle(),
+        };
+        panel.on_state_changed(cx);
+        panel
+    }
+
+    /// Track the session space and resolve its numeric id for the index
+    /// calls; the resolved id backs the form whenever the input is empty.
+    fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        let space = AppState::global(cx).read(cx).space.clone();
+        if space == self.last_space {
+            return;
         }
+        self.last_space = space.clone();
+        self.resolved_space = None;
+        let Some(name) = space.map(|space| space.to_string()) else {
+            cx.notify();
+            return;
+        };
+        let task = schema_service::spaces(cx);
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            this.update(cx, |this, cx| {
+                if let Ok(spaces) = outcome {
+                    if let Some(found) = spaces.iter().find(|info| info.name == name) {
+                        this.resolved_space =
+                            Some((found.name.clone().into(), found.id));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fill the space id input from the resolved session space.
+    fn use_current_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, id)) = self.resolved_space.clone() else {
+            self.error = Some("Current space id is unknown; pick a space first.".into());
+            cx.notify();
+            return;
+        };
+        self.space_id.update(cx, |field, cx| {
+            field.set_value(id.to_string(), window, cx);
+        });
+        cx.notify();
     }
 
     fn text(field: &Entity<InputState>, cx: &App) -> String {
@@ -58,7 +112,10 @@ impl VectorPanel {
     }
 
     fn identity(&self, cx: &App) -> Option<(u64, String, String)> {
-        let space = Self::text(&self.space_id, cx).parse::<u64>().ok()?;
+        let space = Self::text(&self.space_id, cx)
+            .parse::<u64>()
+            .ok()
+            .or_else(|| self.resolved_space.clone().map(|(_, id)| id))?;
         let tag = Self::text(&self.tag, cx);
         let field = Self::text(&self.field, cx);
         if tag.is_empty() || field.is_empty() {
@@ -326,6 +383,36 @@ impl Render for VectorPanel {
                                     .gap_2()
                                     .p_3()
                                     .child(form_row("Space id", self.space_id.clone(), cx))
+                                    .child(
+                                        h_flex().gap_2().items_center()
+                                            .child(
+                                                Button::new("vector-use-space")
+                                                    .label("Use current space")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .disabled(self.resolved_space.is_none())
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.use_current_space(window, cx);
+                                                        },
+                                                    )),
+                                            )
+                                            .when_some(
+                                                self.resolved_space.clone(),
+                                                |row, (name, id)| {
+                                                    row.child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(
+                                                                cx.theme().muted_foreground,
+                                                            )
+                                                            .child(SharedString::from(format!(
+                                                                "{name} (id {id})"
+                                                            ))),
+                                                    )
+                                                },
+                                            ),
+                                    )
                                     .child(form_row("Tag", self.tag.clone(), cx))
                                     .child(form_row("Field", self.field.clone(), cx))
                                     .child(form_row("Size", self.size.clone(), cx))

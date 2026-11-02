@@ -117,6 +117,9 @@ pub struct UsersPanel {
     password: Entity<InputState>,
     role: Entity<InputState>,
     space: Entity<InputState>,
+    own_old: Entity<InputState>,
+    own_new: Entity<InputState>,
+    own_confirm: Entity<InputState>,
     confirm_drop: Option<String>,
     loading: bool,
     message: Option<SharedString>,
@@ -138,6 +141,21 @@ impl UsersPanel {
         });
         let role = cx.new(|cx| InputState::new(window, cx).placeholder("Role, e.g. admin"));
         let space = cx.new(|cx| InputState::new(window, cx).placeholder("Space"));
+        let own_old = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Current password")
+                .masked(true)
+        });
+        let own_new = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("New password")
+                .masked(true)
+        });
+        let own_confirm = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Confirm new password")
+                .masked(true)
+        });
         let mut panel = Self {
             data,
             table,
@@ -145,6 +163,9 @@ impl UsersPanel {
             password,
             role,
             space,
+            own_old,
+            own_new,
+            own_confirm,
             confirm_drop: None,
             loading: false,
             message: None,
@@ -501,6 +522,80 @@ impl Render for UsersPanel {
                                                     user_service::revoke_role(cx, &name, &space);
                                                 this.run(window, cx, "Revoke role", task);
                                             })),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .pt_2()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(theme.foreground)
+                                                    .child(SharedString::from(
+                                                        "Change my password",
+                                                    )),
+                                            )
+                                            .child(form_row(
+                                                "Current",
+                                                self.own_old.clone(),
+                                                cx,
+                                            ))
+                                            .child(form_row(
+                                                "New",
+                                                self.own_new.clone(),
+                                                cx,
+                                            ))
+                                            .child(form_row(
+                                                "Confirm",
+                                                self.own_confirm.clone(),
+                                                cx,
+                                            ))
+                                            .child(
+                                                Button::new("users-change-own-password")
+                                                    .label("Change password")
+                                                    .xsmall()
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            let old = Self::text(
+                                                                &this.own_old, cx,
+                                                            );
+                                                            let new = Self::text(
+                                                                &this.own_new, cx,
+                                                            );
+                                                            let confirm = Self::text(
+                                                                &this.own_confirm, cx,
+                                                            );
+                                                            if old.is_empty()
+                                                                || new.is_empty()
+                                                            {
+                                                                this.error = Some(
+                                                                    "Current and new passwords are required."
+                                                                        .into(),
+                                                                );
+                                                                cx.notify();
+                                                                return;
+                                                            }
+                                                            if new != confirm {
+                                                                this.error = Some(
+                                                                    "New passwords do not match."
+                                                                        .into(),
+                                                                );
+                                                                cx.notify();
+                                                                return;
+                                                            }
+                                                            let task =
+                                                                user_service::change_own_password(
+                                                                    cx, &old, &new,
+                                                                );
+                                                            this.run(
+                                                                window,
+                                                                cx,
+                                                                "Change password",
+                                                                task,
+                                                            );
+                                                        },
+                                                    )),
+                                            ),
                                     )
                                     .when_some(self.confirm_drop.clone(), |panel, name| {
                                         panel.child(

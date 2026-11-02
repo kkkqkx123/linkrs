@@ -291,6 +291,38 @@ impl HttpClient {
         self.execute_query(query, session_id).await
     }
 
+    /// Execute a query with explicit parameters and session variables.
+    /// Both maps bind by name; empty maps behave like [`Self::execute_query`].
+    pub async fn execute_query_with_options(
+        &self,
+        query: &str,
+        session_id: i64,
+        parameters: std::collections::HashMap<String, serde_json::Value>,
+        session_variables: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<QueryResult> {
+        let url = format!("{}/query", self.base_url);
+        let request = QueryRequest {
+            query: query.to_string(),
+            session_id,
+            parameters,
+            session_variables,
+            consistency: None,
+            consistency_timeout_ms: None,
+            minimum_lsn: None,
+        };
+
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&request)
+            .send()
+            .await?;
+
+        let response = Self::check_response(response, "Query failed").await?;
+
+        let wire: QueryResponse = response.json().await?;
+        Ok(QueryResult::from(wire))
+    }
+
     /// List all available spaces
     pub async fn list_spaces(&self) -> Result<Vec<SpaceInfo>> {
         let url = format!("{}/schema/spaces", self.base_url);
@@ -2206,6 +2238,16 @@ impl HttpClient {
             .send()
             .await?;
         let response = Self::check_response(response, "Failed to get vertex").await?;
+        let envelope: ApiEnvelope<serde_json::Value> = response.json().await?;
+        envelope.into_result()
+    }
+
+    /// Fetch space statistics (`GET /v1/schema/spaces/{name}/statistics`).
+    pub async fn get_space_statistics(&self, space: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/schema/spaces/{}/statistics", self.base_url, space);
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response =
+            Self::check_response(response, "Failed to get space statistics").await?;
         let envelope: ApiEnvelope<serde_json::Value> = response.json().await?;
         envelope.into_result()
     }

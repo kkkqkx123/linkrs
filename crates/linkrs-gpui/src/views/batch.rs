@@ -124,6 +124,46 @@ impl BatchPanel {
         .detach();
     }
 
+    /// Load the items JSON array from a file chosen in the system dialog.
+    fn load_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Load batch items".into()),
+        });
+        cx.spawn_in(window, async move |this, window| {
+            let paths = receiver.await;
+            _ = this.update_in(window, move |this, window, cx| {
+                match paths {
+                    Ok(Ok(Some(mut list))) if !list.is_empty() => {
+                        let path = list.remove(0);
+                        match std::fs::read_to_string(&path) {
+                            Ok(text) => {
+                                this.items_text.update(cx, |field, cx| {
+                                    field.set_value(text, window, cx);
+                                });
+                                this.error = None;
+                                this.message =
+                                    Some(format!("Loaded {}.", path.display()).into());
+                            }
+                            Err(error) => {
+                                this.error = Some(
+                                    format!("Cannot read {}: {error}", path.display()).into(),
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        this.message = Some("File selection cancelled.".into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn add_items(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(batch_id) = self.batch_id.clone() else {
             self.error = Some("Create a batch before adding items.".into());
@@ -552,6 +592,16 @@ impl Render for BatchPanel {
                             .child(
                                 h_flex()
                                     .gap_1()
+                                    .child(
+                                        Button::new("batch-load")
+                                            .label("Load file")
+                                            .icon(IconName::FolderOpen)
+                                            .xsmall()
+                                            .disabled(self.busy)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.load_file(window, cx);
+                                            })),
+                                    )
                                     .child(
                                         Button::new("batch-add")
                                             .label("Add items")
