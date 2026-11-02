@@ -36,16 +36,21 @@
 
 缺口（需补强类型方法，或过渡期走 `HttpClient::inner()` + `base_url()`）：
 
-| 功能域 | 缺失端点 | 使用阶段 |
-|---|---|---|
-| 数据浏览器 | 顶点/边分页扫描、单条记录详情、按谓词过滤 | 阶段二 |
-| 图可视化 | N 跳邻接查询、节点度数统计 | 阶段二 |
-| 用户管理 | 用户列表/创建/删除/改密/角色分配 | 阶段三 |
-| 全文管理 | 索引列表/创建/删除/重建 | 阶段三 |
-| 向量管理 | 集合列表/创建/删除/统计 | 阶段三 |
-| 迁移 | 任务列表/发起/进度/取消 | 阶段三 |
-| 会话管理 | 会话列表/终止 | 阶段三 |
-| 导入导出 | 文件上传/下载进度 | 阶段二 |
+> 状态更新（见 §12）：阶段 2/3 服务层预移植时端点已大规模补齐（当前 115 个公开方法），
+> 下表剩余缺口为数据浏览器、图邻接与导入导出文件传输三类。
+
+| 功能域 | 缺失端点 | 使用阶段 | 状态 |
+|---|---|---|---|
+| 数据浏览器 | 顶点/边分页扫描、单条记录详情、按谓词过滤 | 阶段二 | **仍缺** |
+| 图可视化 | N 跳邻接查询、节点度数统计 | 阶段二 | **仍缺** |
+| 用户管理 | 用户列表/创建/删除/改密/角色分配 | 阶段三 | 已补齐 |
+| 全文管理 | 索引列表/创建/删除/重建 | 阶段三 | 已补齐 |
+| 向量管理 | 集合列表/创建/删除/统计 | 阶段三 | 已补齐 |
+| 迁移 | 任务列表/发起/进度/取消 | 阶段三 | 已补齐 |
+| 会话管理 | 会话列表/终止 | 阶段三 | 已补齐 |
+| 导入导出 | 文件上传/下载进度 | 阶段二 | **仍缺**（仅 `import_status`） |
+
+此外已补齐计划未列出的端点：事务/保存点全生命周期、游标、流式查询（`execute_query_stream`）、会话变量、配置读写重置、函数注册、同步 outbox 诊断/重试、冻结统计等。
 
 ### 1.3 Web Studio 功能域（对齐目标）
 
@@ -358,3 +363,86 @@ src/
   如需改框架能力先推 fork 再更新指针（§1.4 决策五不变）。
 - 本节 §9 中“git 依赖固定分支”“compograph 接口收敛”等条目中与接入方式
   相关的表述以本节为准，其余风险项不变。
+
+## 12. 当前进度与功能缺口（2026-11 更新）
+
+以 `crates/linkrs-gpui` 工作树实测状态为准（总计约 4500 行，`cargo check` 通过）。
+
+### 12.1 已交付
+
+**阶段 0（工程准备与骨架）——已完成**
+
+- `TitleBar + Sidebar（分组导航）+ DockArea（布局序列化/恢复，带版本号）+ StatusBar` 主框架（`views/main_window.rs`）。
+- 主题 system/light/dark 切换与持久化、最近连接、最近查询、Dock 布局均落盘 `settings.rs`（`~/.config/linkrs/`）。
+- 全局 `Action`/快捷键注册（`app.rs`）、客户端 tokio 运行时桥接（`runtime.rs`，GPUI executor ↔ tokio oneshot 转发）。
+
+**阶段 1（MVP：连接与查询控制台）——已完成**
+
+- 登录表单 + 最近连接下拉 + 会话失效全局回登录（`connection/login_view.rs`、`connection_service.rs`，含后台心跳、`is_session_expired` 统一判定）。
+- 控制台：多语句分号切分、逐语句执行、多结果集 tab、错误面板（错误码 + 消息）、CSV/JSON 导出、本地查询历史（`views/console.rs`）。
+- 结果表：列排序、单元格复制、右键菜单（`components/result_table.rs`）。
+- Schema 浏览：space/tag/edge_type 树状展示 + space 切换联动刷新（`views/schema.rs`、`schema_service.rs`）。
+- 会话状态实体（`state.rs`：连接状态机、当前 space、session id）。
+
+### 12.2 预移植（超出计划节奏）
+
+阶段 2/3 的服务层已按 Web Studio 的 20 个服务文件契约**预先移植完毕**：batch、config、cursor、fulltext、function、migration、server_session、stats、sync、transaction、transfer、user、vector 共 13 个模块约 92 个函数，全部对齐 `linkrs-client` 已补齐的强类型端点，并与 `connection_service` 一致地处理会话失效。
+
+> 这 13 个模块当前无任何视图调用，`cargo check` 产生约 105 条 `dead_code`
+> 警告。**这是移植节奏的正常中间态**（服务层先于视图落地），不通过
+> `#[allow(dead_code)]` 抑制；对应视图接线后警告自然消除。
+
+### 12.3 功能缺口（下一步工作）
+
+| 缺口 | 内容 | 所属阶段 |
+|---|---|---|
+| 视图层 | 阶段 2 视图全部缺失：data_browser、graph（compograph）、monitoring、batch、transfer；阶段 3 视图全部缺失：users、sessions、migration、vector、fulltext | 阶段 2/3 |
+| linkrs-client 端点 | 顶点/边分页扫描与谓词过滤、N 跳邻接与度数、文件上传/下载进度回调（§1.2 表中"仍缺"三项） | 阶段 2 |
+| 图可视化 | compograph 接入（`graph_host.rs`/`graph_service.rs` 隔离层）尚未开工 | 阶段 2 |
+| 流式/游标 UI | 端点已齐（`execute_query_stream`、cursor 三件套），控制台尚无流式模式与游标自动分页 | 阶段 3 |
+| 历史侧栏 | 本地环形缓存已有雏形，服务端历史接口未接 | 阶段 3 |
+| 阶段 4 | 快捷键面板、打包分发、性能采样、OS keychain 均未启动 | 阶段 4 |
+
+### 12.4 与计划的实现偏差（均已在 §11 或工作树验证）
+
+- `rust-version = "1.97"`（高于计划声明的 1.96 下限，gpui-kit 快照演进所致）。
+- gpui-kit 启用特性为 `component + assets + syntect + tree-sitter-sql`（`default-features = false`），计划中的 `gpui-fast` 未启用。
+- 设计文档 §5 的 `commands.rs`/`tasks.rs` 未落地，对应职责分别由 `app.rs` 的 Action 注册与 `runtime.rs` 承担；`management_service.rs` 按功能域拆分为 `user_service.rs` + `server_session_service.rs`。
+- 调试性能调优（`[profile.dev.package]` opt-level 3）落在 `linkrs-gpui` 自身 workspace，根 workspace 仅保留 `tree-sitter` 一条。
+
+### 12.5 阶段 2/3 交付记录（本次实现）
+
+§12.3 的视图层、端点、流式/游标三类缺口已交付，历史侧栏与阶段 4 不在本次范围。
+
+**linkrs-client 端点补齐**（`crates/linkrs-client/src/http_client.rs`）：
+
+- 新增 `ApiEnvelope<T>`/`DataPage`/`NeighborListData` 类型，对齐服务端 `/v1/data` 与 `/v1/graph` 的 `{ success, data, error }` 信封。
+- 新增 `list_vertices_by_tag` / `list_edges_by_type`（分页 + `filter`/`sort_by`/`sort_order`）、`get_vertex` / `get_edge` / `get_neighbors`（`OUT`/`IN`/`BOTH` + 可选 edge type）。
+- `SessionManager` 新增 `require_space` + `list_vertices` / `list_edges` / `get_vertex` / `get_neighbors` 当前 space 便捷封装。
+- N 跳邻接与度数未新增服务端点：N 跳由 `graph_service::expand_neighborhood` 在客户端 BFS（去重防环），度数由三次有向邻居调用计数；文件上传/下载走既有 `server_import_file` / `server_export_bytes`（单请求体，无分块进度回调）。
+- 新增 `http_client::data_browser_tests` 3 个单测（信封成功/失败、邻居列表容错解析）。
+
+**服务层新增**（`crates/linkrs-gpui/src/services/`）：`data_browser_service.rs`（分页扫描 + 行归一化）、`graph_service.rs`（`GraphNode`/`GraphEdge`、单跳/多跳展开、度数、顶点详情）、`monitoring_service.rs`（overview/system/query/database 轮询 + `number_at` 路径取数）。另附归一化单测 4 个（`cargo test --bin linkrs-gpui services::` 共 7 通过）。
+
+**组件层新增**（`crates/linkrs-gpui/src/components/`）：`graph_host.rs`（compograph 真实后端：`GraphModel` 持有 `GraphStore` + `LayoutDriver` + `Camera` + `SpatialIndex` + 选择/拖拽状态，`set_graph` 重建结构并同步执行布局、`plans` 逐帧规划节点/边/箭头/标签、`press/drag_to/end_drag/zoom_at` 由视图手势驱动；`render_canvas_frame` 由 paint plans 组装 `graph_view`）、`property_panel.rs`（JSON 扁平化键值渲染 + 图选择详情）、`filter_panel.rs`（`FilterControls` 过滤/排序控件 + `form_row` + `render_json_block`）。
+
+**视图层新增**（`crates/linkrs-gpui/src/views/`，全部实现 Dock `Panel` 并注册进主框架）：
+
+| 视图 | 要点 |
+|---|---|
+| `data_browser.rs` | 顶点/边模式切换、tag/edge-type 芯片、服务端分页过滤排序、`DataTable` + 右键复制、选中行属性详情 |
+| `graph.rs` | seed 输入、1–3 跳 N 跳展开、OUT/IN/BOTH 方向、compograph 原生画布点选/拖拽/滚轮缩放、布局切换（force/circle/grid/concentric/breadthfirst/radial）、点选节点加载顶点详情、边列表、Fit 复位 |
+| `monitoring.rs` | overview/system/query/database 5s 轮询（可开关）、QPS/延迟 `AreaChart`、指标卡片、原始 payload |
+| `batch.rs` | 创建/加项（JSON 数组解析）/执行/状态轮询（`Progress`）/取消/删除 |
+| `transfer.rs` | 本地文件读取后服务端导入 + job 状态跟进、服务端导出经文件对话框落盘 |
+| `users.rs` | 用户列表排序、创建/改密/启用/禁用/授权/撤权、删除二次确认 |
+| `sessions.rs` | 会话列表 + 终止 + 5s 自动刷新循环、选中会话变量查看/设置 |
+| `migration.rs` | plan 历史版本输入、plan/dry-run/execute/rollback、history/status/progress 查询、plan JSON 回填 |
+| `vector.rs` | list/info/count/create/rebuild/drop/search（JSON 向量输入） |
+| `fulltext.rs` | list/inconsistent/search/rebuild/status/clear |
+
+**控制台增强**（`views/console.rs`）：Stream 开关（`execute_query_stream` 逐语句流式执行）、游标分页器（首语句 open cursor → 独立结果 tab、Next page 追加 `extend_from_result`、Close cursor；`components/result_table.rs` 新增 `from_columns_rows`/`extend_from_result`）。
+
+**主框架接线**（`views/main_window.rs`）：12 面板全部注册（`register_panel` + 默认中心 tab 布局），Dock 布局版本升至 3（旧布局自动重置），侧栏占位禁用项全部替换为可点击导航（查询/数据/观测/管理四组）。
+
+与计划的偏差：图渲染已改用 compograph 原生画布（`graph_host.rs` 为 `GraphStore` + `LayoutDriver` + `Camera` 会话，`graph.rs` 只负责帧装配与手势转发，隔离边界仍收敛在这两个文件，符合决策三）。compograph 子模块的 gpui pin 由 `=0.3.8` 升至 `=0.3.10`（与其自身"与 gpui-kit pin 保持一致"的规定对齐，`cargo check --workspace` 通过），提交链为 compograph → gpui-kit 指针 → 主仓库指针，需上游 push；管理页用内联表单 + 二次确认代替 `Sheet`/`Dialog`（同等功能，组件 API 风险更低）；`dead_code` 警告由约 105 条降至约 62 条，剩余为 config/transaction/sync/function 等尚未有视图的服务函数。

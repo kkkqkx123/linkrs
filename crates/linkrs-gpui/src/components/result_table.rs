@@ -52,6 +52,31 @@ impl QueryTableData {
         &self.columns
     }
 
+    /// Build a snapshot from pre-normalized columns and rows (used by the
+    /// data browser, whose rows are flattened JSON rather than query output).
+    pub fn from_columns_rows(columns: Vec<String>, rows: Vec<Vec<String>>) -> Self {
+        Self {
+            columns,
+            rows,
+            ..Self::default()
+        }
+    }
+
+    /// Append one result page (cursor pagination) to the snapshot.
+    pub fn extend_from_result(&mut self, result: &QueryResult) {
+        if self.columns.is_empty() {
+            self.columns.clone_from(&result.columns);
+        }
+        for row in &result.rows {
+            self.rows.push(
+                self.columns
+                    .iter()
+                    .map(|name| format_value(row.get(name)))
+                    .collect(),
+            );
+        }
+    }
+
     pub fn rows(&self) -> &[Vec<String>] {
         &self.rows
     }

@@ -52,6 +52,17 @@ csv = "1.3"
 # syntax-aware editing) on top of the lighter syntect fallback used by
 # `.language("sql")` on the query editor.
 gpui-kit = { path = "../gpui-kit/crates/kit", default-features = false, features = ["component", "assets", "syntect", "tree-sitter-sql"] }
+# Native graph rendering (compograph). These crates share the gpui-pre
+# =0.3.10 pin with gpui-kit (see the compograph workspace Cargo.toml);
+# both workspaces resolve one GPUI API baseline, so views and canvases
+# share entity and element types. The compograph submodule must be
+# initialized (`git submodule update --init --recursive crates/gpui-kit`).
+compograph-graph = { path = "../gpui-kit/crates/compograph/crates/foundation/cg-graph" }
+compograph-layout = { path = "../gpui-kit/crates/compograph/crates/engine/cg-layout" }
+compograph-render = { path = "../gpui-kit/crates/compograph/crates/render/cg-render" }
+compograph-interact = { path = "../gpui-kit/crates/compograph/crates/render/cg-interact" }
+compograph-types = { path = "../gpui-kit/crates/compograph/crates/foundation/cg-types" }
+compograph-geometry = { path = "../gpui-kit/crates/compograph/crates/foundation/cg-geometry" }
 linkrs-client = { path = "../linkrs-client" }
 linkrs-wire = { path = "../linkrs-wire" }
 anyhow.workspace = true

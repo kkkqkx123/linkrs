@@ -24,6 +24,70 @@ use crate::config::{ClientConfig, SessionInfo};
 use crate::transaction::TransactionOptions;
 use crate::types::QueryResult;
 use crate::utils::error::{ClientError, Result};
+use serde::{Deserialize, Serialize};
+
+/// Standard `{ success, data, error }` envelope shared by the `/v1/data`
+/// and `/v1/graph` web endpoints (see `linkrs-server/src/web/models.rs`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiEnvelope<T> {
+    pub success: bool,
+    pub data: Option<T>,
+    pub error: Option<ApiErrorBody>,
+}
+
+/// Failure payload carried inside [`ApiEnvelope`] when `success` is false.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiErrorBody {
+    pub code: String,
+    pub message: String,
+}
+
+impl<T> ApiEnvelope<T> {
+    /// Unwrap the envelope, mapping a backend-reported failure onto
+    /// [`ClientError::Http`] so service layers keep one error type.
+    pub fn into_result(self) -> Result<T> {
+        if self.success {
+            self.data
+                .ok_or_else(|| ClientError::http(200, "Server returned success without data"))
+        } else {
+            let body = self.error.map(|e| format!("{}: {}", e.code, e.message));
+            Err(ClientError::http(
+                200,
+                body.unwrap_or_else(|| "Request failed".to_string()),
+            ))
+        }
+    }
+}
+
+/// One paginated vertex/edge page from the data browser endpoints.
+///
+/// Rows stay plain JSON values; the GPUI views normalize them into
+/// display columns the same way `frontend/.../dataBrowser.ts` does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataPage {
+    #[serde(default)]
+    pub items: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+/// Neighbor list payload from `GET /v1/graph/vertices/{vid}/neighbors`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeighborListData {
+    #[serde(default)]
+    pub vid: String,
+    #[serde(default)]
+    pub space: String,
+    #[serde(default)]
+    pub direction: String,
+    pub edge_type: Option<String>,
+    #[serde(default)]
+    pub neighbors: Vec<serde_json::Value>,
+}
 
 /// HTTP client for connecting to remote Linkrs server
 pub struct HttpClient {
@@ -2056,5 +2120,172 @@ impl HttpClient {
 
         let login_resp: LoginResponse = response.json().await?;
         Ok(login_resp)
+    }
+
+    // ── Data browser (`/v1/data`) ──
+
+    /// List vertices of one tag with server-side pagination, filtering and
+    /// sorting (`GET /v1/data/spaces/{space}/tags/{tag}/vertices`).
+    ///
+    /// `filter` is a property expression such as `age>18`; `sort_order` is
+    /// `ASC` or `DESC`. Mirrors `frontend/src/lib/services/dataBrowser.ts`.
+    pub async fn list_vertices_by_tag(
+        &self,
+        space: &str,
+        tag: &str,
+        limit: usize,
+        offset: usize,
+        filter: Option<&str>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> Result<DataPage> {
+        let url = format!(
+            "{}/data/spaces/{}/tags/{}/vertices",
+            self.base_url, space, tag
+        );
+        let mut request = self
+            .authed(self.inner.get(&url))
+            .query(&[("limit", limit.to_string()), ("offset", offset.to_string())]);
+        if let Some(filter) = filter.filter(|s| !s.trim().is_empty()) {
+            request = request.query(&[("filter", filter)]);
+        }
+        if let Some(sort_by) = sort_by.filter(|s| !s.trim().is_empty()) {
+            request = request.query(&[("sort_by", sort_by)]);
+        }
+        if let Some(order) = sort_order.filter(|s| !s.trim().is_empty()) {
+            request = request.query(&[("sort_order", order)]);
+        }
+        let response = request.send().await?;
+        let response = Self::check_response(response, "Failed to list vertices").await?;
+        let envelope: ApiEnvelope<DataPage> = response.json().await?;
+        envelope.into_result()
+    }
+
+    /// List edges of one edge type with server-side pagination, filtering
+    /// and sorting (`GET /v1/data/spaces/{space}/edge-types/{edge}/edges`).
+    pub async fn list_edges_by_type(
+        &self,
+        space: &str,
+        edge_type: &str,
+        limit: usize,
+        offset: usize,
+        filter: Option<&str>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> Result<DataPage> {
+        let url = format!(
+            "{}/data/spaces/{}/edge-types/{}/edges",
+            self.base_url, space, edge_type
+        );
+        let mut request = self
+            .authed(self.inner.get(&url))
+            .query(&[("limit", limit.to_string()), ("offset", offset.to_string())]);
+        if let Some(filter) = filter.filter(|s| !s.trim().is_empty()) {
+            request = request.query(&[("filter", filter)]);
+        }
+        if let Some(sort_by) = sort_by.filter(|s| !s.trim().is_empty()) {
+            request = request.query(&[("sort_by", sort_by)]);
+        }
+        if let Some(order) = sort_order.filter(|s| !s.trim().is_empty()) {
+            request = request.query(&[("sort_order", order)]);
+        }
+        let response = request.send().await?;
+        let response = Self::check_response(response, "Failed to list edges").await?;
+        let envelope: ApiEnvelope<DataPage> = response.json().await?;
+        envelope.into_result()
+    }
+
+    // ── Graph data (`/v1/graph`) ──
+
+    /// Fetch one vertex by id (`GET /v1/graph/vertices/{vid}?space=`).
+    pub async fn get_vertex(&self, vid: &str, space: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/graph/vertices/{}", self.base_url, vid);
+        let response = self
+            .authed(self.inner.get(&url))
+            .query(&[("space", space)])
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to get vertex").await?;
+        let envelope: ApiEnvelope<serde_json::Value> = response.json().await?;
+        envelope.into_result()
+    }
+
+    /// Fetch one edge by endpoints (`GET /v1/graph/edges`).
+    pub async fn get_edge(
+        &self,
+        space: &str,
+        src: &str,
+        dst: &str,
+        edge_type: &str,
+        rank: i64,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/graph/edges", self.base_url);
+        let response = self
+            .authed(self.inner.get(&url))
+            .query(&[
+                ("space", space),
+                ("src", src),
+                ("dst", dst),
+                ("edge_type", edge_type),
+                ("rank", &rank.to_string()),
+            ])
+            .send()
+            .await?;
+        let response = Self::check_response(response, "Failed to get edge").await?;
+        let envelope: ApiEnvelope<serde_json::Value> = response.json().await?;
+        envelope.into_result()
+    }
+
+    /// List 1-hop neighbors of one vertex
+    /// (`GET /v1/graph/vertices/{vid}/neighbors`). `direction` is
+    /// `OUT`, `IN` or `BOTH`; `edge_type` optionally narrows the traversal.
+    pub async fn get_neighbors(
+        &self,
+        vid: &str,
+        space: &str,
+        direction: &str,
+        edge_type: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>> {
+        let url = format!("{}/graph/vertices/{}/neighbors", self.base_url, vid);
+        let mut request = self
+            .authed(self.inner.get(&url))
+            .query(&[("space", space), ("direction", direction)]);
+        if let Some(edge_type) = edge_type.filter(|s| !s.trim().is_empty()) {
+            request = request.query(&[("edge_type", edge_type)]);
+        }
+        let response = request.send().await?;
+        let response = Self::check_response(response, "Failed to get neighbors").await?;
+        let envelope: ApiEnvelope<NeighborListData> = response.json().await?;
+        Ok(envelope.into_result()?.neighbors)
+    }
+}
+
+#[cfg(test)]
+mod data_browser_tests {
+    use super::{ApiEnvelope, DataPage, NeighborListData};
+
+    #[test]
+    fn envelope_unwraps_success_payload() {
+        let raw = r#"{"success": true, "data": {"items": [], "total": 0, "limit": 20, "offset": 0}, "error": null}"#;
+        let envelope: ApiEnvelope<DataPage> = serde_json::from_str(raw).expect("valid envelope");
+        let page = envelope.into_result().expect("success unwraps");
+        assert_eq!(page.total, 0);
+        assert!(page.items.is_empty());
+    }
+
+    #[test]
+    fn envelope_maps_failure_to_http_error() {
+        let raw = r#"{"success": false, "data": null, "error": {"code": "NOT_FOUND", "message": "no such space"}}"#;
+        let envelope: ApiEnvelope<DataPage> = serde_json::from_str(raw).expect("valid envelope");
+        let error = envelope.into_result().expect_err("failure maps to error");
+        assert!(error.to_string().contains("NOT_FOUND"));
+    }
+
+    #[test]
+    fn neighbor_list_parses_with_missing_direction() {
+        let raw = r#"{"vid": "1", "space": "demo", "neighbors": [{"vertex": {"vid": "2"}}]}"#;
+        let list: NeighborListData = serde_json::from_str(raw).expect("valid neighbor list");
+        assert_eq!(list.direction, "");
+        assert_eq!(list.neighbors.len(), 1);
     }
 }

@@ -24,11 +24,13 @@ use linkrs_client::{ClientError, QueryErrorInfo};
 use crate::components::{
     empty_state, new_table_state, on_copy_row, QueryTableData, QueryTableDelegate,
 };
-use crate::services::{connection_service, query_service};
+use crate::services::{connection_service, cursor_service, query_service};
 use crate::settings;
 
 actions!(linkrs, [RunQuery, CancelQuery]);
 
+/// Page size for one cursor fetch in the console cursor pager.
+const CURSOR_PAGE_SIZE: usize = 200;
 /// Editor pane height as a fraction of the panel. Results take the rest.
 const EDITOR_HEIGHT: f32 = 260.;
 
@@ -58,6 +60,14 @@ pub struct ConsolePanel {
     active_tab: Option<usize>,
     running: Option<Task<()>>,
     history_open: bool,
+    /// When set, statements run through the SSE streaming endpoint.
+    stream: bool,
+    /// Forward-only cursor pager state (`None` when no cursor is open).
+    cursor_id: Option<u64>,
+    cursor_tab: Option<usize>,
+    cursor_has_more: bool,
+    cursor_loading: bool,
+    cursor_error: Option<SharedString>,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -72,6 +82,12 @@ impl ConsolePanel {
             active_tab: None,
             running: None,
             history_open: false,
+            stream: false,
+            cursor_id: None,
+            cursor_tab: None,
+            cursor_has_more: false,
+            cursor_loading: false,
+            cursor_error: None,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -131,6 +147,13 @@ impl ConsolePanel {
             })
             .collect();
         self.active_tab = Some(0);
+        // A fresh run owns the result area: drop any open cursor pager so
+        // the two result pipelines never interleave rows.
+        self.cursor_id = None;
+        self.cursor_tab = None;
+        self.cursor_has_more = false;
+        self.cursor_error = None;
+        let stream = self.stream;
 
         let task = cx.spawn_in(window, async move |this, cx| {
             let count = this
@@ -144,7 +167,11 @@ impl ConsolePanel {
                     this.active_tab = Some(ix);
                     cx.notify();
                     let sql = this.tabs[ix].sql.clone();
-                    query_service::execute(cx, &sql, false)
+                    if stream {
+                        query_service::execute_stream(cx, &sql)
+                    } else {
+                        query_service::execute(cx, &sql, false)
+                    }
                 });
                 let Ok(task) = task else { break };
                 let result = task.await;
@@ -255,6 +282,132 @@ impl ConsolePanel {
         }
     }
 
+    // -- Cursor pager --------------------------------------------------------
+
+    /// Open a forward-only cursor over the first statement of the editor.
+    /// The first page becomes its own result tab; further pages append.
+    fn open_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cursor_id.is_some() || self.cursor_loading {
+            return;
+        }
+        let script = self.editor.read(cx).text().to_string();
+        let mut statements = query_service::split_statements(&script);
+        if statements.is_empty() {
+            self.cursor_error = Some("The editor holds no statement to page.".into());
+            cx.notify();
+            return;
+        }
+        let first = statements.remove(0);
+        self.cursor_loading = true;
+        self.cursor_error = None;
+        cx.notify();
+
+        let task = cursor_service::open(cx, &first);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, window, cx| {
+                this.cursor_loading = false;
+                match outcome {
+                    Ok((id, columns)) => {
+                        this.cursor_id = Some(id);
+                        this.start_cursor_tab(&columns, window, cx);
+                        this.fetch_cursor_page(window, cx);
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.cursor_error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Create the empty cursor result tab with the cursor column header.
+    fn start_cursor_tab(
+        &mut self,
+        columns: &[String],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let data = Rc::new(RefCell::new(QueryTableData::from_columns_rows(
+            columns.to_vec(),
+            Vec::new(),
+        )));
+        let table = new_table_state(&data, window, cx);
+        let ix = self.tabs.len();
+        self.tabs.push(ResultTab {
+            sql: "-- cursor".to_string(),
+            status: TabStatus::Running,
+            data,
+            table,
+            error: None,
+            elapsed_ms: 0,
+        });
+        self.cursor_tab = Some(ix);
+        self.active_tab = Some(ix);
+        cx.notify();
+    }
+
+    /// Fetch the next cursor page and append it to the cursor result tab.
+    fn fetch_cursor_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.cursor_id else {
+            return;
+        };
+        if self.cursor_loading {
+            return;
+        }
+        self.cursor_loading = true;
+        cx.notify();
+        let task = cursor_service::fetch(cx, id, CURSOR_PAGE_SIZE);
+        cx.spawn_in(window, async move |this, window| {
+            let outcome = task.await;
+            _ = this.update_in(window, |this, _, cx| {
+                this.cursor_loading = false;
+                match outcome {
+                    Ok((result, has_more)) => {
+                        this.cursor_has_more = has_more;
+                        if let Some(ix) = this.cursor_tab {
+                            if let Some(tab) = this.tabs.get_mut(ix) {
+                                tab.data.borrow_mut().extend_from_result(&result);
+                                tab.status = TabStatus::Ok;
+                                tab.table.update(cx, |_, cx| cx.notify());
+                                this.active_tab = Some(ix);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        if connection_service::is_session_expired(&error) {
+                            connection_service::invalidate_session(cx);
+                        }
+                        this.cursor_error = Some(error.to_string().into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Release the server-side cursor. Rows already fetched stay visible.
+    fn close_cursor(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.cursor_id.take() else {
+            return;
+        };
+        self.cursor_tab = None;
+        self.cursor_has_more = false;
+        self.cursor_loading = false;
+        cx.notify();
+        let task = cursor_service::close(cx, id);
+        cx.spawn(async move |_this, _cx| {
+            let _ = task.await;
+        })
+        .detach();
+    }
+
     // -- Export --------------------------------------------------------------
 
     fn export(&mut self, format: ExportFormat, window: &mut Window, cx: &mut Context<Self>) {
@@ -325,6 +478,10 @@ impl ConsolePanel {
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let running = self.running.is_some();
         let history_open = self.history_open;
+        let stream = self.stream;
+        let cursor_open = self.cursor_id.is_some();
+        let cursor_busy = self.cursor_loading;
+        let cursor_more = self.cursor_has_more;
         let theme = cx.theme().clone();
 
         h_flex()
@@ -379,6 +536,56 @@ impl ConsolePanel {
                     })),
             )
             .child(div().flex_1())
+            .child(
+                Button::new("toggle-stream")
+                    .label("Stream")
+                    .icon(IconName::Zap)
+                    .xsmall()
+                    .ghost()
+                    .selected(stream)
+                    .disabled(running)
+                    .accessibility_label("Run through the SSE streaming endpoint")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.stream = !this.stream;
+                        cx.notify();
+                    })),
+            )
+            .when(!cursor_open, |bar| {
+                bar.child(
+                    Button::new("cursor-open")
+                        .label("Cursor")
+                        .icon(IconName::Database)
+                        .xsmall()
+                        .ghost()
+                        .disabled(running || cursor_busy)
+                        .accessibility_label("Open a server cursor for large results")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_cursor(window, cx);
+                        })),
+                )
+            })
+            .when(cursor_open, |bar| {
+                bar.child(
+                    Button::new("cursor-next")
+                        .label(if cursor_more { "Next page" } else { "Done" })
+                        .icon(IconName::ChevronRight)
+                        .xsmall()
+                        .disabled(cursor_busy || !cursor_more)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.fetch_cursor_page(window, cx);
+                        })),
+                )
+                .child(
+                    Button::new("cursor-close")
+                        .label("Close cursor")
+                        .icon(IconName::X)
+                        .xsmall()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close_cursor(cx);
+                        })),
+                )
+            })
             .child(
                 Button::new("toggle-history")
                     .label("History")
@@ -639,6 +846,25 @@ impl Render for ConsolePanel {
             .on_action(cx.listener(Self::on_cancel_query))
             .on_action(cx.listener(Self::on_copy_row))
             .child(self.render_toolbar(cx))
+            .when_some(self.cursor_error.clone(), |panel, message| {
+                panel.child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .bg(theme.danger.opacity(0.08))
+                        .child(Icon::new(IconName::TriangleAlert).text_color(theme.danger))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .text_color(theme.danger)
+                                .child(message),
+                        ),
+                )
+            })
             .child(
                 h_flex()
                     .flex_1()

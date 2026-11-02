@@ -23,13 +23,22 @@ use crate::app::{to_theme_mode, Quit, ThemeDark, ThemeLight, ThemeSystem};
 use crate::services::connection_service;
 use crate::settings::{self, ThemeModeSetting, WindowGeometry};
 use crate::state::{self, AppState, ConnectionStatus};
-use crate::views::{ConsolePanel, SchemaPanel};
+use crate::views::{
+    BatchPanel, ConsolePanel, DataBrowserPanel, FulltextPanel, GraphPanel, MigrationPanel,
+    MonitoringPanel, SchemaPanel, SessionsPanel, TransferPanel, UsersPanel, VectorPanel,
+};
 
 /// Bump when the default layout changes so stale persisted layouts reset.
-const MAIN_DOCK_VERSION: usize = 2;
+const MAIN_DOCK_VERSION: usize = 3;
 const MAIN_DOCK_ID: &str = "main-dock";
 /// Debounce window before a layout change is written to disk.
-const LAYOUT_SAVE_DELAY: Duration = Duration::from_millis(1200);
+const LAYOUT_SAVE_DELAY: Duration = Duration::from_secs(1);
+
+/// Sidebar entry: label, icon and the panel it activates.
+struct NavEntry {
+    label: &'static str,
+    icon: IconName,
+}
 
 // -- Main window --------------------------------------------------------------
 
@@ -37,6 +46,16 @@ pub struct MainWindow {
     dock_area: Entity<DockArea>,
     console: Entity<ConsolePanel>,
     schema: Entity<SchemaPanel>,
+    data_browser: Entity<DataBrowserPanel>,
+    graph: Entity<GraphPanel>,
+    monitoring: Entity<MonitoringPanel>,
+    batch: Entity<BatchPanel>,
+    transfer: Entity<TransferPanel>,
+    users: Entity<UsersPanel>,
+    sessions: Entity<SessionsPanel>,
+    migration: Entity<MigrationPanel>,
+    vector: Entity<VectorPanel>,
+    fulltext: Entity<FulltextPanel>,
     /// Sidebar highlight: the panel last opened from the sidebar.
     active_panel: &'static str,
     /// Kept for imperative dock controls (toggles, panel menus) added with
@@ -59,6 +78,16 @@ impl MainWindow {
 
         let console = cx.new(|cx| ConsolePanel::new(window, cx));
         let schema = cx.new(|cx| SchemaPanel::new(window, cx));
+        let data_browser = cx.new(|cx| DataBrowserPanel::new(window, cx));
+        let graph = cx.new(|cx| GraphPanel::new(window, cx));
+        let monitoring = cx.new(|cx| MonitoringPanel::new(window, cx));
+        let batch = cx.new(|cx| BatchPanel::new(window, cx));
+        let transfer = cx.new(|cx| TransferPanel::new(window, cx));
+        let users = cx.new(|cx| UsersPanel::new(window, cx));
+        let sessions = cx.new(|cx| SessionsPanel::new(window, cx));
+        let migration = cx.new(|cx| MigrationPanel::new(window, cx));
+        let vector = cx.new(|cx| VectorPanel::new(window, cx));
+        let fulltext = cx.new(|cx| FulltextPanel::new(window, cx));
 
         // The registry rebuilds panels when a persisted layout is restored;
         // handing it the live entities keeps panel identities stable across
@@ -71,11 +100,61 @@ impl MainWindow {
             let schema = schema.clone();
             move |_, _, _| panel_handle(schema.clone())
         });
+        register_panel(cx, DataBrowserPanel::PANEL_NAME, {
+            let data_browser = data_browser.clone();
+            move |_, _, _| panel_handle(data_browser.clone())
+        });
+        register_panel(cx, GraphPanel::PANEL_NAME, {
+            let graph = graph.clone();
+            move |_, _, _| panel_handle(graph.clone())
+        });
+        register_panel(cx, MonitoringPanel::PANEL_NAME, {
+            let monitoring = monitoring.clone();
+            move |_, _, _| panel_handle(monitoring.clone())
+        });
+        register_panel(cx, BatchPanel::PANEL_NAME, {
+            let batch = batch.clone();
+            move |_, _, _| panel_handle(batch.clone())
+        });
+        register_panel(cx, TransferPanel::PANEL_NAME, {
+            let transfer = transfer.clone();
+            move |_, _, _| panel_handle(transfer.clone())
+        });
+        register_panel(cx, UsersPanel::PANEL_NAME, {
+            let users = users.clone();
+            move |_, _, _| panel_handle(users.clone())
+        });
+        register_panel(cx, SessionsPanel::PANEL_NAME, {
+            let sessions = sessions.clone();
+            move |_, _, _| panel_handle(sessions.clone())
+        });
+        register_panel(cx, MigrationPanel::PANEL_NAME, {
+            let migration = migration.clone();
+            move |_, _, _| panel_handle(migration.clone())
+        });
+        register_panel(cx, VectorPanel::PANEL_NAME, {
+            let vector = vector.clone();
+            move |_, _, _| panel_handle(vector.clone())
+        });
+        register_panel(cx, FulltextPanel::PANEL_NAME, {
+            let fulltext = fulltext.clone();
+            move |_, _, _| panel_handle(fulltext.clone())
+        });
 
         if load_layout(&dock_area, window, cx).is_err() {
             reset_default_layout(
                 console.clone(),
                 schema.clone(),
+                data_browser.clone(),
+                graph.clone(),
+                monitoring.clone(),
+                batch.clone(),
+                transfer.clone(),
+                users.clone(),
+                sessions.clone(),
+                migration.clone(),
+                vector.clone(),
+                fulltext.clone(),
                 dock_area.downgrade(),
                 window,
                 cx,
@@ -114,6 +193,16 @@ impl MainWindow {
             dock_area,
             console,
             schema,
+            data_browser,
+            graph,
+            monitoring,
+            batch,
+            transfer,
+            users,
+            sessions,
+            migration,
+            vector,
+            fulltext,
             active_panel: ConsolePanel::PANEL_NAME,
             skin,
             theme_mode,
@@ -174,6 +263,56 @@ impl MainWindow {
         self.activate_panel(panel, SchemaPanel::PANEL_NAME, window, cx);
     }
 
+    fn on_data_browser(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.data_browser.clone();
+        self.activate_panel(panel, DataBrowserPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_graph(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.graph.clone();
+        self.activate_panel(panel, GraphPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_monitoring(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.monitoring.clone();
+        self.activate_panel(panel, MonitoringPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_batch(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.batch.clone();
+        self.activate_panel(panel, BatchPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_transfer(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.transfer.clone();
+        self.activate_panel(panel, TransferPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_users(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.users.clone();
+        self.activate_panel(panel, UsersPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_sessions(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.sessions.clone();
+        self.activate_panel(panel, SessionsPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_migration(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.migration.clone();
+        self.activate_panel(panel, MigrationPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_vector(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.vector.clone();
+        self.activate_panel(panel, VectorPanel::PANEL_NAME, window, cx);
+    }
+
+    fn on_fulltext(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.fulltext.clone();
+        self.activate_panel(panel, FulltextPanel::PANEL_NAME, window, cx);
+    }
+
     /// End the session server-side and drop back to the sign-in screen. The
     /// local session is cleared even when the server cannot be reached.
     fn on_logout(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -211,16 +350,16 @@ impl MainWindow {
         self.apply_theme(ThemeModeSetting::System, window, cx);
     }
 
+    fn nav_item(&self, entry: NavEntry, active: bool, _cx: &mut Context<Self>) -> SidebarMenuItem {
+        SidebarMenuItem::new(entry.label)
+            .icon(entry.icon)
+            .active(active)
+            .accessibility_label(entry.label.to_string())
+    }
+
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let user = state::AppState::global(cx).read(cx).user.clone();
         let active = self.active_panel;
-
-        let placeholder = |label: &'static str, icon: IconName| -> SidebarMenuItem {
-            SidebarMenuItem::new(label)
-                .icon(icon)
-                .disable(true)
-                .accessibility_label(format!("{label} (not yet available)"))
-        };
 
         Sidebar::new("main-sidebar")
             .w(px(232.))
@@ -257,37 +396,133 @@ impl MainWindow {
             .child(
                 SidebarGroup::new("Query").child(
                     SidebarMenu::new().children([
-                        SidebarMenuItem::new("Console")
-                            .icon(IconName::SquareTerminal)
-                            .active(active == ConsolePanel::PANEL_NAME)
-                            .on_click(cx.listener(Self::on_console)),
-                        SidebarMenuItem::new("Schema")
-                            .icon(IconName::FolderOpen)
-                            .active(active == SchemaPanel::PANEL_NAME)
-                            .on_click(cx.listener(Self::on_schema)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Console",
+                                icon: IconName::SquareTerminal,
+                            },
+                            active == ConsolePanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_console)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Schema",
+                                icon: IconName::FolderOpen,
+                            },
+                            active == SchemaPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_schema)),
                     ]),
                 ),
             )
             .child(
-                SidebarGroup::new("Data").child(SidebarMenu::new().children([
-                    placeholder("Data Browser", IconName::HardDrive),
-                    placeholder("Graph", IconName::Network),
-                ])),
+                SidebarGroup::new("Data").child(
+                    SidebarMenu::new().children([
+                        self.nav_item(
+                            NavEntry {
+                                label: "Data Browser",
+                                icon: IconName::HardDrive,
+                            },
+                            active == DataBrowserPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_data_browser)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Graph",
+                                icon: IconName::Network,
+                            },
+                            active == GraphPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_graph)),
+                    ]),
+                ),
             )
             .child(
-                SidebarGroup::new("Observability")
-                    .child(SidebarMenu::new().children([placeholder("Monitoring", IconName::Cpu)])),
+                SidebarGroup::new("Observability").child(
+                    SidebarMenu::new().children([self
+                        .nav_item(
+                            NavEntry {
+                                label: "Monitoring",
+                                icon: IconName::Cpu,
+                            },
+                            active == MonitoringPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_monitoring))]),
+                ),
             )
             .child(
-                SidebarGroup::new("Management").child(SidebarMenu::new().children([
-                    placeholder("Users", IconName::User),
-                    placeholder("Batch", IconName::Inbox),
-                    placeholder("Transfer", IconName::ExternalLink),
-                    placeholder("Migration", IconName::FileText),
-                    placeholder("Vector", IconName::MemoryStick),
-                    placeholder("Fulltext", IconName::Search),
-                    placeholder("Sessions", IconName::Globe),
-                ])),
+                SidebarGroup::new("Management").child(
+                    SidebarMenu::new().children([
+                        self.nav_item(
+                            NavEntry {
+                                label: "Users",
+                                icon: IconName::User,
+                            },
+                            active == UsersPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_users)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Batch",
+                                icon: IconName::Inbox,
+                            },
+                            active == BatchPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_batch)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Transfer",
+                                icon: IconName::ExternalLink,
+                            },
+                            active == TransferPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_transfer)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Migration",
+                                icon: IconName::FileText,
+                            },
+                            active == MigrationPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_migration)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Vector",
+                                icon: IconName::MemoryStick,
+                            },
+                            active == VectorPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_vector)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Fulltext",
+                                icon: IconName::Search,
+                            },
+                            active == FulltextPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_fulltext)),
+                        self.nav_item(
+                            NavEntry {
+                                label: "Sessions",
+                                icon: IconName::Globe,
+                            },
+                            active == SessionsPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_sessions)),
+                    ]),
+                ),
             )
             .footer(
                 SidebarFooter::new().child(
@@ -445,9 +680,20 @@ fn load_layout(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reset_default_layout(
     console: Entity<ConsolePanel>,
     schema: Entity<SchemaPanel>,
+    data_browser: Entity<DataBrowserPanel>,
+    graph: Entity<GraphPanel>,
+    monitoring: Entity<MonitoringPanel>,
+    batch: Entity<BatchPanel>,
+    transfer: Entity<TransferPanel>,
+    users: Entity<UsersPanel>,
+    sessions: Entity<SessionsPanel>,
+    migration: Entity<MigrationPanel>,
+    vector: Entity<VectorPanel>,
+    fulltext: Entity<FulltextPanel>,
     dock_area: WeakEntity<DockArea>,
     window: &mut Window,
     cx: &mut App,
@@ -455,6 +701,16 @@ fn reset_default_layout(
     let center = DockLayout::tabs()
         .panel(console)
         .panel(schema)
+        .panel(data_browser)
+        .panel(graph)
+        .panel(monitoring)
+        .panel(batch)
+        .panel(transfer)
+        .panel(users)
+        .panel(sessions)
+        .panel(migration)
+        .panel(vector)
+        .panel(fulltext)
         .active_index(0);
 
     _ = dock_area.update(cx, |area, cx| {

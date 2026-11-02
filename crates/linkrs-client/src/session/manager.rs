@@ -286,6 +286,66 @@ impl SessionManager {
         &self.client
     }
 
+    /// Current space or [`ClientError::NoSpaceSelected`] when none is set.
+    pub fn require_space(&self) -> Result<String> {
+        self.current_space()
+            .map(str::to_string)
+            .ok_or(ClientError::NoSpaceSelected)
+    }
+
+    /// Paginated vertex scan of one tag in the current space.
+    pub async fn list_vertices(
+        &self,
+        tag: &str,
+        limit: usize,
+        offset: usize,
+        filter: Option<&str>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> Result<crate::DataPage> {
+        let space = self.require_space()?;
+        self.client
+            .list_vertices_by_tag(&space, tag, limit, offset, filter, sort_by, sort_order)
+            .await
+    }
+
+    /// Paginated edge scan of one edge type in the current space.
+    pub async fn list_edges(
+        &self,
+        edge_type: &str,
+        limit: usize,
+        offset: usize,
+        filter: Option<&str>,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> Result<crate::DataPage> {
+        let space = self.require_space()?;
+        self.client
+            .list_edges_by_type(
+                &space, edge_type, limit, offset, filter, sort_by, sort_order,
+            )
+            .await
+    }
+
+    /// One vertex detail in the current space.
+    pub async fn get_vertex(&self, vid: &str) -> Result<serde_json::Value> {
+        let space = self.require_space()?;
+        self.client.get_vertex(vid, &space).await
+    }
+
+    /// 1-hop neighbors of one vertex in the current space.
+    pub async fn get_neighbors(
+        &self,
+        vid: &str,
+        direction: &str,
+        edge_type: Option<&str>,
+    ) -> Result<Vec<serde_json::Value>> {
+        let space = self.require_space()?;
+        self.client
+            .get_neighbors(vid, &space, direction, edge_type)
+            .await
+    }
+
     /// Get connection string
     pub fn connection_string(&self) -> String {
         self.client.connection_string()

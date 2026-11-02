@@ -54,6 +54,12 @@ View 事件 -> Service 方法 -> `SessionManager` / `HttpClient` -> 服务端 ->
 
 ## 4. Crate 与依赖
 
+> **现状说明**：本节为设计期方案。实际落地时发现单 workspace 存在两个无法绕过的
+> blocker（嵌套清单继承解析、`gpui-component` 与 `linkrs-grammar` 的 tree-sitter
+> `links` 冲突），`crates/linkrs-gpui` 最终采用**独立 workspace + 本地 path 依赖**
+> 接入 gpui-kit，未启用 `gpui-fast`，改用 `syntect + tree-sitter-sql` 特性组合。
+> 结论与理由见实施计划 §1.1 与 §11，以该处为准。
+
 `crates/linkrs-gpui/Cargo.toml` 建议：
 
 ```toml
@@ -79,6 +85,12 @@ GPUI 直接从当前项目 `crates/gpui-kit` 获取，不使用外部版本。�
 Workspace `members` 增加 `crates/linkrs-gpui`。
 
 ## 5. 模块设计
+
+> **现状说明**：实际模块划分略有出入——`commands.rs`/`tasks.rs` 的职责由
+> `app.rs`（Action 注册）与 `runtime.rs`（tokio 桥接）承担；服务层按功能域
+> 拆分为 16 个文件（如 `management_service` 拆为 `user_service` +
+> `server_session_service`），已预移植完毕、随视图逐个接线。以下树保留为
+> 设计期参考，实际结构以 `crates/linkrs-gpui/src/` 为准。
 
 ```text
 crates/linkrs-gpui/src/
