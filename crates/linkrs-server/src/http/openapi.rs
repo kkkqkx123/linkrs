@@ -12,10 +12,19 @@
 //! `FulltextDoc` are feature gated and merged on top when the corresponding
 //! cargo feature is enabled.
 //!
+//! Test split: the committed snapshot covers every backend, so
+//! `openapi_snapshot_matches` only runs with `--features vector,fulltext`.
+//! The remaining tests (`routes_match_openapi_paths`,
+//! `operation_ids_are_unique`, `openapi_document_builds`) run in every
+//! feature combination with feature-aware source scanning, so
+//! `cargo test -p linkrs-server openapi` stays free of the tantivy/simvec
+//! backends.
+//!
 //! Standard commands (run from the workspace root):
 //! ```text
-//! LINKRS_REFRESH_OPENAPI=1 cargo test -p linkrs-server --features vector,fulltext openapi_snapshot_matches
+//! cargo test -p linkrs-server openapi
 //! cargo test -p linkrs-server --features vector,fulltext
+//! LINKRS_REFRESH_OPENAPI=1 cargo test -p linkrs-server --features vector,fulltext openapi_snapshot_matches
 //! ```
 
 use std::sync::OnceLock;
@@ -260,7 +269,6 @@ pub fn openapi_json() -> String {
         .clone()
 }
 
-#[cfg(all(feature = "vector", feature = "fulltext"))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,7 +277,9 @@ mod tests {
 
     // ---- contract configuration (repo-specific) ----
 
+    #[cfg(all(feature = "vector", feature = "fulltext"))]
     const SNAPSHOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../frontend/openapi.json");
+    #[cfg(all(feature = "vector", feature = "fulltext"))]
     const REFRESH_ENV: &str = "LINKRS_REFRESH_OPENAPI";
 
     fn source_root() -> PathBuf {
@@ -310,6 +320,10 @@ mod tests {
         }
     }
 
+    /// Canonical snapshot: only meaningful with all features enabled, since
+    /// the committed document covers every backend. Standard refresh:
+    /// `LINKRS_REFRESH_OPENAPI=1 cargo test -p linkrs-server --features vector,fulltext openapi_snapshot_matches`
+    #[cfg(all(feature = "vector", feature = "fulltext"))]
     #[test]
     fn openapi_snapshot_matches() {
         let doc = openapi_json();
@@ -324,6 +338,37 @@ mod tests {
             doc.trim_end(),
             expected.trim_end(),
             "snapshot drifted; refresh with {REFRESH_ENV}=1"
+        );
+    }
+
+    /// Smoke test for every feature combination: the document must build,
+    /// core routes must always be present, and gated routes must track the
+    /// cargo features. This is what `cargo test -p linkrs-server openapi`
+    /// exercises without paying for the tantivy/simvec backends.
+    #[test]
+    fn openapi_document_builds() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&openapi_json()).expect("document must parse");
+        let paths = doc
+            .get("paths")
+            .and_then(|paths| paths.as_object())
+            .expect("document must contain paths");
+        assert!(!paths.is_empty(), "expected a non-empty OpenAPI document");
+        assert!(
+            paths.contains_key("/v1/health"),
+            "core route /v1/health must always be documented"
+        );
+        let has_vector = paths.keys().any(|path| path.starts_with("/v1/vector"));
+        let has_fulltext = paths.keys().any(|path| path.starts_with("/v1/fulltext"));
+        assert_eq!(
+            has_vector,
+            cfg!(feature = "vector"),
+            "vector docs must track the vector feature"
+        );
+        assert_eq!(
+            has_fulltext,
+            cfg!(feature = "fulltext"),
+            "fulltext docs must track the fulltext feature"
         );
     }
 
@@ -433,9 +478,24 @@ mod tests {
         out
     }
 
+    /// Whole-module feature gates live in `handlers.rs` (`pub mod vector` /
+    /// `pub mod fulltext`), so the source text of these files is present but
+    /// uncompiled when the feature is off. Skip them up front; per-item gates
+    /// inside `rebuild.rs` are honored by [`parse_utoipa_annotations`].
+    fn file_feature_gate(rel: &str) -> Option<&str> {
+        match rel {
+            "http/handlers/vector.rs" => Some("vector"),
+            "http/handlers/fulltext.rs" => Some("fulltext"),
+            _ => None,
+        }
+    }
+
     fn collect_annotated() -> BTreeSet<(String, String)> {
         let mut out = BTreeSet::new();
-        for (_rel, text) in source_files() {
+        for (rel, text) in source_files() {
+            if file_feature_gate(&rel).is_some_and(|name| !feature_enabled(name)) {
+                continue;
+            }
             for (method, path) in parse_utoipa_annotations(&text) {
                 out.insert((method, path));
             }
@@ -460,32 +520,104 @@ mod tests {
     }
 
     /// Parse `#[utoipa::path(...)]` attributes into (method, full path).
+    /// Feature gates on the same item are honored: `rebuild.rs` puts
+    /// `#[cfg(feature = ...)]` after the utoipa block, so the lines between
+    /// the block end and the item are scanned as well as the lines directly
+    /// above the attribute. Whole-module gates (`vector.rs`, `fulltext.rs`
+    /// via `handlers.rs`) are handled by [`file_feature_gate`].
     fn parse_utoipa_annotations(text: &str) -> Vec<(String, String)> {
+        let lines: Vec<&str> = text.lines().collect();
         let mut out = Vec::new();
-        let mut lines = text.lines().peekable();
-        let mut buf: Vec<String> = Vec::new();
-        while let Some(line) = lines.next() {
-            let trimmed = line.trim();
-            if let Some(tail) = trimmed.strip_prefix("#[utoipa::path(") {
-                buf.clear();
-                if tail != "(" {
-                    buf.push(tail.to_string());
+        let mut i = 0;
+        while i < lines.len() {
+            let trimmed = lines[i].trim();
+            let Some(tail) = trimmed.strip_prefix("#[utoipa::path(") else {
+                i += 1;
+                continue;
+            };
+            let attr_idx = i;
+            let mut buf = Vec::new();
+            if tail != "(" {
+                buf.push(tail.to_string());
+            }
+            i += 1;
+            let mut closed = false;
+            for _ in 0..60 {
+                let Some(line) = lines.get(i) else {
+                    break;
+                };
+                let trimmed = line.trim();
+                buf.push(trimmed.to_string());
+                i += 1;
+                if trimmed.strip_prefix(")]").is_some() {
+                    closed = true;
+                    break;
                 }
-                for line in lines.by_ref().take(60) {
-                    let trimmed = line.trim();
-                    if let Some(closer) = trimmed.strip_prefix(")]") {
-                        buf.push(trimmed.to_string());
-                        let _ = closer;
-                        break;
-                    }
-                    buf.push(trimmed.to_string());
-                }
-                if let Some((method, path)) = annotation_head(&buf) {
-                    out.push((method, path));
-                }
+            }
+            if !closed {
+                continue;
+            }
+            if item_gated_out(&lines, attr_idx, i) {
+                continue;
+            }
+            if let Some((method, path)) = annotation_head(&buf) {
+                out.push((method, path));
             }
         }
         out
+    }
+
+    /// Whether the `#[utoipa::path]` attribute at `attr_idx` (block ends at
+    /// `block_end`) is compiled out by a neighboring `#[cfg(...)]`. The gate
+    /// may sit on either side of the attribute; doc comments and unrelated
+    /// attributes are skipped, any other code line ends the search.
+    fn item_gated_out(lines: &[&str], attr_idx: usize, block_end: usize) -> bool {
+        let mut gated = false;
+        let mut j = attr_idx;
+        while j > 0 {
+            j -= 1;
+            let trimmed = lines[j].trim();
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                continue;
+            }
+            if let Some(expr) = trimmed
+                .strip_prefix("#[cfg(")
+                .and_then(|rest| rest.strip_suffix(")]"))
+            {
+                gated |= !eval_cfg(expr);
+                continue;
+            }
+            if trimmed.starts_with("#[") {
+                continue;
+            }
+            break;
+        }
+        let end = (block_end + 15).min(lines.len());
+        let mut j = block_end;
+        while j < end {
+            let trimmed = lines[j].trim();
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                j += 1;
+                continue;
+            }
+            if trimmed.starts_with("#[utoipa::path(") {
+                break;
+            }
+            if let Some(expr) = trimmed
+                .strip_prefix("#[cfg(")
+                .and_then(|rest| rest.strip_suffix(")]"))
+            {
+                gated |= !eval_cfg(expr);
+                j += 1;
+                continue;
+            }
+            if trimmed.starts_with("#[") {
+                j += 1;
+                continue;
+            }
+            break;
+        }
+        gated
     }
 
     fn annotation_head(buf: &[String]) -> Option<(String, String)> {
