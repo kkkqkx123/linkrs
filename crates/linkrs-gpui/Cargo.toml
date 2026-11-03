@@ -58,12 +58,12 @@ gpui-kit = { path = "../gpui-kit/crates/kit", default-features = false, features
 # both workspaces resolve one GPUI API baseline, so views and canvases
 # share entity and element types. The compograph submodule must be
 # initialized (`git submodule update --init --recursive crates/gpui-kit`).
-compograph-graph = { path = "../gpui-kit/crates/compograph/crates/foundation/cg-graph" }
-compograph-layout = { path = "../gpui-kit/crates/compograph/crates/engine/cg-layout" }
-compograph-render = { path = "../gpui-kit/crates/compograph/crates/render/cg-render" }
-compograph-interact = { path = "../gpui-kit/crates/compograph/crates/render/cg-interact" }
-compograph-types = { path = "../gpui-kit/crates/compograph/crates/foundation/cg-types" }
-compograph-geometry = { path = "../gpui-kit/crates/compograph/crates/foundation/cg-geometry" }
+compograph-graph = { path = "../gpui-kit/crates/compograph/crates/cg-graph" }
+compograph-layout = { path = "../gpui-kit/crates/compograph/crates/cg-layout" }
+compograph-render = { path = "../gpui-kit/crates/compograph/crates/cg-render" }
+compograph-interact = { path = "../gpui-kit/crates/compograph/crates/cg-interact" }
+compograph-types = { path = "../gpui-kit/crates/compograph/crates/cg-types" }
+compograph-geometry = { path = "../gpui-kit/crates/compograph/crates/cg-geometry" }
 linkrs-client = { path = "../linkrs-client" }
 linkrs-wire = { path = "../linkrs-wire" }
 # Tree-sitter grammar for the Linkrs dialect. Its runtime unifies with the
