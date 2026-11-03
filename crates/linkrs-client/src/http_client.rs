@@ -543,6 +543,93 @@ impl HttpClient {
         Ok(())
     }
 
+    // ── Schema indexes (web management mount) ──
+
+    /// Server origin hosting the `/api` web management mount. `base_url`
+    /// always ends in `/v1`, so trimming it yields the same-origin root
+    /// the browser studio uses for `/api/v1/schema/...` index calls.
+    fn web_root_of(base_url: &str) -> String {
+        base_url.trim_end_matches("/v1").to_string()
+    }
+
+    /// List graph indexes of a space
+    /// (`GET /api/v1/schema/spaces/{space}/indexes`).
+    pub async fn list_schema_indexes(&self, space: &str) -> Result<Vec<serde_json::Value>> {
+        let url = format!(
+            "{}/api/v1/schema/spaces/{}/indexes",
+            Self::web_root_of(&self.base_url),
+            space
+        );
+        let response = self.authed(self.inner.get(&url)).send().await?;
+        let response = Self::check_response(response, "Failed to list indexes").await?;
+        let envelope: ApiEnvelope<serde_json::Value> = response.json().await?;
+        let data = envelope.into_result()?;
+        Ok(data
+            .get("indexes")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Create a graph index (`POST /api/v1/schema/spaces/{space}/indexes`).
+    /// `index_type` is `INDEX` or `UNIQUE`; `entity_type` is `TAG` or `EDGE`.
+    pub async fn create_schema_index(
+        &self,
+        space: &str,
+        name: &str,
+        index_type: &str,
+        entity_type: &str,
+        entity_name: &str,
+        fields: Vec<String>,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/schema/spaces/{}/indexes",
+            Self::web_root_of(&self.base_url),
+            space
+        );
+        let body = serde_json::json!({
+            "name": name,
+            "index_type": index_type,
+            "entity_type": entity_type,
+            "entity_name": entity_name,
+            "fields": fields,
+        });
+        let response = self
+            .authed(self.inner.post(&url))
+            .json(&body)
+            .send()
+            .await?;
+        Self::check_response(response, "Failed to create index").await?;
+        Ok(())
+    }
+
+    /// Drop a graph index (`DELETE /api/v1/schema/spaces/{space}/indexes/{index}`).
+    pub async fn drop_schema_index(&self, space: &str, index: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/schema/spaces/{}/indexes/{}",
+            Self::web_root_of(&self.base_url),
+            space,
+            index
+        );
+        let response = self.authed(self.inner.delete(&url)).send().await?;
+        Self::check_response(response, "Failed to drop index").await?;
+        Ok(())
+    }
+
+    /// Rebuild a graph index
+    /// (`POST /api/v1/schema/spaces/{space}/indexes/{index}/rebuild`).
+    pub async fn rebuild_schema_index(&self, space: &str, index: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/schema/spaces/{}/indexes/{}/rebuild",
+            Self::web_root_of(&self.base_url),
+            space,
+            index
+        );
+        let response = self.authed(self.inner.post(&url)).send().await?;
+        Self::check_response(response, "Failed to rebuild index").await?;
+        Ok(())
+    }
+
     // ── Transactions ──
 
     /// Begin a new transaction
@@ -2329,5 +2416,11 @@ mod data_browser_tests {
         let list: NeighborListData = serde_json::from_str(raw).expect("valid neighbor list");
         assert_eq!(list.direction, "");
         assert_eq!(list.neighbors.len(), 1);
+    }
+
+    #[test]
+    fn web_root_trims_v1_suffix() {
+        let root = super::HttpClient::web_root_of("http://127.0.0.1:9758/v1");
+        assert_eq!(root, "http://127.0.0.1:9758");
     }
 }

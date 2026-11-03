@@ -43,6 +43,24 @@ pub enum HistoryPath {
     Stream,
 }
 
+/// Console execution preference, mirroring the frontend console store:
+/// run through the materialized endpoint, the SSE streaming endpoint,
+/// or decide per script (multi-statement scripts stream, single
+/// statements compare the planner row estimate against the threshold).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutionPreference {
+    #[default]
+    Materialized,
+    Stream,
+    Auto,
+}
+
+/// Default row threshold for automatic stream routing.
+pub fn default_auto_stream_threshold() -> u64 {
+    1000
+}
+
 /// One executed statement with its outcome, newest first in `query_history`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryHistoryItem {
@@ -105,6 +123,12 @@ pub struct Settings {
     /// Named saved queries.
     #[serde(default)]
     pub favorites: Vec<QueryFavoriteItem>,
+    /// Console execution preference, persisted across restarts.
+    #[serde(default)]
+    pub execution_preference: ExecutionPreference,
+    /// Row threshold for automatic stream routing.
+    #[serde(default = "default_auto_stream_threshold")]
+    pub auto_stream_threshold: u64,
 }
 
 impl Settings {

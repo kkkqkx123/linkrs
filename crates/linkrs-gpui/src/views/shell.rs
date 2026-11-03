@@ -14,6 +14,9 @@ use crate::views::MainWindow;
 pub struct Shell {
     login: Entity<LoginView>,
     main: Option<Entity<MainWindow>>,
+    /// Last console result import generation already switched to; tracks
+    /// the global drop box so a send from the console opens the graph.
+    last_graph_generation: u64,
 }
 
 impl Shell {
@@ -23,13 +26,20 @@ impl Shell {
         cx.observe_in(&state, window, |this, _, window, cx| this.sync(window, cx))
             .detach();
 
-        let mut shell = Self { login, main: None };
+        let mut shell = Self {
+            login,
+            main: None,
+            last_graph_generation: 0,
+        };
         shell.sync(window, cx);
         shell
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let status = AppState::global(cx).read(cx).status;
+        let (status, generation) = {
+            let state = AppState::global(cx).read(cx);
+            (state.status, state.graph_generation)
+        };
         match status {
             ConnectionStatus::Connected | ConnectionStatus::Unhealthy => {
                 if self.main.is_none() {
@@ -38,6 +48,12 @@ impl Shell {
             }
             ConnectionStatus::Disconnected | ConnectionStatus::Connecting => {
                 self.main = None;
+            }
+        }
+        if generation != self.last_graph_generation {
+            self.last_graph_generation = generation;
+            if let Some(main) = self.main.clone() {
+                main.update(cx, |main, cx| main.activate_graph(window, cx));
             }
         }
         cx.notify();

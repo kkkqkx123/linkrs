@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::app::{to_theme_mode, Quit, ThemeDark, ThemeLight, ThemeSystem, TogglePalette};
 use crate::services::connection_service;
 use crate::settings::{self, ThemeModeSetting, WindowGeometry};
-use crate::state::{self, AppState, ConnectionStatus};
+use crate::state::{self, AppState, Capability, ConnectionStatus};
 use crate::views::{
     BatchPanel, ConfigPanel, ConsolePanel, DataBrowserPanel, FulltextPanel, FunctionsPanel,
     GraphPanel, MigrationPanel, MonitoringPanel, SchemaPanel, SessionsPanel, SyncPanel,
@@ -325,6 +325,12 @@ impl MainWindow {
         self.activate_panel(panel, GraphPanel::PANEL_NAME, window, cx);
     }
 
+    /// Switch to the graph panel; used when a console result import lands.
+    pub(crate) fn activate_graph(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.graph.clone();
+        self.activate_panel(panel, GraphPanel::PANEL_NAME, window, cx);
+    }
+
     fn on_monitoring(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.monitoring.clone();
         self.activate_panel(panel, MonitoringPanel::PANEL_NAME, window, cx);
@@ -373,8 +379,9 @@ impl MainWindow {
         cx.notify();
     }
 
-    /// Activate the palette row at `index`: panels by position, then the two
-    /// console actions. Theme rows dispatch their own actions.
+    /// Activate the palette row at `index`: panels by position in the
+    /// capability-filtered panel list, then the two console actions.
+    /// Theme rows dispatch their own actions.
     fn confirm_palette(&mut self, index: IndexPath, window: &mut Window, cx: &mut Context<Self>) {
         match (index.section, index.row) {
             (0, row) => self.activate_palette_panel(row, window, cx),
@@ -393,50 +400,95 @@ impl MainWindow {
         self.close_palette(cx);
     }
 
+    /// Palette panels visible to the signed-in identity, in display order.
+    /// Render and activation share this list so filtering can never
+    /// desynchronize the row positions.
+    fn visible_palette_panels(cx: &App) -> Vec<PalettePanel> {
+        let state = AppState::global(cx).read(cx);
+        palette_panels(
+            state.can(Capability::ManageUsers),
+            state.can(Capability::ManageBatch),
+        )
+    }
+
     fn activate_palette_panel(&mut self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
-        match row {
-            0 => self.activate_panel(self.console.clone(), ConsolePanel::PANEL_NAME, window, cx),
-            1 => self.activate_panel(self.schema.clone(), SchemaPanel::PANEL_NAME, window, cx),
-            2 => self.activate_panel(
+        let panels = Self::visible_palette_panels(cx);
+        let Some(panel) = panels.get(row) else {
+            return;
+        };
+        match panel.target {
+            PaletteTarget::Console => {
+                self.activate_panel(self.console.clone(), ConsolePanel::PANEL_NAME, window, cx)
+            }
+            PaletteTarget::Schema => {
+                self.activate_panel(self.schema.clone(), SchemaPanel::PANEL_NAME, window, cx)
+            }
+            PaletteTarget::DataBrowser => self.activate_panel(
                 self.data_browser.clone(),
                 DataBrowserPanel::PANEL_NAME,
                 window,
                 cx,
             ),
-            3 => self.activate_panel(self.graph.clone(), GraphPanel::PANEL_NAME, window, cx),
-            4 => self.activate_panel(
+            PaletteTarget::Graph => {
+                self.activate_panel(self.graph.clone(), GraphPanel::PANEL_NAME, window, cx)
+            }
+            PaletteTarget::Monitoring => self.activate_panel(
                 self.monitoring.clone(),
                 MonitoringPanel::PANEL_NAME,
                 window,
                 cx,
             ),
-            5 => self.activate_panel(
+            PaletteTarget::Transactions => self.activate_panel(
                 self.transactions.clone(),
                 TransactionsPanel::PANEL_NAME,
                 window,
                 cx,
             ),
-            6 => self.activate_panel(self.sync.clone(), SyncPanel::PANEL_NAME, window, cx),
-            7 => self.activate_panel(
+            PaletteTarget::Sync => {
+                self.activate_panel(self.sync.clone(), SyncPanel::PANEL_NAME, window, cx)
+            }
+            PaletteTarget::Functions => self.activate_panel(
                 self.functions.clone(),
                 FunctionsPanel::PANEL_NAME,
                 window,
                 cx,
             ),
-            8 => self.activate_panel(self.config.clone(), ConfigPanel::PANEL_NAME, window, cx),
-            9 => self.activate_panel(self.batch.clone(), BatchPanel::PANEL_NAME, window, cx),
-            10 => self.activate_panel(self.transfer.clone(), TransferPanel::PANEL_NAME, window, cx),
-            11 => self.activate_panel(self.users.clone(), UsersPanel::PANEL_NAME, window, cx),
-            12 => self.activate_panel(self.sessions.clone(), SessionsPanel::PANEL_NAME, window, cx),
-            13 => self.activate_panel(
+            PaletteTarget::Config => {
+                self.activate_panel(self.config.clone(), ConfigPanel::PANEL_NAME, window, cx)
+            }
+            PaletteTarget::Batch => {
+                self.activate_panel(self.batch.clone(), BatchPanel::PANEL_NAME, window, cx)
+            }
+            PaletteTarget::Transfer => self.activate_panel(
+                self.transfer.clone(),
+                TransferPanel::PANEL_NAME,
+                window,
+                cx,
+            ),
+            PaletteTarget::Users => {
+                self.activate_panel(self.users.clone(), UsersPanel::PANEL_NAME, window, cx)
+            }
+            PaletteTarget::Sessions => self.activate_panel(
+                self.sessions.clone(),
+                SessionsPanel::PANEL_NAME,
+                window,
+                cx,
+            ),
+            PaletteTarget::Migration => self.activate_panel(
                 self.migration.clone(),
                 MigrationPanel::PANEL_NAME,
                 window,
                 cx,
             ),
-            14 => self.activate_panel(self.vector.clone(), VectorPanel::PANEL_NAME, window, cx),
-            15 => self.activate_panel(self.fulltext.clone(), FulltextPanel::PANEL_NAME, window, cx),
-            _ => {}
+            PaletteTarget::Vector => {
+                self.activate_panel(self.vector.clone(), VectorPanel::PANEL_NAME, window, cx)
+            }
+            PaletteTarget::Fulltext => self.activate_panel(
+                self.fulltext.clone(),
+                FulltextPanel::PANEL_NAME,
+                window,
+                cx,
+            ),
         }
     }
 
@@ -464,24 +516,11 @@ impl MainWindow {
                     .child(
                         Command::new(&state)
                             .placeholder("Type a command or search…")
-                            .group(CommandGroup::new().label("Panels").items(vec![
-                                palette_item("Console", IconName::SquareTerminal, "console"),
-                                palette_item("Schema", IconName::FolderOpen, "schema"),
-                                palette_item("Data Browser", IconName::HardDrive, "data"),
-                                palette_item("Graph", IconName::Network, "graph"),
-                                palette_item("Monitoring", IconName::Cpu, "monitoring"),
-                                palette_item("Transactions", IconName::Repeat, "transactions"),
-                                palette_item("Sync", IconName::ArrowLeftRight, "sync"),
-                                palette_item("Functions", IconName::Braces, "functions"),
-                                palette_item("Config", IconName::SlidersHorizontal, "config"),
-                                palette_item("Batch", IconName::Inbox, "batch"),
-                                palette_item("Transfer", IconName::ExternalLink, "transfer"),
-                                palette_item("Users", IconName::User, "users"),
-                                palette_item("Sessions", IconName::Globe, "sessions"),
-                                palette_item("Migration", IconName::FileText, "migration"),
-                                palette_item("Vector", IconName::MemoryStick, "vector"),
-                                palette_item("Fulltext", IconName::Search, "fulltext"),
-                            ]))
+                            .group(CommandGroup::new().label("Panels").items(
+                                Self::visible_palette_panels(cx).into_iter().map(|panel| {
+                                    palette_item(panel.label, panel.icon, panel.keyword)
+                                }),
+                            ))
                             .group(CommandGroup::new().label("Console").items(vec![
                                     CommandItem::new()
                                         .label("Run editor query")
@@ -605,9 +644,14 @@ impl MainWindow {
     }
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (user, can_manage, role) = {
+        let (user, can_manage, can_batch, role) = {
             let state = state::AppState::global(cx).read(cx);
-            (state.user.clone(), state.can_manage(), state.ui_role())
+            (
+                state.user.clone(),
+                state.can_manage(),
+                state.can(Capability::ManageBatch),
+                state.ui_role(),
+            )
         };
         let role_badge: Option<SharedString> =
             user.as_ref().map(|_| SharedString::from(role));
@@ -722,17 +766,19 @@ impl MainWindow {
                         .on_click(cx.listener(Self::on_users)),
                     );
                 }
-                items.push(
-                    self.nav_item(
-                        NavEntry {
-                            label: "Batch",
-                            icon: IconName::Inbox,
-                        },
-                        active == BatchPanel::PANEL_NAME,
-                        cx,
-                    )
-                    .on_click(cx.listener(Self::on_batch)),
-                );
+                if can_batch {
+                    items.push(
+                        self.nav_item(
+                            NavEntry {
+                                label: "Batch",
+                                icon: IconName::Inbox,
+                            },
+                            active == BatchPanel::PANEL_NAME,
+                            cx,
+                        )
+                        .on_click(cx.listener(Self::on_batch)),
+                    );
+                }
                 items.push(
                     self.nav_item(
                         NavEntry {
@@ -969,6 +1015,144 @@ fn palette_item(label: &'static str, icon: IconName, keyword: &'static str) -> C
         .keywords([keyword])
 }
 
+/// Palette jump target: one entry per dock panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaletteTarget {
+    Console,
+    Schema,
+    DataBrowser,
+    Graph,
+    Monitoring,
+    Transactions,
+    Sync,
+    Functions,
+    Config,
+    Batch,
+    Transfer,
+    Users,
+    Sessions,
+    Migration,
+    Vector,
+    Fulltext,
+}
+
+struct PalettePanel {
+    label: &'static str,
+    icon: IconName,
+    keyword: &'static str,
+    target: PaletteTarget,
+}
+
+/// Palette panels in display order for the given capabilities. Hidden
+/// management panels stay unreachable through the palette, matching
+/// the sidebar filtering.
+fn palette_panels(manage_users: bool, manage_batch: bool) -> Vec<PalettePanel> {
+    let mut panels = vec![
+        PalettePanel {
+            label: "Console",
+            icon: IconName::SquareTerminal,
+            keyword: "console",
+            target: PaletteTarget::Console,
+        },
+        PalettePanel {
+            label: "Schema",
+            icon: IconName::FolderOpen,
+            keyword: "schema",
+            target: PaletteTarget::Schema,
+        },
+        PalettePanel {
+            label: "Data Browser",
+            icon: IconName::HardDrive,
+            keyword: "data",
+            target: PaletteTarget::DataBrowser,
+        },
+        PalettePanel {
+            label: "Graph",
+            icon: IconName::Network,
+            keyword: "graph",
+            target: PaletteTarget::Graph,
+        },
+        PalettePanel {
+            label: "Monitoring",
+            icon: IconName::Cpu,
+            keyword: "monitoring",
+            target: PaletteTarget::Monitoring,
+        },
+        PalettePanel {
+            label: "Transactions",
+            icon: IconName::Repeat,
+            keyword: "transactions",
+            target: PaletteTarget::Transactions,
+        },
+        PalettePanel {
+            label: "Sync",
+            icon: IconName::ArrowLeftRight,
+            keyword: "sync",
+            target: PaletteTarget::Sync,
+        },
+        PalettePanel {
+            label: "Functions",
+            icon: IconName::Braces,
+            keyword: "functions",
+            target: PaletteTarget::Functions,
+        },
+        PalettePanel {
+            label: "Config",
+            icon: IconName::SlidersHorizontal,
+            keyword: "config",
+            target: PaletteTarget::Config,
+        },
+        PalettePanel {
+            label: "Batch",
+            icon: IconName::Inbox,
+            keyword: "batch",
+            target: PaletteTarget::Batch,
+        },
+        PalettePanel {
+            label: "Transfer",
+            icon: IconName::ExternalLink,
+            keyword: "transfer",
+            target: PaletteTarget::Transfer,
+        },
+        PalettePanel {
+            label: "Users",
+            icon: IconName::User,
+            keyword: "users",
+            target: PaletteTarget::Users,
+        },
+        PalettePanel {
+            label: "Sessions",
+            icon: IconName::Globe,
+            keyword: "sessions",
+            target: PaletteTarget::Sessions,
+        },
+        PalettePanel {
+            label: "Migration",
+            icon: IconName::FileText,
+            keyword: "migration",
+            target: PaletteTarget::Migration,
+        },
+        PalettePanel {
+            label: "Vector",
+            icon: IconName::MemoryStick,
+            keyword: "vector",
+            target: PaletteTarget::Vector,
+        },
+        PalettePanel {
+            label: "Fulltext",
+            icon: IconName::Search,
+            keyword: "fulltext",
+            target: PaletteTarget::Fulltext,
+        },
+    ];
+    panels.retain(|panel| match panel.target {
+        PaletteTarget::Users | PaletteTarget::Sessions => manage_users,
+        PaletteTarget::Batch => manage_batch,
+        _ => true,
+    });
+    panels
+}
+
 // -- Dock layout persistence --------------------------------------------------
 
 /// Versioned wrapper so stale layouts can be detected and reset.
@@ -1043,4 +1227,36 @@ fn reset_default_layout(
         area.set_center(center, window, cx);
         save_layout_state(&area.dump(cx));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn targets(manage_users: bool, manage_batch: bool) -> Vec<PaletteTarget> {
+        palette_panels(manage_users, manage_batch)
+            .into_iter()
+            .map(|panel| panel.target)
+            .collect()
+    }
+
+    #[test]
+    fn admin_sees_every_panel_in_stable_order() {
+        let panels = targets(true, true);
+        assert_eq!(panels.len(), 16);
+        assert_eq!(panels[0], PaletteTarget::Console);
+        assert!(panels.contains(&PaletteTarget::Users));
+        assert!(panels.contains(&PaletteTarget::Sessions));
+        assert!(panels.contains(&PaletteTarget::Batch));
+    }
+
+    #[test]
+    fn operator_loses_users_sessions_and_batch() {
+        let panels = targets(false, false);
+        assert_eq!(panels.len(), 13);
+        assert!(!panels.contains(&PaletteTarget::Users));
+        assert!(!panels.contains(&PaletteTarget::Sessions));
+        assert!(!panels.contains(&PaletteTarget::Batch));
+        assert_eq!(panels[0], PaletteTarget::Console);
+    }
 }

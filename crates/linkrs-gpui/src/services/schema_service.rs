@@ -116,6 +116,75 @@ pub fn drop_edge_type(cx: &App, space: &str, name: &str) -> Task<Result<(), Clie
     })
 }
 
+/// List graph indexes of a space with their type, fields and status.
+/// A missing space selection surfaces `NoSpaceSelected` like the tag
+/// and edge-type listings so the panel can stay silent.
+pub fn list_indexes(cx: &App, space: &str) -> Task<Result<Vec<serde_json::Value>, ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let space = space.to_string();
+    runtime::spawn(cx, async move {
+        if space.is_empty() {
+            return Err(ClientError::NoSpaceSelected);
+        }
+        let guard = manager.lock().await;
+        guard.client().list_schema_indexes(&space).await
+    })
+}
+
+/// Create a graph index on a tag or edge-type field set.
+pub fn create_index(
+    cx: &App,
+    space: &str,
+    name: &str,
+    index_type: &str,
+    entity_type: &str,
+    entity_name: &str,
+    fields: Vec<String>,
+) -> Task<Result<(), ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let space = space.to_string();
+    let name = name.to_string();
+    let index_type = index_type.to_string();
+    let entity_type = entity_type.to_string();
+    let entity_name = entity_name.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard
+            .client()
+            .create_schema_index(
+                &space,
+                &name,
+                &index_type,
+                &entity_type,
+                &entity_name,
+                fields,
+            )
+            .await
+    })
+}
+
+/// Drop a graph index from a space.
+pub fn drop_index(cx: &App, space: &str, name: &str) -> Task<Result<(), ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let space = space.to_string();
+    let name = name.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().drop_schema_index(&space, &name).await
+    })
+}
+
+/// Rebuild a graph index in a space.
+pub fn rebuild_index(cx: &App, space: &str, name: &str) -> Task<Result<(), ClientError>> {
+    let manager = SessionStore::manager(cx);
+    let space = space.to_string();
+    let name = name.to_string();
+    runtime::spawn(cx, async move {
+        let guard = manager.lock().await;
+        guard.client().rebuild_schema_index(&space, &name).await
+    })
+}
+
 /// Alter a vertex tag by adding properties and dropping existing ones.
 /// Runs through an `ALTER TAG` statement in the session's current space.
 pub fn alter_tag(

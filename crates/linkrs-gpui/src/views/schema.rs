@@ -20,9 +20,9 @@ use crate::services::{connection_service, schema_service};
 use crate::state::{AppState, ConnectionStatus};
 
 /// Schema explorer panel: graph spaces of the connected server with the tag
-/// and edge-type fields of the session's current space, plus write operations
-/// (create/drop spaces, tags and edge types, alter properties) and a schema
-/// version viewer.
+/// and edge-type fields of the session's current space, index management,
+/// write operations (create/drop spaces, tags and edge types, alter
+/// properties) and a schema version viewer.
 pub struct SchemaPanel {
     tree_state: Entity<TreeState>,
     focus_handle: gpui_kit::FocusHandle,
@@ -33,12 +33,19 @@ pub struct SchemaPanel {
     last_space: Option<SharedString>,
     tags: Vec<TagInfo>,
     edge_types: Vec<EdgeTypeInfo>,
+    indexes: Vec<serde_json::Value>,
     selected: Option<SchemaTarget>,
+    selected_index: Option<String>,
     space_name: Entity<InputState>,
     vid_type: Entity<InputState>,
     create_tag_mode: bool,
     entry_name: Entity<InputState>,
     entry_props: Entity<InputState>,
+    index_name: Entity<InputState>,
+    index_entity: Entity<InputState>,
+    index_fields: Entity<InputState>,
+    index_unique: bool,
+    index_entity_edge: bool,
     add_name: Entity<InputState>,
     add_type: Entity<InputState>,
     drop_names: Vec<String>,
@@ -65,6 +72,7 @@ enum PendingOp {
     Space(String),
     Tag { space: String, name: String },
     Edge { space: String, name: String },
+    Index { space: String, name: String },
 }
 
 impl PendingOp {
@@ -76,6 +84,9 @@ impl PendingOp {
             }
             Self::Edge { name, .. } => {
                 format!("Drop edge type {name}? This cannot be undone.")
+            }
+            Self::Index { space, name } => {
+                format!("Drop index {name} in space {space}? This cannot be undone.")
             }
         }
     }
@@ -106,6 +117,13 @@ impl SchemaPanel {
         let ver_label = cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge name"));
         let ver_from = cx.new(|cx| InputState::new(window, cx).placeholder("1"));
         let ver_to = cx.new(|cx| InputState::new(window, cx).placeholder("2"));
+        let index_name =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Index name"));
+        let index_entity =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge type name"));
+        let index_fields = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Comma-separated fields, e.g. age, name")
+        });
 
         let mut panel = Self {
             tree_state,
@@ -117,12 +135,19 @@ impl SchemaPanel {
             last_space,
             tags: Vec::new(),
             edge_types: Vec::new(),
+            indexes: Vec::new(),
             selected: None,
+            selected_index: None,
             space_name,
             vid_type,
             create_tag_mode: true,
             entry_name,
             entry_props,
+            index_name,
+            index_entity,
+            index_fields,
+            index_unique: false,
+            index_entity_edge: false,
             add_name,
             add_type,
             drop_names: Vec::new(),
@@ -158,6 +183,8 @@ impl SchemaPanel {
         if status == ConnectionStatus::Disconnected {
             self.loading = false;
             self.message = None;
+            self.indexes.clear();
+            self.selected_index = None;
             self.tree_state
                 .update(cx, |tree, cx| tree.set_items(Vec::new(), cx));
             cx.notify();
@@ -183,13 +210,18 @@ impl SchemaPanel {
         let spaces = schema_service::spaces(cx);
         let tags = schema_service::tags(cx);
         let edge_types = schema_service::edge_types(cx);
+        let space_name = Self::current_space(cx).unwrap_or_default();
+        let indexes = schema_service::list_indexes(cx, &space_name);
 
         cx.spawn(async move |this, cx| {
             let spaces = spaces.await;
             let tags = tags.await;
             let edge_types = edge_types.await;
-            this.update(cx, |this, cx| this.apply(spaces, tags, edge_types, cx))
-                .ok();
+            let indexes = indexes.await;
+            this.update(cx, |this, cx| {
+                this.apply(spaces, tags, edge_types, indexes, cx)
+            })
+            .ok();
         })
         .detach();
     }
@@ -199,6 +231,7 @@ impl SchemaPanel {
         spaces: Result<Vec<SpaceInfo>, ClientError>,
         tags: Result<Vec<TagInfo>, ClientError>,
         edge_types: Result<Vec<EdgeTypeInfo>, ClientError>,
+        indexes: Result<Vec<serde_json::Value>, ClientError>,
         cx: &mut Context<Self>,
     ) {
         self.loading = false;
@@ -238,6 +271,33 @@ impl SchemaPanel {
             }
         };
         problem = problem.or(edge_problem);
+        match indexes {
+            Ok(list) => {
+                self.indexes = list;
+                let known: std::collections::HashSet<&str> = self
+                    .indexes
+                    .iter()
+                    .filter_map(|item| item.get("name").and_then(|name| name.as_str()))
+                    .collect();
+                if self
+                    .selected_index
+                    .as_deref()
+                    .is_none_or(|name| !known.contains(name))
+                {
+                    self.selected_index = None;
+                }
+            }
+            Err(error) => {
+                self.indexes.clear();
+                self.selected_index = None;
+                if !matches!(
+                    error,
+                    ClientError::NoSpaceSelected | ClientError::NotConnected
+                ) {
+                    problem = problem.or(Some(error.to_string()));
+                }
+            }
+        }
         self.message = problem.map(Into::into);
 
         let current = AppState::global(cx).read(cx).space.clone();
@@ -478,6 +538,83 @@ impl SchemaPanel {
                 cx.notify();
             }
         }
+    }
+
+    fn create_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(space) = Self::current_space(cx) else {
+            self.message = Some("Select a space first.".into());
+            cx.notify();
+            return;
+        };
+        let name = Self::text(&self.index_name, cx);
+        let entity = Self::text(&self.index_entity, cx);
+        if name.is_empty() || entity.is_empty() {
+            self.message = Some("Index name and entity name are required.".into());
+            cx.notify();
+            return;
+        }
+        let fields: Vec<String> = Self::text(&self.index_fields, cx)
+            .split(',')
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+            .map(str::to_string)
+            .collect();
+        if fields.is_empty() {
+            self.message = Some("At least one index field is required.".into());
+            cx.notify();
+            return;
+        }
+        let index_type = if self.index_unique { "UNIQUE" } else { "INDEX" };
+        let entity_type = if self.index_entity_edge { "EDGE" } else { "TAG" };
+        let task = schema_service::create_index(
+            cx,
+            &space,
+            &name,
+            index_type,
+            entity_type,
+            &entity,
+            fields,
+        );
+        self.selected_index = Some(name);
+        self.run_write(window, cx, "Create index", task);
+    }
+
+    fn drop_selected_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.pending.clone() {
+            Some(PendingOp::Index { space, name }) => {
+                let task = schema_service::drop_index(cx, &space, &name);
+                self.run_write(window, cx, "Drop index", task);
+            }
+            _ => {
+                let Some(space) = Self::current_space(cx) else {
+                    self.message = Some("Select a space first.".into());
+                    cx.notify();
+                    return;
+                };
+                let Some(name) = self.selected_index.clone() else {
+                    self.message = Some("Select an index in the list first.".into());
+                    cx.notify();
+                    return;
+                };
+                self.pending = Some(PendingOp::Index { space, name });
+                cx.notify();
+            }
+        }
+    }
+
+    fn rebuild_selected_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(space) = Self::current_space(cx) else {
+            self.message = Some("Select a space first.".into());
+            cx.notify();
+            return;
+        };
+        let Some(name) = self.selected_index.clone() else {
+            self.message = Some("Select an index in the list first.".into());
+            cx.notify();
+            return;
+        };
+        let task = schema_service::rebuild_index(cx, &space, &name);
+        self.run_write(window, cx, "Rebuild index", task);
     }
 
     fn toggle_drop_field(&mut self, name: String, cx: &mut Context<Self>) {
@@ -843,6 +980,123 @@ impl SchemaPanel {
         )
     }
 
+    fn render_index_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let unique = self.index_unique;
+        let entity_edge = self.index_entity_edge;
+        let selected = self.selected_index.clone();
+        let mut section = v_flex()
+            .gap_1()
+            .child(self.section_title("Indexes", cx));
+        if self.indexes.is_empty() {
+            section = section.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("No indexes in the current space."),
+            );
+        } else {
+            section = section.child(v_flex().gap_1().children(
+                self.indexes.iter().map(|item| {
+                    let name = item
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    let active = selected.as_deref() == Some(name.as_str());
+                    Button::new(format!("schema-index-{name}"))
+                        .label(index_label(item))
+                        .xsmall()
+                        .ghost()
+                        .selected(active)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.selected_index = Some(name.clone());
+                            cx.notify();
+                        }))
+                }),
+            ));
+        }
+        section
+            .child(
+                h_flex().gap_1()
+                    .child(
+                        Button::new("schema-index-type-tag")
+                            .label("INDEX")
+                            .xsmall()
+                            .selected(!unique)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.index_unique = false;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-index-type-unique")
+                            .label("UNIQUE")
+                            .xsmall()
+                            .selected(unique)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.index_unique = true;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-index-entity-tag")
+                            .label("TAG")
+                            .xsmall()
+                            .selected(!entity_edge)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.index_entity_edge = false;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-index-entity-edge")
+                            .label("EDGE")
+                            .xsmall()
+                            .selected(entity_edge)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.index_entity_edge = true;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(form_row("Name", self.index_name.clone(), cx))
+            .child(form_row("Entity", self.index_entity.clone(), cx))
+            .child(form_row("Fields", self.index_fields.clone(), cx))
+            .child(
+                h_flex().gap_1()
+                    .child(
+                        Button::new("schema-index-create")
+                            .label("Create index")
+                            .xsmall()
+                            .disabled(self.busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.create_index(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-index-drop")
+                            .label(match &self.pending {
+                                Some(PendingOp::Index { .. }) => "Confirm drop",
+                                _ => "Drop selected",
+                            })
+                            .xsmall()
+                            .disabled(self.busy || selected.is_none())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.drop_selected_index(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-index-rebuild")
+                            .label("Rebuild")
+                            .xsmall()
+                            .disabled(self.busy || selected.is_none())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.rebuild_selected_index(window, cx);
+                            })),
+                    ),
+            )
+    }
+
     fn render_version_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let ver_edge = self.ver_edge;
         let mut section = v_flex()
@@ -964,6 +1218,7 @@ impl SchemaPanel {
             .child(self.render_space_section(cx))
             .child(self.render_entry_section(cx))
             .child(self.render_alter_section(cx))
+            .child(self.render_index_section(cx))
             .child(self.render_version_section(cx))
     }
 }
@@ -1002,6 +1257,33 @@ impl VersionAction {
             }
         }
     }
+}
+
+/// One-line summary for an index row: name, type, fields and status.
+fn index_label(item: &serde_json::Value) -> String {
+    let name = item
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("?");
+    let kind = item
+        .get("index_type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let status = item
+        .get("status")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let fields = item
+        .get("fields")
+        .and_then(|value| value.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|field| field.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    format!("{name} [{kind}] ({fields}) {status}")
 }
 
 /// Parse the create-entry property input: empty means no properties,

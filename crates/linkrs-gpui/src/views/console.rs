@@ -7,7 +7,7 @@ use gpui_kit::base::Selectable as _;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Editor, EditorState, InputState},
+    input::{Editor, EditorState, Input, InputState},
     notification::Notification,
     tab::{Tab, TabBar},
     table::{DataTable, TableState},
@@ -24,8 +24,9 @@ use crate::components::{
     empty_state, form_row, new_table_state, on_copy_row, render_json_block, QueryTableData,
     QueryTableDelegate,
 };
-use crate::services::{connection_service, cursor_service, query_service};
-use crate::settings::{self, HistoryPath, QueryHistoryItem};
+use crate::services::{connection_service, cursor_service, graph_service, query_service};
+use crate::settings::{self, ExecutionPreference, HistoryPath, QueryHistoryItem};
+use crate::state::AppState;
 
 actions!(linkrs, [RunQuery, CancelQuery]);
 
@@ -43,6 +44,9 @@ struct ResultTab {
     error: Option<QueryErrorInfo>,
     elapsed_ms: u64,
     trace_id: Option<String>,
+    /// Structured rows kept for result-to-graph imports; the table above
+    /// only holds the flattened display strings.
+    raw_rows: Vec<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 /// Title plus payload for the Validate / profile / running-queries inspector.
@@ -60,8 +64,9 @@ enum TabStatus {
     Failed,
 }
 
-/// Query console panel: SQL editor, multi-statement execution, result tabs,
-/// CSV/JSON export, and the local query history.
+/// Query console panel: SQL editor, multi-statement execution with
+/// materialized/stream/auto routing, result tabs, CSV/JSON export,
+/// and the local query history.
 /// Parsed query parameters and session variables.
 #[derive(Clone, Debug)]
 struct ParsedBindings {
@@ -90,8 +95,12 @@ pub struct ConsolePanel {
     params_error: Option<SharedString>,
     /// Execution path captured at run start for history recording.
     run_stream: bool,
-    /// When set, statements run through the SSE streaming endpoint.
-    stream: bool,
+    /// Console execution preference; `Auto` decides per script.
+    execution: ExecutionPreference,
+    /// Row threshold for automatic stream routing.
+    auto_threshold: Entity<InputState>,
+    /// Last automatic routing outcome shown in the toolbar.
+    auto_decision: Option<String>,
     /// Forward-only cursor pager state (`None` when no cursor is open).
     cursor_id: Option<u64>,
     cursor_tab: Option<usize>,
@@ -135,7 +144,14 @@ impl ConsolePanel {
             session_vars,
             params_error: None,
             run_stream: false,
-            stream: false,
+            execution: settings::global(cx).execution_preference,
+            auto_threshold: cx.new(|cx| {
+                let saved = settings::global(cx).auto_stream_threshold;
+                let mut input = InputState::new(window, cx).placeholder("1000");
+                input.set_value(&saved.to_string(), window, cx);
+                input
+            }),
+            auto_decision: None,
             cursor_id: None,
             cursor_tab: None,
             cursor_has_more: false,
@@ -160,9 +176,25 @@ impl ConsolePanel {
         self.run(window, cx);
     }
 
-    /// Flip the streaming execution toggle; used by the command palette.
+    /// Flip the streaming execution preference; used by the command palette.
+    /// `Auto` resolves to an explicit choice so the toggle stays binary.
     pub(crate) fn toggle_stream(&mut self, cx: &mut Context<Self>) {
-        self.stream = !self.stream;
+        self.execution = match self.execution {
+            ExecutionPreference::Stream => ExecutionPreference::Materialized,
+            _ => ExecutionPreference::Stream,
+        };
+        settings::update(cx, |settings| {
+            settings.execution_preference = self.execution;
+        });
+        cx.notify();
+    }
+
+    /// Persist the console execution preference.
+    fn set_execution(&mut self, preference: ExecutionPreference, cx: &mut Context<Self>) {
+        self.execution = preference;
+        settings::update(cx, |settings| {
+            settings.execution_preference = preference;
+        });
         cx.notify();
     }
 
@@ -208,6 +240,7 @@ impl ConsolePanel {
                     error: None,
                     elapsed_ms: 0,
                     trace_id: None,
+                    raw_rows: Vec::new(),
                 }
             })
             .collect();
@@ -218,8 +251,13 @@ impl ConsolePanel {
         self.cursor_tab = None;
         self.cursor_has_more = false;
         self.cursor_error = None;
-        self.run_stream = self.stream;
-        let stream = self.stream;
+        let preference = self.execution;
+        let threshold = Self::auto_threshold_value(&self.auto_threshold, cx);
+        settings::update(cx, |settings| {
+            settings.execution_preference = preference;
+            settings.auto_stream_threshold = threshold;
+        });
+        self.auto_decision = None;
         let bindings = match self.parse_bindings(cx) {
             Ok(bindings) => bindings,
             Err(message) => {
@@ -235,6 +273,39 @@ impl ConsolePanel {
             let count = this
                 .update_in(cx, |this, _, _| this.tabs.len())
                 .unwrap_or_default();
+            // Decide the execution path. Explicit preferences apply to the
+            // whole script; `Auto` streams multi-statement scripts, runs
+            // bound single statements materially (the stream channel carries
+            // no bindings) and validates lone statements for a planner
+            // estimate first.
+            let mut stream = preference == ExecutionPreference::Stream;
+            let mut decision = None::<String>;
+            if preference == ExecutionPreference::Auto {
+                if count > 1 {
+                    stream = true;
+                    decision = Some(format!("auto \u{2192} stream ({count} statements)"));
+                } else if bound {
+                    stream = false;
+                    decision =
+                        Some("auto \u{2192} materialized (parameters bound)".to_string());
+                } else if count == 1 {
+                    let validate_task = this.update_in(cx, |this, _, cx| {
+                        query_service::validate(cx, &this.tabs[0].sql)
+                    });
+                    let outcome = match validate_task {
+                        Ok(task) => task.await,
+                        Err(_) => Err(ClientError::NotConnected),
+                    };
+                    let (choice, note) = auto_decision(&outcome, threshold);
+                    stream = choice;
+                    decision = Some(note);
+                }
+            }
+            this.update_in(cx, |this, _, _| {
+                this.run_stream = stream;
+                this.auto_decision = decision;
+            })
+            .ok();
             let mut failed = false;
             for ix in 0..count {
                 let started = std::time::Instant::now();
@@ -310,6 +381,7 @@ impl ConsolePanel {
                     let row_count = result.row_count;
                     let trace_id = result.trace_id.clone();
                     *tab.data.borrow_mut() = QueryTableData::from_result(&result);
+                    tab.raw_rows = result.rows.clone();
                     tab.status = TabStatus::Ok;
                     tab.trace_id = trace_id.clone();
                     tab.table.update(cx, |_, cx| cx.notify());
@@ -445,6 +517,19 @@ impl ConsolePanel {
             .next()
     }
 
+    /// Parse the auto-route row threshold, clamped to the frontend range.
+    fn auto_threshold_value(field: &Entity<InputState>, cx: &App) -> u64 {
+        field
+            .read(cx)
+            .value()
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .map(|value| value.min(10_000_000))
+            .unwrap_or_else(settings::default_auto_stream_threshold)
+    }
+
     fn inspect_result(
         &mut self,
         title: String,
@@ -524,6 +609,7 @@ impl ConsolePanel {
                             error: result.error,
                             elapsed_ms: result.execution_time_ms,
                             trace_id,
+                            raw_rows: Vec::new(),
                         });
                         this.active_tab = Some(this.tabs.len() - 1);
                     }
@@ -740,6 +826,7 @@ impl ConsolePanel {
             error: None,
             elapsed_ms: 0,
             trace_id: None,
+            raw_rows: Vec::new(),
         });
         self.cursor_tab = Some(ix);
         self.active_tab = Some(ix);
@@ -860,6 +947,42 @@ impl ConsolePanel {
 
     // -- Rendering helpers ---------------------------------------------------
 
+    /// Push the active result tab into the graph panel through the global
+    /// drop box; the shell switches to the graph panel on arrival.
+    fn send_to_graph(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.active_tab.and_then(|active| self.tabs.get(active));
+        let Some(tab) = tab else {
+            return;
+        };
+        if tab.status != TabStatus::Ok || tab.raw_rows.is_empty() {
+            window.push_notification(
+                Notification::info("Run a statement with rows before sending to the graph."),
+                cx,
+            );
+            return;
+        }
+        match graph_service::neighborhood_from_rows(&tab.raw_rows) {
+            Some((neighborhood, truncated)) => {
+                let summary = format!(
+                    "Sent {} nodes and {} edges to the graph{}",
+                    neighborhood.nodes.len(),
+                    neighborhood.edges.len(),
+                    if truncated { " (truncated)" } else { "" },
+                );
+                AppState::global(cx).update(cx, |state, cx| {
+                    state.push_graph_drop(neighborhood, cx);
+                });
+                window.push_notification(Notification::success(summary), cx);
+            }
+            None => {
+                window.push_notification(
+                    Notification::info("No vertex or edge data in this result set."),
+                    cx,
+                );
+            }
+        }
+    }
+
     fn tab_label(sql: &str) -> String {
         let first_line = sql.lines().next().unwrap_or(sql);
         let mut label: String = first_line.chars().take(32).collect();
@@ -875,7 +998,8 @@ impl ConsolePanel {
         let favorites_open = self.favorites_open;
         let running_open = self.running_open;
         let inspect_busy = self.inspect_loading;
-        let stream = self.stream;
+        let preference = self.execution;
+        let decision = self.auto_decision.clone();
         let cursor_open = self.cursor_id.is_some();
         let cursor_busy = self.cursor_loading;
         let cursor_more = self.cursor_has_more;
@@ -934,19 +1058,56 @@ impl ConsolePanel {
             )
             .child(div().flex_1())
             .child(
-                Button::new("toggle-stream")
-                    .label("Stream")
-                    .icon(IconName::Zap)
+                Button::new("pref-materialized")
+                    .label("Materialized")
                     .xsmall()
                     .ghost()
-                    .selected(stream)
+                    .selected(preference == ExecutionPreference::Materialized)
+                    .disabled(running)
+                    .accessibility_label("Run through the materialized endpoint")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_execution(ExecutionPreference::Materialized, cx);
+                    })),
+            )
+            .child(
+                Button::new("pref-stream")
+                    .label("Stream")
+                    .xsmall()
+                    .ghost()
+                    .selected(preference == ExecutionPreference::Stream)
                     .disabled(running)
                     .accessibility_label("Run through the SSE streaming endpoint")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.stream = !this.stream;
-                        cx.notify();
+                        this.set_execution(ExecutionPreference::Stream, cx);
                     })),
             )
+            .child(
+                Button::new("pref-auto")
+                    .label("Auto")
+                    .xsmall()
+                    .ghost()
+                    .selected(preference == ExecutionPreference::Auto)
+                    .disabled(running)
+                    .accessibility_label(
+                        "Route multi-statement scripts to streaming and single statements by row estimate",
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_execution(ExecutionPreference::Auto, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .w(px(72.))
+                    .child(Input::new(&self.auto_threshold))
+            )
+            .when_some(decision, |bar, text| {
+                bar.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(SharedString::from(text)),
+                )
+            })
             .when(!cursor_open, |bar| {
                 bar.child(
                     Button::new("cursor-open")
@@ -1166,7 +1327,7 @@ impl ConsolePanel {
                         let sql = rerun_sql.clone();
                         view_rerun.update(cx, |this, cx| {
                             if path == HistoryPath::Stream {
-                                this.stream = true;
+                                this.execution = ExecutionPreference::Stream;
                             }
                             this.load_sql(&sql, true, window, cx);
                         });
@@ -1383,10 +1544,12 @@ impl ConsolePanel {
                                         view_rerun.update(cx, |this, cx| {
                                             match preferred {
                                                 Some(HistoryPath::Stream) => {
-                                                    this.stream = true;
+                                                    this.execution =
+                                                        ExecutionPreference::Stream;
                                                 }
                                                 Some(HistoryPath::Materialized) => {
-                                                    this.stream = false;
+                                                    this.execution =
+                                                        ExecutionPreference::Materialized;
                                                 }
                                                 None => {}
                                             }
@@ -1592,6 +1755,8 @@ impl ConsolePanel {
             ),
             TabStatus::Failed => "failed".to_string(),
         };
+        let can_send =
+            active_status == TabStatus::Ok && !self.tabs[active].raw_rows.is_empty();
 
         v_flex()
             .flex_1()
@@ -1606,11 +1771,27 @@ impl ConsolePanel {
             .child(
                 h_flex()
                     .flex_shrink_0()
+                    .items_center()
                     .justify_end()
+                    .gap_2()
                     .px_3()
                     .py_1()
                     .text_xs()
                     .text_color(theme.muted_foreground)
+                    .child(
+                        Button::new("send-to-graph")
+                            .label("Graph")
+                            .icon(IconName::Network)
+                            .xsmall()
+                            .ghost()
+                            .disabled(!can_send)
+                            .accessibility_label(
+                                "Send the active result set to the graph panel",
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.send_to_graph(window, cx);
+                            })),
+                    )
                     .child(SharedString::from(summary)),
             )
             .child(
@@ -1785,6 +1966,39 @@ enum ExportFormat {
 }
 
 /// Short, user-facing sentence for transport-level failures.
+/// Decide the automatic execution path from a validate outcome: invalid
+/// statements run materially, valid ones compare the planner estimate
+/// against the threshold (a missing estimate streams, matching the
+/// frontend routing).
+fn auto_decision(
+    outcome: &Result<serde_json::Value, ClientError>,
+    threshold: u64,
+) -> (bool, String) {
+    match outcome {
+        Err(_) => (false, "auto \u{2192} materialized (validate failed)".to_string()),
+        Ok(payload) => {
+            if !payload
+                .get("valid")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                return (false, "auto \u{2192} materialized (invalid)".to_string());
+            }
+            match payload.get("estimated_rows").and_then(|value| value.as_u64()) {
+                Some(estimated) if estimated <= threshold => (
+                    false,
+                    format!("auto \u{2192} materialized (est. {estimated} \u{2264} {threshold})"),
+                ),
+                Some(estimated) => (
+                    true,
+                    format!("auto \u{2192} stream (est. {estimated} > {threshold})"),
+                ),
+                None => (true, "auto \u{2192} stream (no estimate)".to_string()),
+            }
+        }
+    }
+}
+
 fn user_message(error: &ClientError) -> String {
     match error {
         ClientError::NotConnected => "The session is no longer connected.".into(),
@@ -1840,4 +2054,33 @@ fn to_json(columns: &[String], rows: &[Vec<String>]) -> String {
         })
         .collect();
     serde_json::to_string_pretty(&items).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid(estimated: Option<u64>) -> Result<serde_json::Value, ClientError> {
+        Ok(serde_json::json!({"valid": true, "estimated_rows": estimated}))
+    }
+
+    #[test]
+    fn auto_routes_by_estimate() {
+        let (stream, note) = auto_decision(&valid(Some(5)), 1000);
+        assert!(!stream);
+        assert!(note.contains("materialized"));
+        let (stream, note) = auto_decision(&valid(Some(5000)), 1000);
+        assert!(stream);
+        assert!(note.contains("stream"));
+        let (stream, _) = auto_decision(&valid(None), 1000);
+        assert!(stream);
+    }
+
+    #[test]
+    fn auto_falls_back_to_materialized() {
+        let invalid = Ok(serde_json::json!({"valid": false, "estimated_rows": 99_999}));
+        assert!(!auto_decision(&invalid, 1000).0);
+        let failed: Result<serde_json::Value, ClientError> = Err(ClientError::NotConnected);
+        assert!(!auto_decision(&failed, 1000).0);
+    }
 }

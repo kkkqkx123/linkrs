@@ -33,6 +33,9 @@ pub struct GraphPanel {
     loading: bool,
     message: Option<SharedString>,
     cursor_error: Option<SharedString>,
+    /// Generation of the last console result import consumed; observed
+    /// through the global state so sends from the console land on canvas.
+    last_drop_generation: u64,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -50,6 +53,10 @@ impl GraphPanel {
             )
         });
         let model = GraphModel::new(store, layout, cx);
+        let state = AppState::global(cx);
+        let last_drop_generation = state.read(cx).graph_generation;
+        cx.observe(&state, |this, _, cx| this.consume_graph_drop(cx))
+            .detach();
         Self {
             seed,
             depth: 1,
@@ -59,7 +66,27 @@ impl GraphPanel {
             loading: false,
             message: None,
             cursor_error: None,
+            last_drop_generation,
             focus_handle: cx.focus_handle(),
+        }
+    }
+
+    /// Consume a console result import published after panel creation and
+    /// replace the canvas content; stale generations stay untouched.
+    fn consume_graph_drop(&mut self, cx: &mut Context<Self>) {
+        let drop = {
+            let state = AppState::global(cx).read(cx);
+            if state.graph_generation == self.last_drop_generation {
+                return;
+            }
+            state.graph_drop.clone()
+        };
+        if let Some((generation, neighborhood)) = drop {
+            self.last_drop_generation = generation;
+            self.model.set_graph(&neighborhood.nodes, &neighborhood.edges, cx);
+            self.degree = None;
+            self.message = None;
+            cx.notify();
         }
     }
 

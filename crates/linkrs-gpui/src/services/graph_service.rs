@@ -199,6 +199,131 @@ fn value_text(value: &serde_json::Value) -> String {
     }
 }
 
+/// Display caps for console result imports, matching the web studio limits.
+const MAX_GRAPH_NODES: usize = 800;
+const MAX_GRAPH_EDGES: usize = 1200;
+
+/// Build a display neighborhood from raw query rows, mirroring the web
+/// studio result-to-graph extraction: objects carrying `vid` become nodes,
+/// objects carrying endpoints plus an edge type become edges (missing
+/// endpoints are completed as `unknown` nodes). Returns `None` when no
+/// row carried graph data; the flag reports cap truncation.
+pub fn neighborhood_from_rows(
+    rows: &[std::collections::HashMap<String, serde_json::Value>],
+) -> Option<(Neighborhood, bool)> {
+    let mut nodes: HashMap<String, GraphNode> = HashMap::new();
+    let mut edges: Vec<GraphEdge> = Vec::new();
+    let mut seen_edges: HashSet<(String, String, String, i64)> = HashSet::new();
+    let mut truncated = false;
+    for row in rows {
+        for value in row.values() {
+            push_graph_value(value, &mut nodes, &mut edges, &mut seen_edges, &mut truncated);
+        }
+    }
+    if nodes.is_empty() {
+        return None;
+    }
+    let mut ordered: Vec<GraphNode> = nodes.into_values().collect();
+    ordered.sort_by(|a, b| a.vid.cmp(&b.vid));
+    Some((Neighborhood { nodes: ordered, edges }, truncated))
+}
+
+fn push_graph_value(
+    value: &serde_json::Value,
+    nodes: &mut HashMap<String, GraphNode>,
+    edges: &mut Vec<GraphEdge>,
+    seen_edges: &mut HashSet<(String, String, String, i64)>,
+    truncated: &mut bool,
+) {
+    if let Some(items) = value.as_array() {
+        for item in items {
+            push_graph_value(item, nodes, edges, seen_edges, truncated);
+        }
+        return;
+    }
+    if !value.is_object() {
+        return;
+    }
+    let node = normalize_neighbor(value);
+    if !node.vid.is_empty() {
+        insert_node(nodes, node, truncated);
+        return;
+    }
+    let Some(edge) = extract_row_edge(value) else {
+        return;
+    };
+    let key = (edge.src.clone(), edge.dst.clone(), edge.edge_type.clone(), edge.rank);
+    if !seen_edges.insert(key) {
+        return;
+    }
+    if edges.len() >= MAX_GRAPH_EDGES {
+        *truncated = true;
+        return;
+    }
+    insert_node(
+        nodes,
+        GraphNode {
+            vid: edge.src.clone(),
+            tag: "unknown".to_string(),
+            properties: serde_json::Value::Null,
+        },
+        truncated,
+    );
+    insert_node(
+        nodes,
+        GraphNode {
+            vid: edge.dst.clone(),
+            tag: "unknown".to_string(),
+            properties: serde_json::Value::Null,
+        },
+        truncated,
+    );
+    edges.push(edge);
+}
+
+fn insert_node(
+    nodes: &mut HashMap<String, GraphNode>,
+    node: GraphNode,
+    truncated: &mut bool,
+) {
+    if nodes.contains_key(&node.vid) {
+        return;
+    }
+    if nodes.len() >= MAX_GRAPH_NODES {
+        *truncated = true;
+        return;
+    }
+    nodes.insert(node.vid.clone(), node);
+}
+
+/// Edge extraction for result rows: endpoint keys follow the web studio
+/// spellings, the type falls back to `type`/`edgeName` spellings the
+/// neighbor listing never emits.
+fn extract_row_edge(value: &serde_json::Value) -> Option<GraphEdge> {
+    let object = value.as_object()?;
+    let endpoint = |keys: &[&str]| {
+        keys.iter()
+            .filter_map(|key| object.get(*key))
+            .map(value_text)
+            .find(|text| !text.is_empty())
+    };
+    let src = endpoint(&["src", "srcID", "source"])?;
+    let dst = endpoint(&["dst", "dstID", "target", "destination"])?;
+    let edge_type = ["edge_type", "edgeType", "edgeName", "type"]
+        .iter()
+        .filter_map(|key| object.get(*key))
+        .filter_map(|value| value.as_str())
+        .map(str::to_string)
+        .find(|text| !text.is_empty())?;
+    let rank = ["ranking", "rank"]
+        .iter()
+        .filter_map(|key| object.get(*key))
+        .filter_map(serde_json::Value::as_i64)
+        .next()
+        .unwrap_or(0);
+    Some(GraphEdge { src, dst, edge_type, rank })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +349,32 @@ mod tests {
         let node = normalize_neighbor(&raw);
         assert_eq!(node.vid, "3");
         assert_eq!(node.tag, "City");
+    }
+
+    fn row(pairs: &[(&str, serde_json::Value)]) -> std::collections::HashMap<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn rows_build_nodes_and_edges() {
+        let rows = vec![
+            row(&[("person", serde_json::json!({"vid": "1", "tag": "Person"}))]),
+            row(&[("knows", serde_json::json!({"src": "1", "dst": "2", "edge_type": "Knows"}))]),
+        ];
+        let (neighborhood, truncated) = neighborhood_from_rows(&rows).expect("graph data");
+        assert!(!truncated);
+        assert_eq!(neighborhood.nodes.len(), 2);
+        assert_eq!(neighborhood.edges.len(), 1);
+        assert!(neighborhood.nodes.iter().any(|node| node.tag == "Person"));
+        assert!(neighborhood.nodes.iter().any(|node| node.tag == "unknown"));
+    }
+
+    #[test]
+    fn rows_without_graph_data_yield_none() {
+        let rows = vec![row(&[("count", serde_json::json!(7))])];
+        assert!(neighborhood_from_rows(&rows).is_none());
     }
 }

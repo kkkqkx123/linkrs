@@ -36,6 +36,48 @@
 | C API（FFI） | ⚠️ 嵌入式 API 的 FFI 投影（`c_api` 特性门控，隐含 `embedded`，约 170 个导出符号）：库/会话/结果句柄生命周期（含内存库一键开启）、查询（含位置/命名带参、参数加会话变量联合执行、`validate`/`explain`）、结果（含按名 `bool/float`、行与结果集 JSON 导出）、事务（含配置化开启、事务信息、保存点枚举与按名查找、会话与事务两侧的命名/联合执行、`kill`/`list`/`metrics`）、预编译（含批量绑定、原文回读、参数元信息、批量执行）、会话变量、批量（含多条添加、结果汇总 JSON）、UDF（含聚合、扩展加载/列表/安装）、配置（构造期向量开关 setter 与内存/路径查询 + 运行期 `get/update/reset/bulk`）、迁移（`plan`/`execute`/`rollback`）、版本历史读、结构化 Schema（空间/标签/边类型 `create/drop/list/get`，属性定义走 JSON）、统计（`changes`/`last-id`/`statistics`/`overview`）、hooks（`trace`/`commit`/`rollback`/`update`）/中断（含中断状态查询）、向量/全文/混合搜索（运行时门控，见说明）、结果空值判断、结果句柄直接导出、错误槽（`errcode/errmsg/errstr/offset/extended`）、调用方自驱动的 `busy_handler` + 建议式 `busy_timeout` | — | — | — | — | — |
 | 输出/脚本/分页 | — | — | — | — | — | ✅ CLI 本地能力（脚本/变量/pager/输出重定向） |
 
+## GPUI 桌面客户端
+
+`crates/linkrs-gpui`（独立 workspace，原生桌面应用）复用 `linkrs-client` 传输层，
+以 16 个 Dock 面板覆盖全部 11 个前端路由：Console、Schema、DataBrowser、Graph、Monitoring、
+Transactions、Sync、Functions、Config、Batch、Transfer、Users、Sessions、Migration、
+Vector、Fulltext。向量、全文、函数、配置在前端只是内嵌页签，在 GPUI 是独立面板，
+能力持平或反超。事务面板另有显式 begin/commit/rollback 与保存点 UI，超出前端页面。
+
+| 功能模块 | GPUI 支持 |
+|---|---|
+| 健康检查与指标 | ✅ 监控面板轮询 overview/system/query/database，加 QPS 与延迟面积图、慢查询表、画像查看、阈值告警样式；后台心跳，失活回登录 |
+| 认证与用户管理 | ✅ 登录、最近连接、记住密码走系统凭据存储；用户列表/创建/启停/按空间授权回收/删除/自己改密；能力门控（用户与会话管理、批量仅 admin，命令面板同步过滤） |
+| 会话管理 | ✅ 列表/详情/终止、自动刷新 |
+| 会话变量（`$name`） | ✅ 控制台参数与变量透传执行，会话面板支持按会话查看/设置/删除 |
+| 查询执行 | ✅ 多语句多结果 tab、参数与变量透传、CSV/JSON 文件导出、结果一键送图谱（自动切面板） |
+| 预编译语句 | — 与服务端一致，无 UI（合理，带参查询已覆盖） |
+| 查询管理（运行中查询） | ✅ 列表与终止，入口在控制台工具栏 |
+| 流式查询 | ✅ 偏好三选（materialized/stream/auto，持久化）：auto 下多语句走流式、单语句先校验按预估行数与阈值路由，带绑定走 materialized |
+| 结果游标 | ✅ 控制台游标分页器 |
+| 查询校验/解释 | ✅ Validate/Explain/画像，均接线到控制台 |
+| 事务控制 | ✅ 列表/指标/kill/outbox 重试，另有显式 begin/commit/rollback（超出前端页面） |
+| 保存点 | ✅ 命名保存点创建与回滚/释放（超出前端页面） |
+| Schema 管理 | ✅ 空间/标签/边类型创建删除、属性 ALTER、索引列表/创建/删除/重建、版本查看 |
+| Schema 版本与迁移 | ✅ 版本历史/变更/破坏性检查只读，迁移计划/执行/流式进度 |
+| 批量操作 | ✅ 创建/条目添加（含文件载入）/执行 |
+| 向量索引 | ✅ 列表/创建/删除/搜索/计数/重建轮询/scroll/payload 合并删除/清空，空间自动填充 |
+| 全文索引 | ✅ 列表/搜索/重建/状态/不一致清单/清空 |
+| 统计信息 | ✅ 监控面板全量区块加 retrieval 聚合快照 |
+| 配置管理 | ✅ 整配置 JSON 树、按 section/key 查询、更新与重置；无批量更新入口 |
+| 函数管理 | ✅ 列表/详情/注册/注销 |
+| 同步/Outbox | ✅ 状态快照、死信过滤与重入列、降级区间清除、retention 单次执行 |
+| 导入/导出 | ✅ 服务端导入（本地文件读取上传）/导出（查询结果写本地文件）加状态轮询 |
+| Web 管理 | — 非该层职责，原生端不挂载 Web 后端 |
+| C API（FFI） | — 非该层职责 |
+| 输出/脚本/分页 | ⚠️ 历史与收藏本地持久化、CSV/JSON 文件导出、游标分页；无 CLI 式脚本与输出重定向 |
+
+与前端的合理差异：Schema 级 ER 图缺失（实例图已覆盖日常浏览）、编辑器无高亮格式化与
+语句级执行、中英文双语缺失（暂英文）、无离线 mock 模式、会话标识只驻内存（比前端
+持久化更保守）、管理页用内联表单加二次确认代替弹窗。四项缺口（索引管理、能力门控、自动路由偏好、
+结果一键送图谱）已按 `docs/plan/gpui-gap-remediation-plan.md` 补齐；监控暂停开关复核为
+已交付，无需立项，详见 `docs/plan/frontend-gpui-gap-analysis.md`。
+
 ## 说明
 
 - 嵌入式 API 以查询语言和事务 API 为主；服务端专属能力（用户管理、同步运维）在嵌入式侧标记为 —。
