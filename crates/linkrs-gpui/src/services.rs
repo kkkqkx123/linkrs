@@ -1,6 +1,7 @@
 pub(crate) mod batch_service;
 pub(crate) mod config_service;
 pub(crate) mod connection_service;
+pub(crate) mod completion_service;
 pub(crate) mod cursor_service;
 pub(crate) mod data_browser_service;
 pub(crate) mod fulltext_service;

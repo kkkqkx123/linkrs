@@ -25,7 +25,10 @@ use crate::components::{
     QueryTableDelegate,
 };
 use crate::i18n::t;
-use crate::services::{connection_service, cursor_service, graph_service, query_service};
+use crate::services::{
+    completion_service::{LinkrsCompletionProvider, SchemaSnapshot, SharedSchemaSnapshot},
+    connection_service, cursor_service, graph_service, query_service, schema_service,
+};
 use crate::settings::{self, ExecutionPreference, HistoryPath, QueryHistoryItem};
 use crate::state::AppState;
 
@@ -109,22 +112,46 @@ pub struct ConsolePanel {
     cursor_loading: bool,
     cursor_error: Option<SharedString>,
     focus_handle: gpui_kit::FocusHandle,
+    /// Schema names feeding statement completion, refreshed on space
+    /// switches and after schema-changing runs.
+    completion_schema: SharedSchemaSnapshot,
+    /// Space the completion snapshot was taken from.
+    completion_space: Option<String>,
 }
 
 impl ConsolePanel {
     pub(crate) const PANEL_NAME: &'static str = "Console";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        cx.observe(&AppState::global(cx), |_, _, cx| cx.notify())
-            .detach();
-        let editor = cx.new(|cx| EditorState::new(window, cx).language("sql"));
+        cx.observe(&AppState::global(cx), |this, _, cx| {
+            let space = AppState::global(cx)
+                .read(cx)
+                .space
+                .clone()
+                .map(|name| name.to_string());
+            if space != this.completion_space {
+                this.refresh_completion_snapshot(cx);
+            }
+            cx.notify();
+        })
+        .detach();
+        let completion_schema = SharedSchemaSnapshot::new();
+        let provider_schema = completion_schema.clone();
+        let editor = cx.new(|cx| EditorState::new(window, cx).language("linkrs"));
+        editor.update(cx, |state, _| {
+            // Mount through the editor's public LSP hook: the trait is
+            // transport-agnostic (text plus offset in, items out), so a local
+            // source needs no language server behind it.
+            state.lsp_mut().completion_provider =
+                Some(Rc::new(LinkrsCompletionProvider::new(provider_schema)));
+        });
         let fav_name = cx.new(|cx| InputState::new(window, cx).placeholder("Favorite name"));
         let kill_session = cx.new(|cx| InputState::new(window, cx).placeholder("Session id"));
         let kill_query = cx.new(|cx| InputState::new(window, cx).placeholder("Query id"));
         let params = cx.new(|cx| InputState::new(window, cx).placeholder("{\"name\": value}"));
         let session_vars =
             cx.new(|cx| InputState::new(window, cx).placeholder("{\"name\": value}"));
-        Self {
+        let mut panel = Self {
             editor,
             tabs: Vec::new(),
             active_tab: None,
@@ -158,7 +185,46 @@ impl ConsolePanel {
             cursor_loading: false,
             cursor_error: None,
             focus_handle: cx.focus_handle(),
+            completion_schema,
+            completion_space: None,
+        };
+        panel.refresh_completion_snapshot(cx);
+        panel
+    }
+
+    /// Reload tag and edge type names for completion. Skipped without a
+    /// selected space or when the snapshot already matches it; failed
+    /// fetches clear the marker so the next trigger retries.
+    fn refresh_completion_snapshot(&mut self, cx: &mut Context<Self>) {
+        let space = AppState::global(cx)
+            .read(cx)
+            .space
+            .clone()
+            .map(|name| name.to_string());
+        let Some(space) = space else {
+            return;
+        };
+        if self.completion_space.as_deref() == Some(space.as_str()) {
+            return;
         }
+        self.completion_space = Some(space.clone());
+        let tags = schema_service::tags(cx);
+        let edges = schema_service::edge_types(cx);
+        let handle = self.completion_schema.clone();
+        cx.spawn(async move |this, cx| {
+            let tags = tags.await;
+            let edges = edges.await;
+            this.update(cx, |this, _| match (tags, edges) {
+                (Ok(tags), Ok(edges)) => {
+                    handle.store(SchemaSnapshot::from_wire(&tags, &edges));
+                }
+                _ => {
+                    this.completion_space = None;
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // -- Actions -------------------------------------------------------------
@@ -477,6 +543,15 @@ impl ConsolePanel {
         if failed {
             cx.notify();
             return;
+        }
+        // Schema-changing runs invalidate the completion names.
+        if self
+            .tabs
+            .iter()
+            .any(|tab| script_may_change_schema(&tab.sql))
+        {
+            self.completion_space = None;
+            self.refresh_completion_snapshot(cx);
         }
         let (rows, elapsed) = self.tabs.iter().fold((0usize, 0u64), |(rows, time), tab| {
             (rows + tab.data.borrow().row_count(), time + tab.elapsed_ms)
@@ -2067,6 +2142,17 @@ enum ExportFormat {
 }
 
 /// Short, user-facing sentence for transport-level failures.
+/// Whether a script may change schema names (tags, edge types, spaces),
+/// in which case statement completion must reload its snapshot.
+fn script_may_change_schema(script: &str) -> bool {
+    let upper = script.to_uppercase();
+    let verb = ["CREATE", "DROP", "ALTER"]
+        .iter()
+        .any(|v| upper.contains(v));
+    let object = ["TAG", "EDGE", "SPACE"].iter().any(|o| upper.contains(o));
+    verb && object
+}
+
 /// Decide the automatic execution path from a validate outcome: invalid
 /// statements run materially, valid ones compare the planner estimate
 /// against the threshold (a missing estimate streams, matching the

@@ -6,6 +6,7 @@ mod runtime;
 mod services;
 mod settings;
 mod state;
+mod syntax;
 mod views;
 
 fn main() {

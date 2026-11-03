@@ -149,7 +149,7 @@ pub fn tokens(source: &str) -> Vec<Token> {
     let mut cursor = QueryCursor::new();
     let mut matches = cursor.matches(&query, outcome.tree.root_node(), source.as_bytes());
     while let Some(m) = matches.next() {
-        for capture in m.captures() {
+        for capture in m.captures {
             let node = capture.node;
             let class: &'static str = match capture_names
                 .get(capture.index as usize)
@@ -239,4 +239,12 @@ fn classify(node: Node<'_>, spans: &[(usize, usize, &'static str)]) -> &'static 
 /// crate stays free of serialization dependencies.
 pub fn inventory_json() -> &'static str {
     INVENTORY
+}
+
+/// The highlight query committed next to the grammar, covering the same
+/// capture vocabulary the frontend and the desktop client share.
+/// Editor integrations register this string verbatim.
+#[cfg(feature = "parser")]
+pub fn highlights_query() -> &'static str {
+    HIGHLIGHTS
 }

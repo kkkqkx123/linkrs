@@ -1,3 +1,4 @@
+use gpui_kit::component::input::ShowCompletions;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{
     point, px, size, App, AppContext as _, Bounds, KeyBinding, Size, WindowBounds, WindowOptions,
@@ -8,6 +9,7 @@ use crate::runtime;
 use crate::services::connection_service;
 use crate::settings::{self, Settings};
 use crate::state;
+use crate::syntax;
 use crate::views::{RunQuery, Shell};
 
 pub mod actions {
@@ -31,6 +33,7 @@ pub fn run(settings: Settings) {
 
         settings::init_global(settings, cx);
         state::AppState::init(cx);
+        syntax::register_linkrs_language();
         init_runtime(cx);
         init_session(cx);
 
@@ -92,6 +95,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-d", ThemeDark, None),
         KeyBinding::new("secondary-shift-s", ThemeSystem, None),
         KeyBinding::new("ctrl-enter", RunQuery, Some("Console")),
+        KeyBinding::new("ctrl-space", ShowCompletions, Some("Console")),
     ]);
 }
 

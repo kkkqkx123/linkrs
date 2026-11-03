@@ -78,7 +78,9 @@ Vector、Fulltext。向量、全文、函数、配置在前端只是内嵌页签
 重启后一次登录即可恢复）。四项缺口（索引管理、能力门控、自动路由偏好、
 结果一键送图谱）已按 `docs/plan/gpui-gap-remediation-plan.md` 补齐；监控暂停开关复核为
 已交付。另有三项已交付：控制台语句级执行（选区＞光标语句＞全文，校验/解释/游标作用于目标语句）
-与本地格式化（见 `docs/plan/gpui-console-statement-execution-design.md`，完整高亮远期再议）、
+与本地格式化（见 `docs/plan/gpui-console-statement-execution-design.md`）、
+控制台按 Linkrs 方言高亮与语句补全（见 `docs/plan/gpui-highlight-completion-design.md`，
+Schema 名专属配色与子句感知作用域留待二期）、
 Schema 级 ER 只读视图（见 `docs/plan/gpui-schema-er-design.md`）、中英文双语基础设施与
 登录/主框架/控制台工具栏迁移（见 `docs/plan/gpui-i18n-design.md`，其余面板分批跟进）。
 

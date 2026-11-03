@@ -66,6 +66,12 @@ compograph-types = { path = "../gpui-kit/crates/compograph/crates/foundation/cg-
 compograph-geometry = { path = "../gpui-kit/crates/compograph/crates/foundation/cg-geometry" }
 linkrs-client = { path = "../linkrs-client" }
 linkrs-wire = { path = "../linkrs-wire" }
+# Tree-sitter grammar for the Linkrs dialect. Its runtime unifies with the
+# one gpui-kit links (see the root workspace pin), so highlighting and
+# completion share the exact grammar the backend parses with.
+linkrs-grammar = { path = "../linkrs-grammar" }
+# Pinned to the version gpui-kit links so `CompletionProvider` impls match.
+lsp-types = { version = "0.97.0", features = ["proposed"] }
 anyhow.workspace = true
 log.workspace = true
 serde.workspace = true
