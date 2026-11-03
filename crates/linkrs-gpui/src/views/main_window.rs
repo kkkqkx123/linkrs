@@ -21,6 +21,7 @@ use gpui_kit::{
 use serde::{Deserialize, Serialize};
 
 use crate::app::{to_theme_mode, Quit, ThemeDark, ThemeLight, ThemeSystem, TogglePalette};
+use crate::i18n::{self, t};
 use crate::services::connection_service;
 use crate::settings::{self, ThemeModeSetting, WindowGeometry};
 use crate::state::{self, AppState, Capability, ConnectionStatus};
@@ -97,8 +98,7 @@ impl MainWindow {
         let window_handle = window.window_handle();
         let theme_mode = settings::global(cx).theme_mode.unwrap_or_default();
 
-        let (dock_area, _) =
-            DockSkin::dock_area(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx);
+        let (dock_area, _) = DockSkin::dock_area(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx);
 
         let console = cx.new(|cx| ConsolePanel::new(window, cx));
         let schema = cx.new(|cx| SchemaPanel::new(window, cx));
@@ -459,21 +459,15 @@ impl MainWindow {
             PaletteTarget::Batch => {
                 self.activate_panel(self.batch.clone(), BatchPanel::PANEL_NAME, window, cx)
             }
-            PaletteTarget::Transfer => self.activate_panel(
-                self.transfer.clone(),
-                TransferPanel::PANEL_NAME,
-                window,
-                cx,
-            ),
+            PaletteTarget::Transfer => {
+                self.activate_panel(self.transfer.clone(), TransferPanel::PANEL_NAME, window, cx)
+            }
             PaletteTarget::Users => {
                 self.activate_panel(self.users.clone(), UsersPanel::PANEL_NAME, window, cx)
             }
-            PaletteTarget::Sessions => self.activate_panel(
-                self.sessions.clone(),
-                SessionsPanel::PANEL_NAME,
-                window,
-                cx,
-            ),
+            PaletteTarget::Sessions => {
+                self.activate_panel(self.sessions.clone(), SessionsPanel::PANEL_NAME, window, cx)
+            }
             PaletteTarget::Migration => self.activate_panel(
                 self.migration.clone(),
                 MigrationPanel::PANEL_NAME,
@@ -483,12 +477,9 @@ impl MainWindow {
             PaletteTarget::Vector => {
                 self.activate_panel(self.vector.clone(), VectorPanel::PANEL_NAME, window, cx)
             }
-            PaletteTarget::Fulltext => self.activate_panel(
-                self.fulltext.clone(),
-                FulltextPanel::PANEL_NAME,
-                window,
-                cx,
-            ),
+            PaletteTarget::Fulltext => {
+                self.activate_panel(self.fulltext.clone(), FulltextPanel::PANEL_NAME, window, cx)
+            }
         }
     }
 
@@ -644,17 +635,17 @@ impl MainWindow {
     }
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (user, can_manage, can_batch, role) = {
+        let (user, can_manage, can_batch, role, locale) = {
             let state = state::AppState::global(cx).read(cx);
             (
                 state.user.clone(),
                 state.can_manage(),
                 state.can(Capability::ManageBatch),
                 state.ui_role(),
+                state.locale,
             )
         };
-        let role_badge: Option<SharedString> =
-            user.as_ref().map(|_| SharedString::from(role));
+        let role_badge: Option<SharedString> = user.as_ref().map(|_| SharedString::from(role));
         let active = self.active_panel;
 
         Sidebar::new("main-sidebar")
@@ -690,7 +681,7 @@ impl MainWindow {
                 ),
             )
             .child(
-                SidebarGroup::new("Query").child(
+                SidebarGroup::new(t("nav.query", locale)).child(
                     SidebarMenu::new().children([
                         self.nav_item(
                             NavEntry {
@@ -714,7 +705,7 @@ impl MainWindow {
                 ),
             )
             .child(
-                SidebarGroup::new("Data").child(
+                SidebarGroup::new(t("nav.data", locale)).child(
                     SidebarMenu::new().children([
                         self.nav_item(
                             NavEntry {
@@ -738,7 +729,7 @@ impl MainWindow {
                 ),
             )
             .child(
-                SidebarGroup::new("Observability").child(
+                SidebarGroup::new(t("nav.observability", locale)).child(
                     SidebarMenu::new().children([self
                         .nav_item(
                             NavEntry {
@@ -880,7 +871,8 @@ impl MainWindow {
                     )
                     .on_click(cx.listener(Self::on_config)),
                 );
-                SidebarGroup::new("Management").child(SidebarMenu::new().children(items))
+                SidebarGroup::new(t("nav.management", locale))
+                    .child(SidebarMenu::new().children(items))
             })
             .footer(
                 SidebarFooter::new().child(
@@ -889,7 +881,7 @@ impl MainWindow {
                         .items_center()
                         .child(IconName::CircleUser)
                         .child(SharedString::from(
-                            user.as_deref().unwrap_or("Not signed in"),
+                            user.as_deref().unwrap_or(t("status.notSignedIn", locale)),
                         ))
                         .when_some(role_badge, |row, role| {
                             row.child(
@@ -905,18 +897,28 @@ impl MainWindow {
                                 .icon(IconName::LogOut)
                                 .xsmall()
                                 .ghost()
-                                .accessibility_label("Sign out")
+                                .accessibility_label(t("status.signOut", locale))
                                 .on_click(cx.listener(Self::on_logout)),
                         ),
                 ),
             )
     }
 
+    /// Localized connection status for the status bar.
+    fn status_text(status: ConnectionStatus, locale: settings::Locale) -> &'static str {
+        match status {
+            ConnectionStatus::Disconnected => t("status.disconnected", locale),
+            ConnectionStatus::Connecting => t("status.connecting", locale),
+            ConnectionStatus::Connected => t("status.connected", locale),
+            ConnectionStatus::Unhealthy => t("status.unhealthy", locale),
+        }
+    }
+
     fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let app_state = state::AppState::global(cx);
-        let (status, space) = {
+        let (status, space, locale) = {
             let state = app_state.read(cx);
-            (state.status, state.space.clone())
+            (state.status, state.space.clone(), state.locale)
         };
         let mode = self.theme_mode;
 
@@ -944,14 +946,18 @@ impl MainWindow {
                     .gap_2()
                     .items_center()
                     .child(div().size_2().rounded_full().bg(dot))
-                    .child(div().text_xs().child(SharedString::from(status.label()))),
+                    .child(
+                        div()
+                            .text_xs()
+                            .child(SharedString::from(Self::status_text(status, locale))),
+                    ),
             )
             .left(h_flex().gap_2().items_center().children(space.map(|space| {
                 Button::new("status-space")
                     .label(format!("space: {space}"))
                     .xsmall()
                     .ghost()
-                    .accessibility_label("Open the schema panel to switch spaces")
+                    .accessibility_label(t("status.spaceHint", locale))
                     .on_click(cx.listener(Self::on_space_jump))
             })))
             .right(
@@ -960,15 +966,41 @@ impl MainWindow {
                     .items_center()
                     .child(theme_button(
                         "theme-system",
-                        "System",
+                        t("status.themeSystem", locale),
                         ThemeModeSetting::System,
                     ))
                     .child(theme_button(
                         "theme-light",
-                        "Light",
+                        t("status.themeLight", locale),
                         ThemeModeSetting::Light,
                     ))
-                    .child(theme_button("theme-dark", "Dark", ThemeModeSetting::Dark)),
+                    .child(theme_button(
+                        "theme-dark",
+                        t("status.themeDark", locale),
+                        ThemeModeSetting::Dark,
+                    ))
+                    .child(
+                        Button::new("lang-en")
+                            .label(t("language.en", locale))
+                            .xsmall()
+                            .ghost()
+                            .selected(locale == settings::Locale::En)
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                i18n::set_locale(settings::Locale::En, cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("lang-zh")
+                            .label(t("language.zh", locale))
+                            .xsmall()
+                            .ghost()
+                            .selected(locale == settings::Locale::Zh)
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                i18n::set_locale(settings::Locale::Zh, cx);
+                                cx.notify();
+                            })),
+                    ),
             )
             .right(
                 div()

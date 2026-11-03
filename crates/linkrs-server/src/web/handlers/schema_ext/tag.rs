@@ -22,11 +22,11 @@ use crate::web::{
     },
     WebState,
 };
+use linkrs_api::api_core::PropertyDef as CorePropertyDef;
 use linkrs_wire::schema::{
     CreateTagRequest, FieldInfo, TagCreateResponse, TagDeleteResponse, TagInfo, TagListResponse,
     TagUpdateResponse,
 };
-use linkrs_api::api_core::PropertyDef as CorePropertyDef;
 // ==================== Tag Handlers ====================
 
 /// List all tags in a space

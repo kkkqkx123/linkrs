@@ -1,6 +1,7 @@
 mod app;
 mod components;
 mod connection;
+mod i18n;
 mod runtime;
 mod services;
 mod settings;

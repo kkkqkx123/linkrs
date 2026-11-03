@@ -2333,8 +2333,7 @@ impl HttpClient {
     pub async fn get_space_statistics(&self, space: &str) -> Result<serde_json::Value> {
         let url = format!("{}/schema/spaces/{}/statistics", self.base_url, space);
         let response = self.authed(self.inner.get(&url)).send().await?;
-        let response =
-            Self::check_response(response, "Failed to get space statistics").await?;
+        let response = Self::check_response(response, "Failed to get space statistics").await?;
         let envelope: ApiEnvelope<serde_json::Value> = response.json().await?;
         envelope.into_result()
     }

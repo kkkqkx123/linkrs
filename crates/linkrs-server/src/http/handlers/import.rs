@@ -180,7 +180,12 @@ fn vertex_item_from_json_object(
     let vid = obj
         .get("_id")
         .cloned()
-        .filter(|id| matches!(id, serde_json::Value::String(_) | serde_json::Value::Number(_)))
+        .filter(|id| {
+            matches!(
+                id,
+                serde_json::Value::String(_) | serde_json::Value::Number(_)
+            )
+        })
         .ok_or_else(|| {
             HttpError::BadRequest("JSON vertex objects must have a string or numeric _id".into())
         })?;
@@ -207,14 +212,24 @@ fn edge_item_from_json_object(
     let src = obj
         .get("_src")
         .cloned()
-        .filter(|id| matches!(id, serde_json::Value::String(_) | serde_json::Value::Number(_)))
+        .filter(|id| {
+            matches!(
+                id,
+                serde_json::Value::String(_) | serde_json::Value::Number(_)
+            )
+        })
         .ok_or_else(|| {
             HttpError::BadRequest("JSON edge objects must have a string or numeric _src".into())
         })?;
     let dst = obj
         .get("_dst")
         .cloned()
-        .filter(|id| matches!(id, serde_json::Value::String(_) | serde_json::Value::Number(_)))
+        .filter(|id| {
+            matches!(
+                id,
+                serde_json::Value::String(_) | serde_json::Value::Number(_)
+            )
+        })
         .ok_or_else(|| {
             HttpError::BadRequest("JSON edge objects must have a string or numeric _dst".into())
         })?;
@@ -434,8 +449,7 @@ pub async fn import_file<
             HttpError::NotFound(format!("The graph space does not exist: {}", space))
         })?
     };
-    let session =
-        super::authz::require_space_write(&state, session_id, space_id as i64)?;
+    let session = super::authz::require_space_write(&state, session_id, space_id as i64)?;
     session.charge();
 
     let items = parse_items(&format, &target_type, &target_name, &file_data)?;

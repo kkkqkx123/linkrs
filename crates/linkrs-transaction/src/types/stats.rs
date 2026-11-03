@@ -226,11 +226,11 @@ impl TransactionStats {
     }
 
     pub fn end_statement(&self) {
-        let _ =
-            self.active_statements
-                .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                    value.checked_sub(1)
-                });
+        let _ = self
+            .active_statements
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_sub(1)
+            });
     }
 
     pub fn record_txn_begin(&self) {

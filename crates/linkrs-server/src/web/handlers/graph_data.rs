@@ -84,8 +84,7 @@ async fn get_vertex<
     let result = execute_in_space(&web_state, caller_session_id, &params.space, &query).await?;
     if let Some(vertex) = result.first_value() {
         return Ok(Json(ApiResponse::success(VertexDetailData {
-            vertex: serde_json::to_value(vertex)
-                .unwrap_or(serde_json::Value::Null),
+            vertex: serde_json::to_value(vertex).unwrap_or(serde_json::Value::Null),
         })));
     }
 

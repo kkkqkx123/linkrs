@@ -1,23 +1,34 @@
+use compograph_graph::GraphStore;
+use compograph_layout::{CircleLayout, CircleOptions, LayoutDriver};
+use compograph_types::Point2;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::base::Disableable as _;
 use gpui_kit::base::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::InputState;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::tree::{tree, TreeEntry, TreeItem, TreeState};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity, EventEmitter,
-    Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    Focusable, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    ParentElement as _, Render, ScrollDelta, ScrollEvent, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 use linkrs_client::ClientError;
 use linkrs_wire::schema::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
 
-use crate::components::{form_row, render_properties};
+use crate::components::{
+    empty_state, form_row, render_canvas_frame, render_properties, GraphModel,
+};
+use crate::services::graph_service::GraphNode;
 use crate::services::{connection_service, schema_service};
 use crate::state::{AppState, ConnectionStatus};
+
+/// Prefix marking edge-type nodes in the schema ER view, mirroring the
+/// frontend schema graph convention.
+const EDGE_TYPE_NODE_PREFIX: &str = "__edge__";
 
 /// Schema explorer panel: graph spaces of the connected server with the tag
 /// and edge-type fields of the session's current space, index management,
@@ -57,6 +68,11 @@ pub struct SchemaPanel {
     version_title: Option<SharedString>,
     version_output: Option<serde_json::Value>,
     pending: Option<PendingOp>,
+    /// Read-only ER overview of the current space; the tree stays the
+    /// editing surface while the canvas only selects `SchemaTarget`s.
+    er_open: bool,
+    er_search: Entity<InputState>,
+    er_model: GraphModel,
 }
 
 /// Selected tree target for drop/alter actions.
@@ -109,16 +125,26 @@ impl SchemaPanel {
         let entry_name =
             cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge type name"));
         let entry_props = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("[JSON properties, e.g. [{\"name\":\"age\",\"data_type\":\"INT64\"}]]")
+            InputState::new(window, cx)
+                .placeholder("[JSON properties, e.g. [{\"name\":\"age\",\"data_type\":\"INT64\"}]]")
         });
         let add_name = cx.new(|cx| InputState::new(window, cx).placeholder("Field name"));
         let add_type = cx.new(|cx| InputState::new(window, cx).placeholder("STRING"));
+        let er_search = cx.new(|cx| InputState::new(window, cx).placeholder("Filter schema nodes"));
+        let store = cx.new(|_| GraphStore::new());
+        let layout = cx.new(|cx| {
+            LayoutDriver::new(
+                cx,
+                &store,
+                Box::new(CircleLayout::with_options(CircleOptions::default())),
+            )
+        });
+        let er_model = GraphModel::new(store, layout, cx);
         let ver_space = cx.new(|cx| InputState::new(window, cx).placeholder("Space"));
         let ver_label = cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge name"));
         let ver_from = cx.new(|cx| InputState::new(window, cx).placeholder("1"));
         let ver_to = cx.new(|cx| InputState::new(window, cx).placeholder("2"));
-        let index_name =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Index name"));
+        let index_name = cx.new(|cx| InputState::new(window, cx).placeholder("Index name"));
         let index_entity =
             cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge type name"));
         let index_fields = cx.new(|cx| {
@@ -159,7 +185,13 @@ impl SchemaPanel {
             version_title: None,
             version_output: None,
             pending: None,
+            er_open: false,
+            er_search,
+            er_model,
         };
+        let search = panel.er_search.clone();
+        cx.observe(&search, |this, _, cx| this.refresh_er(cx))
+            .detach();
         if matches!(
             last_status,
             ConnectionStatus::Connected | ConnectionStatus::Unhealthy
@@ -167,6 +199,15 @@ impl SchemaPanel {
             panel.refresh(cx);
         }
         panel
+    }
+
+    /// Rebuild the read-only ER overview from the loaded tags and edge
+    /// types, honoring the current filter text.
+    fn refresh_er(&mut self, cx: &mut Context<Self>) {
+        let query = self.er_search.read(cx).value().trim().to_lowercase();
+        let nodes = er_nodes(&self.tags, &self.edge_types, &query);
+        self.er_model.set_graph(&nodes, &[], cx);
+        cx.notify();
     }
 
     /// Rebuild the tree when the connection status or selected space changes.
@@ -187,6 +228,7 @@ impl SchemaPanel {
             self.selected_index = None;
             self.tree_state
                 .update(cx, |tree, cx| tree.set_items(Vec::new(), cx));
+            self.er_model.set_graph(&[], &[], cx);
             cx.notify();
             return;
         }
@@ -245,6 +287,7 @@ impl SchemaPanel {
                 self.message = Some(schema_message(&error).into());
                 self.tree_state
                     .update(cx, |tree, cx| tree.set_items(Vec::new(), cx));
+                self.er_model.set_graph(&[], &[], cx);
                 cx.notify();
                 return;
             }
@@ -326,7 +369,7 @@ impl SchemaPanel {
 
         self.tree_state
             .update(cx, |tree, cx| tree.set_items(items, cx));
-        cx.notify();
+        self.refresh_er(cx);
     }
 
     /// A row was clicked: spaces switch the session, tag/edge rows select
@@ -565,7 +608,11 @@ impl SchemaPanel {
             return;
         }
         let index_type = if self.index_unique { "UNIQUE" } else { "INDEX" };
-        let entity_type = if self.index_entity_edge { "EDGE" } else { "TAG" };
+        let entity_type = if self.index_entity_edge {
+            "EDGE"
+        } else {
+            "TAG"
+        };
         let task = schema_service::create_index(
             cx,
             &space,
@@ -676,9 +723,7 @@ impl SchemaPanel {
             cx.notify();
             return;
         }
-        let from = Self::text(&self.ver_from, cx)
-            .parse::<u64>()
-            .unwrap_or(1);
+        let from = Self::text(&self.ver_from, cx).parse::<u64>().unwrap_or(1);
         let to = Self::text(&self.ver_to, cx).parse::<u64>().unwrap_or(2);
         let is_edge = self.ver_edge;
         if self.busy {
@@ -739,6 +784,29 @@ impl SchemaPanel {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(SharedString::from(status_line)),
+            )
+            .child(
+                Button::new("schema-view-tree")
+                    .label("Tree")
+                    .xsmall()
+                    .ghost()
+                    .selected(!self.er_open)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.er_open = false;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("schema-view-er")
+                    .label("ER")
+                    .xsmall()
+                    .ghost()
+                    .selected(self.er_open)
+                    .accessibility_label("Read-only schema overview graph")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.er_open = true;
+                        this.refresh_er(cx);
+                    })),
             )
             .child(
                 Button::new("schema-refresh")
@@ -838,7 +906,8 @@ impl SchemaPanel {
             .child(form_row("Name", self.space_name.clone(), cx))
             .child(form_row("VID type", self.vid_type.clone(), cx))
             .child(
-                h_flex().gap_1()
+                h_flex()
+                    .gap_1()
                     .child(
                         Button::new("schema-create-space")
                             .label("Create")
@@ -869,7 +938,8 @@ impl SchemaPanel {
             .gap_1()
             .child(self.section_title("Tags / edge types", cx))
             .child(
-                h_flex().gap_1()
+                h_flex()
+                    .gap_1()
                     .child(
                         Button::new("schema-mode-tag")
                             .label("Tag")
@@ -894,10 +964,15 @@ impl SchemaPanel {
             .child(form_row("Name", self.entry_name.clone(), cx))
             .child(form_row("Properties", self.entry_props.clone(), cx))
             .child(
-                h_flex().gap_1()
+                h_flex()
+                    .gap_1()
                     .child(
                         Button::new("schema-create-entry")
-                            .label(if tag_mode { "Create tag" } else { "Create edge" })
+                            .label(if tag_mode {
+                                "Create tag"
+                            } else {
+                                "Create edge"
+                            })
                             .xsmall()
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -907,8 +982,9 @@ impl SchemaPanel {
                     .child(
                         Button::new("schema-drop-entry")
                             .label(match &self.pending {
-                                Some(PendingOp::Tag { .. })
-                                | Some(PendingOp::Edge { .. }) => "Confirm drop",
+                                Some(PendingOp::Tag { .. }) | Some(PendingOp::Edge { .. }) => {
+                                    "Confirm drop"
+                                }
                                 _ => "Drop selected",
                             })
                             .xsmall()
@@ -944,8 +1020,8 @@ impl SchemaPanel {
                     .child("Select a tag or edge type in the tree to alter it."),
             );
         } else {
-            section = section.child(
-                v_flex().gap_1().children(fields.into_iter().map(|(name, data_type)| {
+            section = section.child(v_flex().gap_1().children(fields.into_iter().map(
+                |(name, data_type)| {
                     let ticked = dropped.contains(&name);
                     let label = name.clone();
                     h_flex()
@@ -966,8 +1042,8 @@ impl SchemaPanel {
                                 .text_xs()
                                 .child(SharedString::from(format!("{name}: {data_type}"))),
                         )
-                })),
-            );
+                },
+            )));
         }
         section.child(
             Button::new("schema-alter-apply")
@@ -984,9 +1060,7 @@ impl SchemaPanel {
         let unique = self.index_unique;
         let entity_edge = self.index_entity_edge;
         let selected = self.selected_index.clone();
-        let mut section = v_flex()
-            .gap_1()
-            .child(self.section_title("Indexes", cx));
+        let mut section = v_flex().gap_1().child(self.section_title("Indexes", cx));
         if self.indexes.is_empty() {
             section = section.child(
                 div()
@@ -995,29 +1069,28 @@ impl SchemaPanel {
                     .child("No indexes in the current space."),
             );
         } else {
-            section = section.child(v_flex().gap_1().children(
-                self.indexes.iter().map(|item| {
-                    let name = item
-                        .get("name")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("?")
-                        .to_string();
-                    let active = selected.as_deref() == Some(name.as_str());
-                    Button::new(format!("schema-index-{name}"))
-                        .label(index_label(item))
-                        .xsmall()
-                        .ghost()
-                        .selected(active)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.selected_index = Some(name.clone());
-                            cx.notify();
-                        }))
-                }),
-            ));
+            section = section.child(v_flex().gap_1().children(self.indexes.iter().map(|item| {
+                let name = item
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("?")
+                    .to_string();
+                let active = selected.as_deref() == Some(name.as_str());
+                Button::new(format!("schema-index-{name}"))
+                    .label(index_label(item))
+                    .xsmall()
+                    .ghost()
+                    .selected(active)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected_index = Some(name.clone());
+                        cx.notify();
+                    }))
+            })));
         }
         section
             .child(
-                h_flex().gap_1()
+                h_flex()
+                    .gap_1()
                     .child(
                         Button::new("schema-index-type-tag")
                             .label("INDEX")
@@ -1063,7 +1136,8 @@ impl SchemaPanel {
             .child(form_row("Entity", self.index_entity.clone(), cx))
             .child(form_row("Fields", self.index_fields.clone(), cx))
             .child(
-                h_flex().gap_1()
+                h_flex()
+                    .gap_1()
                     .child(
                         Button::new("schema-index-create")
                             .label("Create index")
@@ -1105,7 +1179,8 @@ impl SchemaPanel {
             .child(form_row("Space", self.ver_space.clone(), cx))
             .child(form_row("Label", self.ver_label.clone(), cx))
             .child(
-                h_flex().gap_1()
+                h_flex()
+                    .gap_1()
                     .child(
                         Button::new("schema-ver-tag")
                             .label("Tag")
@@ -1130,7 +1205,8 @@ impl SchemaPanel {
             .child(form_row("From", self.ver_from.clone(), cx))
             .child(form_row("To", self.ver_to.clone(), cx))
             .child(
-                h_flex().gap_1()
+                h_flex()
+                    .gap_1()
                     .child(
                         Button::new("schema-ver-history")
                             .label("History")
@@ -1162,12 +1238,7 @@ impl SchemaPanel {
         if let (Some(title), Some(output)) =
             (self.version_title.clone(), self.version_output.clone())
         {
-            section = section.child(render_properties(
-                title.as_str(),
-                None,
-                &output,
-                cx,
-            ));
+            section = section.child(render_properties(title.as_str(), None, &output, cx));
         }
         section
     }
@@ -1252,9 +1323,7 @@ impl VersionAction {
         match self {
             Self::History => schema_service::version_history(cx, space, label, is_edge),
             Self::Changes => schema_service::changes(cx, space, label, from, to, is_edge),
-            Self::Breaking => {
-                schema_service::breaking_changes(cx, space, label, from, to, is_edge)
-            }
+            Self::Breaking => schema_service::breaking_changes(cx, space, label, from, to, is_edge),
         }
     }
 }
@@ -1414,10 +1483,178 @@ impl gpui_kit::component::dock::Panel for SchemaPanel {
     }
 }
 
-impl Render for SchemaPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+impl SchemaPanel {
+    /// Tree editing surface: spaces, tags and edge types with alter/drop.
+    fn render_tree(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        div().flex_1().min_w_0().p_1().child(tree(
+            &self.tree_state,
+            move |ix, entry: &TreeEntry, _selected, _window, cx| {
+                let view = view.clone();
+                let item = entry.item();
+                let id = item.id.clone();
+                let label = item.label.clone();
+                let icon = row_icon(&id);
+                let depth = entry.depth();
+
+                view.update(cx, |_, cx| {
+                    ListItem::new(ix)
+                        .w_full()
+                        .pl(px(16.) * depth + px(8.))
+                        .pr_2()
+                        .rounded(cx.theme().radius)
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .min_w_0()
+                                .child(Icon::new(icon).text_color(cx.theme().muted_foreground))
+                                .child(div().text_sm().min_w_0().child(label)),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.activate(&id, cx);
+                        }))
+                })
+            },
+        ))
+    }
+
+    /// Read-only ER overview: tags and edge types as canvas nodes, search
+    /// filter, click-to-select reusing the tree target model.
+    fn render_er(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let empty = self.er_model.is_empty();
+        let count = self.er_model.node_count();
+
+        let body: gpui_kit::AnyElement = if empty {
+            empty_state(
+                IconName::Network,
+                "No schema yet",
+                Some("Create a tag or edge type to see it in the overview.".into()),
+                cx,
+            )
+        } else {
+            self.render_er_canvas(window, cx).into_any_element()
+        };
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .p_2()
+            .gap_2()
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().child(Input::new(&self.er_search)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(format!("{count} nodes"))),
+                    )
+                    .child(
+                        Button::new("schema-er-zoom-in")
+                            .label("+")
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.er_model.zoom_step(1.25);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-er-zoom-out")
+                            .label("\u{2212}")
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.er_model.zoom_step(0.8);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-er-fit")
+                            .label("Fit")
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.er_model.fit_camera(cx);
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(body)
+    }
+
+    /// Native canvas for the ER overview with point-select and wheel zoom.
+    /// A node click selects the same tree target the side panel edits.
+    fn render_er_canvas(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let size = window.viewport_size();
+        self.er_model
+            .set_viewport(f32::from(size.width), f32::from(size.height));
+        let plans = self.er_model.plans(cx);
+
+        div()
+            .id("schema-er-canvas")
+            .flex_1()
+            .min_h(px(280.))
+            .relative()
+            .overflow_hidden()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().muted.opacity(0.12))
+            .child(render_canvas_frame(plans))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                    let world = this.er_model.to_world(viewport_point(event.position));
+                    let additive = event.modifiers.shift;
+                    if this.er_model.press(world, additive, cx) {
+                        if let Some((vid, _, _)) = this.er_model.selected_detail() {
+                            this.activate(&vid, cx);
+                        }
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                if this.er_model.drag_active() {
+                    let world = this.er_model.to_world(viewport_point(event.position));
+                    this.er_model.drag_to(world, cx);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.er_model.end_drag() {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _window, cx| {
+                let anchor = viewport_point(event.position);
+                let lines = match &event.delta {
+                    ScrollDelta::Pixels(pixels) => f32::from(pixels.y) / 16.0,
+                    ScrollDelta::Lines(lines) => lines.y,
+                };
+                this.er_model
+                    .zoom_at(anchor, GraphModel::zoom_factor(lines));
+                cx.notify();
+            }))
+    }
+}
+
+impl Render for SchemaPanel {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let er_open = self.er_open;
 
         v_flex()
             .id("schema-panel")
@@ -1429,41 +1666,98 @@ impl Render for SchemaPanel {
                 panel.child(self.render_error_strip(cx))
             })
             .child(self.render_pending(cx))
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(div().flex_1().min_w_0().p_1().child(tree(
-                &self.tree_state,
-                move |ix, entry: &TreeEntry, _selected, _window, cx| {
-                    let view = view.clone();
-                    let item = entry.item();
-                    let id = item.id.clone();
-                    let label = item.label.clone();
-                    let icon = row_icon(&id);
-                    let depth = entry.depth();
+            .child({
+                let main = h_flex().flex_1().min_h_0();
+                let main = if er_open {
+                    main.child(self.render_er(window, cx))
+                } else {
+                    main.child(self.render_tree(cx))
+                };
+                main.child(self.render_side(cx))
+            })
+    }
+}
 
-                    view.update(cx, |_, cx| {
-                        ListItem::new(ix)
-                            .w_full()
-                            .pl(px(16.) * depth + px(8.))
-                            .pr_2()
-                            .rounded(cx.theme().radius)
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .min_w_0()
-                                    .child(Icon::new(icon).text_color(cx.theme().muted_foreground))
-                                    .child(div().text_sm().min_w_0().child(label)),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.activate(&id, cx);
-                            }))
-                    })
-                },
-            )))
-            .child(self.render_side(cx))
-            )
+/// Viewport-relative position in logical pixels for pointer events.
+fn viewport_point(position: gpui_kit::Point<gpui_kit::Pixels>) -> Point2 {
+    Point2::new(f32::from(position.x), f32::from(position.y))
+}
+
+/// Project the loaded schema into ER overview nodes, mirroring the frontend
+/// schema graph: tags become nodes, edge types become standalone nodes with
+/// a marker prefix (the schema records no endpoints, so no edges exist).
+/// An empty query keeps every node; otherwise names match case-insensitively.
+fn er_nodes(tags: &[TagInfo], edge_types: &[EdgeTypeInfo], query: &str) -> Vec<GraphNode> {
+    let mut nodes = Vec::new();
+    for tag in tags {
+        if query.is_empty() || tag.name.to_lowercase().contains(query) {
+            nodes.push(GraphNode {
+                vid: format!("tag:{}", tag.name),
+                tag: tag.name.clone(),
+                properties: fields_json(&tag.fields),
+            });
+        }
+    }
+    for edge in edge_types {
+        if query.is_empty() || edge.name.to_lowercase().contains(query) {
+            nodes.push(GraphNode {
+                vid: format!("edge:{}", edge.name),
+                tag: format!("{EDGE_TYPE_NODE_PREFIX}{}", edge.name),
+                properties: fields_json(&edge.fields),
+            });
+        }
+    }
+    nodes
+}
+
+/// Field list as JSON for canvas detail display.
+fn fields_json(fields: &[linkrs_wire::schema::FieldInfo]) -> serde_json::Value {
+    serde_json::json!(fields
+        .iter()
+        .map(|field| serde_json::json!({
+            "name": field.name,
+            "data_type": field.data_type,
+            "nullable": field.nullable,
+        }))
+        .collect::<Vec<_>>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(name: &str) -> TagInfo {
+        TagInfo {
+            name: name.to_string(),
+            fields: Vec::new(),
+        }
+    }
+
+    fn edge(name: &str) -> EdgeTypeInfo {
+        EdgeTypeInfo {
+            name: name.to_string(),
+            fields: Vec::new(),
+            src_tag: None,
+            dst_tag: None,
+        }
+    }
+
+    #[test]
+    fn er_nodes_mirror_frontend_encoding() {
+        let nodes = er_nodes(&[tag("Person")], &[edge("Knows")], "");
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].vid, "tag:Person");
+        assert_eq!(nodes[0].tag, "Person");
+        assert_eq!(nodes[1].vid, "edge:Knows");
+        assert_eq!(nodes[1].tag, "__edge__Knows");
+    }
+
+    #[test]
+    fn er_nodes_filter_matches_case_insensitively() {
+        let tags = vec![tag("Person"), tag("Movie")];
+        let nodes = er_nodes(&tags, &[edge("Knows")], "mov");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].vid, "tag:Movie");
+        assert!(er_nodes(&tags, &[], "zzz").is_empty());
     }
 }

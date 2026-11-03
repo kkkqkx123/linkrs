@@ -24,6 +24,7 @@ use crate::components::{
     empty_state, form_row, new_table_state, on_copy_row, render_json_block, QueryTableData,
     QueryTableDelegate,
 };
+use crate::i18n::t;
 use crate::services::{connection_service, cursor_service, graph_service, query_service};
 use crate::settings::{self, ExecutionPreference, HistoryPath, QueryHistoryItem};
 use crate::state::AppState;
@@ -114,16 +115,15 @@ impl ConsolePanel {
     pub(crate) const PANEL_NAME: &'static str = "Console";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.observe(&AppState::global(cx), |_, _, cx| cx.notify())
+            .detach();
         let editor = cx.new(|cx| EditorState::new(window, cx).language("sql"));
         let fav_name = cx.new(|cx| InputState::new(window, cx).placeholder("Favorite name"));
         let kill_session = cx.new(|cx| InputState::new(window, cx).placeholder("Session id"));
         let kill_query = cx.new(|cx| InputState::new(window, cx).placeholder("Query id"));
-        let params = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("{\"name\": value}")
-        });
-        let session_vars = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("{\"name\": value}")
-        });
+        let params = cx.new(|cx| InputState::new(window, cx).placeholder("{\"name\": value}"));
+        let session_vars =
+            cx.new(|cx| InputState::new(window, cx).placeholder("{\"name\": value}"));
         Self {
             editor,
             tabs: Vec::new(),
@@ -211,8 +211,7 @@ impl ConsolePanel {
 
     // -- Execution -----------------------------------------------------------
 
-    /// Split the editor script into statements and run them one by one,
-    /// stopping at the first failure.
+    /// Run the whole editor script, one result tab per statement.
     fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.running.is_some() {
             return;
@@ -220,13 +219,35 @@ impl ConsolePanel {
         let script = self.editor.read(cx).text().to_string();
         let statements = query_service::split_statements(&script);
         if statements.is_empty() {
-            window.push_notification(
-                Notification::info("Nothing to run: the editor is empty."),
-                cx,
-            );
+            let locale = AppState::global(cx).read(cx).locale;
+            window.push_notification(Notification::info(t("console.emptyEditor", locale)), cx);
             return;
         }
+        self.start_run(statements, window, cx);
+    }
 
+    /// Run the selected statement, the statement under the cursor, or the
+    /// full script when the cursor sits in a gap between statements.
+    fn run_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.running.is_some() {
+            return;
+        }
+        let Some(target) = self.target_statement(cx) else {
+            let locale = AppState::global(cx).read(cx).locale;
+            window.push_notification(Notification::info(t("console.emptyEditor", locale)), cx);
+            return;
+        };
+        let statements = query_service::split_statements(&target);
+        if statements.is_empty() {
+            let locale = AppState::global(cx).read(cx).locale;
+            window.push_notification(Notification::info(t("console.emptySelection", locale)), cx);
+            return;
+        }
+        self.start_run(statements, window, cx);
+    }
+
+    /// Run pre-split statements one by one, stopping at the first failure.
+    fn start_run(&mut self, statements: Vec<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.tabs = statements
             .into_iter()
             .map(|sql| {
@@ -286,8 +307,7 @@ impl ConsolePanel {
                     decision = Some(format!("auto \u{2192} stream ({count} statements)"));
                 } else if bound {
                     stream = false;
-                    decision =
-                        Some("auto \u{2192} materialized (parameters bound)".to_string());
+                    decision = Some("auto \u{2192} materialized (parameters bound)".to_string());
                 } else if count == 1 {
                     let validate_task = this.update_in(cx, |this, _, cx| {
                         query_service::validate(cx, &this.tabs[0].sql)
@@ -489,20 +509,22 @@ impl ConsolePanel {
     /// First editor statement; the single-statement helpers all target it.
     /// Parse the parameter bindings: empty input means no bindings,
     /// otherwise a JSON object of name to value.
-    fn parse_bindings(
-        &self,
-        cx: &App,
-    ) -> Result<ParsedBindings, String> {
+    fn parse_bindings(&self, cx: &App) -> Result<ParsedBindings, String> {
         let parse = |field: &Entity<InputState>, what: &str| {
             let raw = field.read(cx).value().trim().to_string();
             if raw.is_empty() {
                 return Ok(std::collections::HashMap::new());
             }
-            let value: serde_json::Value = serde_json::from_str(&raw)
-                .map_err(|_| format!("{what} must be a JSON object."))?;
+            let value: serde_json::Value =
+                serde_json::from_str(&raw).map_err(|_| format!("{what} must be a JSON object."))?;
             value
                 .as_object()
-                .map(|object| object.iter().map(|(key, item)| (key.clone(), item.clone())).collect())
+                .map(|object| {
+                    object
+                        .iter()
+                        .map(|(key, item)| (key.clone(), item.clone()))
+                        .collect()
+                })
                 .ok_or_else(|| format!("{what} must be a JSON object."))
         };
         Ok(ParsedBindings {
@@ -511,10 +533,72 @@ impl ConsolePanel {
         })
     }
 
-    fn first_statement(&self, cx: &App) -> Option<String> {
-        query_service::split_statements(&self.editor.read(cx).text().to_string())
-            .into_iter()
-            .next()
+    /// Statement targeted by single-statement actions: the non-empty
+    /// selection, else the statement under the cursor, else the full script.
+    /// Returns `None` only when the editor holds no statement at all.
+    fn target_statement(&self, cx: &App) -> Option<String> {
+        let editor = self.editor.read(cx);
+        let range = editor.selected_range();
+        if range.start != range.end {
+            let selected = editor.selected_text().to_string();
+            if !selected.trim().is_empty() {
+                return Some(selected.trim().to_string());
+            }
+        }
+        let script = editor.text().to_string();
+        if script.trim().is_empty() {
+            return None;
+        }
+        let offset = editor.cursor();
+        Some(query_service::statement_at_offset(&script, offset).unwrap_or(script))
+    }
+
+    /// Format the selected text, or the whole script when nothing is
+    /// selected. Only layout changes; string literals and comments stay
+    /// untouched.
+    fn format_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (range, input, script) = {
+            let editor = self.editor.read(cx);
+            let script = editor.text().to_string();
+            let range = editor.selected_range();
+            if range.start != range.end {
+                match script.get(range.clone()) {
+                    Some(selected) if !selected.trim().is_empty() => {
+                        (range, selected.to_string(), script)
+                    }
+                    _ => (0..script.len(), script.clone(), script),
+                }
+            } else {
+                (0..script.len(), script.clone(), script)
+            }
+        };
+        if input.trim().is_empty() {
+            let locale = AppState::global(cx).read(cx).locale;
+            window.push_notification(Notification::info(t("console.emptyFormat", locale)), cx);
+            return;
+        }
+        let formatted = query_service::format_script(&input);
+        if formatted == input.trim() {
+            let locale = AppState::global(cx).read(cx).locale;
+            window.push_notification(
+                Notification::info(t("console.alreadyFormatted", locale)),
+                cx,
+            );
+            return;
+        }
+        let head = script
+            .get(..range.start)
+            .expect("selection range comes from the same editor text");
+        let tail = script
+            .get(range.end..)
+            .expect("selection range comes from the same editor text");
+        let merged = format!("{head}{formatted}{tail}");
+        self.editor.update(cx, |state, cx| {
+            state.set_value(merged, window, cx);
+        });
+        let locale = AppState::global(cx).read(cx).locale;
+        window.push_notification(Notification::info(t("console.formatted", locale)), cx);
+        cx.notify();
     }
 
     /// Parse the auto-route row threshold, clamped to the frontend range.
@@ -555,13 +639,11 @@ impl ConsolePanel {
         cx.notify();
     }
 
-    /// Validate the first statement without executing it.
+    /// Validate the targeted statement without executing it.
     fn validate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(sql) = self.first_statement(cx) else {
-            window.push_notification(
-                Notification::info("The editor holds no statement to validate."),
-                cx,
-            );
+        let Some(sql) = self.target_statement(cx) else {
+            let locale = AppState::global(cx).read(cx).locale;
+            window.push_notification(Notification::info(t("console.emptyValidate", locale)), cx);
             return;
         };
         self.inspect_loading = true;
@@ -576,16 +658,14 @@ impl ConsolePanel {
         .detach();
     }
 
-    /// Explain the first statement and open the plan as a new result tab.
+    /// Explain the targeted statement and open the plan as a new result tab.
     fn explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.running.is_some() {
             return;
         }
-        let Some(sql) = self.first_statement(cx) else {
-            window.push_notification(
-                Notification::info("The editor holds no statement to explain."),
-                cx,
-            );
+        let Some(sql) = self.target_statement(cx) else {
+            let locale = AppState::global(cx).read(cx).locale;
+            window.push_notification(Notification::info(t("console.emptyExplain", locale)), cx);
             return;
         };
         self.inspect_loading = true;
@@ -763,16 +843,21 @@ impl ConsolePanel {
 
     // -- Cursor pager --------------------------------------------------------
 
-    /// Open a forward-only cursor over the first statement of the editor.
+    /// Open a forward-only cursor over the targeted statement of the editor.
     /// The first page becomes its own result tab; further pages append.
     fn open_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.cursor_id.is_some() || self.cursor_loading {
             return;
         }
-        let script = self.editor.read(cx).text().to_string();
-        let mut statements = query_service::split_statements(&script);
+        let locale = AppState::global(cx).read(cx).locale;
+        let Some(target) = self.target_statement(cx) else {
+            self.cursor_error = Some(t("console.emptyPage", locale).into());
+            cx.notify();
+            return;
+        };
+        let mut statements = query_service::split_statements(&target);
         if statements.is_empty() {
-            self.cursor_error = Some("The editor holds no statement to page.".into());
+            self.cursor_error = Some(t("console.emptyPage", locale).into());
             cx.notify();
             return;
         }
@@ -993,6 +1078,7 @@ impl ConsolePanel {
     }
 
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let locale = AppState::global(cx).read(cx).locale;
         let running = self.running.is_some();
         let history_open = self.history_open;
         let favorites_open = self.favorites_open;
@@ -1016,7 +1102,7 @@ impl ConsolePanel {
             .when(!running, |bar| {
                 bar.child(
                     Button::new("run")
-                        .label("Run")
+                        .label(t("console.run", locale))
                         .icon(IconName::Play)
                         .primary()
                         .xsmall()
@@ -1028,7 +1114,7 @@ impl ConsolePanel {
             .when(running, |bar| {
                 bar.child(
                     Button::new("cancel")
-                        .label("Cancel")
+                        .label(t("common.cancel", locale))
                         .icon(IconName::CircleX)
                         .xsmall()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1036,6 +1122,30 @@ impl ConsolePanel {
                         })),
                 )
             })
+            .when(!running, |bar| {
+                bar.child(
+                    Button::new("run-stmt")
+                        .label(t("console.runStmt", locale))
+                        .icon(IconName::StepForward)
+                        .xsmall()
+                        .accessibility_label(t("console.runStmtHint", locale))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.run_target(window, cx);
+                        })),
+                )
+            })
+            .child(
+                Button::new("format")
+                    .label(t("console.format", locale))
+                    .icon(IconName::Wand)
+                    .xsmall()
+                    .ghost()
+                    .disabled(running)
+                    .accessibility_label(t("console.formatHint", locale))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.format_editor(window, cx);
+                    })),
+            )
             .child(
                 Button::new("export-csv")
                     .label("CSV")
@@ -1059,47 +1169,41 @@ impl ConsolePanel {
             .child(div().flex_1())
             .child(
                 Button::new("pref-materialized")
-                    .label("Materialized")
+                    .label(t("console.materialized", locale))
                     .xsmall()
                     .ghost()
                     .selected(preference == ExecutionPreference::Materialized)
                     .disabled(running)
-                    .accessibility_label("Run through the materialized endpoint")
+                    .accessibility_label(t("console.materializedHint", locale))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_execution(ExecutionPreference::Materialized, cx);
                     })),
             )
             .child(
                 Button::new("pref-stream")
-                    .label("Stream")
+                    .label(t("console.stream", locale))
                     .xsmall()
                     .ghost()
                     .selected(preference == ExecutionPreference::Stream)
                     .disabled(running)
-                    .accessibility_label("Run through the SSE streaming endpoint")
+                    .accessibility_label(t("console.streamHint", locale))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_execution(ExecutionPreference::Stream, cx);
                     })),
             )
             .child(
                 Button::new("pref-auto")
-                    .label("Auto")
+                    .label(t("console.auto", locale))
                     .xsmall()
                     .ghost()
                     .selected(preference == ExecutionPreference::Auto)
                     .disabled(running)
-                    .accessibility_label(
-                        "Route multi-statement scripts to streaming and single statements by row estimate",
-                    )
+                    .accessibility_label(t("console.autoHint", locale))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_execution(ExecutionPreference::Auto, cx);
                     })),
             )
-            .child(
-                div()
-                    .w(px(72.))
-                    .child(Input::new(&self.auto_threshold))
-            )
+            .child(div().w(px(72.)).child(Input::new(&self.auto_threshold)))
             .when_some(decision, |bar, text| {
                 bar.child(
                     div()
@@ -1111,12 +1215,12 @@ impl ConsolePanel {
             .when(!cursor_open, |bar| {
                 bar.child(
                     Button::new("cursor-open")
-                        .label("Cursor")
+                        .label(t("console.cursor", locale))
                         .icon(IconName::Database)
                         .xsmall()
                         .ghost()
                         .disabled(running || cursor_busy)
-                        .accessibility_label("Open a server cursor for large results")
+                        .accessibility_label(t("console.openCursorHint", locale))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_cursor(window, cx);
                         })),
@@ -1125,7 +1229,11 @@ impl ConsolePanel {
             .when(cursor_open, |bar| {
                 bar.child(
                     Button::new("cursor-next")
-                        .label(if cursor_more { "Next page" } else { "Done" })
+                        .label(if cursor_more {
+                            t("console.nextPage", locale)
+                        } else {
+                            t("console.done", locale)
+                        })
                         .icon(IconName::ChevronRight)
                         .xsmall()
                         .disabled(cursor_busy || !cursor_more)
@@ -1135,7 +1243,7 @@ impl ConsolePanel {
                 )
                 .child(
                     Button::new("cursor-close")
-                        .label("Close cursor")
+                        .label(t("console.closeCursor", locale))
                         .icon(IconName::X)
                         .xsmall()
                         .ghost()
@@ -1146,43 +1254,43 @@ impl ConsolePanel {
             })
             .child(
                 Button::new("validate")
-                    .label("Validate")
+                    .label(t("console.validate", locale))
                     .icon(IconName::Check)
                     .xsmall()
                     .ghost()
                     .disabled(running || inspect_busy)
-                    .accessibility_label("Validate the first statement without executing")
+                    .accessibility_label(t("console.validateHint", locale))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.validate(window, cx);
                     })),
             )
             .child(
                 Button::new("explain")
-                    .label("Explain")
+                    .label(t("console.explain", locale))
                     .icon(IconName::Info)
                     .xsmall()
                     .ghost()
                     .disabled(running || inspect_busy)
-                    .accessibility_label("Explain the first statement into a new tab")
+                    .accessibility_label(t("console.explainHint", locale))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.explain(window, cx);
                     })),
             )
             .child(
                 Button::new("profile")
-                    .label("Profile")
+                    .label(t("console.profile", locale))
                     .icon(IconName::Activity)
                     .xsmall()
                     .ghost()
                     .disabled(running || inspect_busy)
-                    .accessibility_label("Fetch the server portrait for the active result")
+                    .accessibility_label(t("console.profileHint", locale))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.profile_active(window, cx);
                     })),
             )
             .child(
                 Button::new("toggle-running")
-                    .label("Running")
+                    .label(t("console.running", locale))
                     .icon(IconName::List)
                     .xsmall()
                     .ghost()
@@ -1198,7 +1306,7 @@ impl ConsolePanel {
             )
             .child(
                 Button::new("toggle-history")
-                    .label("History")
+                    .label(t("console.history", locale))
                     .icon(IconName::Clock)
                     .xsmall()
                     .ghost()
@@ -1210,7 +1318,7 @@ impl ConsolePanel {
             )
             .child(
                 Button::new("toggle-favorites")
-                    .label("Favorites")
+                    .label(t("console.favorites", locale))
                     .icon(IconName::Star)
                     .xsmall()
                     .ghost()
@@ -1222,13 +1330,13 @@ impl ConsolePanel {
             )
             .child(
                 Button::new("toggle-params")
-                    .label("Params")
+                    .label(t("console.params", locale))
                     .icon(IconName::Braces)
                     .xsmall()
                     .ghost()
                     .selected(self.params_open)
                     .disabled(running)
-                    .accessibility_label("Query parameters and session variables")
+                    .accessibility_label(t("console.paramsHint", locale))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.params_open = !this.params_open;
                         cx.notify();
@@ -1248,12 +1356,7 @@ impl ConsolePanel {
             .child(form_row("Parameters", self.params.clone(), cx))
             .child(form_row("Session vars", self.session_vars.clone(), cx))
             .when_some(params_error, |panel, message| {
-                panel.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().danger)
-                        .child(message),
-                )
+                panel.child(div().text_xs().text_color(cx.theme().danger).child(message))
             })
     }
 
@@ -1544,8 +1647,7 @@ impl ConsolePanel {
                                         view_rerun.update(cx, |this, cx| {
                                             match preferred {
                                                 Some(HistoryPath::Stream) => {
-                                                    this.execution =
-                                                        ExecutionPreference::Stream;
+                                                    this.execution = ExecutionPreference::Stream;
                                                 }
                                                 Some(HistoryPath::Materialized) => {
                                                     this.execution =
@@ -1755,8 +1857,7 @@ impl ConsolePanel {
             ),
             TabStatus::Failed => "failed".to_string(),
         };
-        let can_send =
-            active_status == TabStatus::Ok && !self.tabs[active].raw_rows.is_empty();
+        let can_send = active_status == TabStatus::Ok && !self.tabs[active].raw_rows.is_empty();
 
         v_flex()
             .flex_1()
@@ -1785,9 +1886,7 @@ impl ConsolePanel {
                             .xsmall()
                             .ghost()
                             .disabled(!can_send)
-                            .accessibility_label(
-                                "Send the active result set to the graph panel",
-                            )
+                            .accessibility_label("Send the active result set to the graph panel")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.send_to_graph(window, cx);
                             })),
@@ -1910,7 +2009,9 @@ impl Render for ConsolePanel {
             .on_action(cx.listener(Self::on_cancel_query))
             .on_action(cx.listener(Self::on_copy_row))
             .child(self.render_toolbar(cx))
-            .when(self.params_open, |panel| panel.child(self.render_params(cx)))
+            .when(self.params_open, |panel| {
+                panel.child(self.render_params(cx))
+            })
             .when_some(self.cursor_error.clone(), |panel, message| {
                 panel.child(
                     h_flex()
@@ -1975,7 +2076,10 @@ fn auto_decision(
     threshold: u64,
 ) -> (bool, String) {
     match outcome {
-        Err(_) => (false, "auto \u{2192} materialized (validate failed)".to_string()),
+        Err(_) => (
+            false,
+            "auto \u{2192} materialized (validate failed)".to_string(),
+        ),
         Ok(payload) => {
             if !payload
                 .get("valid")
@@ -1984,7 +2088,10 @@ fn auto_decision(
             {
                 return (false, "auto \u{2192} materialized (invalid)".to_string());
             }
-            match payload.get("estimated_rows").and_then(|value| value.as_u64()) {
+            match payload
+                .get("estimated_rows")
+                .and_then(|value| value.as_u64())
+            {
                 Some(estimated) if estimated <= threshold => (
                     false,
                     format!("auto \u{2192} materialized (est. {estimated} \u{2264} {threshold})"),

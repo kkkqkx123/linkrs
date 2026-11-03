@@ -154,7 +154,9 @@ async fn delete_history<
 
     Ok((
         StatusCode::OK,
-        Json(ApiResponse::success(HistoryDeleteResponse { deleted: true })),
+        Json(ApiResponse::success(HistoryDeleteResponse {
+            deleted: true,
+        })),
     ))
 }
 
@@ -361,7 +363,9 @@ async fn delete_favorite<
 
     Ok((
         StatusCode::OK,
-        Json(ApiResponse::success(FavoriteDeleteResponse { deleted: true })),
+        Json(ApiResponse::success(FavoriteDeleteResponse {
+            deleted: true,
+        })),
     ))
 }
 
@@ -395,6 +399,8 @@ async fn clear_favorites<
 
     Ok((
         StatusCode::OK,
-        Json(ApiResponse::success(FavoriteClearResponse { cleared: true })),
+        Json(ApiResponse::success(FavoriteClearResponse {
+            cleared: true,
+        })),
     ))
 }

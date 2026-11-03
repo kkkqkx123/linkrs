@@ -1,7 +1,9 @@
 use gpui_kit::base::Disableable as _;
+use gpui_kit::base::Selectable as _;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
+    h_flex,
     input::{Input, InputState},
     notification::Notification,
     v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
@@ -15,8 +17,10 @@ use linkrs_client::ClientError;
 
 use super::credentials;
 use crate::app::Quit;
+use crate::i18n::{self, t};
 use crate::services::connection_service;
 use crate::settings::{self, LastConnection};
+use crate::state::AppState;
 
 /// Default endpoint shown before any connection has been persisted.
 pub(crate) const DEFAULT_HOST: &str = "127.0.0.1";
@@ -77,6 +81,8 @@ impl LoginView {
             remember: false,
             remembered_endpoint: None,
         };
+        cx.observe(&AppState::global(cx), |_, _, cx| cx.notify())
+            .detach();
         view.prefill_remembered(window, cx);
         view
     }
@@ -129,13 +135,14 @@ impl LoginView {
         let user = self.user.read(cx).value().to_string();
         let password = self.password.read(cx).value().to_string();
 
+        let locale = AppState::global(cx).read(cx).locale;
         let Ok(port) = port_raw.trim().parse::<u16>() else {
-            self.message = Some("Port must be a number between 1 and 65535.".into());
+            self.message = Some(t("login.portInvalid", locale).into());
             cx.notify();
             return;
         };
         if host.trim().is_empty() || user.trim().is_empty() {
-            self.message = Some("Host and user are required.".into());
+            self.message = Some(t("login.hostUserRequired", locale).into());
             cx.notify();
             return;
         }
@@ -200,8 +207,12 @@ impl LoginView {
                                 cx,
                             );
                         });
+                        let locale = AppState::global(cx).read(cx).locale;
                         window.push_notification(
-                            Notification::success(format!("Connected to {host}:{port}")),
+                            Notification::success(format!(
+                                "{} {host}:{port}",
+                                t("login.connectedTo", locale)
+                            )),
                             cx,
                         );
                     }
@@ -209,9 +220,11 @@ impl LoginView {
                         crate::state::AppState::global(cx).update(cx, |state, cx| {
                             state.set_disconnected(cx);
                         });
-                        this.message = Some(user_message(&error).into());
+                        let locale = AppState::global(cx).read(cx).locale;
+                        this.message = Some(user_message(&error, locale).into());
                         window.push_notification(
-                            Notification::error(user_message(&error)).title("Connection failed"),
+                            Notification::error(user_message(&error, locale))
+                                .title(t("login.connectionFailed", locale)),
                             cx,
                         );
                     }
@@ -307,6 +320,7 @@ impl LoginView {
     /// Remember-me checkbox with a forget action. The forget action only
     /// shows while the form points at an endpoint with a stored password.
     fn remember_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let locale = AppState::global(cx).read(cx).locale;
         let forget_visible = self
             .remembered_endpoint
             .as_ref()
@@ -318,7 +332,7 @@ impl LoginView {
             .justify_between()
             .child(
                 Checkbox::new("remember-password")
-                    .label("Remember password on this device")
+                    .label(t("login.remember", locale))
                     .checked(self.remember)
                     .disabled(busy)
                     .on_change(cx.listener(|this, checked: &bool, _, cx| {
@@ -329,7 +343,7 @@ impl LoginView {
             .when(forget_visible, |row| {
                 row.child(
                     Button::new("forget-password")
-                        .label("Forget")
+                        .label(t("login.forget", locale))
                         .xsmall()
                         .ghost()
                         .disabled(busy)
@@ -363,11 +377,11 @@ impl LoginView {
 }
 
 /// Map client errors onto short, user-facing sentences.
-fn user_message(error: &ClientError) -> String {
+fn user_message(error: &ClientError, locale: crate::settings::Locale) -> String {
     match error {
-        ClientError::AuthError(_) => "Authentication failed. Check the user and password.".into(),
+        ClientError::AuthError(_) => t("login.authFailed", locale).to_string(),
         ClientError::ConnectionError(_) | ClientError::HttpError(_) => {
-            "Could not reach the server. Check the host and port.".into()
+            t("login.unreachable", locale).to_string()
         }
         _ => error.to_string(),
     }
@@ -382,6 +396,7 @@ impl Focusable for LoginView {
 impl Render for LoginView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = AppState::global(cx).read(cx).locale;
 
         div()
             .id("login-view")
@@ -409,19 +424,19 @@ impl Render for LoginView {
                                 div()
                                     .text_xl()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Sign in to Linkrs"),
+                                    .child(t("login.title", locale)),
                             )
                             .child(
                                 div()
                                     .text_sm()
                                     .text_color(theme.muted_foreground)
-                                    .child("Connect to a graph database server."),
+                                    .child(t("login.subtitle", locale)),
                             ),
                     )
-                    .child(self.form_row("Host", self.host.clone(), cx))
-                    .child(self.form_row("Port", self.port.clone(), cx))
-                    .child(self.form_row("User", self.user.clone(), cx))
-                    .child(self.form_row("Password", self.password.clone(), cx))
+                    .child(self.form_row(t("login.host", locale), self.host.clone(), cx))
+                    .child(self.form_row(t("login.port", locale), self.port.clone(), cx))
+                    .child(self.form_row(t("login.user", locale), self.user.clone(), cx))
+                    .child(self.form_row(t("login.password", locale), self.password.clone(), cx))
                     .child(self.remember_row(cx))
                     .when_some(self.message.clone(), |card, message| {
                         card.child(
@@ -438,9 +453,9 @@ impl Render for LoginView {
                     .child(
                         Button::new("connect")
                             .label(if self.busy {
-                                "Connecting…"
+                                t("login.connecting", locale)
                             } else {
-                                "Connect"
+                                t("login.connect", locale)
                             })
                             .primary()
                             .w_full()
@@ -457,7 +472,7 @@ impl Render for LoginView {
                                     div()
                                         .text_xs()
                                         .text_color(theme.muted_foreground)
-                                        .child("Recent connections"),
+                                        .child(t("login.recent", locale)),
                                 )
                                 .children(self.recent.iter().enumerate().map(|(ix, entry)| {
                                     let entry = entry.clone();
@@ -473,12 +488,44 @@ impl Render for LoginView {
                                 })),
                         )
                     })
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(
-                        SharedString::from(format!(
-                            "Linkrs Desktop v{}",
-                            env!("CARGO_PKG_VERSION")
-                        )),
-                    )),
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(
+                                SharedString::from(format!(
+                                    "Linkrs Desktop v{}",
+                                    env!("CARGO_PKG_VERSION")
+                                )),
+                            ))
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Button::new("login-lang-en")
+                                            .label(t("language.en", locale))
+                                            .xsmall()
+                                            .ghost()
+                                            .selected(locale == crate::settings::Locale::En)
+                                            .on_click(cx.listener(|_, _, _, cx| {
+                                                i18n::set_locale(crate::settings::Locale::En, cx);
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("login-lang-zh")
+                                            .label(t("language.zh", locale))
+                                            .xsmall()
+                                            .ghost()
+                                            .selected(locale == crate::settings::Locale::Zh)
+                                            .on_click(cx.listener(|_, _, _, cx| {
+                                                i18n::set_locale(crate::settings::Locale::Zh, cx);
+                                                cx.notify();
+                                            })),
+                                    ),
+                            ),
+                    ),
             )
     }
 }

@@ -129,9 +129,26 @@ impl StorageReader for MockStorage {
             v
         }))
     }
-    mock_stub!(&self, scan_vertices(_space: &str) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, scan_vertices_by_tag(_space: &str, _tag: &str) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, scan_vertices_by_prop(_space: &str, _tag: &str, _prop: &str, _value: &Value) -> Result<Vec<Vertex>, StorageError>, Ok(Vec::new()));
+    mock_stub!(
+        &self,
+        scan_vertices(_space: &str) -> Result<Vec<Vertex>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        scan_vertices_by_tag(_space: &str, _tag: &str) -> Result<Vec<Vertex>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        scan_vertices_by_prop(
+            _space: &str,
+            _tag: &str,
+            _prop: &str,
+            _value: &Value,
+        ) -> Result<Vec<Vertex>, StorageError>,
+        Ok(Vec::new())
+    );
     fn get_edge(
         &self,
         _space: &str,
@@ -170,13 +187,56 @@ impl StorageReader for MockStorage {
             e
         }))
     }
-    mock_stub!(&self, get_node_edges(_space: &str, _node_id: &VertexId, _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, neighbor_dst_ids_batch(_space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<Vec<VertexId>>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, out_degree_batch(_space: &str, _src_ids: &[VertexId], _direction: EdgeDirection, _edge_types: &[String]) -> Result<Vec<usize>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, scan_edges_by_type(_space: &str, _edge_type: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, scan_all_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, count_vertices_by_tag(_space: &str, _tag: &str) -> Result<u64, StorageError>, Ok(0));
-    mock_stub!(&self, count_edges_by_type(_space: &str, _edge_type: &str) -> Result<u64, StorageError>, Ok(0));
+    mock_stub!(
+        &self,
+        get_node_edges(
+            _space: &str,
+            _node_id: &VertexId,
+            _direction: EdgeDirection,
+            _edge_types: &[String],
+        ) -> Result<Vec<Edge>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        neighbor_dst_ids_batch(
+            _space: &str,
+            _src_ids: &[VertexId],
+            _direction: EdgeDirection,
+            _edge_types: &[String],
+        ) -> Result<Vec<Vec<VertexId>>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        out_degree_batch(
+            _space: &str,
+            _src_ids: &[VertexId],
+            _direction: EdgeDirection,
+            _edge_types: &[String],
+        ) -> Result<Vec<usize>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        scan_edges_by_type(_space: &str, _edge_type: &str) -> Result<Vec<Edge>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        scan_all_edges(_space: &str) -> Result<Vec<Edge>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        count_vertices_by_tag(_space: &str, _tag: &str) -> Result<u64, StorageError>,
+        Ok(0)
+    );
+    mock_stub!(
+        &self,
+        count_edges_by_type(_space: &str, _edge_type: &str) -> Result<u64, StorageError>,
+        Ok(0)
+    );
     fn enable_edge_property_index(
         &self,
         space: &str,
@@ -257,32 +317,164 @@ impl StorageReader for MockStorage {
         }
         Ok(result)
     }
-    mock_stub!(&self, lookup_index(_space: &str, _index: &str, _value: &Value) -> Result<Vec<Value>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, get_vertex_with_schema(_space: &str, _tag: &str, _id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>, Ok(None));
-    mock_stub!(&self, get_edge_with_schema(_space: &str, _edge_type: &str, _src: &Value, _dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>, Ok(None));
-    mock_stub!(&self, scan_vertices_with_schema(_space: &str, _tag: &str) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, scan_edges_with_schema(_space: &str, _edge_type: &str) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, get_space(_space: &str) -> Result<Option<SpaceInfo>, StorageError>, Ok(None));
-    mock_stub!(&self, get_space_by_id(_space_id: u64) -> Result<Option<SpaceInfo>, StorageError>, Ok(None));
+    mock_stub!(
+        &self,
+        lookup_index(
+            _space: &str,
+            _index: &str,
+            _value: &Value,
+        ) -> Result<Vec<Value>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        get_vertex_with_schema(
+            _space: &str,
+            _tag: &str,
+            _id: &Value,
+        ) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>,
+        Ok(None)
+    );
+    mock_stub!(
+        &self,
+        get_edge_with_schema(
+            _space: &str,
+            _edge_type: &str,
+            _src: &Value,
+            _dst: &Value,
+        ) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>,
+        Ok(None)
+    );
+    mock_stub!(
+        &self,
+        scan_vertices_with_schema(
+            _space: &str,
+            _tag: &str,
+        ) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        scan_edges_with_schema(
+            _space: &str,
+            _edge_type: &str,
+        ) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        get_space(_space: &str) -> Result<Option<SpaceInfo>, StorageError>,
+        Ok(None)
+    );
+    mock_stub!(
+        &self,
+        get_space_by_id(_space_id: u64) -> Result<Option<SpaceInfo>, StorageError>,
+        Ok(None)
+    );
     mock_stub!(&self, list_spaces() -> Result<Vec<SpaceInfo>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, get_space_id(_space: &str) -> Result<u64, StorageError>, Ok(1));
+    mock_stub!(
+        &self,
+        get_space_id(_space: &str) -> Result<u64, StorageError>,
+        Ok(1)
+    );
     mock_stub!(&self, space_exists(_space: &str) -> bool, false);
-    mock_stub!(&self, get_tag(_space: &str, _tag: &str) -> Result<Option<TagInfo>, StorageError>, Ok(None));
-    mock_stub!(&self, list_tags(_space: &str) -> Result<Vec<TagInfo>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, get_edge_type(_space: &str, _edge_type: &str) -> Result<Option<EdgeTypeSchema>, StorageError>, Ok(None));
+    mock_stub!(
+        &self,
+        get_tag(_space: &str, _tag: &str) -> Result<Option<TagInfo>, StorageError>,
+        Ok(None)
+    );
+    mock_stub!(
+        &self,
+        list_tags(_space: &str) -> Result<Vec<TagInfo>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        get_edge_type(
+            _space: &str,
+            _edge_type: &str,
+        ) -> Result<Option<EdgeTypeSchema>, StorageError>,
+        Ok(None)
+    );
     fn list_edge_types(&self, _space: &str) -> Result<Vec<EdgeTypeSchema>, StorageError> {
         Ok(self.edge_types.read().clone())
     }
-    mock_stub!(&self, get_tag_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>, Ok(None));
-    mock_stub!(&self, list_tag_indexes(_space: &str) -> Result<Vec<Index>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, get_edge_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>, Ok(None));
-    mock_stub!(&self, list_edge_indexes(_space: &str) -> Result<Vec<Index>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, get_vertex_version_history(_space: &str, _tag: &str) -> Result<Option<LabelVersionHistory>, StorageError>, Ok(None));
-    mock_stub!(&self, get_edge_version_history(_space: &str, _edge_type: &str) -> Result<Option<LabelVersionHistory>, StorageError>, Ok(None));
-    mock_stub!(&self, get_vertex_schema_changes(_space: &str, _tag: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, get_edge_schema_changes(_space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, detect_vertex_breaking_changes(_space: &str, _tag: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&self, detect_edge_breaking_changes(_space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    mock_stub!(
+        &self,
+        get_tag_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>,
+        Ok(None)
+    );
+    mock_stub!(
+        &self,
+        list_tag_indexes(_space: &str) -> Result<Vec<Index>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        get_edge_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>,
+        Ok(None)
+    );
+    mock_stub!(
+        &self,
+        list_edge_indexes(_space: &str) -> Result<Vec<Index>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        get_vertex_version_history(
+            _space: &str,
+            _tag: &str,
+        ) -> Result<Option<LabelVersionHistory>, StorageError>,
+        Ok(None)
+    );
+    mock_stub!(
+        &self,
+        get_edge_version_history(
+            _space: &str,
+            _edge_type: &str,
+        ) -> Result<Option<LabelVersionHistory>, StorageError>,
+        Ok(None)
+    );
+    mock_stub!(
+        &self,
+        get_vertex_schema_changes(
+            _space: &str,
+            _tag: &str,
+            _from_version: u64,
+            _to_version: u64,
+        ) -> Result<Vec<PropertyChange>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        get_edge_schema_changes(
+            _space: &str,
+            _edge_type: &str,
+            _from_version: u64,
+            _to_version: u64,
+        ) -> Result<Vec<PropertyChange>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        detect_vertex_breaking_changes(
+            _space: &str,
+            _tag: &str,
+            _from_version: u64,
+            _to_version: u64,
+        ) -> Result<Vec<PropertyChange>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &self,
+        detect_edge_breaking_changes(
+            _space: &str,
+            _edge_type: &str,
+            _from_version: u64,
+            _to_version: u64,
+        ) -> Result<Vec<PropertyChange>, StorageError>,
+        Ok(Vec::new())
+    );
     fn list_migration_history(
         &self,
         space: &str,
@@ -349,12 +541,47 @@ impl StorageWriter for MockStorage {
             .push(vertex.clone());
         Ok(vertex.vid)
     }
-    mock_stub!(&mut self, update_vertex(_space: &str, _vertex: Vertex) -> Result<(), StorageError>, Ok(()));
-    mock_stub!(&mut self, update_vertex_replace(_space: &str, _vertex: Vertex) -> Result<(), StorageError>, Ok(()));
-    mock_stub!(&mut self, delete_vertex(_space: &str, _tag: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
-    mock_stub!(&mut self, delete_vertex_with_edges(_space: &str, _tag: &str, _id: &VertexId) -> Result<(), StorageError>, Ok(()));
-    mock_stub!(&mut self, batch_delete_vertices_with_edges(_space: &str, _tag: &str, _ids: &[VertexId]) -> Result<usize, StorageError>, Ok(0));
-    mock_stub!(&mut self, batch_insert_vertices(_space: &str, _vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>, Ok(Vec::new()));
+    mock_stub!(
+        &mut self,
+        update_vertex(_space: &str, _vertex: Vertex) -> Result<(), StorageError>,
+        Ok(())
+    );
+    mock_stub!(
+        &mut self,
+        update_vertex_replace(_space: &str, _vertex: Vertex) -> Result<(), StorageError>,
+        Ok(())
+    );
+    mock_stub!(
+        &mut self,
+        delete_vertex(_space: &str, _tag: &str, _id: &VertexId) -> Result<(), StorageError>,
+        Ok(())
+    );
+    mock_stub!(
+        &mut self,
+        delete_vertex_with_edges(
+            _space: &str,
+            _tag: &str,
+            _id: &VertexId,
+        ) -> Result<(), StorageError>,
+        Ok(())
+    );
+    mock_stub!(
+        &mut self,
+        batch_delete_vertices_with_edges(
+            _space: &str,
+            _tag: &str,
+            _ids: &[VertexId],
+        ) -> Result<usize, StorageError>,
+        Ok(0)
+    );
+    mock_stub!(
+        &mut self,
+        batch_insert_vertices(
+            _space: &str,
+            _vertices: Vec<Vertex>,
+        ) -> Result<Vec<VertexId>, StorageError>,
+        Ok(Vec::new())
+    );
     fn insert_edge(&mut self, _space: &str, _edge: Edge) -> Result<(), StorageError> {
         if *self.fail_insert_edge.read() {
             Err(StorageError::db_error("insert_edge failed".to_string()))
@@ -391,51 +618,235 @@ impl StorageWriter for MockStorage {
             Ok(())
         }
     }
-    mock_stub!(&mut self, batch_delete_edges(_space: &str, _deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>, Ok(0));
-    mock_stub!(&mut self, insert_vertex_data(_space: &str, _info: &InsertVertexInfo) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, insert_edge_data(_space: &str, _info: &InsertEdgeInfo) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, delete_vertex_data(_space: &str, _tag: &str, _vertex_id: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, delete_edge_data(_space: &str, _src: &str, _dst: &str, _rank: i64) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, update_data(_space: &str, _space_id: u64, _info: &UpdateInfo) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(
+        &mut self,
+        batch_delete_edges(_space: &str, _deletes: &[EdgeDeleteKey]) -> Result<usize, StorageError>,
+        Ok(0)
+    );
+    mock_stub!(
+        &mut self,
+        insert_vertex_data(_space: &str, _info: &InsertVertexInfo) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        insert_edge_data(_space: &str, _info: &InsertEdgeInfo) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        delete_vertex_data(
+            _space: &str,
+            _tag: &str,
+            _vertex_id: &str,
+        ) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        delete_edge_data(
+            _space: &str,
+            _src: &str,
+            _dst: &str,
+            _rank: i64,
+        ) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        update_data(_space: &str, _space_id: u64, _info: &UpdateInfo) -> Result<bool, StorageError>,
+        Ok(true)
+    );
 }
 
 impl StorageSchemaOps for MockStorage {
-    mock_stub!(&mut self, create_space(_space: &mut SpaceInfo) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, drop_space(_space: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, clear_space(_space: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, create_tag(_space: &str, _info: &TagInfo) -> Result<u32, StorageError>, Ok(1));
-    mock_stub!(&mut self, alter_tag(_space: &str, _tag: &str, _additions: Vec<PropertyDef>, _deletions: Vec<String>, _new_comment: Option<String>) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, rename_vertex_property(_label: LabelId, _old_name: &str, _new_name: &str) -> Result<(), StorageError>, Ok(()));
-    mock_stub!(&mut self, rename_tag_property(_space: &str, _tag: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, rename_tag(_space: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, drop_tag(_space: &str, _tag: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, create_edge_type(_space: &str, _info: &EdgeTypeSchema) -> Result<u32, StorageError>, Ok(1));
-    mock_stub!(&mut self, alter_edge_type(_space: &str, _edge_type: &str, _additions: Vec<PropertyDef>, _deletions: Vec<String>, _new_comment: Option<String>) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, rename_edge_type(_space: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, rename_edge_property(_space: &str, _edge_type: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, update_edge_endpoints(_space: &str, _edge_type: &str, _src_tag: &str, _dst_tag: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, drop_edge_type(_space: &str, _edge_type: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, create_tag_index(_space: &str, _info: &Index) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, drop_tag_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, rebuild_tag_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, create_edge_index(_space: &str, _info: &Index) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, drop_edge_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, rebuild_edge_index(_space: &str, _index: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(
+        &mut self,
+        create_space(_space: &mut SpaceInfo) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        drop_space(_space: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        clear_space(_space: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        create_tag(_space: &str, _info: &TagInfo) -> Result<u32, StorageError>,
+        Ok(1)
+    );
+    mock_stub!(
+        &mut self,
+        alter_tag(
+            _space: &str,
+            _tag: &str,
+            _additions: Vec<PropertyDef>,
+            _deletions: Vec<String>,
+            _new_comment: Option<String>,
+        ) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        rename_vertex_property(
+            _label: LabelId,
+            _old_name: &str,
+            _new_name: &str,
+        ) -> Result<(), StorageError>,
+        Ok(())
+    );
+    mock_stub!(
+        &mut self,
+        rename_tag_property(
+            _space: &str,
+            _tag: &str,
+            _old_name: &str,
+            _new_name: &str,
+        ) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        rename_tag(_space: &str, _old_name: &str, _new_name: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        drop_tag(_space: &str, _tag: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        create_edge_type(_space: &str, _info: &EdgeTypeSchema) -> Result<u32, StorageError>,
+        Ok(1)
+    );
+    mock_stub!(
+        &mut self,
+        alter_edge_type(
+            _space: &str,
+            _edge_type: &str,
+            _additions: Vec<PropertyDef>,
+            _deletions: Vec<String>,
+            _new_comment: Option<String>,
+        ) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        rename_edge_type(
+            _space: &str,
+            _old_name: &str,
+            _new_name: &str,
+        ) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        rename_edge_property(
+            _space: &str,
+            _edge_type: &str,
+            _old_name: &str,
+            _new_name: &str,
+        ) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        update_edge_endpoints(
+            _space: &str,
+            _edge_type: &str,
+            _src_tag: &str,
+            _dst_tag: &str,
+        ) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        drop_edge_type(_space: &str, _edge_type: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        create_tag_index(_space: &str, _info: &Index) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        drop_tag_index(_space: &str, _index: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        rebuild_tag_index(_space: &str, _index: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        create_edge_index(_space: &str, _info: &Index) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        drop_edge_index(_space: &str, _index: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        rebuild_edge_index(_space: &str, _index: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
 }
 
 impl StorageAuthOps for MockStorage {
-    mock_stub!(&mut self, change_password(_info: &PasswordInfo) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, create_user(_info: &UserInfo) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, alter_user(_info: &UserAlterInfo) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, drop_user(_username: &str) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(
+        &mut self,
+        change_password(_info: &PasswordInfo) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        create_user(_info: &UserInfo) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        alter_user(_info: &UserAlterInfo) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        drop_user(_username: &str) -> Result<bool, StorageError>,
+        Ok(true)
+    );
     mock_stub!(&self, user_exists(_username: &str) -> bool, false);
     mock_stub!(&self, list_users() -> Vec<String>, Vec::new());
     mock_stub!(&self, get_user(_username: &str) -> Option<UserInfo>, None);
-    mock_stub!(&self, update_last_login(_username: &str) -> Result<bool, StorageError>, Ok(false));
-    mock_stub!(&self, list_user_roles(_username: &str) -> Vec<(i64, RoleType)>, Vec::new());
+    mock_stub!(
+        &self,
+        update_last_login(_username: &str) -> Result<bool, StorageError>,
+        Ok(false)
+    );
+    mock_stub!(
+        &self,
+        list_user_roles(_username: &str) -> Vec<(i64, RoleType)>,
+        Vec::new()
+    );
     mock_stub!(&self, list_all_user_roles() -> Vec<(String, Vec<(i64, RoleType)>)>, Vec::new());
-    mock_stub!(&mut self, grant_role(_username: &str, _space_id: i64, _role: RoleType) -> Result<bool, StorageError>, Ok(true));
-    mock_stub!(&mut self, revoke_role(_username: &str, _space_id: i64) -> Result<bool, StorageError>, Ok(true));
+    mock_stub!(
+        &mut self,
+        grant_role(_username: &str, _space_id: i64, _role: RoleType) -> Result<bool, StorageError>,
+        Ok(true)
+    );
+    mock_stub!(
+        &mut self,
+        revoke_role(_username: &str, _space_id: i64) -> Result<bool, StorageError>,
+        Ok(true)
+    );
 }
 
 impl StorageAdmin for MockStorage {
@@ -455,9 +866,24 @@ impl StorageAdmin for MockStorage {
         }
     }
 
-    mock_stub!(&self, find_dangling_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
-    mock_stub!(&mut self, repair_dangling_edges(_space: &str) -> Result<usize, StorageError>, Ok(0));
-    mock_stub!(&self, purge_expired(_space: &str, _target: Option<crate::PurgeTarget<'_>>) -> Result<Vec<crate::TtlPurgeEntry>, StorageError>, Ok(Vec::new()));
+    mock_stub!(
+        &self,
+        find_dangling_edges(_space: &str) -> Result<Vec<Edge>, StorageError>,
+        Ok(Vec::new())
+    );
+    mock_stub!(
+        &mut self,
+        repair_dangling_edges(_space: &str) -> Result<usize, StorageError>,
+        Ok(0)
+    );
+    mock_stub!(
+        &self,
+        purge_expired(
+            _space: &str,
+            _target: Option<crate::PurgeTarget<'_>>,
+        ) -> Result<Vec<crate::TtlPurgeEntry>, StorageError>,
+        Ok(Vec::new())
+    );
     mock_stub!(&self, get_db_path() -> &str, "");
 }
 

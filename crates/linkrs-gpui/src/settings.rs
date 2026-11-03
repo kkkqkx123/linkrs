@@ -29,6 +29,17 @@ impl LastConnection {
     }
 }
 
+/// Interface language persisted across runs. English is the default;
+/// Chinese strings live in `messages/*.json` so no non-English text
+/// appears in Rust sources.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Locale {
+    #[default]
+    En,
+    Zh,
+}
+
 /// Cap on how many distinct connections, history entries and favorites are persisted.
 const MAX_RECENT_CONNECTIONS: usize = 8;
 const MAX_QUERY_HISTORY: usize = 50;
@@ -129,6 +140,9 @@ pub struct Settings {
     /// Row threshold for automatic stream routing.
     #[serde(default = "default_auto_stream_threshold")]
     pub auto_stream_threshold: u64,
+    /// Interface language, persisted across restarts.
+    #[serde(default)]
+    pub locale: Locale,
 }
 
 impl Settings {

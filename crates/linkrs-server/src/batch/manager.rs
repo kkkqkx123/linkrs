@@ -112,9 +112,7 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
         let mut loaded = 0;
         for entry in entries {
             let path = entry
-                .map_err(|e| {
-                    CoreError::Internal(format!("Cannot read batch snapshot entry: {e}"))
-                })?
+                .map_err(|e| CoreError::Internal(format!("Cannot read batch snapshot entry: {e}")))?
                 .path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
@@ -420,7 +418,7 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
                             "edge has invalid endpoint ids".into(),
                         ),
                     )),
-                }
+                },
                 BatchItem::UpdateVertex(data) => match self.convert_vertex_data(data) {
                     Some(vertex) => mutations.push((index, Mutation::UpdateVertex(vertex))),
                     None => mutations.push((
@@ -506,12 +504,7 @@ impl<S: StorageClient + Clone + 'static> BatchManager<S> {
             let base = chunk.first().map(|(index, _)| *index).unwrap_or(0);
             let config = BulkInsertConfig::new().with_continue_on_error(true);
             let mut operation = BulkInsertOperation::new(config);
-            operation.add_items(
-                chunk
-                    .iter()
-                    .map(|(_, item)| item.clone())
-                    .collect(),
-            );
+            operation.add_items(chunk.iter().map(|(_, item)| item.clone()).collect());
             let mut storage = self.storage.write();
             let core_result = operation.execute_sync(&mut *storage, space_name)?;
             drop(storage);

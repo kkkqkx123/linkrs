@@ -409,13 +409,15 @@ pub async fn inconsistent_fulltext<
         .get_graph_service()
         .get_stats_manager()
         .record_inconsistent_index_count(count);
-    Ok(JsonResponse(linkrs_wire::meta::InconsistentFulltextResponse {
-        inconsistent: inconsistent
-            .into_iter()
-            .map(|v| serde_json::to_value(v).unwrap_or(serde_json::Value::Null))
-            .collect(),
-        count,
-    }))
+    Ok(JsonResponse(
+        linkrs_wire::meta::InconsistentFulltextResponse {
+            inconsistent: inconsistent
+                .into_iter()
+                .map(|v| serde_json::to_value(v).unwrap_or(serde_json::Value::Null))
+                .collect(),
+            count,
+        },
+    ))
 }
 
 #[utoipa::path(

@@ -72,11 +72,15 @@ Vector、Fulltext。向量、全文、函数、配置在前端只是内嵌页签
 | C API（FFI） | — 非该层职责 |
 | 输出/脚本/分页 | ⚠️ 历史与收藏本地持久化、CSV/JSON 文件导出、游标分页；无 CLI 式脚本与输出重定向 |
 
-与前端的合理差异：Schema 级 ER 图缺失（实例图已覆盖日常浏览）、编辑器无高亮格式化与
-语句级执行、中英文双语缺失（暂英文）、无离线 mock 模式、会话标识只驻内存（比前端
-持久化更保守）、管理页用内联表单加二次确认代替弹窗。四项缺口（索引管理、能力门控、自动路由偏好、
+与前端的差异详见 `docs/plan/frontend-gpui-gap-analysis.md`，复核结论如下：无离线 mock 模式、
+会话标识只驻内存、管理页用内联表单加二次确认代替弹窗为有意为之，不再立项——会话标识
+只驻内存是安全取向（与口令不落盘一致，且服务端会话闲置超时约 1 小时，持久化收益低，
+重启后一次登录即可恢复）。四项缺口（索引管理、能力门控、自动路由偏好、
 结果一键送图谱）已按 `docs/plan/gpui-gap-remediation-plan.md` 补齐；监控暂停开关复核为
-已交付，无需立项，详见 `docs/plan/frontend-gpui-gap-analysis.md`。
+已交付。另有三项已交付：控制台语句级执行（选区＞光标语句＞全文，校验/解释/游标作用于目标语句）
+与本地格式化（见 `docs/plan/gpui-console-statement-execution-design.md`，完整高亮远期再议）、
+Schema 级 ER 只读视图（见 `docs/plan/gpui-schema-er-design.md`）、中英文双语基础设施与
+登录/主框架/控制台工具栏迁移（见 `docs/plan/gpui-i18n-design.md`，其余面板分批跟进）。
 
 ## 说明
 

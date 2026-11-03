@@ -22,11 +22,11 @@ use crate::web::{
     },
     WebState,
 };
-use linkrs_wire::schema::{
-    CreateEdgeTypeRequest, EdgeCreateResponse, EdgeDeleteResponse, EdgeListResponse,
-    EdgeTypeInfo, EdgeUpdateResponse, FieldInfo,
-};
 use linkrs_api::api_core::PropertyDef as CorePropertyDef;
+use linkrs_wire::schema::{
+    CreateEdgeTypeRequest, EdgeCreateResponse, EdgeDeleteResponse, EdgeListResponse, EdgeTypeInfo,
+    EdgeUpdateResponse, FieldInfo,
+};
 // ==================== Edge Type Handlers ====================
 
 /// List all edge types in a space

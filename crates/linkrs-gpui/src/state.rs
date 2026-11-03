@@ -1,6 +1,7 @@
 use gpui_kit::{App, AppContext as _, Entity, Global, SharedString};
 
 use crate::services::graph_service::Neighborhood;
+use crate::settings::Locale;
 
 /// Connection lifecycle as displayed in the status bar and by view switching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,17 +13,6 @@ pub enum ConnectionStatus {
     Unhealthy,
 }
 
-impl ConnectionStatus {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Disconnected => "Not connected",
-            Self::Connecting => "Connecting…",
-            Self::Connected => "Connected",
-            Self::Unhealthy => "Unhealthy",
-        }
-    }
-}
-
 /// Global UI state shared across views. The `SessionManager` itself lives in
 /// [`crate::connection::SessionStore`]; this entity only mirrors what the UI
 /// renders so views can observe it without touching the client stack.
@@ -32,6 +22,7 @@ pub struct AppState {
     pub space: Option<SharedString>,
     pub session_id: Option<i64>,
     pub roles: Vec<String>,
+    pub locale: Locale,
     /// Latest console result import for the graph panel, with the
     /// generation that published it.
     pub graph_drop: Option<(u64, Neighborhood)>,
@@ -56,16 +47,24 @@ pub enum Capability {
 
 impl AppState {
     pub fn init(cx: &mut App) {
+        let locale = crate::settings::global(cx).locale;
         let entity = cx.new(|_| Self {
             status: ConnectionStatus::Disconnected,
             user: None,
             space: None,
             session_id: None,
             roles: Vec::new(),
+            locale,
             graph_drop: None,
             graph_generation: 0,
         });
         cx.set_global(AppStateGlobal(entity));
+    }
+
+    /// Switch the interface language. `Entity::update` notifies observers,
+    /// so observing views re-render with the new catalogue.
+    pub fn set_locale(&mut self, locale: Locale) {
+        self.locale = locale;
     }
 
     pub fn global(cx: &App) -> Entity<Self> {
@@ -184,6 +183,7 @@ mod tests {
             space: None,
             session_id: Some(1),
             roles: roles.iter().map(|role| role.to_string()).collect(),
+            locale: Locale::En,
             graph_drop: None,
             graph_generation: 0,
         }

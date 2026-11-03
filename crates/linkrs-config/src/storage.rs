@@ -511,7 +511,9 @@ impl StorageConfig {
         {
             return Err("index eviction ratios must satisfy 0 < low < high <= 1".to_string());
         }
-        if self.cache_ttl_secs > 0 && self.cache_tti_secs > 0 && self.cache_tti_secs > self.cache_ttl_secs
+        if self.cache_ttl_secs > 0
+            && self.cache_tti_secs > 0
+            && self.cache_tti_secs > self.cache_ttl_secs
         {
             return Err(
                 "cache_tti_secs must not exceed cache_ttl_secs; otherwise the idle term can never bind"
@@ -521,7 +523,8 @@ impl StorageConfig {
         if self.cache_memory_bytes == 0 {
             return Err("cache_memory_bytes must be greater than 0".to_string());
         }
-        let memory_soft_limit = (self.max_memory_bytes as f64 * self.memory_soft_ratio).round() as u64;
+        let memory_soft_limit =
+            (self.max_memory_bytes as f64 * self.memory_soft_ratio).round() as u64;
         if self.cache_memory_bytes > memory_soft_limit {
             return Err(
                 "cache_memory_bytes must not exceed the memory soft limit (max_memory_bytes * memory_soft_ratio)"

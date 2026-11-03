@@ -528,28 +528,50 @@ pub async fn metrics<
     let manager = state.server.get_txn_manager();
     let stats = manager.stats();
     let resources = manager.resource_metrics();
-    Ok(JsonResponse(linkrs_wire::meta::TransactionMetricsResponse {
-        outcomes: linkrs_wire::meta::TransactionOutcomes {
-            begun: stats.total_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            active: stats.active_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            committed: stats.committed_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            aborted: stats.aborted_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            timeout: stats.timeout_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            conflict: stats.conflict_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            disconnect: stats.disconnect_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            recovery_abort: stats.recovery_abort_transactions.load(std::sync::atomic::Ordering::Relaxed),
-            cleanup_failure: stats.cleanup_failure_transactions.load(std::sync::atomic::Ordering::Relaxed),
+    Ok(JsonResponse(
+        linkrs_wire::meta::TransactionMetricsResponse {
+            outcomes: linkrs_wire::meta::TransactionOutcomes {
+                begun: stats
+                    .total_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                active: stats
+                    .active_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                committed: stats
+                    .committed_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                aborted: stats
+                    .aborted_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                timeout: stats
+                    .timeout_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                conflict: stats
+                    .conflict_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                disconnect: stats
+                    .disconnect_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                recovery_abort: stats
+                    .recovery_abort_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                cleanup_failure: stats
+                    .cleanup_failure_transactions
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            },
+            resources: linkrs_wire::meta::TransactionResources {
+                active_statements: stats
+                    .active_statements
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                active_snapshots: resources.active_snapshots,
+                pending_writes: resources.pending_writes.max(0) as u64,
+                committed_frontier_lag: resources.committed_frontier_lag,
+                staged_wal_bytes: resources.staged_wal_bytes,
+                undo_bytes: resources.undo_bytes,
+                checkpoint_drain_time_ms: resources.checkpoint_drain_time.as_millis() as u64,
+            },
         },
-        resources: linkrs_wire::meta::TransactionResources {
-            active_statements: stats.active_statements.load(std::sync::atomic::Ordering::Relaxed),
-            active_snapshots: resources.active_snapshots,
-            pending_writes: resources.pending_writes.max(0) as u64,
-            committed_frontier_lag: resources.committed_frontier_lag,
-            staged_wal_bytes: resources.staged_wal_bytes,
-            undo_bytes: resources.undo_bytes,
-            checkpoint_drain_time_ms: resources.checkpoint_drain_time.as_millis() as u64,
-        },
-    }))
+    ))
 }
 
 #[utoipa::path(
@@ -644,10 +666,12 @@ pub async fn retry_transaction_outbox<
     let delivered = manager
         .retry_outbox_projection()
         .map_err(|error| HttpError::transaction_message(error.to_string()))?;
-    Ok(JsonResponse(linkrs_wire::meta::TransactionOutboxRetryResponse {
-        transaction_id: txn_id,
-        delivered: delivered as u64,
-        scope: "global".to_string(),
-        status: "completed".to_string(),
-    }))
+    Ok(JsonResponse(
+        linkrs_wire::meta::TransactionOutboxRetryResponse {
+            transaction_id: txn_id,
+            delivered: delivered as u64,
+            scope: "global".to_string(),
+            status: "completed".to_string(),
+        },
+    ))
 }
