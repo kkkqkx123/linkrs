@@ -61,10 +61,11 @@ impl AppState {
         cx.set_global(AppStateGlobal(entity));
     }
 
-    /// Switch the interface language. `Entity::update` notifies observers,
-    /// so observing views re-render with the new catalogue.
-    pub fn set_locale(&mut self, locale: Locale) {
+    /// Switch the interface language and notify observers so views re-render
+    /// with the new catalogue.
+    pub fn set_locale(&mut self, locale: Locale, cx: &mut gpui_kit::Context<Self>) {
         self.locale = locale;
+        cx.notify();
     }
 
     pub fn global(cx: &App) -> Entity<Self> {

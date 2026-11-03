@@ -39,8 +39,8 @@ pub fn t(key: &str, locale: Locale) -> &str {
 /// observing views re-render; the toggle host notifies its own view too.
 pub fn set_locale(locale: Locale, cx: &mut gpui_kit::App) {
     crate::settings::update(cx, |settings| settings.locale = locale);
-    AppState::global(cx).update(cx, |state, _| {
-        state.set_locale(locale);
+    AppState::global(cx).update(cx, |state, cx| {
+        state.set_locale(locale, cx);
     });
 }
 

@@ -71,5 +71,12 @@
   "console.streamHint": "经 SSE 流式通道执行",
   "console.autoHint": "多语句脚本走流式，单语句按预估行数路由",
   "console.validate": "校验",
-  "console.validateHint": "校验目标语句而不执行"
+  "console.validateHint": "校验目标语句而不执行",
+  "console.runComplete": "运行完成",
+  "console.exportEmpty": "结果集为空。",
+  "console.exportedTo": "已导出到 {}",
+  "console.exportFailed": "导出失败：{}",
+  "console.export": "导出",
+  "console.sendGraphNoRows": "请先运行返回行的语句，再发送到图谱。",
+  "console.sendGraphNoGraphData": "结果集中没有顶点或边数据。"
 }

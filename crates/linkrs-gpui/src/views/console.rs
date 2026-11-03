@@ -540,6 +540,7 @@ impl ConsolePanel {
 
     /// Called once after the run loop ends (completed or aborted on error).
     fn finish_run(&mut self, failed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let locale = AppState::global(cx).read(cx).locale;
         if failed {
             cx.notify();
             return;
@@ -562,7 +563,7 @@ impl ConsolePanel {
                 self.tabs.len(),
                 rows
             ))
-            .title("Run complete"),
+            .title(t("console.runComplete", locale)),
             cx,
         );
         cx.notify();
@@ -1052,6 +1053,7 @@ impl ConsolePanel {
     // -- Export --------------------------------------------------------------
 
     fn export(&mut self, format: ExportFormat, window: &mut Window, cx: &mut Context<Self>) {
+        let locale = AppState::global(cx).read(cx).locale;
         let Some(active) = self.active_tab else {
             return;
         };
@@ -1070,7 +1072,7 @@ impl ConsolePanel {
             (data.columns().to_vec(), data.rows().to_vec())
         };
         if rows.is_empty() {
-            window.push_notification(Notification::info("The result set is empty."), cx);
+            window.push_notification(Notification::info(t("console.exportEmpty", locale)), cx);
             return;
         }
 
@@ -1091,15 +1093,19 @@ impl ConsolePanel {
                 ExportFormat::Json => to_json(&columns, &rows),
             };
             let written = std::fs::write(&path, content);
-            let _ = this.update_in(cx, |_, window, cx| match written {
-                Ok(()) => window.push_notification(
-                    Notification::success(format!("Exported to {}", path.display())),
-                    cx,
-                ),
-                Err(err) => window.push_notification(
-                    Notification::error(format!("Export failed: {err}")).title("Export"),
-                    cx,
-                ),
+            let _ = this.update_in(cx, |_, window, cx| {
+                let locale = AppState::global(cx).read(cx).locale;
+                match written {
+                    Ok(()) => window.push_notification(
+                        Notification::success(format!(t("console.exportedTo", locale), path.display())),
+                        cx,
+                    ),
+                    Err(err) => window.push_notification(
+                        Notification::error(format!(t("console.exportFailed", locale), err))
+                            .title(t("console.export", locale)),
+                        cx,
+                    ),
+                }
             });
         })
         .detach();
@@ -1110,13 +1116,14 @@ impl ConsolePanel {
     /// Push the active result tab into the graph panel through the global
     /// drop box; the shell switches to the graph panel on arrival.
     fn send_to_graph(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let locale = AppState::global(cx).read(cx).locale;
         let tab = self.active_tab.and_then(|active| self.tabs.get(active));
         let Some(tab) = tab else {
             return;
         };
         if tab.status != TabStatus::Ok || tab.raw_rows.is_empty() {
             window.push_notification(
-                Notification::info("Run a statement with rows before sending to the graph."),
+                Notification::info(t("console.sendGraphNoRows", locale)),
                 cx,
             );
             return;
@@ -1136,7 +1143,7 @@ impl ConsolePanel {
             }
             None => {
                 window.push_notification(
-                    Notification::info("No vertex or edge data in this result set."),
+                    Notification::info(t("console.sendGraphNoGraphData", locale)),
                     cx,
                 );
             }

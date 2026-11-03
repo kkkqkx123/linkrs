@@ -71,5 +71,12 @@
   "console.streamHint": "Run through the SSE streaming endpoint",
   "console.autoHint": "Route multi-statement scripts to streaming and single statements by row estimate",
   "console.validate": "Validate",
-  "console.validateHint": "Validate the targeted statement without executing"
+  "console.validateHint": "Validate the targeted statement without executing",
+  "console.runComplete": "Run complete",
+  "console.exportEmpty": "The result set is empty.",
+  "console.exportedTo": "Exported to {}",
+  "console.exportFailed": "Export failed: {}",
+  "console.export": "Export",
+  "console.sendGraphNoRows": "Run a statement with rows before sending to the graph.",
+  "console.sendGraphNoGraphData": "No vertex or edge data in this result set."
 }
