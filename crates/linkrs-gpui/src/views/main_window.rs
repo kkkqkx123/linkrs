@@ -1,30 +1,35 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::dock::{register_panel, Panel as BasePanel, PanelId};
-use gpui_kit::base::Selectable as _;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     command::{Command, CommandGroup, CommandItem, CommandState},
     dock::{panel_handle, DockArea, DockAreaState, DockEvent, DockLayout, DockPlacement, DockSkin},
     h_flex,
-    sidebar::{Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
+    menu::DropdownMenu as _,
+    sidebar::{
+        Sidebar, SidebarCollapsible, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu,
+        SidebarMenuItem, SidebarToggleButton,
+    },
     status_bar::StatusBar,
     v_flex, ActiveTheme as _, Icon, IndexPath, Sizable as _, Theme,
 };
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, AnyWindowHandle, App, AppContext as _, ClickEvent,
     Context, Entity, Focusable as _, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Task, WeakEntity, Window,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Task, WeakEntity, Window,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::app::{to_theme_mode, Quit, ThemeDark, ThemeLight, ThemeSystem, TogglePalette};
 use crate::i18n::{self, t};
+use crate::metrics::{SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_W};
 use crate::services::connection_service;
-use crate::settings::{self, ThemeModeSetting, WindowGeometry};
+use crate::settings::{self, Density, ThemeModeSetting, WindowGeometry};
 use crate::state::{self, AppState, Capability, ConnectionStatus};
+use crate::theme;
 use crate::views::{
     BatchPanel, ConfigPanel, ConsolePanel, DataBrowserPanel, FulltextPanel, FunctionsPanel,
     GraphPanel, MigrationPanel, MonitoringPanel, SchemaPanel, SessionsPanel, SyncPanel,
@@ -86,6 +91,12 @@ pub struct MainWindow {
     /// Sidebar highlight: the panel last opened from the sidebar.
     active_panel: &'static str,
     theme_mode: ThemeModeSetting,
+    density: Density,
+    sidebar_width: f32,
+    sidebar_collapsed: bool,
+    /// Last measured health round trip, shown in the workspace header.
+    latency_ms: Option<u64>,
+    probing: bool,
     last_saved_layout: Option<DockAreaState>,
     window_handle: AnyWindowHandle,
     _save_layout_task: Option<Task<()>>,
@@ -96,7 +107,14 @@ pub struct MainWindow {
 impl MainWindow {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let window_handle = window.window_handle();
-        let theme_mode = settings::global(cx).theme_mode.unwrap_or_default();
+        let saved = settings::global(cx);
+        let theme_mode = saved.theme_mode.unwrap_or_default();
+        let density = saved.density;
+        let sidebar_width = saved
+            .sidebar_width
+            .unwrap_or(SIDEBAR_W)
+            .clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+        let sidebar_collapsed = saved.sidebar_collapsed;
 
         let (dock_area, _) = DockSkin::dock_area(MAIN_DOCK_ID, Some(MAIN_DOCK_VERSION), window, cx);
 
@@ -236,7 +254,7 @@ impl MainWindow {
         })
         .detach();
 
-        Self {
+        let mut window_state = Self {
             dock_area,
             console,
             schema,
@@ -256,12 +274,19 @@ impl MainWindow {
             fulltext,
             active_panel: ConsolePanel::PANEL_NAME,
             theme_mode,
+            density,
+            sidebar_width,
+            sidebar_collapsed,
+            latency_ms: None,
+            probing: false,
             last_saved_layout: None,
             window_handle,
             _save_layout_task: None,
             palette_open: false,
             palette_state,
-        }
+        };
+        window_state.probe_health(window, cx);
+        window_state
     }
 
     fn schedule_layout_save(
@@ -608,7 +633,45 @@ impl MainWindow {
         self.theme_mode = mode;
         settings::update(cx, |settings| settings.theme_mode = Some(mode));
         Theme::change(to_theme_mode(mode, cx), Some(window), cx);
+        theme::apply(cx);
         cx.notify();
+    }
+
+    fn set_density(&mut self, density: Density, cx: &mut Context<Self>) {
+        self.density = density;
+        settings::update(cx, |settings| settings.density = density);
+        cx.notify();
+    }
+
+    fn toggle_density(&mut self, cx: &mut Context<Self>) {
+        self.set_density(self.density.toggled(), cx);
+    }
+
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        let collapsed = self.sidebar_collapsed;
+        settings::update(cx, |settings| settings.sidebar_collapsed = collapsed);
+        cx.notify();
+    }
+
+    /// Measure one health round trip for the header indicator.
+    fn probe_health(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.probing {
+            return;
+        }
+        self.probing = true;
+        let started = Instant::now();
+        let task = connection_service::health(cx);
+        cx.spawn_in(window, async move |this, window| {
+            let healthy = task.await;
+            let elapsed = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u64;
+            _ = this.update_in(window, |this, _, cx| {
+                this.probing = false;
+                this.latency_ms = healthy.then_some(elapsed);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
@@ -627,29 +690,34 @@ impl MainWindow {
         self.apply_theme(ThemeModeSetting::System, window, cx);
     }
 
-    fn nav_item(&self, entry: NavEntry, active: bool, _cx: &mut Context<Self>) -> SidebarMenuItem {
-        SidebarMenuItem::new(entry.label)
+    fn nav_item(&self, entry: NavEntry, active: bool, cx: &mut Context<Self>) -> SidebarMenuItem {
+        let accent = cx.theme().primary;
+        let clear = accent.opacity(0.0);
+        let locale = state::AppState::global(cx).read(cx).locale;
+        let label = t(nav_key(entry.label), locale);
+        SidebarMenuItem::new(label)
             .icon(entry.icon)
             .active(active)
-            .accessibility_label(entry.label.to_string())
+            .border_l_2()
+            .border_color(if active { accent } else { clear })
+            .accessibility_label(label.to_string())
     }
 
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (user, can_manage, can_batch, role, locale) = {
+        let (can_manage, can_batch, locale) = {
             let state = state::AppState::global(cx).read(cx);
             (
-                state.user.clone(),
                 state.can_manage(),
                 state.can(Capability::ManageBatch),
-                state.ui_role(),
                 state.locale,
             )
         };
-        let role_badge: Option<SharedString> = user.as_ref().map(|_| SharedString::from(role));
         let active = self.active_panel;
 
         Sidebar::new("main-sidebar")
-            .w(px(232.))
+            .w(px(self.sidebar_width))
+            .collapsible(SidebarCollapsible::Icon)
+            .collapsed(self.sidebar_collapsed)
             .header(
                 SidebarHeader::new().child(
                     h_flex()
@@ -670,11 +738,17 @@ impl MainWindow {
                         .child(
                             v_flex()
                                 .overflow_hidden()
-                                .child(SharedString::from("Linkrs"))
                                 .child(
                                     div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
+                                        .text_size(px(16.))
+                                        .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                        .text_color(cx.theme().sidebar_accent_foreground)
+                                        .child(SharedString::from("Linkrs")),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(cx.theme().sidebar_foreground.opacity(0.7))
                                         .child(SharedString::from("Graph Database")),
                                 ),
                         ),
@@ -877,30 +951,203 @@ impl MainWindow {
             .footer(
                 SidebarFooter::new().child(
                     h_flex()
-                        .gap_2()
+                        .w_full()
                         .items_center()
-                        .child(IconName::CircleUser)
-                        .child(SharedString::from(
-                            user.as_deref().unwrap_or(t("status.notSignedIn", locale)),
-                        ))
-                        .when_some(role_badge, |row, role| {
-                            row.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(SharedString::from(format!("({role})"))),
-                            )
-                        })
-                        .child(div().flex_1())
+                        .justify_between()
+                        .gap_2()
                         .child(
-                            Button::new("logout")
-                                .icon(IconName::LogOut)
-                                .xsmall()
-                                .ghost()
-                                .accessibility_label(t("status.signOut", locale))
-                                .on_click(cx.listener(Self::on_logout)),
+                            div()
+                                .text_size(px(12.))
+                                .text_color(cx.theme().sidebar_foreground.opacity(0.6))
+                                .child(SharedString::from(format!(
+                                    "v{}",
+                                    env!("CARGO_PKG_VERSION")
+                                ))),
+                        )
+                        .child(
+                            SidebarToggleButton::new()
+                                .collapsed(self.sidebar_collapsed)
+                                .accessibility_label(t("nav.toggle", locale))
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
                         ),
                 ),
+            )
+    }
+
+    /// Workspace header: space context, health, density, language, theme and
+    /// the signed-in account. Mirrors the web studio's top bar.
+    fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
+        let (status, space, user, role, locale) = {
+            let state = state::AppState::global(cx).read(cx);
+            (
+                state.status,
+                state.space.clone(),
+                state.user.clone(),
+                state.ui_role(),
+                state.locale,
+            )
+        };
+        let (dot, status_text) = match status {
+            ConnectionStatus::Disconnected => {
+                (theme.muted_foreground, t("status.disconnected", locale))
+            }
+            ConnectionStatus::Connecting => (theme.warning, t("status.connecting", locale)),
+            ConnectionStatus::Connected => (theme.success, t("status.connected", locale)),
+            ConnectionStatus::Unhealthy => (theme.danger, t("status.unhealthy", locale)),
+        };
+        let latency = self
+            .latency_ms
+            .map(|ms| format!("{ms} ms"))
+            .unwrap_or_else(|| "—".to_string());
+        let density_label = match self.density {
+            Density::Comfortable => t("header.densityComfortable", locale),
+            Density::Dense => t("header.densityDense", locale),
+        };
+        let theme_label = match self.theme_mode {
+            ThemeModeSetting::System => t("status.themeSystem", locale),
+            ThemeModeSetting::Light => t("status.themeLight", locale),
+            ThemeModeSetting::Dark => t("status.themeDark", locale),
+        };
+
+        h_flex()
+            .h(px(crate::metrics::HEADER_H))
+            .w_full()
+            .flex_shrink_0()
+            .items_center()
+            .gap_2()
+            .px(px(20.))
+            .bg(theme.popover)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Button::new("header-space")
+                    .icon(IconName::LayoutDashboard)
+                    .label(
+                        space
+                            .clone()
+                            .unwrap_or_else(|| SharedString::from(t("header.noSpace", locale))),
+                    )
+                    .ghost()
+                    .small()
+                    .accessibility_label(t("status.spaceHint", locale))
+                    .on_click(cx.listener(Self::on_space_jump)),
+            )
+            .child(div().flex_1())
+            .child(
+                h_flex()
+                    .id("header-health")
+                    .on_click(cx.listener(|this, _, window, cx| this.probe_health(window, cx)))
+                    .items_center()
+                    .gap_2()
+                    .px(px(10.))
+                    .h(px(26.))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.secondary)
+                    .hover(|this| this.bg(theme.muted))
+                    .child(div().size(px(7.)).rounded_full().bg(dot))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.foreground)
+                            .child(SharedString::from(status_text)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(latency)),
+                    ),
+            )
+            .child(
+                Button::new("header-density")
+                    .icon(IconName::Rows3)
+                    .label(density_label)
+                    .ghost()
+                    .small()
+                    .accessibility_label(t("header.density", locale))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_density(cx))),
+            )
+            .child(
+                Button::new("header-language")
+                    .icon(IconName::Globe)
+                    .label(match locale {
+                        settings::Locale::En => "EN",
+                        settings::Locale::Zh => "中文",
+                    })
+                    .ghost()
+                    .small()
+                    .accessibility_label(t("header.language", locale))
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        let next = match AppState::global(cx).read(cx).locale {
+                            settings::Locale::En => settings::Locale::Zh,
+                            settings::Locale::Zh => settings::Locale::En,
+                        };
+                        i18n::set_locale(next, cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("header-theme")
+                    .icon(match self.theme_mode {
+                        ThemeModeSetting::System => IconName::Monitor,
+                        ThemeModeSetting::Light => IconName::Sun,
+                        ThemeModeSetting::Dark => IconName::Moon,
+                    })
+                    .label(theme_label)
+                    .ghost()
+                    .small()
+                    .dropdown_menu(move |menu, _, _| {
+                        menu.menu(t("status.themeLight", locale), Box::new(ThemeLight))
+                            .menu(t("status.themeDark", locale), Box::new(ThemeDark))
+                            .menu(t("status.themeSystem", locale), Box::new(ThemeSystem))
+                    }),
+            )
+            .child(div().w(px(1.)).h(px(20.)).bg(theme.border))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .size(px(26.))
+                            .rounded_full()
+                            .bg(theme.accent)
+                            .text_color(theme.accent_foreground)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(IconName::CircleUser).size(px(16.))),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                                    .text_color(theme.foreground)
+                                    .child(SharedString::from(
+                                        user.as_deref().unwrap_or(t("status.notSignedIn", locale)),
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme.muted_foreground)
+                                    .child(SharedString::from(role)),
+                            ),
+                    ),
+            )
+            .child(
+                Button::new("header-logout")
+                    .icon(IconName::LogOut)
+                    .ghost()
+                    .small()
+                    .accessibility_label(t("status.signOut", locale))
+                    .on_click(cx.listener(Self::on_logout)),
             )
     }
 
@@ -920,24 +1167,13 @@ impl MainWindow {
             let state = app_state.read(cx);
             (state.status, state.space.clone(), state.locale)
         };
-        let mode = self.theme_mode;
+        let theme = cx.theme().clone();
 
         let dot = match status {
-            ConnectionStatus::Disconnected => cx.theme().muted_foreground,
-            ConnectionStatus::Connecting => cx.theme().warning,
-            ConnectionStatus::Connected => cx.theme().success,
-            ConnectionStatus::Unhealthy => cx.theme().danger,
-        };
-
-        let theme_button = |id: &'static str, label: &'static str, target: ThemeModeSetting| {
-            Button::new(id)
-                .label(label)
-                .xsmall()
-                .ghost()
-                .selected(mode == target)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.apply_theme(target, window, cx);
-                }))
+            ConnectionStatus::Disconnected => theme.muted_foreground,
+            ConnectionStatus::Connecting => theme.warning,
+            ConnectionStatus::Connected => theme.success,
+            ConnectionStatus::Unhealthy => theme.danger,
         };
 
         StatusBar::new()
@@ -948,68 +1184,40 @@ impl MainWindow {
                     .child(div().size_2().rounded_full().bg(dot))
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
                             .child(SharedString::from(Self::status_text(status, locale))),
-                    ),
+                    )
+                    .children(space.map(|space| {
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(format!("· {space}")))
+                    })),
             )
-            .left(h_flex().gap_2().items_center().children(space.map(|space| {
-                Button::new("status-space")
-                    .label(format!("space: {space}"))
-                    .xsmall()
-                    .ghost()
-                    .accessibility_label(t("status.spaceHint", locale))
-                    .on_click(cx.listener(Self::on_space_jump))
-            })))
             .right(
                 h_flex()
-                    .gap_1()
+                    .gap_3()
                     .items_center()
-                    .child(theme_button(
-                        "theme-system",
-                        t("status.themeSystem", locale),
-                        ThemeModeSetting::System,
-                    ))
-                    .child(theme_button(
-                        "theme-light",
-                        t("status.themeLight", locale),
-                        ThemeModeSetting::Light,
-                    ))
-                    .child(theme_button(
-                        "theme-dark",
-                        t("status.themeDark", locale),
-                        ThemeModeSetting::Dark,
-                    ))
                     .child(
-                        Button::new("lang-en")
-                            .label(t("language.en", locale))
-                            .xsmall()
-                            .ghost()
-                            .selected(locale == settings::Locale::En)
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                i18n::set_locale(settings::Locale::En, cx);
-                                cx.notify();
-                            })),
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(
+                                self.latency_ms
+                                    .map(|ms| format!("{ms} ms"))
+                                    .unwrap_or_else(|| "—".to_string()),
+                            )),
                     )
                     .child(
-                        Button::new("lang-zh")
-                            .label(t("language.zh", locale))
-                            .xsmall()
-                            .ghost()
-                            .selected(locale == settings::Locale::Zh)
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                i18n::set_locale(settings::Locale::Zh, cx);
-                                cx.notify();
-                            })),
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(format!(
+                                "v{}",
+                                env!("CARGO_PKG_VERSION")
+                            ))),
                     ),
-            )
-            .right(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(SharedString::from(format!(
-                        "v{}",
-                        env!("CARGO_PKG_VERSION")
-                    ))),
             )
     }
 }
@@ -1030,12 +1238,42 @@ impl Render for MainWindow {
                     .flex_1()
                     .min_h_0()
                     .child(self.render_sidebar(cx))
-                    .child(div().flex_1().min_w_0().child(self.dock_area.clone())),
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .child(self.render_header(cx))
+                            .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
+                            .child(self.render_status_bar(cx)),
+                    ),
             )
             .when(self.palette_open, |root| {
                 root.child(self.render_palette(cx))
             })
-            .child(self.render_status_bar(cx))
+    }
+}
+
+/// Message key for a sidebar entry.
+fn nav_key(label: &'static str) -> &'static str {
+    match label {
+        "Console" => "nav.console",
+        "Schema" => "nav.schema",
+        "Data Browser" => "nav.dataBrowser",
+        "Graph" => "nav.graph",
+        "Monitoring" => "nav.monitoring",
+        "Users" => "nav.users",
+        "Batch" => "nav.batch",
+        "Transfer" => "nav.transfer",
+        "Migration" => "nav.migration",
+        "Vector" => "nav.vector",
+        "Fulltext" => "nav.fulltext",
+        "Sessions" => "nav.sessions",
+        "Transactions" => "nav.transactions",
+        "Sync" => "nav.sync",
+        "Functions" => "nav.functions",
+        "Config" => "nav.config",
+        other => other,
     }
 }
 

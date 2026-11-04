@@ -29,6 +29,28 @@ impl LastConnection {
     }
 }
 
+/// Row density for tables and cards, mirroring the web studio toggle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Density {
+    #[default]
+    Comfortable,
+    Dense,
+}
+
+impl Density {
+    pub fn is_dense(self) -> bool {
+        matches!(self, Self::Dense)
+    }
+
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Comfortable => Self::Dense,
+            Self::Dense => Self::Comfortable,
+        }
+    }
+}
+
 /// Interface language persisted across runs. English is the default;
 /// Chinese strings live in `messages/*.json` so no non-English text
 /// appears in Rust sources.
@@ -143,6 +165,15 @@ pub struct Settings {
     /// Interface language, persisted across restarts.
     #[serde(default)]
     pub locale: Locale,
+    /// Table/card density preference.
+    #[serde(default)]
+    pub density: Density,
+    /// Expanded sidebar width in logical pixels.
+    #[serde(default)]
+    pub sidebar_width: Option<f32>,
+    /// Whether the sidebar starts collapsed to its icon rail.
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
 }
 
 impl Settings {

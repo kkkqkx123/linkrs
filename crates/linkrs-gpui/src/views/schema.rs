@@ -20,7 +20,7 @@ use linkrs_client::ClientError;
 use linkrs_wire::schema::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
 
 use crate::components::{
-    empty_state, form_row, render_canvas_frame, render_properties, GraphModel,
+    empty_state, form_row, panel_header, render_canvas_frame, render_properties, GraphModel,
 };
 use crate::services::graph_service::GraphNode;
 use crate::services::{connection_service, schema_service};
@@ -767,76 +767,58 @@ impl SchemaPanel {
     }
 
     fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
         let status_line = self.status_line(cx);
 
-        h_flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .flex_1()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(SharedString::from(status_line)),
-            )
-            .child(
-                Button::new("schema-view-tree")
-                    .label("Tree")
-                    .xsmall()
-                    .ghost()
-                    .selected(!self.er_open)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.er_open = false;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("schema-view-er")
-                    .label("ER")
-                    .xsmall()
-                    .ghost()
-                    .selected(self.er_open)
-                    .accessibility_label("Read-only schema overview graph")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.er_open = true;
-                        this.refresh_er(cx);
-                    })),
-            )
-            .child(
-                Button::new("schema-refresh")
-                    .icon(IconName::RefreshCw)
-                    .xsmall()
-                    .ghost()
-                    .disabled(self.loading)
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-            )
+        panel_header(
+            SharedString::from(crate::i18n::t("nav.schema", crate::i18n::locale(cx))),
+            Some(SharedString::from(status_line)),
+            Some(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("schema-view-tree")
+                            .label("Tree")
+                            .small()
+                            .ghost()
+                            .selected(!self.er_open)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.er_open = false;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-view-er")
+                            .label("ER")
+                            .small()
+                            .ghost()
+                            .selected(self.er_open)
+                            .accessibility_label("Read-only schema overview graph")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.er_open = true;
+                                this.refresh_er(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("schema-refresh")
+                            .icon(IconName::RefreshCw)
+                            .small()
+                            .ghost()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                    )
+                    .into_any_element(),
+            ),
+            cx,
+        )
     }
 
-    fn render_error_strip(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+    fn render_error_strip(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
         let message = self.message.clone().unwrap_or_default();
-
-        h_flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .bg(theme.danger.opacity(0.08))
-            .child(Icon::new(IconName::TriangleAlert).text_color(theme.danger))
-            .child(
-                div()
-                    .flex_1()
-                    .text_xs()
-                    .text_color(theme.danger)
-                    .child(message),
-            )
+        div()
+            .px(px(20.))
+            .py(px(8.))
+            .child(gpui_kit::component::alert::Alert::error("schema-error", message).small())
     }
 
     fn selected_label(&self) -> Option<String> {
@@ -1667,7 +1649,7 @@ impl Render for SchemaPanel {
             })
             .child(self.render_pending(cx))
             .child({
-                let main = h_flex().flex_1().min_h_0();
+                let main = h_flex().flex_1().min_h_0().gap_3().px(px(16.)).py(px(12.));
                 let main = if er_open {
                     main.child(self.render_er(window, cx))
                 } else {

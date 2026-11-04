@@ -5,12 +5,14 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use gpui_kit::{
-    div, prelude::FluentBuilder as _, App, AppContext as _, Context, Entity, EventEmitter,
+    div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity, EventEmitter,
     Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{empty_state, form_row, render_json_block};
+use crate::components::{
+    card, card_body, card_head, confirm, empty_state, form_row, panel_header, render_json_block,
+};
 use crate::services::{connection_service, sync_service};
 
 /// Sync/outbox management panel: status snapshot, dead-letter table with
@@ -28,7 +30,6 @@ pub struct SyncPanel {
     message: Option<SharedString>,
     error: Option<SharedString>,
     loading: bool,
-    confirm_clear: Option<String>,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -54,7 +55,6 @@ impl SyncPanel {
             message: None,
             error: None,
             loading: false,
-            confirm_clear: None,
             focus_handle: cx.focus_handle(),
         };
         panel.refresh(window, cx);
@@ -84,7 +84,6 @@ impl SyncPanel {
             return;
         }
         self.loading = true;
-        self.confirm_clear = None;
         cx.notify();
         let (target, index_id, generation, limit) = self.filters(cx);
         let status = sync_service::status(cx);
@@ -188,7 +187,6 @@ impl SyncPanel {
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, |this, window, cx| {
-                this.confirm_clear = None;
                 match outcome {
                     Ok(_) => {
                         this.message = Some("Cleared degraded range.".into());
@@ -260,79 +258,62 @@ impl Render for SyncPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Sync / outbox")),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("sync-requeue")
-                            .label("Requeue filtered")
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.requeue(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("sync-retry")
-                            .label("Retry outbox")
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.retry(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("sync-retention-run")
-                            .label("Run retention")
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.retention_run(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("sync-refresh")
-                            .icon(IconName::RefreshCw)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.refresh(window, cx);
-                            })),
-                    ),
-            )
-            .when_some(self.error.clone(), |panel, message| {
-                panel.child(
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.sync", crate::i18n::locale(cx))),
+                None,
+                Some(
                     h_flex()
-                        .flex_shrink_0()
                         .items_center()
                         .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
                         .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
+                            Button::new("sync-requeue")
+                                .label("Requeue filtered")
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.requeue(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("sync-retry")
+                                .label("Retry outbox")
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.retry(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("sync-retention-run")
+                                .label("Run retention")
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.retention_run(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("sync-refresh")
+                                .icon(IconName::RefreshCw)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.refresh(window, cx);
+                                })),
+                        )
+                        .into_any_element(),
+                ),
+                cx,
+            ))
+            .when_some(self.error.clone(), |panel, message| {
+                panel.child(
+                    div().px(px(20.)).py(px(8.)).child(
+                        gpui_kit::component::alert::Alert::error("sync-error", message).small(),
+                    ),
                 )
             })
             .when_some(self.message.clone(), |panel, message| {
@@ -343,53 +324,6 @@ impl Render for SyncPanel {
                             .text_color(theme.muted_foreground)
                             .child(message),
                     ),
-                )
-            })
-            .when_some(self.confirm_clear.clone(), |panel, key| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.warning.opacity(0.1))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.warning)
-                                .child(SharedString::from(format!("Clear degraded range {key}?"))),
-                        )
-                        .child(
-                            Button::new("sync-clear-confirm")
-                                .label("Confirm")
-                                .xsmall()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let row = this
-                                        .degraded
-                                        .iter()
-                                        .find(|row| degraded_key(row) == key)
-                                        .cloned();
-                                    match row {
-                                        Some(row) => this.clear_degraded(&row, window, cx),
-                                        None => {
-                                            this.confirm_clear = None;
-                                            cx.notify();
-                                        }
-                                    }
-                                })),
-                        )
-                        .child(
-                            Button::new("sync-clear-cancel")
-                                .label("Cancel")
-                                .xsmall()
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.confirm_clear = None;
-                                    cx.notify();
-                                })),
-                        ),
                 )
             })
             .child(
@@ -415,30 +349,24 @@ impl Render for SyncPanel {
                             .id("sync-status")
                             .flex_1()
                             .min_w_0()
-                            .gap_2()
-                            .p_2()
+                            .gap_3()
+                            .p(px(16.))
                             .overflow_y_scroll()
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(SharedString::from("Status")),
+                                card(cx)
+                                    .child(card_head("Status", None, cx))
+                                    .child(card_body().child(render_json_block(&self.status, cx))),
                             )
-                            .child(render_json_block(&self.status, cx))
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(SharedString::from("Diagnostics")),
+                                card(cx).child(card_head("Diagnostics", None, cx)).child(
+                                    card_body().child(render_json_block(&self.diagnostics, cx)),
+                                ),
                             )
-                            .child(render_json_block(&self.diagnostics, cx))
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(SharedString::from("Retention")),
-                            )
-                            .child(render_json_block(&self.retention, cx)),
+                                card(cx).child(card_head("Retention", None, cx)).child(
+                                    card_body().child(render_json_block(&self.retention, cx)),
+                                ),
+                            ),
                     )
                     .child(
                         v_flex()
@@ -539,15 +467,29 @@ fn render_row(
                     serde_json::to_string(row).unwrap_or_else(|_| "?".to_string()),
                 )),
         )
-        .when_some(clear, |line, (key, _)| {
+        .when_some(clear, |line, (key, row)| {
             line.child(
                 Button::new((prefix, ix))
                     .label("Clear")
-                    .xsmall()
+                    .small()
                     .ghost()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.confirm_clear = Some(key.clone());
-                        cx.notify();
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let view = cx.entity();
+                        let key = key.clone();
+                        let row = row.clone();
+                        confirm(
+                            window,
+                            cx,
+                            "Clear degraded range",
+                            format!("Clear degraded range {key}? Mirroring resumes from scratch."),
+                            "Clear",
+                            true,
+                            move |window, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.clear_degraded(&row, window, cx);
+                                });
+                            },
+                        );
                     })),
             )
         })

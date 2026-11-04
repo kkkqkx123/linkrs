@@ -36,13 +36,7 @@ pub fn dead_letters(
         let guard = manager.lock().await;
         guard
             .client()
-            .outbox_dead_letters(
-                target.as_deref(),
-                index_id,
-                generation,
-                limit,
-                offset,
-            )
+            .outbox_dead_letters(target.as_deref(), index_id, generation, limit, offset)
             .await
     })
 }

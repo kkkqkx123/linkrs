@@ -19,7 +19,10 @@ pub fn search(
     let query = query.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().fulltext_search(space_id, &tag_name, &field_name, &query, limit).await
+        guard
+            .client()
+            .fulltext_search(space_id, &tag_name, &field_name, &query, limit)
+            .await
     })
 }
 
@@ -53,7 +56,10 @@ pub fn rebuild(
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().rebuild_fulltext_index(space_id, &tag_name, &field_name).await
+        guard
+            .client()
+            .rebuild_fulltext_index(space_id, &tag_name, &field_name)
+            .await
     })
 }
 
@@ -80,6 +86,9 @@ pub fn clear(
     let field_name = field_name.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().clear_fulltext_index(space_id, &tag_name, &field_name, force).await
+        guard
+            .client()
+            .clear_fulltext_index(space_id, &tag_name, &field_name, force)
+            .await
     })
 }

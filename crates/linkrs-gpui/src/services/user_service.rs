@@ -42,7 +42,10 @@ pub fn reset_password(cx: &App, name: &str, new_password: &str) -> Task<Result<(
     let new_password = new_password.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().reset_user_password(&name, &new_password).await
+        guard
+            .client()
+            .reset_user_password(&name, &new_password)
+            .await
     })
 }
 
@@ -102,10 +105,7 @@ pub fn change_own_password(
 }
 
 fn quote_literal(raw: &str) -> String {
-    format!(
-        "\"{}\"",
-        raw.replace('\\', "\\\\").replace('"', "\\\"")
-    )
+    format!("\"{}\"", raw.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Revoke a user's role in a space.

@@ -105,7 +105,10 @@ pub fn expand_neighborhood(
         // through a cycle; otherwise keep the placeholder.
         let mut ordered: Vec<GraphNode> = nodes.into_values().collect();
         ordered.sort_by(|a, b| a.vid.cmp(&b.vid));
-        Ok(Neighborhood { nodes: ordered, edges })
+        Ok(Neighborhood {
+            nodes: ordered,
+            edges,
+        })
     })
 }
 
@@ -217,7 +220,13 @@ pub fn neighborhood_from_rows(
     let mut truncated = false;
     for row in rows {
         for value in row.values() {
-            push_graph_value(value, &mut nodes, &mut edges, &mut seen_edges, &mut truncated);
+            push_graph_value(
+                value,
+                &mut nodes,
+                &mut edges,
+                &mut seen_edges,
+                &mut truncated,
+            );
         }
     }
     if nodes.is_empty() {
@@ -225,7 +234,13 @@ pub fn neighborhood_from_rows(
     }
     let mut ordered: Vec<GraphNode> = nodes.into_values().collect();
     ordered.sort_by(|a, b| a.vid.cmp(&b.vid));
-    Some((Neighborhood { nodes: ordered, edges }, truncated))
+    Some((
+        Neighborhood {
+            nodes: ordered,
+            edges,
+        },
+        truncated,
+    ))
 }
 
 fn push_graph_value(
@@ -252,7 +267,12 @@ fn push_graph_value(
     let Some(edge) = extract_row_edge(value) else {
         return;
     };
-    let key = (edge.src.clone(), edge.dst.clone(), edge.edge_type.clone(), edge.rank);
+    let key = (
+        edge.src.clone(),
+        edge.dst.clone(),
+        edge.edge_type.clone(),
+        edge.rank,
+    );
     if !seen_edges.insert(key) {
         return;
     }
@@ -281,11 +301,7 @@ fn push_graph_value(
     edges.push(edge);
 }
 
-fn insert_node(
-    nodes: &mut HashMap<String, GraphNode>,
-    node: GraphNode,
-    truncated: &mut bool,
-) {
+fn insert_node(nodes: &mut HashMap<String, GraphNode>, node: GraphNode, truncated: &mut bool) {
     if nodes.contains_key(&node.vid) {
         return;
     }
@@ -321,7 +337,12 @@ fn extract_row_edge(value: &serde_json::Value) -> Option<GraphEdge> {
         .filter_map(serde_json::Value::as_i64)
         .next()
         .unwrap_or(0);
-    Some(GraphEdge { src, dst, edge_type, rank })
+    Some(GraphEdge {
+        src,
+        dst,
+        edge_type,
+        rank,
+    })
 }
 
 #[cfg(test)]
@@ -351,7 +372,9 @@ mod tests {
         assert_eq!(node.tag, "City");
     }
 
-    fn row(pairs: &[(&str, serde_json::Value)]) -> std::collections::HashMap<String, serde_json::Value> {
+    fn row(
+        pairs: &[(&str, serde_json::Value)],
+    ) -> std::collections::HashMap<String, serde_json::Value> {
         pairs
             .iter()
             .map(|(key, value)| (key.to_string(), value.clone()))
@@ -362,7 +385,10 @@ mod tests {
     fn rows_build_nodes_and_edges() {
         let rows = vec![
             row(&[("person", serde_json::json!({"vid": "1", "tag": "Person"}))]),
-            row(&[("knows", serde_json::json!({"src": "1", "dst": "2", "edge_type": "Knows"}))]),
+            row(&[(
+                "knows",
+                serde_json::json!({"src": "1", "dst": "2", "edge_type": "Knows"}),
+            )]),
         ];
         let (neighborhood, truncated) = neighborhood_from_rows(&rows).expect("graph data");
         assert!(!truncated);

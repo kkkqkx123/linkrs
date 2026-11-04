@@ -32,10 +32,7 @@ pub fn kill(cx: &App, session_id: i64) -> Task<Result<(), ClientError>> {
 }
 
 /// Snapshot session variables for one session.
-pub fn list_variables(
-    cx: &App,
-    session_id: i64,
-) -> Task<Result<serde_json::Value, ClientError>> {
+pub fn list_variables(cx: &App, session_id: i64) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;

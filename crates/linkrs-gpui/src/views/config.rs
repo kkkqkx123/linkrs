@@ -5,12 +5,12 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _};
 use gpui_kit::{
-    div, prelude::FluentBuilder as _, App, AppContext as _, Context, Entity, EventEmitter,
+    div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity, EventEmitter,
     Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Window,
 };
 
-use crate::components::{empty_state, form_row, render_json_block};
+use crate::components::{confirm, empty_state, form_row, panel_header, render_json_block};
 use crate::services::{config_service, connection_service};
 
 /// Server configuration panel: full configuration tree, per-key lookup,
@@ -23,7 +23,6 @@ pub struct ConfigPanel {
     loading: bool,
     message: Option<SharedString>,
     error: Option<SharedString>,
-    confirm_reset: bool,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -42,7 +41,6 @@ impl ConfigPanel {
             loading: false,
             message: None,
             error: None,
-            confirm_reset: false,
             focus_handle: cx.focus_handle(),
         };
         panel.reload(window, cx);
@@ -63,7 +61,6 @@ impl ConfigPanel {
             return;
         }
         self.loading = true;
-        self.confirm_reset = false;
         cx.notify();
         let task = config_service::get(cx);
         cx.spawn_in(window, async move |this, window| {
@@ -158,7 +155,6 @@ impl ConfigPanel {
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, |this, _, cx| {
-                this.confirm_reset = false;
                 match outcome {
                     Ok(value) => {
                         this.config = value;
@@ -208,84 +204,75 @@ impl Render for ConfigPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Configuration")),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("config-reload")
-                            .icon(IconName::RefreshCw)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.reload(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("config-lookup")
-                            .label("Lookup")
-                            .icon(IconName::Search)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.lookup(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("config-apply")
-                            .label("Update")
-                            .icon(IconName::Check)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.apply(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("config-reset")
-                            .label("Reset")
-                            .icon(IconName::RotateCcw)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.confirm_reset = true;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .when_some(self.error.clone(), |panel, message| {
-                panel.child(
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.config", crate::i18n::locale(cx))),
+                None,
+                Some(
                     h_flex()
-                        .flex_shrink_0()
                         .items_center()
                         .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
                         .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                            Button::new("config-reload")
+                                .icon(IconName::RefreshCw)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.reload(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("config-lookup")
+                                .label("Lookup")
+                                .icon(IconName::Search)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.lookup(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("config-apply")
+                                .label("Update")
+                                .icon(IconName::Check)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.apply(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("config-reset")
+                                .label("Reset")
+                                .icon(IconName::RotateCcw)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|_, _, window, cx| {
+                                    let view = cx.entity();
+                                    confirm(
+                                        window,
+                                        cx,
+                                        "Reset configuration",
+                                        "Reset this key to its default value?",
+                                        "Reset",
+                                        true,
+                                        move |window, cx| {
+                                            view.update(cx, |this, cx| this.reset(window, cx));
+                                        },
+                                    );
+                                })),
+                        )
+                        .into_any_element(),
+                ),
+                cx,
+            ))
+            .when_some(self.error.clone(), |panel, message| {
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("config-error", message).small(),
+                ))
             })
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(
@@ -295,42 +282,6 @@ impl Render for ConfigPanel {
                             .text_color(theme.muted_foreground)
                             .child(message),
                     ),
-                )
-            })
-            .when(self.confirm_reset, |panel| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.warning.opacity(0.1))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.warning)
-                                .child(SharedString::from("Reset this key to its default?")),
-                        )
-                        .child(
-                            Button::new("config-reset-confirm")
-                                .label("Confirm")
-                                .xsmall()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.reset(window, cx);
-                                })),
-                        )
-                        .child(
-                            Button::new("config-reset-cancel")
-                                .label("Cancel")
-                                .xsmall()
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.confirm_reset = false;
-                                    cx.notify();
-                                })),
-                        ),
                 )
             })
             .child(

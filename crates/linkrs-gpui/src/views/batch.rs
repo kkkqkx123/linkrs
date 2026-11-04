@@ -5,7 +5,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _, WindowExt as _};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, WindowExt as _};
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, App, AppContext as _, ClickEvent, Context, Entity,
     EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render,
@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 use linkrs_wire::batch::{BatchItem, BatchStatus, BatchStatusResponse, BatchType};
 
-use crate::components::{form_row, render_json_block};
+use crate::components::{form_row, panel_header, render_json_block};
 use crate::services::{batch_service, connection_service};
 
 /// Batch job panel: create a bulk-load task, append JSON items, execute it
@@ -144,13 +144,11 @@ impl BatchPanel {
                                     field.set_value(text, window, cx);
                                 });
                                 this.error = None;
-                                this.message =
-                                    Some(format!("Loaded {}.", path.display()).into());
+                                this.message = Some(format!("Loaded {}.", path.display()).into());
                             }
                             Err(error) => {
-                                this.error = Some(
-                                    format!("Cannot read {}: {error}", path.display()).into(),
-                                );
+                                this.error =
+                                    Some(format!("Cannot read {}: {error}", path.display()).into());
                             }
                         }
                     }
@@ -366,30 +364,29 @@ impl BatchPanel {
             .child(form_row("Space id", self.space_id.clone(), cx))
             .child(form_row("Batch size", self.batch_size.clone(), cx))
             .child(
-                h_flex()
+                v_flex()
                     .gap_1()
-                    .items_center()
                     .child(
                         div()
-                            .w(px(112.))
-                            .flex_shrink_0()
-                            .text_sm()
+                            .text_size(px(12.))
                             .text_color(cx.theme().muted_foreground)
                             .child(SharedString::from("Type")),
                     )
-                    .children(
-                        [BatchType::Vertex, BatchType::Edge, BatchType::Mixed]
-                            .into_iter()
-                            .map(|candidate| {
-                                Button::new(format!("batch-type-{candidate}"))
-                                    .label(candidate.to_string())
-                                    .xsmall()
-                                    .selected(batch_type == candidate)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.batch_type = candidate;
-                                        cx.notify();
-                                    }))
-                            }),
+                    .child(
+                        h_flex().gap_1().items_center().children(
+                            [BatchType::Vertex, BatchType::Edge, BatchType::Mixed]
+                                .into_iter()
+                                .map(|candidate| {
+                                    Button::new(format!("batch-type-{candidate}"))
+                                        .label(candidate.to_string())
+                                        .xsmall()
+                                        .selected(batch_type == candidate)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.batch_type = candidate;
+                                            cx.notify();
+                                        }))
+                                }),
+                        ),
                     ),
             )
             .child(
@@ -517,41 +514,20 @@ impl Render for BatchPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Bulk batch jobs")),
-                    )
-                    .child(div().flex_1()),
-            )
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.batch", crate::i18n::locale(cx))),
+                Some(SharedString::from(if self.busy {
+                    "Working…"
+                } else {
+                    "Idle"
+                })),
+                None,
+                cx,
+            ))
             .when_some(self.error.clone(), |panel, message| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
-                        .child(Icon::new(IconName::TriangleAlert).text_color(theme.danger))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("batch-error", message).small(),
+                ))
             })
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(

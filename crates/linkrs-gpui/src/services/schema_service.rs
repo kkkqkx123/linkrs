@@ -48,7 +48,10 @@ pub fn create_space(
     let comment = comment.map(str::to_string);
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().create_space(&name, vid_type.as_deref(), comment.as_deref()).await
+        guard
+            .client()
+            .create_space(&name, vid_type.as_deref(), comment.as_deref())
+            .await
     })
 }
 
@@ -90,7 +93,10 @@ pub fn create_edge_type(
     let name = name.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().create_edge_type(&space, &name, properties).await
+        guard
+            .client()
+            .create_edge_type(&space, &name, properties)
+            .await
     })
 }
 
@@ -226,12 +232,7 @@ fn alter_entity(
     })
 }
 
-fn alter_statement(
-    kind: &str,
-    name: &str,
-    added: &[PropertyDef],
-    dropped: &[String],
-) -> String {
+fn alter_statement(kind: &str, name: &str, added: &[PropertyDef], dropped: &[String]) -> String {
     let mut parts = Vec::new();
     if !added.is_empty() {
         let fields = added
@@ -265,7 +266,10 @@ pub fn version_history(
     let label = label.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().get_schema_version_history(&space, &label, is_edge).await
+        guard
+            .client()
+            .get_schema_version_history(&space, &label, is_edge)
+            .await
     })
 }
 
@@ -283,7 +287,10 @@ pub fn changes(
     let label = label.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().get_schema_changes(&space, &label, from_version, to_version, is_edge).await
+        guard
+            .client()
+            .get_schema_changes(&space, &label, from_version, to_version, is_edge)
+            .await
     })
 }
 
@@ -301,6 +308,9 @@ pub fn breaking_changes(
     let label = label.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().detect_schema_breaking_changes(&space, &label, from_version, to_version, is_edge).await
+        guard
+            .client()
+            .detect_schema_breaking_changes(&space, &label, from_version, to_version, is_edge)
+            .await
     })
 }

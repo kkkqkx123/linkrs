@@ -24,7 +24,7 @@ use crate::components::{
     empty_state, form_row, new_table_state, on_copy_row, render_json_block, QueryTableData,
     QueryTableDelegate,
 };
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use crate::services::{
     completion_service::{LinkrsCompletionProvider, SchemaSnapshot, SharedSchemaSnapshot},
     connection_service, cursor_service, graph_service, query_service, schema_service,
@@ -1097,11 +1097,11 @@ impl ConsolePanel {
                 let locale = AppState::global(cx).read(cx).locale;
                 match written {
                     Ok(()) => window.push_notification(
-                        Notification::success(format!(t("console.exportedTo", locale), path.display())),
+                        Notification::success(tf("console.exportedTo", locale, path.display())),
                         cx,
                     ),
                     Err(err) => window.push_notification(
-                        Notification::error(format!(t("console.exportFailed", locale), err))
+                        Notification::error(tf("console.exportFailed", locale, err))
                             .title(t("console.export", locale)),
                         cx,
                     ),
@@ -1122,10 +1122,7 @@ impl ConsolePanel {
             return;
         };
         if tab.status != TabStatus::Ok || tab.raw_rows.is_empty() {
-            window.push_notification(
-                Notification::info(t("console.sendGraphNoRows", locale)),
-                cx,
-            );
+            window.push_notification(Notification::info(t("console.sendGraphNoRows", locale)), cx);
             return;
         }
         match graph_service::neighborhood_from_rows(&tab.raw_rows) {
@@ -1187,7 +1184,7 @@ impl ConsolePanel {
                         .label(t("console.run", locale))
                         .icon(IconName::Play)
                         .primary()
-                        .xsmall()
+                        .small()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run(window, cx);
                         })),
@@ -1209,7 +1206,7 @@ impl ConsolePanel {
                     Button::new("run-stmt")
                         .label(t("console.runStmt", locale))
                         .icon(IconName::StepForward)
-                        .xsmall()
+                        .small()
                         .accessibility_label(t("console.runStmtHint", locale))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_target(window, cx);
@@ -1986,10 +1983,11 @@ impl ConsolePanel {
                         active_status != TabStatus::Failed && !active_sql_empty,
                         |host| {
                             host.child(
-                                div()
-                                    .size_full()
-                                    .p_1()
-                                    .child(DataTable::new(&active_table).stripe(true)),
+                                div().size_full().p_1().child(
+                                    DataTable::new(&active_table)
+                                        .stripe(true)
+                                        .with_size(crate::components::table_size(cx)),
+                                ),
                             )
                         },
                     )

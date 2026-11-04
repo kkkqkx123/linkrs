@@ -2,11 +2,13 @@ mod app;
 mod components;
 mod connection;
 mod i18n;
+mod metrics;
 mod runtime;
 mod services;
 mod settings;
 mod state;
 mod syntax;
+mod theme;
 mod views;
 
 fn main() {

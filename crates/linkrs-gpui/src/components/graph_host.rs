@@ -1,4 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
 
 use compograph_graph::{GraphStore, GraphView, NodeIndex};
 use compograph_interact::{
@@ -10,12 +12,40 @@ use compograph_render::{
     graph_bounds, graph_view, paint_arrows_for_level, paint_edge_labels_for, paint_edges_for,
     paint_labels_for, paint_nodes, subscribe_repaint, Camera, DetailLevel, EdgePaintOptions,
     EdgeStyle, NodeFill, NodeShape, NodeStyle, PaintedArrow, PaintedEdge, PaintedEdgeLabel,
-    PaintedLabel, PaintedNode, SpatialIndex, SELECTED_NODE_FILL,
+    PaintedLabel, PaintedNode, SpatialIndex,
 };
 use compograph_types::{Point2, Vec2};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{App, AppContext as _, Context, Entity, IntoElement, Subscription};
 
 use crate::services::graph_service::{GraphEdge, GraphNode};
+
+/// Tag palette shared with the web studio's graph legend.
+const TAG_COLORS: [u32; 8] = [
+    0x1890ff, 0x52c41a, 0xfaad14, 0xf5222d, 0x722ed1, 0x13c2c2, 0xeb2f96, 0xfa8c16,
+];
+
+/// Stable tag colour: nodes sharing a label always share one palette slot.
+fn node_color(labels: &HashMap<NodeIndex, String>, index: usize) -> u32 {
+    let Some(label) = labels.get(&NodeIndex::new(index)) else {
+        return TAG_COLORS[0];
+    };
+    if label.is_empty() {
+        return TAG_COLORS[0];
+    }
+    let mut hasher = DefaultHasher::new();
+    label.hash(&mut hasher);
+    TAG_COLORS[(hasher.finish() as usize) % TAG_COLORS.len()]
+}
+
+/// Brand accent used for the selected node.
+fn selected_color(dark: bool) -> u32 {
+    if dark {
+        0x34b37a
+    } else {
+        0x299c68
+    }
+}
 
 /// Logical pixels kept clear around the fitted graph.
 const FIT_PADDING: f32 = 32.0;
@@ -237,7 +267,11 @@ impl GraphModel {
         }
         let mut rows = Vec::new();
         for ((source, target), edge_type) in &self.edge_labels {
-            let rank = self.edge_ranks.get(&(*source, *target)).copied().unwrap_or(0);
+            let rank = self
+                .edge_ranks
+                .get(&(*source, *target))
+                .copied()
+                .unwrap_or(0);
             let source_vid = back
                 .get(&NodeIndex::new(*source))
                 .map(|vid| vid.to_string())
@@ -250,6 +284,19 @@ impl GraphModel {
         }
         rows.sort();
         rows
+    }
+
+    /// Distinct labels with their palette colour, for the canvas legend.
+    pub fn tag_legend(&self) -> Vec<(String, u32)> {
+        let mut legend: Vec<(String, u32)> = Vec::new();
+        for (index, label) in &self.labels {
+            if legend.iter().any(|(known, _)| known == label) {
+                continue;
+            }
+            legend.push((label.clone(), node_color(&self.labels, index.index())));
+        }
+        legend.sort_by(|left, right| left.0.cmp(&right.0));
+        legend
     }
 
     /// Selected vertex with its display label and full record. Prefers the
@@ -391,10 +438,14 @@ impl GraphModel {
         pairs.sort_unstable_by_key(|(source, target)| (source.index(), target.index()));
 
         let selected: BTreeSet<usize> = self.selection.iter().map(|node| node.index()).collect();
+        let selected_fill = selected_color(cx.theme().mode.is_dark());
+        let labels = &self.labels;
         let nodes = paint_nodes(view, positions, &self.camera, self.viewport, |node| {
             let mut style = NodeStyle::default();
+            style.fill = NodeFill::solid(node_color(labels, node.index()));
             if selected.contains(&node.index()) {
-                style.fill = NodeFill::solid(SELECTED_NODE_FILL);
+                style.fill = NodeFill::solid(selected_fill);
+                style.stroke = selected_fill;
                 style.stroke_width = 2.5;
             }
             style

@@ -6,12 +6,12 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::{v_flex, ActiveTheme as _};
 use gpui_kit::{
-    div, prelude::FluentBuilder as _, App, AppContext as _, ClickEvent, Context, Entity,
+    div, prelude::FluentBuilder as _, px, App, AppContext as _, ClickEvent, Context, Entity,
     EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{form_row, render_json_block};
+use crate::components::{form_row, panel_header, render_json_block};
 use crate::services::{connection_service, transfer_service};
 
 /// Import/export panel: server-side multipart import with status polling and
@@ -271,9 +271,8 @@ impl TransferPanel {
                             "path": save_path,
                             "bytes": bytes,
                         });
-                        this.message = Some(
-                            format!("Exported {bytes} byte(s) to {save_path}.").into(),
-                        );
+                        this.message =
+                            Some(format!("Exported {bytes} byte(s) to {save_path}.").into());
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
@@ -347,21 +346,23 @@ impl TransferPanel {
                         }))
                 }),
             ))
-            .child(gpui_kit::component::h_flex().gap_1().children(
-                [("bytes", "Bytes (dialog)"), ("server", "Server task")]
-                    .into_iter()
-                    .map(|(mode, label)| {
-                        let active = (mode == "server") == server_side;
-                        Button::new(format!("transfer-mode-{mode}"))
-                            .label(label)
-                            .xsmall()
-                            .selected(active)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.server_side_export = mode == "server";
-                                cx.notify();
-                            }))
-                    }),
-            ))
+            .child(
+                gpui_kit::component::h_flex().gap_1().children(
+                    [("bytes", "Bytes (dialog)"), ("server", "Server task")]
+                        .into_iter()
+                        .map(|(mode, label)| {
+                            let active = (mode == "server") == server_side;
+                            Button::new(format!("transfer-mode-{mode}"))
+                                .label(label)
+                                .xsmall()
+                                .selected(active)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.server_side_export = mode == "server";
+                                    cx.notify();
+                                }))
+                        }),
+                ),
+            )
             .child(
                 Button::new("transfer-export")
                     .label(if server_side {
@@ -408,42 +409,20 @@ impl Render for TransferPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                gpui_kit::component::h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Import / Export")),
-                    )
-                    .child(div().flex_1())
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(
-                        SharedString::from(if self.busy { "Working…" } else { "Idle" }),
-                    )),
-            )
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.transfer", crate::i18n::locale(cx))),
+                Some(SharedString::from(if self.busy {
+                    "Working…"
+                } else {
+                    "Idle"
+                })),
+                None,
+                cx,
+            ))
             .when_some(self.error.clone(), |panel, message| {
-                panel.child(
-                    gpui_kit::component::h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("transfer-error", message).small(),
+                ))
             })
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(

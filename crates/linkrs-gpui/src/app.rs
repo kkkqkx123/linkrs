@@ -103,6 +103,7 @@ fn bind_keys(cx: &mut App) {
 fn apply_saved_theme(cx: &mut App) {
     let mode = settings::global(cx).theme_mode.unwrap_or_default();
     Theme::change(to_theme_mode(mode, cx), None, cx);
+    crate::theme::apply(cx);
 }
 
 /// Map the persisted preference onto a concrete theme mode.

@@ -38,10 +38,7 @@ pub fn create_plan(
 }
 
 /// Execute a migration plan document.
-pub fn execute(
-    cx: &App,
-    plan_json: &str,
-) -> Task<Result<MigrationExecuteResponse, ClientError>> {
+pub fn execute(cx: &App, plan_json: &str) -> Task<Result<MigrationExecuteResponse, ClientError>> {
     let manager = SessionStore::manager(cx);
     let plan_json = plan_json.to_string();
     runtime::spawn(cx, async move {
@@ -51,10 +48,7 @@ pub fn execute(
 }
 
 /// Roll back a migration plan document.
-pub fn rollback(
-    cx: &App,
-    plan_json: &str,
-) -> Task<Result<MigrationExecuteResponse, ClientError>> {
+pub fn rollback(cx: &App, plan_json: &str) -> Task<Result<MigrationExecuteResponse, ClientError>> {
     let manager = SessionStore::manager(cx);
     let plan_json = plan_json.to_string();
     runtime::spawn(cx, async move {
@@ -64,10 +58,7 @@ pub fn rollback(
 }
 
 /// Dry-run a migration plan document without applying it.
-pub fn dry_run(
-    cx: &App,
-    plan_json: &str,
-) -> Task<Result<MigrationExecuteResponse, ClientError>> {
+pub fn dry_run(cx: &App, plan_json: &str) -> Task<Result<MigrationExecuteResponse, ClientError>> {
     let manager = SessionStore::manager(cx);
     let plan_json = plan_json.to_string();
     runtime::spawn(cx, async move {
@@ -88,7 +79,10 @@ pub fn history(
     let label = label.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().migration_history(&space, &label, is_edge).await
+        guard
+            .client()
+            .migration_history(&space, &label, is_edge)
+            .await
     })
 }
 
@@ -104,7 +98,10 @@ pub fn status(
     let label = label.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().migration_status(&space, &label, is_edge).await
+        guard
+            .client()
+            .migration_status(&space, &label, is_edge)
+            .await
     })
 }
 

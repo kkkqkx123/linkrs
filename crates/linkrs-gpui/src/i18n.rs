@@ -35,6 +35,16 @@ pub fn t(key: &str, locale: Locale) -> &str {
     .unwrap_or(key)
 }
 
+/// Current interface locale, mirrored in the global state.
+pub fn locale(cx: &gpui_kit::App) -> Locale {
+    AppState::global(cx).read(cx).locale
+}
+
+/// Formatted lookup: replaces the first `{}` placeholder with `arg`.
+pub fn tf(key: &str, locale: Locale, arg: impl std::fmt::Display) -> String {
+    t(key, locale).replacen("{}", &arg.to_string(), 1)
+}
+
 /// Persist the language and mirror it into the observable global state so
 /// observing views re-render; the toggle host notifies its own view too.
 pub fn set_locale(locale: Locale, cx: &mut gpui_kit::App) {

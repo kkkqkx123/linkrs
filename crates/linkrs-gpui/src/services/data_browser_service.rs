@@ -93,7 +93,10 @@ pub fn edge_detail(
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
         let space = guard.require_space()?;
-        guard.client().get_edge(&space, &src, &dst, &edge_type, rank).await
+        guard
+            .client()
+            .get_edge(&space, &src, &dst, &edge_type, rank)
+            .await
     })
 }
 
@@ -120,7 +123,10 @@ pub fn update_edge(
     rank: i64,
     properties: &serde_json::Map<String, serde_json::Value>,
 ) -> Task<Result<(), ClientError>> {
-    run_statement(cx, &build_edge_update(edge_type, src, dst, rank, properties))
+    run_statement(
+        cx,
+        &build_edge_update(edge_type, src, dst, rank, properties),
+    )
 }
 
 /// Delete one edge.
@@ -194,14 +200,7 @@ pub fn edge_endpoints(item: &serde_json::Value) -> Option<(String, String, Strin
 fn is_identity_key(key: &str) -> bool {
     matches!(
         key,
-        "id" | "vid"
-            | "tag"
-            | "type"
-            | "edge_type"
-            | "src"
-            | "dst"
-            | "rank"
-            | "properties"
+        "id" | "vid" | "tag" | "type" | "edge_type" | "src" | "dst" | "rank" | "properties"
     )
 }
 
@@ -269,10 +268,7 @@ fn format_value(value: &serde_json::Value) -> String {
             if numeric {
                 text.clone()
             } else {
-                format!(
-                    "\"{}\"",
-                    text.replace('\\', "\\\\").replace('"', "\\\"")
-                )
+                format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
             }
         }
         other => format!(

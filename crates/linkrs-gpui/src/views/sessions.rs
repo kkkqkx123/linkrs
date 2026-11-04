@@ -12,7 +12,7 @@ use gpui_kit::{
     SharedString, StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{empty_state, form_row, render_json_block};
+use crate::components::{confirm, empty_state, form_row, panel_header, render_json_block};
 use crate::services::{connection_service, server_session_service};
 use crate::state::AppState;
 
@@ -131,8 +131,8 @@ impl SessionsPanel {
             this.update(cx, |this, cx| {
                 match outcome {
                     Ok(me) => {
-                        this.identity = serde_json::to_value(&me)
-                            .unwrap_or(serde_json::Value::Null);
+                        this.identity =
+                            serde_json::to_value(&me).unwrap_or(serde_json::Value::Null);
                         AppState::global(cx).update(cx, |state, cx| {
                             state.user = Some(me.username.clone().into());
                             state.roles = me.roles.clone();
@@ -197,10 +197,7 @@ impl SessionsPanel {
         cx.notify();
     }
 
-    fn kill(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else {
-            return;
-        };
+    fn terminate(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let task = server_session_service::kill(cx, id);
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
@@ -322,81 +319,93 @@ impl Render for SessionsPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Server sessions")),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("sessions-refresh")
-                            .icon(IconName::RefreshCw)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                    )
-                    .child(
-                        Button::new("sessions-auto")
-                            .label("Auto")
-                            .xsmall()
-                            .ghost()
-                            .selected(self.auto_refresh)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.auto_refresh = !this.auto_refresh;
-                                if this.auto_refresh {
-                                    this.spawn_loop(cx);
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("sessions-identity")
-                            .label("Refresh identity")
-                            .icon(IconName::User)
-                            .xsmall()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.refresh_identity(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("sessions-kill")
-                            .label("Terminate")
-                            .icon(IconName::Ban)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.selected.is_none())
-                            .on_click(cx.listener(Self::kill)),
-                    ),
-            )
-            .when_some(self.error.clone(), |panel, message| {
-                panel.child(
+            .child(panel_header(
+                SharedString::from(crate::i18n::t(
+                    "nav.sessions",
+                    crate::i18n::locale(cx),
+                )),
+                Some(SharedString::from(format!(
+                    "{} live · {}",
+                    self.sessions.len(),
+                    if self.loading {
+                        "Refreshing…"
+                    } else {
+                        "Idle"
+                    }
+                ))),
+                Some(
                     h_flex()
-                        .flex_shrink_0()
                         .items_center()
                         .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
                         .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                            Button::new("sessions-auto")
+                                .label("Auto")
+                                .small()
+                                .ghost()
+                                .selected(self.auto_refresh)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.auto_refresh = !this.auto_refresh;
+                                    if this.auto_refresh {
+                                        this.spawn_loop(cx);
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("sessions-identity")
+                                .label("Refresh identity")
+                                .icon(IconName::User)
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.refresh_identity(cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("sessions-kill")
+                                .label("Terminate")
+                                .icon(IconName::Ban)
+                                .small()
+                                .ghost()
+                                .disabled(self.selected.is_none())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    let Some(id) = this.selected else {
+                                        return;
+                                    };
+                                    let view = cx.entity();
+                                    confirm(
+                                        window,
+                                        cx,
+                                        "Terminate session",
+                                        format!(
+                                            "Terminate session {id}? Unsaved work in that session is lost."
+                                        ),
+                                        "Terminate",
+                                        true,
+                                        move |window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                this.terminate(id, window, cx);
+                                            });
+                                        },
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new("sessions-refresh")
+                                .icon(IconName::RefreshCw)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                        )
+                        .into_any_element(),
+                ),
+                cx,
+            ))
+            .when_some(self.error.clone(), |panel, message| {
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("sessions-error", message).small(),
+                ))
             })
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(
@@ -497,22 +506,25 @@ impl Render for SessionsPanel {
                                     .child(form_row("Name", self.var_name.clone(), cx))
                                     .child(form_row("Value (JSON)", self.var_value.clone(), cx))
                                     .child(
-                                        h_flex().gap_1().child(
-                                            Button::new("sessions-set-var")
-                                                .label("Set variable")
-                                                .icon(IconName::Plus)
-                                                .xsmall()
-                                                .disabled(self.selected.is_none())
-                                                .on_click(cx.listener(Self::set_variable)),
-                                        ).child(
-                                            Button::new("sessions-delete-var")
-                                                .label("Delete variable")
-                                                .icon(IconName::Trash)
-                                                .xsmall()
-                                                .ghost()
-                                                .disabled(self.selected.is_none())
-                                                .on_click(cx.listener(Self::delete_variable)),
-                                        ),
+                                        h_flex()
+                                            .gap_1()
+                                            .child(
+                                                Button::new("sessions-set-var")
+                                                    .label("Set variable")
+                                                    .icon(IconName::Plus)
+                                                    .xsmall()
+                                                    .disabled(self.selected.is_none())
+                                                    .on_click(cx.listener(Self::set_variable)),
+                                            )
+                                            .child(
+                                                Button::new("sessions-delete-var")
+                                                    .label("Delete variable")
+                                                    .icon(IconName::Trash)
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .disabled(self.selected.is_none())
+                                                    .on_click(cx.listener(Self::delete_variable)),
+                                            ),
                                     )
                                     .child(render_json_block(&self.variables, cx))
                                     .child(

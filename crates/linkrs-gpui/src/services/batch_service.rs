@@ -1,8 +1,6 @@
 use gpui_kit::{App, Task};
 use linkrs_client::ClientError;
-use linkrs_wire::batch::{
-    BatchItem, BatchStatusResponse, BatchType, ExecuteBatchResponse,
-};
+use linkrs_wire::batch::{BatchItem, BatchStatusResponse, BatchType, ExecuteBatchResponse};
 
 use crate::connection::SessionStore;
 use crate::runtime;
@@ -17,7 +15,10 @@ pub fn create(
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().create_batch(space_id, batch_type, batch_size).await
+        guard
+            .client()
+            .create_batch(space_id, batch_type, batch_size)
+            .await
     })
 }
 

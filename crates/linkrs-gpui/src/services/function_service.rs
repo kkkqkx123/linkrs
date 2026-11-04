@@ -34,7 +34,10 @@ pub fn register(
     let implementation = implementation.to_string();
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
-        guard.client().register_function(&name, &implementation).await
+        guard
+            .client()
+            .register_function(&name, &implementation)
+            .await
     })
 }
 

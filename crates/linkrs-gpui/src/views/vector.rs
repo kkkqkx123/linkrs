@@ -10,7 +10,7 @@ use gpui_kit::{
     SharedString, StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{form_row, render_json_block};
+use crate::components::{confirm, form_row, panel_header, render_json_block};
 use crate::services::{connection_service, schema_service, vector_service};
 use crate::state::AppState;
 
@@ -33,7 +33,6 @@ pub struct VectorPanel {
     scroll_offset: Entity<InputState>,
     rebuild_id: Entity<InputState>,
     busy: bool,
-    confirm_clear: bool,
     rebuild_generation: u64,
     message: Option<SharedString>,
     error: Option<SharedString>,
@@ -53,14 +52,13 @@ impl VectorPanel {
         let field = cx.new(|cx| InputState::new(window, cx).placeholder("Field name"));
         let size = cx.new(|cx| InputState::new(window, cx).placeholder("Vector size"));
         let query_vector = cx.new(|cx| InputState::new(window, cx).placeholder("[0.1, 0.2, ...]"));
-        let point_id =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Point id (comma list for payload)"));
-        let payload =
-            cx.new(|cx| InputState::new(window, cx).placeholder("{\"key\": \"value\"}"));
-        let payload_keys =
-            cx.new(|cx| InputState::new(window, cx).placeholder("key1,key2"));
-        let scroll_offset =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Scroll offset (empty for first page)"));
+        let point_id = cx
+            .new(|cx| InputState::new(window, cx).placeholder("Point id (comma list for payload)"));
+        let payload = cx.new(|cx| InputState::new(window, cx).placeholder("{\"key\": \"value\"}"));
+        let payload_keys = cx.new(|cx| InputState::new(window, cx).placeholder("key1,key2"));
+        let scroll_offset = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Scroll offset (empty for first page)")
+        });
         let rebuild_id = cx.new(|cx| InputState::new(window, cx).placeholder("Rebuild id"));
         let state = AppState::global(cx);
         let last_space = state.read(cx).space.clone();
@@ -78,7 +76,6 @@ impl VectorPanel {
             scroll_offset,
             rebuild_id,
             busy: false,
-            confirm_clear: false,
             rebuild_generation: 0,
             message: None,
             error: None,
@@ -111,8 +108,7 @@ impl VectorPanel {
             this.update(cx, |this, cx| {
                 if let Ok(spaces) = outcome {
                     if let Some(found) = spaces.iter().find(|info| info.name == name) {
-                        this.resolved_space =
-                            Some((found.name.clone().into(), found.id));
+                        this.resolved_space = Some((found.name.clone().into(), found.id));
                     }
                 }
                 cx.notify();
@@ -406,8 +402,7 @@ impl VectorPanel {
                         match outcome {
                             Ok(value) => {
                                 this.show("Rebuild status", value.clone());
-                                this.message =
-                                    Some(format!("Rebuild {rebuild_id} polled.").into());
+                                this.message = Some(format!("Rebuild {rebuild_id} polled.").into());
                                 if rebuild_finished(&value) {
                                     return true;
                                 }
@@ -455,19 +450,14 @@ impl VectorPanel {
         .detach();
     }
 
-    fn clear(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
-            cx.notify();
-            return;
-        };
-        if !self.confirm_clear {
-            self.confirm_clear = true;
-            self.message = Some("Press Clear again to confirm wiping all vectors.".into());
-            cx.notify();
-            return;
-        }
-        self.confirm_clear = false;
+    fn clear_index(
+        &mut self,
+        space: u64,
+        tag: String,
+        field: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.busy = true;
         cx.notify();
         let task = vector_service::clear(cx, space, &tag, &field, true);
@@ -563,8 +553,10 @@ impl VectorPanel {
         let task = vector_service::set_payload(cx, space, &tag, &field, ids, payload);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Set payload", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                this.finish(cx, "Set payload", outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
@@ -591,8 +583,10 @@ impl VectorPanel {
         let task = vector_service::merge_payload_fields(cx, space, &tag, &field, ids, payload);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Merge payload", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                this.finish(cx, "Merge payload", outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
@@ -620,8 +614,10 @@ impl VectorPanel {
         let task = vector_service::delete_payload(cx, space, &tag, &field, ids, keys);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Delete payload", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                this.finish(cx, "Delete payload", outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
@@ -652,49 +648,26 @@ impl Render for VectorPanel {
         let theme = cx.theme().clone();
         let output_title = self.output_title.clone();
         let output = self.output.clone();
-        let confirm_clear = self.confirm_clear;
 
         v_flex()
             .id("vector-panel")
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Vector indexes")),
-                    )
-                    .child(div().flex_1())
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(
-                        SharedString::from(if self.busy { "Working…" } else { "Idle" }),
-                    )),
-            )
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.vector", crate::i18n::locale(cx))),
+                Some(SharedString::from(if self.busy {
+                    "Working…"
+                } else {
+                    "Idle"
+                })),
+                None,
+                cx,
+            ))
             .when_some(self.error.clone(), |panel, message| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("vector-error", message).small(),
+                ))
             })
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(
@@ -724,7 +697,9 @@ impl Render for VectorPanel {
                                     .p_3()
                                     .child(form_row("Space id", self.space_id.clone(), cx))
                                     .child(
-                                        h_flex().gap_2().items_center()
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
                                             .child(
                                                 Button::new("vector-use-space")
                                                     .label("Use current space")
@@ -743,9 +718,7 @@ impl Render for VectorPanel {
                                                     row.child(
                                                         div()
                                                             .text_xs()
-                                                            .text_color(
-                                                                cx.theme().muted_foreground,
-                                                            )
+                                                            .text_color(cx.theme().muted_foreground)
                                                             .child(SharedString::from(format!(
                                                                 "{name} (id {id})"
                                                             ))),
@@ -886,16 +859,46 @@ impl Render for VectorPanel {
                                             )
                                             .child(
                                                 Button::new("vector-clear")
-                                                    .label(if confirm_clear {
-                                                        "Confirm clear"
-                                                    } else {
-                                                        "Clear"
-                                                    })
+                                                    .label("Clear")
                                                     .icon(IconName::Trash)
-                                                    .xsmall()
+                                                    .small()
                                                     .ghost()
                                                     .disabled(self.busy)
-                                                    .on_click(cx.listener(Self::clear)),
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            let Some((space, tag, field)) =
+                                                                this.identity(cx)
+                                                            else {
+                                                                this.error = Some(
+                                                                    "Space id, tag and field are required."
+                                                                        .into(),
+                                                                );
+                                                                cx.notify();
+                                                                return;
+                                                            };
+                                                            let view = cx.entity();
+                                                            confirm(
+                                                                window,
+                                                                cx,
+                                                                "Clear vector index",
+                                                                format!(
+                                                                    "Clear all vectors for {tag}.{field}? This cannot be undone."
+                                                                ),
+                                                                "Clear",
+                                                                true,
+                                                                move |window, cx| {
+                                                                    let tag = tag.clone();
+                                                                    let field = field.clone();
+                                                                    view.update(cx, |this, cx| {
+                                                                        this.clear_index(
+                                                                            space, tag, field,
+                                                                            window, cx,
+                                                                        );
+                                                                    });
+                                                                },
+                                                            );
+                                                        },
+                                                    )),
                                             ),
                                     ),
                             ),

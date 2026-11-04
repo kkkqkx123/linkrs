@@ -16,7 +16,9 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{empty_state, render_canvas_frame, render_graph_selection, GraphModel};
+use crate::components::{
+    empty_state, panel_header, render_canvas_frame, render_graph_selection, GraphModel,
+};
 use crate::services::{connection_service, graph_service};
 use crate::state::AppState;
 
@@ -83,7 +85,8 @@ impl GraphPanel {
         };
         if let Some((generation, neighborhood)) = drop {
             self.last_drop_generation = generation;
-            self.model.set_graph(&neighborhood.nodes, &neighborhood.edges, cx);
+            self.model
+                .set_graph(&neighborhood.nodes, &neighborhood.edges, cx);
             self.degree = None;
             self.message = None;
             cx.notify();
@@ -128,7 +131,8 @@ impl GraphPanel {
                 this.loading = false;
                 match outcome {
                     Ok(neighborhood) => {
-                        this.model.set_graph(&neighborhood.nodes, &neighborhood.edges, cx);
+                        this.model
+                            .set_graph(&neighborhood.nodes, &neighborhood.edges, cx);
                         this.degree = degree;
                         if this.model.is_empty() {
                             this.message = Some("No neighbors found for this seed.".into());
@@ -309,6 +313,32 @@ impl GraphPanel {
             .border_color(cx.theme().border)
             .bg(cx.theme().muted.opacity(0.12))
             .child(render_canvas_frame(plans))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(12.))
+                    .bottom(px(12.))
+                    .max_w(px(220.))
+                    .px_2()
+                    .py_1()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().popover.opacity(0.92))
+                    .children(self.model.tag_legend().into_iter().map(|(label, color)| {
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .py(px(1.))
+                            .child(div().size(px(8.)).rounded_full().bg(gpui_kit::rgb(color)))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(SharedString::from(label)),
+                            )
+                    })),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -382,26 +412,22 @@ impl Render for GraphPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.graph", crate::i18n::locale(cx))),
+                Some(SharedString::from(format!(
+                    "{} nodes · {} edges",
+                    self.model.node_count(),
+                    self.model.edge_count()
+                ))),
+                None,
+                cx,
+            ))
             .child(self.render_toolbar(cx))
             .child(self.render_stats(cx))
             .when_some(self.message.clone(), |panel, message| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
-                        .child(Icon::new(IconName::TriangleAlert).text_color(theme.danger))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("graph-error", message).small(),
+                ))
             })
             .child(
                 h_flex()

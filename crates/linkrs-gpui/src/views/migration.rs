@@ -4,14 +4,14 @@ use gpui_kit::base::{Disableable as _, Selectable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _, WindowExt as _};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, WindowExt as _};
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, App, AppContext as _, ClickEvent, Context, Entity,
     EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{form_row, render_json_block};
+use crate::components::{form_row, panel_header, render_json_block};
 use crate::services::{connection_service, migration_service};
 
 /// Schema migration panel: plan between two schema versions, dry-run /
@@ -305,43 +305,20 @@ impl Render for MigrationPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Schema migration")),
-                    )
-                    .child(div().flex_1())
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(
-                        SharedString::from(if self.busy { "Working…" } else { "Idle" }),
-                    )),
-            )
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.migration", crate::i18n::locale(cx))),
+                Some(SharedString::from(if self.busy {
+                    "Working…"
+                } else {
+                    "Idle"
+                })),
+                None,
+                cx,
+            ))
             .when_some(self.error.clone(), |panel, message| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
-                        .child(Icon::new(IconName::TriangleAlert).text_color(theme.danger))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("migration-error", message).small(),
+                ))
             })
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(

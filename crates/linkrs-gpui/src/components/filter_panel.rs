@@ -1,8 +1,8 @@
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _};
 use gpui_kit::{
-    div, px, App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, px, App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, SharedString,
+    Styled as _, Window,
 };
 
 /// Shared filter/sort/page-size controls used by the data browser. The view
@@ -74,37 +74,20 @@ impl FilterControls {
     }
 }
 
-/// Render one labeled row used by management forms.
+/// Render one labeled field used by management forms.
 pub fn form_row<V: 'static>(
     label: &'static str,
     field: Entity<InputState>,
     cx: &Context<V>,
 ) -> impl IntoElement {
-    h_flex()
-        .items_center()
-        .gap_3()
+    v_flex()
+        .gap_1()
+        .min_w_0()
         .child(
             div()
-                .w(px(112.))
-                .flex_shrink_0()
-                .text_sm()
+                .text_size(px(12.))
                 .text_color(cx.theme().muted_foreground)
                 .child(label),
         )
-        .child(div().flex_1().min_w_0().child(Input::new(&field)))
-}
-
-/// Stacked scrollable JSON/text block for untyped management payloads.
-pub fn render_json_block(value: &serde_json::Value, cx: &App) -> impl IntoElement {
-    let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-    v_flex().gap_1().child(
-        div()
-            .id("json-block")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .text_xs()
-            .text_color(cx.theme().foreground)
-            .child(SharedString::from(pretty)),
-    )
+        .child(Input::new(&field))
 }

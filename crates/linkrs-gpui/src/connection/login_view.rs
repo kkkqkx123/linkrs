@@ -360,19 +360,15 @@ impl LoginView {
         field: Entity<InputState>,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
+        v_flex()
+            .gap_1()
             .child(
                 div()
-                    .w(px(72.))
-                    .flex_shrink_0()
-                    .text_sm()
+                    .text_size(px(12.))
                     .text_color(cx.theme().muted_foreground)
                     .child(label),
             )
-            .child(Input::new(&field).flex_1())
+            .child(Input::new(&field).w_full())
     }
 }
 

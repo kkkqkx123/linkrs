@@ -10,7 +10,7 @@ use gpui_kit::{
     SharedString, StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{form_row, render_json_block};
+use crate::components::{form_row, panel_header, render_json_block};
 use crate::services::{connection_service, fulltext_service, schema_service};
 use crate::state::AppState;
 
@@ -83,8 +83,7 @@ impl FulltextPanel {
             this.update(cx, |this, cx| {
                 if let Ok(spaces) = outcome {
                     if let Some(found) = spaces.iter().find(|info| info.name == name) {
-                        this.resolved_space =
-                            Some((found.name.clone().into(), found.id));
+                        this.resolved_space = Some((found.name.clone().into(), found.id));
                     }
                 }
                 cx.notify();
@@ -288,42 +287,20 @@ impl Render for FulltextPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Fulltext indexes")),
-                    )
-                    .child(div().flex_1())
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(
-                        SharedString::from(if self.busy { "Working…" } else { "Idle" }),
-                    )),
-            )
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.fulltext", crate::i18n::locale(cx))),
+                Some(SharedString::from(if self.busy {
+                    "Working…"
+                } else {
+                    "Idle"
+                })),
+                None,
+                cx,
+            ))
             .when_some(self.error.clone(), |panel, message| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("fulltext-error", message).small(),
+                ))
             })
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(
@@ -353,7 +330,9 @@ impl Render for FulltextPanel {
                                     .p_3()
                                     .child(form_row("Space id", self.space_id.clone(), cx))
                                     .child(
-                                        h_flex().gap_2().items_center()
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
                                             .child(
                                                 Button::new("fulltext-use-space")
                                                     .label("Use current space")
@@ -372,9 +351,7 @@ impl Render for FulltextPanel {
                                                     row.child(
                                                         div()
                                                             .text_xs()
-                                                            .text_color(
-                                                                cx.theme().muted_foreground,
-                                                            )
+                                                            .text_color(cx.theme().muted_foreground)
                                                             .child(SharedString::from(format!(
                                                                 "{name} (id {id})"
                                                             ))),

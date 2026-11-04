@@ -4,19 +4,22 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::base::{Disableable as _, Selectable as _};
+use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::chart::AreaChart;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _};
 use gpui_kit::{
-    div, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, App,
-    AppContext as _, Context, Entity, EventEmitter, Focusable, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window,
+    div, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, App, AppContext as _,
+    Context, Entity, EventEmitter, Focusable, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{form_row, render_json_block};
+use crate::components::{
+    card, card_body, card_head, card_stack, form_row, kpi_grid, page_body, panel_header,
+    render_json_block, Kpi, Tone,
+};
 use crate::services::{
     config_service, connection_service, fulltext_service, monitoring_service, query_service,
     stats_service, vector_service,
@@ -82,18 +85,9 @@ impl MonitoringPanel {
             migration: serde_json::Value::Null,
             retrieval: serde_json::Value::Null,
             confirm_freeze: false,
-            cpu_threshold: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("80")
-            }),
-            mem_threshold: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("80")
-            }),
-            slow_threshold: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("100")
-            }),
+            cpu_threshold: cx.new(|cx| InputState::new(window, cx).placeholder("80")),
+            mem_threshold: cx.new(|cx| InputState::new(window, cx).placeholder("80")),
+            slow_threshold: cx.new(|cx| InputState::new(window, cx).placeholder("100")),
             portrait_trace: None,
             portrait: serde_json::Value::Null,
             portrait_loading: false,
@@ -265,8 +259,7 @@ impl MonitoringPanel {
             .get("slow_queries")
             .and_then(|rows| rows.as_array())
             .map(|rows| {
-                rows
-                    .iter()
+                rows.iter()
                     .filter_map(|row| {
                         let duration = row.get("duration_ms")?.as_f64()?;
                         if duration < min_ms {
@@ -297,8 +290,8 @@ impl MonitoringPanel {
                 this.portrait_loading = false;
                 match outcome {
                     Ok(detail) => {
-                        this.portrait = serde_json::to_value(&detail)
-                            .unwrap_or(serde_json::Value::Null);
+                        this.portrait =
+                            serde_json::to_value(&detail).unwrap_or(serde_json::Value::Null);
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
@@ -323,55 +316,61 @@ impl MonitoringPanel {
     ) -> impl IntoElement {
         let data: Vec<MetricPoint> = points.iter().cloned().collect();
         let current = data.last().map(|point| point.value).unwrap_or(0.0);
-        v_flex()
-            .min_h(px(160.))
+        card(cx)
             .flex_1()
-            .gap_2()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded(cx.theme().radius)
+            .min_w(px(280.))
             .child(
                 h_flex()
+                    .h(px(crate::metrics::CARD_HEAD_H))
+                    .w_full()
+                    .flex_shrink_0()
+                    .items_center()
                     .justify_between()
-                    .py_1()
-                    .px_3()
+                    .gap_3()
+                    .px(px(crate::metrics::CARD_PAD))
+                    .border_b_1()
+                    .border_color(cx.theme().border)
                     .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().foreground)
-                            .child(SharedString::from(title.to_string())),
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().size(px(8.)).rounded_full().bg(color))
+                            .child(
+                                div()
+                                    .text_size(px(16.))
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child(SharedString::from(title.to_string())),
+                            ),
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(18.))
+                            .font_family(cx.theme().mono_font_family.clone())
                             .text_color(color)
                             .child(SharedString::from(format!("{current:.2} {unit}"))),
                     ),
             )
             .child(
-                AreaChart::new(data)
-                    .x(|point| point.index.to_string())
-                    .y(|point| point.value)
-                    .stroke(color)
-                    .fill(linear_gradient(
-                        0.,
-                        linear_color_stop(color.opacity(0.4), 1.),
-                        linear_color_stop(cx.theme().background.opacity(0.1), 0.),
-                    ))
-                    .tick_margin(15),
+                div().p_3().child(
+                    AreaChart::new(data)
+                        .x(|point| point.index.to_string())
+                        .y(|point| point.value)
+                        .stroke(color)
+                        .fill(linear_gradient(
+                            0.,
+                            linear_color_stop(color.opacity(0.4), 1.),
+                            linear_color_stop(cx.theme().popover.opacity(0.1), 0.),
+                        ))
+                        .tick_margin(15),
+                ),
             )
     }
 
     fn render_slow_queries(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let rows = self.slow_rows(cx);
-        let count = rows.len();
-        let mut section = v_flex().gap_1().child(
-            div()
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(SharedString::from(format!("Slow queries ({count})"))),
-        );
+        let mut section = v_flex().gap_2();
         if rows.is_empty() {
             section = section.child(
                 div()
@@ -398,14 +397,11 @@ impl MonitoringPanel {
                         .rounded(theme.radius)
                         .border_1()
                         .border_color(if selected { theme.info } else { theme.border })
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.foreground)
-                                .child(SharedString::from(format!(
-                                    "{duration:.1}ms · session {session_id} · {status}"
-                                ))),
-                        )
+                        .child(div().text_xs().text_color(theme.foreground).child(
+                            SharedString::from(format!(
+                                "{duration:.1}ms · session {session_id} · {status}"
+                            )),
+                        ))
                         .child(
                             div()
                                 .flex_1()
@@ -471,19 +467,16 @@ impl MonitoringPanel {
             exceeded.push(format!("CPU {:.1}% > {cpu_limit:.0}%", cpu.unwrap_or(0.0)));
         }
         if mem_ratio.map(|value| value > mem_limit).unwrap_or(false) {
-            exceeded.push(format!("Memory {:.1}% > {mem_limit:.0}%", mem_ratio.unwrap_or(0.0)));
+            exceeded.push(format!(
+                "Memory {:.1}% > {mem_limit:.0}%",
+                mem_ratio.unwrap_or(0.0)
+            ));
         }
         h_flex()
             .flex_shrink_0()
             .items_center()
-            .gap_2()
+            .gap_3()
             .flex_wrap()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child("Thresholds"),
-            )
             .child(form_row("CPU % >", self.cpu_threshold.clone(), cx))
             .child(form_row("Memory % >", self.mem_threshold.clone(), cx))
             .child(form_row("Slow ms >", self.slow_threshold.clone(), cx))
@@ -497,60 +490,79 @@ impl MonitoringPanel {
             })
     }
 
+    /// One card holding a titled structured payload.
+    fn section_card(
+        &self,
+        title: &str,
+        value: &serde_json::Value,
+        cx: &Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        card(cx)
+            .child(card_head(title.to_string(), None, cx))
+            .child(card_body().child(render_json_block(value, cx)))
+            .into_any_element()
+    }
+
     fn render_stat_cards(&self, cx: &Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let cards: Vec<(String, String)> = vec![
-            (
-                "Spaces".to_string(),
-                number(&self.database, &["space_count"])
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "—".to_string()),
-            ),
-            (
-                "Vertices".to_string(),
-                number(&self.database, &["total_vertices"])
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "—".to_string()),
-            ),
-            (
-                "Edges".to_string(),
-                number(&self.database, &["total_edges"])
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "—".to_string()),
-            ),
-            (
-                "Active queries".to_string(),
-                number(&self.database, &["active_queries"])
-                    .or_else(|| number(&self.queries, &["active_queries"]))
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "—".to_string()),
-            ),
-        ];
-        h_flex()
-            .flex_shrink_0()
-            .flex_wrap()
-            .gap_2()
-            .children(cards.into_iter().map(|(label, value)| {
-                v_flex()
-                    .w(px(150.))
-                    .gap_1()
-                    .p_3()
-                    .rounded(theme.radius)
-                    .border_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(SharedString::from(label)),
-                    )
-                    .child(
-                        div()
-                            .text_lg()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from(value)),
-                    )
-            }))
+        let qps = self.qps.back().map(|point| point.value).unwrap_or(0.0);
+        let latency = self.latency.back().map(|point| point.value).unwrap_or(0.0);
+        let cpu = pick(&self.system, &["cpu_usage_percent"]);
+        let mem = self
+            .system
+            .get("memory_usage")
+            .and_then(|usage| {
+                let used = usage.get("used_bytes")?.as_f64()?;
+                let total = usage.get("total_bytes")?.as_f64()?;
+                (total > 0.0).then(|| used / total * 100.0)
+            })
+            .or_else(|| pick(&self.system, &["memory_usage_percent"]));
+
+        let value = |number: Option<i64>| {
+            number
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "—".to_string())
+        };
+
+        kpi_grid(
+            vec![
+                Kpi::new("Spaces", value(number(&self.database, &["space_count"]))),
+                Kpi::new(
+                    "Vertices",
+                    value(number(&self.database, &["total_vertices"])),
+                ),
+                Kpi::new("Edges", value(number(&self.database, &["total_edges"]))),
+                Kpi::new(
+                    "Active queries",
+                    value(
+                        number(&self.database, &["active_queries"])
+                            .or_else(|| number(&self.queries, &["active_queries"])),
+                    ),
+                ),
+                Kpi::new("QPS", format!("{qps:.2}")),
+                Kpi::new("Avg latency", format!("{latency:.1} ms")),
+                Kpi::new(
+                    "CPU",
+                    cpu.map(|value| format!("{value:.1} %"))
+                        .unwrap_or_else(|| "—".to_string()),
+                )
+                .tone(if cpu.map(|value| value >= 80.0).unwrap_or(false) {
+                    Tone::Danger
+                } else {
+                    Tone::Neutral
+                }),
+                Kpi::new(
+                    "Memory",
+                    mem.map(|value| format!("{value:.1} %"))
+                        .unwrap_or_else(|| "—".to_string()),
+                )
+                .tone(if mem.map(|value| value >= 80.0).unwrap_or(false) {
+                    Tone::Danger
+                } else {
+                    Tone::Neutral
+                }),
+            ],
+            cx,
+        )
     }
 }
 
@@ -577,222 +589,155 @@ impl gpui_kit::component::dock::Panel for MonitoringPanel {
 impl Render for MonitoringPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = crate::i18n::locale(cx);
+
+        let actions = h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.muted_foreground)
+                    .child(SharedString::from(if self.loading {
+                        "Refreshing…"
+                    } else {
+                        "Idle"
+                    })),
+            )
+            .child(
+                Button::new("monitoring-auto")
+                    .label("Auto refresh (5s)")
+                    .small()
+                    .ghost()
+                    .selected(self.auto_refresh)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.auto_refresh = !this.auto_refresh;
+                        if this.auto_refresh {
+                            this.spawn_loop(cx);
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("monitoring-refresh")
+                    .icon(IconName::RefreshCw)
+                    .small()
+                    .ghost()
+                    .disabled(self.loading)
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+            )
+            .into_any_element();
 
         v_flex()
             .id("monitoring-panel")
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        Button::new("monitoring-refresh")
-                            .icon(IconName::RefreshCw)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                    )
-                    .child(
-                        Button::new("monitoring-auto")
-                            .label("Auto refresh (5s)")
-                            .xsmall()
-                            .ghost()
-                            .selected(self.auto_refresh)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.auto_refresh = !this.auto_refresh;
-                                if this.auto_refresh {
-                                    this.spawn_loop(cx);
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(
-                        SharedString::from(if self.loading {
-                            "Refreshing…"
-                        } else {
-                            "Idle"
-                        }),
-                    )),
-            )
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.monitoring", locale)),
+                None,
+                Some(actions),
+                cx,
+            ))
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
+                    div()
+                        .px(px(20.))
+                        .py(px(8.))
+                        .child(Alert::error("monitoring-error", message).small()),
                 )
             })
-            .child(
-                div()
-                    .id("monitoring-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p_3()
-                    .child(
-                        v_flex()
+            .child({
+                let freeze_action = Button::new("monitoring-freeze")
+                    .label("Trigger freeze")
+                    .small()
+                    .ghost()
+                    .disabled(self.loading)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.confirm_freeze = true;
+                        cx.notify();
+                    }))
+                    .into_any_element();
+
+                page_body("monitoring-body", cx).child(
+                    card_stack().children([
+                        self.render_stat_cards(cx).into_any_element(),
+                        card(cx)
+                            .child(card_head("Thresholds", None, cx))
+                            .child(card_body().child(self.render_thresholds(cx)))
+                            .into_any_element(),
+                        card(cx)
+                            .child(card_head(
+                                format!("Slow queries ({})", self.slow_rows(cx).len()),
+                                None,
+                                cx,
+                            ))
+                            .child(card_body().child(self.render_slow_queries(cx)))
+                            .into_any_element(),
+                        h_flex()
+                            .w_full()
                             .gap_3()
-                            .child(self.render_stat_cards(cx))
-                            .child(self.render_thresholds(cx))
-                            .child(self.render_slow_queries(cx))
-                            .child(
-                                h_flex()
-                                    .gap_3()
-                                    .child(self.render_chart(
-                                        "Queries per second",
-                                        "qps",
-                                        &self.qps,
-                                        theme.blue,
-                                        cx,
-                                    ))
-                                    .child(self.render_chart(
-                                        "Average latency",
-                                        "ms",
-                                        &self.latency,
-                                        theme.red,
-                                        cx,
-                                    )),
-                            )
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Overview payload")),
-                                    )
-                                    .child(render_json_block(&self.overview, cx)),
-                            )
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Search statistics")),
-                                    )
-                                    .child(render_json_block(&self.search, cx)),
-                            )
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        h_flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .text_sm()
-                                                    .text_color(theme.foreground)
-                                                    .child(SharedString::from("Freeze statistics")),
-                                            )
-                                            .child(
-                                                Button::new("monitoring-freeze")
-                                                    .label("Trigger freeze")
-                                                    .xsmall()
-                                                    .ghost()
-                                                    .disabled(self.loading)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.confirm_freeze = true;
-                                                        cx.notify();
-                                                    })),
-                                            ),
-                                    )
-                                    .when(self.confirm_freeze, |area| {
-                                        area.child(
-                                            h_flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .text_xs()
-                                                        .text_color(theme.warning)
-                                                        .child(SharedString::from(
-                                                            "Trigger a freeze now?",
-                                                        )),
-                                                )
-                                                .child(
-                                                    Button::new("monitoring-freeze-confirm")
-                                                        .label("Confirm")
-                                                        .xsmall()
-                                                        .on_click(cx.listener(
-                                                            |this, _, window, cx| {
-                                                                this.trigger_freeze(window, cx);
-                                                            },
-                                                        )),
-                                                )
-                                                .child(
-                                                    Button::new("monitoring-freeze-cancel")
-                                                        .label("Cancel")
-                                                        .xsmall()
-                                                        .ghost()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.confirm_freeze = false;
-                                                            cx.notify();
-                                                        })),
-                                                ),
+                            .child(self.render_chart(
+                                "Queries per second",
+                                "qps",
+                                &self.qps,
+                                theme.chart_1,
+                                cx,
+                            ))
+                            .child(self.render_chart(
+                                "Average latency",
+                                "ms",
+                                &self.latency,
+                                theme.chart_3,
+                                cx,
+                            ))
+                            .into_any_element(),
+                        self.section_card("Overview", &self.overview, cx),
+                        self.section_card("Search statistics", &self.search, cx),
+                        card(cx)
+                            .child(card_head("Freeze statistics", Some(freeze_action), cx))
+                            .when(self.confirm_freeze, |area| {
+                                area.child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .px(px(24.))
+                                        .pt(px(12.))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .text_size(px(12.))
+                                                .text_color(theme.warning)
+                                                .child(SharedString::from("Trigger a freeze now?")),
                                         )
-                                    })
-                                    .child(render_json_block(&self.freeze, cx)),
-                            )
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Current session")),
-                                    )
-                                    .child(render_json_block(&self.session, cx)),
-                            )
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Migration statistics")),
-                                    )
-                                    .child(render_json_block(&self.migration, cx)),
-                            )
-                            .child(
-                                v_flex()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Retrieval snapshot")),
-                                    )
-                                    .child(render_json_block(&self.retrieval, cx)),
-                            ),
-                    ),
-            )
+                                        .child(
+                                            Button::new("monitoring-freeze-confirm")
+                                                .label("Confirm")
+                                                .small()
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.trigger_freeze(window, cx);
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("monitoring-freeze-cancel")
+                                                .label("Cancel")
+                                                .small()
+                                                .ghost()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.confirm_freeze = false;
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                            })
+                            .child(card_body().child(render_json_block(&self.freeze, cx)))
+                            .into_any_element(),
+                        self.section_card("Current session", &self.session, cx),
+                        self.section_card("Migration statistics", &self.migration, cx),
+                        self.section_card("Retrieval snapshot", &self.retrieval, cx),
+                    ]),
+                )
+            })
     }
 }
 

@@ -4,10 +4,10 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::base::{Disableable as _, Selectable as _};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::input::{Editor, EditorState};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::table::{DataTable, TableState};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _, WindowExt as _};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, Sizable as _, WindowExt as _};
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity, EventEmitter,
     Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
@@ -15,8 +15,8 @@ use gpui_kit::{
 };
 
 use crate::components::{
-    empty_state, new_table_state, on_copy_row, render_properties, CopyRow, FilterControls,
-    QueryTableData, QueryTableDelegate,
+    card, confirm, empty_state, new_table_state, on_copy_row, panel_header, render_properties,
+    CopyRow, FilterControls, QueryTableData, QueryTableDelegate,
 };
 use crate::services::{connection_service, data_browser_service, schema_service};
 use crate::state::AppState;
@@ -71,7 +71,6 @@ pub struct DataBrowserPanel {
     edit_editor: Entity<EditorState>,
     conflict: Option<SharedString>,
     allow_overwrite: bool,
-    confirm_delete: bool,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -108,7 +107,6 @@ impl DataBrowserPanel {
             edit_editor,
             conflict: None,
             allow_overwrite: false,
-            confirm_delete: false,
             focus_handle: cx.focus_handle(),
         };
         panel.reload_schema(cx);
@@ -224,7 +222,6 @@ impl DataBrowserPanel {
         self.edit_target = None;
         self.conflict = None;
         self.allow_overwrite = false;
-        self.confirm_delete = false;
         cx.notify();
 
         let kind = self.kind;
@@ -368,7 +365,6 @@ impl DataBrowserPanel {
                 match outcome {
                     Ok(()) => {
                         this.message = Some(format!("{label} succeeded.").into());
-                        this.confirm_delete = false;
                         this.close_edit(cx);
                         this.fetch(cx);
                     }
@@ -406,8 +402,7 @@ impl DataBrowserPanel {
             BrowseKind::Edge => data_browser_service::edge_endpoints(&payload),
         };
         if self.kind == BrowseKind::Edge && endpoints.is_none() {
-            self.message =
-                Some("Cannot locate this edge's endpoints for editing.".into());
+            self.message = Some("Cannot locate this edge's endpoints for editing.".into());
             cx.notify();
             return;
         }
@@ -424,7 +419,6 @@ impl DataBrowserPanel {
         self.edit_open = true;
         self.conflict = None;
         self.allow_overwrite = false;
-        self.confirm_delete = false;
         cx.notify();
     }
 
@@ -492,17 +486,12 @@ impl DataBrowserPanel {
     }
 
     /// Delete the selected row behind an inline confirm step.
-    fn delete_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(payload) = self.selected_row(cx) else {
-            self.message = Some("Select a row to delete first.".into());
-            cx.notify();
-            return;
-        };
-        if !self.confirm_delete {
-            self.confirm_delete = true;
-            cx.notify();
-            return;
-        }
+    fn delete_row(
+        &mut self,
+        payload: serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (id, _, _) = data_browser_service::normalize_row(&payload);
         let task = match self.kind {
             BrowseKind::Vertex => data_browser_service::delete_vertex(cx, &id),
@@ -511,8 +500,7 @@ impl DataBrowserPanel {
                     data_browser_service::delete_edge(cx, &edge_type, &src, &dst, rank)
                 }
                 None => {
-                    self.message =
-                        Some("Cannot locate this edge's endpoints for deletion.".into());
+                    self.message = Some("Cannot locate this edge's endpoints for deletion.".into());
                     cx.notify();
                     return;
                 }
@@ -568,36 +556,37 @@ impl DataBrowserPanel {
     /// Space statistics strip; hidden until the first successful load so a
     /// missing space or endpoint failure never blocks the scan list.
     fn render_stats(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex_shrink_0().when_some(self.stats.clone(), |host, stats| {
-            let cell = |label: &str, key: &str| {
-                let value = stats.get(key).and_then(|item| item.as_i64()).unwrap_or(0);
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(SharedString::from(format!("{label}: {value}")))
-            };
-            host.child(
-                h_flex()
-                    .items_center()
-                    .gap_3()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(cell("Vertices", "estimated_vertex_count"))
-                    .child(cell("Edges", "estimated_edge_count"))
-                    .child(cell("Tags", "tag_count"))
-                    .child(cell("Edge types", "edge_type_count"))
-                    .child(cell("Indexes", "index_count")),
-            )
-        })
+        div()
+            .flex_shrink_0()
+            .when_some(self.stats.clone(), |host, stats| {
+                let cell = |label: &str, key: &str| {
+                    let value = stats.get(key).and_then(|item| item.as_i64()).unwrap_or(0);
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(SharedString::from(format!("{label}: {value}")))
+                };
+                host.child(
+                    h_flex()
+                        .items_center()
+                        .gap_3()
+                        .px_2()
+                        .py_1()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(cell("Vertices", "estimated_vertex_count"))
+                        .child(cell("Edges", "estimated_edge_count"))
+                        .child(cell("Tags", "tag_count"))
+                        .child(cell("Edge types", "edge_type_count"))
+                        .child(cell("Indexes", "index_count")),
+                )
+            })
     }
 
     fn render_detail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let (detail_title, detail_value) = self.selected_detail(cx);
         let detail_subtitle = (!detail_title.is_empty()).then_some(detail_title.as_str());
         let writing = self.writing;
-        let confirm = self.confirm_delete;
         let editing = self.edit_open;
         let overwrite = self.allow_overwrite;
         let conflict = self.conflict.clone();
@@ -640,25 +629,35 @@ impl DataBrowserPanel {
                             )
                             .child(
                                 Button::new("browse-delete")
-                                    .label(if confirm { "Confirm delete" } else { "Delete" })
-                                    .xsmall()
+                                    .label("Delete")
+                                    .small()
                                     .disabled(writing || empty)
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.delete_selected(window, cx);
-                                    })),
-                            )
-                            .when(confirm, |row| {
-                                row.child(
-                                    Button::new("browse-delete-cancel")
-                                        .label("Cancel")
-                                        .xsmall()
-                                        .ghost()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.confirm_delete = false;
+                                        let Some(payload) = this.selected_row(cx) else {
+                                            this.message =
+                                                Some("Select a row to delete first.".into());
                                             cx.notify();
-                                        })),
-                                )
-                            }),
+                                            return;
+                                        };
+                                        let (id, _, _) =
+                                            data_browser_service::normalize_row(&payload);
+                                        let view = cx.entity();
+                                        confirm(
+                                            window,
+                                            cx,
+                                            "Delete record",
+                                            format!("Delete record {id}? This cannot be undone."),
+                                            "Delete",
+                                            true,
+                                            move |window, cx| {
+                                                let payload = payload.clone();
+                                                view.update(cx, |this, cx| {
+                                                    this.delete_row(payload, window, cx);
+                                                });
+                                            },
+                                        );
+                                    })),
+                            ),
                     )
             })
             .when(editing, |panel| {
@@ -729,7 +728,7 @@ impl DataBrowserPanel {
             .child(
                 Button::new("browse-vertices")
                     .label(BrowseKind::Vertex.label())
-                    .xsmall()
+                    .small()
                     .selected(kind == BrowseKind::Vertex)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_kind(BrowseKind::Vertex, cx);
@@ -738,21 +737,13 @@ impl DataBrowserPanel {
             .child(
                 Button::new("browse-edges")
                     .label(BrowseKind::Edge.label())
-                    .xsmall()
+                    .small()
                     .selected(kind == BrowseKind::Edge)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_kind(BrowseKind::Edge, cx);
                     })),
             )
             .child(div().flex_1().min_w_0().child(self.controls.render(cx)))
-            .child(
-                Button::new("browse-refresh")
-                    .icon(IconName::RefreshCw)
-                    .xsmall()
-                    .ghost()
-                    .disabled(self.loading)
-                    .on_click(cx.listener(|this, _, _, cx| this.fetch(cx))),
-            )
     }
 
     fn render_chips(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -856,6 +847,25 @@ impl Render for DataBrowserPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let table = self.table.clone();
+        let empty = self.raw_rows.is_empty() && !self.loading;
+        let subtitle = SharedString::from(format!(
+            "{} · page {} · {} total",
+            self.kind.label(),
+            self.page,
+            self.total
+        ));
+        let actions = h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                Button::new("browse-refresh")
+                    .icon(IconName::RefreshCw)
+                    .small()
+                    .ghost()
+                    .disabled(self.loading)
+                    .on_click(cx.listener(|this, _, _, cx| this.fetch(cx))),
+            )
+            .into_any_element();
 
         v_flex()
             .id("data-browser-panel")
@@ -863,62 +873,68 @@ impl Render for DataBrowserPanel {
             .bg(theme.background)
             .text_color(theme.foreground)
             .on_action(cx.listener(Self::on_copy_row))
-            .child(self.render_toolbar(cx))
-            .child(self.render_chips(cx))
-            .child(self.render_stats(cx))
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.dataBrowser", crate::i18n::locale(cx))),
+                Some(subtitle),
+                Some(actions),
+                cx,
+            ))
             .when_some(self.message.clone(), |panel, message| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
-                        .child(Icon::new(IconName::TriangleAlert).text_color(theme.danger))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("browse-error", message).small(),
+                ))
             })
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
+                    .gap_3()
+                    .px(px(20.))
+                    .py(px(16.))
                     .child(
-                        v_flex()
+                        card(cx)
                             .flex_1()
                             .min_w_0()
+                            .min_h_0()
+                            .child(self.render_toolbar(cx))
+                            .child(self.render_chips(cx))
+                            .child(self.render_stats(cx))
                             .child(
                                 div()
                                     .flex_1()
                                     .min_h_0()
-                                    .p_1()
-                                    .child(DataTable::new(&table).stripe(true)),
+                                    .when(empty, |host| {
+                                        host.child(empty_state(
+                                            IconName::HardDrive,
+                                            "No records",
+                                            Some(
+                                                "Select a tag or edge type to scan its records."
+                                                    .into(),
+                                            ),
+                                            cx,
+                                        ))
+                                    })
+                                    .when(!empty, |host| {
+                                        host.child(
+                                            DataTable::new(&table)
+                                                .stripe(true)
+                                                .with_size(crate::components::table_size(cx)),
+                                        )
+                                    }),
                             )
                             .child(self.render_pager(cx)),
                     )
                     .child(
                         div()
                             .id("browser-detail")
-                            .w(px(300.))
+                            .w(px(320.))
                             .flex_shrink_0()
-                            .border_l_1()
-                            .border_color(theme.border)
-                            .child(self.render_detail(cx)),
+                            .child(
+                                card(cx)
+                                    .size_full()
+                                    .child(div().flex_1().min_h_0().child(self.render_detail(cx))),
+                            ),
                     ),
             )
-            .when(self.raw_rows.is_empty() && !self.loading, |panel| {
-                panel.child(empty_state(
-                    IconName::HardDrive,
-                    "No records",
-                    Some("Select a tag or edge type to scan its records.".into()),
-                    cx,
-                ))
-            })
     }
 }

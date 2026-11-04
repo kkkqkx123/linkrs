@@ -63,10 +63,7 @@ pub fn metrics(cx: &App) -> Task<Result<serde_json::Value, ClientError>> {
 }
 
 /// Retry outbox projection scoped to one transaction.
-pub fn retry_outbox(
-    cx: &App,
-    txn_id: u64,
-) -> Task<Result<serde_json::Value, ClientError>> {
+pub fn retry_outbox(cx: &App, txn_id: u64) -> Task<Result<serde_json::Value, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
@@ -88,10 +85,7 @@ pub fn create_savepoint(
 }
 
 /// List savepoints of an explicit transaction.
-pub fn list_savepoints(
-    cx: &App,
-    txn_id: u64,
-) -> Task<Result<Vec<serde_json::Value>, ClientError>> {
+pub fn list_savepoints(cx: &App, txn_id: u64) -> Task<Result<Vec<serde_json::Value>, ClientError>> {
     let manager = SessionStore::manager(cx);
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;

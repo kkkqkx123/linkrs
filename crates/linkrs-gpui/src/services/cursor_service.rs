@@ -7,10 +7,7 @@ use crate::runtime;
 use crate::state::AppState;
 
 /// Open a cursor over a query.
-pub fn open(
-    cx: &App,
-    query: &str,
-) -> Task<Result<(u64, Vec<String>), ClientError>> {
+pub fn open(cx: &App, query: &str) -> Task<Result<(u64, Vec<String>), ClientError>> {
     let manager = SessionStore::manager(cx);
     let query = query.to_string();
     let session_id = AppState::global(cx).read(cx).session_id;
@@ -32,7 +29,10 @@ pub fn fetch(
     runtime::spawn(cx, async move {
         let guard = manager.lock().await;
         let id = session_id.ok_or(ClientError::NotConnected)?;
-        guard.client().fetch_cursor_page(cursor_id, page_size, id).await
+        guard
+            .client()
+            .fetch_cursor_page(cursor_id, page_size, id)
+            .await
     })
 }
 

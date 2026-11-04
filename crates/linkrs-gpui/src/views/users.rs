@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 use linkrs_wire::meta::UserListItem;
 
-use crate::components::{empty_state, form_row};
+use crate::components::{confirm, empty_state, form_row, panel_header};
 use crate::services::{connection_service, user_service};
 
 /// Row selection state shared between the delegate and the panel.
@@ -120,7 +120,6 @@ pub struct UsersPanel {
     own_old: Entity<InputState>,
     own_new: Entity<InputState>,
     own_confirm: Entity<InputState>,
-    confirm_drop: Option<String>,
     loading: bool,
     message: Option<SharedString>,
     error: Option<SharedString>,
@@ -166,7 +165,6 @@ impl UsersPanel {
             own_old,
             own_new,
             own_confirm,
-            confirm_drop: None,
             loading: false,
             message: None,
             error: None,
@@ -225,7 +223,6 @@ impl UsersPanel {
                 match outcome {
                     Ok(()) => {
                         this.message = Some(format!("{label} succeeded.").into());
-                        this.confirm_drop = None;
                         window.push_notification(
                             Notification::success(format!("{label} succeeded.")),
                             cx,
@@ -287,48 +284,32 @@ impl Render for UsersPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Users (admin)")),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("users-refresh")
-                            .icon(IconName::RefreshCw)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                    ),
-            )
-            .when_some(self.error.clone(), |panel, message| {
-                panel.child(
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.users", crate::i18n::locale(cx))),
+                Some(SharedString::from(format!(
+                    "{} accounts",
+                    self.data.borrow().users.len()
+                ))),
+                Some(
                     h_flex()
-                        .flex_shrink_0()
                         .items_center()
                         .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
                         .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
-                )
+                            Button::new("users-refresh")
+                                .icon(IconName::RefreshCw)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                        )
+                        .into_any_element(),
+                ),
+                cx,
+            ))
+            .when_some(self.error.clone(), |panel, message| {
+                panel.child(div().px(px(20.)).py(px(8.)).child(
+                    gpui_kit::component::alert::Alert::error("users-error", message).small(),
+                ))
             })
             .when_some(self.message.clone(), |panel, message| {
                 panel.child(
@@ -362,7 +343,11 @@ impl Render for UsersPanel {
                                         ))
                                     })
                                     .when(!empty, |host| {
-                                        host.child(DataTable::new(&table).stripe(true))
+                                        host.child(
+                                            DataTable::new(&table)
+                                                .stripe(true)
+                                                .with_size(crate::components::table_size(cx)),
+                                        )
                                     }),
                             )
                             .child(
@@ -404,12 +389,35 @@ impl Render for UsersPanel {
                                         Button::new("users-kill")
                                             .label("Drop")
                                             .icon(IconName::Trash)
-                                            .xsmall()
+                                            .small()
                                             .ghost()
                                             .disabled(selected.is_none())
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.confirm_drop = this.selected_name(cx);
-                                                cx.notify();
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                let Some(name) = this.selected_name(cx) else {
+                                                    return;
+                                                };
+                                                let view = cx.entity();
+                                                confirm(
+                                                    window,
+                                                    cx,
+                                                    "Drop user",
+                                                    format!(
+                                                        "Drop user {name}? This cannot be undone."
+                                                    ),
+                                                    "Drop",
+                                                    true,
+                                                    move |window, cx| {
+                                                        view.update(cx, |this, cx| {
+                                                            let task = user_service::drop(cx, &name);
+                                                            this.run(
+                                                                window,
+                                                                cx,
+                                                                "Drop user",
+                                                                task,
+                                                            );
+                                                        });
+                                                    },
+                                                );
                                             })),
                                     ),
                             ),
@@ -597,59 +605,7 @@ impl Render for UsersPanel {
                                                     )),
                                             ),
                                     )
-                                    .when_some(self.confirm_drop.clone(), |panel, name| {
-                                        panel.child(
-                                            v_flex()
-                                                .gap_1()
-                                                .p_2()
-                                                .rounded(theme.radius)
-                                                .border_1()
-                                                .border_color(theme.danger)
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(theme.danger)
-                                                        .child(SharedString::from(format!(
-                                                        "Drop user {name}? This cannot be undone."
-                                                    ))),
-                                                )
-                                                .child(
-                                                    h_flex()
-                                                        .gap_1()
-                                                        .child(
-                                                            Button::new("users-drop-confirm")
-                                                                .label("Confirm drop")
-                                                                .xsmall()
-                                                                .on_click(cx.listener(
-                                                                    move |this, _, window, cx| {
-                                                                        let task =
-                                                                            user_service::drop(
-                                                                                cx, &name,
-                                                                            );
-                                                                        this.run(
-                                                                            window,
-                                                                            cx,
-                                                                            "Drop user",
-                                                                            task,
-                                                                        );
-                                                                    },
-                                                                )),
-                                                        )
-                                                        .child(
-                                                            Button::new("users-drop-cancel")
-                                                                .label("Cancel")
-                                                                .xsmall()
-                                                                .ghost()
-                                                                .on_click(cx.listener(
-                                                                    |this, _, _, cx| {
-                                                                        this.confirm_drop = None;
-                                                                        cx.notify();
-                                                                    },
-                                                                )),
-                                                        ),
-                                                ),
-                                        )
-                                    }),
+
                             ),
                     ),
             )

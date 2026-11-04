@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 use linkrs_client::TransactionOptions;
 
-use crate::components::{empty_state, form_row, render_json_block};
+use crate::components::{confirm, empty_state, form_row, panel_header, render_json_block};
 use crate::services::{connection_service, monitoring_service, transaction_service};
 
 /// Transaction management panel: explicit begin/commit/rollback, savepoint
@@ -28,7 +28,6 @@ pub struct TransactionsPanel {
     loading: bool,
     message: Option<SharedString>,
     error: Option<SharedString>,
-    confirm_kill: Option<u64>,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -39,8 +38,7 @@ impl TransactionsPanel {
         let txn_id = cx.new(|cx| InputState::new(window, cx).placeholder("Transaction id"));
         let savepoint_name =
             cx.new(|cx| InputState::new(window, cx).placeholder("Savepoint name (optional)"));
-        let savepoint_id =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Savepoint id"));
+        let savepoint_id = cx.new(|cx| InputState::new(window, cx).placeholder("Savepoint id"));
         let mut panel = Self {
             overview: serde_json::Value::Null,
             metrics: serde_json::Value::Null,
@@ -53,7 +51,6 @@ impl TransactionsPanel {
             loading: false,
             message: None,
             error: None,
-            confirm_kill: None,
             focus_handle: cx.focus_handle(),
         };
         panel.refresh(window, cx);
@@ -65,7 +62,6 @@ impl TransactionsPanel {
             return;
         }
         self.loading = true;
-        self.confirm_kill = None;
         cx.notify();
         let overview = monitoring_service::overview(cx);
         let metrics = transaction_service::metrics(cx);
@@ -157,8 +153,7 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message =
-                            Some(format!("Committed transaction {txn_id}.").into());
+                        this.message = Some(format!("Committed transaction {txn_id}.").into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -186,8 +181,7 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message =
-                            Some(format!("Rolled back transaction {txn_id}.").into());
+                        this.message = Some(format!("Rolled back transaction {txn_id}.").into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -209,12 +203,7 @@ impl TransactionsPanel {
             cx.notify();
             return;
         };
-        let name = self
-            .savepoint_name
-            .read(cx)
-            .value()
-            .trim()
-            .to_string();
+        let name = self.savepoint_name.read(cx).value().trim().to_string();
         let name = (!name.is_empty()).then_some(name);
         let task = transaction_service::create_savepoint(cx, txn_id, name.clone());
         cx.spawn_in(window, async move |this, window| {
@@ -255,8 +244,8 @@ impl TransactionsPanel {
             this.update(cx, |this, cx| {
                 match outcome {
                     Ok(rows) => {
-                        this.savepoints = serde_json::to_value(&rows)
-                            .unwrap_or(serde_json::Value::Null);
+                        this.savepoints =
+                            serde_json::to_value(&rows).unwrap_or(serde_json::Value::Null);
                     }
                     Err(error) => {
                         this.error = Some(error.to_string().into());
@@ -328,10 +317,8 @@ impl TransactionsPanel {
                 match outcome {
                     Ok(_) => {
                         this.message = Some(
-                            format!(
-                                "Released savepoint {savepoint_id} of transaction {txn_id}."
-                            )
-                            .into(),
+                            format!("Released savepoint {savepoint_id} of transaction {txn_id}.")
+                                .into(),
                         );
                         this.list_savepoints_inner(txn_id, cx);
                     }
@@ -353,7 +340,6 @@ impl TransactionsPanel {
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, |this, window, cx| {
-                this.confirm_kill = None;
                 match outcome {
                     Ok(_) => {
                         this.message = Some(format!("Terminated transaction {txn_id}.").into());
@@ -577,49 +563,35 @@ impl Render for TransactionsPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Transactions")),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("transactions-refresh")
-                            .icon(IconName::RefreshCw)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.refresh(window, cx);
-                            })),
-                    ),
-            )
-            .when_some(self.error.clone(), |panel, message| {
-                panel.child(
+            .child(panel_header(
+                SharedString::from(crate::i18n::t("nav.transactions", crate::i18n::locale(cx))),
+                Some(SharedString::from(format!(
+                    "{} active",
+                    self.transactions.len()
+                ))),
+                Some(
                     h_flex()
-                        .flex_shrink_0()
                         .items_center()
                         .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.danger.opacity(0.08))
                         .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.danger)
-                                .child(message),
-                        ),
+                            Button::new("transactions-refresh")
+                                .icon(IconName::RefreshCw)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.refresh(window, cx);
+                                })),
+                        )
+                        .into_any_element(),
+                ),
+                cx,
+            ))
+            .when_some(self.error.clone(), |panel, message| {
+                panel.child(
+                    div().px(px(20.)).py(px(8.)).child(
+                        gpui_kit::component::alert::Alert::error("txn-error", message).small(),
+                    ),
                 )
             })
             .when_some(self.message.clone(), |panel, message| {
@@ -630,38 +602,6 @@ impl Render for TransactionsPanel {
                             .text_color(theme.muted_foreground)
                             .child(message),
                     ),
-                )
-            })
-            .when_some(self.confirm_kill, |panel, txn_id| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.warning.opacity(0.1))
-                        .child(div().flex_1().text_xs().text_color(theme.warning).child(
-                            SharedString::from(format!("Terminate transaction {txn_id}?")),
-                        ))
-                        .child(
-                            Button::new("transactions-kill-confirm")
-                                .label("Confirm")
-                                .xsmall()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.kill(txn_id, window, cx);
-                                })),
-                        )
-                        .child(
-                            Button::new("transactions-kill-cancel")
-                                .label("Cancel")
-                                .xsmall()
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.confirm_kill = None;
-                                    cx.notify();
-                                })),
-                        ),
                 )
             })
             .child(
@@ -677,28 +617,30 @@ impl Render for TransactionsPanel {
                             .flex_shrink_0()
                             .px_2()
                             .py_1()
+                            .child(div().text_sm().text_color(theme.foreground).child(
+                                SharedString::from(format!(
+                                    "Active transactions ({})",
+                                    self.transactions.len()
+                                )),
+                            ))
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(SharedString::from(format!(
-                                        "Active transactions ({})",
-                                        self.transactions.len()
-                                    ))),
-                            )
-                            .child(
-                                v_flex().children(self.transactions.iter().map(|txn| {
-                                    render_transaction_row(txn, &theme, self.confirm_kill, cx)
-                                })).when(self.transactions.is_empty(), |list| {
-                                    list.child(empty_state(
-                                        IconName::Inbox,
-                                        "No active transactions",
-                                        Some(
-                                            "The server reports no running transactions.".into(),
-                                        ),
-                                        cx,
-                                    ))
-                                }),
+                                v_flex()
+                                    .children(
+                                        self.transactions
+                                            .iter()
+                                            .map(|txn| render_transaction_row(txn, &theme, cx)),
+                                    )
+                                    .when(self.transactions.is_empty(), |list| {
+                                        list.child(empty_state(
+                                            IconName::Inbox,
+                                            "No active transactions",
+                                            Some(
+                                                "The server reports no running transactions."
+                                                    .into(),
+                                            ),
+                                            cx,
+                                        ))
+                                    }),
                             ),
                     ),
             )
@@ -709,7 +651,6 @@ impl Render for TransactionsPanel {
 fn render_transaction_row(
     txn: &serde_json::Value,
     theme: &gpui_kit::component::Theme,
-    confirm_kill: Option<u64>,
     cx: &mut Context<TransactionsPanel>,
 ) -> impl IntoElement {
     let txn_id = txn
@@ -783,12 +724,23 @@ fn render_transaction_row(
             row.child(
                 Button::new(("transactions-kill", id))
                     .label("Kill")
-                    .xsmall()
+                    .small()
                     .ghost()
-                    .disabled(confirm_kill == Some(id))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.confirm_kill = Some(id);
-                        cx.notify();
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let view = cx.entity();
+                        confirm(
+                            window,
+                            cx,
+                            "Terminate transaction",
+                            format!(
+                                "Terminate transaction {id}? Its pending writes are rolled back."
+                            ),
+                            "Terminate",
+                            true,
+                            move |window, cx| {
+                                view.update(cx, |this, cx| this.kill(id, window, cx));
+                            },
+                        );
                     })),
             )
             .when(blocking.is_some(), |row| {

@@ -10,7 +10,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{empty_state, form_row, render_json_block};
+use crate::components::{confirm, empty_state, form_row, panel_header, render_json_block};
 use crate::services::{connection_service, function_service};
 
 /// Function registry panel: registered function list, detail inspection,
@@ -24,7 +24,6 @@ pub struct FunctionsPanel {
     loading: bool,
     message: Option<SharedString>,
     error: Option<SharedString>,
-    confirm_unregister: Option<String>,
     focus_handle: gpui_kit::FocusHandle,
 }
 
@@ -44,7 +43,6 @@ impl FunctionsPanel {
             loading: false,
             message: None,
             error: None,
-            confirm_unregister: None,
             focus_handle: cx.focus_handle(),
         };
         panel.refresh(window, cx);
@@ -56,7 +54,6 @@ impl FunctionsPanel {
             return;
         }
         self.loading = true;
-        self.confirm_unregister = None;
         cx.notify();
         let task = function_service::list(cx);
         cx.spawn_in(window, async move |this, window| {
@@ -143,7 +140,6 @@ impl FunctionsPanel {
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, |this, window, cx| {
-                this.confirm_unregister = None;
                 match outcome {
                     Ok(()) => {
                         this.message = Some(format!("Unregistered function {name}.").into());
@@ -193,45 +189,60 @@ impl Render for FunctionsPanel {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(SharedString::from("Functions")),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("functions-refresh")
-                            .icon(IconName::RefreshCw)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.refresh(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("functions-unregister")
-                            .label("Unregister")
-                            .icon(IconName::Trash)
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.selected.is_none())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.confirm_unregister = this.selected.clone();
-                                cx.notify();
-                            })),
-                    ),
-            )
+            .child(panel_header(
+                SharedString::from(crate::i18n::t(
+                    "nav.functions",
+                    crate::i18n::locale(cx),
+                )),
+                None,
+                Some(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("functions-refresh")
+                                .icon(IconName::RefreshCw)
+                                .small()
+                                .ghost()
+                                .disabled(self.loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.refresh(window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("functions-unregister")
+                                .label("Unregister")
+                                .icon(IconName::Trash)
+                                .small()
+                                .ghost()
+                                .disabled(self.selected.is_none())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    let Some(name) = this.selected.clone() else {
+                                        return;
+                                    };
+                                    let view = cx.entity();
+                                    confirm(
+                                        window,
+                                        cx,
+                                        "Unregister function",
+                                        format!(
+                                            "Unregister function {name}? Existing queries stop resolving it."
+                                        ),
+                                        "Unregister",
+                                        true,
+                                        move |window, cx| {
+                                            let name = name.clone();
+                                            view.update(cx, |this, cx| {
+                                                this.unregister(&name, window, cx);
+                                            });
+                                        },
+                                    );
+                                })),
+                        )
+                        .into_any_element(),
+                ),
+                cx,
+            ))
             .when_some(self.error.clone(), |panel, message| {
                 panel.child(
                     h_flex()
@@ -260,42 +271,7 @@ impl Render for FunctionsPanel {
                     ),
                 )
             })
-            .when_some(self.confirm_unregister.clone(), |panel, name| {
-                panel.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.warning.opacity(0.1))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(theme.warning)
-                                .child(SharedString::from(format!("Unregister function {name}?"))),
-                        )
-                        .child(
-                            Button::new("functions-unregister-confirm")
-                                .label("Confirm")
-                                .xsmall()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.unregister(&name, window, cx);
-                                })),
-                        )
-                        .child(
-                            Button::new("functions-unregister-cancel")
-                                .label("Cancel")
-                                .xsmall()
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.confirm_unregister = None;
-                                    cx.notify();
-                                })),
-                        ),
-                )
-            })
+
             .child(
                 h_flex()
                     .flex_1()
