@@ -18,8 +18,9 @@ use gpui_kit::{
 
 use crate::components::{
     card, card_body, card_head, card_stack, form_row, kpi_grid, page_body, panel_header,
-    render_json_block, Kpi, Tone,
+    render_json_block, skeleton_rows, Kpi, Tone,
 };
+use crate::i18n::t;
 use crate::services::{
     config_service, connection_service, fulltext_service, monitoring_service, query_service,
     stats_service, vector_service,
@@ -226,7 +227,10 @@ impl MonitoringPanel {
                 match outcome {
                     Ok(value) => {
                         this.freeze = value;
-                        this.message = Some("Freeze triggered.".into());
+                        this.message = Some(
+                            crate::i18n::t("monitoring.freezeTriggered", crate::i18n::locale(cx))
+                                .into(),
+                        );
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
@@ -362,7 +366,12 @@ impl MonitoringPanel {
                             linear_color_stop(color.opacity(0.4), 1.),
                             linear_color_stop(cx.theme().popover.opacity(0.1), 0.),
                         ))
-                        .tick_margin(15),
+                        .tick_margin(15)
+                        .tooltip_title(|point| SharedString::from(point.index.to_string()))
+                        .tooltip_value({
+                            let unit = unit.to_string();
+                            move |_, _, value| SharedString::from(format!("{value:.2} {unit}"))
+                        }),
                 ),
             )
     }
@@ -372,12 +381,9 @@ impl MonitoringPanel {
         let rows = self.slow_rows(cx);
         let mut section = v_flex().gap_2();
         if rows.is_empty() {
-            section = section.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("No slow queries above the threshold."),
-            );
+            section = section.child(div().text_xs().text_color(theme.muted_foreground).child(
+                crate::i18n::t("monitoring.noSlowQueries", crate::i18n::locale(cx)),
+            ));
         } else {
             section = section.child(v_flex().gap_1().children(rows.into_iter().enumerate().map(
                 |(ix, (trace_id, session_id, query, duration, status))| {
@@ -438,7 +444,10 @@ impl MonitoringPanel {
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("Loading portrait…")
+                            .child(crate::i18n::t(
+                                "monitoring.loadingPortrait",
+                                crate::i18n::locale(cx),
+                            ))
                             .into_any_element()
                     } else {
                         render_json_block(&self.portrait, cx).into_any_element()
@@ -477,9 +486,21 @@ impl MonitoringPanel {
             .items_center()
             .gap_3()
             .flex_wrap()
-            .child(form_row("CPU % >", self.cpu_threshold.clone(), cx))
-            .child(form_row("Memory % >", self.mem_threshold.clone(), cx))
-            .child(form_row("Slow ms >", self.slow_threshold.clone(), cx))
+            .child(form_row(
+                t("monitoring.cpuThreshold", crate::i18n::locale(cx)),
+                self.cpu_threshold.clone(),
+                cx,
+            ))
+            .child(form_row(
+                t("monitoring.memThreshold", crate::i18n::locale(cx)),
+                self.mem_threshold.clone(),
+                cx,
+            ))
+            .child(form_row(
+                t("monitoring.slowMs", crate::i18n::locale(cx)),
+                self.slow_threshold.clone(),
+                cx,
+            ))
             .when(!exceeded.is_empty(), |row| {
                 row.child(
                     div()
@@ -499,7 +520,10 @@ impl MonitoringPanel {
     ) -> gpui_kit::AnyElement {
         card(cx)
             .child(card_head(title.to_string(), None, cx))
-            .child(card_body().child(render_json_block(value, cx)))
+            .child(
+                card_body(crate::settings::global(cx).density.is_dense())
+                    .child(render_json_block(value, cx)),
+            )
             .into_any_element()
     }
 
@@ -507,6 +531,8 @@ impl MonitoringPanel {
         let qps = self.qps.back().map(|point| point.value).unwrap_or(0.0);
         let latency = self.latency.back().map(|point| point.value).unwrap_or(0.0);
         let cpu = pick(&self.system, &["cpu_usage_percent"]);
+        let locale = crate::i18n::locale(cx);
+        let label = |key: &'static str| SharedString::from(t(key, locale));
         let mem = self
             .system
             .get("memory_usage")
@@ -525,23 +551,32 @@ impl MonitoringPanel {
 
         kpi_grid(
             vec![
-                Kpi::new("Spaces", value(number(&self.database, &["space_count"]))),
                 Kpi::new(
-                    "Vertices",
+                    label("monitoring.kpiSpaces"),
+                    value(number(&self.database, &["space_count"])),
+                ),
+                Kpi::new(
+                    label("monitoring.kpiVertices"),
                     value(number(&self.database, &["total_vertices"])),
                 ),
-                Kpi::new("Edges", value(number(&self.database, &["total_edges"]))),
                 Kpi::new(
-                    "Active queries",
+                    label("monitoring.kpiEdges"),
+                    value(number(&self.database, &["total_edges"])),
+                ),
+                Kpi::new(
+                    label("monitoring.kpiActiveQueries"),
                     value(
                         number(&self.database, &["active_queries"])
                             .or_else(|| number(&self.queries, &["active_queries"])),
                     ),
                 ),
-                Kpi::new("QPS", format!("{qps:.2}")),
-                Kpi::new("Avg latency", format!("{latency:.1} ms")),
+                Kpi::new(label("monitoring.kpiQps"), format!("{qps:.2}")),
                 Kpi::new(
-                    "CPU",
+                    label("monitoring.kpiAvgLatency"),
+                    format!("{latency:.1} ms"),
+                ),
+                Kpi::new(
+                    label("monitoring.kpiCpu"),
                     cpu.map(|value| format!("{value:.1} %"))
                         .unwrap_or_else(|| "—".to_string()),
                 )
@@ -551,7 +586,7 @@ impl MonitoringPanel {
                     Tone::Neutral
                 }),
                 Kpi::new(
-                    "Memory",
+                    label("monitoring.kpiMemory"),
                     mem.map(|value| format!("{value:.1} %"))
                         .unwrap_or_else(|| "—".to_string()),
                 )
@@ -599,14 +634,17 @@ impl Render for MonitoringPanel {
                     .text_size(px(12.))
                     .text_color(theme.muted_foreground)
                     .child(SharedString::from(if self.loading {
-                        "Refreshing…"
+                        crate::i18n::t("monitoring.refreshing", crate::i18n::locale(cx))
                     } else {
-                        "Idle"
+                        crate::i18n::t("monitoring.idle", crate::i18n::locale(cx))
                     })),
             )
             .child(
                 Button::new("monitoring-auto")
-                    .label("Auto refresh (5s)")
+                    .label(crate::i18n::t(
+                        "monitoring.autoRefresh",
+                        crate::i18n::locale(cx),
+                    ))
                     .small()
                     .ghost()
                     .selected(self.auto_refresh)
@@ -649,7 +687,10 @@ impl Render for MonitoringPanel {
             })
             .child({
                 let freeze_action = Button::new("monitoring-freeze")
-                    .label("Trigger freeze")
+                    .label(crate::i18n::t(
+                        "monitoring.triggerFreeze",
+                        crate::i18n::locale(cx),
+                    ))
                     .small()
                     .ghost()
                     .disabled(self.loading)
@@ -659,84 +700,157 @@ impl Render for MonitoringPanel {
                     }))
                     .into_any_element();
 
-                page_body("monitoring-body", cx).child(
-                    card_stack().children([
-                        self.render_stat_cards(cx).into_any_element(),
-                        card(cx)
-                            .child(card_head("Thresholds", None, cx))
-                            .child(card_body().child(self.render_thresholds(cx)))
-                            .into_any_element(),
-                        card(cx)
-                            .child(card_head(
-                                format!("Slow queries ({})", self.slow_rows(cx).len()),
-                                None,
-                                cx,
-                            ))
-                            .child(card_body().child(self.render_slow_queries(cx)))
-                            .into_any_element(),
-                        h_flex()
-                            .w_full()
-                            .gap_3()
-                            .child(self.render_chart(
-                                "Queries per second",
-                                "qps",
-                                &self.qps,
-                                theme.chart_1,
-                                cx,
-                            ))
-                            .child(self.render_chart(
-                                "Average latency",
-                                "ms",
-                                &self.latency,
-                                theme.chart_3,
-                                cx,
-                            ))
-                            .into_any_element(),
-                        self.section_card("Overview", &self.overview, cx),
-                        self.section_card("Search statistics", &self.search, cx),
-                        card(cx)
-                            .child(card_head("Freeze statistics", Some(freeze_action), cx))
-                            .when(self.confirm_freeze, |area| {
-                                area.child(
-                                    h_flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .px(px(24.))
-                                        .pt(px(12.))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .text_size(px(12.))
-                                                .text_color(theme.warning)
-                                                .child(SharedString::from("Trigger a freeze now?")),
-                                        )
-                                        .child(
-                                            Button::new("monitoring-freeze-confirm")
-                                                .label("Confirm")
-                                                .small()
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.trigger_freeze(window, cx);
-                                                })),
-                                        )
-                                        .child(
-                                            Button::new("monitoring-freeze-cancel")
-                                                .label("Cancel")
-                                                .small()
-                                                .ghost()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.confirm_freeze = false;
-                                                    cx.notify();
-                                                })),
-                                        ),
+                page_body("monitoring-body", cx).child(if self.loading && self.overview.is_null() {
+                    card(cx)
+                        .child(card_body(false).child(skeleton_rows(6, cx)))
+                        .into_any_element()
+                } else {
+                    card_stack()
+                        .children([
+                            self.render_stat_cards(cx).into_any_element(),
+                            card(cx)
+                                .child(card_head(
+                                    crate::i18n::t(
+                                        "monitoring.thresholds",
+                                        crate::i18n::locale(cx),
+                                    ),
+                                    None,
+                                    cx,
+                                ))
+                                .child(
+                                    card_body(crate::settings::global(cx).density.is_dense())
+                                        .child(self.render_thresholds(cx)),
                                 )
-                            })
-                            .child(card_body().child(render_json_block(&self.freeze, cx)))
-                            .into_any_element(),
-                        self.section_card("Current session", &self.session, cx),
-                        self.section_card("Migration statistics", &self.migration, cx),
-                        self.section_card("Retrieval snapshot", &self.retrieval, cx),
-                    ]),
-                )
+                                .into_any_element(),
+                            card(cx)
+                                .child(card_head(
+                                    crate::i18n::tf(
+                                        "monitoring.slowQueries",
+                                        crate::i18n::locale(cx),
+                                        self.slow_rows(cx).len(),
+                                    ),
+                                    None,
+                                    cx,
+                                ))
+                                .child(
+                                    card_body(crate::settings::global(cx).density.is_dense())
+                                        .child(self.render_slow_queries(cx)),
+                                )
+                                .into_any_element(),
+                            h_flex()
+                                .w_full()
+                                .gap_3()
+                                .child(self.render_chart(
+                                    crate::i18n::t("monitoring.qpsTitle", crate::i18n::locale(cx)),
+                                    "qps",
+                                    &self.qps,
+                                    theme.chart_1,
+                                    cx,
+                                ))
+                                .child(self.render_chart(
+                                    crate::i18n::t(
+                                        "monitoring.latencyTitle",
+                                        crate::i18n::locale(cx),
+                                    ),
+                                    "ms",
+                                    &self.latency,
+                                    theme.chart_3,
+                                    cx,
+                                ))
+                                .into_any_element(),
+                            self.section_card(
+                                crate::i18n::t("monitoring.overview", crate::i18n::locale(cx)),
+                                &self.overview,
+                                cx,
+                            ),
+                            self.section_card(
+                                crate::i18n::t("monitoring.searchStats", crate::i18n::locale(cx)),
+                                &self.search,
+                                cx,
+                            ),
+                            card(cx)
+                                .child(card_head(
+                                    crate::i18n::t(
+                                        "monitoring.freezeStats",
+                                        crate::i18n::locale(cx),
+                                    ),
+                                    Some(freeze_action),
+                                    cx,
+                                ))
+                                .when(self.confirm_freeze, |area| {
+                                    area.child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .px(px(24.))
+                                            .pt(px(12.))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .text_size(px(12.))
+                                                    .text_color(theme.warning)
+                                                    .child(SharedString::from(crate::i18n::t(
+                                                        "monitoring.confirmFreeze",
+                                                        crate::i18n::locale(cx),
+                                                    ))),
+                                            )
+                                            .child(
+                                                Button::new("monitoring-freeze-confirm")
+                                                    .label(crate::i18n::t(
+                                                        "monitoring.confirm",
+                                                        crate::i18n::locale(cx),
+                                                    ))
+                                                    .small()
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.trigger_freeze(window, cx);
+                                                        },
+                                                    )),
+                                            )
+                                            .child(
+                                                Button::new("monitoring-freeze-cancel")
+                                                    .label(crate::i18n::t(
+                                                        "monitoring.cancel",
+                                                        crate::i18n::locale(cx),
+                                                    ))
+                                                    .small()
+                                                    .ghost()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.confirm_freeze = false;
+                                                        cx.notify();
+                                                    })),
+                                            ),
+                                    )
+                                })
+                                .child(
+                                    card_body(crate::settings::global(cx).density.is_dense())
+                                        .child(render_json_block(&self.freeze, cx)),
+                                )
+                                .into_any_element(),
+                            self.section_card(
+                                crate::i18n::t(
+                                    "monitoring.currentSession",
+                                    crate::i18n::locale(cx),
+                                ),
+                                &self.session,
+                                cx,
+                            ),
+                            self.section_card(
+                                crate::i18n::t(
+                                    "monitoring.migrationStats",
+                                    crate::i18n::locale(cx),
+                                ),
+                                &self.migration,
+                                cx,
+                            ),
+                            self.section_card(
+                                crate::i18n::t("monitoring.retrieval", crate::i18n::locale(cx)),
+                                &self.retrieval,
+                                cx,
+                            ),
+                        ])
+                        .into_any_element()
+                })
             })
     }
 }

@@ -13,6 +13,7 @@ use gpui_kit::component::{
     table::{DataTable, TableState},
     v_flex, ActiveTheme as _, Icon, Sizable as _, WindowExt as _,
 };
+use gpui_kit::Div;
 use gpui_kit::{
     actions, div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity,
     EventEmitter, Focusable, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -83,8 +84,6 @@ pub struct ConsolePanel {
     tabs: Vec<ResultTab>,
     active_tab: Option<usize>,
     running: Option<Task<()>>,
-    history_open: bool,
-    favorites_open: bool,
     fav_name: Entity<InputState>,
     fav_path: Option<HistoryPath>,
     inspect: Option<InspectOutput>,
@@ -145,9 +144,16 @@ impl ConsolePanel {
             state.lsp_mut().completion_provider =
                 Some(Rc::new(LinkrsCompletionProvider::new(provider_schema)));
         });
-        let fav_name = cx.new(|cx| InputState::new(window, cx).placeholder("Favorite name"));
-        let kill_session = cx.new(|cx| InputState::new(window, cx).placeholder("Session id"));
-        let kill_query = cx.new(|cx| InputState::new(window, cx).placeholder("Query id"));
+        let fav_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("console.favoriteName", crate::i18n::locale(cx)))
+        });
+        let kill_session = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("console.sessionId", crate::i18n::locale(cx)))
+        });
+        let kill_query = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("console.queryId", crate::i18n::locale(cx)))
+        });
         let params = cx.new(|cx| InputState::new(window, cx).placeholder("{\"name\": value}"));
         let session_vars =
             cx.new(|cx| InputState::new(window, cx).placeholder("{\"name\": value}"));
@@ -156,8 +162,6 @@ impl ConsolePanel {
             tabs: Vec::new(),
             active_tab: None,
             running: None,
-            history_open: false,
-            favorites_open: false,
             fav_name,
             fav_path: None,
             inspect: None,
@@ -530,7 +534,8 @@ impl ConsolePanel {
                     },
                 );
                 window.push_notification(
-                    Notification::error(user_message(&error)).title("Query failed"),
+                    Notification::error(user_message(&error, crate::i18n::locale(cx)))
+                        .title(t("console.queryFailed", crate::i18n::locale(cx))),
                     cx,
                 );
                 false
@@ -604,8 +609,14 @@ impl ConsolePanel {
                 .ok_or_else(|| format!("{what} must be a JSON object."))
         };
         Ok(ParsedBindings {
-            parameters: parse(&self.params, "Parameters")?,
-            session_variables: parse(&self.session_vars, "Session variables")?,
+            parameters: parse(
+                &self.params,
+                t("console.parameters", crate::i18n::locale(cx)),
+            )?,
+            session_variables: parse(
+                &self.session_vars,
+                t("console.sessionVars", crate::i18n::locale(cx)),
+            )?,
         })
     }
 
@@ -707,7 +718,8 @@ impl ConsolePanel {
                     connection_service::invalidate_session(cx);
                 }
                 window.push_notification(
-                    Notification::error(user_message(&error)).title("Inspection failed"),
+                    Notification::error(user_message(&error, crate::i18n::locale(cx)))
+                        .title(t("console.inspectFailed", crate::i18n::locale(cx))),
                     cx,
                 );
             }
@@ -774,7 +786,8 @@ impl ConsolePanel {
                             connection_service::invalidate_session(cx);
                         }
                         window.push_notification(
-                            Notification::error(user_message(&error)).title("Explain failed"),
+                            Notification::error(user_message(&error, crate::i18n::locale(cx)))
+                                .title(t("console.explainFailed", crate::i18n::locale(cx))),
                             cx,
                         );
                     }
@@ -802,8 +815,8 @@ impl ConsolePanel {
                             connection_service::invalidate_session(cx);
                         }
                         window.push_notification(
-                            Notification::error(user_message(&error))
-                                .title("Running queries failed"),
+                            Notification::error(user_message(&error, crate::i18n::locale(cx)))
+                                .title(t("console.runningFailed", crate::i18n::locale(cx))),
                             cx,
                         );
                     }
@@ -820,7 +833,7 @@ impl ConsolePanel {
         let query_id: Option<i64> = self.kill_query.read(cx).value().trim().parse().ok();
         let (Some(session_id), Some(query_id)) = (session_id, query_id) else {
             window.push_notification(
-                Notification::info("Enter numeric session and query ids first."),
+                Notification::info(t("console.numericIds", crate::i18n::locale(cx))),
                 cx,
             );
             return;
@@ -829,13 +842,18 @@ impl ConsolePanel {
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, |this, window, cx| {
+                let locale = crate::i18n::locale(cx);
                 match outcome {
                     Ok(payload) => {
                         this.running_payload = payload;
                         window.push_notification(
-                            Notification::success(format!(
-                                "Terminated query {query_id} on session {session_id}."
-                            )),
+                            Notification::success(
+                                tf("console.terminatedQuery", locale, query_id).replacen(
+                                    "{}",
+                                    &session_id.to_string(),
+                                    1,
+                                ),
+                            ),
                             cx,
                         );
                     }
@@ -844,7 +862,8 @@ impl ConsolePanel {
                             connection_service::invalidate_session(cx);
                         }
                         window.push_notification(
-                            Notification::error(user_message(&error)).title("Terminate failed"),
+                            Notification::error(user_message(&error, crate::i18n::locale(cx)))
+                                .title(t("console.terminateFailed", crate::i18n::locale(cx))),
                             cx,
                         );
                     }
@@ -862,7 +881,10 @@ impl ConsolePanel {
             .and_then(|ix| self.tabs.get(ix))
             .and_then(|tab| tab.trace_id.clone());
         let Some(trace_id) = trace_id else {
-            window.push_notification(Notification::info("The active result has no trace id."), cx);
+            window.push_notification(
+                Notification::info(t("console.noTraceId", crate::i18n::locale(cx))),
+                cx,
+            );
             return;
         };
         self.inspect_loading = true;
@@ -873,7 +895,15 @@ impl ConsolePanel {
                 .await
                 .map(|detail| serde_json::to_value(&detail).unwrap_or(serde_json::Value::Null));
             _ = this.update_in(window, |this, window, cx| {
-                this.inspect_result(format!("Profile {trace_id}"), outcome, window, cx);
+                this.inspect_result(
+                    format!(
+                        "{} {trace_id}",
+                        t("console.profile", crate::i18n::locale(cx))
+                    ),
+                    outcome,
+                    window,
+                    cx,
+                );
             });
         })
         .detach();
@@ -892,9 +922,11 @@ impl ConsolePanel {
                 });
                 cx.notify();
             }
-            Err(message) => {
-                window.push_notification(Notification::error(message).title("Save favorite"), cx)
-            }
+            Err(message) => window.push_notification(
+                Notification::error(message)
+                    .title(t("console.saveFavoriteFailed", crate::i18n::locale(cx))),
+                cx,
+            ),
         }
     }
 
@@ -909,8 +941,6 @@ impl ConsolePanel {
         self.editor.update(cx, |state, cx| {
             state.set_value(sql.to_string(), window, cx);
         });
-        self.history_open = false;
-        self.favorites_open = false;
         cx.notify();
         if run_after {
             self.run(window, cx);
@@ -1062,7 +1092,7 @@ impl ConsolePanel {
         };
         if tab.status != TabStatus::Ok {
             window.push_notification(
-                Notification::info("Run the statement successfully before exporting."),
+                Notification::info(t("console.exportNotRun", crate::i18n::locale(cx))),
                 cx,
             );
             return;
@@ -1127,12 +1157,17 @@ impl ConsolePanel {
         }
         match graph_service::neighborhood_from_rows(&tab.raw_rows) {
             Some((neighborhood, truncated)) => {
-                let summary = format!(
-                    "Sent {} nodes and {} edges to the graph{}",
-                    neighborhood.nodes.len(),
-                    neighborhood.edges.len(),
-                    if truncated { " (truncated)" } else { "" },
-                );
+                let summary = tf("console.sentGraph", locale, neighborhood.nodes.len())
+                    .replacen("{}", &neighborhood.edges.len().to_string(), 1)
+                    .replacen(
+                        "{}",
+                        if truncated {
+                            t("console.truncated", locale)
+                        } else {
+                            ""
+                        },
+                        1,
+                    );
                 AppState::global(cx).update(cx, |state, cx| {
                     state.push_graph_drop(neighborhood, cx);
                 });
@@ -1159,10 +1194,8 @@ impl ConsolePanel {
     fn render_toolbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = AppState::global(cx).read(cx).locale;
         let running = self.running.is_some();
-        let history_open = self.history_open;
-        let favorites_open = self.favorites_open;
-        let running_open = self.running_open;
         let inspect_busy = self.inspect_loading;
+        let running_open = self.running_open;
         let preference = self.execution;
         let decision = self.auto_decision.clone();
         let cursor_open = self.cursor_id.is_some();
@@ -1227,7 +1260,7 @@ impl ConsolePanel {
             )
             .child(
                 Button::new("export-csv")
-                    .label("CSV")
+                    .label(crate::i18n::t("console.exportCsv", crate::i18n::locale(cx)))
                     .icon(IconName::Download)
                     .xsmall()
                     .disabled(running)
@@ -1237,7 +1270,10 @@ impl ConsolePanel {
             )
             .child(
                 Button::new("export-json")
-                    .label("JSON")
+                    .label(crate::i18n::t(
+                        "console.exportJson",
+                        crate::i18n::locale(cx),
+                    ))
                     .icon(IconName::Download)
                     .xsmall()
                     .disabled(running)
@@ -1389,10 +1425,8 @@ impl ConsolePanel {
                     .icon(IconName::Clock)
                     .xsmall()
                     .ghost()
-                    .selected(history_open)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.history_open = !this.history_open;
-                        cx.notify();
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_history_drawer(window, cx);
                     })),
             )
             .child(
@@ -1401,10 +1435,8 @@ impl ConsolePanel {
                     .icon(IconName::Star)
                     .xsmall()
                     .ghost()
-                    .selected(favorites_open)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.favorites_open = !this.favorites_open;
-                        cx.notify();
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_favorites_drawer(window, cx);
                     })),
             )
             .child(
@@ -1425,6 +1457,7 @@ impl ConsolePanel {
 
     fn render_params(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let params_error = self.params_error.clone();
+        let locale = crate::i18n::locale(cx);
         v_flex()
             .flex_shrink_0()
             .gap_1()
@@ -1432,8 +1465,16 @@ impl ConsolePanel {
             .py_1()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(form_row("Parameters", self.params.clone(), cx))
-            .child(form_row("Session vars", self.session_vars.clone(), cx))
+            .child(form_row(
+                t("console.parameters", locale),
+                self.params.clone(),
+                cx,
+            ))
+            .child(form_row(
+                t("console.sessionVars", locale),
+                self.session_vars.clone(),
+                cx,
+            ))
             .when_some(params_error, |panel, message| {
                 panel.child(div().text_xs().text_color(cx.theme().danger).child(message))
             })
@@ -1447,16 +1488,21 @@ impl ConsolePanel {
         ix: usize,
         view: &Entity<Self>,
         theme: &gpui_kit::component::Theme,
+        locale: crate::settings::Locale,
     ) -> impl IntoElement {
         let load_sql = item.sql.clone();
         let rerun_sql = item.sql.clone();
         let path = item.path;
         let summary = if item.success {
-            format!("{} rows · {} ms", item.row_count, item.elapsed_ms)
+            tf("console.rowsMs", locale, item.row_count).replacen(
+                "{}",
+                &item.elapsed_ms.to_string(),
+                1,
+            )
         } else {
             item.error_code
                 .clone()
-                .unwrap_or_else(|| "failed".to_string())
+                .unwrap_or_else(|| t("console.failed", locale).to_string())
         };
         let view_load = view.clone();
         let view_rerun = view.clone();
@@ -1504,7 +1550,7 @@ impl ConsolePanel {
                     .icon(IconName::Play)
                     .xsmall()
                     .ghost()
-                    .accessibility_label("Load and rerun this statement")
+                    .accessibility_label(t("console.rerunHint", locale))
                     .on_click(move |_, window, cx| {
                         let sql = rerun_sql.clone();
                         view_rerun.update(cx, |this, cx| {
@@ -1517,16 +1563,35 @@ impl ConsolePanel {
             )
     }
 
-    fn render_history(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let history = settings::global(cx).query_history;
+    /// Open the query history in a right-side drawer (the web studio's
+    /// history drawer).
+    fn open_history_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.entity();
+        let title = t("console.history", crate::i18n::locale(cx)).to_string();
+        crate::components::drawer(window, cx, title, move |sheet, _, cx| {
+            sheet.child(Self::history_body(&view, cx))
+        });
+    }
+
+    /// Open favorites (saved queries) in a right-side drawer.
+    fn open_favorites_drawer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = cx.entity();
+        let title = t("console.favorites", crate::i18n::locale(cx)).to_string();
+        crate::components::drawer(window, cx, title, move |sheet, _, cx| {
+            sheet.child(Self::favorites_body(&view, cx))
+        });
+    }
+
+    /// Drawer body for history: summary, clear action, list. Built from the
+    /// app context so it can live inside a `Sheet` builder closure; the
+    /// captured entity keeps the handlers live.
+    fn history_body(view: &Entity<Self>, cx: &App) -> Div {
+        let theme = cx.theme().clone();
+        let locale = crate::i18n::locale(cx);
+        let history = settings::global(cx).query_history;
 
         v_flex()
-            .w(px(300.))
-            .flex_shrink_0()
-            .border_r_1()
-            .border_color(theme.border)
+            .size_full()
             .child(
                 h_flex()
                     .items_center()
@@ -1537,22 +1602,36 @@ impl ConsolePanel {
                             .flex_1()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child(SharedString::from(format!(
-                                "History ({} entries, newest first)",
-                                history.len()
+                            .child(SharedString::from(tf(
+                                "console.historyCount",
+                                locale,
+                                history.len(),
                             ))),
                     )
                     .child(
                         Button::new("history-clear")
-                            .label("Clear")
+                            .label(t("console.clear", locale))
                             .xsmall()
                             .ghost()
                             .disabled(history.is_empty())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                settings::clear_history(cx);
-                                this.history_open = false;
-                                cx.notify();
-                            })),
+                            .on_click({
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    let view = view.clone();
+                                    crate::components::confirm(
+                                        window,
+                                        cx,
+                                        t("console.clearHistoryTitle", locale),
+                                        t("console.clearHistoryDesc", locale),
+                                        t("console.clear", locale),
+                                        true,
+                                        move |_, cx| {
+                                            settings::clear_history(cx);
+                                            view.update(cx, |_, cx| cx.notify());
+                                        },
+                                    );
+                                }
+                            }),
                     ),
             )
             .child(
@@ -1562,56 +1641,58 @@ impl ConsolePanel {
                     .min_h_0()
                     .overflow_y_scroll()
                     .px_1()
-                    .children(
-                        history
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, item)| Self::history_row(item.clone(), ix, &view, &theme)),
-                    )
+                    .children(history.iter().enumerate().map(|(ix, item)| {
+                        Self::history_row(item.clone(), ix, view, &theme, locale)
+                    }))
                     .when(history.is_empty(), |list| {
                         list.child(empty_state(
                             IconName::Clock,
-                            "No history yet",
-                            Some("Executed statements land here with timings.".into()),
+                            t("console.noHistory", locale),
+                            Some(t("console.noHistoryHint", locale).into()),
                             cx,
                         ))
                     }),
             )
     }
 
-    fn render_favorites(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Drawer body for favorites: save form plus the saved list.
+    fn favorites_body(view: &Entity<Self>, cx: &App) -> Div {
         let theme = cx.theme().clone();
+        let locale = crate::i18n::locale(cx);
         let favorites = settings::global(cx).favorites;
-        let view = cx.entity();
-        let fav_path = self.fav_path;
+        let fav_path = view.read(cx).fav_path;
+        let fav_name = view.read(cx).fav_name.clone();
 
-        let path_button = |id: &'static str, label: &'static str, value: Option<HistoryPath>| {
+        let path_button = |id: &'static str, key: &'static str, value: Option<HistoryPath>| {
             Button::new(id)
-                .label(label)
+                .label(t(key, locale))
                 .xsmall()
                 .ghost()
                 .selected(fav_path == value)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.fav_path = value;
-                    cx.notify();
-                }))
+                .on_click({
+                    let view = view.clone();
+                    move |_, _, cx| {
+                        view.update(cx, |this, cx| {
+                            this.fav_path = value;
+                            cx.notify();
+                        });
+                    }
+                })
                 .into_any_element()
         };
 
         v_flex()
-            .w(px(300.))
-            .flex_shrink_0()
-            .border_r_1()
-            .border_color(theme.border)
+            .size_full()
             .child(
                 div()
                     .px_3()
                     .py_2()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(SharedString::from(format!(
-                        "Favorites ({} saved)",
-                        favorites.len()
+                    .child(SharedString::from(tf(
+                        "console.favoritesCount",
+                        locale,
+                        favorites.len(),
                     ))),
             )
             .child(
@@ -1621,7 +1702,17 @@ impl ConsolePanel {
                     .pb_2()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(form_row("Name", self.fav_name.clone(), cx))
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(t("console.name", locale)),
+                            )
+                            .child(Input::new(&fav_name).small()),
+                    )
                     .child(
                         h_flex()
                             .gap_1()
@@ -1630,28 +1721,33 @@ impl ConsolePanel {
                                 div()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child(SharedString::from("Rerun path")),
+                                    .child(t("console.rerunPath", locale)),
                             )
-                            .child(path_button("fav-path-auto", "Auto", None))
+                            .child(path_button("fav-path-auto", "console.pathAuto", None))
                             .child(path_button(
                                 "fav-path-materialized",
-                                "Results",
+                                "console.pathResults",
                                 Some(HistoryPath::Materialized),
                             ))
                             .child(path_button(
                                 "fav-path-stream",
-                                "Stream",
+                                "console.pathStream",
                                 Some(HistoryPath::Stream),
                             )),
                     )
                     .child(
                         Button::new("fav-save")
-                            .label("Save current editor")
+                            .label(t("console.saveFavorite", locale))
                             .icon(IconName::Star)
                             .xsmall()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.save_favorite(window, cx);
-                            })),
+                            .on_click({
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.save_favorite(window, cx);
+                                    });
+                                }
+                            }),
                     ),
             )
             .child(
@@ -1661,105 +1757,116 @@ impl ConsolePanel {
                     .min_h_0()
                     .overflow_y_scroll()
                     .px_1()
-                    .children(favorites.iter().enumerate().map(|(ix, fav)| {
-                        let load_sql = fav.sql.clone();
-                        let rerun_sql = fav.sql.clone();
-                        let preferred = fav.preferred_path;
-                        let name = fav.name.clone();
-                        let delete_name = fav.name.clone();
-                        let view_load = view.clone();
-                        let view_rerun = view.clone();
-                        let view_delete = view.clone();
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .px_1()
-                            .py_1()
-                            .child(
-                                div()
-                                    .id(("fav-load", ix))
-                                    .flex_1()
-                                    .min_w_0()
-                                    .on_click(move |_, window, cx| {
-                                        let sql = load_sql.clone();
-                                        view_load.update(cx, |this, cx| {
-                                            this.load_sql(&sql, false, window, cx);
-                                        });
-                                    })
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            .items_center()
-                                            .min_w_0()
-                                            .child(
-                                                Icon::new(IconName::Star)
-                                                    .text_color(theme.muted_foreground),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .min_w_0()
-                                                    .overflow_hidden()
-                                                    .whitespace_nowrap()
-                                                    .text_ellipsis()
-                                                    .child(SharedString::from(name)),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .overflow_hidden()
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .child(ConsolePanel::tab_label(&fav.sql)),
-                                    ),
-                            )
-                            .child(
-                                Button::new(("fav-rerun", ix))
-                                    .icon(IconName::Play)
-                                    .xsmall()
-                                    .ghost()
-                                    .accessibility_label("Load and rerun this favorite")
-                                    .on_click(move |_, window, cx| {
-                                        let sql = rerun_sql.clone();
-                                        view_rerun.update(cx, |this, cx| {
-                                            match preferred {
-                                                Some(HistoryPath::Stream) => {
-                                                    this.execution = ExecutionPreference::Stream;
-                                                }
-                                                Some(HistoryPath::Materialized) => {
-                                                    this.execution =
-                                                        ExecutionPreference::Materialized;
-                                                }
-                                                None => {}
-                                            }
-                                            this.load_sql(&sql, true, window, cx);
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new(("fav-delete", ix))
-                                    .icon(IconName::Trash)
-                                    .xsmall()
-                                    .ghost()
-                                    .accessibility_label("Delete this favorite")
-                                    .on_click(move |_, _, cx| {
-                                        let name = delete_name.clone();
-                                        view_delete.update(cx, |_, cx| {
-                                            settings::remove_favorite(cx, &name);
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                    }))
+                    .children(
+                        favorites
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, fav)| Self::favorite_row(fav, ix, view, &theme, locale)),
+                    )
                     .when(favorites.is_empty(), |list| {
                         list.child(empty_state(
                             IconName::Star,
-                            "No favorites yet",
-                            Some("Name the current editor above to save it.".into()),
+                            t("console.noFavorites", locale),
+                            Some(t("console.noFavoritesHint", locale).into()),
                             cx,
                         ))
+                    }),
+            )
+    }
+
+    /// One favorite row: name (click loads), statement preview, rerun and
+    /// delete actions. Handler-only variant usable inside drawer bodies.
+    fn favorite_row(
+        fav: &crate::settings::QueryFavoriteItem,
+        ix: usize,
+        view: &Entity<Self>,
+        theme: &gpui_kit::component::Theme,
+        locale: crate::settings::Locale,
+    ) -> impl IntoElement {
+        let load_sql = fav.sql.clone();
+        let rerun_sql = fav.sql.clone();
+        let preferred = fav.preferred_path;
+        let name = fav.name.clone();
+        let delete_name = fav.name.clone();
+        let view_load = view.clone();
+        let view_rerun = view.clone();
+        let view_delete = view.clone();
+        h_flex()
+            .gap_1()
+            .items_center()
+            .px_1()
+            .py_1()
+            .child(
+                div()
+                    .id(("fav-load", ix))
+                    .flex_1()
+                    .min_w_0()
+                    .on_click(move |_, window, cx| {
+                        let sql = load_sql.clone();
+                        view_load.update(cx, |this, cx| {
+                            this.load_sql(&sql, false, window, cx);
+                        });
+                    })
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .min_w_0()
+                            .child(Icon::new(IconName::Star).text_color(theme.muted_foreground))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(SharedString::from(name)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(ConsolePanel::tab_label(&fav.sql)),
+                    ),
+            )
+            .child(
+                Button::new(("fav-rerun", ix))
+                    .icon(IconName::Play)
+                    .xsmall()
+                    .ghost()
+                    .accessibility_label(t("console.rerunFavHint", locale))
+                    .on_click(move |_, window, cx| {
+                        let sql = rerun_sql.clone();
+                        view_rerun.update(cx, |this, cx| {
+                            match preferred {
+                                Some(HistoryPath::Stream) => {
+                                    this.execution = ExecutionPreference::Stream;
+                                }
+                                Some(HistoryPath::Materialized) => {
+                                    this.execution = ExecutionPreference::Materialized;
+                                }
+                                None => {}
+                            }
+                            this.load_sql(&sql, true, window, cx);
+                        });
+                    }),
+            )
+            .child(
+                Button::new(("fav-delete", ix))
+                    .icon(IconName::Trash)
+                    .xsmall()
+                    .ghost()
+                    .accessibility_label(t("console.deleteFavHint", locale))
+                    .on_click(move |_, _, cx| {
+                        let name = delete_name.clone();
+                        view_delete.update(cx, |_, cx| {
+                            settings::remove_favorite(cx, &name);
+                            cx.notify();
+                        });
                     }),
             )
     }
@@ -1775,7 +1882,7 @@ impl ConsolePanel {
                 .border_color(theme.border)
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(SharedString::from("Loading…"))
+                .child(t("console.loading", crate::i18n::locale(cx)))
                 .into_any_element();
         }
         let Some(inspect) = self.inspect.clone() else {
@@ -1803,7 +1910,10 @@ impl ConsolePanel {
                             .icon(IconName::X)
                             .xsmall()
                             .ghost()
-                            .accessibility_label("Close inspector")
+                            .accessibility_label(t(
+                                "console.closeInspector",
+                                crate::i18n::locale(cx),
+                            ))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.inspect = None;
                                 cx.notify();
@@ -1840,14 +1950,20 @@ impl ConsolePanel {
                         div()
                             .flex_1()
                             .text_sm()
-                            .child(SharedString::from("Running queries")),
+                            .child(SharedString::from(crate::i18n::t(
+                                "console.runningQueries",
+                                crate::i18n::locale(cx),
+                            ))),
                     )
                     .child(
                         Button::new("running-refresh")
                             .icon(IconName::RefreshCw)
                             .xsmall()
                             .ghost()
-                            .accessibility_label("Refresh running queries")
+                            .accessibility_label(crate::i18n::t(
+                                "console.refreshRunning",
+                                crate::i18n::locale(cx),
+                            ))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.load_running(window, cx);
                             })),
@@ -1857,7 +1973,7 @@ impl ConsolePanel {
                             .icon(IconName::X)
                             .xsmall()
                             .ghost()
-                            .accessibility_label("Close running queries")
+                            .accessibility_label(t("console.closeRunning", crate::i18n::locale(cx)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.running_open = false;
                                 cx.notify();
@@ -1869,11 +1985,19 @@ impl ConsolePanel {
                     .gap_1()
                     .items_center()
                     .px_2()
-                    .child(form_row("Session id", self.kill_session.clone(), cx))
-                    .child(form_row("Query id", self.kill_query.clone(), cx))
+                    .child(form_row(
+                        t("console.sessionId", crate::i18n::locale(cx)),
+                        self.kill_session.clone(),
+                        cx,
+                    ))
+                    .child(form_row(
+                        t("console.queryId", crate::i18n::locale(cx)),
+                        self.kill_query.clone(),
+                        cx,
+                    ))
                     .child(
                         Button::new("running-kill")
-                            .label("Terminate")
+                            .label(crate::i18n::t("console.terminate", crate::i18n::locale(cx)))
                             .icon(IconName::Ban)
                             .xsmall()
                             .ghost()
@@ -1898,8 +2022,8 @@ impl ConsolePanel {
         if self.tabs.is_empty() {
             return div().flex_1().min_h_0().child(empty_state(
                 IconName::Terminal,
-                "No results yet",
-                Some("Write a statement and press Run (Ctrl+Enter).".into()),
+                t("console.noResults", crate::i18n::locale(cx)),
+                Some(t("console.noResultsHint", crate::i18n::locale(cx)).into()),
                 cx,
             ));
         }
@@ -1960,12 +2084,15 @@ impl ConsolePanel {
                     .text_color(theme.muted_foreground)
                     .child(
                         Button::new("send-to-graph")
-                            .label("Graph")
+                            .label(crate::i18n::t("console.graph", crate::i18n::locale(cx)))
                             .icon(IconName::Network)
                             .xsmall()
                             .ghost()
                             .disabled(!can_send)
-                            .accessibility_label("Send the active result set to the graph panel")
+                            .accessibility_label(t(
+                                "console.sendGraphHint",
+                                crate::i18n::locale(cx),
+                            ))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.send_to_graph(window, cx);
                             })),
@@ -1996,8 +2123,8 @@ impl ConsolePanel {
                         |host| {
                             host.child(empty_state(
                                 IconName::Inbox,
-                                "No rows",
-                                Some("The statement produced no result set.".into()),
+                                t("console.noRows", crate::i18n::locale(cx)),
+                                Some(t("console.noRowsHint", crate::i18n::locale(cx)).into()),
                                 cx,
                             ))
                         },
@@ -2017,12 +2144,13 @@ impl ConsolePanel {
                     .gap_2()
                     .items_center()
                     .child(Icon::new(IconName::CircleX).text_color(theme.danger))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(SharedString::from(format!("Statement {} failed", ix + 1))),
-                    ),
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(
+                        SharedString::from(tf(
+                            "console.stmtFailed",
+                            crate::i18n::locale(cx),
+                            ix + 1,
+                        )),
+                    )),
             )
             .when_some(error, |panel, error| {
                 panel
@@ -2112,29 +2240,22 @@ impl Render for ConsolePanel {
                 )
             })
             .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .when(self.history_open, |row| row.child(self.render_history(cx)))
-                    .when(self.favorites_open, |row| {
-                        row.child(self.render_favorites(cx))
-                    })
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .h(px(EDITOR_HEIGHT))
-                                    .flex_shrink_0()
-                                    .border_b_1()
-                                    .border_color(theme.border)
-                                    .child(Editor::new(&self.editor)),
-                            )
-                            .child(self.render_inspect(cx))
-                            .child(self.render_running(cx))
-                            .child(self.render_results(cx)),
-                    ),
+                h_flex().flex_1().min_h_0().child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .h(px(EDITOR_HEIGHT))
+                                .flex_shrink_0()
+                                .border_b_1()
+                                .border_color(theme.border)
+                                .child(Editor::new(&self.editor)),
+                        )
+                        .child(self.render_inspect(cx))
+                        .child(self.render_running(cx))
+                        .child(self.render_results(cx)),
+                ),
             )
     }
 }
@@ -2197,10 +2318,10 @@ fn auto_decision(
     }
 }
 
-fn user_message(error: &ClientError) -> String {
+fn user_message(error: &ClientError, locale: crate::settings::Locale) -> String {
     match error {
-        ClientError::NotConnected => "The session is no longer connected.".into(),
-        ClientError::NoSpaceSelected => "Select a space before running this statement.".into(),
+        ClientError::NotConnected => t("console.notConnected", locale).to_string(),
+        ClientError::NoSpaceSelected => t("console.selectSpaceFirst", locale).to_string(),
         _ => error.to_string(),
     }
 }

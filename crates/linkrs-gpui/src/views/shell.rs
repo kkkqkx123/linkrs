@@ -5,6 +5,7 @@ use gpui_kit::{
 };
 
 use crate::connection::LoginView;
+use crate::i18n::t;
 use crate::state::{AppState, ConnectionStatus};
 use crate::views::MainWindow;
 
@@ -60,6 +61,7 @@ impl Shell {
     }
 
     fn render_title_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let locale = crate::i18n::locale(cx);
         TitleBar::new().child(
             h_flex()
                 .gap_2()
@@ -74,7 +76,7 @@ impl Shell {
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(SharedString::from("Desktop Client")),
+                        .child(SharedString::from(t("common.desktopClient", locale))),
                 ),
         )
     }

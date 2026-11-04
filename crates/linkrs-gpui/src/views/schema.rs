@@ -20,11 +20,12 @@ use linkrs_client::ClientError;
 use linkrs_wire::schema::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
 
 use crate::components::{
-    empty_state, form_row, panel_header, render_canvas_frame, render_properties, GraphModel,
+    empty_state, form_row, panel_header, render_canvas_frame, render_properties, skeleton_rows,
+    GraphModel,
 };
 use crate::services::graph_service::GraphNode;
 use crate::services::{connection_service, schema_service};
-use crate::state::{AppState, ConnectionStatus};
+use crate::state::{AppState, Capability, ConnectionStatus};
 
 /// Prefix marking edge-type nodes in the schema ER view, mirroring the
 /// frontend schema graph convention.
@@ -539,7 +540,7 @@ impl SchemaPanel {
             schema_service::create_edge_type(cx, &space, &name, properties)
         };
         let label = if self.create_tag_mode {
-            "Create tag"
+            crate::i18n::t("schema.createTag", crate::i18n::locale(cx))
         } else {
             "Create edge type"
         };
@@ -623,7 +624,12 @@ impl SchemaPanel {
             fields,
         );
         self.selected_index = Some(name);
-        self.run_write(window, cx, "Create index", task);
+        self.run_write(
+            window,
+            cx,
+            crate::i18n::t("schema.createIndex", crate::i18n::locale(cx)),
+            task,
+        );
     }
 
     fn drop_selected_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -778,7 +784,7 @@ impl SchemaPanel {
                     .gap_2()
                     .child(
                         Button::new("schema-view-tree")
-                            .label("Tree")
+                            .label(crate::i18n::t("schema.tree", crate::i18n::locale(cx)))
                             .small()
                             .ghost()
                             .selected(!self.er_open)
@@ -789,7 +795,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-view-er")
-                            .label("ER")
+                            .label(crate::i18n::t("schema.er", crate::i18n::locale(cx)))
                             .small()
                             .ghost()
                             .selected(self.er_open)
@@ -869,9 +875,14 @@ impl SchemaPanel {
 
     fn render_space_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = Self::current_space(cx).unwrap_or_default();
+        let can_write = AppState::global(cx).read(cx).can(Capability::Write);
+        let can_drop = AppState::global(cx).read(cx).can(Capability::DropSpace);
         v_flex()
             .gap_1()
-            .child(self.section_title("Spaces", cx))
+            .child(self.section_title(
+                crate::i18n::t("schema.sectionSpaces", crate::i18n::locale(cx)),
+                cx,
+            ))
             .child(
                 div()
                     .text_xs()
@@ -892,9 +903,9 @@ impl SchemaPanel {
                     .gap_1()
                     .child(
                         Button::new("schema-create-space")
-                            .label("Create")
+                            .label(crate::i18n::t("schema.create", crate::i18n::locale(cx)))
                             .xsmall()
-                            .disabled(self.busy)
+                            .disabled(self.busy || !can_write)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.create_space(window, cx);
                             })),
@@ -902,11 +913,13 @@ impl SchemaPanel {
                     .child(
                         Button::new("schema-drop-space")
                             .label(match &self.pending {
-                                Some(PendingOp::Space(_)) => "Confirm drop",
-                                _ => "Drop current",
+                                Some(PendingOp::Space(_)) => {
+                                    crate::i18n::t("schema.confirmDrop", crate::i18n::locale(cx))
+                                }
+                                _ => crate::i18n::t("schema.dropCurrent", crate::i18n::locale(cx)),
                             })
                             .xsmall()
-                            .disabled(self.busy)
+                            .disabled(self.busy || !can_drop)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.drop_current_space(window, cx);
                             })),
@@ -916,15 +929,20 @@ impl SchemaPanel {
 
     fn render_entry_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let tag_mode = self.create_tag_mode;
+        let can_write = AppState::global(cx).read(cx).can(Capability::Write);
+        let can_drop = AppState::global(cx).read(cx).can(Capability::DropSpace);
         v_flex()
             .gap_1()
-            .child(self.section_title("Tags / edge types", cx))
+            .child(self.section_title(
+                crate::i18n::t("schema.sectionTags", crate::i18n::locale(cx)),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_1()
                     .child(
                         Button::new("schema-mode-tag")
-                            .label("Tag")
+                            .label(crate::i18n::t("schema.tag", crate::i18n::locale(cx)))
                             .xsmall()
                             .selected(tag_mode)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -934,7 +952,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-mode-edge")
-                            .label("Edge")
+                            .label(crate::i18n::t("schema.edge", crate::i18n::locale(cx)))
                             .xsmall()
                             .selected(!tag_mode)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -951,12 +969,12 @@ impl SchemaPanel {
                     .child(
                         Button::new("schema-create-entry")
                             .label(if tag_mode {
-                                "Create tag"
+                                crate::i18n::t("schema.createTag", crate::i18n::locale(cx))
                             } else {
-                                "Create edge"
+                                crate::i18n::t("schema.createEdge", crate::i18n::locale(cx))
                             })
                             .xsmall()
-                            .disabled(self.busy)
+                            .disabled(self.busy || !can_write)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.create_entry(window, cx);
                             })),
@@ -965,12 +983,12 @@ impl SchemaPanel {
                         Button::new("schema-drop-entry")
                             .label(match &self.pending {
                                 Some(PendingOp::Tag { .. }) | Some(PendingOp::Edge { .. }) => {
-                                    "Confirm drop"
+                                    crate::i18n::t("schema.confirmDrop", crate::i18n::locale(cx))
                                 }
-                                _ => "Drop selected",
+                                _ => crate::i18n::t("schema.dropSelected", crate::i18n::locale(cx)),
                             })
                             .xsmall()
-                            .disabled(self.busy || self.selected.is_none())
+                            .disabled(self.busy || self.selected.is_none() || !can_drop)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.drop_selected(window, cx);
                             })),
@@ -988,10 +1006,14 @@ impl SchemaPanel {
 
     fn render_alter_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let fields = self.selected_fields();
+        let can_alter = AppState::global(cx).read(cx).can(Capability::AlterSchema);
         let dropped = self.drop_names.clone();
         let mut section = v_flex()
             .gap_1()
-            .child(self.section_title("Alter selected", cx))
+            .child(self.section_title(
+                crate::i18n::t("schema.sectionAlter", crate::i18n::locale(cx)),
+                cx,
+            ))
             .child(form_row("Add field", self.add_name.clone(), cx))
             .child(form_row("Field type", self.add_type.clone(), cx));
         if fields.is_empty() {
@@ -999,7 +1021,7 @@ impl SchemaPanel {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Select a tag or edge type in the tree to alter it."),
+                    .child(crate::i18n::t("schema.alterHint", crate::i18n::locale(cx))),
             );
         } else {
             section = section.child(v_flex().gap_1().children(fields.into_iter().map(
@@ -1029,9 +1051,9 @@ impl SchemaPanel {
         }
         section.child(
             Button::new("schema-alter-apply")
-                .label("Apply alter")
+                .label(crate::i18n::t("schema.applyAlter", crate::i18n::locale(cx)))
                 .xsmall()
-                .disabled(self.busy || self.selected.is_none())
+                .disabled(self.busy || self.selected.is_none() || !can_alter)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.alter_selected(window, cx);
                 })),
@@ -1042,13 +1064,19 @@ impl SchemaPanel {
         let unique = self.index_unique;
         let entity_edge = self.index_entity_edge;
         let selected = self.selected_index.clone();
-        let mut section = v_flex().gap_1().child(self.section_title("Indexes", cx));
+        let can_write = AppState::global(cx).read(cx).can(Capability::Write);
+        let can_drop = AppState::global(cx).read(cx).can(Capability::DropSpace);
+        let can_alter = AppState::global(cx).read(cx).can(Capability::AlterSchema);
+        let mut section = v_flex().gap_1().child(self.section_title(
+            crate::i18n::t("schema.sectionIndexes", crate::i18n::locale(cx)),
+            cx,
+        ));
         if self.indexes.is_empty() {
             section = section.child(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("No indexes in the current space."),
+                    .child(crate::i18n::t("schema.noIndexes", crate::i18n::locale(cx))),
             );
         } else {
             section = section.child(v_flex().gap_1().children(self.indexes.iter().map(|item| {
@@ -1075,7 +1103,7 @@ impl SchemaPanel {
                     .gap_1()
                     .child(
                         Button::new("schema-index-type-tag")
-                            .label("INDEX")
+                            .label(crate::i18n::t("schema.index", crate::i18n::locale(cx)))
                             .xsmall()
                             .selected(!unique)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1085,7 +1113,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-index-type-unique")
-                            .label("UNIQUE")
+                            .label(crate::i18n::t("schema.unique", crate::i18n::locale(cx)))
                             .xsmall()
                             .selected(unique)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1095,7 +1123,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-index-entity-tag")
-                            .label("TAG")
+                            .label(crate::i18n::t("schema.tagType", crate::i18n::locale(cx)))
                             .xsmall()
                             .selected(!entity_edge)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1105,7 +1133,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-index-entity-edge")
-                            .label("EDGE")
+                            .label(crate::i18n::t("schema.edgeType", crate::i18n::locale(cx)))
                             .xsmall()
                             .selected(entity_edge)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1122,9 +1150,12 @@ impl SchemaPanel {
                     .gap_1()
                     .child(
                         Button::new("schema-index-create")
-                            .label("Create index")
+                            .label(crate::i18n::t(
+                                "schema.createIndex",
+                                crate::i18n::locale(cx),
+                            ))
                             .xsmall()
-                            .disabled(self.busy)
+                            .disabled(self.busy || !can_write)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.create_index(window, cx);
                             })),
@@ -1132,20 +1163,22 @@ impl SchemaPanel {
                     .child(
                         Button::new("schema-index-drop")
                             .label(match &self.pending {
-                                Some(PendingOp::Index { .. }) => "Confirm drop",
-                                _ => "Drop selected",
+                                Some(PendingOp::Index { .. }) => {
+                                    crate::i18n::t("schema.confirmDrop", crate::i18n::locale(cx))
+                                }
+                                _ => crate::i18n::t("schema.dropSelected", crate::i18n::locale(cx)),
                             })
                             .xsmall()
-                            .disabled(self.busy || selected.is_none())
+                            .disabled(self.busy || selected.is_none() || !can_drop)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.drop_selected_index(window, cx);
                             })),
                     )
                     .child(
                         Button::new("schema-index-rebuild")
-                            .label("Rebuild")
+                            .label(crate::i18n::t("schema.rebuild", crate::i18n::locale(cx)))
                             .xsmall()
-                            .disabled(self.busy || selected.is_none())
+                            .disabled(self.busy || selected.is_none() || !can_alter)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.rebuild_selected_index(window, cx);
                             })),
@@ -1157,7 +1190,10 @@ impl SchemaPanel {
         let ver_edge = self.ver_edge;
         let mut section = v_flex()
             .gap_1()
-            .child(self.section_title("Schema versions", cx))
+            .child(self.section_title(
+                crate::i18n::t("schema.sectionVersions", crate::i18n::locale(cx)),
+                cx,
+            ))
             .child(form_row("Space", self.ver_space.clone(), cx))
             .child(form_row("Label", self.ver_label.clone(), cx))
             .child(
@@ -1165,7 +1201,7 @@ impl SchemaPanel {
                     .gap_1()
                     .child(
                         Button::new("schema-ver-tag")
-                            .label("Tag")
+                            .label(crate::i18n::t("schema.tag", crate::i18n::locale(cx)))
                             .xsmall()
                             .selected(!ver_edge)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1175,7 +1211,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-ver-edge")
-                            .label("Edge")
+                            .label(crate::i18n::t("schema.edge", crate::i18n::locale(cx)))
                             .xsmall()
                             .selected(ver_edge)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1191,7 +1227,7 @@ impl SchemaPanel {
                     .gap_1()
                     .child(
                         Button::new("schema-ver-history")
-                            .label("History")
+                            .label(crate::i18n::t("schema.history", crate::i18n::locale(cx)))
                             .xsmall()
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1200,7 +1236,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-ver-changes")
-                            .label("Changes")
+                            .label(crate::i18n::t("schema.changes", crate::i18n::locale(cx)))
                             .xsmall()
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1209,7 +1245,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-ver-breaking")
-                            .label("Breaking")
+                            .label(crate::i18n::t("schema.breaking", crate::i18n::locale(cx)))
                             .xsmall()
                             .disabled(self.busy)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1246,7 +1282,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-pending-cancel")
-                            .label("Cancel")
+                            .label(crate::i18n::t("common.cancel", crate::i18n::locale(cx)))
                             .xsmall()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1469,36 +1505,46 @@ impl SchemaPanel {
     /// Tree editing surface: spaces, tags and edge types with alter/drop.
     fn render_tree(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        div().flex_1().min_w_0().p_1().child(tree(
-            &self.tree_state,
-            move |ix, entry: &TreeEntry, _selected, _window, cx| {
-                let view = view.clone();
-                let item = entry.item();
-                let id = item.id.clone();
-                let label = item.label.clone();
-                let icon = row_icon(&id);
-                let depth = entry.depth();
+        let loading_empty = self.loading && self.tree_state.read(cx).entry(0).is_none();
+        div()
+            .flex_1()
+            .min_w_0()
+            .p_1()
+            .when(loading_empty, |panel| panel.child(skeleton_rows(6, cx)))
+            .when(!loading_empty, |panel| {
+                panel.child(tree(
+                    &self.tree_state,
+                    move |ix, entry: &TreeEntry, _selected, _window, cx| {
+                        let view = view.clone();
+                        let item = entry.item();
+                        let id = item.id.clone();
+                        let label = item.label.clone();
+                        let icon = row_icon(&id);
+                        let depth = entry.depth();
 
-                view.update(cx, |_, cx| {
-                    ListItem::new(ix)
-                        .w_full()
-                        .pl(px(16.) * depth + px(8.))
-                        .pr_2()
-                        .rounded(cx.theme().radius)
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .items_center()
-                                .min_w_0()
-                                .child(Icon::new(icon).text_color(cx.theme().muted_foreground))
-                                .child(div().text_sm().min_w_0().child(label)),
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.activate(&id, cx);
-                        }))
-                })
-            },
-        ))
+                        view.update(cx, |_, cx| {
+                            ListItem::new(ix)
+                                .w_full()
+                                .pl(px(16.) * depth + px(8.))
+                                .pr_2()
+                                .rounded(cx.theme().radius)
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .items_center()
+                                        .min_w_0()
+                                        .child(
+                                            Icon::new(icon).text_color(cx.theme().muted_foreground),
+                                        )
+                                        .child(div().text_sm().min_w_0().child(label)),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.activate(&id, cx);
+                                }))
+                        })
+                    },
+                ))
+            })
     }
 
     /// Read-only ER overview: tags and edge types as canvas nodes, search
@@ -1557,7 +1603,7 @@ impl SchemaPanel {
                     )
                     .child(
                         Button::new("schema-er-fit")
-                            .label("Fit")
+                            .label(crate::i18n::t("schema.fit", crate::i18n::locale(cx)))
                             .xsmall()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1592,6 +1638,62 @@ impl SchemaPanel {
             .border_color(cx.theme().border)
             .bg(cx.theme().muted.opacity(0.12))
             .child(render_canvas_frame(plans))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(12.))
+                    .bottom(px(12.))
+                    .max_w(px(220.))
+                    .px_2()
+                    .py_1()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().popover.opacity(0.92))
+                    .children(
+                        self.er_model
+                            .tag_legend()
+                            .into_iter()
+                            .map(|(label, color)| {
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .py(px(1.))
+                                    .child(
+                                        div().size(px(8.)).rounded_full().bg(gpui_kit::rgb(color)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(SharedString::from(label)),
+                                    )
+                            })
+                            .chain(self.er_model.edge_type_legend().into_iter().map(
+                                |(label, color, count)| {
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .py(px(1.))
+                                        .child(
+                                            div()
+                                                .w(px(14.))
+                                                .h(px(2.))
+                                                .rounded_full()
+                                                .bg(gpui_kit::rgb(color)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(SharedString::from(format!(
+                                                    "{label} ({count})"
+                                                ))),
+                                        )
+                                },
+                            )),
+                    ),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _window, cx| {

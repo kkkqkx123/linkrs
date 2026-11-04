@@ -11,6 +11,7 @@ use gpui_kit::{
 };
 
 use crate::components::{confirm, form_row, panel_header, render_json_block};
+use crate::i18n::{locale, t, tf};
 use crate::services::{connection_service, schema_service, vector_service};
 use crate::state::AppState;
 
@@ -47,19 +48,24 @@ impl VectorPanel {
     pub(crate) const PANEL_NAME: &'static str = "Vector";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let space_id = cx.new(|cx| InputState::new(window, cx).placeholder("Space id"));
-        let tag = cx.new(|cx| InputState::new(window, cx).placeholder("Tag name"));
-        let field = cx.new(|cx| InputState::new(window, cx).placeholder("Field name"));
-        let size = cx.new(|cx| InputState::new(window, cx).placeholder("Vector size"));
+        let locale = locale(cx);
+        let space_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("vector.spaceId", locale)));
+        let tag = cx.new(|cx| InputState::new(window, cx).placeholder(t("vector.tagName", locale)));
+        let field =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("vector.fieldName", locale)));
+        let size =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("vector.vectorSize", locale)));
         let query_vector = cx.new(|cx| InputState::new(window, cx).placeholder("[0.1, 0.2, ...]"));
-        let point_id = cx
-            .new(|cx| InputState::new(window, cx).placeholder("Point id (comma list for payload)"));
+        let point_id = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("vector.pointIdPlaceholder", locale))
+        });
         let payload = cx.new(|cx| InputState::new(window, cx).placeholder("{\"key\": \"value\"}"));
         let payload_keys = cx.new(|cx| InputState::new(window, cx).placeholder("key1,key2"));
-        let scroll_offset = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Scroll offset (empty for first page)")
-        });
-        let rebuild_id = cx.new(|cx| InputState::new(window, cx).placeholder("Rebuild id"));
+        let scroll_offset =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("vector.scrollOffset", locale)));
+        let rebuild_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("vector.rebuildId", locale)));
         let state = AppState::global(cx);
         let last_space = state.read(cx).space.clone();
         cx.observe(&state, |this, _, cx| this.on_state_changed(cx))
@@ -121,7 +127,7 @@ impl VectorPanel {
     /// Fill the space id input from the resolved session space.
     fn use_current_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((_, id)) = self.resolved_space.clone() else {
-            self.error = Some("Current space id is unknown; pick a space first.".into());
+            self.error = Some(t("vector.currentSpaceUnknown", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -193,7 +199,7 @@ impl VectorPanel {
         match outcome {
             Ok(value) => {
                 self.show(title, render(value));
-                self.message = Some(format!("{title} finished.").into());
+                self.message = Some(tf("common.finished", locale(cx), title).into());
                 self.error = None;
             }
             Err(error) => {
@@ -212,21 +218,24 @@ impl VectorPanel {
         let task = vector_service::list_indexes(cx);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Indexes", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("vector.indexes", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn create(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
         let size = Self::text(&self.size, cx).parse::<usize>().ok();
         let Some(size) = size else {
-            self.error = Some("Vector size must be a number.".into());
+            self.error = Some(t("vector.vectorSizeNumber", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -235,15 +244,18 @@ impl VectorPanel {
         let task = vector_service::create_index(cx, space, &tag, &field, size);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Create", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("vector.create", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn drop(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -253,9 +265,10 @@ impl VectorPanel {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             this.update(cx, |this, cx| {
+                let loc = locale(cx);
                 this.finish(
                     cx,
-                    "Drop",
+                    t("vector.drop", loc),
                     outcome,
                     |()| serde_json::json!({"dropped": true}),
                 )
@@ -267,7 +280,7 @@ impl VectorPanel {
 
     fn info(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -276,22 +289,25 @@ impl VectorPanel {
         let task = vector_service::index_info(cx, space, &tag, &field);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Index", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("vector.index", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn search(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
         let raw = Self::text(&self.query_vector, cx);
         let vector: Vec<f32> = serde_json::from_str(&raw).unwrap_or_default();
         if vector.is_empty() {
-            self.error = Some("Query vector must be a JSON array of numbers.".into());
+            self.error = Some(t("vector.queryVectorJson", locale(cx)).into());
             cx.notify();
             return;
         }
@@ -300,15 +316,18 @@ impl VectorPanel {
         let task = vector_service::search(cx, space, &tag, &field, vector, 10);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Search", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("vector.search", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn count(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -317,15 +336,18 @@ impl VectorPanel {
         let task = vector_service::count(cx, space, &tag, &field);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Count", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("vector.count", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn rebuild(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -335,6 +357,7 @@ impl VectorPanel {
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, |this, window, cx| {
+                let locale = locale(cx);
                 this.busy = false;
                 match outcome {
                     Ok(value) => {
@@ -342,14 +365,13 @@ impl VectorPanel {
                             this.rebuild_id.update(cx, |field, cx| {
                                 field.set_value(id.clone(), window, cx);
                             });
-                            this.show("Rebuild", value);
-                            this.message =
-                                Some(format!("Rebuild {id} started; polling status.").into());
+                            this.show(t("vector.rebuild", locale), value);
+                            this.message = Some(tf("vector.rebuildStarted", locale, &id).into());
                             this.error = None;
                             this.spawn_rebuild_poll(id, window, cx);
                         } else {
-                            this.show("Rebuild", value);
-                            this.message = Some("Rebuild finished.".into());
+                            this.show(t("vector.rebuild", locale), value);
+                            this.message = Some(t("vector.rebuildFinished", locale).into());
                             this.error = None;
                         }
                     }
@@ -396,13 +418,15 @@ impl VectorPanel {
                 let outcome = task.await;
                 let done = view
                     .update(cx, |this, cx| {
+                        let locale = locale(cx);
                         if this.rebuild_generation != generation {
                             return true;
                         }
                         match outcome {
                             Ok(value) => {
-                                this.show("Rebuild status", value.clone());
-                                this.message = Some(format!("Rebuild {rebuild_id} polled.").into());
+                                this.show(t("vector.rebuildStatus", locale), value.clone());
+                                this.message =
+                                    Some(tf("vector.rebuildPolled", locale, &rebuild_id).into());
                                 if rebuild_finished(&value) {
                                     return true;
                                 }
@@ -433,7 +457,7 @@ impl VectorPanel {
     ) {
         let rebuild_id = Self::text(&self.rebuild_id, cx);
         if rebuild_id.is_empty() {
-            self.error = Some("Rebuild id is required.".into());
+            self.error = Some(t("vector.rebuildIdRequired", locale(cx)).into());
             cx.notify();
             return;
         }
@@ -443,7 +467,8 @@ impl VectorPanel {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             this.update(cx, |this, cx| {
-                this.finish(cx, "Rebuild status", outcome, |v| v)
+                let loc = locale(cx);
+                this.finish(cx, t("vector.rebuildStatus", loc), outcome, |v| v)
             })
             .ok();
         })
@@ -463,21 +488,24 @@ impl VectorPanel {
         let task = vector_service::clear(cx, space, &tag, &field, true);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Clear", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("vector.clear", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn get_point(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
         let ids = self.point_ids(cx);
         let Some(point_id) = ids.first().cloned() else {
-            self.error = Some("Point id is required.".into());
+            self.error = Some(t("vector.pointIdRequired", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -486,15 +514,18 @@ impl VectorPanel {
         let task = vector_service::get_point(cx, space, &tag, &field, &point_id);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Point", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("vector.point", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn scroll(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -506,6 +537,7 @@ impl VectorPanel {
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, |this, window, cx| {
+                let locale = locale(cx);
                 this.busy = false;
                 match outcome {
                     Ok(value) => {
@@ -514,8 +546,8 @@ impl VectorPanel {
                                 field.set_value(next, window, cx);
                             });
                         }
-                        this.show("Scroll", value);
-                        this.message = Some("Scroll finished.".into());
+                        this.show(t("vector.scroll", locale), value);
+                        this.message = Some(t("vector.scrollFinished", locale).into());
                         this.error = None;
                     }
                     Err(error) => {
@@ -533,18 +565,18 @@ impl VectorPanel {
 
     fn set_payload(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
         let ids = self.point_ids(cx);
         if ids.is_empty() {
-            self.error = Some("Point id is required.".into());
+            self.error = Some(t("vector.pointIdRequired", locale(cx)).into());
             cx.notify();
             return;
         }
         let Some(payload) = self.payload_map(cx) else {
-            self.error = Some("Payload must be a JSON object.".into());
+            self.error = Some(t("vector.payloadJsonObject", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -554,7 +586,8 @@ impl VectorPanel {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             this.update(cx, |this, cx| {
-                this.finish(cx, "Set payload", outcome, |v| v)
+                let loc = locale(cx);
+                this.finish(cx, t("vector.setPayload", loc), outcome, |v| v)
             })
             .ok();
         })
@@ -563,18 +596,18 @@ impl VectorPanel {
 
     fn merge_payload(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
         let ids = self.point_ids(cx);
         if ids.is_empty() {
-            self.error = Some("Point id is required.".into());
+            self.error = Some(t("vector.pointIdRequired", locale(cx)).into());
             cx.notify();
             return;
         }
         let Some(payload) = self.payload_map(cx) else {
-            self.error = Some("Payload must be a JSON object.".into());
+            self.error = Some(t("vector.payloadJsonObject", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -584,7 +617,8 @@ impl VectorPanel {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             this.update(cx, |this, cx| {
-                this.finish(cx, "Merge payload", outcome, |v| v)
+                let loc = locale(cx);
+                this.finish(cx, t("vector.mergePayload", loc), outcome, |v| v)
             })
             .ok();
         })
@@ -593,19 +627,19 @@ impl VectorPanel {
 
     fn delete_payload(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("vector.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
         let ids = self.point_ids(cx);
         if ids.is_empty() {
-            self.error = Some("Point id is required.".into());
+            self.error = Some(t("vector.pointIdRequired", locale(cx)).into());
             cx.notify();
             return;
         }
         let keys = self.payload_keys(cx);
         if keys.is_empty() {
-            self.error = Some("Payload keys are required.".into());
+            self.error = Some(t("vector.payloadKeysRequired", locale(cx)).into());
             cx.notify();
             return;
         }
@@ -615,7 +649,8 @@ impl VectorPanel {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             this.update(cx, |this, cx| {
-                this.finish(cx, "Delete payload", outcome, |v| v)
+                let loc = locale(cx);
+                this.finish(cx, t("vector.deletePayload", loc), outcome, |v| v)
             })
             .ok();
         })
@@ -646,6 +681,7 @@ impl gpui_kit::component::dock::Panel for VectorPanel {
 impl Render for VectorPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = locale(cx);
         let output_title = self.output_title.clone();
         let output = self.output.clone();
 
@@ -657,9 +693,9 @@ impl Render for VectorPanel {
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.vector", crate::i18n::locale(cx))),
                 Some(SharedString::from(if self.busy {
-                    "Working…"
+                    t("common.working", locale)
                 } else {
-                    "Idle"
+                    t("common.idle", locale)
                 })),
                 None,
                 cx,
@@ -695,14 +731,18 @@ impl Render for VectorPanel {
                                 v_flex()
                                     .gap_2()
                                     .p_3()
-                                    .child(form_row("Space id", self.space_id.clone(), cx))
+                                    .child(form_row(
+                                        t("vector.spaceId", locale),
+                                        self.space_id.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_2()
                                             .items_center()
                                             .child(
                                                 Button::new("vector-use-space")
-                                                    .label("Use current space")
+                                                    .label(t("vector.useCurrentSpace", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.resolved_space.is_none())
@@ -726,16 +766,28 @@ impl Render for VectorPanel {
                                                 },
                                             ),
                                     )
-                                    .child(form_row("Tag", self.tag.clone(), cx))
-                                    .child(form_row("Field", self.field.clone(), cx))
-                                    .child(form_row("Size", self.size.clone(), cx))
-                                    .child(form_row("Query vector", self.query_vector.clone(), cx))
+                                    .child(form_row(t("vector.tag", locale), self.tag.clone(), cx))
+                                    .child(form_row(
+                                        t("vector.field", locale),
+                                        self.field.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("vector.size", locale),
+                                        self.size.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("vector.queryVector", locale),
+                                        self.query_vector.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_1()
                                             .child(
                                                 Button::new("vector-list")
-                                                    .label("List")
+                                                    .label(t("vector.list", locale))
                                                     .icon(IconName::MemoryStick)
                                                     .primary()
                                                     .xsmall()
@@ -744,7 +796,7 @@ impl Render for VectorPanel {
                                             )
                                             .child(
                                                 Button::new("vector-info")
-                                                    .label("Info")
+                                                    .label(t("vector.info", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -752,7 +804,7 @@ impl Render for VectorPanel {
                                             )
                                             .child(
                                                 Button::new("vector-count")
-                                                    .label("Count")
+                                                    .label(t("vector.count", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -764,7 +816,7 @@ impl Render for VectorPanel {
                                             .gap_1()
                                             .child(
                                                 Button::new("vector-create")
-                                                    .label("Create")
+                                                    .label(t("vector.create", locale))
                                                     .icon(IconName::Plus)
                                                     .xsmall()
                                                     .disabled(self.busy)
@@ -772,7 +824,7 @@ impl Render for VectorPanel {
                                             )
                                             .child(
                                                 Button::new("vector-rebuild")
-                                                    .label("Rebuild")
+                                                    .label(t("vector.rebuild", locale))
                                                     .icon(IconName::RefreshCw)
                                                     .xsmall()
                                                     .disabled(self.busy)
@@ -780,7 +832,7 @@ impl Render for VectorPanel {
                                             )
                                             .child(
                                                 Button::new("vector-drop")
-                                                    .label("Drop")
+                                                    .label(t("vector.drop", locale))
                                                     .icon(IconName::Trash)
                                                     .xsmall()
                                                     .ghost()
@@ -790,28 +842,40 @@ impl Render for VectorPanel {
                                     )
                                     .child(
                                         Button::new("vector-search")
-                                            .label("Similarity search")
+                                            .label(t("vector.similaritySearch", locale))
                                             .icon(IconName::Search)
                                             .xsmall()
                                             .disabled(self.busy)
                                             .on_click(cx.listener(Self::search)),
                                     )
-                                    .child(form_row("Point id", self.point_id.clone(), cx))
-                                    .child(form_row("Payload (JSON)", self.payload.clone(), cx))
-                                    .child(form_row("Payload keys", self.payload_keys.clone(), cx))
+                                    .child(form_row(
+                                        t("vector.pointId", locale),
+                                        self.point_id.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("vector.payloadJson", locale),
+                                        self.payload.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("vector.payloadKeys", locale),
+                                        self.payload_keys.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_1()
                                             .child(
                                                 Button::new("vector-get-point")
-                                                    .label("Get point")
+                                                    .label(t("vector.getPoint", locale))
                                                     .xsmall()
                                                     .disabled(self.busy)
                                                     .on_click(cx.listener(Self::get_point)),
                                             )
                                             .child(
                                                 Button::new("vector-set-payload")
-                                                    .label("Set")
+                                                    .label(t("vector.set", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -819,7 +883,7 @@ impl Render for VectorPanel {
                                             )
                                             .child(
                                                 Button::new("vector-merge-payload")
-                                                    .label("Merge")
+                                                    .label(t("vector.merge", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -827,29 +891,37 @@ impl Render for VectorPanel {
                                             )
                                             .child(
                                                 Button::new("vector-delete-payload")
-                                                    .label("Delete keys")
+                                                    .label(t("vector.deleteKeys", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
                                                     .on_click(cx.listener(Self::delete_payload)),
                                             ),
                                     )
-                                    .child(form_row("Offset", self.scroll_offset.clone(), cx))
+                                    .child(form_row(
+                                        t("vector.offset", locale),
+                                        self.scroll_offset.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         Button::new("vector-scroll")
-                                            .label("Scroll points")
+                                            .label(t("vector.scrollPoints", locale))
                                             .icon(IconName::List)
                                             .xsmall()
                                             .disabled(self.busy)
                                             .on_click(cx.listener(Self::scroll)),
                                     )
-                                    .child(form_row("Rebuild id", self.rebuild_id.clone(), cx))
+                                    .child(form_row(
+                                        t("vector.rebuildId", locale),
+                                        self.rebuild_id.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_1()
                                             .child(
                                                 Button::new("vector-rebuild-status")
-                                                    .label("Rebuild status")
+                                                    .label(t("vector.rebuildStatus", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -859,7 +931,7 @@ impl Render for VectorPanel {
                                             )
                                             .child(
                                                 Button::new("vector-clear")
-                                                    .label("Clear")
+                                                    .label(t("vector.clear", locale))
                                                     .icon(IconName::Trash)
                                                     .small()
                                                     .ghost()
@@ -870,21 +942,28 @@ impl Render for VectorPanel {
                                                                 this.identity(cx)
                                                             else {
                                                                 this.error = Some(
-                                                                    "Space id, tag and field are required."
-                                                                        .into(),
+                                                                    t(
+                                                                        "vector.fieldsRequired",
+                                                                        crate::i18n::locale(cx),
+                                                                    )
+                                                                    .into(),
                                                                 );
                                                                 cx.notify();
                                                                 return;
                                                             };
                                                             let view = cx.entity();
+                                                            let locale = crate::i18n::locale(cx);
                                                             confirm(
                                                                 window,
                                                                 cx,
-                                                                "Clear vector index",
-                                                                format!(
-                                                                    "Clear all vectors for {tag}.{field}? This cannot be undone."
-                                                                ),
-                                                                "Clear",
+                                                                t("vector.clearTitle", locale),
+                                                                tf(
+                                                                    "vector.clearConfirm",
+                                                                    locale,
+                                                                    &tag,
+                                                                )
+                                                                .replacen("{}", &field, 1),
+                                                                t("vector.clear", locale),
                                                                 true,
                                                                 move |window, cx| {
                                                                     let tag = tag.clone();
@@ -911,7 +990,7 @@ impl Render for VectorPanel {
                             .p_3()
                             .child(div().text_sm().text_color(theme.foreground).child(
                                 SharedString::from(if output_title.is_empty() {
-                                    "Result".to_string()
+                                    t("common.result", locale).to_string()
                                 } else {
                                     output_title
                                 }),

@@ -8,6 +8,8 @@ use gpui_kit::component::sheet::Sheet;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{px, App, ParentElement as _, SharedString, Styled as _, Window};
 
+use crate::i18n::t;
+
 /// Ask for confirmation before a destructive action.
 ///
 /// The callback runs only when the user accepts; the dialog then closes.
@@ -23,7 +25,7 @@ pub fn confirm(
     let title: SharedString = title.into();
     let description: SharedString = description.into();
     let ok_text: SharedString = ok_text.into();
-    let cancel_text = SharedString::from("Cancel");
+    let cancel_text = SharedString::from(t("common.cancel", crate::i18n::locale(cx)));
     let on_ok: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_ok);
 
     window.open_alert_dialog(cx, move |alert, _, _| {

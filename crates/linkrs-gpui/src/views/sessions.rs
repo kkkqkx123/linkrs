@@ -12,7 +12,10 @@ use gpui_kit::{
     SharedString, StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{confirm, empty_state, form_row, panel_header, render_json_block};
+use crate::components::{
+    confirm, empty_state, form_row, panel_header, render_json_block, skeleton_rows,
+};
+use crate::i18n::{t, tf};
 use crate::services::{connection_service, server_session_service};
 use crate::state::AppState;
 
@@ -38,8 +41,14 @@ impl SessionsPanel {
     pub(crate) const PANEL_NAME: &'static str = "Sessions";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let var_name = cx.new(|cx| InputState::new(window, cx).placeholder("Variable name"));
-        let var_value = cx.new(|cx| InputState::new(window, cx).placeholder("JSON value"));
+        let var_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("sessions.varNamePlaceholder", crate::i18n::locale(cx)))
+        });
+        let var_value = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("sessions.varValuePlaceholder", crate::i18n::locale(cx)))
+        });
         let mut panel = Self {
             sessions: Vec::new(),
             selected: None,
@@ -138,7 +147,8 @@ impl SessionsPanel {
                             state.roles = me.roles.clone();
                             cx.notify();
                         });
-                        this.message = Some("Identity refreshed.".into());
+                        this.message =
+                            Some(t("sessions.identityRefreshed", crate::i18n::locale(cx)).into());
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
@@ -204,11 +214,10 @@ impl SessionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message = Some(format!("Terminated session {id}.").into());
-                        window.push_notification(
-                            Notification::success(format!("Terminated session {id}.")),
-                            cx,
-                        );
+                        let message: SharedString =
+                            tf("sessions.terminated", crate::i18n::locale(cx), id).into();
+                        this.message = Some(message.clone());
+                        window.push_notification(Notification::success(message), cx);
                         this.selected = None;
                         this.detail = serde_json::Value::Null;
                         this.refresh(cx);
@@ -228,14 +237,14 @@ impl SessionsPanel {
 
     fn set_variable(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.selected else {
-            self.error = Some("Select a session first.".into());
+            self.error = Some(t("sessions.selectFirst", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
         let name = self.var_name.read(cx).value().trim().to_string();
         let raw = self.var_value.read(cx).value().to_string();
         if name.is_empty() {
-            self.error = Some("Variable name is required.".into());
+            self.error = Some(t("sessions.varNameRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -248,7 +257,8 @@ impl SessionsPanel {
                 match outcome {
                     Ok(value) => {
                         this.variables = value;
-                        this.message = Some(format!("Set {name}.").into());
+                        this.message =
+                            Some(tf("sessions.variableSet", crate::i18n::locale(cx), name).into());
                     }
                     Err(error) => this.error = Some(error.to_string().into()),
                 }
@@ -260,13 +270,13 @@ impl SessionsPanel {
 
     fn delete_variable(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.selected else {
-            self.error = Some("Select a session first.".into());
+            self.error = Some(t("sessions.selectFirst", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
         let name = self.var_name.read(cx).value().trim().to_string();
         if name.is_empty() {
-            self.error = Some("Variable name is required.".into());
+            self.error = Some(t("sessions.varNameRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -277,7 +287,9 @@ impl SessionsPanel {
                 match outcome {
                     Ok(value) => {
                         this.variables = value;
-                        this.message = Some(format!("Deleted {name}.").into());
+                        this.message = Some(
+                            tf("sessions.variableDeleted", crate::i18n::locale(cx), name).into(),
+                        );
                     }
                     Err(error) => this.error = Some(error.to_string().into()),
                 }
@@ -313,6 +325,7 @@ impl Render for SessionsPanel {
         let theme = cx.theme().clone();
         let view = cx.entity();
         let empty = self.sessions.is_empty();
+        let locale = crate::i18n::locale(cx);
 
         v_flex()
             .id("sessions-panel")
@@ -320,26 +333,28 @@ impl Render for SessionsPanel {
             .bg(theme.background)
             .text_color(theme.foreground)
             .child(panel_header(
-                SharedString::from(crate::i18n::t(
-                    "nav.sessions",
-                    crate::i18n::locale(cx),
+                SharedString::from(crate::i18n::t("nav.sessions", crate::i18n::locale(cx))),
+                Some(SharedString::from(
+                    tf("sessions.liveCount", locale, self.sessions.len()).replacen(
+                        "{}",
+                        t(
+                            if self.loading {
+                                "sessions.refreshing"
+                            } else {
+                                "sessions.idle"
+                            },
+                            locale,
+                        ),
+                        1,
+                    ),
                 )),
-                Some(SharedString::from(format!(
-                    "{} live · {}",
-                    self.sessions.len(),
-                    if self.loading {
-                        "Refreshing…"
-                    } else {
-                        "Idle"
-                    }
-                ))),
                 Some(
                     h_flex()
                         .items_center()
                         .gap_2()
                         .child(
                             Button::new("sessions-auto")
-                                .label("Auto")
+                                .label(t("sessions.auto", locale))
                                 .small()
                                 .ghost()
                                 .selected(self.auto_refresh)
@@ -353,7 +368,7 @@ impl Render for SessionsPanel {
                         )
                         .child(
                             Button::new("sessions-identity")
-                                .label("Refresh identity")
+                                .label(t("sessions.refreshIdentity", locale))
                                 .icon(IconName::User)
                                 .small()
                                 .ghost()
@@ -363,7 +378,7 @@ impl Render for SessionsPanel {
                         )
                         .child(
                             Button::new("sessions-kill")
-                                .label("Terminate")
+                                .label(t("sessions.terminate", locale))
                                 .icon(IconName::Ban)
                                 .small()
                                 .ghost()
@@ -373,14 +388,13 @@ impl Render for SessionsPanel {
                                         return;
                                     };
                                     let view = cx.entity();
+                                    let locale = crate::i18n::locale(cx);
                                     confirm(
                                         window,
                                         cx,
-                                        "Terminate session",
-                                        format!(
-                                            "Terminate session {id}? Unsaved work in that session is lost."
-                                        ),
-                                        "Terminate",
+                                        t("sessions.terminateTitle", locale),
+                                        tf("sessions.terminateDesc", locale, id),
+                                        t("sessions.terminate", locale),
                                         true,
                                         move |window, cx| {
                                             view.update(cx, |this, cx| {
@@ -427,11 +441,14 @@ impl Render for SessionsPanel {
                             .flex_shrink_0()
                             .border_r_1()
                             .border_color(theme.border)
-                            .when(empty, |panel| {
+                            .when(self.loading && empty, |panel| {
+                                panel.child(skeleton_rows(8, cx))
+                            })
+                            .when(!self.loading && empty, |panel| {
                                 panel.child(empty_state(
                                     IconName::Globe,
-                                    "No sessions",
-                                    Some("No live server sessions.".into()),
+                                    t("sessions.emptyTitle", locale),
+                                    Some(t("sessions.emptyHint", locale).into()),
                                     cx,
                                 ))
                             })
@@ -490,27 +507,29 @@ impl Render for SessionsPanel {
                                 v_flex()
                                     .gap_2()
                                     .p_3()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Session detail")),
-                                    )
+                                    .child(div().text_sm().text_color(theme.foreground).child(
+                                        SharedString::from(t("sessions.detailHeading", locale)),
+                                    ))
                                     .child(render_json_block(&self.detail, cx))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Session variables")),
-                                    )
-                                    .child(form_row("Name", self.var_name.clone(), cx))
-                                    .child(form_row("Value (JSON)", self.var_value.clone(), cx))
+                                    .child(div().text_sm().text_color(theme.foreground).child(
+                                        SharedString::from(t("sessions.variablesHeading", locale)),
+                                    ))
+                                    .child(form_row(
+                                        t("sessions.fieldName", locale),
+                                        self.var_name.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("sessions.fieldValue", locale),
+                                        self.var_value.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_1()
                                             .child(
                                                 Button::new("sessions-set-var")
-                                                    .label("Set variable")
+                                                    .label(t("sessions.setVariable", locale))
                                                     .icon(IconName::Plus)
                                                     .xsmall()
                                                     .disabled(self.selected.is_none())
@@ -518,7 +537,7 @@ impl Render for SessionsPanel {
                                             )
                                             .child(
                                                 Button::new("sessions-delete-var")
-                                                    .label("Delete variable")
+                                                    .label(t("sessions.deleteVariable", locale))
                                                     .icon(IconName::Trash)
                                                     .xsmall()
                                                     .ghost()
@@ -527,12 +546,9 @@ impl Render for SessionsPanel {
                                             ),
                                     )
                                     .child(render_json_block(&self.variables, cx))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Current identity")),
-                                    )
+                                    .child(div().text_sm().text_color(theme.foreground).child(
+                                        SharedString::from(t("sessions.identityHeading", locale)),
+                                    ))
                                     .child(render_json_block(&self.identity, cx)),
                             ),
                     ),

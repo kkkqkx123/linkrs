@@ -37,14 +37,22 @@ impl BatchPanel {
     pub(crate) const PANEL_NAME: &'static str = "Batch";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let space_id = cx.new(|cx| InputState::new(window, cx).placeholder("Space id, e.g. 1"));
-        let batch_size =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Batch size, e.g. 500"));
+        let locale = crate::i18n::locale(cx);
+        let space_id = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("batch.spaceIdPlaceholder", locale))
+        });
+        let batch_size = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("batch.batchSizePlaceholder", locale))
+        });
         batch_size.update(cx, |field, cx| {
             field.set_value("500", window, cx);
         });
-        let items_text =
-            cx.new(|cx| InputState::new(window, cx).placeholder("[batch items JSON array]"));
+        let items_text = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("batch.itemsPlaceholder", locale))
+        });
         Self {
             space_id,
             batch_size,
@@ -79,8 +87,9 @@ impl BatchPanel {
         if text.trim().is_empty() {
             return Ok(Vec::new());
         }
-        serde_json::from_str::<Vec<BatchItem>>(&text)
-            .map_err(|error| format!("Items must be a JSON array of batch items: {error}"))
+        serde_json::from_str::<Vec<BatchItem>>(&text).map_err(|error| {
+            crate::i18n::tf("batch.itemsArrayError", crate::i18n::locale(cx), error)
+        })
     }
 
     fn create(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -88,7 +97,8 @@ impl BatchPanel {
             return;
         }
         let Some(space_id) = self.parse_space(cx) else {
-            self.error = Some("Space id must be a number.".into());
+            self.error =
+                Some(crate::i18n::t("batch.spaceIdRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
@@ -107,7 +117,10 @@ impl BatchPanel {
                     Ok(batch_id) => {
                         this.batch_id = Some(batch_id.clone());
                         this.status = None;
-                        this.message = Some(format!("Created batch {batch_id}").into());
+                        this.message = Some(
+                            crate::i18n::tf("batch.created", crate::i18n::locale(cx), &batch_id)
+                                .into(),
+                        );
                         this.poll(cx);
                     }
                     Err(error) => {
@@ -130,7 +143,7 @@ impl BatchPanel {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Load batch items".into()),
+            prompt: Some(crate::i18n::t("batch.loadPrompt", crate::i18n::locale(cx)).into()),
         });
         cx.spawn_in(window, async move |this, window| {
             let paths = receiver.await;
@@ -144,16 +157,32 @@ impl BatchPanel {
                                     field.set_value(text, window, cx);
                                 });
                                 this.error = None;
-                                this.message = Some(format!("Loaded {}.", path.display()).into());
+                                this.message = Some(
+                                    crate::i18n::tf(
+                                        "batch.loaded",
+                                        crate::i18n::locale(cx),
+                                        path.display(),
+                                    )
+                                    .into(),
+                                );
                             }
                             Err(error) => {
-                                this.error =
-                                    Some(format!("Cannot read {}: {error}", path.display()).into());
+                                this.error = Some(
+                                    crate::i18n::tf(
+                                        "batch.cannotRead",
+                                        crate::i18n::locale(cx),
+                                        path.display(),
+                                    )
+                                    .replacen("{}", &error.to_string(), 1)
+                                    .into(),
+                                );
                             }
                         }
                     }
                     _ => {
-                        this.message = Some("File selection cancelled.".into());
+                        this.message = Some(
+                            crate::i18n::t("batch.fileCancelled", crate::i18n::locale(cx)).into(),
+                        );
                     }
                 }
                 cx.notify();
@@ -164,7 +193,7 @@ impl BatchPanel {
 
     fn add_items(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(batch_id) = self.batch_id.clone() else {
-            self.error = Some("Create a batch before adding items.".into());
+            self.error = Some(crate::i18n::t("batch.createFirst", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
@@ -177,7 +206,7 @@ impl BatchPanel {
             }
         };
         if items.is_empty() {
-            self.error = Some("Paste a JSON array of batch items first.".into());
+            self.error = Some(crate::i18n::t("batch.pasteItems", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -190,7 +219,10 @@ impl BatchPanel {
                 this.busy = false;
                 match outcome {
                     Ok(accepted) => {
-                        this.message = Some(format!("Added {accepted} item(s).").into());
+                        this.message = Some(
+                            crate::i18n::tf("batch.added", crate::i18n::locale(cx), accepted)
+                                .into(),
+                        );
                         this.poll(cx);
                     }
                     Err(error) => {
@@ -209,7 +241,7 @@ impl BatchPanel {
 
     fn execute(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(batch_id) = self.batch_id.clone() else {
-            self.error = Some("Create a batch before executing.".into());
+            self.error = Some(crate::i18n::t("batch.executeFirst", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
@@ -222,9 +254,15 @@ impl BatchPanel {
                 this.busy = false;
                 match outcome {
                     Ok(_) => {
-                        this.message = Some("Execution started.".into());
+                        this.message = Some(
+                            crate::i18n::t("batch.executionStarted", crate::i18n::locale(cx))
+                                .into(),
+                        );
                         window.push_notification(
-                            Notification::success("Batch execution started."),
+                            Notification::success(crate::i18n::t(
+                                "batch.executionStartedNotify",
+                                crate::i18n::locale(cx),
+                            )),
                             cx,
                         );
                         this.poll(cx);
@@ -293,7 +331,9 @@ impl BatchPanel {
             this.update(cx, |this, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message = Some("Cancel requested.".into());
+                        this.message = Some(
+                            crate::i18n::t("batch.cancelRequested", crate::i18n::locale(cx)).into(),
+                        );
                         this.poll(cx);
                     }
                     Err(error) => {
@@ -317,7 +357,10 @@ impl BatchPanel {
             this.update(cx, |this, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message = Some(format!("Deleted batch {batch_id}.").into());
+                        this.message = Some(
+                            crate::i18n::tf("batch.deleted", crate::i18n::locale(cx), &batch_id)
+                                .into(),
+                        );
                         this.batch_id = None;
                         this.status = None;
                     }
@@ -359,10 +402,21 @@ impl BatchPanel {
                 div()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .child(SharedString::from("New batch task")),
+                    .child(SharedString::from(crate::i18n::t(
+                        "batch.newTask",
+                        crate::i18n::locale(cx),
+                    ))),
             )
-            .child(form_row("Space id", self.space_id.clone(), cx))
-            .child(form_row("Batch size", self.batch_size.clone(), cx))
+            .child(form_row(
+                crate::i18n::t("batch.spaceId", crate::i18n::locale(cx)),
+                self.space_id.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("batch.batchSize", crate::i18n::locale(cx)),
+                self.batch_size.clone(),
+                cx,
+            ))
             .child(
                 v_flex()
                     .gap_1()
@@ -370,7 +424,10 @@ impl BatchPanel {
                         div()
                             .text_size(px(12.))
                             .text_color(cx.theme().muted_foreground)
-                            .child(SharedString::from("Type")),
+                            .child(SharedString::from(crate::i18n::t(
+                                "batch.type",
+                                crate::i18n::locale(cx),
+                            ))),
                     )
                     .child(
                         h_flex().gap_1().items_center().children(
@@ -391,7 +448,7 @@ impl BatchPanel {
             )
             .child(
                 Button::new("batch-create")
-                    .label("Create batch")
+                    .label(crate::i18n::t("batch.create", crate::i18n::locale(cx)))
                     .icon(IconName::Plus)
                     .primary()
                     .xsmall()
@@ -422,7 +479,11 @@ impl BatchPanel {
                         div()
                             .text_sm()
                             .text_color(theme.foreground)
-                            .child(SharedString::from(format!("Batch {batch_id}"))),
+                            .child(SharedString::from(crate::i18n::tf(
+                                "batch.title",
+                                crate::i18n::locale(cx),
+                                batch_id,
+                            ))),
                     )
                     .child(
                         div()
@@ -442,7 +503,7 @@ impl BatchPanel {
                     .gap_1()
                     .child(
                         Button::new("batch-poll")
-                            .label("Refresh")
+                            .label(crate::i18n::t("batch.refresh", crate::i18n::locale(cx)))
                             .icon(IconName::RefreshCw)
                             .xsmall()
                             .ghost()
@@ -451,7 +512,7 @@ impl BatchPanel {
                     )
                     .child(
                         Button::new("batch-cancel")
-                            .label("Cancel")
+                            .label(crate::i18n::t("batch.cancel", crate::i18n::locale(cx)))
                             .icon(IconName::Ban)
                             .xsmall()
                             .ghost()
@@ -460,7 +521,7 @@ impl BatchPanel {
                     )
                     .child(
                         Button::new("batch-delete")
-                            .label("Delete")
+                            .label(crate::i18n::t("batch.delete", crate::i18n::locale(cx)))
                             .icon(IconName::Trash)
                             .xsmall()
                             .ghost()
@@ -469,7 +530,7 @@ impl BatchPanel {
                     )
                     .child(
                         Button::new("batch-auto")
-                            .label("Auto poll")
+                            .label(crate::i18n::t("batch.autoPoll", crate::i18n::locale(cx)))
                             .xsmall()
                             .ghost()
                             .selected(self.auto_poll)
@@ -517,9 +578,9 @@ impl Render for BatchPanel {
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.batch", crate::i18n::locale(cx))),
                 Some(SharedString::from(if self.busy {
-                    "Working…"
+                    crate::i18n::t("common.working", crate::i18n::locale(cx))
                 } else {
-                    "Idle"
+                    crate::i18n::t("common.idle", crate::i18n::locale(cx))
                 })),
                 None,
                 cx,
@@ -550,12 +611,12 @@ impl Render for BatchPanel {
                         v_flex()
                             .gap_1()
                             .px_3()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(SharedString::from("Items (JSON array)")),
-                            )
+                            .child(div().text_sm().text_color(theme.foreground).child(
+                                SharedString::from(crate::i18n::t(
+                                    "batch.items",
+                                    crate::i18n::locale(cx),
+                                )),
+                            ))
                             .child(
                                 div()
                                     .min_h(px(96.))
@@ -570,7 +631,10 @@ impl Render for BatchPanel {
                                     .gap_1()
                                     .child(
                                         Button::new("batch-load")
-                                            .label("Load file")
+                                            .label(crate::i18n::t(
+                                                "batch.loadFile",
+                                                crate::i18n::locale(cx),
+                                            ))
                                             .icon(IconName::FolderOpen)
                                             .xsmall()
                                             .disabled(self.busy)
@@ -580,7 +644,10 @@ impl Render for BatchPanel {
                                     )
                                     .child(
                                         Button::new("batch-add")
-                                            .label("Add items")
+                                            .label(crate::i18n::t(
+                                                "batch.addItems",
+                                                crate::i18n::locale(cx),
+                                            ))
                                             .icon(IconName::Plus)
                                             .xsmall()
                                             .disabled(self.busy)
@@ -588,7 +655,10 @@ impl Render for BatchPanel {
                                     )
                                     .child(
                                         Button::new("batch-execute")
-                                            .label("Execute")
+                                            .label(crate::i18n::t(
+                                                "batch.execute",
+                                                crate::i18n::locale(cx),
+                                            ))
                                             .icon(IconName::Play)
                                             .primary()
                                             .xsmall()

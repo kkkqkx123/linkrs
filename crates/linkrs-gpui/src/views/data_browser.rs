@@ -16,8 +16,9 @@ use gpui_kit::{
 
 use crate::components::{
     card, confirm, empty_state, new_table_state, on_copy_row, panel_header, render_properties,
-    CopyRow, FilterControls, QueryTableData, QueryTableDelegate,
+    skeleton_rows, CopyRow, FilterControls, QueryTableData, QueryTableDelegate,
 };
+use crate::i18n::{t, tf};
 use crate::services::{connection_service, data_browser_service, schema_service};
 use crate::state::AppState;
 
@@ -206,12 +207,12 @@ impl DataBrowserPanel {
             return;
         }
         if self.selected.trim().is_empty() {
-            self.message = Some("Pick a tag or edge type first.".into());
+            self.message = Some(t("dataBrowser.pickEntity", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
         if AppState::global(cx).read(cx).space.is_none() {
-            self.message = Some("Select a space before browsing data.".into());
+            self.message = Some(t("dataBrowser.selectSpaceFirst", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -392,7 +393,7 @@ impl DataBrowserPanel {
     /// Open the JSON editor for the selected row.
     fn open_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(payload) = self.selected_row(cx) else {
-            self.message = Some("Select a row to edit first.".into());
+            self.message = Some(t("dataBrowser.selectRowEdit", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
@@ -402,7 +403,7 @@ impl DataBrowserPanel {
             BrowseKind::Edge => data_browser_service::edge_endpoints(&payload),
         };
         if self.kind == BrowseKind::Edge && endpoints.is_none() {
-            self.message = Some("Cannot locate this edge's endpoints for editing.".into());
+            self.message = Some(t("dataBrowser.edgeEndpointsEdit", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -431,13 +432,14 @@ impl DataBrowserPanel {
         let parsed: serde_json::Value = match serde_json::from_str(&raw) {
             Ok(value) => value,
             Err(_) => {
-                self.message = Some("Edited content must be a JSON object.".into());
+                self.message =
+                    Some(t("dataBrowser.editMustBeObject", crate::i18n::locale(cx)).into());
                 cx.notify();
                 return;
             }
         };
         let Some(edited) = parsed.as_object() else {
-            self.message = Some("Edited content must be a JSON object.".into());
+            self.message = Some(t("dataBrowser.editMustBeObject", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
@@ -460,10 +462,8 @@ impl DataBrowserPanel {
                 if !this.allow_overwrite {
                     if let Some(latest) = latest {
                         if latest != target.original {
-                            this.conflict = Some(
-                                "Record changed on the server. Review and overwrite, or cancel."
-                                    .into(),
-                            );
+                            this.conflict =
+                                Some(t("dataBrowser.conflict", crate::i18n::locale(cx)).into());
                             this.allow_overwrite = true;
                             cx.notify();
                             return;
@@ -500,13 +500,19 @@ impl DataBrowserPanel {
                     data_browser_service::delete_edge(cx, &edge_type, &src, &dst, rank)
                 }
                 None => {
-                    self.message = Some("Cannot locate this edge's endpoints for deletion.".into());
+                    self.message =
+                        Some(t("dataBrowser.edgeEndpointsDelete", crate::i18n::locale(cx)).into());
                     cx.notify();
                     return;
                 }
             },
         };
-        self.run_write(window, cx, "Delete", task);
+        self.run_write(
+            window,
+            cx,
+            crate::i18n::t("dataBrowser.delete", crate::i18n::locale(cx)),
+            task,
+        );
     }
 
     /// Detail payload for the currently selected table row.
@@ -574,11 +580,26 @@ impl DataBrowserPanel {
                         .py_1()
                         .border_b_1()
                         .border_color(cx.theme().border)
-                        .child(cell("Vertices", "estimated_vertex_count"))
-                        .child(cell("Edges", "estimated_edge_count"))
-                        .child(cell("Tags", "tag_count"))
-                        .child(cell("Edge types", "edge_type_count"))
-                        .child(cell("Indexes", "index_count")),
+                        .child(cell(
+                            t("dataBrowser.statVertices", crate::i18n::locale(cx)),
+                            "estimated_vertex_count",
+                        ))
+                        .child(cell(
+                            t("dataBrowser.statEdges", crate::i18n::locale(cx)),
+                            "estimated_edge_count",
+                        ))
+                        .child(cell(
+                            t("dataBrowser.statTags", crate::i18n::locale(cx)),
+                            "tag_count",
+                        ))
+                        .child(cell(
+                            t("dataBrowser.statEdgeTypes", crate::i18n::locale(cx)),
+                            "edge_type_count",
+                        ))
+                        .child(cell(
+                            t("dataBrowser.statIndexes", crate::i18n::locale(cx)),
+                            "index_count",
+                        )),
                 )
             })
     }
@@ -620,7 +641,10 @@ impl DataBrowserPanel {
                             .border_color(cx.theme().border)
                             .child(
                                 Button::new("browse-edit")
-                                    .label("Edit")
+                                    .label(crate::i18n::t(
+                                        "dataBrowser.edit",
+                                        crate::i18n::locale(cx),
+                                    ))
                                     .xsmall()
                                     .disabled(writing || empty)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -629,25 +653,42 @@ impl DataBrowserPanel {
                             )
                             .child(
                                 Button::new("browse-delete")
-                                    .label("Delete")
+                                    .label(crate::i18n::t(
+                                        "dataBrowser.delete",
+                                        crate::i18n::locale(cx),
+                                    ))
                                     .small()
                                     .disabled(writing || empty)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         let Some(payload) = this.selected_row(cx) else {
-                                            this.message =
-                                                Some("Select a row to delete first.".into());
+                                            this.message = Some(
+                                                t(
+                                                    "dataBrowser.selectRowDelete",
+                                                    crate::i18n::locale(cx),
+                                                )
+                                                .into(),
+                                            );
                                             cx.notify();
                                             return;
                                         };
                                         let (id, _, _) =
                                             data_browser_service::normalize_row(&payload);
                                         let view = cx.entity();
+                                        let locale = crate::i18n::locale(cx);
+                                        let confirm_label =
+                                            crate::i18n::t("dataBrowser.delete", locale)
+                                                .to_string();
+                                        let title =
+                                            crate::i18n::t("dataBrowser.deleteTitle", locale)
+                                                .to_string();
+                                        let description =
+                                            tf("dataBrowser.deleteConfirm", locale, &id);
                                         confirm(
                                             window,
                                             cx,
-                                            "Delete record",
-                                            format!("Delete record {id}? This cannot be undone."),
-                                            "Delete",
+                                            title,
+                                            description,
+                                            confirm_label,
                                             true,
                                             move |window, cx| {
                                                 let payload = payload.clone();
@@ -669,7 +710,7 @@ impl DataBrowserPanel {
                             .py_1()
                             .text_sm()
                             .text_color(cx.theme().foreground)
-                            .child("Edit properties (JSON)"),
+                            .child(t("dataBrowser.editProps", crate::i18n::locale(cx))),
                     )
                     .when_some(conflict, |panel, message| {
                         panel.child(
@@ -704,7 +745,10 @@ impl DataBrowserPanel {
                             )
                             .child(
                                 Button::new("browse-edit-cancel")
-                                    .label("Cancel")
+                                    .label(crate::i18n::t(
+                                        "dataBrowser.cancel",
+                                        crate::i18n::locale(cx),
+                                    ))
                                     .xsmall()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -811,13 +855,19 @@ impl DataBrowserPanel {
             .child(div().flex_1())
             .child(
                 Button::new("browse-copy-row")
-                    .label("Copy row")
+                    .label(crate::i18n::t(
+                        "dataBrowser.copyRow",
+                        crate::i18n::locale(cx),
+                    ))
                     .icon(IconName::ClipboardCopy)
                     .xsmall()
                     .ghost()
                     .on_click(cx.listener(|this, _, window, cx| {
                         on_copy_row(&this.data, cx);
-                        window.push_notification(Notification::info("Row copied."), cx);
+                        window.push_notification(
+                            Notification::info(t("dataBrowser.rowCopied", crate::i18n::locale(cx))),
+                            cx,
+                        );
                     })),
             )
     }
@@ -903,18 +953,27 @@ impl Render for DataBrowserPanel {
                                 div()
                                     .flex_1()
                                     .min_h_0()
+                                    .when(self.loading && self.raw_rows.is_empty(), |host| {
+                                        host.child(skeleton_rows(6, cx))
+                                    })
                                     .when(empty, |host| {
                                         host.child(empty_state(
                                             IconName::HardDrive,
-                                            "No records",
+                                            crate::i18n::t(
+                                                "dataBrowser.noRecords",
+                                                crate::i18n::locale(cx),
+                                            ),
                                             Some(
-                                                "Select a tag or edge type to scan its records."
-                                                    .into(),
+                                                crate::i18n::t(
+                                                    "dataBrowser.noRecordsHint",
+                                                    crate::i18n::locale(cx),
+                                                )
+                                                .into(),
                                             ),
                                             cx,
                                         ))
                                     })
-                                    .when(!empty, |host| {
+                                    .when(!self.raw_rows.is_empty(), |host| {
                                         host.child(
                                             DataTable::new(&table)
                                                 .stripe(true)

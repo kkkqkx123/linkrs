@@ -13,7 +13,8 @@ use gpui_kit::{
 };
 use linkrs_wire::meta::UserListItem;
 
-use crate::components::{confirm, empty_state, form_row, panel_header};
+use crate::components::{confirm, empty_state, form_row, panel_header, skeleton_rows};
+use crate::i18n::{t, tf};
 use crate::services::{connection_service, user_service};
 
 /// Row selection state shared between the delegate and the panel.
@@ -36,11 +37,12 @@ impl TableDelegate for UserDelegate {
         self.data.borrow().users.len()
     }
 
-    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+    fn column(&self, col_ix: usize, cx: &App) -> Column {
+        let locale = crate::i18n::locale(cx);
         match col_ix {
-            0 => Column::new("username", "Username").sortable(),
-            1 => Column::new("role", "Role").sortable(),
-            _ => Column::new("status", "Status").sortable(),
+            0 => Column::new("username", t("users.columnUsername", locale)).sortable(),
+            1 => Column::new("role", t("users.columnRole", locale)).sortable(),
+            _ => Column::new("status", t("users.columnStatus", locale)).sortable(),
         }
     }
 
@@ -132,27 +134,35 @@ impl UsersPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let data = std::rc::Rc::new(std::cell::RefCell::new(UserTable::default()));
         let table = cx.new(|cx| TableState::new(UserDelegate { data: data.clone() }, window, cx));
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("Username"));
+        let name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("users.fieldUsername", crate::i18n::locale(cx)))
+        });
         let password = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Password")
+                .placeholder(t("users.fieldPassword", crate::i18n::locale(cx)))
                 .masked(true)
         });
-        let role = cx.new(|cx| InputState::new(window, cx).placeholder("Role, e.g. admin"));
-        let space = cx.new(|cx| InputState::new(window, cx).placeholder("Space"));
+        let role = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("users.rolePlaceholder", crate::i18n::locale(cx)))
+        });
+        let space = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("users.fieldSpace", crate::i18n::locale(cx)))
+        });
         let own_old = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Current password")
+                .placeholder(t("users.fieldCurrent", crate::i18n::locale(cx)))
                 .masked(true)
         });
         let own_new = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("New password")
+                .placeholder(t("users.fieldNew", crate::i18n::locale(cx)))
                 .masked(true)
         });
         let own_confirm = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Confirm new password")
+                .placeholder(t("users.fieldConfirm", crate::i18n::locale(cx)))
                 .masked(true)
         });
         let mut panel = Self {
@@ -213,20 +223,21 @@ impl UsersPanel {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        label: &str,
+        key: &'static str,
         task: gpui_kit::Task<Result<(), linkrs_client::ClientError>>,
     ) {
-        let label = label.to_string();
+        let key = key.to_string();
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, move |this, window, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message = Some(format!("{label} succeeded.").into());
-                        window.push_notification(
-                            Notification::success(format!("{label} succeeded.")),
-                            cx,
-                        );
+                        let locale = crate::i18n::locale(cx);
+                        let label = t(&key, locale).to_string();
+                        let message: SharedString =
+                            tf("users.actionSucceeded", locale, label).into();
+                        this.message = Some(message.clone());
+                        window.push_notification(Notification::success(message), cx);
                         this.refresh(cx);
                     }
                     Err(error) => {
@@ -278,6 +289,7 @@ impl Render for UsersPanel {
         let table = self.table.clone();
         let selected = self.table.read(cx).selected_row();
         let empty = self.data.borrow().users.is_empty();
+        let locale = crate::i18n::locale(cx);
 
         v_flex()
             .id("users-panel")
@@ -286,9 +298,10 @@ impl Render for UsersPanel {
             .text_color(theme.foreground)
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.users", crate::i18n::locale(cx))),
-                Some(SharedString::from(format!(
-                    "{} accounts",
-                    self.data.borrow().users.len()
+                Some(SharedString::from(tf(
+                    "users.accountsCount",
+                    crate::i18n::locale(cx),
+                    self.data.borrow().users.len(),
                 ))),
                 Some(
                     h_flex()
@@ -334,11 +347,14 @@ impl Render for UsersPanel {
                                     .flex_1()
                                     .min_h_0()
                                     .p_1()
-                                    .when(empty, |host| {
+                                    .when(self.loading && empty, |host| {
+                                        host.child(skeleton_rows(6, cx))
+                                    })
+                                    .when(!self.loading && empty, |host| {
                                         host.child(empty_state(
                                             IconName::User,
-                                            "No users",
-                                            Some("The server returned an empty user list.".into()),
+                                            t("users.emptyTitle", locale),
+                                            Some(t("users.emptyHint", locale).into()),
                                             cx,
                                         ))
                                     })
@@ -361,33 +377,33 @@ impl Render for UsersPanel {
                                     .border_color(theme.border)
                                     .child(
                                         Button::new("users-enable")
-                                            .label("Enable")
+                                            .label(t("users.enable", locale))
                                             .xsmall()
                                             .ghost()
                                             .disabled(selected.is_none())
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 if let Some(name) = this.selected_name(cx) {
                                                     let task = user_service::enable(cx, &name);
-                                                    this.run(window, cx, "Enable", task);
+                                                    this.run(window, cx, "users.enable", task);
                                                 }
                                             })),
                                     )
                                     .child(
                                         Button::new("users-disable")
-                                            .label("Disable")
+                                            .label(t("users.disable", locale))
                                             .xsmall()
                                             .ghost()
                                             .disabled(selected.is_none())
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 if let Some(name) = this.selected_name(cx) {
                                                     let task = user_service::disable(cx, &name);
-                                                    this.run(window, cx, "Disable", task);
+                                                    this.run(window, cx, "users.disable", task);
                                                 }
                                             })),
                                     )
                                     .child(
                                         Button::new("users-kill")
-                                            .label("Drop")
+                                            .label(t("users.drop", locale))
                                             .icon(IconName::Trash)
                                             .small()
                                             .ghost()
@@ -397,22 +413,26 @@ impl Render for UsersPanel {
                                                     return;
                                                 };
                                                 let view = cx.entity();
+                                                let locale = crate::i18n::locale(cx);
                                                 confirm(
                                                     window,
                                                     cx,
-                                                    "Drop user",
-                                                    format!(
-                                                        "Drop user {name}? This cannot be undone."
+                                                    t("users.dropUser", locale),
+                                                    tf(
+                                                        "users.dropUserConfirmDesc",
+                                                        locale,
+                                                        name.clone(),
                                                     ),
-                                                    "Drop",
+                                                    t("users.drop", locale),
                                                     true,
                                                     move |window, cx| {
                                                         view.update(cx, |this, cx| {
-                                                            let task = user_service::drop(cx, &name);
+                                                            let task =
+                                                                user_service::drop(cx, &name);
                                                             this.run(
                                                                 window,
                                                                 cx,
-                                                                "Drop user",
+                                                                "users.dropUser",
                                                                 task,
                                                             );
                                                         });
@@ -435,18 +455,33 @@ impl Render for UsersPanel {
                                     .gap_2()
                                     .p_3()
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(SharedString::from("Create / update")),
+                                        div().text_sm().text_color(theme.foreground).child(
+                                            SharedString::from(t("users.createUpdate", locale)),
+                                        ),
                                     )
-                                    .child(form_row("Username", self.name.clone(), cx))
-                                    .child(form_row("Password", self.password.clone(), cx))
-                                    .child(form_row("Role", self.role.clone(), cx))
-                                    .child(form_row("Space", self.space.clone(), cx))
+                                    .child(form_row(
+                                        t("users.fieldUsername", locale),
+                                        self.name.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("users.fieldPassword", locale),
+                                        self.password.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("users.fieldRole", locale),
+                                        self.role.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("users.fieldSpace", locale),
+                                        self.space.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         Button::new("users-create")
-                                            .label("Create user")
+                                            .label(t("users.createUser", locale))
                                             .icon(IconName::Plus)
                                             .primary()
                                             .xsmall()
@@ -455,28 +490,34 @@ impl Render for UsersPanel {
                                                 let password = Self::text(&this.password, cx);
                                                 if name.is_empty() || password.is_empty() {
                                                     this.error = Some(
-                                                        "Username and password are required."
-                                                            .into(),
+                                                        t(
+                                                            "users.usernamePasswordRequired",
+                                                            crate::i18n::locale(cx),
+                                                        )
+                                                        .into(),
                                                     );
                                                     cx.notify();
                                                     return;
                                                 }
                                                 let task =
                                                     user_service::create(cx, &name, &password);
-                                                this.run(window, cx, "Create user", task);
+                                                this.run(window, cx, "users.createUser", task);
                                             })),
                                     )
                                     .child(
                                         Button::new("users-reset")
-                                            .label("Reset password")
+                                            .label(t("users.resetPassword", locale))
                                             .xsmall()
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 let name = Self::text(&this.name, cx);
                                                 let password = Self::text(&this.password, cx);
                                                 if name.is_empty() || password.is_empty() {
                                                     this.error = Some(
-                                                        "Username and new password are required."
-                                                            .into(),
+                                                        t(
+                                                            "users.usernameNewPasswordRequired",
+                                                            crate::i18n::locale(cx),
+                                                        )
+                                                        .into(),
                                                     );
                                                     cx.notify();
                                                     return;
@@ -484,12 +525,12 @@ impl Render for UsersPanel {
                                                 let task = user_service::reset_password(
                                                     cx, &name, &password,
                                                 );
-                                                this.run(window, cx, "Reset password", task);
+                                                this.run(window, cx, "users.resetPassword", task);
                                             })),
                                     )
                                     .child(
                                         Button::new("users-grant")
-                                            .label("Grant role")
+                                            .label(t("users.grantRole", locale))
                                             .xsmall()
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 let name = Self::text(&this.name, cx);
@@ -500,8 +541,11 @@ impl Render for UsersPanel {
                                                     || space.is_empty()
                                                 {
                                                     this.error = Some(
-                                                        "Username, role and space are required."
-                                                            .into(),
+                                                        t(
+                                                            "users.usernameRoleSpaceRequired",
+                                                            crate::i18n::locale(cx),
+                                                        )
+                                                        .into(),
                                                     );
                                                     cx.notify();
                                                     return;
@@ -509,26 +553,30 @@ impl Render for UsersPanel {
                                                 let task = user_service::grant_role(
                                                     cx, &name, &role, &space,
                                                 );
-                                                this.run(window, cx, "Grant role", task);
+                                                this.run(window, cx, "users.grantRole", task);
                                             })),
                                     )
                                     .child(
                                         Button::new("users-revoke")
-                                            .label("Revoke role")
+                                            .label(t("users.revokeRole", locale))
                                             .xsmall()
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 let name = Self::text(&this.name, cx);
                                                 let space = Self::text(&this.space, cx);
                                                 if name.is_empty() || space.is_empty() {
                                                     this.error = Some(
-                                                        "Username and space are required.".into(),
+                                                        t(
+                                                            "users.usernameSpaceRequired",
+                                                            crate::i18n::locale(cx),
+                                                        )
+                                                        .into(),
                                                     );
                                                     cx.notify();
                                                     return;
                                                 }
                                                 let task =
                                                     user_service::revoke_role(cx, &name, &space);
-                                                this.run(window, cx, "Revoke role", task);
+                                                this.run(window, cx, "users.revokeRole", task);
                                             })),
                                     )
                                     .child(
@@ -536,57 +584,54 @@ impl Render for UsersPanel {
                                             .gap_1()
                                             .pt_2()
                                             .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(theme.foreground)
-                                                    .child(SharedString::from(
-                                                        "Change my password",
+                                                div().text_sm().text_color(theme.foreground).child(
+                                                    SharedString::from(t(
+                                                        "users.changeMyPassword",
+                                                        locale,
                                                     )),
+                                                ),
                                             )
                                             .child(form_row(
-                                                "Current",
+                                                t("users.labelCurrent", locale),
                                                 self.own_old.clone(),
                                                 cx,
                                             ))
                                             .child(form_row(
-                                                "New",
+                                                t("users.labelNew", locale),
                                                 self.own_new.clone(),
                                                 cx,
                                             ))
                                             .child(form_row(
-                                                "Confirm",
+                                                t("users.labelConfirm", locale),
                                                 self.own_confirm.clone(),
                                                 cx,
                                             ))
                                             .child(
                                                 Button::new("users-change-own-password")
-                                                    .label("Change password")
+                                                    .label(t("users.changePassword", locale))
                                                     .xsmall()
                                                     .on_click(cx.listener(
                                                         |this, _, window, cx| {
-                                                            let old = Self::text(
-                                                                &this.own_old, cx,
-                                                            );
-                                                            let new = Self::text(
-                                                                &this.own_new, cx,
-                                                            );
-                                                            let confirm = Self::text(
-                                                                &this.own_confirm, cx,
-                                                            );
-                                                            if old.is_empty()
-                                                                || new.is_empty()
-                                                            {
-                                                                this.error = Some(
-                                                                    "Current and new passwords are required."
-                                                                        .into(),
-                                                                );
+                                                            let old = Self::text(&this.own_old, cx);
+                                                            let new = Self::text(&this.own_new, cx);
+                                                            let confirm =
+                                                                Self::text(&this.own_confirm, cx);
+                                                            if old.is_empty() || new.is_empty() {
+                                                                this.error = Some(t(
+                                                                    "users.ownPasswordsRequired",
+                                                                    crate::i18n::locale(cx),
+                                                                )
+                                                                    .into(),);
                                                                 cx.notify();
                                                                 return;
                                                             }
                                                             if new != confirm {
                                                                 this.error = Some(
-                                                                    "New passwords do not match."
-                                                                        .into(),
+                                                                    t(
+                                                                        "users.passwordsMismatch",
+                                                                        crate::i18n::locale(cx),
+                                                                    )
+                                                                    .into(),
                                                                 );
                                                                 cx.notify();
                                                                 return;
@@ -598,14 +643,13 @@ impl Render for UsersPanel {
                                                             this.run(
                                                                 window,
                                                                 cx,
-                                                                "Change password",
+                                                                "users.changePassword",
                                                                 task,
                                                             );
                                                         },
                                                     )),
                                             ),
-                                    )
-
+                                    ),
                             ),
                     ),
             )

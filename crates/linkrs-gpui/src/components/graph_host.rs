@@ -25,6 +25,10 @@ const TAG_COLORS: [u32; 8] = [
     0x1890ff, 0x52c41a, 0xfaad14, 0xf5222d, 0x722ed1, 0x13c2c2, 0xeb2f96, 0xfa8c16,
 ];
 
+/// Edge-type palette shared with the web studio: greys first, then the tag
+/// hues, so plain graphs stay calm while typed edges stay distinguishable.
+const EDGE_COLORS: [u32; 5] = [0x999999, 0x666666, 0x333333, 0x1890ff, 0x52c41a];
+
 /// Stable tag colour: nodes sharing a label always share one palette slot.
 fn node_color(labels: &HashMap<NodeIndex, String>, index: usize) -> u32 {
     let Some(label) = labels.get(&NodeIndex::new(index)) else {
@@ -45,6 +49,14 @@ fn selected_color(dark: bool) -> u32 {
     } else {
         0x299c68
     }
+}
+
+/// Colour for one edge type: distinct types walk the edge palette in sorted
+/// order, unknown or untyped edges stay the default grey.
+fn edge_color_for(type_index: Option<usize>) -> u32 {
+    type_index
+        .map(|ix| EDGE_COLORS[ix % EDGE_COLORS.len()])
+        .unwrap_or(EDGE_COLORS[0])
 }
 
 /// Logical pixels kept clear around the fitted graph.
@@ -286,6 +298,48 @@ impl GraphModel {
         rows
     }
 
+    /// Distinct edge types in sorted order; the palette index follows it.
+    fn edge_type_order(&self) -> Vec<String> {
+        let mut types: Vec<String> = self
+            .edge_labels
+            .values()
+            .filter(|label| !label.is_empty())
+            .cloned()
+            .collect();
+        types.sort();
+        types.dedup();
+        types
+    }
+
+    /// Edge-type index used by both painting and the legend, so a colour
+    /// always denotes the same type within one model.
+    fn edge_type_index(&self, label: &str) -> Option<usize> {
+        if label.is_empty() {
+            return None;
+        }
+        self.edge_type_order()
+            .iter()
+            .position(|known| known == label)
+    }
+
+    /// `(edge type, colour, count)` rows for the canvas legend. Colours come
+    /// from the same stable sorted index the painting uses.
+    pub fn edge_type_legend(&self) -> Vec<(String, u32, usize)> {
+        self.edge_type_order()
+            .into_iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let count = self
+                    .edge_labels
+                    .values()
+                    .filter(|value| value.as_str() == label)
+                    .count();
+                let color = edge_color_for(Some(index));
+                (label, color, count)
+            })
+            .collect()
+    }
+
     /// Distinct labels with their palette colour, for the canvas legend.
     pub fn tag_legend(&self) -> Vec<(String, u32)> {
         let mut legend: Vec<(String, u32)> = Vec::new();
@@ -456,7 +510,18 @@ impl GraphModel {
             &self.camera,
             self.viewport,
             EdgePaintOptions::default(),
-            |_, _| EdgeStyle::default(),
+            |source, target| {
+                let tint = self
+                    .edge_labels
+                    .get(&(source.index(), target.index()))
+                    .and_then(|label| self.edge_type_index(label))
+                    .map(|ix| edge_color_for(Some(ix)))
+                    .unwrap_or_else(|| edge_color_for(None));
+                EdgeStyle {
+                    tint,
+                    ..EdgeStyle::default()
+                }
+            },
         );
         let arrows = paint_arrows_for_level(&edges, DetailLevel::Full);
         let labels = self.labels.clone();

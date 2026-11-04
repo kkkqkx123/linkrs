@@ -3,7 +3,7 @@ use gpui_kit::{
     div, px, AnyElement, App, Div, FontWeight, ParentElement as _, SharedString, Styled as _,
 };
 
-use crate::metrics::{CARD_HEAD_H, CARD_PAD};
+use crate::metrics::{CARD_HEAD_H, CARD_PAD, CARD_RADIUS};
 
 /// Surface container: white card on the grey page canvas.
 pub fn card(cx: &App) -> Div {
@@ -12,7 +12,7 @@ pub fn card(cx: &App) -> Div {
         .bg(theme.popover)
         .border_1()
         .border_color(theme.border)
-        .rounded(theme.radius)
+        .rounded(px(CARD_RADIUS))
 }
 
 /// Card with the standard inner padding.
@@ -48,9 +48,14 @@ pub fn card_head(title: impl Into<SharedString>, actions: Option<AnyElement>, cx
         .children(actions)
 }
 
-/// Card body with standard padding.
-pub fn card_body() -> Div {
-    v_flex().w_full().p(px(CARD_PAD)).min_w_0()
+/// Card body with padding following the row density.
+pub fn card_body(dense: bool) -> Div {
+    let pad = if dense {
+        crate::metrics::CARD_PAD_DENSE
+    } else {
+        CARD_PAD
+    };
+    v_flex().w_full().p(px(pad)).min_w_0()
 }
 
 /// Stacked card list used as the page body.

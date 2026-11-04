@@ -10,8 +10,11 @@ use gpui_kit::{
     Styled as _, Window,
 };
 
-use crate::components::{confirm, empty_state, form_row, panel_header, render_json_block};
+use crate::components::{
+    confirm, empty_state, form_row, panel_header, render_json_block, skeleton_rows,
+};
 use crate::services::{config_service, connection_service};
+use crate::state::Capability;
 
 /// Server configuration panel: full configuration tree, per-key lookup,
 /// value updates and resets.
@@ -30,9 +33,16 @@ impl ConfigPanel {
     pub(crate) const PANEL_NAME: &'static str = "Config";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let section = cx.new(|cx| InputState::new(window, cx).placeholder("Section"));
-        let key = cx.new(|cx| InputState::new(window, cx).placeholder("Key"));
-        let value = cx.new(|cx| InputState::new(window, cx).placeholder("Value (JSON)"));
+        let locale = crate::i18n::locale(cx);
+        let section = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(crate::i18n::t("config.section", locale))
+        });
+        let key = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(crate::i18n::t("config.keyLabel", locale))
+        });
+        let value = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(crate::i18n::t("config.valueJson", locale))
+        });
         let mut panel = Self {
             config: serde_json::Value::Null,
             section,
@@ -87,7 +97,8 @@ impl ConfigPanel {
 
     fn lookup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((section, key)) = self.coordinates(cx) else {
-            self.error = Some("Section and key are required.".into());
+            self.error =
+                Some(crate::i18n::t("config.sectionKeyRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
@@ -115,7 +126,8 @@ impl ConfigPanel {
 
     fn apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((section, key)) = self.coordinates(cx) else {
-            self.error = Some("Section and key are required.".into());
+            self.error =
+                Some(crate::i18n::t("config.sectionKeyRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
@@ -129,7 +141,14 @@ impl ConfigPanel {
                 match outcome {
                     Ok(value) => {
                         this.config = value;
-                        this.message = Some(format!("Updated {section}.{key}.").into());
+                        this.message = Some(
+                            crate::i18n::tf(
+                                "config.updated",
+                                crate::i18n::locale(cx),
+                                format!("{section}.{key}"),
+                            )
+                            .into(),
+                        );
                         this.error = None;
                     }
                     Err(error) => {
@@ -147,7 +166,8 @@ impl ConfigPanel {
 
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((section, key)) = self.coordinates(cx) else {
-            self.error = Some("Section and key are required.".into());
+            self.error =
+                Some(crate::i18n::t("config.sectionKeyRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
@@ -158,7 +178,14 @@ impl ConfigPanel {
                 match outcome {
                     Ok(value) => {
                         this.config = value;
-                        this.message = Some(format!("Reset {section}.{key}.").into());
+                        this.message = Some(
+                            crate::i18n::tf(
+                                "config.resetDone",
+                                crate::i18n::locale(cx),
+                                format!("{section}.{key}"),
+                            )
+                            .into(),
+                        );
                         this.error = None;
                     }
                     Err(error) => {
@@ -198,6 +225,8 @@ impl gpui_kit::component::dock::Panel for ConfigPanel {
 impl Render for ConfigPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let can_manage_config =
+            crate::state::AppState::global(cx).read(cx).can(Capability::ManageConfig);
 
         v_flex()
             .id("config-panel")
@@ -223,7 +252,7 @@ impl Render for ConfigPanel {
                         )
                         .child(
                             Button::new("config-lookup")
-                                .label("Lookup")
+                                .label(crate::i18n::t("config.lookup", crate::i18n::locale(cx)))
                                 .icon(IconName::Search)
                                 .small()
                                 .ghost()
@@ -234,30 +263,37 @@ impl Render for ConfigPanel {
                         )
                         .child(
                             Button::new("config-apply")
-                                .label("Update")
+                                .label(crate::i18n::t("config.update", crate::i18n::locale(cx)))
                                 .icon(IconName::Check)
                                 .small()
                                 .ghost()
-                                .disabled(self.loading)
+                                .disabled(self.loading || !can_manage_config)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.apply(window, cx);
                                 })),
                         )
                         .child(
                             Button::new("config-reset")
-                                .label("Reset")
+                                .label(crate::i18n::t("config.reset", crate::i18n::locale(cx)))
                                 .icon(IconName::RotateCcw)
                                 .small()
                                 .ghost()
-                                .disabled(self.loading)
+                                .disabled(self.loading || !can_manage_config)
                                 .on_click(cx.listener(|_, _, window, cx| {
                                     let view = cx.entity();
+                                    let locale = crate::i18n::locale(cx);
+                                    let confirm_label =
+                                        crate::i18n::t("config.reset", locale).to_string();
+                                    let title =
+                                        crate::i18n::t("config.resetTitle", locale).to_string();
+                                    let description =
+                                        crate::i18n::t("config.resetConfirm", locale).to_string();
                                     confirm(
                                         window,
                                         cx,
-                                        "Reset configuration",
-                                        "Reset this key to its default value?",
-                                        "Reset",
+                                        title,
+                                        description,
+                                        confirm_label,
                                         true,
                                         move |window, cx| {
                                             view.update(cx, |this, cx| this.reset(window, cx));
@@ -293,9 +329,21 @@ impl Render for ConfigPanel {
                     .py_1()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(form_row("Section", self.section.clone(), cx))
-                    .child(form_row("Key", self.key.clone(), cx))
-                    .child(form_row("Value (JSON)", self.value.clone(), cx)),
+                    .child(form_row(
+                        crate::i18n::t("config.section", crate::i18n::locale(cx)),
+                        self.section.clone(),
+                        cx,
+                    ))
+                    .child(form_row(
+                        crate::i18n::t("config.keyLabel", crate::i18n::locale(cx)),
+                        self.key.clone(),
+                        cx,
+                    ))
+                    .child(form_row(
+                        crate::i18n::t("config.valueJson", crate::i18n::locale(cx)),
+                        self.value.clone(),
+                        cx,
+                    )),
             )
             .child(
                 v_flex()
@@ -303,14 +351,27 @@ impl Render for ConfigPanel {
                     .min_h_0()
                     .px_2()
                     .py_1()
-                    .child(render_json_block(&self.config, cx))
-                    .when(self.config.is_null(), |area| {
-                        area.child(empty_state(
-                            IconName::Inbox,
-                            "No configuration loaded",
-                            Some("Reload or look up a section key.".into()),
-                            cx,
-                        ))
+                    .when(self.loading && self.config.is_null(), |area| {
+                        area.child(skeleton_rows(6, cx))
+                    })
+                    .when(!self.loading, |area| {
+                        area.child(render_json_block(&self.config, cx)).when(
+                            self.config.is_null(),
+                            |area| {
+                                area.child(empty_state(
+                                    IconName::Inbox,
+                                    crate::i18n::t("config.noConfig", crate::i18n::locale(cx)),
+                                    Some(
+                                        crate::i18n::t(
+                                            "config.noConfigHint",
+                                            crate::i18n::locale(cx),
+                                        )
+                                        .into(),
+                                    ),
+                                    cx,
+                                ))
+                            },
+                        )
                     }),
             )
     }

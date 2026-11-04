@@ -17,8 +17,10 @@ use gpui_kit::{
 };
 
 use crate::components::{
-    empty_state, panel_header, render_canvas_frame, render_graph_selection, GraphModel,
+    empty_state, panel_header, render_canvas_frame, render_graph_selection, skeleton_rows,
+    GraphModel,
 };
+use crate::i18n::t;
 use crate::services::{connection_service, graph_service};
 use crate::state::AppState;
 
@@ -45,7 +47,10 @@ impl GraphPanel {
     pub(crate) const PANEL_NAME: &'static str = "Graph";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let seed = cx.new(|cx| InputState::new(window, cx).placeholder("Seed vertex id"));
+        let seed = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("graph.seedPlaceholder", crate::i18n::locale(cx)))
+        });
         let store = cx.new(|_| GraphStore::new());
         let layout = cx.new(|cx| {
             LayoutDriver::new(
@@ -104,12 +109,14 @@ impl GraphPanel {
         }
         let seed = self.seed_text(cx).trim().to_string();
         if seed.is_empty() {
-            self.message = Some("Enter a seed vertex id first.".into());
+            self.message =
+                Some(crate::i18n::t("graph.enterSeedError", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
         if AppState::global(cx).read(cx).space.is_none() {
-            self.message = Some("Select a space before exploring the graph.".into());
+            self.message =
+                Some(crate::i18n::t("graph.selectSpaceError", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -135,7 +142,9 @@ impl GraphPanel {
                             .set_graph(&neighborhood.nodes, &neighborhood.edges, cx);
                         this.degree = degree;
                         if this.model.is_empty() {
-                            this.message = Some("No neighbors found for this seed.".into());
+                            this.message = Some(
+                                crate::i18n::t("graph.noNeighbors", crate::i18n::locale(cx)).into(),
+                            );
                         }
                     }
                     Err(error) => {
@@ -228,7 +237,7 @@ impl GraphPanel {
             }))
             .child(
                 Button::new("graph-expand")
-                    .label("Expand")
+                    .label(crate::i18n::t("graph.expand", crate::i18n::locale(cx)))
                     .icon(IconName::Network)
                     .primary()
                     .xsmall()
@@ -285,7 +294,7 @@ impl GraphPanel {
             )
             .child(
                 Button::new("graph-reset")
-                    .label("Fit")
+                    .label(crate::i18n::t("graph.fit", crate::i18n::locale(cx)))
                     .xsmall()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -325,19 +334,49 @@ impl GraphPanel {
                     .border_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().popover.opacity(0.92))
-                    .children(self.model.tag_legend().into_iter().map(|(label, color)| {
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .py(px(1.))
-                            .child(div().size(px(8.)).rounded_full().bg(gpui_kit::rgb(color)))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(SharedString::from(label)),
-                            )
-                    })),
+                    .children(
+                        self.model
+                            .tag_legend()
+                            .into_iter()
+                            .map(|(label, color)| {
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .py(px(1.))
+                                    .child(
+                                        div().size(px(8.)).rounded_full().bg(gpui_kit::rgb(color)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(SharedString::from(label)),
+                                    )
+                            })
+                            .chain(self.model.edge_type_legend().into_iter().map(
+                                |(label, color, count)| {
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .py(px(1.))
+                                        .child(
+                                            div()
+                                                .w(px(14.))
+                                                .h(px(2.))
+                                                .rounded_full()
+                                                .bg(gpui_kit::rgb(color)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(SharedString::from(format!(
+                                                    "{label} ({count})"
+                                                ))),
+                                        )
+                                },
+                            )),
+                    ),
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -404,7 +443,10 @@ impl Render for GraphPanel {
         let selected = self.model.selected_detail();
         let (detail_title, detail_value) = match selected {
             Some((vid, label, detail)) => (format!("{vid} · {label}"), detail),
-            None => ("No selection".to_string(), serde_json::Value::Null),
+            None => (
+                t("graph.noSelection", crate::i18n::locale(cx)).to_string(),
+                serde_json::Value::Null,
+            ),
         };
 
         v_flex()
@@ -439,84 +481,83 @@ impl Render for GraphPanel {
                             .min_w_0()
                             .p_2()
                             .gap_2()
+                            .when(empty && self.loading, |panel| {
+                                panel.child(skeleton_rows(4, cx))
+                            })
                             .when(empty && !self.loading, |panel| {
                                 panel.child(empty_state(
                                     IconName::Network,
-                                    "No graph yet",
+                                    crate::i18n::t("graph.emptyTitle", crate::i18n::locale(cx)),
                                     Some(
-                                        "Enter a vertex id and press Expand to load its neighborhood."
+                                        crate::i18n::t("graph.emptyHint", crate::i18n::locale(cx))
                                             .into(),
                                     ),
                                     cx,
                                 ))
                             })
                             .when(!empty, |panel| {
-                                panel
-                                    .child(self.render_canvas(window, cx))
-                                    .child(
-                                        v_flex()
-                                            .flex_shrink_0()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(SharedString::from("Nodes")),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("graph-nodes")
-                                                    .max_h(px(120.))
-                                                    .overflow_y_scroll()
-                                                    .children(
-                                                        self.model.node_list().into_iter().map(
-                                                            |(vid, label)| {
-                                                                let view = view.clone();
-                                                                let select_vid = vid.clone();
-                                                                let selected =
-                                                                    self.model.selected.as_deref()
-                                                                        == Some(vid.as_str());
-                                                                view.update(cx, |_, cx| {
-                                                                    ListItem::new(format!(
-                                                                        "graph-node-{vid}"
+                                panel.child(self.render_canvas(window, cx)).child(
+                                    v_flex()
+                                        .flex_shrink_0()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child(SharedString::from(crate::i18n::t(
+                                                    "graph.nodes",
+                                                    crate::i18n::locale(cx),
+                                                ))),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("graph-nodes")
+                                                .max_h(px(120.))
+                                                .overflow_y_scroll()
+                                                .children(self.model.node_list().into_iter().map(
+                                                    |(vid, label)| {
+                                                        let view = view.clone();
+                                                        let select_vid = vid.clone();
+                                                        let selected =
+                                                            self.model.selected.as_deref()
+                                                                == Some(vid.as_str());
+                                                        view.update(cx, |_, cx| {
+                                                            ListItem::new(format!(
+                                                                "graph-node-{vid}"
+                                                            ))
+                                                            .selected(selected)
+                                                            .child(
+                                                                h_flex()
+                                                                    .gap_2()
+                                                                    .items_center()
+                                                                    .min_w_0()
+                                                                    .child(Icon::new(
+                                                                        IconName::Database,
                                                                     ))
-                                                                    .selected(selected)
                                                                     .child(
-                                                                        h_flex()
-                                                                            .gap_2()
-                                                                            .items_center()
+                                                                        div()
+                                                                            .text_sm()
                                                                             .min_w_0()
-                                                                            .child(Icon::new(
-                                                                                IconName::Database,
-                                                                            ))
-                                                                            .child(
-                                                                                div()
-                                                                                    .text_sm()
-                                                                                    .min_w_0()
-                                                                                    .overflow_hidden()
-                                                                                    .whitespace_nowrap()
-                                                                                    .text_ellipsis()
-                                                                                    .child(label),
-                                                                            ),
-                                                                    )
-                                                                    .on_click(cx.listener(
-                                                                        move |this,
-                                                                              _,
-                                                                              window,
-                                                                              cx| {
-                                                                            this.locate(
-                                                                                select_vid.clone(),
-                                                                                window,
-                                                                                cx,
-                                                                            );
-                                                                        },
-                                                                    ))
-                                                                })
-                                                            },
-                                                        ),
-                                                    ),
-                                            ),
-                                    )
+                                                                            .overflow_hidden()
+                                                                            .whitespace_nowrap()
+                                                                            .text_ellipsis()
+                                                                            .child(label),
+                                                                    ),
+                                                            )
+                                                            .on_click(cx.listener(
+                                                                move |this, _, window, cx| {
+                                                                    this.locate(
+                                                                        select_vid.clone(),
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                },
+                                                            ))
+                                                        })
+                                                    },
+                                                )),
+                                        ),
+                                )
                             }),
                     )
                     .child(
@@ -537,10 +578,12 @@ impl Render for GraphPanel {
                                     .gap_1()
                                     .p_3()
                                     .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.muted_foreground)
-                                            .child(SharedString::from("Edges")),
+                                        div().text_xs().text_color(theme.muted_foreground).child(
+                                            SharedString::from(crate::i18n::t(
+                                                "graph.edges",
+                                                crate::i18n::locale(cx),
+                                            )),
+                                        ),
                                     )
                                     .children(self.model.edge_list().into_iter().map(
                                         |(source, edge_type, rank, target)| {
@@ -555,7 +598,10 @@ impl Render for GraphPanel {
                             )
                             .child(
                                 Button::new("graph-copy-vid")
-                                    .label("Copy seed vid")
+                                    .label(crate::i18n::t(
+                                        "graph.copySeedVid",
+                                        crate::i18n::locale(cx),
+                                    ))
                                     .icon(IconName::ClipboardCopy)
                                     .xsmall()
                                     .ghost()
@@ -566,7 +612,10 @@ impl Render for GraphPanel {
                                                 gpui_kit::ClipboardItem::new_string(vid),
                                             );
                                             window.push_notification(
-                                                Notification::info("Seed vid copied."),
+                                                Notification::info(t(
+                                                    "graph.vidCopied",
+                                                    crate::i18n::locale(cx),
+                                                )),
                                                 cx,
                                             );
                                         }

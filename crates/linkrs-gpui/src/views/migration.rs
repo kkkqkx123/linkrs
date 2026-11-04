@@ -12,6 +12,7 @@ use gpui_kit::{
 };
 
 use crate::components::{form_row, panel_header, render_json_block};
+use crate::i18n::{t, tf};
 use crate::services::{connection_service, migration_service};
 
 /// Schema migration panel: plan between two schema versions, dry-run /
@@ -36,11 +37,22 @@ impl MigrationPanel {
     pub(crate) const PANEL_NAME: &'static str = "Migration";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let space = cx.new(|cx| InputState::new(window, cx).placeholder("Space"));
-        let label = cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge-type label"));
-        let from_version = cx.new(|cx| InputState::new(window, cx).placeholder("From version"));
-        let to_version = cx.new(|cx| InputState::new(window, cx).placeholder("To version"));
-        let plan_json = cx.new(|cx| InputState::new(window, cx).placeholder("Plan JSON document"));
+        let locale = crate::i18n::locale(cx);
+        let space = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("migration.spacePlaceholder", locale))
+        });
+        let label = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("migration.labelPlaceholder", locale))
+        });
+        let from_version = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("migration.fromPlaceholder", locale))
+        });
+        let to_version = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("migration.toPlaceholder", locale))
+        });
+        let plan_json = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("migration.planJsonPlaceholder", locale))
+        });
         Self {
             space,
             label,
@@ -76,12 +88,12 @@ impl MigrationPanel {
         let space = Self::text(&self.space, cx);
         let label = Self::text(&self.label, cx);
         let Some((from, to)) = self.versions(cx) else {
-            self.error = Some("From/to versions must be numbers.".into());
+            self.error = Some(t("migration.versionsInvalid", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         };
         if space.is_empty() || label.is_empty() {
-            self.error = Some("Space and label are required.".into());
+            self.error = Some(t("migration.spaceLabelRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -94,10 +106,11 @@ impl MigrationPanel {
             let outcome = task.await;
             _ = this.update_in(window, move |this, window, cx| {
                 this.busy = false;
+                let locale = crate::i18n::locale(cx);
                 match outcome {
                     Ok(response) => {
                         this.show(
-                            "Plan",
+                            t("migration.plan", locale),
                             serde_json::to_value(&response.plan).unwrap_or_default(),
                         );
                         let plan_json = response.plan_json.clone();
@@ -105,7 +118,7 @@ impl MigrationPanel {
                             // Prefill the plan document for execute/rollback.
                             field.set_value(plan_json, window, cx);
                         });
-                        this.message = Some("Plan created.".into());
+                        this.message = Some(t("migration.planCreated", locale).into());
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
@@ -123,7 +136,7 @@ impl MigrationPanel {
     fn run_plan(&mut self, window: &mut Window, cx: &mut Context<Self>, mode: PlanMode) {
         let plan_json = Self::text(&self.plan_json, cx);
         if plan_json.is_empty() {
-            self.error = Some("Plan JSON is required.".into());
+            self.error = Some(t("migration.planJsonRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -135,19 +148,19 @@ impl MigrationPanel {
             PlanMode::DryRun => migration_service::dry_run(cx, &plan_json),
             PlanMode::Rollback => migration_service::rollback(cx, &plan_json),
         };
-        let title = mode.label();
+        let title_key = mode.label();
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, move |this, window, cx| {
                 this.busy = false;
+                let locale = crate::i18n::locale(cx);
+                let title = t(title_key, locale);
                 match outcome {
                     Ok(response) => {
                         this.show(title, serde_json::to_value(&response).unwrap_or_default());
-                        this.message = Some(format!("{title} finished.").into());
-                        window.push_notification(
-                            Notification::success(format!("{title} finished.")),
-                            cx,
-                        );
+                        let finished = tf("migration.finished", locale, title);
+                        this.message = Some(finished.clone().into());
+                        window.push_notification(Notification::success(finished), cx);
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
@@ -166,7 +179,7 @@ impl MigrationPanel {
         let space = Self::text(&self.space, cx);
         let label = Self::text(&self.label, cx);
         if space.is_empty() || label.is_empty() {
-            self.error = Some("Space and label are required.".into());
+            self.error = Some(t("migration.spaceLabelRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -181,7 +194,7 @@ impl MigrationPanel {
                 match outcome {
                     Ok(response) => {
                         this.show(
-                            "History",
+                            t("migration.history", crate::i18n::locale(cx)),
                             serde_json::to_value(&response).unwrap_or_default(),
                         );
                     }
@@ -198,7 +211,7 @@ impl MigrationPanel {
         let space = Self::text(&self.space, cx);
         let label = Self::text(&self.label, cx);
         if space.is_empty() || label.is_empty() {
-            self.error = Some("Space and label are required.".into());
+            self.error = Some(t("migration.spaceLabelRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -213,7 +226,7 @@ impl MigrationPanel {
                 match outcome {
                     Ok(response) => {
                         this.show(
-                            "Status",
+                            t("migration.status", crate::i18n::locale(cx)),
                             serde_json::to_value(&response).unwrap_or_default(),
                         );
                     }
@@ -230,7 +243,7 @@ impl MigrationPanel {
         let space = Self::text(&self.space, cx);
         let label = Self::text(&self.label, cx);
         if space.is_empty() || label.is_empty() {
-            self.error = Some("Space and label are required.".into());
+            self.error = Some(t("migration.spaceLabelRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -244,7 +257,10 @@ impl MigrationPanel {
                 this.busy = false;
                 match outcome {
                     Ok(events) => {
-                        this.show("Progress", serde_json::Value::Array(events));
+                        this.show(
+                            t("migration.progress", crate::i18n::locale(cx)),
+                            serde_json::Value::Array(events),
+                        );
                     }
                     Err(error) => this.error = Some(error.to_string().into()),
                 }
@@ -264,11 +280,12 @@ enum PlanMode {
 }
 
 impl PlanMode {
+    /// Catalogue key for the mode; rendered via `i18n::t` at use sites.
     fn label(self) -> &'static str {
         match self {
-            Self::Execute => "Execute",
-            Self::DryRun => "Dry run",
-            Self::Rollback => "Rollback",
+            Self::Execute => "migration.execute",
+            Self::DryRun => "migration.dryRun",
+            Self::Rollback => "migration.rollback",
         }
     }
 }
@@ -296,6 +313,7 @@ impl gpui_kit::component::dock::Panel for MigrationPanel {
 impl Render for MigrationPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = crate::i18n::locale(cx);
         let is_edge = self.is_edge;
         let output_title = self.output_title.clone();
         let output = self.output.clone();
@@ -307,11 +325,14 @@ impl Render for MigrationPanel {
             .text_color(theme.foreground)
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.migration", crate::i18n::locale(cx))),
-                Some(SharedString::from(if self.busy {
-                    "Working…"
-                } else {
-                    "Idle"
-                })),
+                Some(SharedString::from(t(
+                    if self.busy {
+                        "common.working"
+                    } else {
+                        "common.idle"
+                    },
+                    locale,
+                ))),
                 None,
                 cx,
             ))
@@ -346,17 +367,33 @@ impl Render for MigrationPanel {
                                 v_flex()
                                     .gap_2()
                                     .p_3()
-                                    .child(form_row("Space", self.space.clone(), cx))
-                                    .child(form_row("Label", self.label.clone(), cx))
-                                    .child(form_row("From version", self.from_version.clone(), cx))
-                                    .child(form_row("To version", self.to_version.clone(), cx))
+                                    .child(form_row(
+                                        t("migration.space", locale),
+                                        self.space.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("migration.label", locale),
+                                        self.label.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("migration.fromVersion", locale),
+                                        self.from_version.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("migration.toVersion", locale),
+                                        self.to_version.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_1()
                                             .items_center()
                                             .child(
                                                 Button::new("migration-tag")
-                                                    .label("Tag")
+                                                    .label(t("migration.tag", locale))
                                                     .xsmall()
                                                     .selected(!is_edge)
                                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -366,7 +403,7 @@ impl Render for MigrationPanel {
                                             )
                                             .child(
                                                 Button::new("migration-edge")
-                                                    .label("Edge")
+                                                    .label(t("migration.edge", locale))
                                                     .xsmall()
                                                     .selected(is_edge)
                                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -375,13 +412,17 @@ impl Render for MigrationPanel {
                                                     })),
                                             ),
                                     )
-                                    .child(form_row("Plan JSON", self.plan_json.clone(), cx))
+                                    .child(form_row(
+                                        t("migration.planJson", locale),
+                                        self.plan_json.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_1()
                                             .child(
                                                 Button::new("migration-plan")
-                                                    .label("Plan")
+                                                    .label(t("migration.plan", locale))
                                                     .icon(IconName::GitBranch)
                                                     .primary()
                                                     .xsmall()
@@ -390,7 +431,7 @@ impl Render for MigrationPanel {
                                             )
                                             .child(
                                                 Button::new("migration-dry")
-                                                    .label("Dry run")
+                                                    .label(t("migration.dryRun", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -404,7 +445,7 @@ impl Render for MigrationPanel {
                                             .gap_1()
                                             .child(
                                                 Button::new("migration-execute")
-                                                    .label("Execute")
+                                                    .label(t("migration.execute", locale))
                                                     .icon(IconName::Play)
                                                     .xsmall()
                                                     .disabled(self.busy)
@@ -414,7 +455,7 @@ impl Render for MigrationPanel {
                                             )
                                             .child(
                                                 Button::new("migration-rollback")
-                                                    .label("Rollback")
+                                                    .label(t("migration.rollback", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -428,7 +469,7 @@ impl Render for MigrationPanel {
                                             .gap_1()
                                             .child(
                                                 Button::new("migration-history")
-                                                    .label("History")
+                                                    .label(t("migration.history", locale))
                                                     .icon(IconName::Clock)
                                                     .xsmall()
                                                     .ghost()
@@ -437,7 +478,7 @@ impl Render for MigrationPanel {
                                             )
                                             .child(
                                                 Button::new("migration-status")
-                                                    .label("Status")
+                                                    .label(t("migration.status", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -445,7 +486,7 @@ impl Render for MigrationPanel {
                                             )
                                             .child(
                                                 Button::new("migration-progress")
-                                                    .label("Progress")
+                                                    .label(t("migration.progress", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -462,7 +503,7 @@ impl Render for MigrationPanel {
                             .p_3()
                             .child(div().text_sm().text_color(theme.foreground).child(
                                 SharedString::from(if output_title.is_empty() {
-                                    "Result".to_string()
+                                    t("migration.result", locale).to_string()
                                 } else {
                                     output_title
                                 }),

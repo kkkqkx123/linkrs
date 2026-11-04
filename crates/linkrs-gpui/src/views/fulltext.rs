@@ -11,6 +11,7 @@ use gpui_kit::{
 };
 
 use crate::components::{form_row, panel_header, render_json_block};
+use crate::i18n::{locale, t, tf};
 use crate::services::{connection_service, fulltext_service, schema_service};
 use crate::state::AppState;
 
@@ -36,11 +37,17 @@ impl FulltextPanel {
     pub(crate) const PANEL_NAME: &'static str = "Fulltext";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let space_id = cx.new(|cx| InputState::new(window, cx).placeholder("Space id"));
-        let tag = cx.new(|cx| InputState::new(window, cx).placeholder("Tag name"));
-        let field = cx.new(|cx| InputState::new(window, cx).placeholder("Field name"));
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search text"));
-        let rebuild_id = cx.new(|cx| InputState::new(window, cx).placeholder("Rebuild id"));
+        let locale = locale(cx);
+        let space_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("fulltext.spaceId", locale)));
+        let tag =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("fulltext.tagName", locale)));
+        let field =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("fulltext.fieldName", locale)));
+        let query =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("fulltext.searchText", locale)));
+        let rebuild_id =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t("fulltext.rebuildId", locale)));
         let state = AppState::global(cx);
         let last_space = state.read(cx).space.clone();
         cx.observe(&state, |this, _, cx| this.on_state_changed(cx))
@@ -96,7 +103,7 @@ impl FulltextPanel {
     /// Fill the space id input from the resolved session space.
     fn use_current_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((_, id)) = self.resolved_space.clone() else {
-            self.error = Some("Current space id is unknown; pick a space first.".into());
+            self.error = Some(t("fulltext.currentSpaceUnknown", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -139,7 +146,7 @@ impl FulltextPanel {
         match outcome {
             Ok(value) => {
                 self.show(title, render(value));
-                self.message = Some(format!("{title} finished.").into());
+                self.message = Some(tf("common.finished", locale(cx), title).into());
                 self.error = None;
             }
             Err(error) => {
@@ -158,8 +165,11 @@ impl FulltextPanel {
         let task = fulltext_service::list_indexes(cx);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Indexes", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("fulltext.indexes", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
@@ -171,7 +181,8 @@ impl FulltextPanel {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             this.update(cx, |this, cx| {
-                this.finish(cx, "Inconsistent", outcome, |v| v)
+                let loc = locale(cx);
+                this.finish(cx, t("fulltext.inconsistent", loc), outcome, |v| v)
             })
             .ok();
         })
@@ -180,13 +191,13 @@ impl FulltextPanel {
 
     fn search(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("fulltext.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
         let query = Self::text(&self.query, cx);
         if query.is_empty() {
-            self.error = Some("Search text is required.".into());
+            self.error = Some(t("fulltext.searchTextRequired", locale(cx)).into());
             cx.notify();
             return;
         }
@@ -195,15 +206,18 @@ impl FulltextPanel {
         let task = fulltext_service::search(cx, space, &tag, &field, &query, 10);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Search", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("fulltext.search", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
 
     fn rebuild(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("fulltext.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -212,8 +226,11 @@ impl FulltextPanel {
         let task = fulltext_service::rebuild(cx, space, &tag, &field);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Rebuild", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("fulltext.rebuild", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
@@ -221,7 +238,7 @@ impl FulltextPanel {
     fn rebuild_status(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let id = Self::text(&self.rebuild_id, cx);
         if id.is_empty() {
-            self.error = Some("Rebuild id is required.".into());
+            self.error = Some(t("fulltext.rebuildIdRequired", locale(cx)).into());
             cx.notify();
             return;
         }
@@ -231,7 +248,8 @@ impl FulltextPanel {
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
             this.update(cx, |this, cx| {
-                this.finish(cx, "Rebuild status", outcome, |v| v)
+                let loc = locale(cx);
+                this.finish(cx, t("fulltext.rebuildStatus", loc), outcome, |v| v)
             })
             .ok();
         })
@@ -240,7 +258,7 @@ impl FulltextPanel {
 
     fn clear(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let Some((space, tag, field)) = self.identity(cx) else {
-            self.error = Some("Space id, tag and field are required.".into());
+            self.error = Some(t("fulltext.fieldsRequired", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -249,8 +267,11 @@ impl FulltextPanel {
         let task = fulltext_service::clear(cx, space, &tag, &field, true);
         cx.spawn(async move |this, cx| {
             let outcome = task.await;
-            this.update(cx, |this, cx| this.finish(cx, "Clear", outcome, |v| v))
-                .ok();
+            this.update(cx, |this, cx| {
+                let loc = locale(cx);
+                this.finish(cx, t("fulltext.clear", loc), outcome, |v| v)
+            })
+            .ok();
         })
         .detach();
     }
@@ -279,6 +300,7 @@ impl gpui_kit::component::dock::Panel for FulltextPanel {
 impl Render for FulltextPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = locale(cx);
         let output_title = self.output_title.clone();
         let output = self.output.clone();
 
@@ -290,9 +312,9 @@ impl Render for FulltextPanel {
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.fulltext", crate::i18n::locale(cx))),
                 Some(SharedString::from(if self.busy {
-                    "Working…"
+                    t("common.working", locale)
                 } else {
-                    "Idle"
+                    t("common.idle", locale)
                 })),
                 None,
                 cx,
@@ -328,14 +350,18 @@ impl Render for FulltextPanel {
                                 v_flex()
                                     .gap_2()
                                     .p_3()
-                                    .child(form_row("Space id", self.space_id.clone(), cx))
+                                    .child(form_row(
+                                        t("fulltext.spaceId", locale),
+                                        self.space_id.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_2()
                                             .items_center()
                                             .child(
                                                 Button::new("fulltext-use-space")
-                                                    .label("Use current space")
+                                                    .label(t("fulltext.useCurrentSpace", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.resolved_space.is_none())
@@ -359,16 +385,32 @@ impl Render for FulltextPanel {
                                                 },
                                             ),
                                     )
-                                    .child(form_row("Tag", self.tag.clone(), cx))
-                                    .child(form_row("Field", self.field.clone(), cx))
-                                    .child(form_row("Query", self.query.clone(), cx))
-                                    .child(form_row("Rebuild id", self.rebuild_id.clone(), cx))
+                                    .child(form_row(
+                                        t("fulltext.tag", locale),
+                                        self.tag.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("fulltext.field", locale),
+                                        self.field.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("fulltext.query", locale),
+                                        self.query.clone(),
+                                        cx,
+                                    ))
+                                    .child(form_row(
+                                        t("fulltext.rebuildId", locale),
+                                        self.rebuild_id.clone(),
+                                        cx,
+                                    ))
                                     .child(
                                         h_flex()
                                             .gap_1()
                                             .child(
                                                 Button::new("fulltext-list")
-                                                    .label("List")
+                                                    .label(t("fulltext.list", locale))
                                                     .icon(IconName::Search)
                                                     .primary()
                                                     .xsmall()
@@ -377,7 +419,7 @@ impl Render for FulltextPanel {
                                             )
                                             .child(
                                                 Button::new("fulltext-inconsistent")
-                                                    .label("Inconsistent")
+                                                    .label(t("fulltext.inconsistent", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -386,7 +428,7 @@ impl Render for FulltextPanel {
                                     )
                                     .child(
                                         Button::new("fulltext-search")
-                                            .label("BM25 search")
+                                            .label(t("fulltext.bm25Search", locale))
                                             .xsmall()
                                             .disabled(self.busy)
                                             .on_click(cx.listener(Self::search)),
@@ -396,7 +438,7 @@ impl Render for FulltextPanel {
                                             .gap_1()
                                             .child(
                                                 Button::new("fulltext-rebuild")
-                                                    .label("Rebuild")
+                                                    .label(t("fulltext.rebuild", locale))
                                                     .icon(IconName::RefreshCw)
                                                     .xsmall()
                                                     .disabled(self.busy)
@@ -404,7 +446,7 @@ impl Render for FulltextPanel {
                                             )
                                             .child(
                                                 Button::new("fulltext-status")
-                                                    .label("Rebuild status")
+                                                    .label(t("fulltext.rebuildStatus", locale))
                                                     .xsmall()
                                                     .ghost()
                                                     .disabled(self.busy)
@@ -413,7 +455,7 @@ impl Render for FulltextPanel {
                                     )
                                     .child(
                                         Button::new("fulltext-clear")
-                                            .label("Clear index")
+                                            .label(t("fulltext.clearIndex", locale))
                                             .icon(IconName::Trash)
                                             .xsmall()
                                             .ghost()
@@ -430,7 +472,7 @@ impl Render for FulltextPanel {
                             .p_3()
                             .child(div().text_sm().text_color(theme.foreground).child(
                                 SharedString::from(if output_title.is_empty() {
-                                    "Result".to_string()
+                                    t("common.result", locale).to_string()
                                 } else {
                                     output_title
                                 }),

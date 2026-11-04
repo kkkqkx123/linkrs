@@ -38,18 +38,25 @@ impl TransferPanel {
     pub(crate) const PANEL_NAME: &'static str = "Transfer";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let space = cx.new(|cx| InputState::new(window, cx).placeholder("Space"));
+        let locale = crate::i18n::locale(cx);
+        let space = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(crate::i18n::t("transfer.space", locale))
+        });
         let format = cx.new(|cx| InputState::new(window, cx).placeholder("csv, json or jsonl"));
         format.update(cx, |field, cx| {
             field.set_value("csv", window, cx);
         });
-        let target_type =
-            cx.new(|cx| InputState::new(window, cx).placeholder("tag/vertex or edge"));
+        let target_type = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("transfer.targetTypeHint", locale))
+        });
         target_type.update(cx, |field, cx| {
             field.set_value("vertex", window, cx);
         });
-        let target_name =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Target tag/edge name"));
+        let target_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("transfer.targetNameHint", locale))
+        });
         let file_path = cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/data.csv"));
         let export_query =
             cx.new(|cx| InputState::new(window, cx).placeholder("MATCH (v) RETURN v LIMIT 100"));
@@ -87,14 +94,18 @@ impl TransferPanel {
         let target_name = Self::text(&self.target_name, cx);
         let file_path = Self::text(&self.file_path, cx);
         if space.is_empty() || target_name.is_empty() || file_path.is_empty() {
-            self.error = Some("Space, target name and file path are required.".into());
+            self.error = Some(crate::i18n::t("transfer.required", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
         let bytes = match std::fs::read(&file_path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                self.error = Some(format!("Cannot read {file_path}: {error}").into());
+                self.error = Some(
+                    crate::i18n::tf("transfer.cannotRead", crate::i18n::locale(cx), &file_path)
+                        .replacen("{}", &error.to_string(), 1)
+                        .into(),
+                );
                 cx.notify();
                 return;
             }
@@ -134,8 +145,14 @@ impl TransferPanel {
                             .or_else(|| value.get("jobId"))
                             .and_then(|id| id.as_str())
                             .map(str::to_string);
-                        this.message =
-                            Some(format!("Uploaded {file_name}; import accepted.").into());
+                        this.message = Some(
+                            crate::i18n::tf(
+                                "transfer.uploaded",
+                                crate::i18n::locale(cx),
+                                &file_name,
+                            )
+                            .into(),
+                        );
                         drop(value);
                         if let Some(job_id) = job_id {
                             this.poll_import(&job_id, cx);
@@ -182,7 +199,8 @@ impl TransferPanel {
         let query = Self::text(&self.export_query, cx);
         let save_path = Self::text(&self.save_path, cx);
         if query.is_empty() || save_path.is_empty() {
-            self.error = Some("Query and save path are required for export.".into());
+            self.error =
+                Some(crate::i18n::t("transfer.exportRequired", crate::i18n::locale(cx)).into());
             cx.notify();
             return;
         }
@@ -226,19 +244,34 @@ impl TransferPanel {
                                 "bytes": bytes.len(),
                             });
                             this.message = Some(
-                                format!("Exported {} byte(s) to {}.", bytes.len(), path.display())
-                                    .into(),
+                                crate::i18n::tf(
+                                    "transfer.exported",
+                                    crate::i18n::locale(cx),
+                                    bytes.len(),
+                                )
+                                .replacen("{}", &path.display().to_string(), 1)
+                                .into(),
                             );
                         }
                         Err(error) => {
-                            this.error = Some(format!("Cannot write export: {error}").into());
+                            this.error = Some(
+                                crate::i18n::tf(
+                                    "transfer.cannotWrite",
+                                    crate::i18n::locale(cx),
+                                    error,
+                                )
+                                .into(),
+                            );
                         }
                     },
                     (Err(error), _) => {
                         this.error = Some(error.to_string().into());
                     }
                     _ => {
-                        this.message = Some("Export cancelled.".into());
+                        this.message = Some(
+                            crate::i18n::t("transfer.exportCancelled", crate::i18n::locale(cx))
+                                .into(),
+                        );
                     }
                 }
                 cx.notify();
@@ -271,8 +304,11 @@ impl TransferPanel {
                             "path": save_path,
                             "bytes": bytes,
                         });
-                        this.message =
-                            Some(format!("Exported {bytes} byte(s) to {save_path}.").into());
+                        this.message = Some(
+                            crate::i18n::tf("transfer.exported", crate::i18n::locale(cx), bytes)
+                                .replacen("{}", &save_path, 1)
+                                .into(),
+                        );
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
@@ -296,16 +332,42 @@ impl TransferPanel {
                 div()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .child(SharedString::from("Server-side import")),
+                    .child(SharedString::from(crate::i18n::t(
+                        "transfer.serverImport",
+                        crate::i18n::locale(cx),
+                    ))),
             )
-            .child(form_row("Space", self.space.clone(), cx))
-            .child(form_row("Format", self.format.clone(), cx))
-            .child(form_row("Target type", self.target_type.clone(), cx))
-            .child(form_row("Target name", self.target_name.clone(), cx))
-            .child(form_row("Local file", self.file_path.clone(), cx))
+            .child(form_row(
+                crate::i18n::t("transfer.space", crate::i18n::locale(cx)),
+                self.space.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("transfer.format", crate::i18n::locale(cx)),
+                self.format.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("transfer.targetType", crate::i18n::locale(cx)),
+                self.target_type.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("transfer.targetName", crate::i18n::locale(cx)),
+                self.target_name.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("transfer.localFile", crate::i18n::locale(cx)),
+                self.file_path.clone(),
+                cx,
+            ))
             .child(
                 Button::new("transfer-import")
-                    .label("Upload and import")
+                    .label(crate::i18n::t(
+                        "transfer.uploadImport",
+                        crate::i18n::locale(cx),
+                    ))
                     .icon(IconName::Upload)
                     .primary()
                     .xsmall()
@@ -329,10 +391,21 @@ impl TransferPanel {
                 div()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .child(SharedString::from("Server-side export")),
+                    .child(SharedString::from(crate::i18n::t(
+                        "transfer.serverExport",
+                        crate::i18n::locale(cx),
+                    ))),
             )
-            .child(form_row("Query", self.export_query.clone(), cx))
-            .child(form_row("Save as", self.save_path.clone(), cx))
+            .child(form_row(
+                crate::i18n::t("transfer.query", crate::i18n::locale(cx)),
+                self.export_query.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("transfer.saveAs", crate::i18n::locale(cx)),
+                self.save_path.clone(),
+                cx,
+            ))
             .child(gpui_kit::component::h_flex().gap_1().children(
                 ["csv", "jsonl"].into_iter().map(|candidate| {
                     let active = (candidate == "csv") == csv;
@@ -348,27 +421,36 @@ impl TransferPanel {
             ))
             .child(
                 gpui_kit::component::h_flex().gap_1().children(
-                    [("bytes", "Bytes (dialog)"), ("server", "Server task")]
-                        .into_iter()
-                        .map(|(mode, label)| {
-                            let active = (mode == "server") == server_side;
-                            Button::new(format!("transfer-mode-{mode}"))
-                                .label(label)
-                                .xsmall()
-                                .selected(active)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.server_side_export = mode == "server";
-                                    cx.notify();
-                                }))
-                        }),
+                    [
+                        (
+                            "bytes",
+                            crate::i18n::t("transfer.modeBytes", crate::i18n::locale(cx)),
+                        ),
+                        (
+                            "server",
+                            crate::i18n::t("transfer.modeServer", crate::i18n::locale(cx)),
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(mode, label)| {
+                        let active = (mode == "server") == server_side;
+                        Button::new(format!("transfer-mode-{mode}"))
+                            .label(label)
+                            .xsmall()
+                            .selected(active)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.server_side_export = mode == "server";
+                                cx.notify();
+                            }))
+                    }),
                 ),
             )
             .child(
                 Button::new("transfer-export")
                     .label(if server_side {
-                        "Export via server task"
+                        crate::i18n::t("transfer.exportViaServer", crate::i18n::locale(cx))
                     } else {
-                        "Export to file"
+                        crate::i18n::t("transfer.exportToFile", crate::i18n::locale(cx))
                     })
                     .icon(IconName::Download)
                     .xsmall()
@@ -412,9 +494,9 @@ impl Render for TransferPanel {
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.transfer", crate::i18n::locale(cx))),
                 Some(SharedString::from(if self.busy {
-                    "Working…"
+                    crate::i18n::t("common.working", crate::i18n::locale(cx))
                 } else {
-                    "Idle"
+                    crate::i18n::t("common.idle", crate::i18n::locale(cx))
                 })),
                 None,
                 cx,

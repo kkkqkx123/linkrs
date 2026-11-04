@@ -12,7 +12,9 @@ use gpui_kit::{
 
 use crate::components::{
     card, card_body, card_head, confirm, empty_state, form_row, panel_header, render_json_block,
+    skeleton_rows,
 };
+use crate::i18n::{t, tf};
 use crate::services::{connection_service, sync_service};
 
 /// Sync/outbox management panel: status snapshot, dead-letter table with
@@ -37,11 +39,17 @@ impl SyncPanel {
     pub(crate) const PANEL_NAME: &'static str = "Sync";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let target = cx.new(|cx| InputState::new(window, cx).placeholder("Target (optional)"));
-        let index_id = cx.new(|cx| InputState::new(window, cx).placeholder("Index id (optional)"));
-        let generation =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Generation (optional)"));
-        let limit = cx.new(|cx| InputState::new(window, cx).placeholder("Limit (default 100)"));
+        let locale = crate::i18n::locale(cx);
+        let target = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t("sync.targetPlaceholder", locale)));
+        let index_id = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("sync.indexIdPlaceholder", locale))
+        });
+        let generation = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("sync.generationPlaceholder", locale))
+        });
+        let limit = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t("sync.limitPlaceholder", locale)));
         let mut panel = Self {
             status: serde_json::Value::Null,
             diagnostics: serde_json::Value::Null,
@@ -109,8 +117,11 @@ impl SyncPanel {
                         this.error = None;
                     }
                     _ => {
-                        this.error =
-                            Some("Failed to load sync data; retry or check the connection.".into());
+                        this.error = Some(
+                            t("sync.loadFailed", crate::i18n::locale(cx))
+                                .to_string()
+                                .into(),
+                        );
                     }
                 }
                 cx.notify();
@@ -138,7 +149,7 @@ impl SyncPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(_) => {
-                        this.message = Some("Requeued matching dead letters.".into());
+                        this.message = Some(t("sync.requeued", crate::i18n::locale(cx)).into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -161,7 +172,8 @@ impl SyncPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(_) => {
-                        this.message = Some("Retried outbox delivery.".into());
+                        this.message =
+                            Some(t("sync.outboxRetried", crate::i18n::locale(cx)).into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -189,7 +201,8 @@ impl SyncPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(_) => {
-                        this.message = Some("Cleared degraded range.".into());
+                        this.message =
+                            Some(t("sync.degradedCleared", crate::i18n::locale(cx)).into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -212,7 +225,7 @@ impl SyncPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(_) => {
-                        this.message = Some("Ran outbox retention.".into());
+                        this.message = Some(t("sync.retentionRan", crate::i18n::locale(cx)).into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -252,6 +265,7 @@ impl gpui_kit::component::dock::Panel for SyncPanel {
 impl Render for SyncPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = crate::i18n::locale(cx);
 
         v_flex()
             .id("sync-panel")
@@ -267,7 +281,7 @@ impl Render for SyncPanel {
                         .gap_2()
                         .child(
                             Button::new("sync-requeue")
-                                .label("Requeue filtered")
+                                .label(t("sync.requeueFiltered", locale))
                                 .small()
                                 .ghost()
                                 .disabled(self.loading)
@@ -277,7 +291,7 @@ impl Render for SyncPanel {
                         )
                         .child(
                             Button::new("sync-retry")
-                                .label("Retry outbox")
+                                .label(t("sync.retryOutbox", locale))
                                 .small()
                                 .ghost()
                                 .disabled(self.loading)
@@ -287,7 +301,7 @@ impl Render for SyncPanel {
                         )
                         .child(
                             Button::new("sync-retention-run")
-                                .label("Run retention")
+                                .label(t("sync.runRetention", locale))
                                 .small()
                                 .ghost()
                                 .disabled(self.loading)
@@ -335,10 +349,18 @@ impl Render for SyncPanel {
                     .py_1()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(form_row("Target", self.target.clone(), cx))
-                    .child(form_row("Index id", self.index_id.clone(), cx))
-                    .child(form_row("Generation", self.generation.clone(), cx))
-                    .child(form_row("Limit", self.limit.clone(), cx)),
+                    .child(form_row(t("sync.target", locale), self.target.clone(), cx))
+                    .child(form_row(
+                        t("sync.indexId", locale),
+                        self.index_id.clone(),
+                        cx,
+                    ))
+                    .child(form_row(
+                        t("sync.generation", locale),
+                        self.generation.clone(),
+                        cx,
+                    ))
+                    .child(form_row(t("sync.limit", locale), self.limit.clone(), cx)),
             )
             .child(
                 h_flex()
@@ -354,18 +376,27 @@ impl Render for SyncPanel {
                             .overflow_y_scroll()
                             .child(
                                 card(cx)
-                                    .child(card_head("Status", None, cx))
-                                    .child(card_body().child(render_json_block(&self.status, cx))),
+                                    .child(card_head(t("sync.status", locale), None, cx))
+                                    .child(
+                                        card_body(crate::settings::global(cx).density.is_dense())
+                                            .child(render_json_block(&self.status, cx)),
+                                    ),
                             )
                             .child(
-                                card(cx).child(card_head("Diagnostics", None, cx)).child(
-                                    card_body().child(render_json_block(&self.diagnostics, cx)),
-                                ),
+                                card(cx)
+                                    .child(card_head(t("sync.diagnostics", locale), None, cx))
+                                    .child(
+                                        card_body(crate::settings::global(cx).density.is_dense())
+                                            .child(render_json_block(&self.diagnostics, cx)),
+                                    ),
                             )
                             .child(
-                                card(cx).child(card_head("Retention", None, cx)).child(
-                                    card_body().child(render_json_block(&self.retention, cx)),
-                                ),
+                                card(cx)
+                                    .child(card_head(t("sync.retention", locale), None, cx))
+                                    .child(
+                                        card_body(crate::settings::global(cx).density.is_dense())
+                                            .child(render_json_block(&self.retention, cx)),
+                                    ),
                             ),
                     )
                     .child(
@@ -379,26 +410,31 @@ impl Render for SyncPanel {
                             .border_color(theme.border)
                             .overflow_y_scroll()
                             .child(div().text_sm().text_color(theme.foreground).child(
-                                SharedString::from(format!(
-                                    "Dead letters ({})",
-                                    self.dead_letters.len()
+                                SharedString::from(tf(
+                                    "sync.deadLetters",
+                                    locale,
+                                    self.dead_letters.len(),
                                 )),
                             ))
                             .children(self.dead_letters.iter().enumerate().map(|(ix, row)| {
                                 render_row(row, ix, &theme, cx, "sync-dead", None)
                             }))
+                            .when(self.loading && self.dead_letters.is_empty(), |list| {
+                                list.child(skeleton_rows(6, cx))
+                            })
                             .when(self.dead_letters.is_empty(), |list| {
                                 list.child(empty_state(
                                     IconName::Inbox,
-                                    "No dead letters",
-                                    Some("The outbox reports no dead-lettered events.".into()),
+                                    t("sync.emptyTitle", locale),
+                                    Some(t("sync.emptyBody", locale).to_string().into()),
                                     cx,
                                 ))
                             })
                             .child(div().text_sm().text_color(theme.foreground).child(
-                                SharedString::from(format!(
-                                    "Degraded ranges ({})",
-                                    self.degraded.len()
+                                SharedString::from(tf(
+                                    "sync.degradedRanges",
+                                    locale,
+                                    self.degraded.len(),
                                 )),
                             ))
                             .children(self.degraded.iter().enumerate().map(|(ix, row)| {
@@ -446,6 +482,7 @@ fn render_row(
     prefix: &'static str,
     clear: Option<(String, serde_json::Value)>,
 ) -> impl IntoElement {
+    let locale = crate::i18n::locale(cx);
     h_flex()
         .gap_2()
         .items_center()
@@ -470,7 +507,7 @@ fn render_row(
         .when_some(clear, |line, (key, row)| {
             line.child(
                 Button::new((prefix, ix))
-                    .label("Clear")
+                    .label(t("sync.clear", locale))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |_, _, window, cx| {
@@ -480,9 +517,9 @@ fn render_row(
                         confirm(
                             window,
                             cx,
-                            "Clear degraded range",
-                            format!("Clear degraded range {key}? Mirroring resumes from scratch."),
-                            "Clear",
+                            t("sync.clearTitle", locale),
+                            tf("sync.clearBody", locale, &key),
+                            t("sync.clear", locale),
                             true,
                             move |window, cx| {
                                 view.update(cx, |this, cx| {

@@ -11,7 +11,10 @@ use gpui_kit::{
 };
 use linkrs_client::TransactionOptions;
 
-use crate::components::{confirm, empty_state, form_row, panel_header, render_json_block};
+use crate::components::{
+    confirm, empty_state, form_row, panel_header, render_json_block, skeleton_rows,
+};
+use crate::i18n::{locale, t, tf};
 use crate::services::{connection_service, monitoring_service, transaction_service};
 
 /// Transaction management panel: explicit begin/commit/rollback, savepoint
@@ -35,10 +38,18 @@ impl TransactionsPanel {
     pub(crate) const PANEL_NAME: &'static str = "Transactions";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let txn_id = cx.new(|cx| InputState::new(window, cx).placeholder("Transaction id"));
-        let savepoint_name =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Savepoint name (optional)"));
-        let savepoint_id = cx.new(|cx| InputState::new(window, cx).placeholder("Savepoint id"));
+        let locale = locale(cx);
+        let txn_id = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("transactions.txnIdPlaceholder", locale))
+        });
+        let savepoint_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("transactions.savepointNamePlaceholder", locale))
+        });
+        let savepoint_id = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t("transactions.savepointIdPlaceholder", locale))
+        });
         let mut panel = Self {
             overview: serde_json::Value::Null,
             metrics: serde_json::Value::Null,
@@ -81,7 +92,8 @@ impl TransactionsPanel {
                     }
                     _ => {
                         this.error = Some(
-                            "Failed to load transaction data; retry or check the connection."
+                            t("transactions.loadFailed", crate::i18n::locale(cx))
+                                .to_string()
                                 .into(),
                         );
                     }
@@ -116,12 +128,11 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(response) => {
+                        let locale = locale(cx);
                         this.message = Some(
-                            format!(
-                                "Began transaction {} ({})",
-                                response.transaction_id, response.status
-                            )
-                            .into(),
+                            tf("transactions.began", locale, &response.transaction_id)
+                                .replacen("{}", &response.status, 1)
+                                .into(),
                         );
                         this.txn_id.update(cx, |field, cx| {
                             field.set_value(response.transaction_id.to_string(), window, cx);
@@ -143,7 +154,7 @@ impl TransactionsPanel {
 
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(txn_id) = self.parse_txn_id(cx) else {
-            self.error = Some("Transaction id must be a number.".into());
+            self.error = Some(t("transactions.idMustBeNumber", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -153,7 +164,8 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message = Some(format!("Committed transaction {txn_id}.").into());
+                        this.message =
+                            Some(tf("transactions.committed", locale(cx), txn_id).into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -171,7 +183,7 @@ impl TransactionsPanel {
 
     fn rollback(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(txn_id) = self.parse_txn_id(cx) else {
-            self.error = Some("Transaction id must be a number.".into());
+            self.error = Some(t("transactions.idMustBeNumber", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -181,7 +193,8 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message = Some(format!("Rolled back transaction {txn_id}.").into());
+                        this.message =
+                            Some(tf("transactions.rolledBack", locale(cx), txn_id).into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -199,7 +212,7 @@ impl TransactionsPanel {
 
     fn create_savepoint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(txn_id) = self.parse_txn_id(cx) else {
-            self.error = Some("Transaction id must be a number.".into());
+            self.error = Some(t("transactions.idMustBeNumber", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -211,11 +224,14 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(response) => {
+                        let locale = locale(cx);
                         this.message = Some(
-                            format!(
-                                "Created savepoint {} for transaction {txn_id}.",
-                                response.savepoint_id
+                            tf(
+                                "transactions.savepointCreated",
+                                locale,
+                                &response.savepoint_id,
                             )
+                            .replacen("{}", &txn_id.to_string(), 1)
                             .into(),
                         );
                         this.savepoint_id.update(cx, |field, cx| {
@@ -260,7 +276,7 @@ impl TransactionsPanel {
 
     fn list_savepoints(&mut self, _: &Window, cx: &mut Context<Self>) {
         let Some(txn_id) = self.parse_txn_id(cx) else {
-            self.error = Some("Transaction id must be a number.".into());
+            self.error = Some(t("transactions.idMustBeNumber", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -271,7 +287,7 @@ impl TransactionsPanel {
         let (Some(txn_id), Some(savepoint_id)) =
             (self.parse_txn_id(cx), self.parse_savepoint_id(cx))
         else {
-            self.error = Some("Transaction id and savepoint id must be numbers.".into());
+            self.error = Some(t("transactions.bothIdsMustBeNumbers", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -281,11 +297,11 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(_) => {
+                        let locale = locale(cx);
                         this.message = Some(
-                            format!(
-                                "Rolled back transaction {txn_id} to savepoint {savepoint_id}."
-                            )
-                            .into(),
+                            tf("transactions.rolledBackTo", locale, txn_id)
+                                .replacen("{}", &savepoint_id.to_string(), 1)
+                                .into(),
                         );
                         this.refresh(window, cx);
                     }
@@ -306,7 +322,7 @@ impl TransactionsPanel {
         let (Some(txn_id), Some(savepoint_id)) =
             (self.parse_txn_id(cx), self.parse_savepoint_id(cx))
         else {
-            self.error = Some("Transaction id and savepoint id must be numbers.".into());
+            self.error = Some(t("transactions.bothIdsMustBeNumbers", locale(cx)).into());
             cx.notify();
             return;
         };
@@ -316,8 +332,10 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, _, cx| {
                 match outcome {
                     Ok(_) => {
+                        let locale = locale(cx);
                         this.message = Some(
-                            format!("Released savepoint {savepoint_id} of transaction {txn_id}.")
+                            tf("transactions.savepointReleased", locale, savepoint_id)
+                                .replacen("{}", &txn_id.to_string(), 1)
                                 .into(),
                         );
                         this.list_savepoints_inner(txn_id, cx);
@@ -342,7 +360,8 @@ impl TransactionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(_) => {
-                        this.message = Some(format!("Terminated transaction {txn_id}.").into());
+                        this.message =
+                            Some(tf("transactions.terminated", locale(cx), txn_id).into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -366,7 +385,7 @@ impl TransactionsPanel {
                 match outcome {
                     Ok(_) => {
                         this.message =
-                            Some(format!("Retried outbox for transaction {txn_id}.").into());
+                            Some(tf("transactions.outboxRetried", locale(cx), txn_id).into());
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
@@ -384,6 +403,7 @@ impl TransactionsPanel {
     fn render_explicit(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let read_only = self.read_only;
+        let locale = locale(cx);
         v_flex()
             .flex_shrink_0()
             .gap_2()
@@ -395,16 +415,20 @@ impl TransactionsPanel {
                 div()
                     .text_sm()
                     .text_color(theme.foreground)
-                    .child(SharedString::from("Explicit transactions")),
+                    .child(SharedString::from(t("transactions.explicit", locale))),
             )
-            .child(form_row("Txn id", self.txn_id.clone(), cx))
+            .child(form_row(
+                t("transactions.txnId", locale),
+                self.txn_id.clone(),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_1()
                     .flex_wrap()
                     .child(
                         Button::new("transactions-begin")
-                            .label("Begin")
+                            .label(t("transactions.begin", locale))
                             .icon(IconName::Plus)
                             .xsmall()
                             .disabled(self.loading)
@@ -414,7 +438,7 @@ impl TransactionsPanel {
                     )
                     .child(
                         Button::new("transactions-read-only")
-                            .label("Read-only")
+                            .label(t("transactions.readOnly", locale))
                             .xsmall()
                             .ghost()
                             .selected(read_only)
@@ -425,7 +449,7 @@ impl TransactionsPanel {
                     )
                     .child(
                         Button::new("transactions-commit")
-                            .label("Commit")
+                            .label(t("transactions.commit", locale))
                             .xsmall()
                             .disabled(self.loading)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -434,7 +458,7 @@ impl TransactionsPanel {
                     )
                     .child(
                         Button::new("transactions-rollback")
-                            .label("Rollback")
+                            .label(t("transactions.rollback", locale))
                             .xsmall()
                             .ghost()
                             .disabled(self.loading)
@@ -447,17 +471,25 @@ impl TransactionsPanel {
                 div()
                     .text_sm()
                     .text_color(theme.foreground)
-                    .child(SharedString::from("Savepoints")),
+                    .child(SharedString::from(t("transactions.savepoints", locale))),
             )
-            .child(form_row("Name", self.savepoint_name.clone(), cx))
-            .child(form_row("Savepoint id", self.savepoint_id.clone(), cx))
+            .child(form_row(
+                t("transactions.name", locale),
+                self.savepoint_name.clone(),
+                cx,
+            ))
+            .child(form_row(
+                t("transactions.savepointId", locale),
+                self.savepoint_id.clone(),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_1()
                     .flex_wrap()
                     .child(
                         Button::new("transactions-savepoint-create")
-                            .label("Create")
+                            .label(t("transactions.create", locale))
                             .xsmall()
                             .disabled(self.loading)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -466,7 +498,7 @@ impl TransactionsPanel {
                     )
                     .child(
                         Button::new("transactions-savepoint-list")
-                            .label("List")
+                            .label(t("transactions.list", locale))
                             .xsmall()
                             .ghost()
                             .disabled(self.loading)
@@ -476,7 +508,7 @@ impl TransactionsPanel {
                     )
                     .child(
                         Button::new("transactions-savepoint-rollback")
-                            .label("Rollback to")
+                            .label(t("transactions.rollbackToButton", locale))
                             .xsmall()
                             .ghost()
                             .disabled(self.loading)
@@ -486,7 +518,7 @@ impl TransactionsPanel {
                     )
                     .child(
                         Button::new("transactions-savepoint-release")
-                            .label("Release")
+                            .label(t("transactions.release", locale))
                             .xsmall()
                             .ghost()
                             .disabled(self.loading)
@@ -500,6 +532,7 @@ impl TransactionsPanel {
 
     fn render_gauges(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = locale(cx);
         h_flex()
             .flex_shrink_0()
             .gap_2()
@@ -515,7 +548,7 @@ impl TransactionsPanel {
                         div()
                             .text_sm()
                             .text_color(theme.foreground)
-                            .child(SharedString::from("Outcomes & resources")),
+                            .child(SharedString::from(t("transactions.outcomes", locale))),
                     )
                     .child(render_json_block(&self.metrics, cx)),
             )
@@ -527,7 +560,7 @@ impl TransactionsPanel {
                         div()
                             .text_sm()
                             .text_color(theme.foreground)
-                            .child(SharedString::from("Overview")),
+                            .child(SharedString::from(t("transactions.overview", locale))),
                     )
                     .child(render_json_block(&self.overview, cx)),
             )
@@ -565,9 +598,10 @@ impl Render for TransactionsPanel {
             .text_color(theme.foreground)
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.transactions", crate::i18n::locale(cx))),
-                Some(SharedString::from(format!(
-                    "{} active",
-                    self.transactions.len()
+                Some(SharedString::from(tf(
+                    "transactions.activeSuffix",
+                    locale(cx),
+                    self.transactions.len(),
                 ))),
                 Some(
                     h_flex()
@@ -610,6 +644,9 @@ impl Render for TransactionsPanel {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .when(self.loading && self.transactions.is_empty(), |host| {
+                        host.child(skeleton_rows(8, cx))
+                    })
                     .child(self.render_explicit(cx))
                     .child(self.render_gauges(cx))
                     .child(
@@ -618,9 +655,10 @@ impl Render for TransactionsPanel {
                             .px_2()
                             .py_1()
                             .child(div().text_sm().text_color(theme.foreground).child(
-                                SharedString::from(format!(
-                                    "Active transactions ({})",
-                                    self.transactions.len()
+                                SharedString::from(tf(
+                                    "transactions.activeCount",
+                                    locale(cx),
+                                    self.transactions.len(),
                                 )),
                             ))
                             .child(
@@ -633,9 +671,10 @@ impl Render for TransactionsPanel {
                                     .when(self.transactions.is_empty(), |list| {
                                         list.child(empty_state(
                                             IconName::Inbox,
-                                            "No active transactions",
+                                            t("transactions.emptyTitle", locale(cx)),
                                             Some(
-                                                "The server reports no running transactions."
+                                                t("transactions.emptyBody", locale(cx))
+                                                    .to_string()
                                                     .into(),
                                             ),
                                             cx,
@@ -653,6 +692,7 @@ fn render_transaction_row(
     theme: &gpui_kit::component::Theme,
     cx: &mut Context<TransactionsPanel>,
 ) -> impl IntoElement {
+    let locale = locale(cx);
     let txn_id = txn
         .get("transaction_id")
         .and_then(serde_json::Value::as_u64);
@@ -682,7 +722,7 @@ fn render_transaction_row(
         .filter(|reason| reason != "null" && !reason.is_empty());
     let blocked_suffix = blocking
         .as_ref()
-        .map(|reason| format!(" · blocked: {reason}"))
+        .map(|reason| tf("transactions.blocked", locale, reason))
         .unwrap_or_default();
 
     h_flex()
@@ -717,25 +757,27 @@ fn render_transaction_row(
                 .whitespace_nowrap()
                 .text_ellipsis()
                 .child(SharedString::from(format!(
-                    "{owner} · {elapsed} ms · staged {staged} · undo {undo}{blocked_suffix}"
+                    "{owner}  {}{blocked_suffix}",
+                    tf("transactions.rowStats", locale, elapsed)
+                        .replacen("{}", &staged.to_string(), 1)
+                        .replacen("{}", &undo.to_string(), 1)
                 ))),
         )
         .when_some(txn_id, |row, id| {
             row.child(
                 Button::new(("transactions-kill", id))
-                    .label("Kill")
+                    .label(t("transactions.kill", locale))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |_, _, window, cx| {
                         let view = cx.entity();
+                        let loc = crate::i18n::locale(cx);
                         confirm(
                             window,
                             cx,
-                            "Terminate transaction",
-                            format!(
-                                "Terminate transaction {id}? Its pending writes are rolled back."
-                            ),
-                            "Terminate",
+                            t("transactions.killTitle", loc),
+                            tf("transactions.killBody", loc, id),
+                            t("transactions.terminate", loc),
                             true,
                             move |window, cx| {
                                 view.update(cx, |this, cx| this.kill(id, window, cx));
@@ -746,7 +788,7 @@ fn render_transaction_row(
             .when(blocking.is_some(), |row| {
                 row.child(
                     Button::new(("transactions-retry", id))
-                        .label("Retry outbox")
+                        .label(t("transactions.retryOutbox", locale))
                         .xsmall()
                         .ghost()
                         .on_click(cx.listener(move |this, _, window, cx| {

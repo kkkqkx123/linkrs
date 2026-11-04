@@ -10,7 +10,10 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 
-use crate::components::{confirm, empty_state, form_row, panel_header, render_json_block};
+use crate::components::{
+    confirm, empty_state, form_row, panel_header, render_json_block, skeleton_rows,
+};
+use crate::i18n::{locale, t, tf};
 use crate::services::{connection_service, function_service};
 
 /// Function registry panel: registered function list, detail inspection,
@@ -31,9 +34,12 @@ impl FunctionsPanel {
     pub(crate) const PANEL_NAME: &'static str = "Functions";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("Function name"));
-        let implementation =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Implementation path"));
+        let locale = locale(cx);
+        let name = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t("functions.functionName", locale)));
+        let implementation = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t("functions.implementationPath", locale))
+        });
         let mut panel = Self {
             functions: Vec::new(),
             selected: None,
@@ -107,7 +113,7 @@ impl FunctionsPanel {
         let name = self.name.read(cx).value().trim().to_string();
         let implementation = self.implementation.read(cx).value().to_string();
         if name.is_empty() {
-            self.error = Some("Function name is required.".into());
+            self.error = Some(t("functions.nameRequired", locale(cx)).into());
             cx.notify();
             return;
         }
@@ -118,7 +124,7 @@ impl FunctionsPanel {
                 match outcome {
                     Ok(detail) => {
                         this.detail = detail;
-                        this.message = Some(format!("Registered function {name}.").into());
+                        this.message = Some(tf("functions.registered", locale(cx), &name).into());
                         this.refresh(window, cx);
                     }
                     Err(error) => {
@@ -142,7 +148,7 @@ impl FunctionsPanel {
             _ = this.update_in(window, |this, window, cx| {
                 match outcome {
                     Ok(()) => {
-                        this.message = Some(format!("Unregistered function {name}.").into());
+                        this.message = Some(tf("functions.unregistered", locale(cx), &name).into());
                         this.selected = None;
                         this.refresh(window, cx);
                     }
@@ -183,6 +189,7 @@ impl gpui_kit::component::dock::Panel for FunctionsPanel {
 impl Render for FunctionsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let locale = locale(cx);
 
         v_flex()
             .id("functions-panel")
@@ -190,10 +197,7 @@ impl Render for FunctionsPanel {
             .bg(theme.background)
             .text_color(theme.foreground)
             .child(panel_header(
-                SharedString::from(crate::i18n::t(
-                    "nav.functions",
-                    crate::i18n::locale(cx),
-                )),
+                SharedString::from(crate::i18n::t("nav.functions", crate::i18n::locale(cx))),
                 None,
                 Some(
                     h_flex()
@@ -211,7 +215,7 @@ impl Render for FunctionsPanel {
                         )
                         .child(
                             Button::new("functions-unregister")
-                                .label("Unregister")
+                                .label(t("functions.unregister", locale))
                                 .icon(IconName::Trash)
                                 .small()
                                 .ghost()
@@ -221,14 +225,13 @@ impl Render for FunctionsPanel {
                                         return;
                                     };
                                     let view = cx.entity();
+                                    let loc = crate::i18n::locale(cx);
                                     confirm(
                                         window,
                                         cx,
-                                        "Unregister function",
-                                        format!(
-                                            "Unregister function {name}? Existing queries stop resolving it."
-                                        ),
-                                        "Unregister",
+                                        t("functions.unregisterTitle", loc),
+                                        tf("functions.unregisterConfirm", loc, &name),
+                                        t("functions.unregister", loc),
                                         true,
                                         move |window, cx| {
                                             let name = name.clone();
@@ -271,7 +274,6 @@ impl Render for FunctionsPanel {
                     ),
                 )
             })
-
             .child(
                 h_flex()
                     .flex_1()
@@ -305,11 +307,14 @@ impl Render for FunctionsPanel {
                                                 ))
                                         },
                                     ))
+                                    .when(self.loading && self.functions.is_empty(), |list| {
+                                        list.child(skeleton_rows(6, cx))
+                                    })
                                     .when(self.functions.is_empty(), |list| {
                                         list.child(empty_state(
                                             IconName::Inbox,
-                                            "No functions",
-                                            Some("No registered functions.".into()),
+                                            t("functions.emptyTitle", locale),
+                                            Some(t("functions.emptyHint", locale).into()),
                                             cx,
                                         ))
                                     }),
@@ -324,16 +329,19 @@ impl Render for FunctionsPanel {
                             .p_3()
                             .overflow_y_scroll()
                             .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(SharedString::from("Register function")),
+                                div().text_sm().text_color(theme.foreground).child(
+                                    SharedString::from(t("functions.registerTitle", locale)),
+                                ),
                             )
-                            .child(form_row("Name", self.name.clone(), cx))
-                            .child(form_row("Implementation", self.implementation.clone(), cx))
+                            .child(form_row(t("functions.name", locale), self.name.clone(), cx))
+                            .child(form_row(
+                                t("functions.implementation", locale),
+                                self.implementation.clone(),
+                                cx,
+                            ))
                             .child(
                                 Button::new("functions-register")
-                                    .label("Register")
+                                    .label(t("functions.register", locale))
                                     .icon(IconName::Plus)
                                     .xsmall()
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -344,7 +352,7 @@ impl Render for FunctionsPanel {
                                 div()
                                     .text_sm()
                                     .text_color(theme.foreground)
-                                    .child(SharedString::from("Detail")),
+                                    .child(SharedString::from(t("functions.detail", locale))),
                             )
                             .child(render_json_block(&self.detail, cx)),
                     ),
