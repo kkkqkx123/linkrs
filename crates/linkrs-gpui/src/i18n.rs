@@ -4,10 +4,11 @@
 //! text, so Rust sources stay English-only. Lookups fall back to English
 //! and then to the key itself, so a missing entry never blanks the UI.
 //!
-//! Stage one migrates the login view, the main window chrome (sidebar
-//! groups, status bar, footer) and the console toolbar plus its empty-state
-//! notices. History, favorites, parameters, cursor pager, export, inspect
-//! and graph-send surfaces follow in later batches by adding keys here.
+//! Catalogue rules: every key is namespaced (`console.run`, never a bare
+//! word or sentence), so backend column names, SQL fragments, log lines
+//! and test strings stay out of the JSON files. Only `t`/`tf`/`tf_args`
+//! lookups render user text; anything else (SQL, paths, numbers, JSON
+//! examples, protocol fields) is never translated.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -41,8 +42,25 @@ pub fn locale(cx: &gpui_kit::App) -> Locale {
 }
 
 /// Formatted lookup: replaces the first `{}` placeholder with `arg`.
+/// Multi-placeholder templates use [`tf_args`] so every slot is filled in
+/// order; chaining `replacen` at call sites is not allowed because a
+/// skipped slot silently renders a raw `{}`.
 pub fn tf(key: &str, locale: Locale, arg: impl std::fmt::Display) -> String {
-    t(key, locale).replacen("{}", &arg.to_string(), 1)
+    tf_args(key, locale, &[&arg])
+}
+
+/// Formatted lookup for templates with any number of `{}` placeholders.
+/// Slots fill left to right; surplus template slots keep their `{}` so a
+/// mismatch stays visible instead of shifting arguments.
+pub fn tf_args(key: &str, locale: Locale, args: &[&dyn std::fmt::Display]) -> String {
+    let mut out = t(key, locale).to_string();
+    for arg in args {
+        if !out.contains("{}") {
+            break;
+        }
+        out = out.replacen("{}", &arg.to_string(), 1);
+    }
+    out
 }
 
 /// Persist the language and mirror it into the observable global state so
@@ -81,6 +99,60 @@ mod tests {
             t("definitely.missing.key", Locale::Zh),
             "definitely.missing.key"
         );
+    }
+
+    #[test]
+    fn multi_arg_templates_fill_in_order() {
+        let single = tf_args("console.rowsMs", Locale::En, &[&3, &12]);
+        assert_eq!(single, "3 rows · 12 ms");
+        let triple = tf_args(
+            "console.sentGraph",
+            Locale::En,
+            &[&1, &2, &" (truncated)"],
+        );
+        assert_eq!(triple, "Sent 1 nodes and 2 edges to the graph (truncated)");
+        // Single-arg helper keeps its behavior through the shared path.
+        assert_eq!(tf("console.rowsMs", Locale::En, 3), "3 rows · {} ms");
+        // Chinese templates fill the same slots in order.
+        let zh = tf_args("console.rowsMs", Locale::Zh, &[&3, &12]);
+        assert_eq!(zh, "3 行 · 12 ms");
+    }
+
+    #[test]
+    fn catalogue_keys_stay_namespaced() {
+        for key in EN.keys() {
+            assert!(key.contains('.'), "catalogue key without namespace: {key}");
+            let namespace = key.split('.').next().unwrap_or_default();
+            assert!(
+                [
+                    "common",
+                    "language",
+                    "login",
+                    "nav",
+                    "header",
+                    "status",
+                    "console",
+                    "graph",
+                    "config",
+                    "monitoring",
+                    "batch",
+                    "transfer",
+                    "dataBrowser",
+                    "schema",
+                    "fulltext",
+                    "functions",
+                    "migration",
+                    "sessions",
+                    "sync",
+                    "transactions",
+                    "users",
+                    "vector",
+                    "filter",
+                ]
+                .contains(&namespace),
+                "unknown catalogue namespace: {key}"
+            );
+        }
     }
 
     #[test]

@@ -38,11 +38,19 @@ impl TransferPanel {
     pub(crate) const PANEL_NAME: &'static str = "Transfer";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let locale = crate::i18n::locale(cx);
         let space = cx.new(|cx| {
             InputState::new(window, cx).placeholder(crate::i18n::t("transfer.space", locale))
         });
-        let format = cx.new(|cx| InputState::new(window, cx).placeholder("csv, json or jsonl"));
+        let format = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(crate::i18n::t(
+                "transfer.formatPlaceholder",
+                locale,
+            ))
+        });
         format.update(cx, |field, cx| {
             field.set_value("csv", window, cx);
         });
@@ -102,9 +110,12 @@ impl TransferPanel {
             Ok(bytes) => bytes,
             Err(error) => {
                 self.error = Some(
-                    crate::i18n::tf("transfer.cannotRead", crate::i18n::locale(cx), &file_path)
-                        .replacen("{}", &error.to_string(), 1)
-                        .into(),
+                    crate::i18n::tf_args(
+                        "transfer.cannotRead",
+                        crate::i18n::locale(cx),
+                        &[&file_path, &error],
+                    )
+                    .into(),
                 );
                 cx.notify();
                 return;
@@ -244,13 +255,12 @@ impl TransferPanel {
                                 "bytes": bytes.len(),
                             });
                             this.message = Some(
-                                crate::i18n::tf(
-                                    "transfer.exported",
-                                    crate::i18n::locale(cx),
-                                    bytes.len(),
-                                )
-                                .replacen("{}", &path.display().to_string(), 1)
-                                .into(),
+                                crate::i18n::tf_args(
+                                "transfer.exported",
+                                crate::i18n::locale(cx),
+                                &[&bytes.len(), &path.display()],
+                            )
+                            .into(),
                             );
                         }
                         Err(error) => {
@@ -305,9 +315,12 @@ impl TransferPanel {
                             "bytes": bytes,
                         });
                         this.message = Some(
-                            crate::i18n::tf("transfer.exported", crate::i18n::locale(cx), bytes)
-                                .replacen("{}", &save_path, 1)
-                                .into(),
+                            crate::i18n::tf_args(
+                                "transfer.exported",
+                                crate::i18n::locale(cx),
+                                &[&bytes, &save_path],
+                            )
+                            .into(),
                         );
                     }
                     Err(error) => {

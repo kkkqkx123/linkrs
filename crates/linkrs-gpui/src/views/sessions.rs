@@ -41,6 +41,9 @@ impl SessionsPanel {
     pub(crate) const PANEL_NAME: &'static str = "Sessions";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let var_name = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t("sessions.varNamePlaceholder", crate::i18n::locale(cx)))
@@ -334,10 +337,12 @@ impl Render for SessionsPanel {
             .text_color(theme.foreground)
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.sessions", crate::i18n::locale(cx))),
-                Some(SharedString::from(
-                    tf("sessions.liveCount", locale, self.sessions.len()).replacen(
-                        "{}",
-                        t(
+                Some(SharedString::from(crate::i18n::tf_args(
+                    "sessions.liveCount",
+                    locale,
+                    &[
+                        &self.sessions.len(),
+                        &t(
                             if self.loading {
                                 "sessions.refreshing"
                             } else {
@@ -345,9 +350,8 @@ impl Render for SessionsPanel {
                             },
                             locale,
                         ),
-                        1,
-                    ),
-                )),
+                    ],
+                ))),
                 Some(
                     h_flex()
                         .items_center()

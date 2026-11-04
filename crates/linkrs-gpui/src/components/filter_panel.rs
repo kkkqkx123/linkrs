@@ -16,9 +16,16 @@ pub struct FilterControls {
 
 impl FilterControls {
     pub fn new<V: 'static>(window: &mut Window, cx: &mut Context<V>) -> Self {
-        let filter =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter expression, e.g. age>18"));
-        let sort_by = cx.new(|cx| InputState::new(window, cx).placeholder("Sort field"));
+        let filter = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(crate::i18n::t(
+                "filter.expressionPlaceholder",
+                crate::i18n::locale(cx),
+            ))
+        });
+        let sort_by = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("filter.sortPlaceholder", crate::i18n::locale(cx)))
+        });
         Self {
             filter,
             sort_by,

@@ -365,7 +365,14 @@ impl DataBrowserPanel {
                 this.writing = false;
                 match outcome {
                     Ok(()) => {
-                        this.message = Some(format!("{label} succeeded.").into());
+                        this.message = Some(
+                            crate::i18n::tf(
+                                "common.finished",
+                                crate::i18n::locale(cx),
+                                label,
+                            )
+                            .into(),
+                        );
                         this.close_edit(cx);
                         this.fetch(cx);
                     }
@@ -479,7 +486,12 @@ impl DataBrowserPanel {
                     data_browser_service::update_vertex(cx, &target.id, &edited)
                 };
                 this.conflict = None;
-                this.run_write(window, cx, "Update", task);
+                this.run_write(
+                    window,
+                    cx,
+                    crate::i18n::t("dataBrowser.taskUpdate", crate::i18n::locale(cx)),
+                    task,
+                );
             });
         })
         .detach();
@@ -624,7 +636,10 @@ impl DataBrowserPanel {
                             .min_h_0()
                             .overflow_y_scroll()
                             .child(render_properties(
-                                "Record",
+                                crate::i18n::t(
+                                    "dataBrowser.recordTitle",
+                                    crate::i18n::locale(cx),
+                                ),
                                 detail_subtitle,
                                 &detail_value,
                                 cx,
@@ -735,7 +750,14 @@ impl DataBrowserPanel {
                             .border_color(cx.theme().border)
                             .child(
                                 Button::new("browse-edit-save")
-                                    .label(if overwrite { "Overwrite" } else { "Save" })
+                                    .label(crate::i18n::t(
+                                        if overwrite {
+                                            "dataBrowser.overwrite"
+                                        } else {
+                                            "dataBrowser.save"
+                                        },
+                                        crate::i18n::locale(cx),
+                                    ))
                                     .primary()
                                     .xsmall()
                                     .disabled(writing)

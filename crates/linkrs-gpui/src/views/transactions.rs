@@ -38,6 +38,9 @@ impl TransactionsPanel {
     pub(crate) const PANEL_NAME: &'static str = "Transactions";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let locale = locale(cx);
         let txn_id = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t("transactions.txnIdPlaceholder", locale))
@@ -130,9 +133,12 @@ impl TransactionsPanel {
                     Ok(response) => {
                         let locale = locale(cx);
                         this.message = Some(
-                            tf("transactions.began", locale, &response.transaction_id)
-                                .replacen("{}", &response.status, 1)
-                                .into(),
+                            crate::i18n::tf_args(
+                                "transactions.began",
+                                locale,
+                                &[&response.transaction_id, &response.status],
+                            )
+                            .into(),
                         );
                         this.txn_id.update(cx, |field, cx| {
                             field.set_value(response.transaction_id.to_string(), window, cx);
@@ -226,12 +232,11 @@ impl TransactionsPanel {
                     Ok(response) => {
                         let locale = locale(cx);
                         this.message = Some(
-                            tf(
+                            crate::i18n::tf_args(
                                 "transactions.savepointCreated",
                                 locale,
-                                &response.savepoint_id,
+                                &[&response.savepoint_id, &txn_id],
                             )
-                            .replacen("{}", &txn_id.to_string(), 1)
                             .into(),
                         );
                         this.savepoint_id.update(cx, |field, cx| {
@@ -299,9 +304,12 @@ impl TransactionsPanel {
                     Ok(_) => {
                         let locale = locale(cx);
                         this.message = Some(
-                            tf("transactions.rolledBackTo", locale, txn_id)
-                                .replacen("{}", &savepoint_id.to_string(), 1)
-                                .into(),
+                            crate::i18n::tf_args(
+                                "transactions.rolledBackTo",
+                                locale,
+                                &[&txn_id, &savepoint_id],
+                            )
+                            .into(),
                         );
                         this.refresh(window, cx);
                     }
@@ -334,9 +342,12 @@ impl TransactionsPanel {
                     Ok(_) => {
                         let locale = locale(cx);
                         this.message = Some(
-                            tf("transactions.savepointReleased", locale, savepoint_id)
-                                .replacen("{}", &txn_id.to_string(), 1)
-                                .into(),
+                            crate::i18n::tf_args(
+                                "transactions.savepointReleased",
+                                locale,
+                                &[&savepoint_id, &txn_id],
+                            )
+                            .into(),
                         );
                         this.list_savepoints_inner(txn_id, cx);
                     }
@@ -758,9 +769,11 @@ fn render_transaction_row(
                 .text_ellipsis()
                 .child(SharedString::from(format!(
                     "{owner}  {}{blocked_suffix}",
-                    tf("transactions.rowStats", locale, elapsed)
-                        .replacen("{}", &staged.to_string(), 1)
-                        .replacen("{}", &undo.to_string(), 1)
+                    crate::i18n::tf_args(
+                        "transactions.rowStats",
+                        locale,
+                        &[&elapsed, &staged, &undo]
+                    )
                 ))),
         )
         .when_some(txn_id, |row, id| {

@@ -563,10 +563,10 @@ impl ConsolePanel {
             (rows + tab.data.borrow().row_count(), time + tab.elapsed_ms)
         });
         window.push_notification(
-            Notification::success(format!(
-                "{} statement(s) finished, {} row(s) in {elapsed} ms",
-                self.tabs.len(),
-                rows
+            Notification::success(crate::i18n::tf_args(
+                "console.multiFinished",
+                locale,
+                &[&self.tabs.len(), &rows, &elapsed],
             ))
             .title(t("console.runComplete", locale)),
             cx,
@@ -740,7 +740,12 @@ impl ConsolePanel {
         cx.spawn_in(window, async move |this, window| {
             let outcome = task.await;
             _ = this.update_in(window, |this, window, cx| {
-                this.inspect_result("Validate".to_string(), outcome, window, cx);
+                this.inspect_result(
+                    crate::i18n::t("console.validate", crate::i18n::locale(cx)).to_string(),
+                    outcome,
+                    window,
+                    cx,
+                );
             });
         })
         .detach();
@@ -848,10 +853,10 @@ impl ConsolePanel {
                         this.running_payload = payload;
                         window.push_notification(
                             Notification::success(
-                                tf("console.terminatedQuery", locale, query_id).replacen(
-                                    "{}",
-                                    &session_id.to_string(),
-                                    1,
+                                crate::i18n::tf_args(
+                                    "console.terminatedQuery",
+                                    locale,
+                                    &[&query_id, &session_id],
                                 ),
                             ),
                             cx,
@@ -1157,17 +1162,20 @@ impl ConsolePanel {
         }
         match graph_service::neighborhood_from_rows(&tab.raw_rows) {
             Some((neighborhood, truncated)) => {
-                let summary = tf("console.sentGraph", locale, neighborhood.nodes.len())
-                    .replacen("{}", &neighborhood.edges.len().to_string(), 1)
-                    .replacen(
-                        "{}",
-                        if truncated {
-                            t("console.truncated", locale)
-                        } else {
-                            ""
-                        },
-                        1,
-                    );
+                let truncated_suffix = if truncated {
+                    t("console.truncated", locale)
+                } else {
+                    ""
+                };
+                let summary = crate::i18n::tf_args(
+                    "console.sentGraph",
+                    locale,
+                    &[
+                        &neighborhood.nodes.len(),
+                        &neighborhood.edges.len(),
+                        &truncated_suffix,
+                    ],
+                );
                 AppState::global(cx).update(cx, |state, cx| {
                     state.push_graph_drop(neighborhood, cx);
                 });
@@ -1494,10 +1502,10 @@ impl ConsolePanel {
         let rerun_sql = item.sql.clone();
         let path = item.path;
         let summary = if item.success {
-            tf("console.rowsMs", locale, item.row_count).replacen(
-                "{}",
-                &item.elapsed_ms.to_string(),
-                1,
+            crate::i18n::tf_args(
+                "console.rowsMs",
+                locale,
+                &[&item.row_count, &item.elapsed_ms],
             )
         } else {
             item.error_code

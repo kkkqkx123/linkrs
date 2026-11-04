@@ -132,6 +132,9 @@ impl UsersPanel {
     pub(crate) const PANEL_NAME: &'static str = "Users";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let data = std::rc::Rc::new(std::cell::RefCell::new(UserTable::default()));
         let table = cx.new(|cx| TableState::new(UserDelegate { data: data.clone() }, window, cx));
         let name = cx.new(|cx| {

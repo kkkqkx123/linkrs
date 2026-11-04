@@ -957,12 +957,11 @@ impl Render for VectorPanel {
                                                                 window,
                                                                 cx,
                                                                 t("vector.clearTitle", locale),
-                                                                tf(
+                                                                crate::i18n::tf_args(
                                                                     "vector.clearConfirm",
                                                                     locale,
-                                                                    &tag,
-                                                                )
-                                                                .replacen("{}", &field, 1),
+                                                                    &[&tag, &field],
+                                                                ),
                                                                 t("vector.clear", locale),
                                                                 true,
                                                                 move |window, cx| {

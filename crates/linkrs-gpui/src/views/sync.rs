@@ -39,6 +39,9 @@ impl SyncPanel {
     pub(crate) const PANEL_NAME: &'static str = "Sync";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let locale = crate::i18n::locale(cx);
         let target = cx
             .new(|cx| InputState::new(window, cx).placeholder(t("sync.targetPlaceholder", locale)));

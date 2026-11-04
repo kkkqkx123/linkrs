@@ -33,6 +33,9 @@ impl ConfigPanel {
     pub(crate) const PANEL_NAME: &'static str = "Config";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let locale = crate::i18n::locale(cx);
         let section = cx.new(|cx| {
             InputState::new(window, cx).placeholder(crate::i18n::t("config.section", locale))

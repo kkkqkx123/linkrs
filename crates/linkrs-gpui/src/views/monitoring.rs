@@ -69,6 +69,9 @@ impl MonitoringPanel {
     pub(crate) const PANEL_NAME: &'static str = "Monitoring";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let mut panel = Self {
             auto_refresh: true,
             generation: 0,

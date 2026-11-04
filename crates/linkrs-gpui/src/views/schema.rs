@@ -114,6 +114,7 @@ impl SchemaPanel {
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let tree_state = cx.new(|cx| TreeState::new(cx));
+        let locale = crate::i18n::locale(cx);
         let state = AppState::global(cx);
         let (last_status, last_space) = {
             let state = state.read(cx);
@@ -121,17 +122,28 @@ impl SchemaPanel {
         };
         cx.observe(&state, |this, _, cx| this.on_state_changed(cx))
             .detach();
-        let space_name = cx.new(|cx| InputState::new(window, cx).placeholder("Space name"));
+        let space_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.spaceNamePlaceholder", locale))
+        });
         let vid_type = cx.new(|cx| InputState::new(window, cx).placeholder("INT64"));
-        let entry_name =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge type name"));
+        let entry_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.entryNamePlaceholder", locale))
+        });
         let entry_props = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("[JSON properties, e.g. [{\"name\":\"age\",\"data_type\":\"INT64\"}]]")
         });
-        let add_name = cx.new(|cx| InputState::new(window, cx).placeholder("Field name"));
+        let add_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.fieldNamePlaceholder", locale))
+        });
         let add_type = cx.new(|cx| InputState::new(window, cx).placeholder("STRING"));
-        let er_search = cx.new(|cx| InputState::new(window, cx).placeholder("Filter schema nodes"));
+        let er_search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.erSearchPlaceholder", locale))
+        });
         let store = cx.new(|_| GraphStore::new());
         let layout = cx.new(|cx| {
             LayoutDriver::new(
@@ -141,15 +153,27 @@ impl SchemaPanel {
             )
         });
         let er_model = GraphModel::new(store, layout, cx);
-        let ver_space = cx.new(|cx| InputState::new(window, cx).placeholder("Space"));
-        let ver_label = cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge name"));
+        let ver_space = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.versionSpacePlaceholder", locale))
+        });
+        let ver_label = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.versionLabelPlaceholder", locale))
+        });
         let ver_from = cx.new(|cx| InputState::new(window, cx).placeholder("1"));
         let ver_to = cx.new(|cx| InputState::new(window, cx).placeholder("2"));
-        let index_name = cx.new(|cx| InputState::new(window, cx).placeholder("Index name"));
-        let index_entity =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Tag or edge type name"));
+        let index_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.indexNamePlaceholder", locale))
+        });
+        let index_entity = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.entryNamePlaceholder", locale))
+        });
         let index_fields = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Comma-separated fields, e.g. age, name")
+            InputState::new(window, cx)
+                .placeholder(crate::i18n::t("schema.indexFieldsPlaceholder", locale))
         });
 
         let mut panel = Self {
@@ -285,7 +309,7 @@ impl SchemaPanel {
                 if connection_service::is_session_expired(&error) {
                     connection_service::invalidate_session(cx);
                 }
-                self.message = Some(schema_message(&error).into());
+                self.message = Some(schema_message(&error, crate::i18n::locale(cx)).into());
                 self.tree_state
                     .update(cx, |tree, cx| tree.set_items(Vec::new(), cx));
                 self.er_model.set_graph(&[], &[], cx);
@@ -423,7 +447,8 @@ impl SchemaPanel {
                     this.message = None;
                 }
                 Err(error) => {
-                    this.message = Some(schema_message(&error).into());
+                    this.message =
+                        Some(schema_message(&error, crate::i18n::locale(cx)).into());
                 }
             })
             .ok();
@@ -442,6 +467,12 @@ impl SchemaPanel {
             .space
             .clone()
             .map(|space| space.to_string())
+    }
+
+    /// Validation failure: show a localized message and re-render.
+    fn deny(&mut self, key: &'static str, cx: &mut Context<Self>) {
+        self.message = Some(crate::i18n::t(key, crate::i18n::locale(cx)).into());
+        cx.notify();
     }
 
     /// Run a schema write; refresh the tree on success.
@@ -466,14 +497,22 @@ impl SchemaPanel {
                 this.busy = false;
                 match outcome {
                     Ok(()) => {
-                        this.message = Some(format!("{label} succeeded.").into());
+                        this.message = Some(
+                            crate::i18n::tf(
+                                "common.finished",
+                                crate::i18n::locale(cx),
+                                label,
+                            )
+                            .into(),
+                        );
                         this.refresh(cx);
                     }
                     Err(error) => {
                         if connection_service::is_session_expired(&error) {
                             connection_service::invalidate_session(cx);
                         }
-                        this.message = Some(schema_message(&error).into());
+                        this.message =
+                            Some(schema_message(&error, crate::i18n::locale(cx)).into());
                     }
                 }
                 cx.notify();
@@ -485,26 +524,34 @@ impl SchemaPanel {
     fn create_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = Self::text(&self.space_name, cx);
         if name.is_empty() {
-            self.message = Some("Space name is required.".into());
-            cx.notify();
+            self.deny("schema.spaceNameRequired", cx);
             return;
         }
         let vid_type = Self::text(&self.vid_type, cx);
         let vid_type = (!vid_type.is_empty()).then_some(vid_type);
         let task = schema_service::create_space(cx, &name, vid_type.as_deref(), None);
-        self.run_write(window, cx, "Create space", task);
+        self.run_write(
+            window,
+            cx,
+            crate::i18n::t("schema.taskCreateSpace", crate::i18n::locale(cx)),
+            task,
+        );
     }
 
     fn drop_current_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.pending.clone() {
             Some(PendingOp::Space(space)) => {
                 let task = schema_service::drop_space(cx, &space);
-                self.run_write(window, cx, "Drop space", task);
+                self.run_write(
+                    window,
+                    cx,
+                    crate::i18n::t("schema.taskDropSpace", crate::i18n::locale(cx)),
+                    task,
+                );
             }
             _ => {
                 let Some(space) = Self::current_space(cx) else {
-                    self.message = Some("Select a space first.".into());
-                    cx.notify();
+                    self.deny("schema.selectSpaceFirst", cx);
                     return;
                 };
                 self.pending = Some(PendingOp::Space(space));
@@ -515,14 +562,12 @@ impl SchemaPanel {
 
     fn create_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(space) = Self::current_space(cx) else {
-            self.message = Some("Select a space first.".into());
-            cx.notify();
+            self.deny("schema.selectSpaceFirst", cx);
             return;
         };
         let name = Self::text(&self.entry_name, cx);
         if name.is_empty() {
-            self.message = Some("Tag or edge type name is required.".into());
-            cx.notify();
+            self.deny("schema.entryNameRequired", cx);
             return;
         }
         let raw = Self::text(&self.entry_props, cx);
@@ -542,7 +587,7 @@ impl SchemaPanel {
         let label = if self.create_tag_mode {
             crate::i18n::t("schema.createTag", crate::i18n::locale(cx))
         } else {
-            "Create edge type"
+            crate::i18n::t("schema.taskCreateEdge", crate::i18n::locale(cx))
         };
         self.run_write(window, cx, label, task);
     }
@@ -551,21 +596,29 @@ impl SchemaPanel {
         match self.pending.clone() {
             Some(PendingOp::Tag { space, name }) => {
                 let task = schema_service::drop_tag(cx, &space, &name);
-                self.run_write(window, cx, "Drop tag", task);
+                self.run_write(
+                    window,
+                    cx,
+                    crate::i18n::t("schema.taskDropTag", crate::i18n::locale(cx)),
+                    task,
+                );
             }
             Some(PendingOp::Edge { space, name }) => {
                 let task = schema_service::drop_edge_type(cx, &space, &name);
-                self.run_write(window, cx, "Drop edge type", task);
+                self.run_write(
+                    window,
+                    cx,
+                    crate::i18n::t("schema.taskDropEdge", crate::i18n::locale(cx)),
+                    task,
+                );
             }
             _ => {
                 let Some(space) = Self::current_space(cx) else {
-                    self.message = Some("Select a space first.".into());
-                    cx.notify();
+                    self.deny("schema.selectSpaceFirst", cx);
                     return;
                 };
                 let Some(target) = self.selected.clone() else {
-                    self.message = Some("Select a tag or edge type in the tree first.".into());
-                    cx.notify();
+                    self.deny("schema.selectEntryFirst", cx);
                     return;
                 };
                 self.pending = Some(if target.is_edge {
@@ -586,15 +639,13 @@ impl SchemaPanel {
 
     fn create_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(space) = Self::current_space(cx) else {
-            self.message = Some("Select a space first.".into());
-            cx.notify();
+            self.deny("schema.selectSpaceFirst", cx);
             return;
         };
         let name = Self::text(&self.index_name, cx);
         let entity = Self::text(&self.index_entity, cx);
         if name.is_empty() || entity.is_empty() {
-            self.message = Some("Index name and entity name are required.".into());
-            cx.notify();
+            self.deny("schema.indexNameEntityRequired", cx);
             return;
         }
         let fields: Vec<String> = Self::text(&self.index_fields, cx)
@@ -604,8 +655,7 @@ impl SchemaPanel {
             .map(str::to_string)
             .collect();
         if fields.is_empty() {
-            self.message = Some("At least one index field is required.".into());
-            cx.notify();
+            self.deny("schema.indexFieldRequired", cx);
             return;
         }
         let index_type = if self.index_unique { "UNIQUE" } else { "INDEX" };
@@ -636,17 +686,20 @@ impl SchemaPanel {
         match self.pending.clone() {
             Some(PendingOp::Index { space, name }) => {
                 let task = schema_service::drop_index(cx, &space, &name);
-                self.run_write(window, cx, "Drop index", task);
+                self.run_write(
+                    window,
+                    cx,
+                    crate::i18n::t("schema.taskDropIndex", crate::i18n::locale(cx)),
+                    task,
+                );
             }
             _ => {
                 let Some(space) = Self::current_space(cx) else {
-                    self.message = Some("Select a space first.".into());
-                    cx.notify();
+                    self.deny("schema.selectSpaceFirst", cx);
                     return;
                 };
                 let Some(name) = self.selected_index.clone() else {
-                    self.message = Some("Select an index in the list first.".into());
-                    cx.notify();
+                    self.deny("schema.selectIndexFirst", cx);
                     return;
                 };
                 self.pending = Some(PendingOp::Index { space, name });
@@ -657,17 +710,20 @@ impl SchemaPanel {
 
     fn rebuild_selected_index(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(space) = Self::current_space(cx) else {
-            self.message = Some("Select a space first.".into());
-            cx.notify();
+            self.deny("schema.selectSpaceFirst", cx);
             return;
         };
         let Some(name) = self.selected_index.clone() else {
-            self.message = Some("Select an index in the list first.".into());
-            cx.notify();
+            self.deny("schema.selectIndexFirst", cx);
             return;
         };
         let task = schema_service::rebuild_index(cx, &space, &name);
-        self.run_write(window, cx, "Rebuild index", task);
+        self.run_write(
+            window,
+            cx,
+            crate::i18n::t("schema.taskRebuildIndex", crate::i18n::locale(cx)),
+            task,
+        );
     }
 
     fn toggle_drop_field(&mut self, name: String, cx: &mut Context<Self>) {
@@ -681,8 +737,7 @@ impl SchemaPanel {
 
     fn alter_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = self.selected.clone() else {
-            self.message = Some("Select a tag or edge type in the tree first.".into());
-            cx.notify();
+            self.deny("schema.selectEntryFirst", cx);
             return;
         };
         let field_name = Self::text(&self.add_name, cx);
@@ -702,8 +757,7 @@ impl SchemaPanel {
             });
         }
         if added.is_empty() && self.drop_names.is_empty() {
-            self.message = Some("Add a field or tick fields to drop first.".into());
-            cx.notify();
+            self.deny("schema.alterEmpty", cx);
             return;
         }
         let dropped = self.drop_names.clone();
@@ -713,7 +767,12 @@ impl SchemaPanel {
             schema_service::alter_tag(cx, &target.name, added, dropped)
         };
         self.drop_names.clear();
-        self.run_write(window, cx, "Alter", task);
+        self.run_write(
+            window,
+            cx,
+            crate::i18n::t("schema.taskAlter", crate::i18n::locale(cx)),
+            task,
+        );
     }
 
     fn inspect_version(
@@ -725,8 +784,7 @@ impl SchemaPanel {
         let space = Self::text(&self.ver_space, cx);
         let label = Self::text(&self.ver_label, cx);
         if space.is_empty() || label.is_empty() {
-            self.message = Some("Version space and label are required.".into());
-            cx.notify();
+            self.deny("schema.versionRequired", cx);
             return;
         }
         let from = Self::text(&self.ver_from, cx).parse::<u64>().unwrap_or(1);
@@ -753,7 +811,8 @@ impl SchemaPanel {
                         if connection_service::is_session_expired(&error) {
                             connection_service::invalidate_session(cx);
                         }
-                        this.message = Some(schema_message(&error).into());
+                        this.message =
+                            Some(schema_message(&error, crate::i18n::locale(cx)).into());
                     }
                 }
                 cx.notify();
@@ -764,11 +823,11 @@ impl SchemaPanel {
 
     fn status_line(&self, cx: &App) -> String {
         if self.loading {
-            return "Loading schema…".to_string();
+            return crate::i18n::t("schema.loading", crate::i18n::locale(cx)).to_string();
         }
         match AppState::global(cx).read(cx).space.clone() {
-            Some(space) => format!("Current space: {space}"),
-            None => "Select a space to load its schema".to_string(),
+            Some(space) => crate::i18n::tf("schema.currentSpace", crate::i18n::locale(cx), space),
+            None => crate::i18n::t("schema.selectSpaceHint", crate::i18n::locale(cx)).to_string(),
         }
     }
 
@@ -827,11 +886,18 @@ impl SchemaPanel {
             .child(gpui_kit::component::alert::Alert::error("schema-error", message).small())
     }
 
-    fn selected_label(&self) -> Option<String> {
+    fn selected_label(&self, locale: crate::settings::Locale) -> Option<String> {
         self.selected.as_ref().map(|target| {
             format!(
                 "{} {}",
-                if target.is_edge { "Edge" } else { "Tag" },
+                crate::i18n::t(
+                    if target.is_edge {
+                        "schema.edge"
+                    } else {
+                        "schema.tag"
+                    },
+                    locale,
+                ),
                 target.name
             )
         })
@@ -896,8 +962,16 @@ impl SchemaPanel {
                         }
                     ))),
             )
-            .child(form_row("Name", self.space_name.clone(), cx))
-            .child(form_row("VID type", self.vid_type.clone(), cx))
+            .child(form_row(
+                crate::i18n::t("schema.labelName", crate::i18n::locale(cx)),
+                self.space_name.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("schema.labelVidType", crate::i18n::locale(cx)),
+                self.vid_type.clone(),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -961,8 +1035,16 @@ impl SchemaPanel {
                             })),
                     ),
             )
-            .child(form_row("Name", self.entry_name.clone(), cx))
-            .child(form_row("Properties", self.entry_props.clone(), cx))
+            .child(form_row(
+                crate::i18n::t("schema.labelName", crate::i18n::locale(cx)),
+                self.entry_name.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("schema.labelProperties", crate::i18n::locale(cx)),
+                self.entry_props.clone(),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -994,7 +1076,7 @@ impl SchemaPanel {
                             })),
                     ),
             )
-            .when_some(self.selected_label(), |section, label| {
+            .when_some(self.selected_label(crate::i18n::locale(cx)), |section, label| {
                 section.child(
                     div()
                         .text_xs()
@@ -1014,8 +1096,16 @@ impl SchemaPanel {
                 crate::i18n::t("schema.sectionAlter", crate::i18n::locale(cx)),
                 cx,
             ))
-            .child(form_row("Add field", self.add_name.clone(), cx))
-            .child(form_row("Field type", self.add_type.clone(), cx));
+            .child(form_row(
+                crate::i18n::t("schema.labelAddField", crate::i18n::locale(cx)),
+                self.add_name.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("schema.labelFieldType", crate::i18n::locale(cx)),
+                self.add_type.clone(),
+                cx,
+            ));
         if fields.is_empty() {
             section = section.child(
                 div()
@@ -1142,9 +1232,21 @@ impl SchemaPanel {
                             })),
                     ),
             )
-            .child(form_row("Name", self.index_name.clone(), cx))
-            .child(form_row("Entity", self.index_entity.clone(), cx))
-            .child(form_row("Fields", self.index_fields.clone(), cx))
+            .child(form_row(
+                crate::i18n::t("schema.labelName", crate::i18n::locale(cx)),
+                self.index_name.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("schema.labelEntity", crate::i18n::locale(cx)),
+                self.index_entity.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("schema.labelFields", crate::i18n::locale(cx)),
+                self.index_fields.clone(),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -1194,8 +1296,16 @@ impl SchemaPanel {
                 crate::i18n::t("schema.sectionVersions", crate::i18n::locale(cx)),
                 cx,
             ))
-            .child(form_row("Space", self.ver_space.clone(), cx))
-            .child(form_row("Label", self.ver_label.clone(), cx))
+            .child(form_row(
+                crate::i18n::t("schema.labelSpace", crate::i18n::locale(cx)),
+                self.ver_space.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("schema.labelEntry", crate::i18n::locale(cx)),
+                self.ver_label.clone(),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -1220,8 +1330,16 @@ impl SchemaPanel {
                             })),
                     ),
             )
-            .child(form_row("From", self.ver_from.clone(), cx))
-            .child(form_row("To", self.ver_to.clone(), cx))
+            .child(form_row(
+                crate::i18n::t("schema.labelFrom", crate::i18n::locale(cx)),
+                self.ver_from.clone(),
+                cx,
+            ))
+            .child(form_row(
+                crate::i18n::t("schema.labelTo", crate::i18n::locale(cx)),
+                self.ver_to.clone(),
+                cx,
+            ))
             .child(
                 h_flex()
                     .gap_1()
@@ -1460,10 +1578,14 @@ fn unfold_error(error: &ClientError) -> (Option<String>, Vec<TreeItem>) {
 }
 
 /// Short, user-facing sentence for schema fetch failures.
-fn schema_message(error: &ClientError) -> String {
+fn schema_message(error: &ClientError, locale: crate::settings::Locale) -> String {
     match error {
-        ClientError::NotConnected => "Connect to a server to browse its schema.".into(),
-        ClientError::NoSpaceSelected => "Select a space to load its tags and edge types.".into(),
+        ClientError::NotConnected => {
+            crate::i18n::t("schema.connectToBrowse", locale).to_string()
+        }
+        ClientError::NoSpaceSelected => {
+            crate::i18n::t("schema.selectSpaceFirst", locale).to_string()
+        }
         _ => error.to_string(),
     }
 }
@@ -1557,8 +1679,10 @@ impl SchemaPanel {
         let body: gpui_kit::AnyElement = if empty {
             empty_state(
                 IconName::Network,
-                "No schema yet",
-                Some("Create a tag or edge type to see it in the overview.".into()),
+                crate::i18n::t("schema.emptyTitle", crate::i18n::locale(cx)),
+                Some(
+                    crate::i18n::t("schema.emptyHint", crate::i18n::locale(cx)).into(),
+                ),
                 cx,
             )
         } else {

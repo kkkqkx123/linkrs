@@ -1423,114 +1423,74 @@ struct PalettePanel {
     target: PaletteTarget,
 }
 
+/// Capability-filtered palette targets in display order. Pure so unit
+/// tests cover the capability gating without a GPUI context.
+fn palette_targets(manage_users: bool, manage_batch: bool) -> Vec<PaletteTarget> {
+    use PaletteTarget::*;
+    [
+        Console,
+        Schema,
+        DataBrowser,
+        Graph,
+        Monitoring,
+        Transactions,
+        Sync,
+        Functions,
+        Config,
+        Batch,
+        Transfer,
+        Users,
+        Sessions,
+        Migration,
+        Vector,
+        Fulltext,
+    ]
+    .into_iter()
+    .filter(|target| match target {
+        Users | Sessions => manage_users,
+        Batch => manage_batch,
+        _ => true,
+    })
+    .collect()
+}
+
 /// Palette panels in display order for the given capabilities. Hidden
 /// management panels stay unreachable through the palette, matching
 /// the sidebar filtering.
 fn palette_panels(manage_users: bool, manage_batch: bool, cx: &App) -> Vec<PalettePanel> {
-    let mut panels = vec![
-        PalettePanel {
-            label: crate::i18n::t("nav.console", crate::i18n::locale(cx)).into(),
-            icon: IconName::SquareTerminal,
-            keyword: "console",
-            target: PaletteTarget::Console,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.schema", crate::i18n::locale(cx)).into(),
-            icon: IconName::FolderOpen,
-            keyword: "schema",
-            target: PaletteTarget::Schema,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.dataBrowser", crate::i18n::locale(cx)).into(),
-            icon: IconName::HardDrive,
-            keyword: "data",
-            target: PaletteTarget::DataBrowser,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.graph", crate::i18n::locale(cx)).into(),
-            icon: IconName::Network,
-            keyword: "graph",
-            target: PaletteTarget::Graph,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.monitoring", crate::i18n::locale(cx)).into(),
-            icon: IconName::Cpu,
-            keyword: "monitoring",
-            target: PaletteTarget::Monitoring,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.transactions", crate::i18n::locale(cx)).into(),
-            icon: IconName::Repeat,
-            keyword: "transactions",
-            target: PaletteTarget::Transactions,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.sync", crate::i18n::locale(cx)).into(),
-            icon: IconName::ArrowLeftRight,
-            keyword: "sync",
-            target: PaletteTarget::Sync,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.functions", crate::i18n::locale(cx)).into(),
-            icon: IconName::Braces,
-            keyword: "functions",
-            target: PaletteTarget::Functions,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.config", crate::i18n::locale(cx)).into(),
-            icon: IconName::SlidersHorizontal,
-            keyword: "config",
-            target: PaletteTarget::Config,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.batch", crate::i18n::locale(cx)).into(),
-            icon: IconName::Inbox,
-            keyword: "batch",
-            target: PaletteTarget::Batch,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.transfer", crate::i18n::locale(cx)).into(),
-            icon: IconName::ExternalLink,
-            keyword: "transfer",
-            target: PaletteTarget::Transfer,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.users", crate::i18n::locale(cx)).into(),
-            icon: IconName::User,
-            keyword: "users",
-            target: PaletteTarget::Users,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.sessions", crate::i18n::locale(cx)).into(),
-            icon: IconName::Globe,
-            keyword: "sessions",
-            target: PaletteTarget::Sessions,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.migration", crate::i18n::locale(cx)).into(),
-            icon: IconName::FileText,
-            keyword: "migration",
-            target: PaletteTarget::Migration,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.vector", crate::i18n::locale(cx)).into(),
-            icon: IconName::MemoryStick,
-            keyword: "vector",
-            target: PaletteTarget::Vector,
-        },
-        PalettePanel {
-            label: crate::i18n::t("nav.fulltext", crate::i18n::locale(cx)).into(),
-            icon: IconName::Search,
-            keyword: "fulltext",
-            target: PaletteTarget::Fulltext,
-        },
-    ];
-    panels.retain(|panel| match panel.target {
-        PaletteTarget::Users | PaletteTarget::Sessions => manage_users,
-        PaletteTarget::Batch => manage_batch,
-        _ => true,
-    });
-    panels
+    palette_targets(manage_users, manage_batch)
+        .into_iter()
+        .map(|target| {
+            let (key, icon, keyword) = match target {
+                PaletteTarget::Console => ("nav.console", IconName::SquareTerminal, "console"),
+                PaletteTarget::Schema => ("nav.schema", IconName::FolderOpen, "schema"),
+                PaletteTarget::DataBrowser => ("nav.dataBrowser", IconName::HardDrive, "data"),
+                PaletteTarget::Graph => ("nav.graph", IconName::Network, "graph"),
+                PaletteTarget::Monitoring => ("nav.monitoring", IconName::Cpu, "monitoring"),
+                PaletteTarget::Transactions => {
+                    ("nav.transactions", IconName::Repeat, "transactions")
+                }
+                PaletteTarget::Sync => ("nav.sync", IconName::ArrowLeftRight, "sync"),
+                PaletteTarget::Functions => ("nav.functions", IconName::Braces, "functions"),
+                PaletteTarget::Config => ("nav.config", IconName::SlidersHorizontal, "config"),
+                PaletteTarget::Batch => ("nav.batch", IconName::Inbox, "batch"),
+                PaletteTarget::Transfer => {
+                    ("nav.transfer", IconName::ExternalLink, "transfer")
+                }
+                PaletteTarget::Users => ("nav.users", IconName::User, "users"),
+                PaletteTarget::Sessions => ("nav.sessions", IconName::Globe, "sessions"),
+                PaletteTarget::Migration => ("nav.migration", IconName::FileText, "migration"),
+                PaletteTarget::Vector => ("nav.vector", IconName::MemoryStick, "vector"),
+                PaletteTarget::Fulltext => ("nav.fulltext", IconName::Search, "fulltext"),
+            };
+            PalettePanel {
+                label: crate::i18n::t(key, crate::i18n::locale(cx)).into(),
+                icon,
+                keyword,
+                target,
+            }
+        })
+        .collect()
 }
 
 // -- Dock layout persistence --------------------------------------------------
@@ -1614,10 +1574,7 @@ mod tests {
     use super::*;
 
     fn targets(manage_users: bool, manage_batch: bool) -> Vec<PaletteTarget> {
-        palette_panels(manage_users, manage_batch)
-            .into_iter()
-            .map(|panel| panel.target)
-            .collect()
+        palette_targets(manage_users, manage_batch)
     }
 
     #[test]

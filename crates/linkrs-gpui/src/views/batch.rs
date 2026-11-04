@@ -37,6 +37,9 @@ impl BatchPanel {
     pub(crate) const PANEL_NAME: &'static str = "Batch";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let locale = crate::i18n::locale(cx);
         let space_id = cx.new(|cx| {
             InputState::new(window, cx)
@@ -168,12 +171,11 @@ impl BatchPanel {
                             }
                             Err(error) => {
                                 this.error = Some(
-                                    crate::i18n::tf(
+                                    crate::i18n::tf_args(
                                         "batch.cannotRead",
                                         crate::i18n::locale(cx),
-                                        path.display(),
+                                        &[&path.display(), &error],
                                     )
-                                    .replacen("{}", &error.to_string(), 1)
                                     .into(),
                                 );
                             }

@@ -34,6 +34,9 @@ impl FunctionsPanel {
     pub(crate) const PANEL_NAME: &'static str = "Functions";
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let state = crate::state::AppState::global(cx);
+        cx.observe(&state, |_, _, cx| cx.notify())
+            .detach();
         let locale = locale(cx);
         let name = cx
             .new(|cx| InputState::new(window, cx).placeholder(t("functions.functionName", locale)));
