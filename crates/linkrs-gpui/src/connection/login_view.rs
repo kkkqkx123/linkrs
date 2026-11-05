@@ -405,9 +405,9 @@ impl Render for LoginView {
             .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
             .child(
                 v_flex()
-                    .w(px(420.))
+                    .w(px(380.))
                     .gap_4()
-                    .p_6()
+                    .p(px(32.))
                     .rounded(cx.theme().radius)
                     .border_1()
                     .border_color(theme.border)
@@ -415,11 +415,12 @@ impl Render for LoginView {
                     .shadow_lg()
                     .child(
                         v_flex()
+                            .items_center()
                             .gap_1()
                             .child(
                                 div()
-                                    .text_xl()
-                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_size(px(20.))
+                                    .font_weight(FontWeight::BOLD)
                                     .child(t("login.title", locale)),
                             )
                             .child(
@@ -489,9 +490,10 @@ impl Render for LoginView {
                             .items_center()
                             .justify_between()
                             .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                SharedString::from(format!(
-                                    "Linkrs Desktop v{}",
-                                    env!("CARGO_PKG_VERSION")
+                                SharedString::from(crate::i18n::tf(
+                                    "login.desktopVersion",
+                                    locale,
+                                    env!("CARGO_PKG_VERSION"),
                                 )),
                             ))
                             .child(

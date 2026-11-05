@@ -129,7 +129,7 @@ impl SimpleTable {
             .overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
-            .text_size(px(13.))
+            .text_size(px(14.))
             .text_color(if cell.muted {
                 theme.muted_foreground
             } else {
@@ -158,6 +158,7 @@ impl SimpleTable {
         } else {
             ROW_H_COMFORTABLE
         };
+        let cell_pad = if self.dense { 8. } else { 24. };
 
         if self.rows.is_empty() {
             return v_flex()
@@ -191,7 +192,7 @@ impl SimpleTable {
             .w_full()
             .flex_shrink_0()
             .items_center()
-            .px(px(12.))
+            .px(px(cell_pad))
             .bg(theme.table_head)
             .border_b_1()
             .border_color(theme.table_row_border);
@@ -201,8 +202,7 @@ impl SimpleTable {
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(12.))
-                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(if self.dense { 12. } else { 14. }))
                 .text_color(theme.table_head_foreground)
                 .child(column.title.clone());
             if let Some(width) = column.width {
@@ -223,7 +223,7 @@ impl SimpleTable {
                 .h(px(row_h))
                 .w_full()
                 .items_center()
-                .px(px(12.))
+                .px(px(cell_pad))
                 .border_b_1()
                 .border_color(theme.table_row_border)
                 .hover(|this| this.bg(theme.table_hover));
@@ -248,11 +248,12 @@ impl SimpleTable {
 
 /// Table control size matching the persisted density preference.
 pub fn table_size(cx: &App) -> gpui_kit::component::Size {
-    if crate::settings::global(cx).density.is_dense() {
-        gpui_kit::component::Size::Small
+    let row_h = if crate::settings::global(cx).density.is_dense() {
+        ROW_H_DENSE
     } else {
-        gpui_kit::component::Size::Large
-    }
+        ROW_H_COMFORTABLE
+    };
+    gpui_kit::component::Size::Size(px(row_h))
 }
 
 /// Two-column key/value list with row separators.

@@ -1,8 +1,9 @@
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme as _, StyledExt as _};
 use gpui_kit::{
     div, px, App, Div, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _,
 };
 
+use super::card::card;
 use super::pill::Tone;
 
 /// One statistic tile.
@@ -46,15 +47,12 @@ pub fn kpi_grid(items: Vec<Kpi>, cx: &App) -> Div {
                 .tone
                 .map(|tone| super::pill::tone_color(theme, tone))
                 .unwrap_or(theme.foreground);
-            v_flex()
+            card(cx)
                 .flex_1()
                 .min_w(px(160.))
-                .gap_1()
+                .v_flex()
+                .gap_0()
                 .p(px(16.))
-                .bg(theme.popover)
-                .border_1()
-                .border_color(theme.border)
-                .rounded(theme.radius)
                 .child(
                     div()
                         .text_size(px(12.))
@@ -63,13 +61,15 @@ pub fn kpi_grid(items: Vec<Kpi>, cx: &App) -> Div {
                 )
                 .child(
                     div()
-                        .text_size(px(20.))
+                        .mt(px(16.))
+                        .text_size(px(24.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(value_color)
                         .child(item.value),
                 )
                 .children(item.hint.map(|hint| {
                     div()
+                        .mt(px(4.))
                         .text_size(px(12.))
                         .text_color(theme.muted_foreground)
                         .child(hint)

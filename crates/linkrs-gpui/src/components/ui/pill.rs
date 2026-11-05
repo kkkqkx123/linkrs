@@ -1,5 +1,7 @@
 use gpui_kit::component::{h_flex, ActiveTheme as _, Theme};
-use gpui_kit::{div, px, App, Div, FontWeight, ParentElement as _, SharedString, Styled as _};
+use gpui_kit::{div, px, App, Div, Hsla, ParentElement as _, SharedString, Styled as _};
+
+use crate::design_tokens;
 
 /// Semantic tone shared by pills, status dots and table cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,10 +30,31 @@ impl Tone {
             _ => Self::Neutral,
         }
     }
+
+    fn light_token(self) -> Option<&'static str> {
+        match self {
+            Tone::Neutral => None,
+            Tone::Primary => Some("--color-primary-light"),
+            Tone::Info => Some("--color-info-light"),
+            Tone::Success => Some("--color-success-light"),
+            Tone::Warning => Some("--color-warning-light"),
+            Tone::Danger => Some("--color-error-light"),
+            Tone::Alt => Some("--color-alt-light"),
+        }
+    }
+
+    fn text_token(self) -> Option<&'static str> {
+        match self {
+            Tone::Warning => Some("--color-warning-text"),
+            Tone::Danger => Some("--color-error-text"),
+            _ => None,
+        }
+    }
 }
 
-/// Resolve a tone to its foreground colour.
-pub fn tone_color(theme: &Theme, tone: Tone) -> gpui_kit::Hsla {
+/// Resolve a tone to its saturated colour, used for dots, table cells and KPI
+/// values that sit on a plain surface.
+pub fn tone_color(theme: &Theme, tone: Tone) -> Hsla {
     match tone {
         Tone::Neutral => theme.muted_foreground,
         Tone::Primary => theme.primary,
@@ -43,25 +66,38 @@ pub fn tone_color(theme: &Theme, tone: Tone) -> gpui_kit::Hsla {
     }
 }
 
-fn tone_background(theme: &Theme, tone: Tone) -> gpui_kit::Hsla {
-    match tone {
-        Tone::Neutral => theme.muted,
-        other => tone_color(theme, other).opacity(0.12),
+/// Exact light background from the shared token catalogue. The web studio
+/// defines dedicated dark-appearance values, so deriving these from the
+/// saturated colour with a fixed alpha would be wrong in dark mode.
+pub fn tone_background(theme: &Theme, tone: Tone) -> Hsla {
+    match tone.light_token() {
+        Some(token) => design_tokens::color(token, theme.mode.is_dark()),
+        None => theme.muted,
     }
 }
 
-/// Text pill: semantic background wash with the tone as text colour.
+/// Foreground colour for text placed on a `tone_background` surface. Warning
+/// and danger have dedicated darker text tokens for legibility.
+pub fn tone_text(theme: &Theme, tone: Tone) -> Hsla {
+    match tone.text_token() {
+        Some(token) => design_tokens::color(token, theme.mode.is_dark()),
+        None => tone_color(theme, tone),
+    }
+}
+
+/// Text pill: semantic background with matching text and hairline border.
 pub fn pill(text: impl Into<SharedString>, tone: Tone, cx: &App) -> Div {
     let theme = cx.theme();
     div()
         .flex_shrink_0()
-        .px(px(8.))
+        .px(px(12.))
         .py(px(2.))
         .rounded_full()
+        .border_1()
+        .border_color(tone_color(theme, tone).opacity(0.4))
         .bg(tone_background(theme, tone))
-        .text_size(px(12.))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(tone_color(theme, tone))
+        .text_size(px(14.))
+        .text_color(tone_text(theme, tone))
         .child(text.into())
 }
 
@@ -79,7 +115,7 @@ pub fn status_dot(
         .child(div().size(px(7.)).rounded_full().bg(color))
         .child(
             div()
-                .text_size(px(12.))
+                .text_size(px(14.))
                 .text_color(theme.foreground)
                 .child(text.into()),
         )
@@ -94,13 +130,13 @@ pub fn chip(text: impl Into<SharedString>, active: bool, cx: &App) -> Div {
         .h(px(24.))
         .flex()
         .items_center()
-        .rounded_full()
+        .rounded(px(3.))
         .border_1()
         .border_color(if active { theme.primary } else { theme.border })
-        .bg(if active { theme.accent } else { theme.popover })
+        .bg(if active { theme.primary } else { theme.popover })
         .text_size(px(12.))
         .text_color(if active {
-            theme.primary
+            theme.primary_foreground
         } else {
             theme.muted_foreground
         })

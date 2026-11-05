@@ -15,7 +15,6 @@ use compograph_render::{
     PaintedLabel, PaintedNode, SpatialIndex,
 };
 use compograph_types::{Point2, Vec2};
-use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{App, AppContext as _, Context, Entity, IntoElement, Subscription};
 
 use crate::services::graph_service::{GraphEdge, GraphNode};
@@ -42,13 +41,9 @@ fn node_color(labels: &HashMap<NodeIndex, String>, index: usize) -> u32 {
     TAG_COLORS[(hasher.finish() as usize) % TAG_COLORS.len()]
 }
 
-/// Brand accent used for the selected node.
-fn selected_color(dark: bool) -> u32 {
-    if dark {
-        0x34b37a
-    } else {
-        0x299c68
-    }
+/// Selection colour shared with the web studio's Cytoscape canvas.
+fn selected_color() -> u32 {
+    0x1890ff
 }
 
 /// Colour for one edge type: distinct types walk the edge palette in sorted
@@ -492,7 +487,7 @@ impl GraphModel {
         pairs.sort_unstable_by_key(|(source, target)| (source.index(), target.index()));
 
         let selected: BTreeSet<usize> = self.selection.iter().map(|node| node.index()).collect();
-        let selected_fill = selected_color(cx.theme().mode.is_dark());
+        let selected_fill = selected_color();
         let labels = &self.labels;
         let nodes = paint_nodes(view, positions, &self.camera, self.viewport, |node| {
             let mut style = NodeStyle::default();

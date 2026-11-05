@@ -456,10 +456,13 @@ impl Render for GraphPanel {
             .text_color(theme.foreground)
             .child(panel_header(
                 SharedString::from(crate::i18n::t("nav.graph", crate::i18n::locale(cx))),
-                Some(SharedString::from(format!(
-                    "{} nodes · {} edges",
-                    self.model.node_count(),
-                    self.model.edge_count()
+                Some(SharedString::from(crate::i18n::tf_args(
+                    "graph.nodeEdgeSummary",
+                    crate::i18n::locale(cx),
+                    &[
+                        &self.model.node_count() as &dyn std::fmt::Display,
+                        &self.model.edge_count() as &dyn std::fmt::Display,
+                    ],
                 ))),
                 None,
                 cx,

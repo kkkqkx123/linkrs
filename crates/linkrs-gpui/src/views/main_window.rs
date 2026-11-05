@@ -15,7 +15,7 @@ use gpui_kit::component::{
         SidebarMenuItem, SidebarToggleButton,
     },
     status_bar::StatusBar,
-    v_flex, ActiveTheme as _, Icon, IndexPath, Sizable as _, Theme,
+    v_flex, ActiveTheme as _, Icon, IndexPath, Sizable as _,
 };
 use gpui_kit::{
     div, prelude::FluentBuilder as _, px, AnyWindowHandle, App, AppContext as _, ClickEvent,
@@ -24,9 +24,10 @@ use gpui_kit::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::app::{to_theme_mode, Quit, ThemeDark, ThemeLight, ThemeSystem, TogglePalette};
+use crate::app::{Quit, ThemeDark, ThemeLight, ThemeSystem, TogglePalette};
+use crate::design_tokens;
 use crate::i18n::{self, t};
-use crate::metrics::{SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_W};
+use crate::metrics::{PAGE_PAD_X, SIDEBAR_MAX, SIDEBAR_MIN, SIDEBAR_W};
 use crate::services::connection_service;
 use crate::settings::{self, Density, ThemeModeSetting, WindowGeometry};
 use crate::state::{self, AppState, Capability, ConnectionStatus};
@@ -691,8 +692,7 @@ impl MainWindow {
     fn apply_theme(&mut self, mode: ThemeModeSetting, window: &mut Window, cx: &mut Context<Self>) {
         self.theme_mode = mode;
         settings::update(cx, |settings| settings.theme_mode = Some(mode));
-        Theme::change(to_theme_mode(mode, cx), Some(window), cx);
-        theme::apply(cx);
+        theme::set_mode(mode, Some(window), cx);
         cx.notify();
     }
 
@@ -750,14 +750,14 @@ impl MainWindow {
     }
 
     fn nav_item(&self, entry: NavEntry, active: bool, cx: &mut Context<Self>) -> SidebarMenuItem {
-        let accent = cx.theme().primary;
+        let accent = design_tokens::color("--color-nav-accent", cx.theme().mode.is_dark());
         let clear = accent.opacity(0.0);
         let locale = state::AppState::global(cx).read(cx).locale;
         let label = t(nav_key(entry.label), locale);
         SidebarMenuItem::new(label)
             .icon(entry.icon)
             .active(active)
-            .border_l_2()
+            .border_l(px(3.))
             .border_color(if active { accent } else { clear })
             .accessibility_label(label.to_string())
     }
@@ -808,7 +808,10 @@ impl MainWindow {
                                     div()
                                         .text_size(px(12.))
                                         .text_color(cx.theme().sidebar_foreground.opacity(0.7))
-                                        .child(SharedString::from("Graph Database")),
+                                        .child(SharedString::from(t(
+                                            "common.graphDatabase",
+                                            locale,
+                                        ))),
                                 ),
                         ),
                 ),
@@ -823,7 +826,7 @@ impl MainWindow {
                                     crate::i18n::locale(cx),
                                 )
                                 .into(),
-                                icon: IconName::SquareTerminal,
+                                icon: IconName::Keyboard,
                             },
                             active == ConsolePanel::PANEL_NAME,
                             cx,
@@ -832,7 +835,7 @@ impl MainWindow {
                         self.nav_item(
                             NavEntry {
                                 label: crate::i18n::t("nav.schema", crate::i18n::locale(cx)).into(),
-                                icon: IconName::FolderOpen,
+                                icon: IconName::Database,
                             },
                             active == SchemaPanel::PANEL_NAME,
                             cx,
@@ -848,7 +851,7 @@ impl MainWindow {
                             NavEntry {
                                 label: crate::i18n::t("nav.dataBrowser", crate::i18n::locale(cx))
                                     .into(),
-                                icon: IconName::HardDrive,
+                                icon: IconName::Table,
                             },
                             active == DataBrowserPanel::PANEL_NAME,
                             cx,
@@ -857,7 +860,7 @@ impl MainWindow {
                         self.nav_item(
                             NavEntry {
                                 label: crate::i18n::t("nav.graph", crate::i18n::locale(cx)).into(),
-                                icon: IconName::Network,
+                                icon: IconName::Link2,
                             },
                             active == GraphPanel::PANEL_NAME,
                             cx,
@@ -873,7 +876,7 @@ impl MainWindow {
                             NavEntry {
                                 label: crate::i18n::t("nav.monitoring", crate::i18n::locale(cx))
                                     .into(),
-                                icon: IconName::Cpu,
+                                icon: IconName::ChartLine,
                             },
                             active == MonitoringPanel::PANEL_NAME,
                             cx,
@@ -888,7 +891,7 @@ impl MainWindow {
                         self.nav_item(
                             NavEntry {
                                 label: crate::i18n::t("nav.users", crate::i18n::locale(cx)).into(),
-                                icon: IconName::User,
+                                icon: IconName::Users,
                             },
                             active == UsersPanel::PANEL_NAME,
                             cx,
@@ -901,7 +904,7 @@ impl MainWindow {
                         self.nav_item(
                             NavEntry {
                                 label: crate::i18n::t("nav.batch", crate::i18n::locale(cx)).into(),
-                                icon: IconName::Inbox,
+                                icon: IconName::Package,
                             },
                             active == BatchPanel::PANEL_NAME,
                             cx,
@@ -913,7 +916,7 @@ impl MainWindow {
                     self.nav_item(
                         NavEntry {
                             label: crate::i18n::t("nav.transfer", crate::i18n::locale(cx)).into(),
-                            icon: IconName::ExternalLink,
+                            icon: IconName::Repeat,
                         },
                         active == TransferPanel::PANEL_NAME,
                         cx,
@@ -924,7 +927,7 @@ impl MainWindow {
                     self.nav_item(
                         NavEntry {
                             label: crate::i18n::t("nav.migration", crate::i18n::locale(cx)).into(),
-                            icon: IconName::FileText,
+                            icon: IconName::Route,
                         },
                         active == MigrationPanel::PANEL_NAME,
                         cx,
@@ -959,7 +962,7 @@ impl MainWindow {
                             NavEntry {
                                 label: crate::i18n::t("nav.sessions", crate::i18n::locale(cx))
                                     .into(),
-                                icon: IconName::Globe,
+                                icon: IconName::PlugZap,
                             },
                             active == SessionsPanel::PANEL_NAME,
                             cx,
@@ -972,7 +975,7 @@ impl MainWindow {
                         NavEntry {
                             label: crate::i18n::t("nav.transactions", crate::i18n::locale(cx))
                                 .into(),
-                            icon: IconName::Repeat,
+                            icon: IconName::Activity,
                         },
                         active == TransactionsPanel::PANEL_NAME,
                         cx,
@@ -983,7 +986,7 @@ impl MainWindow {
                     self.nav_item(
                         NavEntry {
                             label: crate::i18n::t("nav.sync", crate::i18n::locale(cx)).into(),
-                            icon: IconName::ArrowLeftRight,
+                            icon: IconName::RefreshCw,
                         },
                         active == SyncPanel::PANEL_NAME,
                         cx,
@@ -1083,7 +1086,7 @@ impl MainWindow {
             .flex_shrink_0()
             .items_center()
             .gap_2()
-            .px(px(20.))
+            .px(px(PAGE_PAD_X))
             .bg(theme.popover)
             .border_b_1()
             .border_color(theme.border)
@@ -1218,73 +1221,37 @@ impl MainWindow {
             )
     }
 
-    /// Localized connection status for the status bar.
-    fn status_text(status: ConnectionStatus, locale: settings::Locale) -> &'static str {
-        match status {
-            ConnectionStatus::Disconnected => t("status.disconnected", locale),
-            ConnectionStatus::Connecting => t("status.connecting", locale),
-            ConnectionStatus::Connected => t("status.connected", locale),
-            ConnectionStatus::Unhealthy => t("status.unhealthy", locale),
-        }
-    }
-
+    /// Workspace context only: connection health and latency live in the top
+    /// bar's health capsule, so repeating them here would duplicate the same
+    /// information in two chrome rows.
     fn render_status_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let app_state = state::AppState::global(cx);
-        let (status, space, locale) = {
-            let state = app_state.read(cx);
-            (state.status, state.space.clone(), state.locale)
+        let (space, locale) = {
+            let state = state::AppState::global(cx).read(cx);
+            (state.space.clone(), state.locale)
         };
         let theme = cx.theme().clone();
-
-        let dot = match status {
-            ConnectionStatus::Disconnected => theme.muted_foreground,
-            ConnectionStatus::Connecting => theme.warning,
-            ConnectionStatus::Connected => theme.success,
-            ConnectionStatus::Unhealthy => theme.danger,
+        let context: SharedString = match space {
+            Some(space) => space.into(),
+            None => t("header.noSpace", locale).into(),
         };
 
         StatusBar::new()
             .left(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(div().size_2().rounded_full().bg(dot))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme.muted_foreground)
-                            .child(SharedString::from(Self::status_text(status, locale))),
-                    )
-                    .children(space.map(|space| {
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme.muted_foreground)
-                            .child(SharedString::from(format!("· {space}")))
-                    })),
+                h_flex().gap_2().items_center().child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.muted_foreground)
+                        .child(context),
+                ),
             )
             .right(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme.muted_foreground)
-                            .child(SharedString::from(
-                                self.latency_ms
-                                    .map(|ms| format!("{ms} ms"))
-                                    .unwrap_or_else(|| "—".to_string()),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme.muted_foreground)
-                            .child(SharedString::from(format!(
-                                "v{}",
-                                env!("CARGO_PKG_VERSION")
-                            ))),
-                    ),
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.muted_foreground)
+                    .child(SharedString::from(format!(
+                        "v{}",
+                        env!("CARGO_PKG_VERSION")
+                    ))),
             )
     }
 }
@@ -1462,24 +1429,22 @@ fn palette_panels(manage_users: bool, manage_batch: bool, cx: &App) -> Vec<Palet
         .into_iter()
         .map(|target| {
             let (key, icon, keyword) = match target {
-                PaletteTarget::Console => ("nav.console", IconName::SquareTerminal, "console"),
-                PaletteTarget::Schema => ("nav.schema", IconName::FolderOpen, "schema"),
-                PaletteTarget::DataBrowser => ("nav.dataBrowser", IconName::HardDrive, "data"),
-                PaletteTarget::Graph => ("nav.graph", IconName::Network, "graph"),
-                PaletteTarget::Monitoring => ("nav.monitoring", IconName::Cpu, "monitoring"),
+                PaletteTarget::Console => ("nav.console", IconName::Keyboard, "console"),
+                PaletteTarget::Schema => ("nav.schema", IconName::Database, "schema"),
+                PaletteTarget::DataBrowser => ("nav.dataBrowser", IconName::Table, "data"),
+                PaletteTarget::Graph => ("nav.graph", IconName::Link2, "graph"),
+                PaletteTarget::Monitoring => ("nav.monitoring", IconName::ChartLine, "monitoring"),
                 PaletteTarget::Transactions => {
-                    ("nav.transactions", IconName::Repeat, "transactions")
+                    ("nav.transactions", IconName::Activity, "transactions")
                 }
-                PaletteTarget::Sync => ("nav.sync", IconName::ArrowLeftRight, "sync"),
+                PaletteTarget::Sync => ("nav.sync", IconName::RefreshCw, "sync"),
                 PaletteTarget::Functions => ("nav.functions", IconName::Braces, "functions"),
                 PaletteTarget::Config => ("nav.config", IconName::SlidersHorizontal, "config"),
-                PaletteTarget::Batch => ("nav.batch", IconName::Inbox, "batch"),
-                PaletteTarget::Transfer => {
-                    ("nav.transfer", IconName::ExternalLink, "transfer")
-                }
-                PaletteTarget::Users => ("nav.users", IconName::User, "users"),
-                PaletteTarget::Sessions => ("nav.sessions", IconName::Globe, "sessions"),
-                PaletteTarget::Migration => ("nav.migration", IconName::FileText, "migration"),
+                PaletteTarget::Batch => ("nav.batch", IconName::Package, "batch"),
+                PaletteTarget::Transfer => ("nav.transfer", IconName::Repeat, "transfer"),
+                PaletteTarget::Users => ("nav.users", IconName::Users, "users"),
+                PaletteTarget::Sessions => ("nav.sessions", IconName::PlugZap, "sessions"),
+                PaletteTarget::Migration => ("nav.migration", IconName::Route, "migration"),
                 PaletteTarget::Vector => ("nav.vector", IconName::MemoryStick, "vector"),
                 PaletteTarget::Fulltext => ("nav.fulltext", IconName::Search, "fulltext"),
             };

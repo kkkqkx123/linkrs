@@ -70,8 +70,7 @@ impl MonitoringPanel {
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let state = crate::state::AppState::global(cx);
-        cx.observe(&state, |_, _, cx| cx.notify())
-            .detach();
+        cx.observe(&state, |_, _, cx| cx.notify()).detach();
         let mut panel = Self {
             auto_refresh: true,
             generation: 0,
@@ -747,7 +746,7 @@ impl Render for MonitoringPanel {
                                     crate::i18n::t("monitoring.qpsTitle", crate::i18n::locale(cx)),
                                     "qps",
                                     &self.qps,
-                                    theme.chart_1,
+                                    theme.info,
                                     cx,
                                 ))
                                 .child(self.render_chart(
@@ -757,7 +756,7 @@ impl Render for MonitoringPanel {
                                     ),
                                     "ms",
                                     &self.latency,
-                                    theme.chart_3,
+                                    theme.primary,
                                     cx,
                                 ))
                                 .into_any_element(),

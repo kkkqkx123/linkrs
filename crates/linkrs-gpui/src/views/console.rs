@@ -852,13 +852,11 @@ impl ConsolePanel {
                     Ok(payload) => {
                         this.running_payload = payload;
                         window.push_notification(
-                            Notification::success(
-                                crate::i18n::tf_args(
-                                    "console.terminatedQuery",
-                                    locale,
-                                    &[&query_id, &session_id],
-                                ),
-                            ),
+                            Notification::success(crate::i18n::tf_args(
+                                "console.terminatedQuery",
+                                locale,
+                                &[&query_id, &session_id],
+                            )),
                             cx,
                         );
                     }
@@ -2075,8 +2073,7 @@ impl ConsolePanel {
             .min_h_0()
             .child(
                 TabBar::new("result-tabs")
-                    .border_b_1()
-                    .border_color(theme.border)
+                    .underline()
                     .children(tabs)
                     .selected_index(active),
             )

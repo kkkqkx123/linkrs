@@ -1,5 +1,5 @@
 use gpui_kit::component::input::ShowCompletions;
-use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::component::ThemeMode;
 use gpui_kit::{
     point, px, size, App, AppContext as _, Bounds, KeyBinding, Size, WindowBounds, WindowOptions,
 };
@@ -27,7 +27,9 @@ const MIN_WINDOW_SIZE: (f32, f32) = (960., 600.);
 
 /// Entry point: initialize layers and globals, then open the shell window.
 pub fn run(settings: Settings) {
-    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
+    // The navigation uses catalog icons that match the web studio's Lucide
+    // names, so embed the complete icon set instead of the component defaults.
+    let app = gpui_kit::application().with_assets(gpui_kit::assets::AllAssets);
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
 
@@ -102,8 +104,7 @@ fn bind_keys(cx: &mut App) {
 /// Apply the persisted theme preference (system follows the current OS look).
 fn apply_saved_theme(cx: &mut App) {
     let mode = settings::global(cx).theme_mode.unwrap_or_default();
-    Theme::change(to_theme_mode(mode, cx), None, cx);
-    crate::theme::apply(cx);
+    crate::theme::set_mode(mode, None, cx);
 }
 
 /// Map the persisted preference onto a concrete theme mode.

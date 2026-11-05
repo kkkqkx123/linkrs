@@ -16,7 +16,7 @@ pub fn panel_header(
     let theme = cx.theme();
     let mut titles = v_flex().gap_0p5().min_w_0().child(
         div()
-            .text_size(px(16.))
+            .text_size(px(24.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.foreground)
             .child(title.into()),
@@ -38,8 +38,6 @@ pub fn panel_header(
         .justify_between()
         .gap_3()
         .px(px(PAGE_PAD_X))
-        .border_b_1()
-        .border_color(theme.border)
         .child(titles)
         .children(actions)
 }

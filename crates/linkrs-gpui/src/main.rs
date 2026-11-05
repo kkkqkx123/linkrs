@@ -1,6 +1,7 @@
 mod app;
 mod components;
 mod connection;
+mod design_tokens;
 mod i18n;
 mod metrics;
 mod runtime;
