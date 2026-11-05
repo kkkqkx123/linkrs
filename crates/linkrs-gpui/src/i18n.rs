@@ -172,4 +172,163 @@ mod tests {
         }
         assert_eq!(t("language.zh", Locale::En), t("language.zh", Locale::Zh));
     }
+
+    /// `en.json` and `zh.json` must expose exactly the same key set so neither
+    /// locale silently drops a string the other renders.
+    #[test]
+    fn catalogues_share_key_set() {
+        let mut en_keys: Vec<&String> = EN.keys().collect();
+        en_keys.sort();
+        let mut zh_keys: Vec<&String> = ZH.keys().collect();
+        zh_keys.sort();
+        assert_eq!(en_keys, zh_keys, "en/zh catalogue keys diverged");
+    }
+
+    /// Technical abbreviations that legitimately stay in Latin script inside the
+    /// Chinese UI (CPU, JSON, EDGE, …). Every other `zh.json` value must carry
+    /// at least one CJK glyph, otherwise the entry is an untranslated stub.
+    const ACCEPTABLE_LATIN: &[&str] = &[
+        "csv", "cpu%>", "index", "cpu", "en", "unique", "tag", "qps", "edge", "er", "json",
+    ];
+
+    fn has_cjk(s: &str) -> bool {
+        s.chars().any(|c| {
+            let u = c as u32;
+            (0x3400..=0x4DBF).contains(&u)
+                || (0x4E00..=0x9FFF).contains(&u)
+                || (0xF900..=0xFAFF).contains(&u)
+        })
+    }
+
+    #[test]
+    fn chinese_entries_are_translated() {
+        for (key, value) in ZH.iter() {
+            if has_cjk(value) {
+                continue;
+            }
+            let normalized: String = value
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+                .to_ascii_lowercase();
+            assert!(
+                ACCEPTABLE_LATIN.contains(&normalized.as_str()),
+                "zh entry {key} has no Chinese and is not an allowed abbreviation: {value}"
+            );
+        }
+    }
+
+    /// A `{}` in the English template needs a matching `{}` in the Chinese one,
+    /// otherwise arguments shift and a slot renders raw braces.
+    #[test]
+    fn templates_share_placeholder_count() {
+        for key in EN.keys() {
+            let en_count = EN[key].matches("{}").count();
+            let zh_count = ZH.get(key).map(|v| v.matches("{}").count()).unwrap_or(0);
+            assert_eq!(
+                en_count, zh_count,
+                "placeholder count mismatch for {key}: en={en_count} zh={zh_count}"
+            );
+        }
+    }
+
+    /// Keys passed to `t`/`tf`/`tf_args` at call sites must exist in the
+    /// catalogue, so a typo surfaces as a test failure instead of a raw key in
+    /// the UI. Intentionally-absent keys from negative tests are skipped.
+    #[test]
+    fn call_site_keys_exist_in_catalogue() {
+        const IGNORED: &[&str] = &["definitely.missing.key"];
+        let root = env!("CARGO_MANIFEST_DIR");
+        let src = std::path::Path::new(root).join("src");
+        let mut seen = Vec::new();
+        collect_call_site_keys(&src, &mut seen);
+        seen.sort();
+        seen.dedup();
+        for key in seen {
+            if IGNORED.contains(&key.as_str()) {
+                continue;
+            }
+            // Only namespaced catalogue keys carry a dot; bare `t("...")` string
+            // literals elsewhere in source are not catalogue lookups.
+            if !key.contains('.') {
+                continue;
+            }
+            // Catalogue keys are dot-separated identifiers (letters, digits,
+            // dots). Anything else — doc-comment snippets, literal function
+            // names — is not a real lookup and is skipped.
+            if !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
+                || !key.chars().any(|c| c.is_ascii_alphabetic())
+            {
+                continue;
+            }
+            assert!(
+                EN.contains_key(&key),
+                "call site references catalogue key not present in en.json: {key}"
+            );
+        }
+    }
+
+    fn collect_call_site_keys(dir: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_call_site_keys(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    scan_source_keys(&content, out);
+                }
+            }
+        }
+    }
+
+    fn scan_source_keys(content: &str, out: &mut Vec<String>) {
+        let bytes = content.as_bytes();
+        let patterns: &[&str] = &["tf_args(", "tf(", "t("];
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut found: Option<(usize, &str)> = None;
+            for pat in patterns {
+                if let Some(rel) = content[i..].find(pat) {
+                    let abs = i + rel;
+                    let prev_ok = abs == 0
+                        || !(bytes[abs - 1].is_ascii_alphanumeric() || bytes[abs - 1] == b'_');
+                    if prev_ok {
+                        if let Some((best, _)) = found {
+                            if abs < best {
+                                found = Some((abs, pat));
+                            }
+                        } else {
+                            found = Some((abs, pat));
+                        }
+                    }
+                }
+            }
+            let Some((abs, pat)) = found else { break };
+            let mut j = abs + pat.len();
+            while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'"' {
+                j += 1;
+                let start = j;
+                while j < bytes.len() && bytes[j] != b'"' {
+                    if bytes[j] == b'\\' {
+                        j += 2;
+                    } else {
+                        j += 1;
+                    }
+                }
+                let key = &content[start..j];
+                if !key.is_empty() {
+                    out.push(key.to_string());
+                }
+                i = j + 1;
+            } else {
+                i = j;
+            }
+        }
+    }
 }
