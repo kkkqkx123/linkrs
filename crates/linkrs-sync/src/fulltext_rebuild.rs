@@ -343,7 +343,7 @@ impl SyncManager {
                 receiver
                     .apply_index_batch(&refs)
                     .await
-                    .map_err(SyncError::Internal)?;
+                    .map_err(|error| SyncError::Internal(error.to_string()))?;
                 progress.docs_applied += chunk.len() as u64;
             }
             manager.update_rebuild_progress(progress.clone());
@@ -571,7 +571,7 @@ impl SyncManager {
                 Some(Arc::clone(engine)),
             )
             .await
-            .map_err(SyncError::Internal)?;
+            .map_err(|failure| SyncError::Internal(failure.message().to_owned()))?;
             replayed += 1;
         }
         if let Some(last) = events.last() {

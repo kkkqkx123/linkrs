@@ -57,8 +57,6 @@ pub struct SyncManager {
     #[cfg(feature = "vector")]
     auto_embed_text: Arc<std::sync::atomic::AtomicBool>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
-    #[cfg(feature = "vector")]
-    backend_policy: Option<Arc<crate::backend::BackendDeliveryPolicy>>,
     backpressure: Arc<OutboxBackpressureConfig>,
     /// When an `Auth` error is seen, delivery is paused until this timestamp
     /// (millis since epoch). Atomic for lock-free reads in the hot path.
@@ -87,8 +85,6 @@ impl Clone for SyncManager {
             #[cfg(feature = "vector")]
             auto_embed_text: self.auto_embed_text.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
-            #[cfg(feature = "vector")]
-            backend_policy: self.backend_policy.clone(),
             backpressure: self.backpressure.clone(),
             auth_paused_until_ms: self.auth_paused_until_ms.clone(),
             stats_manager: self.stats_manager.clone(),

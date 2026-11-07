@@ -18,6 +18,9 @@ pub enum VectorError {
     #[error("Vector engine unavailable: {0}")]
     EngineUnavailable(String),
 
+    #[error("Vector engine authentication failed: {0}")]
+    Auth(String),
+
     #[error("Vector index corrupted: {0}")]
     IndexCorrupted(String),
 
@@ -170,54 +173,8 @@ impl VectorErrorKind {
             VectorError::Cancelled
             | VectorError::EmbeddingError(_)
             | VectorError::EngineNotFound { .. } => Self::NonRetryable,
+            VectorError::Auth(_) => Self::Auth,
         }
-    }
-
-    /// Classify a stringified error (used in `SyncManager::retry_outbox_sync`
-    /// where the error has been erased to `String`).
-    pub fn classify_str(msg: &str) -> Self {
-        let lower = msg.to_ascii_lowercase();
-        if lower.contains("dimensionmismatch")
-            || lower.contains("dimension mismatch")
-            || lower.contains("invalidconfig")
-            || lower.contains("invalid vector")
-            || lower.contains("invalid point id")
-            || lower.contains("invalidargument")
-            || lower.contains("configerror")
-        {
-            return Self::NonRetryable;
-        }
-        if lower.contains("auth")
-            || lower.contains("unauthorized")
-            || lower.contains("forbidden")
-            || lower.contains("permission")
-            || lower.contains("apikey")
-            || lower.contains("api key")
-        {
-            return Self::Auth;
-        }
-        if lower.contains("engine is disabled") || lower.contains("enginedisabled") {
-            return Self::Retryable;
-        }
-        if lower.contains("timeout")
-            || lower.contains("unavailable")
-            || lower.contains("connection")
-            || lower.contains("transport")
-            || lower.contains("deadline")
-            || lower.contains("temporarily")
-            || lower.contains("rate limit")
-            || lower.contains("qdrant")
-        {
-            return Self::Retryable;
-        }
-        // Default to NonRetryable for unknowns to avoid infinite retries on
-        // validation failures; callers may still retry with capped attempts.
-        // However for safety in outbox path treat unknown as Retryable unless
-        // it clearly looks like a validation failure.
-        if lower.contains("not found") || lower.contains("already exists") {
-            return Self::NonRetryable;
-        }
-        Self::Retryable
     }
 }
 
@@ -253,11 +210,6 @@ impl VectorCoordinatorError {
             | VectorCoordinatorError::Internal(_) => VectorErrorKind::Retryable,
         }
     }
-
-    /// Classify from the display string of the error.
-    pub fn kind_str(msg: &str) -> VectorErrorKind {
-        VectorErrorKind::classify_str(msg)
-    }
 }
 
 pub type VectorResult<T> = std::result::Result<T, VectorError>;
@@ -269,7 +221,7 @@ impl linkrs_core::error::search::ClassifySearchError for VectorError {
         match self {
             Self::IndexNotFound(_) | Self::CollectionNotFound(_) => SearchErrorKind::IndexNotFound,
             Self::IndexAlreadyExists(_) => SearchErrorKind::IndexAlreadyExists,
-            Self::EngineUnavailable(_) | Self::EngineNotFound { .. } => {
+            Self::EngineUnavailable(_) | Self::EngineNotFound { .. } | Self::Auth(_) => {
                 SearchErrorKind::EngineUnavailable
             }
             Self::IndexCorrupted(_) => SearchErrorKind::IndexCorrupted,
@@ -397,6 +349,16 @@ impl From<simvec::VectorEngineError> for VectorCoordinatorError {
     }
 }
 
+/// Whether a stringified gRPC status carries an auth failure code.
+///
+/// The transport only surfaces the display form of the status, so the
+/// conversion boundary matches the stable tonic code names instead of
+/// spreading substring checks through delivery.
+#[cfg(feature = "vector-qdrant")]
+fn is_grpc_auth_message(message: &str) -> bool {
+    message.contains("Unauthenticated") || message.contains("PermissionDenied")
+}
+
 #[cfg(feature = "vector-qdrant")]
 impl From<vector_client::VectorClientError> for VectorError {
     fn from(err: vector_client::VectorClientError) -> Self {
@@ -445,9 +407,19 @@ impl From<vector_client::VectorClientError> for VectorError {
             }
             vector_client::VectorClientError::InternalError(msg) => VectorError::Internal(msg),
             vector_client::VectorClientError::QdrantHttpError { status, message } => {
-                VectorError::QdrantError(format!("HTTP {}: {}", status, message))
+                if status == 401 || status == 403 {
+                    VectorError::Auth(format!("HTTP {}: {}", status, message))
+                } else {
+                    VectorError::QdrantError(format!("HTTP {}: {}", status, message))
+                }
             }
-            vector_client::VectorClientError::QdrantGrpcError(msg) => VectorError::QdrantError(msg),
+            vector_client::VectorClientError::QdrantGrpcError(msg) => {
+                if is_grpc_auth_message(&msg) {
+                    VectorError::Auth(msg)
+                } else {
+                    VectorError::QdrantError(msg)
+                }
+            }
             vector_client::VectorClientError::NotSupported(op) => {
                 VectorError::ConfigError(format!("Operation not supported: {}", op))
             }

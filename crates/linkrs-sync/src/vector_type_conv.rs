@@ -125,6 +125,10 @@ pub fn condition_to_ix(v: tx::ConditionType) -> ix::ConditionType {
         }
         tx::ConditionType::ValuesCount(c) => ix::ConditionType::ValuesCount(values_count_to_ix(c)),
         tx::ConditionType::Contains { value } => ix::ConditionType::Contains { value },
+        tx::ConditionType::StartsWith { prefix } => ix::ConditionType::StartsWith { prefix },
+        tx::ConditionType::Not { condition } => ix::ConditionType::Not {
+            condition: Box::new(filter_condition_to_ix(*condition)),
+        },
     }
 }
 
@@ -147,6 +151,10 @@ pub fn condition_to_tx(v: ix::ConditionType) -> tx::ConditionType {
         }
         ix::ConditionType::ValuesCount(c) => tx::ConditionType::ValuesCount(values_count_to_tx(c)),
         ix::ConditionType::Contains { value } => tx::ConditionType::Contains { value },
+        ix::ConditionType::StartsWith { prefix } => tx::ConditionType::StartsWith { prefix },
+        ix::ConditionType::Not { condition } => tx::ConditionType::Not {
+            condition: Box::new(filter_condition_to_tx(*condition)),
+        },
     }
 }
 

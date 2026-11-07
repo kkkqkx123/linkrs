@@ -74,7 +74,7 @@ pub use outbox_recovery::{
 pub use receiver::FulltextReceiver;
 #[cfg(feature = "vector")]
 pub use receiver::VectorReceiver;
-pub use receiver::{ApplyReceipt, LateArrivalResult};
+pub use receiver::{ApplyReceipt, LateArrivalKind, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
 pub use sqlite_outbox::{
     ClaimedEvent, DeadLetterRow, DegradedRangeRow, IndexSyncDiagnostics, OutboxSnapshot,

@@ -38,8 +38,82 @@ pub(crate) fn edge_entity_id(
     format!("{}->{}#{}", src, dst, ranking)
 }
 
-fn is_disabled_error(message: &str) -> bool {
-    message.contains("Vector engine is disabled") || message.contains("EngineDisabled")
+/// Typed delivery failure carried through the claim-apply-ack loop.
+///
+/// The readable message is persisted to the outbox (retry/dead-letter),
+/// while the kind drives the retry policy. The disabled flag covers the
+/// engine-off state without string matching.
+#[derive(Debug, Clone)]
+pub(crate) struct ApplyFailure {
+    message: String,
+    kind: crate::vector_error::VectorErrorKind,
+    disabled: bool,
+}
+
+impl ApplyFailure {
+    fn retryable(message: String) -> Self {
+        Self {
+            message,
+            kind: crate::vector_error::VectorErrorKind::Retryable,
+            disabled: false,
+        }
+    }
+
+    fn non_retryable(message: String) -> Self {
+        Self {
+            message,
+            kind: crate::vector_error::VectorErrorKind::NonRetryable,
+            disabled: false,
+        }
+    }
+
+    #[cfg(feature = "vector")]
+    fn from_vector(error: crate::vector_error::VectorCoordinatorError) -> Self {
+        let disabled = matches!(
+            error,
+            crate::vector_error::VectorCoordinatorError::EngineDisabled
+        );
+        let kind = error.kind();
+        Self {
+            message: error.to_string(),
+            kind,
+            disabled,
+        }
+    }
+
+    #[cfg(feature = "fulltext")]
+    fn from_fulltext(error: linkrs_fulltext::error::SearchError) -> Self {
+        use linkrs_fulltext::error::SearchError as FulltextError;
+        let kind = match &error {
+            FulltextError::ConfigError(_)
+            | FulltextError::QueryParseError(_)
+            | FulltextError::InvalidDocId(_)
+            | FulltextError::SerializationError(_)
+            | FulltextError::IndexAlreadyExists(_)
+            | FulltextError::IndexNotFound(_)
+            | FulltextError::SpaceNotFound(_)
+            | FulltextError::TagNotFound(_)
+            | FulltextError::FieldNotFound(_) => {
+                crate::vector_error::VectorErrorKind::NonRetryable
+            }
+            _ => crate::vector_error::VectorErrorKind::Retryable,
+        };
+        Self {
+            message: error.to_string(),
+            kind,
+            disabled: false,
+        }
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for ApplyFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
 }
 
 fn retry_backoff_ms(retry_count: u64) -> u64 {
@@ -60,21 +134,22 @@ fn record_transport_latency(
 async fn handle_delivery_error(
     outbox: &crate::sqlite_outbox::SqliteOutbox,
     event: &crate::sqlite_outbox::ClaimedEvent,
-    error: &str,
+    failure: &ApplyFailure,
     now: u64,
     consumer: &crate::manager::OutboxConsumerConfig,
     auth_paused_until_ms: &std::sync::Arc<std::sync::atomic::AtomicU64>,
     target: &str,
 ) -> Result<bool, crate::manager::SyncError> {
     use crate::vector_error::VectorErrorKind;
-    if is_disabled_error(error) {
+    let error = failure.message();
+    if failure.disabled {
         outbox
             .retry(event, now.saturating_add(5_000), error)
             .await
             .map_err(crate::manager::SyncError::PersistenceError)?;
         return Ok(false);
     }
-    match VectorErrorKind::classify_str(error) {
+    match failure.kind {
         VectorErrorKind::Auth => {
             let pause_until = now.saturating_add(60_000);
             auth_paused_until_ms.store(pause_until, std::sync::atomic::Ordering::Relaxed);
@@ -147,39 +222,20 @@ impl super::SyncManager {
         let stats_manager = self.stats_manager.clone();
         // Capture consumer config for the async block (Clone is cheap).
         let consumer = self.outbox_consumer.clone();
-        let backend_policy_name = {
-            #[cfg(feature = "vector")]
-            {
-                self.backend_policy
-                    .as_ref()
-                    .map(|p| p.policy_name.clone())
-                    .unwrap_or_default()
-            }
-            #[cfg(not(feature = "vector"))]
-            {
-                String::new()
-            }
-        };
         let self_clone = self.clone();
         self.execute_sync(move || async move {
             let consumer = consumer.clone();
             let stats_manager = stats_manager.clone();
             let self_clone = self_clone.clone();
-            let backend_policy_name = backend_policy_name.clone();
             let targets = outbox
                 .delivery_targets()
                 .await
                 .map_err(SyncError::PersistenceError)?;
             let mut processed = 0usize;
             for target in targets {
-                let max_concurrency =
-                    if target.as_str() == "vector" && backend_policy_name == "qdrant" {
-                        consumer.max_concurrency.max(4)
-                    } else if target.as_str() == "vector" && backend_policy_name == "local" {
-                        1
-                    } else {
-                        consumer.max_concurrency.max(1)
-                    };
+                // Single source for concurrency: the consumer config already
+                // carries the backend-tuned value, so no policy re-branching here.
+                let max_concurrency = consumer.max_concurrency.max(1);
                 if max_concurrency <= 1 {
                     // Single-threaded path (Local): preserves global
                     // commit_lsn ordering and keeps SQLite contention minimal.
@@ -380,9 +436,11 @@ impl super::SyncManager {
         &self,
         mutation: &linkrs_core::wal::IndexMutation,
         commit_lsn: CommitLsn,
-    ) -> Result<(), String> {
-        let payload: OutboxPayload = postcard::from_bytes(&mutation.document_or_vector)
-            .map_err(|error| format!("Failed to decode index mutation: {}", error))?;
+    ) -> Result<(), ApplyFailure> {
+        let payload: OutboxPayload =
+            postcard::from_bytes(&mutation.document_or_vector).map_err(|error| {
+                ApplyFailure::non_retryable(format!("Failed to decode index mutation: {}", error))
+            })?;
         match mutation.target.as_str() {
             #[cfg(feature = "fulltext")]
             "fulltext" => {
@@ -398,7 +456,7 @@ impl super::SyncManager {
         }
     }
 
-    fn apply_payload(&self, payload: &OutboxPayload) -> Result<(), String> {
+    fn apply_payload(&self, payload: &OutboxPayload) -> Result<(), ApplyFailure> {
         match payload {
             OutboxPayload::CreateIndex { .. }
             | OutboxPayload::DropIndex { .. }
@@ -406,10 +464,10 @@ impl super::SyncManager {
             | OutboxPayload::DropTag { .. } => Ok(()),
             OutboxPayload::Vertex { .. }
             | OutboxPayload::EdgeInsert { .. }
-            | OutboxPayload::EdgeDelete { .. } => Err(
+            | OutboxPayload::EdgeDelete { .. } => Err(ApplyFailure::non_retryable(
                 "Outbox mutation has no registered target receiver; direct delivery is disabled"
                     .to_string(),
-            ),
+            )),
         }
     }
 
@@ -420,11 +478,13 @@ impl super::SyncManager {
         commit_lsn: CommitLsn,
         payload: &OutboxPayload,
         engine_override: Option<Arc<dyn FulltextSearchEngine>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ApplyFailure> {
         let manager = self
             .sync_coordinator
             .as_ref()
-            .ok_or_else(|| "fulltext target is not configured".to_string())?
+            .ok_or_else(|| {
+                ApplyFailure::non_retryable("fulltext target is not configured".to_string())
+            })?
             .fulltext_manager()
             .clone();
 
@@ -507,7 +567,7 @@ impl super::SyncManager {
             }
             OutboxPayload::CreateIndex {
                 space_id,
-                index_name,
+                index_name: _index_name,
                 schema_name,
                 fields,
                 ..
@@ -516,16 +576,18 @@ impl super::SyncManager {
                     if !matches!(value_type, Value::String(_) | Value::FixedString(_)) {
                         continue;
                     }
-                    if manager
+                    if let Err(error) = manager
                         .create_index(*space_id, schema_name, field_name, None)
                         .await
-                        .is_err()
-                        && !manager.has_index(*space_id, schema_name, field_name)
                     {
-                        return Err(format!(
-                            "Failed to create fulltext receiver index {}.{}.{}",
-                            space_id, index_name, field_name
-                        ));
+                        use linkrs_fulltext::error::SearchError as FulltextError;
+                        let already_exists = matches!(
+                            &error,
+                            FulltextError::IndexAlreadyExists(_)
+                        ) && manager.has_index(*space_id, schema_name, field_name);
+                        if !already_exists {
+                            return Err(ApplyFailure::from_fulltext(error));
+                        }
                     }
                 }
                 Ok(())
@@ -546,7 +608,7 @@ impl super::SyncManager {
                     manager
                         .drop_index(*space_id, schema_name, &field_name)
                         .await
-                        .map_err(|error| error.to_string())?;
+                        .map_err(ApplyFailure::from_fulltext)?;
                 }
                 Ok(())
             }
@@ -554,7 +616,7 @@ impl super::SyncManager {
                 manager
                     .drop_space_indexes(*space_id)
                     .await
-                    .map_err(|error| error.to_string())?;
+                    .map_err(ApplyFailure::from_fulltext)?;
                 Ok(())
             }
             OutboxPayload::DropTag { space_id, tag_name } => {
@@ -568,7 +630,7 @@ impl super::SyncManager {
                     manager
                         .drop_index(*space_id, tag_name, &field_name)
                         .await
-                        .map_err(|error| error.to_string())?;
+                        .map_err(ApplyFailure::from_fulltext)?;
                 }
                 Ok(())
             }
@@ -578,7 +640,7 @@ impl super::SyncManager {
     #[cfg(feature = "fulltext")]
     pub(crate) async fn apply_fulltext_fields(
         request: FulltextFieldApply<'_>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ApplyFailure> {
         for (field_name, value) in request.properties {
             // Serialize against rebuild publish: the fence write guard held
             // by publish covers final replay and engine swap, so an apply is
@@ -616,17 +678,19 @@ impl super::SyncManager {
                 "{}:{}",
                 request.mutation.idempotency_key.as_str(),
                 field_name
-            ))?;
+            ))
+            .map_err(ApplyFailure::non_retryable)?;
             let receiver = crate::receiver::FulltextReceiver::new(engine);
             let late_arrival = receiver
                 .check_late_arrival(request.commit_lsn, field_mutation.idempotency_key.as_str())
                 .await;
-            if !late_arrival.accepted && !late_arrival.reason.contains("duplicate") {
-                return Err(late_arrival.reason);
+            if !late_arrival.accepted && !late_arrival.is_duplicate() {
+                return Err(ApplyFailure::retryable(late_arrival.reason));
             }
             receiver
                 .apply_index_batch(&[(&field_mutation, request.commit_lsn)])
-                .await?;
+                .await
+                .map_err(ApplyFailure::from_fulltext)?;
             log::debug!(
                 "Applied fulltext mutation for {} at {}",
                 request.entity_id.as_str(),
@@ -642,18 +706,22 @@ impl super::SyncManager {
         mutation: &linkrs_core::wal::IndexMutation,
         commit_lsn: CommitLsn,
         payload: &OutboxPayload,
-    ) -> Result<(), String> {
+    ) -> Result<(), ApplyFailure> {
         let Some(coordinator) = self.vector_coordinator.as_ref() else {
-            return Err("vector target is not configured".to_string());
+            return Err(ApplyFailure::non_retryable(
+                "vector target is not configured".to_string(),
+            ));
         };
         let Some(receiver) = self.vector_receiver.as_ref() else {
-            return Err("vector receiver is not configured".to_string());
+            return Err(ApplyFailure::non_retryable(
+                "vector receiver is not configured".to_string(),
+            ));
         };
         let late_arrival = receiver
             .check_late_arrival(commit_lsn, mutation.idempotency_key.as_str())
             .await;
-        if !late_arrival.accepted && !late_arrival.reason.contains("duplicate") {
-            return Err(late_arrival.reason);
+        if !late_arrival.accepted && !late_arrival.is_duplicate() {
+            return Err(ApplyFailure::retryable(late_arrival.reason));
         }
         if !late_arrival.accepted {
             return Ok(());
@@ -669,7 +737,8 @@ impl super::SyncManager {
                 // payloads intentionally map to zero contexts: vector
                 // indexes are vertex-only, so edge mutations never produce
                 // points on either the live or the rebuild path.
-                contexts = Self::vector_contexts_for_payload(coordinator, payload)?;
+                contexts = Self::vector_contexts_for_payload(coordinator, payload)
+                    .map_err(ApplyFailure::non_retryable)?;
             }
             OutboxPayload::CreateIndex {
                 space_id,
@@ -692,7 +761,7 @@ impl super::SyncManager {
                             simvec::DistanceMetric::default(),
                         )
                         .await
-                        .map_err(|error| error.to_string())?;
+                        .map_err(ApplyFailure::from_vector)?;
                 }
             }
             OutboxPayload::DropIndex {
@@ -706,7 +775,7 @@ impl super::SyncManager {
                     coordinator
                         .drop_vector_index(*space_id, schema_name, field_name)
                         .await
-                        .map_err(|error| error.to_string())?;
+                        .map_err(ApplyFailure::from_vector)?;
                 }
             }
             OutboxPayload::DropSpace { space_id } => {
@@ -714,14 +783,14 @@ impl super::SyncManager {
                     .index_manager()
                     .drop_space_indexes(*space_id)
                     .await
-                    .map_err(|error| error.to_string())?;
+                    .map_err(ApplyFailure::from_vector)?;
             }
             OutboxPayload::DropTag { space_id, tag_name } => {
                 coordinator
                     .index_manager()
                     .drop_tag_indexes(*space_id, tag_name)
                     .await
-                    .map_err(|error| error.to_string())?;
+                    .map_err(ApplyFailure::from_vector)?;
             }
         }
         // Serialize data-plane delivery against rebuild purge/snapshot and
@@ -748,11 +817,12 @@ impl super::SyncManager {
             coordinator
                 .on_vector_change_batch(contexts)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(ApplyFailure::from_vector)?;
         }
         receiver
             .record_application(commit_lsn, mutation.idempotency_key.as_str())
             .await
+            .map_err(ApplyFailure::retryable)
     }
 
     /// Map one vertex/edge outbox payload to vector change contexts without

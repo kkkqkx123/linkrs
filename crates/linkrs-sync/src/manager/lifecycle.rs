@@ -22,8 +22,6 @@ impl super::SyncManager {
             #[cfg(feature = "vector")]
             auto_embed_text: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
-            #[cfg(feature = "vector")]
-            backend_policy: None,
             backpressure: Arc::new(OutboxBackpressureConfig::default()),
             auth_paused_until_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             stats_manager: None,

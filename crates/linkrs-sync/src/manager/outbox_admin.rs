@@ -155,16 +155,11 @@ impl super::SyncManager {
 
     /// Inject a backend-aware delivery policy (Local vs Qdrant) from startup.
     ///
-    /// The policy replaces the raw `OutboxConsumerConfig` with backend-tuned
-    /// values and records the chosen policy for observability.
+    /// The policy is converted once into the consumer config, which stays
+    /// the single source for delivery concurrency.
     #[cfg(feature = "vector")]
     pub fn configure_backend_policy(&mut self, policy: crate::backend::BackendDeliveryPolicy) {
-        self.backend_policy = Some(Arc::new(policy.clone()));
         self.configure_outbox_consumer(policy.to_consumer_config());
-        // Align the per-target concurrency with the policy.
-        let mut consumer = (*self.outbox_consumer).clone();
-        consumer.max_concurrency = policy.max_concurrency.max(1);
-        self.outbox_consumer = Arc::new(consumer);
     }
 
     /// Override the backpressure limits (defaults: 10k per txn, 100k total).

@@ -18,6 +18,46 @@ pub struct ApplyReceipt {
 pub struct LateArrivalResult {
     pub accepted: bool,
     pub reason: String,
+    pub kind: LateArrivalKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LateArrivalKind {
+    Accepted,
+    Duplicate,
+    Late,
+}
+
+impl LateArrivalResult {
+    fn accepted() -> Self {
+        Self {
+            accepted: true,
+            reason: String::new(),
+            kind: LateArrivalKind::Accepted,
+        }
+    }
+
+    fn duplicate(reason: String) -> Self {
+        Self {
+            accepted: false,
+            reason,
+            kind: LateArrivalKind::Duplicate,
+        }
+    }
+
+    fn late(reason: String) -> Self {
+        Self {
+            accepted: false,
+            reason,
+            kind: LateArrivalKind::Late,
+        }
+    }
+
+    /// Whether the rejection is a duplicate idempotency key (safe to ack)
+    /// as opposed to a genuine late arrival below the water-level (retryable).
+    pub fn is_duplicate(&self) -> bool {
+        matches!(self.kind, LateArrivalKind::Duplicate)
+    }
 }
 
 #[cfg(feature = "fulltext")]
@@ -60,7 +100,7 @@ impl FulltextReceiver {
     pub async fn apply_index_batch(
         &self,
         mutations: &[(&IndexMutation, CommitLsn)],
-    ) -> Result<Vec<ApplyReceipt>, String> {
+    ) -> Result<Vec<ApplyReceipt>, linkrs_fulltext::error::SearchError> {
         let _apply_guard = self.apply_lock.lock().await;
         let mut deletes = Vec::new();
         let mut items = Vec::new();
@@ -79,10 +119,10 @@ impl FulltextReceiver {
             }
             let applied_lsn = *self.applied_lsn.read().await;
             if *lsn < applied_lsn {
-                return Err(format!(
+                return Err(linkrs_fulltext::error::SearchError::Internal(format!(
                     "late fulltext mutation: commit LSN {} is below applied LSN {}",
                     lsn, applied_lsn
-                ));
+                )));
             }
 
             match mutation.operation {
@@ -103,7 +143,12 @@ impl FulltextReceiver {
                         }
                     };
                     let document = String::from_utf8(mutation.document_or_vector.clone())
-                        .map_err(|e| format!("invalid utf-8 in fulltext document: {}", e))?;
+                        .map_err(|e| {
+                            linkrs_fulltext::error::SearchError::InvalidDocId(format!(
+                                "invalid utf-8 in fulltext document: {}",
+                                e
+                            ))
+                        })?;;
                     items.push((entity_id, document));
                 }
             }
@@ -117,17 +162,11 @@ impl FulltextReceiver {
 
         if !deletes.is_empty() {
             let ids: Vec<&str> = deletes.iter().map(|s| s.as_str()).collect();
-            self.engine
-                .delete_batch(ids)
-                .await
-                .map_err(|e| format!("fulltext delete batch failed: {}", e))?;
+            self.engine.delete_batch(ids).await?;
         }
 
         if !items.is_empty() {
-            self.engine
-                .index_batch(items)
-                .await
-                .map_err(|e| format!("fulltext index batch failed: {}", e))?;
+            self.engine.index_batch(items).await?;
         }
 
         let mut persisted_receipts = self.receipts.read().await.clone();
@@ -145,11 +184,8 @@ impl FulltextReceiver {
             applied_lsn: max_lsn.get(),
             receipts: persisted_receipts.clone(),
         })
-        .map_err(|error| format!("serialize fulltext commit receipt: {error}"))?;
-        self.engine
-            .commit_with_payload(payload)
-            .await
-            .map_err(|e| format!("fulltext commit failed: {}", e))?;
+        .map_err(linkrs_fulltext::error::SearchError::SerializationError)?;
+        self.engine.commit_with_payload(payload).await?;
         *self.receipts.write().await = persisted_receipts;
         *self.applied_lsn.write().await = max_lsn;
 
@@ -163,25 +199,16 @@ impl FulltextReceiver {
     ) -> LateArrivalResult {
         let receipts = self.receipts.read().await;
         if receipts.contains(idempotency_key) {
-            return LateArrivalResult {
-                accepted: false,
-                reason: "duplicate idempotency key".to_string(),
-            };
+            return LateArrivalResult::duplicate("duplicate idempotency key".to_string());
         }
         let applied_lsn = *self.applied_lsn.read().await;
         if commit_lsn < applied_lsn {
-            return LateArrivalResult {
-                accepted: false,
-                reason: format!(
-                    "late arrival: commit_lsn {} < applied_lsn {}",
-                    commit_lsn, applied_lsn
-                ),
-            };
+            return LateArrivalResult::late(format!(
+                "late arrival: commit_lsn {} < applied_lsn {}",
+                commit_lsn, applied_lsn
+            ));
         }
-        LateArrivalResult {
-            accepted: true,
-            reason: String::new(),
-        }
+        LateArrivalResult::accepted()
     }
 
     pub async fn applied_lsn(&self) -> CommitLsn {
@@ -281,10 +308,7 @@ impl VectorReceiver {
     ) -> LateArrivalResult {
         let state = self.state.read().await;
         if state.receipts.contains_key(idempotency_key) {
-            return LateArrivalResult {
-                accepted: false,
-                reason: "duplicate idempotency key".to_string(),
-            };
+            return LateArrivalResult::duplicate("duplicate idempotency key".to_string());
         }
 
         let current = CommitLsn::new(state.applied_lsn);
@@ -292,19 +316,13 @@ impl VectorReceiver {
             // Below the water-level: considered late. Even if the key was
             // pruned from the LRU window, the SQLite idempotency table still
             // protects against re-application (see SqliteOutbox::materialize).
-            return LateArrivalResult {
-                accepted: false,
-                reason: format!(
-                    "late arrival: commit_lsn {} < applied_lsn {}",
-                    commit_lsn, current
-                ),
-            };
+            return LateArrivalResult::late(format!(
+                "late arrival: commit_lsn {} < applied_lsn {}",
+                commit_lsn, current
+            ));
         }
 
-        LateArrivalResult {
-            accepted: true,
-            reason: String::new(),
-        }
+        LateArrivalResult::accepted()
     }
 
     /// Persist an applied mutation receipt before exposing it to later deliveries.
@@ -358,6 +376,8 @@ impl VectorReceiver {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "vector")]
+    use crate::receiver::LateArrivalKind;
+    #[cfg(feature = "vector")]
     use crate::VectorReceiver;
     #[cfg(feature = "vector")]
     use linkrs_core::types::CommitLsn;
@@ -374,12 +394,14 @@ mod tests {
             .check_late_arrival(CommitLsn::new(50), "key-2")
             .await;
         assert!(!result.accepted);
-        assert!(result.reason.contains("late arrival"));
+        assert_eq!(result.kind, LateArrivalKind::Late);
+        assert!(!result.is_duplicate());
 
         let result = receiver
             .check_late_arrival(CommitLsn::new(100), "key-3")
             .await;
         assert!(result.accepted);
+        assert_eq!(result.kind, LateArrivalKind::Accepted);
         receiver
             .record_application(CommitLsn::new(100), "key-3")
             .await
@@ -389,7 +411,8 @@ mod tests {
             .check_late_arrival(CommitLsn::new(200), "key-3")
             .await;
         assert!(!result.accepted);
-        assert!(result.reason.contains("duplicate"));
+        assert!(result.is_duplicate());
+        assert_eq!(result.kind, LateArrivalKind::Duplicate);
     }
 
     #[tokio::test]
