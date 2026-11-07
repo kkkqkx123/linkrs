@@ -35,6 +35,7 @@ use std::time::{Duration, SystemTime};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+use linkrs_core::fs::sync_dir;
 use linkrs_core::{StorageError, StorageResult};
 
 /// Snapshot metadata file name
@@ -273,9 +274,9 @@ impl SnapshotManager {
         fs::write(&temporary, content).map_err(|e| {
             StorageError::io_error(format!("Failed to write metadata index: {}", e))
         })?;
-        fs::File::open(&temporary)?.sync_all()?;
+        linkrs_core::fs::sync_file(&temporary)?;
         fs::rename(&temporary, &index_path)?;
-        fs::File::open(&self.snapshots_dir)?.sync_all()?;
+        sync_dir(&self.snapshots_dir)?;
 
         Ok(())
     }
@@ -348,7 +349,7 @@ impl SnapshotManager {
                 StorageError::io_error(format!("Failed to publish snapshot: {}", error))
             }
         })?;
-        fs::File::open(&self.snapshots_dir)?.sync_all()?;
+        sync_dir(&self.snapshots_dir)?;
 
         {
             let mut index = self.metadata_index.write();
@@ -501,7 +502,7 @@ impl SnapshotManager {
                 StorageError::io_error(format!("Failed to delete snapshot dir: {}", e))
             })?;
         }
-        fs::File::open(&self.snapshots_dir)?.sync_all()?;
+        sync_dir(&self.snapshots_dir)?;
 
         Ok(())
     }

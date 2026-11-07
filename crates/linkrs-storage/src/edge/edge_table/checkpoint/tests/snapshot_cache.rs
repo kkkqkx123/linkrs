@@ -215,10 +215,27 @@ fn snapshot_state_machine_full_cycle() {
     assert_eq!(loaded.out_edges(0, 200).len(), 2);
 
     // Expire: corrupt the sidecar; the next load falls back to the authority
-    // base and regenerates the cache on flush.
-    let mut bytes = std::fs::read(&snapshot).unwrap();
-    bytes[8] ^= 0xff;
-    std::fs::write(&snapshot, &bytes).unwrap();
+    // base and regenerates the cache on flush. Drop the reader before writing:
+    // Windows refuses writes to a file that still has a user-mapped section.
+    // Patch one byte in place rather than recreating the file, so no truncation
+    // is involved on platforms that keep the mapping alive longer.
+    drop(loaded);
+    let original = std::fs::read(&snapshot).expect("read snapshot cache");
+    let corrupted = original[8] ^ 0xff;
+    {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let mut sidecar = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&snapshot)
+            .expect("open snapshot cache");
+        sidecar
+            .seek(SeekFrom::Start(8))
+            .expect("seek to cache byte");
+        sidecar
+            .write_all(&[corrupted])
+            .expect("corrupt snapshot cache byte");
+    }
     let mut expired = make_table();
     expired.load(dir.path()).expect("load should succeed");
     assert!(matches!(

@@ -124,7 +124,7 @@ impl RecoveryManager {
         }
         let tmp_path = path.with_extension("tmp");
         let write_result = std::fs::write(&tmp_path, contents).and_then(|()| {
-            std::fs::File::open(&tmp_path).and_then(|file| file.sync_all())?;
+            linkrs_core::fs::sync_file(&tmp_path)?;
             std::fs::rename(&tmp_path, &path)
         });
         if let Err(error) = write_result {

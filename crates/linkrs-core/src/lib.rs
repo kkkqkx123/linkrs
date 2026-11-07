@@ -19,6 +19,7 @@ pub mod wal;
 pub mod arena;
 pub mod bloom_filter;
 pub mod columnar;
+pub mod fs;
 pub mod function;
 pub mod id_gen;
 pub mod lock;

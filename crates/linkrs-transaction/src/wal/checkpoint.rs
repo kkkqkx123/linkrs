@@ -180,15 +180,12 @@ impl CheckpointManager {
 
         let temporary_file = self.checkpoint_file.with_extension("meta.tmp");
         fs::write(&temporary_file, content).map_err(|e| WalError::IoError(e.to_string()))?;
-        fs::File::open(&temporary_file)
-            .and_then(|file| file.sync_all())
+        linkrs_core::fs::sync_file(&temporary_file)
             .map_err(|e| WalError::IoError(e.to_string()))?;
         fs::rename(&temporary_file, &self.checkpoint_file)
             .map_err(|e| WalError::IoError(e.to_string()))?;
         if let Some(parent) = self.checkpoint_file.parent() {
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|e| WalError::IoError(e.to_string()))?;
+            linkrs_core::fs::sync_dir(parent).map_err(|e| WalError::IoError(e.to_string()))?;
         }
 
         Ok(())

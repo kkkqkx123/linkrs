@@ -144,11 +144,26 @@ pub struct PersistenceCoordinator {
 
 impl PersistenceCoordinator {
     pub fn new(config: PersistenceConfig) -> StorageResult<Self> {
-        std::fs::create_dir_all(&config.data_dir)?;
-        std::fs::create_dir_all(&config.checkpoint_dir)?;
+        std::fs::create_dir_all(&config.data_dir).map_err(|error| {
+            StorageError::from(error).with_context(format!(
+                "Failed to create data directory {}",
+                config.data_dir.display()
+            ))
+        })?;
+        std::fs::create_dir_all(&config.checkpoint_dir).map_err(|error| {
+            StorageError::from(error).with_context(format!(
+                "Failed to create checkpoint directory {}",
+                config.checkpoint_dir.display()
+            ))
+        })?;
 
         let wal_manager = if config.enable_wal {
-            std::fs::create_dir_all(&config.wal_dir)?;
+            std::fs::create_dir_all(&config.wal_dir).map_err(|error| {
+                StorageError::from(error).with_context(format!(
+                    "Failed to create WAL directory {}",
+                    config.wal_dir.display()
+                ))
+            })?;
             let mut wal_cfg = WalConfig::default();
             if let Some(ref sp) = config.sync_policy {
                 wal_cfg.sync_policy = *sp;
@@ -157,7 +172,12 @@ impl PersistenceCoordinator {
             wal_cfg.flush_interval_ms = config.wal_flush_interval_ms;
             wal_cfg.enable_async_flush = config.wal_enable_async_flush;
             let mut wal_manager = WalManager::with_config(wal_cfg);
-            wal_manager.open(&config.wal_dir, 0)?;
+            wal_manager.open(&config.wal_dir, 0).map_err(|error| {
+                error.with_context(format!(
+                    "Failed to open WAL at {}",
+                    config.wal_dir.display()
+                ))
+            })?;
             log::info!(
                 "WAL opened at {} (async_flush={})",
                 config.wal_dir.display(),
@@ -168,14 +188,27 @@ impl PersistenceCoordinator {
             None
         };
 
-        Self::cleanup_temporary_checkpoints(&config.checkpoint_dir)?;
+        Self::cleanup_temporary_checkpoints(&config.checkpoint_dir).map_err(|error| {
+            error.with_context(format!(
+                "Failed to clean up temporary checkpoints in {}",
+                config.checkpoint_dir.display()
+            ))
+        })?;
         let manifest_dir = config.checkpoint_dir.join("manifests");
         let manifest_manager = CheckpointManifestManager::new(&manifest_dir);
         manifest_manager.init().map_err(|error| {
             StorageError::db_error(format!("Failed to init manifest manager: {error}"))
         })?;
-        let published_sequence = Self::latest_published_sequence(&manifest_manager)?;
-        Self::cleanup_unpublished_checkpoints(&config.checkpoint_dir, published_sequence)?;
+        let published_sequence = Self::latest_published_sequence(&manifest_manager)
+            .map_err(|error| error.with_context("Failed to read the latest published manifest"))?;
+        Self::cleanup_unpublished_checkpoints(&config.checkpoint_dir, published_sequence).map_err(
+            |error| {
+                error.with_context(format!(
+                    "Failed to clean up unpublished checkpoints in {}",
+                    config.checkpoint_dir.display()
+                ))
+            },
+        )?;
 
         let mut checkpoint_manager =
             CheckpointManager::new(&config.wal_dir, &config.checkpoint_dir, None);
@@ -193,15 +226,30 @@ impl PersistenceCoordinator {
 
         if let Some(ref wal) = wal_manager {
             wal.read()
-                .set_checkpoint_seq(checkpoint_manager.current_seq())?;
+                .set_checkpoint_seq(checkpoint_manager.current_seq())
+                .map_err(|error| {
+                    error.with_context("Failed to publish the checkpoint sequence to the WAL")
+                })?;
         }
 
         let snapshot_manager = if config.enable_snapshots {
-            std::fs::create_dir_all(&config.snapshot_dir)?;
-            Some(Arc::new(SnapshotManager::new(
+            std::fs::create_dir_all(&config.snapshot_dir).map_err(|error| {
+                StorageError::from(error).with_context(format!(
+                    "Failed to create snapshot directory {}",
+                    config.snapshot_dir.display()
+                ))
+            })?;
+            let manager = SnapshotManager::new(
                 config.snapshot_dir.clone(),
                 config.data_dir.join("snapshot_work"),
-            )?))
+            )
+            .map_err(|error| {
+                error.with_context(format!(
+                    "Failed to initialize snapshot manager at {}",
+                    config.snapshot_dir.display()
+                ))
+            })?;
+            Some(Arc::new(manager))
         } else {
             None
         };

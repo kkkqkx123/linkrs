@@ -101,7 +101,7 @@ pub fn write_file_atomic(path: &Path, bytes: &[u8]) -> StorageResult<()> {
         file.sync_all()?;
     }
     std::fs::rename(&temporary, path)?;
-    std::fs::File::open(parent)?.sync_all()?;
+    linkrs_core::fs::sync_dir(parent)?;
     Ok(())
 }
 

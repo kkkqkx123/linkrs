@@ -54,7 +54,7 @@ pub(crate) fn save_generation_build_state(
     }
     std::fs::rename(&temporary, &path)?;
     if let Some(parent) = path.parent() {
-        std::fs::File::open(parent)?.sync_all()?;
+        linkrs_core::fs::sync_dir(parent)?;
     }
     Ok(())
 }

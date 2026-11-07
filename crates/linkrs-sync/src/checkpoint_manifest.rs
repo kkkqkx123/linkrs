@@ -9,6 +9,8 @@
 //! for WAL cleanup decisions via the common safe LSN.
 
 use std::path::{Path, PathBuf};
+
+use linkrs_core::fs::sync_dir;
 use std::time::SystemTime;
 
 use linkrs_core::types::{CommitLsn, IndexGeneration};
@@ -387,12 +389,7 @@ impl CheckpointManifest {
         std::fs::write(&temporary, &bytes).map_err(|error| error.to_string())?;
 
         // Sync the file
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .open(&temporary)
-            .map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
-        drop(file);
+        linkrs_core::fs::sync_file(&temporary).map_err(|error| error.to_string())?;
 
         // Atomic rename
         if destination.exists() {
@@ -402,9 +399,7 @@ impl CheckpointManifest {
 
         // Sync parent directory
         if let Some(parent) = destination.parent() {
-            std::fs::File::open(parent)
-                .and_then(|dir| dir.sync_all())
-                .map_err(|error| error.to_string())?;
+            sync_dir(parent).map_err(|error| error.to_string())?;
         }
 
         Ok(())
@@ -439,9 +434,7 @@ impl CheckpointManifestManager {
         std::fs::create_dir_all(&self.manifest_dir).map_err(|error| error.to_string())?;
 
         // Sync directory
-        std::fs::File::open(&self.manifest_dir)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|error| error.to_string())?;
+        sync_dir(&self.manifest_dir).map_err(|error| error.to_string())?;
 
         Ok(())
     }
@@ -552,9 +545,7 @@ impl CheckpointManifestManager {
 
         // Sync directory
         if removed > 0 {
-            std::fs::File::open(&self.manifest_dir)
-                .and_then(|dir| dir.sync_all())
-                .map_err(|error| error.to_string())?;
+            sync_dir(&self.manifest_dir).map_err(|error| error.to_string())?;
         }
 
         Ok(removed)

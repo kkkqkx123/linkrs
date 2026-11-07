@@ -266,14 +266,10 @@ impl VectorReceiver {
         let temporary = path.with_extension("tmp");
         let bytes = postcard::to_allocvec(state).map_err(|e| e.to_string())?;
         std::fs::write(&temporary, &bytes).map_err(|e| e.to_string())?;
-        std::fs::File::open(&temporary)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        linkrs_core::fs::sync_file(&temporary).map_err(|e| e.to_string())?;
         std::fs::rename(&temporary, &path).map_err(|e| e.to_string())?;
         if let Some(parent) = path.parent() {
-            std::fs::File::open(parent)
-                .and_then(|f| f.sync_all())
-                .map_err(|e| e.to_string())?;
+            linkrs_core::fs::sync_dir(parent).map_err(|e| e.to_string())?;
         }
         Ok(())
     }

@@ -183,14 +183,10 @@ impl SqliteOutbox {
         let checksum_temporary = checksum_path.with_extension("checksum.tmp");
         std::fs::write(&checksum_temporary, crc32fast::hash(&bytes).to_string())
             .map_err(|error| error.to_string())?;
-        std::fs::File::open(&checksum_temporary)
-            .and_then(|file| file.sync_all())
-            .map_err(|error| error.to_string())?;
+        linkrs_core::fs::sync_file(&checksum_temporary).map_err(|error| error.to_string())?;
         std::fs::rename(&checksum_temporary, &checksum_path).map_err(|error| error.to_string())?;
         if let Some(parent) = destination.parent() {
-            std::fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|error| error.to_string())?;
+            linkrs_core::fs::sync_dir(parent).map_err(|error| error.to_string())?;
         }
         let materialized_lsn = self.materialized_lsn().await?;
         Ok(OutboxSnapshot {
@@ -235,9 +231,7 @@ impl SqliteOutbox {
         }
         std::fs::rename(&temporary, destination).map_err(|error| error.to_string())?;
         if let Some(parent) = destination.parent() {
-            std::fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|error| error.to_string())?;
+            linkrs_core::fs::sync_dir(parent).map_err(|error| error.to_string())?;
         }
         Ok(())
     }

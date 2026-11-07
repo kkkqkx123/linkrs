@@ -409,15 +409,13 @@ pub fn sync_dir_for_path(path: &std::path::Path) -> StorageResult<()> {
 
 pub fn sync_dir<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<()> {
     let dir = dir.as_ref();
-    std::fs::File::open(dir)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| {
-            StorageError::io_error(format!(
-                "Failed to sync parent dir for {}: {}",
-                dir.display(),
-                e
-            ))
-        })?;
+    linkrs_core::fs::sync_dir(dir).map_err(|e| {
+        StorageError::io_error(format!(
+            "Failed to sync parent dir for {}: {}",
+            dir.display(),
+            e
+        ))
+    })?;
     Ok(())
 }
 

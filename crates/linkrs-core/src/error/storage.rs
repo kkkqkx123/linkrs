@@ -122,6 +122,14 @@ impl StorageError {
         self
     }
 
+    /// Prefix the message with a contextual description without dropping the
+    /// error kind or the original source chain.
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        let message = std::mem::take(&mut self.message);
+        self.message = format!("{}: {}", context.into(), message);
+        self
+    }
+
     pub fn kind(&self) -> StorageErrorKind {
         self.kind
     }
@@ -455,5 +463,20 @@ mod tests {
 
         let err = StorageError::not_found("test");
         assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn with_context_keeps_kind_message_and_source() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let err = StorageError::from(io_error)
+            .with_context("Failed to create directory /data")
+            .with_context("Failed to initialize persistence");
+
+        assert_eq!(err.kind(), StorageErrorKind::IOError);
+        assert_eq!(
+            err.message(),
+            "Failed to initialize persistence: Failed to create directory /data: denied"
+        );
+        assert!(err.source().is_some());
     }
 }

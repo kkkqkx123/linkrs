@@ -195,9 +195,7 @@ pub fn restore_snapshot_sync(snapshot: &OutboxSnapshot, destination: &Path) -> R
     std::fs::rename(&temporary, destination).map_err(|error| error.to_string())?;
 
     if let Some(parent) = destination.parent() {
-        std::fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| error.to_string())?;
+        linkrs_core::fs::sync_dir(parent).map_err(|error| error.to_string())?;
     }
 
     Ok(())
