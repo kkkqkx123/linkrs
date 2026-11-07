@@ -284,51 +284,483 @@ mod tests {
         }
     }
 
+    /// Delegates to [`scan_source_calls`] and keeps only the keys, so the
+    /// forward and reverse key checks share one tokenizer.
     fn scan_source_keys(content: &str, out: &mut Vec<String>) {
-        let bytes = content.as_bytes();
-        let patterns: &[&str] = &["tf_args(", "tf(", "t("];
-        let mut i = 0;
-        while i < bytes.len() {
-            let mut found: Option<(usize, &str)> = None;
-            for pat in patterns {
-                if let Some(rel) = content[i..].find(pat) {
-                    let abs = i + rel;
-                    let prev_ok = abs == 0
-                        || !(bytes[abs - 1].is_ascii_alphanumeric() || bytes[abs - 1] == b'_');
-                    if prev_ok {
-                        if let Some((best, _)) = found {
-                            if abs < best {
-                                found = Some((abs, pat));
-                            }
-                        } else {
-                            found = Some((abs, pat));
-                        }
-                    }
-                }
-            }
-            let Some((abs, pat)) = found else { break };
-            let mut j = abs + pat.len();
-            while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+        let mut calls = Vec::new();
+        scan_source_calls(content, &mut calls);
+        for (key, _) in calls {
+            out.push(key);
+        }
+    }
+
+    /// Skip a string literal starting at `start` (normal `"..."` or raw
+    /// `r"..."` / `r#"..."#`). Returns the index just past the closing quote so
+    /// the caller never scans catalogue-like text living inside a string.
+    fn skip_string(bytes: &[u8], start: usize) -> usize {
+        if bytes[start] == b'r' {
+            let mut j = start + 1;
+            let mut hashes = 0usize;
+            while j < bytes.len() && bytes[j] == b'#' {
+                hashes += 1;
                 j += 1;
             }
             if j < bytes.len() && bytes[j] == b'"' {
                 j += 1;
-                let start = j;
-                while j < bytes.len() && bytes[j] != b'"' {
-                    if bytes[j] == b'\\' {
-                        j += 2;
-                    } else {
-                        j += 1;
+                while j < bytes.len() {
+                    if bytes[j] == b'"' {
+                        let mut k = j + 1;
+                        let mut h = 0usize;
+                        while k < bytes.len() && h < hashes && bytes[k] == b'#' {
+                            k += 1;
+                            h += 1;
+                        }
+                        if h == hashes {
+                            return k;
+                        }
                     }
+                    j += 1;
                 }
-                let key = &content[start..j];
-                if !key.is_empty() {
-                    out.push(key.to_string());
-                }
-                i = j + 1;
-            } else {
-                i = j;
+                return bytes.len();
+            }
+            return start + 1;
+        }
+        let mut j = start + 1;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'\\' => j += 2,
+                b'"' => return j + 1,
+                _ => j += 1,
             }
         }
+        bytes.len()
+    }
+
+    /// Parse a `t`/`tf`/`tf_args` call whose opening `(` is at `start`. Returns
+    /// the key and the number of value arguments (0 for `t`, 1 for `tf`, the
+    /// inline `&[...]` length for `tf_args`). Returns `None` when the call does
+    /// not match the expected shape (e.g. a dynamically built key).
+    fn parse_call(bytes: &[u8], start: usize) -> Option<(String, usize)> {
+        let is_tf_args = bytes[start + 1] == b'f' && start + 2 < bytes.len() && bytes[start + 2] == b'_';
+        let is_tf = !is_tf_args && bytes[start + 1] == b'f';
+        let mut j = start;
+        while j < bytes.len() && bytes[j] != b'(' {
+            j += 1;
+        }
+        if j >= bytes.len() {
+            return None;
+        }
+        j += 1; // past '('
+        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+            j += 1;
+        }
+        if j >= bytes.len() || bytes[j] != b'"' {
+            return None;
+        }
+        j += 1;
+        let ks = j;
+        while j < bytes.len() && bytes[j] != b'"' {
+            if bytes[j] == b'\\' {
+                j += 2;
+            } else {
+                j += 1;
+            }
+        }
+        if j >= bytes.len() {
+            return None;
+        }
+        let key = String::from_utf8_lossy(&bytes[ks..j]).into_owned();
+        j += 1; // past closing quote
+        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+            j += 1;
+        }
+        if j >= bytes.len() || bytes[j] != b',' {
+            return None;
+        }
+        j += 1; // past comma after key
+        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+            j += 1;
+        }
+        // Skip the locale argument until the next top-level ',' or ')'.
+        let mut depth = 0i32;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'(' | b'<' | b'[' | b'{' => depth += 1,
+                b')' | b'>' | b']' | b'}' => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                b',' if depth == 0 => break,
+                _ => {}
+            }
+            j += 1;
+        }
+        let arg_count = if j < bytes.len() && bytes[j] == b')' {
+            0 // t(key, locale): locale is the last argument
+        } else {
+            j += 1; // past the comma separating locale from the value args
+            while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\n' | b'\r') {
+                j += 1;
+            }
+            if is_tf {
+                1
+            } else if is_tf_args {
+                if j + 1 < bytes.len() && bytes[j] == b'&' && bytes[j + 1] == b'[' {
+                    count_array_elems(bytes, j)?
+                } else {
+                    return None; // not an inline array literal
+                }
+            } else {
+                // t(key, locale): the comma was the separator before the closing
+                // `)`, with no value arguments following.
+                0
+            }
+        };
+        Some((key, arg_count))
+    }
+
+    /// Catalogue keys are dot-separated identifiers (letters, digits, dots) with
+    /// at least one alphabetic character. Shared by the forward and reverse key
+    /// scans so both agree on what counts as a real lookup.
+    fn is_catalogue_key(s: &str) -> bool {
+        !s.is_empty()
+            && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.')
+            && s.chars().any(|c| c.is_ascii_alphabetic())
+    }
+
+    /// Count top-level elements of an inline array literal beginning at `&[` in
+    /// `b`. Returns `None` when the slice is not an inline `&[...]` literal
+    /// (e.g. a variable reference) or is malformed, so callers can skip rather
+    /// than guess a count.
+    fn count_array_elems(b: &[u8], start: usize) -> Option<usize> {
+        let mut j = start;
+        while j < b.len() && b[j] != b'[' {
+            j += 1;
+        }
+        if j >= b.len() {
+            return None;
+        }
+        j += 1; // past '['
+        let mut count = 0usize;
+        let mut elem_started = false;
+        let mut depth = 0i32;
+        let mut k = j;
+        while k < b.len() {
+            match b[k] {
+                b'[' => {
+                    depth += 1;
+                    elem_started = true;
+                }
+                b']' => {
+                    if depth == 0 {
+                        if elem_started {
+                            count += 1;
+                        }
+                        return Some(count);
+                    }
+                    depth -= 1;
+                }
+                b',' => {
+                    if depth == 0 {
+                        count += 1;
+                        elem_started = false;
+                    }
+                }
+                b'"' | b'\'' => {
+                    let q = b[k];
+                    k += 1;
+                    while k < b.len() && b[k] != q {
+                        if b[k] == b'\\' {
+                            k += 1;
+                        }
+                        k += 1;
+                    }
+                    elem_started = true;
+                    continue;
+                }
+                b' ' | b'\t' | b'\n' | b'\r' => {}
+                _ => {
+                    elem_started = true;
+                }
+            }
+            k += 1;
+        }
+        None
+    }
+
+    /// Walk `src/` and collect `(key, arg_count)` pairs from `t`/`tf`/`tf_args`
+    /// call sites. `arg_count` is the number of value arguments the call passes
+    /// (0 for `t`, 1 for `tf`, the inline `&[...]` length for `tf_args`); calls
+    /// whose arguments are not inline literals are skipped.
+    fn collect_call_sites(dir: &std::path::Path, out: &mut Vec<(String, usize)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_call_sites(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                // Skip this file: its own tests deliberately under-fill some
+                // templates to document fallback behavior.
+                if path.file_name().map(|n| n == "i18n.rs").unwrap_or(false) {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    scan_source_calls(&content, out);
+                }
+            }
+        }
+    }
+
+    /// Walk `content` and collect `(key, arg_count)` pairs from `t`/`tf`/`tf_args`
+    /// call sites. Comments and string literals are skipped first, so a `t("`
+    /// appearing inside a doc comment or a SQL/JSON string cannot masquerade as
+    /// a lookup or make the scanner jump past real call sites.
+    fn scan_source_calls(content: &str, out: &mut Vec<(String, usize)>) {
+        let bytes = content.as_bytes();
+        let n = bytes.len();
+        let mut i = 0;
+        while i < n {
+            let c = bytes[i];
+            // Line comment (`//`, `///`, `//!`).
+            if c == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
+                i += 2;
+                while i < n && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            // Block comment.
+            if c == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+                i += 2;
+                while i + 1 < n && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+                continue;
+            }
+            // String literal (normal or raw). Never scan inside it.
+            if c == b'"' || (c == b'r' && i + 1 < n && (bytes[i + 1] == b'"' || bytes[i + 1] == b'#')) {
+                i = skip_string(bytes, i);
+                continue;
+            }
+            // A `t`/`tf`/`tf_args` call that is not part of a larger identifier.
+            if c == b't' {
+                let pat_len = if i + 7 < n
+                    && bytes[i + 1] == b'f'
+                    && bytes[i + 2] == b'_'
+                    && bytes[i + 3] == b'a'
+                    && bytes[i + 4] == b'r'
+                    && bytes[i + 5] == b'g'
+                    && bytes[i + 6] == b's'
+                    && bytes[i + 7] == b'('
+                {
+                    8
+                } else if i + 2 < n && bytes[i + 1] == b'f' && bytes[i + 2] == b'(' {
+                    3
+                } else if i + 1 < n && bytes[i + 1] == b'(' {
+                    2
+                } else {
+                    0
+                };
+                if pat_len > 0 {
+                    let prev_ok = i == 0
+                        || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+                    if prev_ok {
+                        if let Some((key, arg_count)) = parse_call(bytes, i) {
+                            out.push((key, arg_count));
+                        }
+                        i += pat_len;
+                        continue;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// Read a string literal starting at `start` (normal `"..."` or raw
+    /// `r"..."` / `r#"..."#`) and return its inner text plus the index just past
+    /// the closing delimiter. Returns `None` for malformed input.
+    fn read_string(bytes: &[u8], start: usize) -> Option<(String, usize)> {
+        if bytes[start] == b'r' {
+            let mut j = start + 1;
+            let mut hashes = 0usize;
+            while j < bytes.len() && bytes[j] == b'#' {
+                hashes += 1;
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'"' {
+                j += 1;
+                let ks = j;
+                while j < bytes.len() {
+                    if bytes[j] == b'"' {
+                        let mut k = j + 1;
+                        let mut h = 0usize;
+                        while k < bytes.len() && h < hashes && bytes[k] == b'#' {
+                            k += 1;
+                            h += 1;
+                        }
+                        if h == hashes {
+                            return Some((
+                                String::from_utf8_lossy(&bytes[ks..j]).into_owned(),
+                                k,
+                            ));
+                        }
+                    }
+                    j += 1;
+                }
+                return None;
+            }
+            return None;
+        }
+        let mut j = start + 1;
+        let ks = j;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'\\' => j += 2,
+                b'"' => {
+                    return Some((String::from_utf8_lossy(&bytes[ks..j]).into_owned(), j + 1))
+                }
+                _ => j += 1,
+            }
+        }
+        None
+    }
+
+    /// Collect every string literal in `content` whose shape matches a catalogue
+    /// key (`is_catalogue_key`). Keys reach the UI through many helpers
+    /// (`label`, `button`, `path_button`, `deny`, match arms, …) that forward to
+    /// `t` internally, so a `t`/`tf`/`tf_args`-only scan would miss them and
+    /// falsely report live keys as dead. Comment and string contents are skipped.
+    fn scan_catalogue_literals(content: &str, out: &mut Vec<String>) {
+        let bytes = content.as_bytes();
+        let n = bytes.len();
+        let mut i = 0;
+        while i < n {
+            let c = bytes[i];
+            if c == b'/' && i + 1 < n && bytes[i + 1] == b'/' {
+                i += 2;
+                while i < n && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if c == b'/' && i + 1 < n && bytes[i + 1] == b'*' {
+                i += 2;
+                while i + 1 < n && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+                continue;
+            }
+            if c == b'"' || (c == b'r' && i + 1 < n && (bytes[i + 1] == b'"' || bytes[i + 1] == b'#')) {
+                if let Some((text, end)) = read_string(bytes, i) {
+                    if is_catalogue_key(&text) {
+                        out.push(text);
+                    }
+                    i = end;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    /// Recursively collect catalogue-shaped string literals under `dir`.
+    fn collect_catalogue_literals(dir: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_catalogue_literals(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    scan_catalogue_literals(&content, out);
+                }
+            }
+        }
+    }
+
+    /// English strings must stay ASCII (no CJK), so a mis-paste of Chinese into
+    /// the English catalogue surfaces instead of shipping a half-translated UI.
+    /// `language.zh` is the deliberate Chinese label shown for the zh option in
+    /// the English UI, so it is allowed.
+    const EN_CJK_ALLOWED: &[&str] = &["language.zh"];
+
+    #[test]
+    fn english_entries_have_no_cjk() {
+        for (key, value) in EN.iter() {
+            if EN_CJK_ALLOWED.contains(&key.as_str()) {
+                continue;
+            }
+            assert!(
+                !has_cjk(value),
+                "en entry {key} contains CJK glyphs (likely a mis-paste): {value}"
+            );
+        }
+    }
+
+    /// Catalogue keys are only useful when a view renders them. A key no call
+    /// site references is dead weight left by a renamed or dropped feature.
+    /// Keys intentionally reserved (not yet wired to a view) live in
+    /// `IGNORED_KEYS`.
+    #[test]
+    fn catalogue_keys_are_referenced() {
+        const IGNORED_KEYS: &[&str] = &[];
+        let root = env!("CARGO_MANIFEST_DIR");
+        let src = std::path::Path::new(root).join("src");
+        let mut seen = Vec::new();
+        collect_catalogue_literals(&src, &mut seen);
+        seen.sort();
+        seen.dedup();
+        let used: std::collections::HashSet<&str> = seen.iter().map(|s| s.as_str()).collect();
+        let mut missing: Vec<&str> = EN
+            .keys()
+            .filter(|k| !IGNORED_KEYS.contains(&k.as_str()) && !used.contains(k.as_str()))
+            .map(|k| k.as_str())
+            .collect();
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "catalogue keys never referenced at a call site: {missing:?}"
+        );
+    }
+
+    /// The number of value arguments a call site passes to `tf`/`tf_args` must
+    /// match the `{}` placeholder count of the template, otherwise a slot
+    /// renders as raw braces or an argument is silently dropped. Keys built
+    /// dynamically (variables, `format!`) are not statically scannable and are
+    /// skipped.
+    #[test]
+    fn call_site_arg_count_matches_template() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let src = std::path::Path::new(root).join("src");
+        let mut calls = Vec::new();
+        collect_call_sites(&src, &mut calls);
+        let mut mismatches: Vec<(String, usize, usize)> = Vec::new();
+        for (key, arg_count) in calls {
+            if !key.contains('.') || !is_catalogue_key(&key) {
+                continue;
+            }
+            let Some(template) = EN.get(&key) else {
+                continue; // covered by call_site_keys_exist_in_catalogue
+            };
+            let placeholders = template.matches("{}").count();
+            if arg_count != placeholders {
+                mismatches.push((key.clone(), arg_count, placeholders));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "arg count mismatches (key, passed, template_needs): {mismatches:?}"
+        );
     }
 }

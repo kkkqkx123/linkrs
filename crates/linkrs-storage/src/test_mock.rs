@@ -18,10 +18,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 macro_rules! mock_stub {
-    (&self, $fn:ident($($arg:ident: $ty:ty),*) -> $ret:ty, $val:expr) => {
+    (&self, $fn:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty, $val:expr) => {
         fn $fn(&self, $($arg: $ty),*) -> $ret { $val }
     };
-    (&mut self, $fn:ident($($arg:ident: $ty:ty),*) -> $ret:ty, $val:expr) => {
+    (&mut self, $fn:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty, $val:expr) => {
         fn $fn(&mut self, $($arg: $ty),*) -> $ret { $val }
     };
 }
