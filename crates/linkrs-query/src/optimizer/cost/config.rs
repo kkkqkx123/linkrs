@@ -289,10 +289,15 @@ pub struct StrategyThresholds {
     ///
     /// TopN selectivity threshold below which TopN optimization is used. Default value 0.1
     pub topn_threshold: f64,
-    /// TopN default limit
+    /// Minimum `LIMIT` value that qualifies for Sort+Limit -> TopN conversion.
     ///
-    /// TopN defaults to limiting the number of rows. Default value 100
-    pub topn_default_limit: u64,
+    /// This is only a floor: whether the conversion actually happens is still
+    /// decided by the cost ratio (`topn_threshold`) and the sort-memory row
+    /// threshold. It was previously mis-derived from a "default limit" value
+    /// of 100, which suppressed TopN for every common small limit (e.g. 10, 20).
+    /// Any positive limit benefits from a heap-based TopN over a full sort, so
+    /// the floor defaults to 1.
+    pub topn_min_limit: u64,
 
     // ==================== Join reorder review ====================
     /// Minimum relative improvement for the join-order reviewer.
@@ -333,7 +338,7 @@ impl Default for StrategyThresholds {
             // TopN strategy: threshold derives from the sort-to-TopN ratio so
             // the two spellings cannot drift apart.
             topn_threshold: 1.0 / TOPN_RATIO as f64,
-            topn_default_limit: 100,
+            topn_min_limit: 1,
             // Join reorder review: any strict improvement wins by default.
             join_reorder_min_improvement: 0.0,
             // Materialization strategy

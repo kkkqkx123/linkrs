@@ -133,7 +133,7 @@ impl SortEliminationOptimizer {
         Self {
             cost_calculator,
             topn_threshold: thresholds.topn_threshold,
-            min_limit_for_topn: thresholds.topn_default_limit as i64,
+            min_limit_for_topn: thresholds.topn_min_limit.max(1) as i64,
         }
     }
 
@@ -241,29 +241,28 @@ impl SortEliminationOptimizer {
             return None;
         }
 
-        // Single TopN rule: limit/input < topn_threshold (== 1/TOPN_RATIO)
-        // or input exceeds the shared sort-memory row threshold.
-        let limit_ratio = limit as f64 / context.input_rows as f64;
+        // TopN (heap of `limit` rows) is beneficial whenever it is cheaper
+        // than a full sort, or when the input is too large to sort in memory.
+        // The previous `limit/input < topn_threshold` gate suppressed TopN for
+        // common small limits on moderately sized inputs; the cost comparison
+        // already encodes the real benefit, so it is the sole gate here.
+        let original_cost = self.calculate_sort_cost(context.input_rows, sort_items.len());
+        let topn_cost = self
+            .cost_calculator
+            .calculate_topn_cost(context.input_rows, limit);
 
-        if limit_ratio < self.topn_threshold
-            || context.input_rows > self.cost_calculator.config().memory_sort_threshold
+        if context.input_rows > self.cost_calculator.config().memory_sort_threshold
+            || original_cost > topn_cost
         {
-            let original_cost = self.calculate_sort_cost(context.input_rows, sort_items.len());
-            let topn_cost = self
-                .cost_calculator
-                .calculate_topn_cost(context.input_rows, limit);
-
-            if topn_cost < original_cost {
-                return Some(SortEliminationDecision::ConvertToTopN {
-                    reason: if context.has_limit_child {
-                        TopNConversionReason::SortWithLimit
-                    } else {
-                        TopNConversionReason::CostBased
-                    },
-                    topn_cost,
-                    original_cost,
-                });
-            }
+            return Some(SortEliminationDecision::ConvertToTopN {
+                reason: if context.has_limit_child {
+                    TopNConversionReason::SortWithLimit
+                } else {
+                    TopNConversionReason::CostBased
+                },
+                topn_cost,
+                original_cost,
+            });
         }
 
         None
@@ -294,17 +293,17 @@ impl SortEliminationOptimizer {
             return None;
         }
 
-        let limit_ratio = limit as f64 / input_rows as f64;
-
-        if limit_ratio < self.topn_threshold
-            || input_rows > self.cost_calculator.config().memory_sort_threshold
+        // TopN (heap of `limit` rows) is beneficial whenever it is cheaper
+        // than a full sort, or when the input is too large to sort in memory.
+        // The previous `limit/input < topn_threshold` gate suppressed TopN for
+        // common small limits on moderately sized inputs; the cost comparison
+        // already encodes the real benefit, so it is the sole gate here.
+        let original_cost = self.calculate_sort_cost(input_rows, sort_items.len());
+        let topn_cost = self.cost_calculator.calculate_topn_cost(input_rows, limit);
+        if input_rows > self.cost_calculator.config().memory_sort_threshold
+            || original_cost > topn_cost
         {
-            let original_cost = self.calculate_sort_cost(input_rows, sort_items.len());
-            let topn_cost = self.cost_calculator.calculate_topn_cost(input_rows, limit);
-
-            if topn_cost < original_cost {
-                return Some((topn_cost, original_cost));
-            }
+            return Some((topn_cost, original_cost));
         }
 
         None
@@ -360,7 +359,7 @@ mod tests {
         let optimizer = create_test_optimizer();
         // Values come from StrategyThresholds defaults
         assert_eq!(optimizer.topn_threshold, 0.1);
-        assert_eq!(optimizer.min_limit_for_topn, 100); // Default from StrategyThresholds
+        assert_eq!(optimizer.min_limit_for_topn, 1); // Default from StrategyThresholds
     }
 
     #[test]

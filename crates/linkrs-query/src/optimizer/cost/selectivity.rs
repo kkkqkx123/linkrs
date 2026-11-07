@@ -136,6 +136,11 @@ pub mod defaults {
     pub const AND_CORRELATION: f64 = 0.9;
     /// The selective penalty for the Boolean OR operation
     pub const OR_CORRELATION: f64 = 0.9;
+    /// Selectivity of a label/tag membership predicate
+    /// (`contains(labels(v), tag)`). The vertex scan is already scoped to the
+    /// tag, so this redundant predicate retains essentially every scanned row
+    /// instead of behaving like a substring match.
+    pub const LABEL_MEMBERSHIP: f64 = 0.99;
 }
 
 impl SelectivityEstimator {
@@ -469,9 +474,15 @@ impl SelectivityEstimator {
                 let exprs: Vec<Expression> = args.iter().map(|a| a.as_expr().clone()).collect();
                 self.estimate_function_expression(space, tag_name, name, &exprs)
             }
-            Expression::Literal(_) => {
-                // The selectivity of literal value conditions depends on the specific values; such conditions are generally considered to be highly selective.
-                0.1
+            Expression::Literal(value) => {
+                // A constant Boolean predicate is structural, not a value
+                // comparison: `true` keeps every row and `false` keeps none.
+                // Other literal predicates fall back to the selective default.
+                match value {
+                    linkrs_core::value::Value::Bool(true) => 1.0,
+                    linkrs_core::value::Value::Bool(false) => 0.0,
+                    _ => 0.1,
+                }
             }
             Expression::Property { .. } => {
                 // attribute itself as a condition (e.g. WHERE n.active)
@@ -716,6 +727,15 @@ impl SelectivityEstimator {
             }
             "exists" => defaults::EXISTS,
             "contains" | "has" => {
+                // Label membership: `contains(labels(var), tag)` is the
+                // tag-scoping predicate already enforced by the scan, so it
+                // keeps virtually every scanned row rather than acting like a
+                // substring match (which would be far too selective here).
+                if let Some(Expression::Function { name: inner, .. }) = args.first() {
+                    if inner.eq_ignore_ascii_case("labels") {
+                        return defaults::LABEL_MEMBERSHIP;
+                    }
+                }
                 let floor = self.ndv_equality_floor(space, tag_name, first_property.as_deref());
                 0.2_f64.max(floor)
             }
