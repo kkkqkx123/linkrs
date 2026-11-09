@@ -96,6 +96,22 @@ mod server_main {
                     eprintln!("Failed to initialize logging system: {}", e);
                 }
 
+                // On Windows the process may have been started by the Service
+                // Control Manager; hand over to it, otherwise continue below
+                // on the console path.
+                #[cfg(windows)]
+                let (cfg, config_path) =
+                    match linkrs_server::windows_service::dispatch_serve(cfg, config_path) {
+                        linkrs_server::windows_service::ServeDispatch::Serviced(code) => {
+                            logging::shutdown();
+                            std::process::exit(code);
+                        }
+                        linkrs_server::windows_service::ServeDispatch::Console {
+                            config,
+                            config_path,
+                        } => (config, config_path),
+                    };
+
                 // Create Tokio runtime and start service
                 let rt = match tokio::runtime::Runtime::new() {
                     Ok(rt) => rt,

@@ -1,4 +1,4 @@
-# Linkrs server configuration template for Windows deployments (NSSM service
+# Linkrs server configuration template for Windows deployments (native service
 # or foreground runs). Installed to C:\ProgramData\linkrs\config.toml.
 #
 # Only deployment-relevant keys are listed; every other knob keeps its

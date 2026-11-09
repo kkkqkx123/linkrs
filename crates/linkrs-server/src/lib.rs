@@ -18,10 +18,13 @@ pub mod storage {
 
 // Network service modules (moved from `linkrs-api::api::server`).
 pub mod http_server;
+pub mod platform;
 mod shutdown;
 pub mod startup;
 pub mod systemd;
 pub mod value;
+#[cfg(windows)]
+pub mod windows_service;
 
 #[cfg(feature = "vector")]
 pub mod vector_metrics;

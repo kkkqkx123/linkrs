@@ -69,18 +69,23 @@ pub async fn start_http_server<
 
     info!("HTTP server listening on {}", addr);
     crate::http::handlers::health::set_ready(true);
-    crate::systemd::notify_ready();
+    crate::platform::notify_ready();
 
     let shutdown_timeout = std::time::Duration::from_secs(config.shutdown_timeout_secs());
     let serve_future = serve(listener, app).with_graceful_shutdown(async_shutdown_signal());
-    tokio::select! {
-        result = serve_future => result?,
+    let serve_result = tokio::select! {
+        result = serve_future => result,
         _ = tokio::time::sleep(shutdown_timeout) => {
             log::error!("HTTP server graceful shutdown timed out after {}s; forcing exit", shutdown_timeout.as_secs());
             std::process::exit(1);
         }
-    }
+    };
 
+    crate::http::handlers::health::set_ready(false);
+    crate::http::handlers::health::set_stopping(true);
+    crate::platform::notify_stopping();
+
+    serve_result?;
     Ok(())
 }
 
@@ -152,17 +157,21 @@ pub async fn start_http_and_grpc_servers<
         let http_listener = TcpListener::bind(&http_addr).await?;
         info!("HTTP server listening on {}", http_addr);
         crate::http::handlers::health::set_ready(true);
-        crate::systemd::notify_ready();
+        crate::platform::notify_ready();
         let shutdown_timeout = std::time::Duration::from_secs(config.shutdown_timeout_secs());
         let serve_future =
             serve(http_listener, http_app).with_graceful_shutdown(async_shutdown_signal());
-        tokio::select! {
-            result = serve_future => result?,
+        let serve_result = tokio::select! {
+            result = serve_future => result,
             _ = tokio::time::sleep(shutdown_timeout) => {
                 log::error!("HTTP server graceful shutdown timed out after {}s; forcing exit", shutdown_timeout.as_secs());
                 std::process::exit(1);
             }
-        }
+        };
+        crate::http::handlers::health::set_ready(false);
+        crate::http::handlers::health::set_stopping(true);
+        crate::platform::notify_stopping();
+        serve_result?;
         Ok::<(), linkrs_core::error::DBError>(())
     };
 
@@ -180,6 +189,9 @@ pub async fn start_http_and_grpc_servers<
         .parse::<std::net::SocketAddr>()
         .map_err(|e| linkrs_core::error::DBError::internal(e.to_string()))?;
         info!("gRPC server listening on {}", grpc_addr);
+        // The transport binds inside `run_server`, so this readiness report
+        // is approximate; the HTTP listener reports exactly after its bind.
+        crate::platform::notify_ready();
         crate::grpc::run_server(grpc_state, grpc_config, grpc_addr)
             .await
             .map_err(|e| linkrs_core::error::DBError::internal(e.to_string()))?;

@@ -1,6 +1,6 @@
 # deploy/
 
-Linkrs 服务端的部署资源目录：systemd 服务单元、DEB/RPM 打包配置、logrotate 配置、默认配置模板，以及安装/卸载/状态检查脚本。
+Linkrs 服务端的部署资源目录：systemd 服务单元、launchd 服务描述、Windows 原生服务说明、DEB/RPM 打包配置、logrotate 配置、默认配置模板，以及安装/卸载/状态检查脚本。
 
 ## 目录结构
 
@@ -17,12 +17,9 @@ deploy/
 │   ├── prerm                   # DEB 卸载前钩子
 │   └── postrm                  # DEB 卸载后钩子
 ├── logrotate/linkrs            # 日志轮转配置
-├── windows/                    # Windows 部署（NSSM 服务包装）
-│   ├── config/linkrs.toml      # Windows 默认配置模板
-│   └── scripts/
-│       ├── install-service.ps1
-│       ├── uninstall-service.ps1
-│       └── service-status.ps1
+├── launchd/com.linkrs.server.plist  # launchd 服务描述（macOS）
+├── windows/                    # Windows 部署（原生服务 + 默认配置模板）
+│   └── config/linkrs.toml      # Windows 默认配置模板
 └── scripts/
     ├── install-service.sh      # 一键安装服务（含用户/目录/配置/单元）
     ├── uninstall-service.sh    # 卸载服务
@@ -31,7 +28,7 @@ deploy/
 
 ## systemd 服务单元（systemd/linkrs.service）
 
-- **Type=exec**：只验证 `exec()` 成功。服务端尚未实现 sd_notify；待服务端上报 `READY=1` 后可改回 `Type=notify`。
+- **Type=notify**：systemd 等待服务端上报 `READY=1`（HTTP 监听绑定成功后发送，纯 gRPC 部署为地址解析成功后发送）；停机时上报 `STOPPING=1`。需配合 `NotifyAccess=main` 使用。
 - 以专用系统用户 `linkrs:linkrs` 运行，工作目录 `/var/lib/linkrs`。
 - 通过环境变量 `LINKRS_CONFIG` 与 `--config` 双重指定配置文件 `/etc/linkrs/config.toml`。
 - `After/Wants=network-online.target`；`Restart=on-failure`，间隔 5s。
@@ -138,50 +135,43 @@ sudo systemctl restart linkrs     # 配置变更后重启（SIGHUP 热重载暂�
 sudo ./deploy/scripts/uninstall-service.sh
 ```
 
-## Windows（NSSM 方案）
+## Windows（原生服务）
 
-Windows 下通过 [NSSM](https://nssm.cc/)（Non-Sucking Service Manager）把控制台程序包装为 Windows 服务：NSSM 负责与 SCM（服务控制管理器）交互并转发 start/stop 控制到进程，`linkrs-server` 无需内建 SCM 代码即可服务化。需要管理员权限的 PowerShell。
+`linkrs-server` 内建 Windows 服务支持（`windows-service`）：被 SCM（服务控制管理器）拉起时走服务入口，监听绑定成功后上报运行中，停止控制接入现有优雅停机路径；交互运行时自动回落到控制台模式。NSSM 包装方案已退役（长期不维护），存量实例先移除旧包装服务再按本节注册。需要管理员权限的 PowerShell。
 
-### 前置条件
-
-- `nssm.exe`：放在脚本目录、`scripts\bin\`、`C:\Program Files\linkrs\`、PATH 之一，或用 `-NssmPath` 指定。
-- `linkrs-server.exe`（release 构建）：查找顺序同上，或用 `-ServerPath` 指定。
-
-### 目录约定（可用参数覆盖）
+### 目录约定
 
 | 内容 | 默认路径 |
 |---|---|
 | 配置 | `C:\ProgramData\linkrs\config.toml`（由 `windows\config\linkrs.toml` 模板安装） |
 | 数据 | `C:\ProgramData\linkrs\data` |
 | 日志 | `C:\ProgramData\linkrs\logs` |
-| 程序 | `C:\Program Files\linkrs` |
+| 程序 | `C:\Program Files\linkrs\linkrs-server.exe` |
 
-### 安装（deploy/windows/scripts/install-service.ps1）
-
-```powershell
-# 仅安装（手动启动）
-.\install-service.ps1
-
-# 安装 + 开机自启 + 立即启动
-.\install-service.ps1 -EnableService -StartService
-```
-
-服务配置（由 NSSM 设置）：`AppDirectory` 为数据目录；stdout/stderr 重定向到 `logs\service-out.log` / `service-err.log`，并启用 NSSM 内建轮转（单文件 10MB，保留 5 份）；异常退出自动重启，间隔 5 秒；启动类型默认 Manual，`-EnableService` 时为 Automatic。重复执行会先卸载旧服务再重装；已存在 `config.toml` 时不覆盖。
-
-### 卸载（uninstall-service.ps1）
+### 注册与管理
 
 ```powershell
-.\uninstall-service.ps1                # 仅移除服务，保留配置/数据/日志
-.\uninstall-service.ps1 -PurgeData     # 另删 data 与 logs
-.\uninstall-service.ps1 -PurgeConfig   # 另删整个 ProgramData\linkrs
+# 注册（注意 binPath= 与 start= 后的空格是 sc.exe 语法要求）
+sc.exe create linkrs binPath= '"C:\Program Files\linkrs\linkrs-server.exe" serve --config "C:\ProgramData\linkrs\config.toml"' start= auto
+# 异常退出自动重启，间隔 5 秒
+sc.exe failure linkrs reset= 86400 actions= restart/5000
+
+sc.exe start linkrs
+sc.exe query linkrs
+sc.exe stop linkrs
+sc.exe delete linkrs    # 仅移除服务，保留配置/数据/日志；二进制需手动删除
 ```
 
-二进制不会被删除，需手动移除。
+已存在 `config.toml` 时模板不覆盖；配置变更后 `sc.exe stop/start` 重启生效（热重载未实现）。
 
-### 状态诊断（service-status.ps1）
+## macOS（launchd）
 
-输出服务状态、NSSM 参数 dump 与最近的日志文件列表。
+macOS 无需服务端代码改动：`launchd` 没有就绪协议，`SIGTERM` 即进入现有优雅停机路径。模板见 `deploy/launchd/com.linkrs.server.plist`，按实际安装路径调整后装载：
 
-### 局限与后续
+```shell
+cp deploy/launchd/com.linkrs.server.plist /Library/LaunchDaemons/
+launchctl load /Library/LaunchDaemons/com.linkrs.server.plist
+launchctl unload /Library/LaunchDaemons/com.linkrs.server.plist  # 停止并卸载
+```
 
-NSSM 是外部包装器，SCM 交互在 NSSM 进程内完成；服务端内建 Windows Service dispatcher（`windows-service` crate，SCM stop 接入现有优雅停机路径、`--service` 参数安装/卸载）的完整方案见 `docs/plan/deployment_design_review.md` 第四节，待产品确认支持 Windows 服务后实施。
+`KeepAlive` 保证异常退出后重启，`RunAtLoad` 保证开机自启，日志落到模板配置的 `StandardOutPath` / `StandardErrorPath`。

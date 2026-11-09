@@ -588,9 +588,8 @@ pub async fn start_service_with_config_path(
         );
     }
 
-    // Best-effort readiness notification for systemd (no-op outside systemd).
-    crate::http::handlers::health::set_ready(true);
-    crate::systemd::notify_ready();
+    // Readiness is reported by the HTTP/gRPC bootstrap once listeners are
+    // bound, so nothing is notified here before serving starts.
 
     #[cfg(feature = "grpc")]
     if let Err(e) = super::start_http_and_grpc_servers(http_server, &config).await {
@@ -604,7 +603,7 @@ pub async fn start_service_with_config_path(
     super::shutdown_signal().await;
     crate::http::handlers::health::set_ready(false);
     crate::http::handlers::health::set_stopping(true);
-    crate::systemd::notify_stopping();
+    crate::platform::notify_stopping();
 
     info!("Shutting down Linkrs service...");
     let shutdown_timeout = config.shutdown_timeout();

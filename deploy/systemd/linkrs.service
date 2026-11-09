@@ -5,9 +5,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Type=exec: verifies exec() succeeded. The server does not implement
-# sd_notify yet; switch back to Type=notify once READY=1 is reported.
-Type=exec
+# Type=notify: systemd waits for READY=1, which the server sends after its
+# listeners are bound, and tracks STOPPING=1 during graceful shutdown.
+Type=notify
+NotifyAccess=main
 User=linkrs
 Group=linkrs
 WorkingDirectory=/var/lib/linkrs

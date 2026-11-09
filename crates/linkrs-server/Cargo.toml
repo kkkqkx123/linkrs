@@ -93,6 +93,9 @@ fulltext = [
     "linkrs-api/fulltext",
 ]
 
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+
 [dev-dependencies]
 linkrs-storage = { version = "0.1.0", path = "../linkrs-storage", features = ["test-support"] }
 tempfile.workspace = true
