@@ -469,106 +469,19 @@ impl VectorSyncCoordinator {
             return Err(VectorCoordinatorError::EngineDisabled);
         }
 
-        if self.backend().is_local() {
-            if let Some(local) = self.backend().as_local() {
-                let txn_id = {
-                    let now = chrono::Utc::now().timestamp_millis().max(0) as u64;
-                    now.wrapping_mul(0x9e3779b97f4a7c15)
-                        .wrapping_add(contexts.len() as u64)
-                };
-                let mut ops: Vec<simvec::engine::TxnOp> = Vec::with_capacity(contexts.len());
-                for ctx in contexts {
-                    let collection = collection_override
-                        .map(str::to_string)
-                        .unwrap_or_else(|| self.index_manager.collection_name_for(&ctx.location));
-                    let point_id = ctx.data.id;
-                    match ctx.change_type {
-                        VectorChangeType::Insert => {
-                            let mut json_payload: HashMap<String, serde_json::Value> = ctx
-                                .data
-                                .payload
-                                .into_iter()
-                                .filter_map(|(k, v)| {
-                                    serde_json::to_value(&v)
-                                        .ok()
-                                        .map(|json| (k.to_string(), json))
-                                })
-                                .collect();
-                            if let Some(gid) = self.index_manager.group_id_for(&ctx.location) {
-                                json_payload.insert(
-                                    "group_id".into(),
-                                    serde_json::to_value(gid).unwrap_or(serde_json::Value::Null),
-                                );
-                            }
-                            let point = VectorPoint::new(point_id, ctx.data.vector)
-                                .with_payload(json_payload);
-                            ops.push(simvec::engine::TxnOp::Upsert { collection, point });
-                        }
-                        VectorChangeType::Delete => {
-                            ops.push(simvec::engine::TxnOp::Delete {
-                                collection,
-                                point_id: PointId::from(point_id),
-                            });
-                        }
-                    }
-                }
-                if !ops.is_empty() {
-                    local.apply_txn(ops).map_err(|e| {
-                        VectorCoordinatorError::Vector(crate::vector_error::VectorError::from(e))
-                    })?;
-                    debug!("Local vector group-commit txn {} applied", txn_id);
-                }
-                return Ok(());
-            }
-        }
-
         let (upsert_by_collection, delete_by_collection) = self
             .index_manager
             .prepare_change_batch_for_collection(collection_override, contexts);
-
-        use std::future::Future;
-        use std::pin::Pin;
-        let mut all_futs: Vec<Pin<Box<dyn Future<Output = VectorCoordinatorResult<()>> + Send>>> =
-            Vec::new();
-        for (collection_name, points) in upsert_by_collection {
-            let backend = self.backend().clone();
-            all_futs.push(Box::pin(async move {
-                let points_count = points.len();
-                if points_count == 1 {
-                    backend
-                        .upsert(&collection_name, points.into_iter().next().unwrap())
-                        .await?;
-                } else if !points.is_empty() {
-                    backend.upsert_batch(&collection_name, points).await?;
-                    debug!(
-                        "Batch upserted {} vectors to collection {}",
-                        points_count, collection_name
-                    );
-                }
-                Ok::<(), VectorCoordinatorError>(())
-            }));
-        }
-        for (collection_name, point_ids) in delete_by_collection {
-            let backend = self.backend().clone();
-            all_futs.push(Box::pin(async move {
-                let point_ids_count = point_ids.len();
-                if point_ids_count == 1 {
-                    backend.delete(&collection_name, &point_ids[0]).await?;
-                } else if !point_ids.is_empty() {
-                    let refs: Vec<&str> = point_ids.iter().map(|s| s.as_str()).collect();
-                    backend.delete_batch(&collection_name, &refs).await?;
-                    debug!(
-                        "Batch deleted {} vectors from collection {}",
-                        point_ids_count, collection_name
-                    );
-                }
-                Ok::<(), VectorCoordinatorError>(())
-            }));
-        }
-        if !all_futs.is_empty() {
-            futures::future::try_join_all(all_futs).await?;
-        }
-
+        let upsert_collections = upsert_by_collection.len();
+        let delete_collections = delete_by_collection.len();
+        self.backend()
+            .apply_grouped_batch(upsert_by_collection, delete_by_collection)
+            .await?;
+        debug!(
+            "Applied grouped vector batch to {} upsert and {} delete collections",
+            upsert_collections,
+            delete_collections
+        );
         Ok(())
     }
 }

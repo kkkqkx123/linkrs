@@ -131,6 +131,18 @@ impl VectorEngineHandle for MetricsEngineHandle {
         self.inner.restore_promote_backup(live).await
     }
 
+    fn supports_atomic_promote(&self) -> bool {
+        self.inner.supports_atomic_promote()
+    }
+
+    async fn apply_grouped_batch(
+        &self,
+        upserts: std::collections::HashMap<String, Vec<VectorPoint>>,
+        deletes: std::collections::HashMap<String, Vec<String>>,
+    ) -> VectorCoordinatorResult<()> {
+        self.inner.apply_grouped_batch(upserts, deletes).await
+    }
+
     async fn list_collections(&self) -> VectorCoordinatorResult<Vec<String>> {
         self.inner.list_collections().await
     }

@@ -8,6 +8,7 @@
 //! The local engine is synchronous; the Qdrant handle delegates to the
 //! async network client.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -89,6 +90,44 @@ pub trait VectorEngineHandle: Send + Sync + fmt::Debug + 'static {
     /// Reverse recovery after a bad publish: restore the newest backup over
     /// the live collection.
     async fn restore_promote_backup(&self, live: &str) -> VectorCoordinatorResult<String>;
+
+    /// Whether this backend can atomically promote a temp collection over
+    /// its live collection. Local backends rename directories; remote
+    /// backends publish through a logical pointer switch instead.
+    fn supports_atomic_promote(&self) -> bool {
+        false
+    }
+
+    /// Apply one already-grouped batch of writes and deletes.
+    ///
+    /// Grouping and payload conversion stay with the index manager; this
+    /// is only the execution point so per-engine commit semantics
+    /// (grouped commit locally, per-collection writes remotely) do not
+    /// leak into the coordinator. The default walks collections one by
+    /// one; engines with stronger primitives override it.
+    async fn apply_grouped_batch(
+        &self,
+        upserts: HashMap<String, Vec<VectorPoint>>,
+        deletes: HashMap<String, Vec<String>>,
+    ) -> VectorCoordinatorResult<()> {
+        for (collection, points) in upserts {
+            if points.len() == 1 {
+                self.upsert(&collection, points.into_iter().next().expect("len checked"))
+                    .await?;
+            } else if !points.is_empty() {
+                self.upsert_batch(&collection, points).await?;
+            }
+        }
+        for (collection, point_ids) in deletes {
+            if point_ids.len() == 1 {
+                self.delete(&collection, &point_ids[0]).await?;
+            } else if !point_ids.is_empty() {
+                let refs: Vec<&str> = point_ids.iter().map(|id| id.as_str()).collect();
+                self.delete_batch(&collection, &refs).await?;
+            }
+        }
+        Ok(())
+    }
 
     /// Names of all physical collections, including rebuild temps and
     /// publish backups.
@@ -302,6 +341,44 @@ impl VectorEngineHandle for LocalEngineHandle {
 
     fn index_exists(&self, name: &str) -> bool {
         self.0.collection_exists(name)
+    }
+
+    fn supports_atomic_promote(&self) -> bool {
+        true
+    }
+
+    async fn apply_grouped_batch(
+        &self,
+        upserts: HashMap<String, Vec<VectorPoint>>,
+        deletes: HashMap<String, Vec<String>>,
+    ) -> VectorCoordinatorResult<()> {
+        use simvec::engine::TxnOp;
+        let mut ops: Vec<TxnOp> = Vec::new();
+        let mut names: Vec<&String> = upserts.keys().chain(deletes.keys()).collect();
+        names.sort_unstable();
+        names.dedup();
+        for name in names {
+            if let Some(points) = upserts.get(name) {
+                for point in points {
+                    ops.push(TxnOp::Upsert {
+                        collection: name.clone(),
+                        point: point.clone(),
+                    });
+                }
+            }
+            if let Some(ids) = deletes.get(name) {
+                for id in ids {
+                    ops.push(TxnOp::Delete {
+                        collection: name.clone(),
+                        point_id: PointId::from(id.as_str()),
+                    });
+                }
+            }
+        }
+        if !ops.is_empty() {
+            self.0.apply_txn(ops).map_err(VectorError::from)?;
+        }
+        Ok(())
     }
 
     async fn promote_temp_collection(
@@ -529,27 +606,49 @@ impl VectorEngineHandle for LocalEngineHandle {
     ) -> VectorCoordinatorResult<
         Pin<Box<dyn Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
     > {
-        let mut offset: Option<PointId> = None;
-        let mut all_points: Vec<VectorPoint> = Vec::new();
-        loop {
-            let (points, next) = self
-                .0
-                .scroll(
-                    collection,
-                    batch_size,
-                    offset.as_ref(),
-                    with_payload,
-                    with_vector,
-                )
-                .map_err(VectorError::from)?;
-            let is_last = next.is_none();
-            all_points.extend(points);
-            offset = next;
-            if is_last || offset.is_none() {
-                break;
-            }
-        }
-        let stream = futures::stream::iter(all_points.into_iter().map(Ok));
+        use std::collections::VecDeque;
+        let engine = Arc::clone(&self.0);
+        let collection = collection.to_string();
+        let page = batch_size.max(1);
+        let stream = futures::stream::unfold(
+            (None::<String>, VecDeque::<VectorPoint>::new(), false),
+            move |(mut offset, mut buffered, mut finished)| {
+                let engine = Arc::clone(&engine);
+                let collection = collection.clone();
+                async move {
+                    loop {
+                        if let Some(point) = buffered.pop_front() {
+                            return Some((Ok(point), (offset, buffered, finished)));
+                        }
+                        if finished {
+                            return None;
+                        }
+                        let current = offset.clone().map(PointId::from);
+                        match engine.scroll(
+                            &collection,
+                            page,
+                            current.as_ref(),
+                            with_payload,
+                            with_vector,
+                        ) {
+                            Ok((points, next)) => {
+                                finished = next.is_none();
+                                offset = next.map(|id| id.to_string());
+                                buffered = points.into();
+                                if buffered.is_empty() && finished {
+                                    return None;
+                                }
+                            }
+                            Err(error) => {
+                                let failure: VectorCoordinatorResult<VectorPoint> =
+                                    Err(VectorCoordinatorError::Vector(VectorError::from(error)));
+                                return Some((failure, (offset, buffered, true)));
+                            }
+                        }
+                    }
+                }
+            },
+        );
         Ok(Box::pin(stream))
     }
 }
@@ -617,6 +716,10 @@ impl VectorEngineHandle for QdrantEngineHandle {
         self.0.index_exists(name)
     }
 
+    fn supports_atomic_promote(&self) -> bool {
+        false
+    }
+
     async fn promote_temp_collection(
         &self,
         _live: &str,
@@ -632,6 +735,43 @@ impl VectorEngineHandle for QdrantEngineHandle {
         Err(VectorCoordinatorError::Vector(VectorError::ConfigError(
             "qdrant backup restore is a manager-level logical remap".to_string(),
         )))
+    }
+
+    async fn apply_grouped_batch(
+        &self,
+        upserts: HashMap<String, Vec<VectorPoint>>,
+        deletes: HashMap<String, Vec<String>>,
+    ) -> VectorCoordinatorResult<()> {
+        use std::future::Future;
+        let mut pending: Vec<
+            Pin<Box<dyn Future<Output = VectorCoordinatorResult<()>> + Send + '_>>,
+        > = Vec::new();
+        for (collection, points) in upserts {
+            pending.push(Box::pin(async move {
+                if points.len() == 1 {
+                    self.upsert(&collection, points.into_iter().next().expect("len checked"))
+                        .await?;
+                } else if !points.is_empty() {
+                    self.upsert_batch(&collection, points).await?;
+                }
+                Ok(())
+            }));
+        }
+        for (collection, point_ids) in deletes {
+            pending.push(Box::pin(async move {
+                if point_ids.len() == 1 {
+                    self.delete(&collection, &point_ids[0]).await?;
+                } else if !point_ids.is_empty() {
+                    let refs: Vec<&str> = point_ids.iter().map(|id| id.as_str()).collect();
+                    self.delete_batch(&collection, &refs).await?;
+                }
+                Ok(())
+            }));
+        }
+        if !pending.is_empty() {
+            futures::future::try_join_all(pending).await?;
+        }
+        Ok(())
     }
 
     async fn list_collections(&self) -> VectorCoordinatorResult<Vec<String>> {
@@ -811,29 +951,53 @@ impl VectorEngineHandle for QdrantEngineHandle {
     ) -> VectorCoordinatorResult<
         Pin<Box<dyn Stream<Item = VectorCoordinatorResult<VectorPoint>> + Send>>,
     > {
-        let mut offset: Option<String> = None;
-        let mut all_points: Vec<VectorPoint> = Vec::new();
-        loop {
-            let (points, next) = self
-                .0
-                .engine()
-                .scroll(
-                    collection,
-                    batch_size,
-                    offset.as_deref(),
-                    with_payload,
-                    with_vector,
-                )
-                .await
-                .map_err(VectorError::from)?;
-            let is_last = next.is_none();
-            all_points.extend(points);
-            offset = next;
-            if is_last || offset.is_none() {
-                break;
-            }
-        }
-        let stream = futures::stream::iter(all_points.into_iter().map(Ok));
+        use std::collections::VecDeque;
+        let manager = Arc::clone(&self.0);
+        let collection = collection.to_string();
+        let page = batch_size.max(1);
+        let stream = futures::stream::unfold(
+            (None::<String>, VecDeque::<VectorPoint>::new(), false),
+            move |(mut offset, mut buffered, mut finished)| {
+                let manager = Arc::clone(&manager);
+                let collection = collection.clone();
+                async move {
+                    loop {
+                        if let Some(point) = buffered.pop_front() {
+                            return Some((Ok(point), (offset, buffered, finished)));
+                        }
+                        if finished {
+                            return None;
+                        }
+                        let current = offset.clone();
+                        match manager
+                            .engine()
+                            .scroll(
+                                &collection,
+                                page,
+                                current.as_deref(),
+                                with_payload,
+                                with_vector,
+                            )
+                            .await
+                        {
+                            Ok((points, next)) => {
+                                finished = next.is_none();
+                                offset = next;
+                                buffered = points.into();
+                                if buffered.is_empty() && finished {
+                                    return None;
+                                }
+                            }
+                            Err(error) => {
+                                let failure: VectorCoordinatorResult<VectorPoint> =
+                                    Err(VectorCoordinatorError::from(error));
+                                return Some((failure, (offset, buffered, true)));
+                            }
+                        }
+                    }
+                }
+            },
+        );
         Ok(Box::pin(stream))
     }
 }
@@ -1194,13 +1358,20 @@ impl VectorBackend {
         self.delete_collection(temp).await
     }
 
+    /// Whether this backend can atomically promote a temp collection.
+    /// Callers choose physical promotion or logical remap through this
+    /// instead of branching on the engine name.
+    pub fn supports_atomic_promote(&self) -> bool {
+        self.engine.supports_atomic_promote()
+    }
+
     /// Atomically promote a temp collection over its live collection,
     /// retaining the previous live directory as `live + backup_suffix`
     /// (one backup generation; older ones are pruned).
     ///
-    /// Local backend only: the engine renames directories. The remote
-    /// backend has no atomic rename, so Qdrant publishes use a
-    /// manager-level logical remap instead (see `VectorIndexManager`).
+    /// Only call when `supports_atomic_promote` holds. Backends without
+    /// atomic promotion publish through a manager-level logical remap
+    /// instead (see `VectorIndexManager`).
     pub async fn promote_temp_collection(
         &self,
         live: &str,
@@ -1291,6 +1462,16 @@ impl VectorBackend {
         point_ids: &[&str],
     ) -> VectorCoordinatorResult<()> {
         self.engine.delete_batch(collection, point_ids).await
+    }
+
+    /// Apply one already-grouped batch of writes and deletes through the
+    /// engine-specific commit path.
+    pub async fn apply_grouped_batch(
+        &self,
+        upserts: HashMap<String, Vec<VectorPoint>>,
+        deletes: HashMap<String, Vec<String>>,
+    ) -> VectorCoordinatorResult<()> {
+        self.engine.apply_grouped_batch(upserts, deletes).await
     }
 
     /// Delete every point matching `filter`.

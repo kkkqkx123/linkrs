@@ -812,13 +812,13 @@ impl SyncManager {
         Ok(failed)
     }
 
-    /// Heal Field-granularity publishes interrupted mid-rename (local
-    /// backend only): when the live name is missing but a temp for a
-    /// registered index survives, promote the newest temp to live,
-    /// restoring from the newest `.old` backup when no temp survives.
+    /// Heal Field-granularity publishes interrupted mid-rename (backends
+    /// with atomic promotion only): when the live name is missing but a
+    /// temp for a registered index survives, promote the newest temp to
+    /// live, restoring from the newest `.old` backup when no temp survives.
     async fn heal_interrupted_field_publishes(&self, coordinator: &Arc<VectorSyncCoordinator>) {
         use crate::vector_sync::CollectionGranularity;
-        if !coordinator.backend().is_local() {
+        if !coordinator.backend().supports_atomic_promote() {
             return;
         }
         let manager = coordinator.index_manager();
@@ -890,7 +890,7 @@ impl SyncManager {
         target: &TargetId,
     ) {
         use crate::vector_sync::CollectionGranularity;
-        if coordinator.backend().is_local() {
+        if coordinator.backend().supports_atomic_promote() {
             return;
         }
         let manager = coordinator.index_manager();

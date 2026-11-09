@@ -862,7 +862,7 @@ impl VectorIndexManager {
         temp: &TempCollection,
         generation: u64,
     ) -> VectorCoordinatorResult<PublishOutcome> {
-        if self.backend.is_local() {
+        if self.backend.supports_atomic_promote() {
             let backup_suffix = VectorBackend::promote_backup_suffix(generation);
             self.backend
                 .promote_temp_collection(&temp.live_name, &temp.temp_name, &backup_suffix)
@@ -1079,7 +1079,7 @@ impl VectorIndexManager {
             )));
         }
         let live = self.live_collection_name(&loc);
-        if self.backend.is_local() {
+        if self.backend.supports_atomic_promote() {
             let restored = self.backend.restore_promote_backup(&live).await?;
             self.promote_backups.remove(&live);
             return Ok(restored);
