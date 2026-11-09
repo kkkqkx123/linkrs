@@ -57,7 +57,6 @@ impl super::SyncManager {
         Self::new(sync_coordinator)
     }
 
-
     pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {
         self.stats_manager = Some(stats_manager);
         self

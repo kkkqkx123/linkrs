@@ -17,8 +17,6 @@ pub struct SqliteOutbox {
     path: std::path::PathBuf,
 }
 
-
-
 impl SqliteOutbox {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         if let Some(parent) = path.as_ref().parent() {

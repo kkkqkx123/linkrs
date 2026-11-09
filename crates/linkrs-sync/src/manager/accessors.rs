@@ -265,6 +265,4 @@ impl super::SyncManager {
             ))
         }
     }
-
-
 }

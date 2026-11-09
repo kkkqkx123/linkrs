@@ -69,16 +69,16 @@ pub use outbox_recovery::{
     find_latest_snapshot, find_latest_snapshot_at_or_before, live_database_exists, recover_outbox,
     restore_latest_snapshot, restore_snapshot_sync, verify_live_database,
 };
+pub use outbox_types::{
+    ClaimedEvent, DeadLetterRow, DegradedRangeRow, IndexSyncDiagnostics, OutboxSnapshot,
+    RebuildEvent, SyncDiagnostics, TargetSyncDiagnostics,
+};
 #[cfg(feature = "fulltext")]
 pub use receiver::FulltextReceiver;
 #[cfg(feature = "vector")]
 pub use receiver::VectorReceiver;
 pub use receiver::{ApplyReceipt, LateArrivalKind, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
-pub use outbox_types::{
-    ClaimedEvent, DeadLetterRow, DegradedRangeRow, IndexSyncDiagnostics, OutboxSnapshot,
-    RebuildEvent, SyncDiagnostics, TargetSyncDiagnostics,
-};
 pub use sqlite_outbox::SqliteOutbox;
 pub use types::{ChangeType, IndexData, IndexOpKey, IndexOperation, IndexType};
 pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};

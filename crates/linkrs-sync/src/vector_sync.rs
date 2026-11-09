@@ -329,10 +329,6 @@ impl VectorSyncCoordinator {
             .collect()
     }
 
-
-
-
-
     // ── Index lifecycle (delegated) ───────────────────────────────────
 
     /// Vertex-scoped index creation. The coordinator has no schema access:
@@ -479,8 +475,7 @@ impl VectorSyncCoordinator {
             .await?;
         debug!(
             "Applied grouped vector batch to {} upsert and {} delete collections",
-            upsert_collections,
-            delete_collections
+            upsert_collections, delete_collections
         );
         Ok(())
     }

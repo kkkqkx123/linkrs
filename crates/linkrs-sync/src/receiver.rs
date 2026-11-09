@@ -142,13 +142,13 @@ impl FulltextReceiver {
                             format!("{}->{}", src, dst)
                         }
                     };
-                    let document = String::from_utf8(mutation.document_or_vector.clone())
-                        .map_err(|e| {
+                    let document =
+                        String::from_utf8(mutation.document_or_vector.clone()).map_err(|e| {
                             linkrs_fulltext::error::SearchError::InvalidDocId(format!(
                                 "invalid utf-8 in fulltext document: {}",
                                 e
                             ))
-                        })?;;
+                        })?;
                     items.push((entity_id, document));
                 }
             }

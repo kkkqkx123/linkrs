@@ -110,7 +110,8 @@ async fn test_batch_delivery_applies_upserts_and_deletes() {
     assert_eq!(got.vector, vec![1.0, 0.0, 0.0, 0.0]);
 
     // Search scoped by group_id returns the nearest point first.
-    let results = coordinator.index_manager()
+    let results = coordinator
+        .index_manager()
         .search_with_options(SearchOptions::new(
             1,
             "user",
@@ -204,7 +205,8 @@ async fn test_batch_delivery_injects_group_id_payload() {
     );
 
     // A delivered insert is searchable through the group-scoped query path.
-    let results = coordinator.index_manager()
+    let results = coordinator
+        .index_manager()
         .search_with_options(SearchOptions::new(2, "item", "vec", vec![1.0, 0.0, 0.0], 5))
         .await
         .unwrap();
@@ -332,7 +334,8 @@ async fn test_delete_then_compaction_keeps_search_consistent() {
         .is_none());
 
     // Search after compaction only surfaces surviving points.
-    let results = coordinator.index_manager()
+    let results = coordinator
+        .index_manager()
         .search_with_options(SearchOptions::new(
             8,
             "user",

@@ -288,7 +288,9 @@ mod tests {
             .create_index(1, "Node", "text", None)
             .await
             .expect("receiver index should be created");
-        let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(fulltext_manager.clone()));
+        let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(
+            fulltext_manager.clone(),
+        ));
         let mut manager = SyncManager::new(coordinator);
         manager
             .configure_outbox(directory.path().join("outbox/outbox.sqlite"))

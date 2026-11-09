@@ -118,8 +118,8 @@ impl From<linkrs_fulltext::error::SearchError> for SyncError {
 
 impl linkrs_core::error::search::ClassifySearchError for SyncError {
     fn classify(&self) -> linkrs_core::error::search::SearchErrorKind {
-        use linkrs_core::error::search::SearchErrorKind;
         use linkrs_core::error::search::ClassifySearchError;
+        use linkrs_core::error::search::SearchErrorKind;
         match self {
             #[cfg(feature = "fulltext")]
             Self::FulltextError(error) => error.as_ref().classify(),

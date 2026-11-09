@@ -93,9 +93,7 @@ impl ApplyFailure {
             | FulltextError::IndexNotFound(_)
             | FulltextError::SpaceNotFound(_)
             | FulltextError::TagNotFound(_)
-            | FulltextError::FieldNotFound(_) => {
-                crate::vector_error::VectorErrorKind::NonRetryable
-            }
+            | FulltextError::FieldNotFound(_) => crate::vector_error::VectorErrorKind::NonRetryable,
             _ => crate::vector_error::VectorErrorKind::Retryable,
         };
         Self {
@@ -581,10 +579,8 @@ impl super::SyncManager {
                         .await
                     {
                         use linkrs_fulltext::error::SearchError as FulltextError;
-                        let already_exists = matches!(
-                            &error,
-                            FulltextError::IndexAlreadyExists(_)
-                        ) && manager.has_index(*space_id, schema_name, field_name);
+                        let already_exists = matches!(&error, FulltextError::IndexAlreadyExists(_))
+                            && manager.has_index(*space_id, schema_name, field_name);
                         if !already_exists {
                             return Err(ApplyFailure::from_fulltext(error));
                         }

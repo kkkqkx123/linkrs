@@ -249,10 +249,9 @@ pub async fn start_service_with_config_path(
                     failure_policy: config.fulltext.sync.failure_policy,
                 };
 
-                let sync_coordinator =
-                    Arc::new(linkrs_sync::fulltext_sync::FulltextSyncCoordinator::new(
-                        manager.clone(),
-                    ));
+                let sync_coordinator = Arc::new(
+                    linkrs_sync::fulltext_sync::FulltextSyncCoordinator::new(manager.clone()),
+                );
 
                 let sync_manager = SyncManager::with_sync_config(sync_coordinator, sync_config);
 
@@ -644,7 +643,9 @@ fn attach_vector_coordinator(
     ));
     {
         let granularity = _config.vector_config().collection.granularity;
-        vector_coordinator.index_manager().set_granularity(granularity);
+        vector_coordinator
+            .index_manager()
+            .set_granularity(granularity);
         info!("Vector collection granularity: {:?}", granularity);
     }
     info!("Vector index sync enabled");
