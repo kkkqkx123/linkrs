@@ -179,9 +179,15 @@ impl VectorCoordinatorBuilder {
                 "VectorBackend is required".to_string(),
             ));
         };
-        let handle = self.runtime_handle.unwrap_or_else(|| {
-            tokio::runtime::Handle::try_current().expect("No tokio runtime available")
-        });
+        let Some(handle) = self
+            .runtime_handle
+            .or_else(|| tokio::runtime::Handle::try_current().ok())
+        else {
+            return Err(crate::SyncError::Internal(
+                "VectorCoordinatorBuilder requires an explicit runtime handle outside a tokio runtime"
+                    .to_string(),
+            ));
+        };
         Ok(Arc::new(VectorSyncCoordinator::new(backend, handle)))
     }
 }

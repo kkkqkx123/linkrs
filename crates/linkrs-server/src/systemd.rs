@@ -4,7 +4,12 @@
 //! `NOTIFY_SOCKET` is unset they become no-ops.
 
 #[cfg(unix)]
+use std::env;
+#[cfg(unix)]
 use std::os::unix::net::UnixDatagram;
+
+#[cfg(unix)]
+use log::debug;
 
 /// Notify systemd that the service is ready.
 pub fn notify_ready() {

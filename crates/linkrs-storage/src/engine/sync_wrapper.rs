@@ -148,27 +148,10 @@ impl<S: StorageClient> SyncWrapper<S> {
                     ))
                 })?;
             if let Err(error) =
-                manager.materialize_committed_transaction(transaction_id, commit_lsn, &intents)
+                manager.finalize_committed_transaction(transaction_id, commit_lsn, &intents)
             {
                 log::error!(
                     "Committed transaction {} at {} but outbox materialization is pending recovery: {}",
-                    transaction_id,
-                    commit_lsn,
-                    error
-                );
-            }
-            if let Err(error) = manager.rollback_transaction_sync(transaction_id) {
-                log::warn!(
-                    "Committed transaction {} at {} but staging cleanup failed: {}",
-                    transaction_id,
-                    commit_lsn,
-                    error
-                );
-            }
-            manager.clear_transaction_intents(transaction_id);
-            if let Err(error) = manager.retry_outbox_sync() {
-                log::debug!(
-                    "Committed transaction {} at {}; target delivery will retry: {}",
                     transaction_id,
                     commit_lsn,
                     error
@@ -192,11 +175,12 @@ impl<S: StorageClient> SyncWrapper<S> {
         })?;
         let commit_lsn = self.commit_transaction_fact(transaction_id)?;
         // Mirror the explicit-transaction sink flow: after the WAL durability
-        // fence, materialize the staged intents into the durable outbox and
-        // release them. Skipping this step would pin the outbox frontier at
-        // its pre-commit value forever, which in turn pins the checkpoint
-        // safe-WAL boundary at 0 (WAL never truncated) and leaks the staged
-        // intents in `pending_intents`.
+        // fence, finalize the staged intents (fast direct apply for
+        // all-local targets, durable outbox otherwise) and release them.
+        // Skipping this step would pin the outbox frontier at its pre-commit
+        // value forever, which in turn pins the checkpoint safe-WAL boundary
+        // at 0 (WAL never truncated) and leaks the staged intents in
+        // `pending_intents`.
         self.finalize_commit_fact(transaction_id, commit_lsn)?;
         Ok(Some(commit_lsn))
     }

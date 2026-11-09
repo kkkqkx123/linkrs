@@ -908,3 +908,107 @@ impl super::SyncManager {
         Ok(contexts)
     }
 }
+
+impl super::SyncManager {
+    /// Whether a committed batch may bypass the durable outbox and apply
+    /// directly to the local engines. Requires a configured outbox for the
+    /// frontier marker, all-local ready targets, and data-plane intents.
+    /// Schema changes and undecodable intents always take the outbox path.
+    fn fast_path_eligible(&self, intents: &[linkrs_core::wal::OutboxIntent]) -> bool {
+        if self.sqlite_outbox.is_none() {
+            return false;
+        }
+        #[cfg(feature = "vector")]
+        if let Some(coordinator) = self.vector_coordinator.as_ref() {
+            if coordinator.is_disabled_engine() || !coordinator.backend().is_local() {
+                return false;
+            }
+        }
+        intents.iter().all(|intent| {
+            match postcard::from_bytes::<OutboxPayload>(&intent.mutation.document_or_vector) {
+                Ok(
+                    OutboxPayload::Vertex { .. }
+                    | OutboxPayload::EdgeInsert { .. }
+                    | OutboxPayload::EdgeDelete { .. },
+                ) => true,
+                Ok(_) | Err(_) => false,
+            }
+        })
+    }
+
+    /// Apply one committed batch straight to the local engines, without
+    /// writing per-event outbox rows. Shares the delivery appliers so the
+    /// semantics and idempotency match the claim path exactly.
+    async fn apply_committed_fast(
+        &self,
+        commit_lsn: CommitLsn,
+        intents: &[linkrs_core::wal::OutboxIntent],
+    ) -> Result<(), ApplyFailure> {
+        for intent in intents {
+            self.apply_index_mutation(&intent.mutation, commit_lsn)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Commit-path finalization for one transaction. Fast direct apply runs
+    /// when every target is local and ready; anything else, including a
+    /// failed fast apply, falls back to durable outbox materialization and
+    /// the regular claim loop. Staging cleanup and best-effort synchronous
+    /// delivery match the previous commit behavior in both branches.
+    pub fn finalize_committed_transaction(
+        &self,
+        txn_id: linkrs_core::types::TransactionId,
+        commit_lsn: CommitLsn,
+        intents: &[linkrs_core::wal::OutboxIntent],
+    ) -> Result<(), SyncError> {
+        if self.fast_path_eligible(intents) {
+            let applied: Result<(), SyncError> = self.execute_sync(|| async {
+                self.apply_committed_fast(commit_lsn, intents)
+                    .await
+                    .map_err(|failure| SyncError::Internal(format!("fast apply failed: {failure}")))
+            });
+            match applied {
+                Ok(()) => {
+                    // No per-event rows were written, so advance the durable
+                    // frontier with an empty commit marker. Skipping this
+                    // would pin checkpoint log truncation forever.
+                    if let Some(outbox) = self.sqlite_outbox.clone() {
+                        let marker: Result<(), SyncError> = self.execute_sync(|| async {
+                            outbox
+                                .materialize_commit(commit_lsn, &[], &[])
+                                .await
+                                .map_err(SyncError::PersistenceError)?;
+                            Ok(())
+                        });
+                        if let Err(error) = marker {
+                            log::error!(
+                                "Fast-applied transaction {} at {} but the frontier marker failed: {}",
+                                txn_id, commit_lsn, error
+                            );
+                        }
+                    }
+                    self.clear_transaction_intents(txn_id);
+                    return Ok(());
+                }
+                Err(error) => {
+                    log::debug!(
+                        "Fast apply of transaction {} at {} failed ({}); falling back to the durable outbox",
+                        txn_id, commit_lsn, error
+                    );
+                }
+            }
+        }
+        self.materialize_committed_transaction(txn_id, commit_lsn, intents)?;
+        self.clear_transaction_intents(txn_id);
+        if let Err(error) = self.retry_outbox_sync() {
+            log::debug!(
+                "Committed transaction {} at {}; target delivery will retry: {}",
+                txn_id,
+                commit_lsn,
+                error
+            );
+        }
+        Ok(())
+    }
+}

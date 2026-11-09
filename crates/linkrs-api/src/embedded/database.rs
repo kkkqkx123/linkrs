@@ -12,14 +12,10 @@ use linkrs_core::Value;
 use linkrs_fulltext::FulltextConfig;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::FulltextIndexManager;
-#[cfg(feature = "fulltext")]
-use linkrs_fulltext::SyncFailurePolicy;
 use linkrs_metrics::StatsManager;
 use linkrs_storage::{GraphStorage, PersistenceConfig, StorageClient};
 #[cfg(feature = "vector")]
 use linkrs_sync::backend::VectorBackend;
-#[cfg(feature = "fulltext")]
-use linkrs_sync::SyncConfig;
 use linkrs_sync::SyncManager;
 use linkrs_transaction::wal::SyncPolicy;
 use linkrs_transaction::{TransactionManager, TransactionManagerConfig};
@@ -158,17 +154,14 @@ fn build_secondary_managers(
             FulltextIndexManager::new(fulltext_config.clone())
                 .map_err(|e| CoreError::FulltextError(e.to_string()))?,
         );
-        let sync_config = SyncConfig {
-            queue_size: fulltext_config.sync.queue_size,
-            commit_interval_ms: fulltext_config.sync.commit_interval_ms,
-            batch_size: fulltext_config.sync.batch_size,
-            failure_policy: SyncFailurePolicy::FailOpen,
-        };
         let sync_coordinator = Arc::new(linkrs_sync::fulltext_sync::FulltextSyncCoordinator::new(
             manager.clone(),
         ));
         #[cfg_attr(not(feature = "vector"), allow(unused_mut))]
-        let mut sync = SyncManager::with_sync_config(sync_coordinator, sync_config);
+        let mut sync = SyncManager::new(sync_coordinator);
+        if let Some(runtime) = vector_runtime {
+            sync.set_runtime_handle(runtime.clone());
+        }
         #[cfg(feature = "vector")]
         if let Some(coordinator) = create_vector_coordinator(config, vector_runtime)? {
             sync = sync.with_vector_coordinator(coordinator);
@@ -191,6 +184,9 @@ fn build_secondary_managers(
             });
         };
         let mut sync = SyncManager::new_without_fulltext();
+        if let Some(runtime) = vector_runtime {
+            sync.set_runtime_handle(runtime.clone());
+        }
         sync = sync.with_vector_coordinator(coordinator);
         return Ok(SecondaryManagers {
             #[cfg(feature = "fulltext")]

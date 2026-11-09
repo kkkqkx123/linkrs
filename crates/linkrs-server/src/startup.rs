@@ -240,20 +240,11 @@ pub async fn start_service_with_config_path(
                         .expect("Failed to create FulltextIndexManager"),
                 );
 
-                use linkrs_fulltext::SyncConfig;
-
-                let sync_config = SyncConfig {
-                    queue_size: config.fulltext.sync.queue_size,
-                    commit_interval_ms: config.fulltext.sync.commit_interval_ms,
-                    batch_size: config.fulltext.sync.batch_size,
-                    failure_policy: config.fulltext.sync.failure_policy,
-                };
-
                 let sync_coordinator = Arc::new(
                     linkrs_sync::fulltext_sync::FulltextSyncCoordinator::new(manager.clone()),
                 );
 
-                let sync_manager = SyncManager::with_sync_config(sync_coordinator, sync_config);
+                let sync_manager = SyncManager::new(sync_coordinator);
 
                 // Attach vector coordinator if a backend is available
                 #[cfg(feature = "vector")]
@@ -325,6 +316,9 @@ pub async fn start_service_with_config_path(
 
     if let Some(manager) = sync_manager.as_mut().and_then(Arc::get_mut) {
         manager.set_stats_manager(stats_manager.clone());
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            manager.set_runtime_handle(runtime);
+        }
         let outbox_path = PathBuf::from(config.storage_path()).join("outbox/outbox.sqlite");
         if let Err(error) = manager.configure_outbox(outbox_path) {
             return Err(linkrs_core::DBError::storage(format!(

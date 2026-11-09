@@ -72,7 +72,7 @@ fn create_sync_manager() -> Arc<SyncManager> {
             batch_config,
         ));
 
-        SyncManager::with_sync_config(sync_coordinator, sync_config)
+        SyncManager::new(sync_coordinator)
     };
 
     #[cfg(not(feature = "fulltext"))]

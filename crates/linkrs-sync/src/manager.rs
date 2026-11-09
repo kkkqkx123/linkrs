@@ -60,6 +60,9 @@ pub struct SyncManager {
     /// (millis since epoch). Atomic for lock-free reads in the hot path.
     auth_paused_until_ms: Arc<std::sync::atomic::AtomicU64>,
     stats_manager: Option<Arc<StatsManager>>,
+    /// Runtime that owns the background delivery task, injected at
+    /// assembly. Absent only when the host never provided one.
+    runtime_handle: Option<tokio::runtime::Handle>,
     handle: JoinHandleGuard,
     /// Per-index rebuild admission locks. A rebuild holds its key across
     /// generation registration, backfill, catch-up, and publish, so two
@@ -84,6 +87,7 @@ impl Clone for SyncManager {
             backpressure: self.backpressure.clone(),
             auth_paused_until_ms: self.auth_paused_until_ms.clone(),
             stats_manager: self.stats_manager.clone(),
+            runtime_handle: self.runtime_handle.clone(),
             handle: Mutex::new(None),
             rebuild_locks: self.rebuild_locks.clone(),
         }

@@ -6,6 +6,7 @@ use linkrs_core::{StorageError, StorageResult};
 
 use super::format::{parse_header, snapshot_error, write_snapshot_file};
 use super::MappedFrozen;
+use crate::edge::edge_table::config::MemoryIntent;
 use crate::edge::ImmutableCsr;
 
 impl MappedFrozen {

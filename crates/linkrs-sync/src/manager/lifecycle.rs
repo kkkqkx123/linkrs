@@ -1,7 +1,5 @@
 //! Sync manager construction, builder-style configuration and runtime lifecycle.
 use super::*;
-#[cfg(feature = "fulltext")]
-use linkrs_fulltext::SyncConfig;
 use linkrs_metrics::StatsManager;
 #[cfg_attr(
     not(any(feature = "fulltext", feature = "vector")),
@@ -23,6 +21,7 @@ impl super::SyncManager {
             backpressure: Arc::new(OutboxBackpressureConfig::default()),
             auth_paused_until_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             stats_manager: None,
+            runtime_handle: None,
             handle: Mutex::new(None),
             rebuild_locks: DashMap::new(),
         }
@@ -49,14 +48,6 @@ impl super::SyncManager {
         self
     }
 
-    #[cfg(feature = "fulltext")]
-    pub fn with_sync_config(
-        sync_coordinator: Arc<FulltextSyncCoordinator>,
-        _sync_config: SyncConfig,
-    ) -> Self {
-        Self::new(sync_coordinator)
-    }
-
     pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {
         self.stats_manager = Some(stats_manager);
         self
@@ -64,6 +55,19 @@ impl super::SyncManager {
 
     pub fn set_stats_manager(&mut self, stats_manager: Arc<StatsManager>) {
         self.stats_manager = Some(stats_manager);
+    }
+
+    /// Inject the runtime that owns the background delivery task.
+    /// Assembly provides it; the manager never creates one itself.
+    pub fn with_runtime_handle(mut self, handle: tokio::runtime::Handle) -> Self {
+        self.runtime_handle = Some(handle);
+        self
+    }
+
+    /// Inject the runtime that owns the background delivery task.
+    /// Assembly provides it; the manager never creates one itself.
+    pub fn set_runtime_handle(&mut self, handle: tokio::runtime::Handle) {
+        self.runtime_handle = Some(handle);
     }
 
     pub async fn start(&self) -> Result<(), SyncError> {
@@ -78,7 +82,7 @@ impl super::SyncManager {
             let mut handle = self.handle.lock().await;
             if handle.is_none() {
                 let manager = self.clone();
-                *handle = Some(tokio::spawn(async move {
+                let task = async move {
                     let retry_interval = std::time::Duration::from_secs(5);
                     while manager.running.load(std::sync::atomic::Ordering::SeqCst) {
                         if let Err(error) = manager.retry_outbox_sync() {
@@ -86,7 +90,19 @@ impl super::SyncManager {
                         }
                         tokio::time::sleep(retry_interval).await;
                     }
-                }));
+                };
+                if let Some(runtime) = self.runtime_handle.clone() {
+                    *handle = Some(runtime.spawn(task));
+                } else if tokio::runtime::Handle::try_current().is_ok() {
+                    *handle = Some(tokio::spawn(task));
+                } else {
+                    self.running
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    return Err(SyncError::Internal(
+                        "cannot start outbox delivery without a tokio runtime; inject one with set_runtime_handle"
+                            .to_string(),
+                    ));
+                }
             }
         }
 
