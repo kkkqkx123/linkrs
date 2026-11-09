@@ -438,27 +438,9 @@ pub async fn search<
         if let Some(filter) = request.filter {
             options = options.with_filter(filter);
         }
-        if let Some(cons) = request.consistency.as_deref() {
-            let is_ryw = cons.eq_ignore_ascii_case("read_your_writes")
-                || cons.eq_ignore_ascii_case("ryw")
-                || cons.eq_ignore_ascii_case("read-your-writes");
-            if is_ryw {
-                let timeout = request.consistency_timeout_ms.unwrap_or(2000);
-                options.consistency = linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                    timeout_ms: timeout,
-                };
-                if let Some(lsn) = request.minimum_lsn {
-                    options.minimum_lsn = Some(linkrs_core::types::CommitLsn::new(lsn));
-                }
-            }
-        } else if let Some(timeout) = request.consistency_timeout_ms {
-            options.consistency = linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                timeout_ms: timeout,
-            };
-            if let Some(lsn) = request.minimum_lsn {
-                options.minimum_lsn = Some(linkrs_core::types::CommitLsn::new(lsn));
-            }
-        }
+        let _ = request.consistency.as_deref();
+        let _ = request.consistency_timeout_ms;
+        let _ = request.minimum_lsn;
 
         let results = vector_api
             .search_with_options(options)

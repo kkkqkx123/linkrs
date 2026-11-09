@@ -19,8 +19,6 @@ impl super::SyncManager {
             sqlite_outbox: None,
             #[cfg(feature = "vector")]
             vector_receiver: None,
-            #[cfg(feature = "vector")]
-            auto_embed_text: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
             backpressure: Arc::new(OutboxBackpressureConfig::default()),
             auth_paused_until_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -47,10 +45,6 @@ impl super::SyncManager {
         mut self,
         vector_coordinator: Arc<VectorSyncCoordinator>,
     ) -> Self {
-        #[cfg(any(feature = "embedding", feature = "rerank"))]
-        if let Some(stats) = self.stats_manager.clone() {
-            vector_coordinator.set_stats_manager(stats);
-        }
         self.vector_coordinator = Some(vector_coordinator);
         self
     }
@@ -63,32 +57,13 @@ impl super::SyncManager {
         Self::new(sync_coordinator)
     }
 
+
     pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {
-        #[cfg(all(feature = "vector", any(feature = "embedding", feature = "rerank")))]
-        if let Some(coordinator) = self.vector_coordinator.as_ref() {
-            coordinator.set_stats_manager(stats_manager.clone());
-        }
         self.stats_manager = Some(stats_manager);
         self
     }
 
-    #[cfg(feature = "vector")]
-    pub fn set_auto_embed_text(&self, enabled: bool) {
-        self.auto_embed_text
-            .store(enabled, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[cfg(feature = "vector")]
-    pub fn auto_embed_text(&self) -> bool {
-        self.auto_embed_text
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
     pub fn set_stats_manager(&mut self, stats_manager: Arc<StatsManager>) {
-        #[cfg(all(feature = "vector", any(feature = "embedding", feature = "rerank")))]
-        if let Some(coordinator) = self.vector_coordinator.as_ref() {
-            coordinator.set_stats_manager(stats_manager.clone());
-        }
         self.stats_manager = Some(stats_manager);
     }
 

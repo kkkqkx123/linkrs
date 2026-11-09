@@ -440,6 +440,7 @@ impl VectorApi {
         options: SearchOptions,
     ) -> CoreResult<Vec<VectorSearchResult>> {
         self.coordinator
+            .index_manager()
             .search_with_options(options)
             .await
             .map(|results| {

@@ -22,6 +22,7 @@ pub mod manager;
 pub mod metrics_handle;
 mod outbox;
 pub mod outbox_recovery;
+pub mod outbox_types;
 #[cfg(any(feature = "fulltext", feature = "vector"))]
 pub mod rebuild_common;
 pub mod receiver;
@@ -58,9 +59,7 @@ pub use fulltext_rebuild::{
     fulltext_vertex_doc_id, FulltextRebuildOptions, RebuildDoc, RebuildDocSource, RebuildEntity,
 };
 #[cfg(feature = "fulltext")]
-pub use fulltext_sync::{
-    ChangeContext, FulltextCoordinatorError, FulltextSyncCoordinator, RecoveryResult,
-};
+pub use fulltext_sync::{FulltextCoordinatorError, FulltextSyncCoordinator, RecoveryResult};
 pub use linkrs_config::SyncConfig;
 pub use manager::{
     EdgeProps, EdgeRef, OutboxBackpressureConfig, OutboxConsumerConfig, SyncError, SyncManager,
@@ -76,10 +75,11 @@ pub use receiver::FulltextReceiver;
 pub use receiver::VectorReceiver;
 pub use receiver::{ApplyReceipt, LateArrivalKind, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
-pub use sqlite_outbox::{
+pub use outbox_types::{
     ClaimedEvent, DeadLetterRow, DegradedRangeRow, IndexSyncDiagnostics, OutboxSnapshot,
-    RebuildEvent, SqliteOutbox, SyncDiagnostics, TargetSyncDiagnostics,
+    RebuildEvent, SyncDiagnostics, TargetSyncDiagnostics,
 };
+pub use sqlite_outbox::SqliteOutbox;
 pub use types::{ChangeType, IndexData, IndexOpKey, IndexOperation, IndexType};
 pub use vector_error::{VectorCoordinatorError, VectorError, VectorErrorKind};
 

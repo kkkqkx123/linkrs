@@ -78,19 +78,17 @@ impl<'a> EdgeProps<'a> {
         Self { old, new }
     }
 }
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum SyncError {
-    /// Fulltext engine failure, carried as an opaque message so the generic
-    /// sync error stays independent of the fulltext engine's error types.
     #[cfg(feature = "fulltext")]
     #[error("Fulltext error: {0}")]
-    FulltextError(String),
+    FulltextError(std::sync::Arc<linkrs_fulltext::error::SearchError>),
 
     #[error("Buffer error: {0}")]
     BufferError(String),
 
     #[error("Vector error: {0}")]
-    VectorError(String),
+    VectorError(crate::vector_error::VectorCoordinatorError),
 
     #[error("Persistence error: {0}")]
     PersistenceError(String),
@@ -105,32 +103,32 @@ pub enum SyncError {
     Internal(String),
 }
 
+impl From<crate::vector_error::VectorCoordinatorError> for SyncError {
+    fn from(error: crate::vector_error::VectorCoordinatorError) -> Self {
+        Self::VectorError(error)
+    }
+}
+
+#[cfg(feature = "fulltext")]
+impl From<linkrs_fulltext::error::SearchError> for SyncError {
+    fn from(error: linkrs_fulltext::error::SearchError) -> Self {
+        Self::FulltextError(std::sync::Arc::new(error))
+    }
+}
+
 impl linkrs_core::error::search::ClassifySearchError for SyncError {
     fn classify(&self) -> linkrs_core::error::search::SearchErrorKind {
         use linkrs_core::error::search::SearchErrorKind;
+        use linkrs_core::error::search::ClassifySearchError;
         match self {
             #[cfg(feature = "fulltext")]
-            Self::FulltextError(msg) => classify_msg(msg),
-            Self::VectorError(msg) => classify_msg(msg),
+            Self::FulltextError(error) => error.as_ref().classify(),
+            Self::VectorError(error) => error.classify(),
             Self::RebuildBusy(_) => SearchErrorKind::RebuildBusy,
             Self::OutboxBackpressure(_) => SearchErrorKind::Io,
             Self::PersistenceError(_) => SearchErrorKind::Io,
             Self::BufferError(_) => SearchErrorKind::Internal,
             Self::Internal(_) => SearchErrorKind::Internal,
         }
-    }
-}
-
-fn classify_msg(msg: &str) -> linkrs_core::error::search::SearchErrorKind {
-    use linkrs_core::error::search::SearchErrorKind;
-    let lower = msg.to_lowercase();
-    if lower.contains("not found") || lower.contains("does not exist") {
-        SearchErrorKind::IndexNotFound
-    } else if lower.contains("already exists") {
-        SearchErrorKind::IndexAlreadyExists
-    } else if lower.contains("rebuild") && lower.contains("busy") {
-        SearchErrorKind::RebuildBusy
-    } else {
-        SearchErrorKind::Internal
     }
 }

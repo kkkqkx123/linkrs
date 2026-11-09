@@ -42,6 +42,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         })?;
 
         let results = coordinator
+            .fulltext_manager()
             .search(space_id, tag_name, field_name, query, limit)
             .await
             .map_err(|e| CoreError::FulltextError(e.to_string()))?;
@@ -80,6 +81,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         })?;
 
         let results = coordinator
+            .fulltext_manager()
             .search_structured(space_id, tag_name, field_name, query, limit)
             .await
             .map_err(|e| CoreError::FulltextError(e.to_string()))?;

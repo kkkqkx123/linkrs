@@ -66,8 +66,8 @@ pub enum VectorClientError {
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
 
-    #[error("Qdrant gRPC error: {0}")]
-    QdrantGrpcError(String),
+    #[error("Qdrant gRPC error: code={code} message={message}")]
+    QdrantGrpcError { code: u32, message: String },
 
     #[error("Qdrant HTTP error: status={status}, message={message}")]
     QdrantHttpError { status: u16, message: String },

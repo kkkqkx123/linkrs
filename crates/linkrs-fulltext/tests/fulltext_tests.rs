@@ -14,7 +14,3 @@ mod edge_cases;
 mod edge_lifecycle;
 #[path = "fulltext_tests/persistence.rs"]
 mod persistence;
-#[path = "fulltext_tests/sync.rs"]
-mod sync;
-#[path = "fulltext_tests/transaction.rs"]
-mod transaction;

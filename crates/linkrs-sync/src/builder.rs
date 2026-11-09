@@ -13,8 +13,6 @@ pub struct SyncManagerBuilder {
     #[cfg(feature = "vector")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     outbox_path: Option<std::path::PathBuf>,
-    #[cfg(feature = "vector")]
-    auto_embed_text: bool,
 }
 
 impl Default for SyncManagerBuilder {
@@ -31,8 +29,6 @@ impl SyncManagerBuilder {
             #[cfg(feature = "vector")]
             vector_coordinator: None,
             outbox_path: None,
-            #[cfg(feature = "vector")]
-            auto_embed_text: false,
         }
     }
 
@@ -53,12 +49,6 @@ impl SyncManagerBuilder {
         self
     }
 
-    #[cfg(feature = "vector")]
-    pub fn with_auto_embed_text(mut self, enabled: bool) -> Self {
-        self.auto_embed_text = enabled;
-        self
-    }
-
     pub fn build(self) -> Result<SyncManager, crate::manager::SyncError> {
         let mut manager = SyncManager::new_without_fulltext();
 
@@ -76,9 +66,6 @@ impl SyncManagerBuilder {
             manager.configure_outbox(path)?;
         }
 
-        #[cfg(feature = "vector")]
-        manager.set_auto_embed_text(self.auto_embed_text);
-
         Ok(manager)
     }
 }
@@ -86,7 +73,6 @@ impl SyncManagerBuilder {
 #[cfg(feature = "fulltext")]
 pub struct FulltextSyncCoordinatorBuilder {
     fulltext_manager: Option<Arc<linkrs_fulltext::manager::FulltextIndexManager>>,
-    config: Option<crate::batch::BatchConfig>,
     stats_manager: Option<Arc<linkrs_metrics::StatsManager>>,
 }
 
@@ -102,7 +88,6 @@ impl FulltextSyncCoordinatorBuilder {
     pub fn new() -> Self {
         Self {
             fulltext_manager: None,
-            config: None,
             stats_manager: None,
         }
     }
@@ -115,11 +100,6 @@ impl FulltextSyncCoordinatorBuilder {
         self
     }
 
-    pub fn with_config(mut self, config: crate::batch::BatchConfig) -> Self {
-        self.config = Some(config);
-        self
-    }
-
     pub fn with_stats_manager(mut self, stats_manager: Arc<linkrs_metrics::StatsManager>) -> Self {
         self.stats_manager = Some(stats_manager);
         self
@@ -129,9 +109,8 @@ impl FulltextSyncCoordinatorBuilder {
         let manager = self.fulltext_manager.ok_or_else(|| {
             crate::SyncError::Internal("FulltextIndexManager is required".to_string())
         })?;
-        let config = self.config.unwrap_or_default();
 
-        let mut coordinator = FulltextSyncCoordinator::new(manager, config);
+        let mut coordinator = FulltextSyncCoordinator::new(manager);
 
         if let Some(stats) = self.stats_manager {
             coordinator = coordinator.with_stats_manager(stats);
@@ -146,8 +125,6 @@ pub struct VectorCoordinatorBuilder {
     backend: Option<crate::backend::VectorBackend>,
     #[cfg(feature = "vector-qdrant")]
     vector_manager: Option<Arc<vector_client::VectorManager>>,
-    #[cfg(feature = "embedding")]
-    embedding_service: Option<Arc<crate::vector_sync::EmbeddingService>>,
     runtime_handle: Option<tokio::runtime::Handle>,
 }
 
@@ -165,8 +142,6 @@ impl VectorCoordinatorBuilder {
             backend: None,
             #[cfg(feature = "vector-qdrant")]
             vector_manager: None,
-            #[cfg(feature = "embedding")]
-            embedding_service: None,
             runtime_handle: None,
         }
     }
@@ -179,15 +154,6 @@ impl VectorCoordinatorBuilder {
     #[cfg(feature = "vector-qdrant")]
     pub fn with_vector_manager(mut self, manager: Arc<vector_client::VectorManager>) -> Self {
         self.vector_manager = Some(manager);
-        self
-    }
-
-    #[cfg(feature = "embedding")]
-    pub fn with_embedding_service(
-        mut self,
-        service: Arc<crate::vector_sync::EmbeddingService>,
-    ) -> Self {
-        self.embedding_service = Some(service);
         self
     }
 
@@ -216,17 +182,6 @@ impl VectorCoordinatorBuilder {
         let handle = self.runtime_handle.unwrap_or_else(|| {
             tokio::runtime::Handle::try_current().expect("No tokio runtime available")
         });
-        #[cfg(feature = "embedding")]
-        {
-            Ok(Arc::new(VectorSyncCoordinator::new(
-                backend,
-                self.embedding_service,
-                handle,
-            )))
-        }
-        #[cfg(not(feature = "embedding"))]
-        {
-            Ok(Arc::new(VectorSyncCoordinator::new(backend, handle)))
-        }
+        Ok(Arc::new(VectorSyncCoordinator::new(backend, handle)))
     }
 }

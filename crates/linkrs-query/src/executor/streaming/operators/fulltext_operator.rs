@@ -616,29 +616,18 @@ impl FulltextOperator {
                 {
                     if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
-                        let search_results = match ryw_config {
-                            Some(cfg) => crate::executor::streaming::helpers::runtime_bridge::wait(
+                        let _ = ryw_config;
+                        let search_results =
+                            crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext search",
-                                coordinator.search_with_consistency(
-                                    *space_id,
-                                    tag_name,
-                                    field_name,
-                                    structured_query,
-                                    search_limit,
-                                    *cfg,
-                                ),
-                            )?,
-                            None => crate::executor::streaming::helpers::runtime_bridge::wait(
-                                "Fulltext search",
-                                coordinator.search_structured(
+                                coordinator.fulltext_manager().search_structured(
                                     *space_id,
                                     tag_name,
                                     field_name,
                                     structured_query,
                                     search_limit,
                                 ),
-                            )?,
-                        };
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
@@ -688,29 +677,18 @@ impl FulltextOperator {
                 {
                     if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
-                        let search_results = match ryw_config {
-                            Some(cfg) => crate::executor::streaming::helpers::runtime_bridge::wait(
+                        let _ = ryw_config;
+                        let search_results =
+                            crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext lookup",
-                                coordinator.search_with_consistency(
-                                    *space_id,
-                                    tag_name,
-                                    field_name,
-                                    structured_query,
-                                    search_limit,
-                                    *cfg,
-                                ),
-                            )?,
-                            None => crate::executor::streaming::helpers::runtime_bridge::wait(
-                                "Fulltext lookup",
-                                coordinator.search_structured(
+                                coordinator.fulltext_manager().search_structured(
                                     *space_id,
                                     tag_name,
                                     field_name,
                                     structured_query,
                                     search_limit,
                                 ),
-                            )?,
-                        };
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
@@ -762,29 +740,18 @@ impl FulltextOperator {
                 {
                     if let Some(coordinator) = fulltext_coordinator {
                         let search_limit = limit.unwrap_or(100);
-                        let search_results = match ryw_config {
-                            Some(cfg) => crate::executor::streaming::helpers::runtime_bridge::wait(
+                        let _ = ryw_config;
+                        let search_results =
+                            crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Fulltext match",
-                                coordinator.search_with_consistency(
-                                    *space_id,
-                                    tag_name,
-                                    field_name,
-                                    structured_query,
-                                    search_limit,
-                                    *cfg,
-                                ),
-                            )?,
-                            None => crate::executor::streaming::helpers::runtime_bridge::wait(
-                                "Fulltext match",
-                                coordinator.search_structured(
+                                coordinator.fulltext_manager().search_structured(
                                     *space_id,
                                     tag_name,
                                     field_name,
                                     structured_query,
                                     search_limit,
                                 ),
-                            )?,
-                        };
+                            )?;
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);

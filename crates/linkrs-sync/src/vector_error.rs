@@ -349,14 +349,13 @@ impl From<simvec::VectorEngineError> for VectorCoordinatorError {
     }
 }
 
-/// Whether a stringified gRPC status carries an auth failure code.
+/// Whether a gRPC status code signals auth failure.
 ///
-/// The transport only surfaces the display form of the status, so the
-/// conversion boundary matches the stable tonic code names instead of
-/// spreading substring checks through delivery.
+/// Codes follow the stable gRPC numbering carried by the client:
+/// 16 is unauthenticated and 7 is permission denied.
 #[cfg(feature = "vector-qdrant")]
-fn is_grpc_auth_message(message: &str) -> bool {
-    message.contains("Unauthenticated") || message.contains("PermissionDenied")
+fn is_grpc_auth_code(code: u32) -> bool {
+    code == 16 || code == 7
 }
 
 #[cfg(feature = "vector-qdrant")]
@@ -413,11 +412,11 @@ impl From<vector_client::VectorClientError> for VectorError {
                     VectorError::QdrantError(format!("HTTP {}: {}", status, message))
                 }
             }
-            vector_client::VectorClientError::QdrantGrpcError(msg) => {
-                if is_grpc_auth_message(&msg) {
-                    VectorError::Auth(msg)
+            vector_client::VectorClientError::QdrantGrpcError { code, message } => {
+                if is_grpc_auth_code(code) {
+                    VectorError::Auth(message)
                 } else {
-                    VectorError::QdrantError(msg)
+                    VectorError::QdrantError(message)
                 }
             }
             vector_client::VectorClientError::NotSupported(op) => {

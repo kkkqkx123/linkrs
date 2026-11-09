@@ -483,11 +483,6 @@ impl SyncManager {
             )
             .await
             .map_err(|error| SyncError::PersistenceError(error.to_string()))?;
-        if let Some(coordinator) = self.sync_coordinator() {
-            coordinator
-                .repoint_fulltext_processor(space_id, tag_name, field_name, Arc::clone(engine))
-                .await;
-        }
         drop(_publish_guard);
         outbox
             .activate_generation(target, tag_index_id, generation, publish_frontier)

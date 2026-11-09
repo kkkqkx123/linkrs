@@ -37,7 +37,6 @@ jieba = ["dep:jieba-rs", "dep:tantivy-tokenizer-api"]
 [dev-dependencies]
 criterion.workspace = true
 tempfile.workspace = true
-linkrs-sync = { version = "0.1.0", path = "../linkrs-sync", features = ["fulltext"] }
 
 [[bench]]
 name = "fulltext_bench"

@@ -54,8 +54,6 @@ pub struct SyncManager {
     sqlite_outbox: Option<Arc<SqliteOutbox>>,
     #[cfg(feature = "vector")]
     vector_receiver: Option<Arc<crate::VectorReceiver>>,
-    #[cfg(feature = "vector")]
-    auto_embed_text: Arc<std::sync::atomic::AtomicBool>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
     backpressure: Arc<OutboxBackpressureConfig>,
     /// When an `Auth` error is seen, delivery is paused until this timestamp
@@ -82,8 +80,6 @@ impl Clone for SyncManager {
             sqlite_outbox: self.sqlite_outbox.clone(),
             #[cfg(feature = "vector")]
             vector_receiver: self.vector_receiver.clone(),
-            #[cfg(feature = "vector")]
-            auto_embed_text: self.auto_embed_text.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
             backpressure: self.backpressure.clone(),
             auth_paused_until_ms: self.auth_paused_until_ms.clone(),
@@ -249,10 +245,7 @@ mod tests {
             .create_index(1, "Node", "text", None)
             .await
             .expect("fulltext index should be created");
-        let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(
-            fulltext_manager,
-            crate::BatchConfig::default(),
-        ));
+        let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(fulltext_manager));
         let manager = SyncManager::new(coordinator);
         let outbox_path = directory.path().join("outbox/outbox.sqlite");
         let mut manager = manager;
@@ -295,10 +288,7 @@ mod tests {
             .create_index(1, "Node", "text", None)
             .await
             .expect("receiver index should be created");
-        let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(
-            fulltext_manager.clone(),
-            crate::BatchConfig::default(),
-        ));
+        let coordinator = Arc::new(crate::FulltextSyncCoordinator::new(fulltext_manager.clone()));
         let mut manager = SyncManager::new(coordinator);
         manager
             .configure_outbox(directory.path().join("outbox/outbox.sqlite"))

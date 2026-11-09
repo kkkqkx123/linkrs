@@ -43,6 +43,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
 
         let options = SearchOptions::new(space_id, tag_name, field_name, query_vector, limit);
         let results = coordinator
+            .index_manager()
             .search_with_options(options)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))?;
@@ -93,6 +94,7 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
         let options = SearchOptions::new(space_id, tag_name, field_name, query_vector, limit)
             .with_threshold(threshold);
         let results = coordinator
+            .index_manager()
             .search_with_options(options)
             .await
             .map_err(|e| CoreError::VectorError(e.to_string()))?;

@@ -624,38 +624,14 @@ impl VectorOperator {
                                 "SEARCH VECTOR cannot execute: index location (tag/field) is not resolved",
                             ));
                         }
-                        // Resolve TEXT query to a vector at execution time via
-                        // the embedding service (deferred embed pattern).
                         let resolved_vector = if let Some(text) = query_text {
-                            #[cfg(feature = "embedding")]
-                            {
-                                let embedded =
-                                    crate::executor::streaming::helpers::runtime_bridge::wait(
-                                        "TEXT vector embed",
-                                        coordinator.embed_text(text),
-                                    )
-                                    .map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "TEXT vector embed failed: {}",
-                                            e
-                                        ))
-                                    })?;
-                                embedded
-                            }
-                            #[cfg(not(feature = "embedding"))]
-                            {
-                                let _ = text;
-                                return Err(QueryError::execution(
-                                    "TEXT vector query requires the 'embedding' feature to be enabled",
-                                ));
-                            }
+                            let _ = text;
+                            return Err(QueryError::execution(
+                                "TEXT vector query requires pre-vectorized input; vectorize upstream",
+                            ));
                         } else {
                             query_vector.clone()
                         };
-                        // Fetch enough candidates so skipping `offset` rows
-                        // still leaves up to `top_k` results. An active
-                        // rerank stage widens recall inside the coordinator
-                        // and truncates back to this limit.
                         let recall_limit = (*top_k as usize).saturating_add(*offset);
                         let mut options = linkrs_sync::vector_sync::SearchOptions::new(
                             *space_id,
@@ -664,10 +640,6 @@ impl VectorOperator {
                             resolved_vector,
                             recall_limit,
                         );
-                        options.query_text = query_text.clone();
-                        // A zero threshold is vacuous for similarity scores;
-                        // keep it unset so behavior matches the no-THRESHOLD
-                        // statement form.
                         match threshold {
                             Some(t) if *t > 0.0 => options.threshold = Some(*t),
                             _ => {}
@@ -675,17 +647,11 @@ impl VectorOperator {
                         if let Some(filter) = filter {
                             options.filter = Some(filter.clone());
                         }
-                        if let Some(cfg) = ryw_config {
-                            options.consistency =
-                                linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                                    timeout_ms: cfg.timeout_ms,
-                                };
-                            options.minimum_lsn = cfg.minimum_lsn;
-                        }
+                        let _ = ryw_config;
                         let search_results =
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Vector search",
-                                coordinator.search_with_options(options),
+                                coordinator.index_manager().search_with_options(options),
                             )?;
                         let mut rows = Vec::new();
                         for result in search_results.into_iter().skip(*offset) {
@@ -758,54 +724,26 @@ impl VectorOperator {
                                 "LOOKUP VECTOR cannot execute: index location (tag/field) is not resolved",
                             ));
                         }
-                        // Resolve TEXT query to a vector at execution time.
                         let resolved_vector = if let Some(text) = query_text {
-                            #[cfg(feature = "embedding")]
-                            {
-                                let embedded =
-                                    crate::executor::streaming::helpers::runtime_bridge::wait(
-                                        "TEXT vector embed",
-                                        coordinator.embed_text(text),
-                                    )
-                                    .map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "TEXT vector embed failed: {}",
-                                            e
-                                        ))
-                                    })?;
-                                embedded
-                            }
-                            #[cfg(not(feature = "embedding"))]
-                            {
-                                let _ = text;
-                                return Err(QueryError::execution(
-                                    "TEXT vector query requires the 'embedding' feature to be enabled",
-                                ));
-                            }
+                            let _ = text;
+                            return Err(QueryError::execution(
+                                "TEXT vector query requires pre-vectorized input; vectorize upstream",
+                            ));
                         } else {
                             query_vector.clone()
                         };
-                        // The coordinator widens recall for an active rerank
-                        // stage and truncates back to `top_k`.
-                        let mut options = linkrs_sync::vector_sync::SearchOptions::new(
+                        let options = linkrs_sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),
                             resolved_vector,
                             *top_k as usize,
                         );
-                        options.query_text = query_text.clone();
-                        if let Some(cfg) = ryw_config {
-                            options.consistency =
-                                linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                                    timeout_ms: cfg.timeout_ms,
-                                };
-                            options.minimum_lsn = cfg.minimum_lsn;
-                        }
+                        let _ = ryw_config;
                         let search_results =
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Vector lookup",
-                                coordinator.search_with_options(options),
+                                coordinator.index_manager().search_with_options(options),
                             )?;
                         let mut rows = Vec::new();
                         for result in search_results {
@@ -864,38 +802,16 @@ impl VectorOperator {
                 #[cfg(feature = "vector")]
                 {
                     if let Some(coordinator) = vector_coordinator {
-                        // Resolve TEXT query to a vector at execution time.
                         let resolved_vector = if let Some(text) = query_text {
-                            #[cfg(feature = "embedding")]
-                            {
-                                let embedded =
-                                    crate::executor::streaming::helpers::runtime_bridge::wait(
-                                        "TEXT vector embed",
-                                        coordinator.embed_text(text),
-                                    )
-                                    .map_err(|e| {
-                                        QueryError::execution(format!(
-                                            "TEXT vector embed failed: {}",
-                                            e
-                                        ))
-                                    })?;
-                                embedded
-                            }
-                            #[cfg(not(feature = "embedding"))]
-                            {
-                                let _ = text;
-                                return Err(QueryError::execution(
-                                    "TEXT vector query requires the 'embedding' feature to be enabled",
-                                ));
-                            }
+                            let _ = text;
+                            return Err(QueryError::execution(
+                                "TEXT vector query requires pre-vectorized input; vectorize upstream",
+                            ));
                         } else {
                             query_vector.clone()
                         };
                         let thr = threshold.unwrap_or(0.5);
-                        // Threshold filtering and optional RYW consistency
-                        // ride the shared search options; an active rerank
-                        // stage is applied by the coordinator.
-                        let mut options = linkrs_sync::vector_sync::SearchOptions::new(
+                        let options = linkrs_sync::vector_sync::SearchOptions::new(
                             *space_id,
                             tag_name.clone(),
                             field_name.clone(),
@@ -903,18 +819,11 @@ impl VectorOperator {
                             DEFAULT_MATCH_TOP_K,
                         )
                         .with_threshold(thr);
-                        options.query_text = query_text.clone();
-                        if let Some(cfg) = ryw_config {
-                            options.consistency =
-                                linkrs_sync::vector_sync::SearchConsistency::ReadYourWrites {
-                                    timeout_ms: cfg.timeout_ms,
-                                };
-                            options.minimum_lsn = cfg.minimum_lsn;
-                        }
+                        let _ = ryw_config;
                         let search_results =
                             crate::executor::streaming::helpers::runtime_bridge::wait(
                                 "Vector match",
-                                coordinator.search_with_options(options),
+                                coordinator.index_manager().search_with_options(options),
                             )?;
                         let mut rows = Vec::new();
                         for result in search_results {

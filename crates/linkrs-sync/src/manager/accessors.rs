@@ -239,7 +239,7 @@ impl super::SyncManager {
             vector_coord
                 .create_vector_index(space_id, tag_name, field_name, vector_size, distance)
                 .await
-                .map_err(|e| SyncError::VectorError(e.to_string()))
+                .map_err(SyncError::VectorError)
         } else {
             Err(SyncError::Internal(
                 "Vector coordinator not available".to_string(),
@@ -258,7 +258,7 @@ impl super::SyncManager {
             vector_coord
                 .drop_vector_index(space_id, tag_name, field_name)
                 .await
-                .map_err(|e| SyncError::VectorError(e.to_string()))
+                .map_err(SyncError::VectorError)
         } else {
             Err(SyncError::Internal(
                 "Vector coordinator not available".to_string(),
@@ -266,31 +266,5 @@ impl super::SyncManager {
         }
     }
 
-    #[cfg(feature = "vector")]
-    pub async fn search_vector(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        field_name: &str,
-        vector: &[f32],
-        top_k: usize,
-    ) -> Result<Vec<SearchResult>, SyncError> {
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            let options = crate::vector_sync::SearchOptions::new(
-                space_id,
-                tag_name,
-                field_name,
-                vector.to_vec(),
-                top_k,
-            );
-            vector_coord
-                .search_with_options(options)
-                .await
-                .map_err(|e| SyncError::VectorError(e.to_string()))
-        } else {
-            Err(SyncError::Internal(
-                "Vector coordinator not available".to_string(),
-            ))
-        }
-    }
+
 }

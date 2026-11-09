@@ -132,9 +132,6 @@ impl super::SyncManager {
             self.vector_receiver = Some(Arc::new(crate::VectorReceiver::open(
                 work_dir.join("vector_receiver"),
             )));
-            if let Some(coord) = self.vector_coordinator.as_ref() {
-                coord.set_outbox(outbox_arc.clone());
-            }
         }
         Ok(())
     }

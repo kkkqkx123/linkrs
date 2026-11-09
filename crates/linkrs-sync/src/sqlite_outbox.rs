@@ -2,6 +2,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use crate::outbox_types::*;
 use linkrs_core::types::{CommitLsn, LeaseEpoch, TargetId};
 use linkrs_core::wal::{IndexMutation, OutboxIntent};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -10,102 +11,13 @@ use sqlx::{Row, SqliteConnection, SqlitePool};
 /// Never update version in dev phase
 const OUTBOX_SCHEMA_VERSION: i64 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClaimedEvent {
-    pub event_id: i64,
-    pub commit_lsn: CommitLsn,
-    pub intent_sequence: u32,
-    pub mutation: IndexMutation,
-    pub lease_owner: String,
-    pub lease_epoch: LeaseEpoch,
-}
-
-/// One materialized outbox event for rebuild catch-up replay.
-#[derive(Debug, Clone)]
-pub struct RebuildEvent {
-    pub commit_lsn: CommitLsn,
-    pub mutation: IndexMutation,
-}
-
 #[derive(Debug, Clone)]
 pub struct SqliteOutbox {
     pool: SqlitePool,
     path: std::path::PathBuf,
 }
 
-/// Immutable copy of the SQLite projection used by checkpoint recovery.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutboxSnapshot {
-    pub path: std::path::PathBuf,
-    pub size_bytes: u64,
-    pub checksum: u32,
-    pub materialized_lsn: CommitLsn,
-}
 
-/// Point-in-time operational state of the durable outbox.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SyncDiagnostics {
-    pub materialized_lsn: CommitLsn,
-    pub targets: Vec<TargetSyncDiagnostics>,
-    pub indexes: Vec<IndexSyncDiagnostics>,
-    /// Total vector change items skipped due to disabled engine (delivery-plane
-    /// accounting). Sourced from `VectorSyncCoordinator::disabled_skip_count`
-    /// and merged by `SyncManager::sync_diagnostics`; 0 when vector is not
-    /// configured.
-    pub vector_disabled_skips: u64,
-}
-
-/// Delivery health for one synchronization target.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct TargetSyncDiagnostics {
-    pub target: String,
-    pub applied_lsn: CommitLsn,
-    pub frontier_lag: u64,
-    pub pending: u64,
-    pub retrying: u64,
-    pub leased: u64,
-    pub dead_lettered: u64,
-    pub oldest_event_age_ms: Option<u64>,
-    pub degraded: bool,
-}
-
-/// Generation and frontier health for one secondary index target.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct IndexSyncDiagnostics {
-    pub target: String,
-    pub index_id: u64,
-    pub generation: u64,
-    pub state: String,
-    pub barrier_lsn: Option<CommitLsn>,
-    pub applied_lsn: CommitLsn,
-    pub frontier_lag: u64,
-    pub degraded: bool,
-}
-
-/// One dead-letter entry joined with its event metadata.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct DeadLetterRow {
-    pub event_id: i64,
-    pub target: String,
-    pub index_id: u64,
-    pub generation: u64,
-    pub commit_lsn: CommitLsn,
-    pub retry_count: u64,
-    pub failed_at_ms: u64,
-    pub error: String,
-}
-
-/// One degraded range entry.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct DegradedRangeRow {
-    pub target: String,
-    pub index_id: u64,
-    pub generation: u64,
-    pub start_lsn: CommitLsn,
-    pub end_lsn: CommitLsn,
-    pub reason: String,
-    pub created_at_ms: u64,
-}
 
 impl SqliteOutbox {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, String> {

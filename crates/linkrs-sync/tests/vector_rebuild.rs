@@ -92,7 +92,7 @@ fn rebuild_doc(vertex: &Value, properties: Vec<(Arc<str>, Value)>) -> VectorRebu
 async fn purge_field_granularity_recreates_collection() {
     let directory = tempfile::TempDir::new().expect("temporary directory");
     let coordinator = local_coordinator(&directory);
-    coordinator.set_granularity(CollectionGranularity::Field);
+    coordinator.index_manager().set_granularity(CollectionGranularity::Field);
     coordinator
         .create_vector_index(1, "user", "embedding", 4, DistanceMetric::Cosine)
         .await
@@ -361,12 +361,12 @@ async fn rebuild_converges_backfill_and_pending_delivery() {
 async fn temp_naming_isolates_granularities() {
     let directory = tempfile::TempDir::new().expect("temporary directory");
     let coordinator = local_coordinator(&directory);
-    coordinator.set_granularity(CollectionGranularity::Field);
+    coordinator.index_manager().set_granularity(CollectionGranularity::Field);
     let field_temp = coordinator
         .index_manager()
         .temp_name_for(1, "user", "embedding", 7);
     assert_eq!(field_temp, "space_vec_1_user_embedding.rebuild-7");
-    coordinator.set_granularity(CollectionGranularity::Space);
+    coordinator.index_manager().set_granularity(CollectionGranularity::Space);
     let space_temp = coordinator
         .index_manager()
         .temp_name_for(1, "user", "embedding", 7);
@@ -386,7 +386,7 @@ async fn temp_naming_isolates_granularities() {
 async fn temp_collections_are_invisible_to_search() {
     let directory = tempfile::TempDir::new().expect("temporary directory");
     let coordinator = local_coordinator(&directory);
-    coordinator.set_granularity(CollectionGranularity::Field);
+    coordinator.index_manager().set_granularity(CollectionGranularity::Field);
     coordinator
         .create_vector_index(1, "user", "embedding", 4, DistanceMetric::Cosine)
         .await
@@ -460,7 +460,7 @@ async fn temp_collections_are_invisible_to_search() {
 async fn rebuild_failure_before_publish_leaves_live_untouched() {
     let directory = tempfile::TempDir::new().expect("temporary directory");
     let coordinator = local_coordinator(&directory);
-    coordinator.set_granularity(CollectionGranularity::Field);
+    coordinator.index_manager().set_granularity(CollectionGranularity::Field);
     let mut manager = make_manager(Arc::clone(&coordinator));
     manager
         .configure_outbox(directory.path().join("outbox/outbox.sqlite"))
@@ -538,7 +538,7 @@ async fn rebuild_failure_before_publish_leaves_live_untouched() {
 async fn field_publish_swaps_collection_and_restore_reverses_it() {
     let directory = tempfile::TempDir::new().expect("temporary directory");
     let coordinator = local_coordinator(&directory);
-    coordinator.set_granularity(CollectionGranularity::Field);
+    coordinator.index_manager().set_granularity(CollectionGranularity::Field);
     let mut manager = make_manager(Arc::clone(&coordinator));
     manager
         .configure_outbox(directory.path().join("outbox/outbox.sqlite"))
@@ -745,7 +745,7 @@ async fn space_publish_preserves_sibling_slices() {
 async fn recovery_drops_orphan_temps() {
     let directory = tempfile::TempDir::new().expect("temporary directory");
     let coordinator = local_coordinator(&directory);
-    coordinator.set_granularity(CollectionGranularity::Field);
+    coordinator.index_manager().set_granularity(CollectionGranularity::Field);
     let mut manager = make_manager(Arc::clone(&coordinator));
     manager
         .configure_outbox(directory.path().join("outbox/outbox.sqlite"))

@@ -6,10 +6,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(feature = "embedding")]
-use llm_embedding::{EmbeddingConfig, EmbeddingService, OpenAICompatibleProvider};
-#[cfg(feature = "vector")]
-use log::warn;
 use log::{error, info};
 #[cfg(feature = "vector-qdrant")]
 use vector_client::VectorManager;
@@ -173,7 +169,7 @@ pub async fn start_service_with_config_path(
                         (Some(VectorBackend::from_local_arc(arc)), Some(handle))
                     }
                     Err(e) => {
-                        warn!(
+                        log::warn!(
                             "Failed to open local vector engine at {}: {}. Vector search will be disabled.",
                             data_dir.display(),
                             e
@@ -192,7 +188,7 @@ pub async fn start_service_with_config_path(
                         (Some(VectorBackend::qdrant(Arc::new(vm))), None)
                     }
                     Err(e) => {
-                        warn!(
+                        log::warn!(
                             "Failed to create VectorManager: {}. Vector search will be disabled.",
                             e
                         );
@@ -253,11 +249,9 @@ pub async fn start_service_with_config_path(
                     failure_policy: config.fulltext.sync.failure_policy,
                 };
 
-                let batch_config = linkrs_sync::batch::BatchConfig::from(sync_config.clone());
                 let sync_coordinator =
                     Arc::new(linkrs_sync::fulltext_sync::FulltextSyncCoordinator::new(
                         manager.clone(),
-                        batch_config,
                     ));
 
                 let sync_manager = SyncManager::with_sync_config(sync_coordinator, sync_config);
@@ -636,112 +630,6 @@ pub async fn start_service_with_config_path(
     Ok(())
 }
 
-/// Resolve the effective embedding config: the backend-independent top
-/// level wins, `[vector.qdrant.embedding]` overrides it when both are set.
-#[cfg(feature = "embedding")]
-fn resolve_effective_embedding(_config: &Config) -> Option<EmbeddingConfig> {
-    let top = _config.vector_config().embedding.clone();
-    #[cfg(feature = "vector-qdrant")]
-    {
-        if let Some(qdrant) = _config.vector_config().qdrant.embedding.clone() {
-            return Some(qdrant);
-        }
-    }
-    top
-}
-
-/// Build the shared document-side service plus the optional query-side
-/// service carrying the query preprocessor override. Backend independent:
-/// local and remote engines share the same wiring.
-#[cfg(feature = "embedding")]
-fn build_embedding_services(
-    _config: &Config,
-    auto_embed: bool,
-) -> Result<
-    (
-        Option<Arc<linkrs_sync::vector_sync::EmbeddingService>>,
-        Option<Arc<linkrs_sync::vector_sync::EmbeddingService>>,
-    ),
-    String,
-> {
-    let Some(doc_config) = resolve_effective_embedding(_config) else {
-        if auto_embed {
-            return Err(
-                "vector.auto_embed_text requires [vector.embedding] with explicit dimension"
-                    .to_string(),
-            );
-        }
-        return Ok((None, None));
-    };
-    let build = |config: EmbeddingConfig| {
-        OpenAICompatibleProvider::new(config)
-            .map(|provider| {
-                Arc::new(EmbeddingService::new(
-                    provider,
-                    linkrs_sync::vector_sync::EMBEDDING_BATCH_SIZE,
-                ))
-            })
-            .map_err(|err| format!("Failed to create embedding service: {}", err))
-    };
-    let doc_service = match build(doc_config.clone()) {
-        Ok(service) => service,
-        Err(err) => {
-            if auto_embed {
-                return Err(err);
-            }
-            warn!("Failed to create embedding service: {}", err);
-            return Ok((None, None));
-        }
-    };
-    let query_service = match _config.vector_config().embedding_query_preprocessor.clone() {
-        Some(preprocessor) => {
-            let mut query_config = doc_config;
-            query_config.preprocessor = preprocessor;
-            match build(query_config) {
-                Ok(service) => Some(service),
-                Err(err) => {
-                    if auto_embed {
-                        return Err(err);
-                    }
-                    warn!("Failed to create query embedding service: {}", err);
-                    None
-                }
-            }
-        }
-        None => None,
-    };
-    Ok((Some(doc_service), query_service))
-}
-
-/// Build the optional post-recall rerank service. Absent config disables
-/// rerank; invalid config warns and disables. Startup never fails for rerank.
-#[cfg(feature = "rerank")]
-fn build_rerank_service(
-    _config: &Config,
-) -> Option<(
-    Arc<llm_rerank::CohereRerankProvider>,
-    linkrs_config::VectorRerankConfig,
-)> {
-    let rerank = _config.vector_config().rerank.clone()?;
-    if let Err(err) = rerank.validate() {
-        warn!(
-            "Invalid vector rerank configuration, rerank disabled: {}",
-            err
-        );
-        return None;
-    }
-    match llm_rerank::CohereRerankProvider::new(rerank.endpoint.clone()) {
-        Ok(provider) => {
-            info!("Vector rerank enabled (model {})", rerank.endpoint.model);
-            Some((Arc::new(provider), rerank))
-        }
-        Err(err) => {
-            warn!("Failed to create rerank service, rerank disabled: {}", err);
-            None
-        }
-    }
-}
-
 /// Attach a vector sync coordinator backed by `backend` to a SyncManager.
 #[cfg(feature = "vector")]
 fn attach_vector_coordinator(
@@ -750,59 +638,17 @@ fn attach_vector_coordinator(
     _config: &Config,
 ) -> Result<linkrs_sync::SyncManager, String> {
     let handle = tokio::runtime::Handle::current();
-    let auto_embed = _config.vector_config().auto_embed_text;
-    #[cfg(feature = "embedding")]
-    let (embedding_service, query_service) = build_embedding_services(_config, auto_embed)
-        .map_err(|error| format!("Invalid vector embedding configuration: {}", error))?;
-    #[cfg(feature = "embedding")]
-    let vector_coordinator = {
-        let coordinator = linkrs_sync::vector_sync::VectorSyncCoordinator::new(
-            backend.clone(),
-            embedding_service,
-            handle,
-        );
-        let coordinator = match query_service {
-            Some(query) => coordinator.with_query_embedding_service(query),
-            None => coordinator,
-        };
-        #[cfg(feature = "rerank")]
-        let coordinator = match build_rerank_service(_config) {
-            Some((service, rerank)) => coordinator.with_rerank_service(service, rerank),
-            None => coordinator,
-        };
-        Arc::new(coordinator)
-    };
-    #[cfg(not(feature = "embedding"))]
-    let vector_coordinator = {
-        let coordinator = linkrs_sync::vector_sync::VectorSyncCoordinator::new_without_embedding(
-            backend.clone(),
-            handle,
-        );
-        #[cfg(feature = "rerank")]
-        let coordinator = match build_rerank_service(_config) {
-            Some((service, rerank)) => coordinator.with_rerank_service(service, rerank),
-            None => coordinator,
-        };
-        Arc::new(coordinator)
-    };
-    #[cfg(not(feature = "embedding"))]
-    if auto_embed {
-        return Err(
-            "vector.auto_embed_text requires the embedding build with a configured service"
-                .to_string(),
-        );
-    }
+    let vector_coordinator = Arc::new(linkrs_sync::vector_sync::VectorSyncCoordinator::new(
+        backend.clone(),
+        handle,
+    ));
     {
         let granularity = _config.vector_config().collection.granularity;
-        vector_coordinator.set_granularity(granularity);
+        vector_coordinator.index_manager().set_granularity(granularity);
         info!("Vector collection granularity: {:?}", granularity);
     }
     info!("Vector index sync enabled");
-    let mut manager = sync_manager.with_vector_coordinator(vector_coordinator);
-    manager.set_auto_embed_text(auto_embed);
-    if auto_embed {
-        info!("Vector write-time auto-embedding enabled");
-    }
+    let manager = sync_manager.with_vector_coordinator(vector_coordinator);
     // Backend-aware delivery policy: batch / lease / retries / concurrency
     // derived from `VectorConfig` so `manager.rs` does not branch on `is_local`.
     let policy = linkrs_sync::backend::BackendDeliveryPolicy::from_config(_config.vector_config());

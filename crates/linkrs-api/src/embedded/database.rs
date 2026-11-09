@@ -164,10 +164,8 @@ fn build_secondary_managers(
             batch_size: fulltext_config.sync.batch_size,
             failure_policy: SyncFailurePolicy::FailOpen,
         };
-        let batch_config = linkrs_sync::batch::BatchConfig::from(sync_config.clone());
         let sync_coordinator = Arc::new(linkrs_sync::fulltext_sync::FulltextSyncCoordinator::new(
             manager.clone(),
-            batch_config,
         ));
         #[cfg_attr(not(feature = "vector"), allow(unused_mut))]
         let mut sync = SyncManager::with_sync_config(sync_coordinator, sync_config);

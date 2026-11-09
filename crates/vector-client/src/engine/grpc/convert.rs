@@ -26,7 +26,10 @@ impl From<Status> for VectorClientError {
             tonic::Code::Unavailable | tonic::Code::DeadlineExceeded => {
                 VectorClientError::ConnectionFailed(status.message().to_string())
             }
-            _ => VectorClientError::QdrantGrpcError(status.to_string()),
+            _ => VectorClientError::QdrantGrpcError {
+                code: status.code() as u32,
+                message: status.to_string(),
+            },
         }
     }
 }
