@@ -10,7 +10,10 @@
 //! Files without a marker (older format) are rejected. There is no
 //! backward compatibility with pre-marker file formats.
 
+use std::collections::HashMap;
 use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use linkrs_core::{StorageError, StorageResult};
 
@@ -438,6 +441,53 @@ pub fn cleanup_shadow_files<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<
         }
     }
     Ok(cleaned)
+}
+
+type TableFlushLock = Arc<Mutex<()>>;
+
+static TABLE_FLUSH_LOCKS: LazyLock<Mutex<HashMap<PathBuf, TableFlushLock>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Run a whole-table flush holding the process-wide lock for its directory.
+///
+/// A flush starts by deleting leftover `*.tmp` shadow files and finishes by
+/// renaming fresh ones into place. Two flushes overlapping on one directory
+/// let the second one's cleanup delete the first one's in-flight shadow
+/// file, failing its rename. The lock spans the entire flush so cleanup and
+/// publish stay in one critical section. Sharing one path across processes
+/// is unsupported and remains unguarded.
+pub fn with_table_flush_lock<R>(dir: &Path, flush: impl FnOnce() -> R) -> R {
+    with_process_dir_lock(dir, flush)
+}
+
+/// Serialize whole checkpoints (and open-time checkpoint cleanup) that target
+/// the same checkpoint directory within this process.
+///
+/// Checkpoint attempts reuse sequence-numbered temp directories, and `open`
+/// deletes leftover temp/unpublished checkpoint directories. Without
+/// process-wide exclusion a second checkpoint (or a fresh `open`) can remove
+/// the temp tree of an in-flight checkpoint, failing its file renames. The
+/// lock spans the entire checkpoint and the open-time cleanup.
+pub fn with_checkpoint_dir_lock<R>(dir: &Path, op: impl FnOnce() -> R) -> R {
+    with_process_dir_lock(dir, op)
+}
+
+fn with_process_dir_lock<R>(dir: &Path, op: impl FnOnce() -> R) -> R {
+    let key = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let lock = {
+        let mut table = TABLE_FLUSH_LOCKS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        table.get(&key).cloned().unwrap_or_else(|| {
+            let lock: TableFlushLock = Arc::new(Mutex::new(()));
+            table.insert(key.clone(), Arc::clone(&lock));
+            lock
+        })
+    };
+    let _guard = lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    op()
 }
 
 #[cfg(test)]

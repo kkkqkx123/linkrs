@@ -44,6 +44,17 @@ impl EdgeStore {
         page_size: usize,
         level: i32,
     ) -> StorageResult<EdgeCheckpointKind> {
+        crate::compression::with_table_flush_lock(dir, || {
+            self.flush_incremental_unsynchronized(dir, page_size, level)
+        })
+    }
+
+    fn flush_incremental_unsynchronized(
+        &mut self,
+        dir: &Path,
+        page_size: usize,
+        level: i32,
+    ) -> StorageResult<EdgeCheckpointKind> {
         let started = std::time::Instant::now();
         std::fs::create_dir_all(dir)?;
         crate::compression::cleanup_shadow_files(dir)?;

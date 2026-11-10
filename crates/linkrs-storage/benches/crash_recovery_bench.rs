@@ -41,6 +41,14 @@ fn make_vertex(i: i64) -> Vertex {
 
 fn populate(path: &std::path::Path, checkpoint: bool) {
     let mut storage = GraphStorage::new_with_path(path.to_path_buf()).expect("create storage");
+    // Suspend threshold/time-based auto-checkpoints for the whole fixture:
+    // on slow disks the tail inserts outlast the trigger interval and the
+    // scheduler's checkpoint would still hold the persistence guard when
+    // the explicit checkpoint below runs (fail-fast "already active").
+    // Explicit checkpoints are unaffected by the session; `abandon` lifts
+    // the suspension without adding an extra checkpoint, so the WAL-tail
+    // scenario keeps its un-checkpointed tail.
+    let session = storage.begin_bulk_load().expect("bulk-load session");
     let space_name = "recovery".to_string();
     let mut space = SpaceInfo::new(space_name.clone()).with_vid_type(DataType::BigInt);
     storage.create_space(&mut space).expect("create space");
@@ -115,6 +123,7 @@ fn populate(path: &std::path::Path, checkpoint: bool) {
             .batch_insert_edges(&space_name, edges)
             .expect("insert tail edges");
     }
+    session.abandon();
     drop(storage);
 }
 

@@ -43,7 +43,12 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
         let id = *doc_count;
 
         group.bench_with_input(BenchmarkId::from_parameter(doc_count), doc_count, |b, _| {
-            b.to_async(&rt).iter_batched(
+            // Sync `iter_batched` with one `block_on` per closure: criterion
+            // drives `to_async` closures from inside the runtime, so a nested
+            // `block_on` in setup panics ("cannot start a runtime from
+            // within a runtime"). Blocking on the outside keeps timing
+            // equivalent at ms-scale workloads.
+            b.iter_batched(
                 || {
                     let mgr = m.clone();
                     rt.block_on(async move {
@@ -54,20 +59,22 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
                         mgr
                     })
                 },
-                |mgr| async move {
-                    for i in 0..id {
-                        mgr.index_edge_property(
-                            1,
-                            "Article",
-                            "content",
-                            &format!("doc_{}", i),
-                            &format!("benchmark document {}", i),
-                        )
-                        .await
-                        .expect("index");
-                    }
-                    mgr.commit_all().await.expect("commit");
-                    black_box(id)
+                |mgr| {
+                    rt.block_on(async move {
+                        for i in 0..id {
+                            mgr.index_edge_property(
+                                1,
+                                "Article",
+                                "content",
+                                &format!("doc_{}", i),
+                                &format!("benchmark document {}", i),
+                            )
+                            .await
+                            .expect("index");
+                        }
+                        mgr.commit_all().await.expect("commit");
+                        black_box(id)
+                    })
                 },
                 BatchSize::SmallInput,
             );

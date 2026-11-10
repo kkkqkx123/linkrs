@@ -80,6 +80,20 @@ impl ShardedVertexTable {
         kind: CommitKind,
         base_epoch: Option<u64>,
     ) -> StorageResult<()> {
+        let path = path.as_ref();
+        crate::compression::with_table_flush_lock(path, || {
+            self.flush_with_epoch_unsynchronized(path, compression, epoch, kind, base_epoch)
+        })
+    }
+
+    pub fn flush_with_epoch_unsynchronized<P: AsRef<Path>>(
+        &self,
+        path: P,
+        compression: CompressionType,
+        epoch: u64,
+        kind: CommitKind,
+        base_epoch: Option<u64>,
+    ) -> StorageResult<()> {
         use rayon::prelude::*;
         use std::fs;
         use std::sync::atomic::Ordering;
@@ -107,6 +121,19 @@ impl ShardedVertexTable {
     }
 
     pub fn flush_incremental_with_epoch<P: AsRef<Path>>(
+        &self,
+        path: P,
+        compression: CompressionType,
+        epoch: u64,
+        base_epoch: Option<u64>,
+    ) -> StorageResult<()> {
+        let path = path.as_ref();
+        crate::compression::with_table_flush_lock(path, || {
+            self.flush_incremental_with_epoch_unsynchronized(path, compression, epoch, base_epoch)
+        })
+    }
+
+    pub fn flush_incremental_with_epoch_unsynchronized<P: AsRef<Path>>(
         &self,
         path: P,
         compression: CompressionType,

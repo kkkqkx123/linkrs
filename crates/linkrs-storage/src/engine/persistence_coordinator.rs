@@ -188,7 +188,13 @@ impl PersistenceCoordinator {
             None
         };
 
-        Self::cleanup_temporary_checkpoints(&config.checkpoint_dir).map_err(|error| {
+        // Open-time checkpoint cleanup and the manifest read share the
+        // process-wide checkpoint lock with checkpoint execution: a second
+        // checkpoint (or a background one outliving a dropped handle) must
+        // not lose its temp tree to this cleanup mid-flight.
+        let (manifest_manager, published_sequence) =
+            crate::compression::with_checkpoint_dir_lock(&config.checkpoint_dir, || {
+                Self::cleanup_temporary_checkpoints(&config.checkpoint_dir).map_err(|error| {
             error.with_context(format!(
                 "Failed to clean up temporary checkpoints in {}",
                 config.checkpoint_dir.display()
@@ -209,6 +215,8 @@ impl PersistenceCoordinator {
                 ))
             },
         )?;
+        Ok::<_, StorageError>((manifest_manager, published_sequence))
+            })?;
 
         let mut checkpoint_manager =
             CheckpointManager::new(&config.wal_dir, &config.checkpoint_dir, None);

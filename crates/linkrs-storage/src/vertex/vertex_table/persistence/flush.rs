@@ -14,6 +14,17 @@ impl VertexTable {
         path: P,
         compression: crate::compression::CompressionType,
     ) -> StorageResult<()> {
+        let path = path.as_ref();
+        crate::compression::with_table_flush_lock(path, || {
+            self.flush_unsynchronized(path, compression)
+        })
+    }
+
+    pub fn flush_unsynchronized<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        compression: crate::compression::CompressionType,
+    ) -> StorageResult<()> {
         use std::fs;
 
         let path = path.as_ref();

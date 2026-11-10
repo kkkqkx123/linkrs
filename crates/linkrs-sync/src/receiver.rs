@@ -184,7 +184,7 @@ impl FulltextReceiver {
             applied_lsn: max_lsn.get(),
             receipts: persisted_receipts.clone(),
         })
-        .map_err(linkrs_fulltext::error::SearchError::SerializationError)?;
+        .map_err(|e| linkrs_fulltext::error::SearchError::SerializationError(e.to_string()))?;
         self.engine.commit_with_payload(payload).await?;
         *self.receipts.write().await = persisted_receipts;
         *self.applied_lsn.write().await = max_lsn;

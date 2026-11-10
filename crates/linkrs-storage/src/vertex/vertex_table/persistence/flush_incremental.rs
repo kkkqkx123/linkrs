@@ -13,6 +13,24 @@ impl VertexTable {
         compression: crate::compression::CompressionType,
         force_anchor: bool,
     ) -> StorageResult<()> {
+        let path = path.as_ref();
+        crate::compression::with_table_flush_lock(path, || {
+            self.flush_incremental_with_anchor_unsynchronized(
+                path,
+                dirty_pages,
+                compression,
+                force_anchor,
+            )
+        })
+    }
+
+    pub fn flush_incremental_with_anchor_unsynchronized<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        dirty_pages: &[crate::persistence::dirty_page::PageId],
+        compression: crate::compression::CompressionType,
+        force_anchor: bool,
+    ) -> StorageResult<()> {
         use std::fs;
 
         let path = path.as_ref();

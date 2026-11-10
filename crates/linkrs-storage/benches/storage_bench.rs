@@ -144,50 +144,63 @@ fn bench_bulk_vertex_insert(c: &mut Criterion) {
 }
 
 fn bench_real_edge_insert(c: &mut Criterion) {
+    // Edge-type and vertex setup lives in the iter_batched setup closure so
+    // the measured store is rotated before the resource budget trips.
     let mut group = create_benchmark_group(c, "storage_edge_insert", SAMPLE_SIZE);
-    let mut storage = benchmark_storage_with_schema();
-    storage
-        .create_edge_type(
-            "bench",
-            &EdgeTypeInfo::new("Link".to_string())
-                .with_src_tag("Node".to_string())
-                .with_dst_tag("Node".to_string()),
-        )
-        .expect("edge type should be created");
-    for id in 0..100i64 {
-        storage
-            .insert_vertex(
-                "bench",
-                Vertex::new(
-                    VertexId::try_from_int64(id).expect("valid vertex id"),
-                    Tag::new(
-                        "Node".to_string(),
-                        [("value".into(), Value::BigInt(id))].into_iter().collect(),
-                    ),
-                ),
-            )
-            .expect("vertex insert");
-    }
-    let mut next_id = 0i64;
     group.bench_function("single", |b| {
-        b.iter(|| {
-            let src = next_id % 100;
-            let dst = (src + 1) % 100;
-            next_id += 1;
-            storage
-                .insert_edge(
-                    "bench",
-                    Edge {
-                        src: VertexId::try_from_int64(src).expect("valid vertex id"),
-                        dst: VertexId::try_from_int64(dst).expect("valid vertex id"),
-                        edge_type: "Link".to_string(),
-                        ranking: next_id,
-                        props: HashMap::new(),
-                    },
-                )
-                .expect("edge insert");
-            black_box(());
-        });
+        // Rotate the store every 100 inserts: one shared store grows
+        // without bound across iterations until the resource budget trips
+        // CapacityExceeded. Setup cost stays amortized (100 vertices + one
+        // edge type per 100 measured inserts).
+        b.iter_batched(
+            || {
+                let mut storage = benchmark_storage_with_schema();
+                storage
+                    .create_edge_type(
+                        "bench",
+                        &EdgeTypeInfo::new("Link".to_string())
+                            .with_src_tag("Node".to_string())
+                            .with_dst_tag("Node".to_string()),
+                    )
+                    .expect("edge type should be created");
+                for id in 0..100i64 {
+                    storage
+                        .insert_vertex(
+                            "bench",
+                            Vertex::new(
+                                VertexId::try_from_int64(id).expect("valid vertex id"),
+                                Tag::new(
+                                    "Node".to_string(),
+                                    [("value".into(), Value::BigInt(id))].into_iter().collect(),
+                                ),
+                            ),
+                        )
+                        .expect("vertex insert");
+                }
+                (storage, 0i64)
+            },
+            |(mut storage, mut local_id)| {
+                for _ in 0..100 {
+                    let src = local_id % 100;
+                    let dst = (src + 1) % 100;
+                    local_id += 1;
+                    storage
+                        .insert_edge(
+                            "bench",
+                            Edge {
+                                src: VertexId::try_from_int64(src).expect("valid vertex id"),
+                                dst: VertexId::try_from_int64(dst).expect("valid vertex id"),
+                                edge_type: "Link".to_string(),
+                                ranking: local_id,
+                                props: HashMap::new(),
+                            },
+                        )
+                        .expect("edge insert");
+                }
+                black_box(());
+            },
+            criterion::BatchSize::NumIterations(100),
+        );
     });
     group.finish();
 }

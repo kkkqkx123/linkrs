@@ -264,6 +264,24 @@ impl crate::engine::persistence_coordinator::PersistenceCoordinator {
 
     fn create_checkpoint_inner_with_guard(
         &self,
+        guard: crate::engine::persistence_coordinator::PersistenceStateGuard,
+        flush_data: impl FnOnce(&Path, Timestamp) -> StorageResult<CheckpointData>,
+        timestamp: Timestamp,
+        trigger_reason: CheckpointTriggerReason,
+    ) -> StorageResult<CheckpointStats> {
+        let dir = self.config.checkpoint_dir.clone();
+        crate::compression::with_checkpoint_dir_lock(&dir, || {
+            self.create_checkpoint_inner_with_guard_unsynchronized(
+                guard,
+                flush_data,
+                timestamp,
+                trigger_reason,
+            )
+        })
+    }
+
+    fn create_checkpoint_inner_with_guard_unsynchronized(
+        &self,
         _guard: crate::engine::persistence_coordinator::PersistenceStateGuard,
         flush_data: impl FnOnce(&Path, Timestamp) -> StorageResult<CheckpointData>,
         timestamp: Timestamp,
