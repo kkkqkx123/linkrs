@@ -196,18 +196,25 @@ pub unsafe extern "C" fn linkrs_txn_execute(
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Checking session validity
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return linkrs_error_code_t::LINKRS_INTERNAL as c_int;
+        }
     };
 
     let ctx = crate::api_core::QueryRequest {
@@ -288,17 +295,24 @@ pub unsafe extern "C" fn linkrs_txn_execute_params(
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return linkrs_error_code_t::LINKRS_INTERNAL as c_int;
+        }
     };
 
     let mut params_map: HashMap<String, Value> = HashMap::new();
@@ -367,11 +381,13 @@ pub unsafe extern "C" fn linkrs_txn_commit(txn: *mut linkrs_txn_t) -> c_int {
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Check session validity first (only check pointer, don't borrow)
     if !handle.is_session_valid() {
+        set_last_error_message("associated session is no longer valid".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
@@ -437,11 +453,13 @@ pub unsafe extern "C" fn linkrs_txn_rollback(txn: *mut linkrs_txn_t) -> c_int {
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     // Check session validity first (only check pointer, don't borrow)
     if !handle.is_session_valid() {
+        set_last_error_message("associated session is no longer valid".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
@@ -501,35 +519,51 @@ pub unsafe extern "C" fn linkrs_txn_rollback(txn: *mut linkrs_txn_t) -> c_int {
 /// - The transaction must not have been committed or rolled back
 #[no_mangle]
 pub unsafe extern "C" fn linkrs_txn_savepoint(txn: *mut linkrs_txn_t, name: *const c_char) -> i64 {
+    // No status code travels with the id, so every failure records the
+    // thread-local detail for the caller.
     if txn.is_null() || name.is_null() {
+        set_last_error_message("null transaction handle or savepoint name".to_string());
         return -1;
     }
 
     let name_str = match CStr::from_ptr(name).to_str() {
         Ok(s) => s,
-        Err(_) => return -1,
+        Err(_) => {
+            set_last_error_message("savepoint name is not valid UTF-8".to_string());
+            return -1;
+        }
     };
 
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return -1;
     }
 
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return -1,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return -1;
+        }
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return -1,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return -1;
+        }
     };
 
     // Use embedded session API instead of direct TransactionManager access
     match session.inner.create_savepoint(txn_handle, name_str) {
         Ok(id) => id.0 as i64,
-        Err(_) => -1,
+        Err(e) => {
+            set_last_error_message(format!("{e}"));
+            -1
+        }
     }
 }
 
@@ -559,17 +593,24 @@ pub unsafe extern "C" fn linkrs_txn_release_savepoint(
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
     };
 
     let savepoint = crate::api_core::types::SavepointId(savepoint_id as u64);
@@ -613,17 +654,24 @@ pub unsafe extern "C" fn linkrs_txn_rollback_to_savepoint(
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
 
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return linkrs_error_code_t::LINKRS_INTERNAL as c_int;
+        }
     };
 
     let savepoint = crate::api_core::types::SavepointId(savepoint_id as u64);
@@ -758,17 +806,24 @@ unsafe fn run_txn_named_execution(
     out_result: *mut *mut linkrs_result_t,
 ) -> c_int {
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
 
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
     };
 
     let txn_handle = match handle.txn_handle.as_ref() {
         Some(h) => h,
-        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return linkrs_error_code_t::LINKRS_INTERNAL as c_int;
+        }
     };
 
     let ctx = crate::api_core::QueryRequest {
@@ -1113,15 +1168,22 @@ pub unsafe extern "C" fn linkrs_txn_info(
 
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
     };
     let txn_id = match handle.txn_handle.as_ref() {
         Some(h) => h.0,
-        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return linkrs_error_code_t::LINKRS_INTERNAL as c_int;
+        }
     };
 
     match session
@@ -1187,15 +1249,22 @@ pub unsafe extern "C" fn linkrs_txn_list_savepoints(
 
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return linkrs_error_code_t::LINKRS_MISUSE as c_int;
     }
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return linkrs_error_code_t::LINKRS_MISUSE as c_int,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return linkrs_error_code_t::LINKRS_MISUSE as c_int;
+        }
     };
     let txn_id = match handle.txn_handle.as_ref() {
         Some(h) => h.0,
-        None => return linkrs_error_code_t::LINKRS_INTERNAL as c_int,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return linkrs_error_code_t::LINKRS_INTERNAL as c_int;
+        }
     };
 
     let savepoints: Vec<serde_json::Value> = session
@@ -1259,15 +1328,22 @@ pub unsafe extern "C" fn linkrs_txn_find_savepoint(
 
     let handle = &mut *(txn as *mut LinkrsTxnHandle);
     if handle.committed || handle.rolled_back {
+        set_last_error_message("transaction already completed".to_string());
         return -1;
     }
     let session = match handle.get_session() {
         Some(s) => s,
-        None => return -1,
+        None => {
+            set_last_error_message("associated session is no longer valid".to_string());
+            return -1;
+        }
     };
     let txn_id = match handle.txn_handle.as_ref() {
         Some(h) => h.0,
-        None => return -1,
+        None => {
+            set_last_error_message("no active transaction".to_string());
+            return -1;
+        }
     };
 
     session

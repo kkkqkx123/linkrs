@@ -8,7 +8,7 @@
 //! they are schema introspection, not migration orchestration.
 
 use crate::api_core::SpaceConfig;
-use crate::embedded::c_api::database::LinkrsHandle;
+use crate::embedded::c_api::database::{clear_db_error, set_db_error, LinkrsHandle};
 use crate::embedded::c_api::error::{
     error_code_from_core_error, linkrs_error_code_t, set_last_error_message,
 };
@@ -143,10 +143,13 @@ pub unsafe extern "C" fn linkrs_create_space(
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.create_space(name_str, config) {
-        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Ok(()) => {
+            clear_db_error(db);
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             error_code
         }
     }
@@ -169,10 +172,13 @@ pub unsafe extern "C" fn linkrs_drop_space(db: *mut linkrs_t, name: *const c_cha
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.drop_space(name_str) {
-        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Ok(()) => {
+            clear_db_error(db);
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             error_code
         }
     }
@@ -190,9 +196,12 @@ pub unsafe extern "C" fn linkrs_list_spaces(db: *mut linkrs_t) -> *mut c_char {
     }
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.list_spaces() {
-        Ok(names) => heap_json_string(&names),
+        Ok(names) => {
+            clear_db_error(db);
+            heap_json_string(&names)
+        }
         Err(e) => {
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             ptr::null_mut()
         }
     }
@@ -214,10 +223,18 @@ pub unsafe extern "C" fn linkrs_get_space(db: *mut linkrs_t, name: *const c_char
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.get_space(name_str) {
-        Ok(Some(info)) => heap_json_string(&info),
-        Ok(None) => ptr::null_mut(),
+        // Unknown names are not errors, but they still retire any older
+        // outcome so a NULL return is never misread as a past failure.
+        Ok(Some(info)) => {
+            clear_db_error(db);
+            heap_json_string(&info)
+        }
+        Ok(None) => {
+            clear_db_error(db);
+            ptr::null_mut()
+        }
         Err(e) => {
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             ptr::null_mut()
         }
     }
@@ -254,10 +271,13 @@ pub unsafe extern "C" fn linkrs_create_tag(
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.create_tag(space_str, name_str, properties) {
-        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Ok(()) => {
+            clear_db_error(db);
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             error_code
         }
     }
@@ -284,10 +304,13 @@ pub unsafe extern "C" fn linkrs_drop_tag(
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.drop_tag(space_str, name_str) {
-        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Ok(()) => {
+            clear_db_error(db);
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             error_code
         }
     }
@@ -309,9 +332,12 @@ pub unsafe extern "C" fn linkrs_list_tags(db: *mut linkrs_t, space: *const c_cha
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.list_tags(space_str) {
-        Ok(names) => heap_json_string(&names),
+        Ok(names) => {
+            clear_db_error(db);
+            heap_json_string(&names)
+        }
         Err(e) => {
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             ptr::null_mut()
         }
     }
@@ -337,10 +363,16 @@ pub unsafe extern "C" fn linkrs_get_tag(
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.get_tag(space_str, name_str) {
-        Ok(Some(info)) => heap_json_string(&info),
-        Ok(None) => ptr::null_mut(),
+        Ok(Some(info)) => {
+            clear_db_error(db);
+            heap_json_string(&info)
+        }
+        Ok(None) => {
+            clear_db_error(db);
+            ptr::null_mut()
+        }
         Err(e) => {
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             ptr::null_mut()
         }
     }
@@ -377,10 +409,13 @@ pub unsafe extern "C" fn linkrs_create_edge_type(
         .inner
         .create_edge_type(space_str, name_str, properties)
     {
-        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Ok(()) => {
+            clear_db_error(db);
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             error_code
         }
     }
@@ -407,10 +442,13 @@ pub unsafe extern "C" fn linkrs_drop_edge_type(
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.drop_edge_type(space_str, name_str) {
-        Ok(()) => linkrs_error_code_t::LINKRS_OK as c_int,
+        Ok(()) => {
+            clear_db_error(db);
+            linkrs_error_code_t::LINKRS_OK as c_int
+        }
         Err(e) => {
             let (error_code, _) = error_code_from_core_error(&e);
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             error_code
         }
     }
@@ -435,9 +473,12 @@ pub unsafe extern "C" fn linkrs_list_edge_types(
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.list_edge_types(space_str) {
-        Ok(names) => heap_json_string(&names),
+        Ok(names) => {
+            clear_db_error(db);
+            heap_json_string(&names)
+        }
         Err(e) => {
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             ptr::null_mut()
         }
     }
@@ -463,10 +504,16 @@ pub unsafe extern "C" fn linkrs_get_edge_type(
     };
     let handle = &*(db as *mut LinkrsHandle);
     match handle.inner.get_edge_type(space_str, name_str) {
-        Ok(Some(info)) => heap_json_string(&info),
-        Ok(None) => ptr::null_mut(),
+        Ok(Some(info)) => {
+            clear_db_error(db);
+            heap_json_string(&info)
+        }
+        Ok(None) => {
+            clear_db_error(db);
+            ptr::null_mut()
+        }
         Err(e) => {
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             ptr::null_mut()
         }
     }
@@ -500,10 +547,16 @@ pub unsafe extern "C" fn linkrs_label_version_history(
         .inner
         .get_label_version_history(space_str, label_str, is_edge != 0)
     {
-        Ok(Some(history)) => heap_json_string(&history),
-        Ok(None) => ptr::null_mut(),
+        Ok(Some(history)) => {
+            clear_db_error(db);
+            heap_json_string(&history)
+        }
+        Ok(None) => {
+            clear_db_error(db);
+            ptr::null_mut()
+        }
         Err(e) => {
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             ptr::null_mut()
         }
     }
@@ -536,9 +589,12 @@ pub unsafe extern "C" fn linkrs_applied_versions(
         .inner
         .get_applied_versions(space_str, label_str, is_edge != 0)
     {
-        Ok(versions) => heap_json_string(&versions),
+        Ok(versions) => {
+            clear_db_error(db);
+            heap_json_string(&versions)
+        }
         Err(e) => {
-            set_last_error_message(format!("{e}"));
+            set_db_error(db, format!("{e}"));
             ptr::null_mut()
         }
     }

@@ -155,8 +155,8 @@ func TestErrorMapping(t *testing.T) {
 	if err := session.UseSpace("no_such_space"); CodeOf(err) != CodeIO {
 		t.Fatalf("expected IO error for missing space, got %v", err)
 	}
-	if err := session.ValidateQuery("!!! not a query !!!"); !IsMisuse(err) {
-		t.Fatalf("expected misuse carrying the syntax detail, got %v", err)
+	if err := session.ValidateQuery("!!! not a query !!!"); CodeOf(err) != CodeError || ExtendedOf(err) != 1000 {
+		t.Fatalf("expected general error with syntax extended code, got %v", err)
 	}
 	if _, err := session.Execute("SHOW SPACES"); err != nil {
 		t.Fatalf("unexpected error: %v", err)

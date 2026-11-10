@@ -84,13 +84,22 @@ class BindingSmokeTest(unittest.TestCase):
                 with self.assertRaises(LinkrsError) as ctx:
                     session.use_space("no_such_space")
                 self.assertEqual(ctx.exception.code, 10)
-                # Garbage text fails validation as a misuse error carrying
-                # the syntax detail in the message.
-                with self.assertRaises(MisuseError) as ctx:
+                # Garbage text fails validation as a general error with
+                # the syntax extended code and a message.
+                with self.assertRaises(LinkrsError) as ctx:
                     session.validate_query("!!! not a query !!!")
-                self.assertEqual(ctx.exception.code, 20)
-                self.assertIn("syntax", str(ctx.exception).lower())
+                self.assertEqual(ctx.exception.code, 1)
+                self.assertEqual(ctx.exception.extended, 1000)
                 self.assertTrue(db.last_message)
+                # The database slot tracks the last executed operation:
+                # a failed drop sets it, a later success clears it.
+                with self.assertRaises(LinkrsError):
+                    db.drop_space("no_such_space")
+                self.assertNotEqual(db.errcode, 0)
+                db.create_space("tmp")
+                self.assertEqual(db.errcode, 0)
+                db.drop_space("tmp")
+                self.assertEqual(db.errcode, 0)
 
 
 if __name__ == "__main__":

@@ -102,9 +102,10 @@ class DatabaseSmokeTest {
             LinkrsError missing = assertThrows(LinkrsError.class,
                     () -> session.useSpace("no_such_space"));
             assertEquals(10, missing.getCode());
-            MisuseError syntax = assertThrows(MisuseError.class,
+            LinkrsError syntax = assertThrows(LinkrsError.class,
                     () -> session.validateQuery("!!! not a query !!!"));
-            assertEquals(20, syntax.getCode());
+            assertEquals(1, syntax.getCode());
+            assertEquals(1000, syntax.getExtended());
         }
     }
 }

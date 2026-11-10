@@ -91,8 +91,8 @@ expect_true(!is.null(err) && is_linkrs_error(err) && linkrs_code(err) == 10L,
   "missing space maps to IO error")
 err <- tryCatch({ linkrs_validate_query(session, "!!! not a query !!!"); NULL },
   error = function(e) e)
-expect_true(!is.null(err) && is_misuse(err) && linkrs_code(err) == 20L,
-  "garbage query maps to misuse carrying the syntax detail")
+expect_true(!is.null(err) && linkrs_code(err) == 1L && linkrs_extended(err) == 1000L,
+  "garbage query maps to general error with syntax extended code")
 
 linkrs_session_close(session)
 linkrs_close(db)

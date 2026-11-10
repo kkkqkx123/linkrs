@@ -6,7 +6,7 @@
 //! same execution pipeline as [`Session::execute`].
 
 use super::Session;
-use crate::api_core::{CoreError, CoreResult};
+use crate::api_core::{CoreError, CoreResult, ExtendedErrorCode};
 use crate::embedded::result::QueryResult;
 use linkrs_storage::StorageClient;
 
@@ -78,9 +78,16 @@ impl<S: StorageClient + Clone + Send + Sync + 'static + linkrs_storage::UndoTarg
             ));
         }
         let mut parser = linkrs_query::parser::Parser::new(query);
-        let parsed = parser
-            .parse()
-            .map_err(|e| CoreError::InvalidParameter(format!("syntax error: {e}")))?;
+        // A hard parse failure is a normal user error, not caller misuse:
+        // carry the syntax code and the parser offset so the C boundary
+        // reports a typed error instead of a bare misuse code.
+        let parsed = parser.parse().map_err(|e| {
+            CoreError::detailed_query_error(
+                format!("syntax error: {e}"),
+                ExtendedErrorCode::SyntaxError,
+                e.offset,
+            )
+        })?;
         if parser.has_errors() {
             return Ok(QueryValidation::invalid(format!(
                 "syntax error: {}",

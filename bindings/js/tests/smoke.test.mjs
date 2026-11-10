@@ -98,9 +98,9 @@ describe("linkrs js binding smoke", () => {
     try {
       assert.throws(() => session.useSpace("no_such_space"), LinkrsError);
       assert.throws(() => session.validateQuery("!!! not a query !!!"), (err) => {
-        assert.ok(err instanceof MisuseError);
-        assert.equal(err.code, 20);
-        assert.match(String(err), /syntax/i);
+        assert.ok(err instanceof LinkrsError);
+        assert.equal(err.code, 1);
+        assert.equal(err.extended, 1000);
         return true;
       });
       assert.ok(db.lastMessage.length >= 0);

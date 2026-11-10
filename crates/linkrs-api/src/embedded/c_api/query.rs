@@ -226,9 +226,30 @@ pub unsafe extern "C" fn linkrs_validate_query(
     unsafe {
         let handle = &mut *(session as *mut LinkrsSessionHandle);
         match handle.inner.validate_query(query_str) {
-            Ok(_) => {
+            // The conclusion travels inside the success value: an invalid
+            // statement must not report success.
+            Ok(validation) if validation.valid => {
                 handle.clear_error();
                 linkrs_error_code_t::LINKRS_OK as c_int
+            }
+            Ok(validation) => {
+                let error_msg = validation
+                    .error
+                    .unwrap_or_else(|| "query failed validation".to_string());
+                let extended = if error_msg.starts_with("semantic error") {
+                    crate::api_core::error::ExtendedErrorCode::SemanticError
+                } else {
+                    crate::api_core::error::ExtendedErrorCode::SyntaxError
+                };
+                let error = crate::api_core::error::CoreError::detailed_query_error(
+                    error_msg,
+                    extended,
+                    None,
+                );
+                let (error_code, _) = error_code_from_core_error(&error);
+                let extended_code = Some(extended_error_code_from_core_error(&error));
+                handle.set_error(format!("{error}"), None, extended_code);
+                error_code
             }
             Err(e) => {
                 let (error_code, _) = error_code_from_core_error(&e);

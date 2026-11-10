@@ -11,6 +11,7 @@ use crate::embedded::c_api::session::LinkrsSessionHandle;
 use crate::embedded::c_api::types::{linkrs_config_t, linkrs_result_t, linkrs_session_t, linkrs_t};
 use crate::embedded::GraphDatabase;
 use linkrs_storage::GraphStorage;
+use parking_lot::Mutex;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
 use std::sync::Arc;
@@ -18,7 +19,29 @@ use std::sync::Arc;
 /// Database handle internal structure
 pub struct LinkrsHandle {
     pub(crate) inner: Arc<GraphDatabase<GraphStorage>>,
-    pub(crate) last_error: Option<CString>,
+    // Interior mutability: database-level calls share the handle across
+    // threads, so the slot is locked rather than reached through `&mut`.
+    pub(crate) last_error: Mutex<Option<CString>>,
+}
+
+/// Record a database-level failure in both the handle slot (read back
+/// with `linkrs_errcode`) and the thread-local text (read back with
+/// `linkrs_errmsg`).
+pub(crate) unsafe fn set_db_error(db: *mut linkrs_t, msg: String) {
+    if !db.is_null() {
+        let handle = &*(db as *mut LinkrsHandle);
+        *handle.last_error.lock() = CString::new(msg.clone()).ok();
+    }
+    set_last_error_message(msg);
+}
+
+/// Clear the handle slot after a successful database-level call, so
+/// `linkrs_errcode` reports the most recent executed operation.
+pub(crate) unsafe fn clear_db_error(db: *mut linkrs_t) {
+    if !db.is_null() {
+        let handle = &*(db as *mut LinkrsHandle);
+        *handle.last_error.lock() = None;
+    }
 }
 
 /// Open database
@@ -56,7 +79,7 @@ pub unsafe extern "C" fn linkrs_open(path: *const c_char, db: *mut *mut linkrs_t
         Ok(linkrs) => {
             let handle = Box::new(LinkrsHandle {
                 inner: Arc::new(linkrs),
-                last_error: None,
+                last_error: Mutex::new(None),
             });
             unsafe {
                 *db = Box::into_raw(handle) as *mut linkrs_t;
@@ -106,7 +129,7 @@ pub unsafe extern "C" fn linkrs_open_with_config(
         Ok(linkrs) => {
             let handle = Box::new(LinkrsHandle {
                 inner: Arc::new(linkrs),
-                last_error: None,
+                last_error: Mutex::new(None),
             });
             unsafe {
                 *db = Box::into_raw(handle) as *mut linkrs_t;
@@ -152,7 +175,7 @@ pub unsafe extern "C" fn linkrs_open_memory(db: *mut *mut linkrs_t) -> c_int {
         Ok(linkrs) => {
             let handle = Box::new(LinkrsHandle {
                 inner: Arc::new(linkrs),
-                last_error: None,
+                last_error: Mutex::new(None),
             });
             unsafe {
                 *db = Box::into_raw(handle) as *mut linkrs_t;
@@ -216,7 +239,7 @@ pub unsafe extern "C" fn linkrs_errcode(db: *mut linkrs_t) -> c_int {
 
     unsafe {
         let handle = &*(db as *mut LinkrsHandle);
-        if handle.last_error.is_some() {
+        if handle.last_error.lock().is_some() {
             linkrs_error_code_t::LINKRS_ERROR as c_int
         } else {
             linkrs_error_code_t::LINKRS_OK as c_int

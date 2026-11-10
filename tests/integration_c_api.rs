@@ -554,3 +554,66 @@ fn test_c_api_null_handle_contract() {
         c_api::prepared::linkrs_stmt_free(ptr::null_mut());
     }
 }
+
+// ==================== Validation Semantics Tests ====================
+//
+// `linkrs_validate_query` must honor the validation verdict: garbage
+// reports a general error with the syntax extended code, and a statement
+// that parses with recovery (unclosed bracket) must not report success.
+
+#[test]
+fn test_c_api_validate_reports_invalid() {
+    use linkrs::api::embedded::c_api;
+    let test_db = CApiTestDatabase::new();
+    let session = CApiTestSession::from_db(&test_db);
+
+    let garbage = CString::new("!!! not a query !!!").expect("CString");
+    let rc = unsafe {
+        c_api::query::linkrs_validate_query(session.handle(), garbage.as_ptr())
+    };
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_ERROR as i32);
+    assert_eq!(
+        unsafe { c_api::error::linkrs_extended_errcode(session.handle()) },
+        1000
+    );
+
+    let unclosed = CString::new("MATCH (").expect("CString");
+    let rc = unsafe {
+        c_api::query::linkrs_validate_query(session.handle(), unclosed.as_ptr())
+    };
+    assert_ne!(rc, linkrs_error_code_t::LINKRS_OK as i32);
+
+    let valid = CString::new("SHOW SPACES").expect("CString");
+    let rc = unsafe {
+        c_api::query::linkrs_validate_query(session.handle(), valid.as_ptr())
+    };
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
+}
+
+// ==================== Failure Message Tests ====================
+//
+// Logic failures that return a status code must leave a readable
+// thread-local message; otherwise callers see stale text from an
+// unrelated earlier failure.
+
+#[test]
+fn test_c_api_completed_commit_reports_message() {
+    use linkrs::api::embedded::c_api;
+    let test_db = CApiTestDatabase::new();
+    let session = CApiTestSession::from_db(&test_db);
+
+    let mut txn: *mut linkrs::api::embedded::c_api::types::linkrs_txn_t =
+        ptr::null_mut();
+    let rc = unsafe { c_api::transaction::linkrs_txn_begin(session.handle(), &mut txn) };
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
+    let rc = unsafe { c_api::transaction::linkrs_txn_commit(txn) };
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_OK as i32);
+
+    let rc = unsafe { c_api::transaction::linkrs_txn_commit(txn) };
+    assert_eq!(rc, linkrs_error_code_t::LINKRS_MISUSE as i32);
+    let mut buffer = [0i8; 256];
+    let len = unsafe { c_api::error::linkrs_errmsg(buffer.as_mut_ptr(), buffer.len()) };
+    assert!(len > 0, "second commit must leave a message");
+
+    unsafe { c_api::transaction::linkrs_txn_free(txn) };
+}
