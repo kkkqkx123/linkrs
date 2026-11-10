@@ -98,6 +98,24 @@ pub trait VectorEngineHandle: Send + Sync + fmt::Debug + 'static {
         false
     }
 
+    /// Default collection config for a new logical index. Backends decide
+    /// their own creation defaults so the index manager never branches on
+    /// the engine name for this choice.
+    fn default_collection_config(
+        &self,
+        vector_size: usize,
+        distance: simvec::DistanceMetric,
+    ) -> CollectionConfig {
+        CollectionConfig::new(vector_size, distance)
+    }
+
+    /// Whether dropping a logical index should reclaim its space-granularity
+    /// slice from the shared collection. Only backends that own physical
+    /// slice lifecycle answer true; others keep the shared collection.
+    fn owns_space_slice_reclaim(&self) -> bool {
+        false
+    }
+
     /// Apply one already-grouped batch of writes and deletes.
     ///
     /// Grouping and payload conversion stay with the index manager; this
@@ -344,6 +362,10 @@ impl VectorEngineHandle for LocalEngineHandle {
     }
 
     fn supports_atomic_promote(&self) -> bool {
+        true
+    }
+
+    fn owns_space_slice_reclaim(&self) -> bool {
         true
     }
 
@@ -718,6 +740,15 @@ impl VectorEngineHandle for QdrantEngineHandle {
 
     fn supports_atomic_promote(&self) -> bool {
         false
+    }
+
+    fn default_collection_config(
+        &self,
+        vector_size: usize,
+        distance: simvec::DistanceMetric,
+    ) -> CollectionConfig {
+        let hnsw_config = simvec::HnswConfig::new(16, 100).with_payload_m(16);
+        CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config)
     }
 
     async fn promote_temp_collection(
@@ -1363,6 +1394,24 @@ impl VectorBackend {
     /// instead of branching on the engine name.
     pub fn supports_atomic_promote(&self) -> bool {
         self.engine.supports_atomic_promote()
+    }
+
+    /// Default collection config for a new logical index. The index manager
+    /// normalizes the result through `effective_collection_config` before
+    /// registering it.
+    pub fn default_collection_config(
+        &self,
+        vector_size: usize,
+        distance: simvec::DistanceMetric,
+    ) -> CollectionConfig {
+        self.engine.default_collection_config(vector_size, distance)
+    }
+
+    /// Whether dropping a logical index reclaims its space-granularity slice
+    /// from the shared collection. Capability query, not an engine-name
+    /// branch at the call site.
+    pub fn owns_space_slice_reclaim(&self) -> bool {
+        self.engine.owns_space_slice_reclaim()
     }
 
     /// Atomically promote a temp collection over its live collection,

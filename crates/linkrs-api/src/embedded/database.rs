@@ -164,6 +164,14 @@ fn build_secondary_managers(
         }
         #[cfg(feature = "vector")]
         if let Some(coordinator) = create_vector_coordinator(config, vector_runtime)? {
+            log::info!(
+                "Vector fast-path deployment: {} (frontier marker still requires a configured outbox)",
+                if coordinator.backend().is_local() {
+                    "all-local direct apply with frontier marker"
+                } else {
+                    "durable outbox claim-apply-ack"
+                }
+            );
             sync = sync.with_vector_coordinator(coordinator);
         }
         return Ok(SecondaryManagers {
@@ -187,6 +195,14 @@ fn build_secondary_managers(
         if let Some(runtime) = vector_runtime {
             sync.set_runtime_handle(runtime.clone());
         }
+        log::info!(
+            "Vector fast-path deployment: {} (frontier marker still requires a configured outbox)",
+            if coordinator.backend().is_local() {
+                "all-local direct apply with frontier marker"
+            } else {
+                "durable outbox claim-apply-ack"
+            }
+        );
         sync = sync.with_vector_coordinator(coordinator);
         return Ok(SecondaryManagers {
             #[cfg(feature = "fulltext")]

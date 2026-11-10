@@ -655,6 +655,14 @@ fn attach_vector_coordinator(
         policy.max_concurrency
     );
     manager.configure_backend_policy(policy);
+    info!(
+        "Vector fast-path deployment: {} (frontier marker still requires a configured outbox)",
+        if backend.is_local() {
+            "all-local direct apply with frontier marker"
+        } else {
+            "durable outbox claim-apply-ack"
+        }
+    );
     Ok(manager)
 }
 

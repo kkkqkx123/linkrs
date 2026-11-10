@@ -18,6 +18,44 @@ impl std::fmt::Display for RuntimeBridgeError {
 
 impl std::error::Error for RuntimeBridgeError {}
 
+/// Block the calling thread until `future` completes on an injected owner.
+///
+/// The injected handle is authoritative when present: it avoids creating a
+/// transient runtime on the commit hot path. Only when no handle was
+/// injected does the caller fall back to `block_on_ambient`.
+///
+/// Behavior with an injected handle:
+/// - outside any runtime: drive directly on the injected handle;
+/// - inside a runtime: `block_in_place` when the flavor allows it,
+///   otherwise drive on a helper thread that blocks on the injected handle.
+///   The future itself always runs on the injected owner; no new runtime is
+///   created here.
+pub fn block_on_injected<F, T>(
+    handle: &tokio::runtime::Handle,
+    future: F,
+) -> Result<T, RuntimeBridgeError>
+where
+    F: std::future::Future<Output = T> + Send,
+    T: Send,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                Ok(tokio::task::block_in_place(|| handle.block_on(future)))
+            }
+            _ => std::thread::scope(|scope| {
+                scope
+                    .spawn(|| Ok(handle.block_on(future)))
+                    .join()
+                    .map_err(|_| {
+                        RuntimeBridgeError("injected runtime thread panicked".to_string())
+                    })?
+            }),
+        };
+    }
+    Ok(handle.block_on(future))
+}
+
 /// Block the calling thread until `future` completes.
 ///
 /// Behavior by ambient context:

@@ -113,8 +113,13 @@ impl SyncManager {
         Fut: std::future::Future<Output = Result<T, SyncError>> + Send,
         T: Send,
     {
-        crate::runtime::block_on_ambient(f())
-            .map_err(|error| SyncError::Internal(error.to_string()))?
+        if let Some(handle) = self.runtime_handle.clone() {
+            crate::runtime::block_on_injected(&handle, f())
+                .map_err(|error| SyncError::Internal(error.to_string()))?
+        } else {
+            crate::runtime::block_on_ambient(f())
+                .map_err(|error| SyncError::Internal(error.to_string()))?
+        }
     }
 }
 

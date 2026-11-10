@@ -243,17 +243,12 @@ impl VectorIndexManager {
             return Ok(collection_name);
         }
 
-        let config = if self.backend.is_local() {
-            CollectionConfig::new(vector_size, distance)
-        } else {
-            let hnsw_config = simvec::HnswConfig::new(16, 100).with_payload_m(16);
-            CollectionConfig::new(vector_size, distance).with_hnsw(hnsw_config)
-        };
+        let requested = self.backend.default_collection_config(vector_size, distance);
         // Register and compare the effective (stored-equivalent) config:
         // the engine/store fill tier defaults at creation, so comparing the
         // raw request against a stored config false-conflicts on idempotent
         // re-creation (e.g. sibling logical indexes sharing one collection).
-        let config = self.backend.effective_collection_config(&config);
+        let config = self.backend.effective_collection_config(&requested);
 
         if !self.backend.index_exists(&collection_name) {
             self.backend
@@ -449,7 +444,7 @@ impl VectorIndexManager {
                     }
                 }
             }
-        } else if self.backend.is_local() && self.backend.index_exists(&live_name) {
+        } else if self.backend.owns_space_slice_reclaim() && self.backend.index_exists(&live_name) {
             let remaining_siblings = self
                 .logical_indexes
                 .iter()

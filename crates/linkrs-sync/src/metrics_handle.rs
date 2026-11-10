@@ -135,6 +135,18 @@ impl VectorEngineHandle for MetricsEngineHandle {
         self.inner.supports_atomic_promote()
     }
 
+    fn default_collection_config(
+        &self,
+        vector_size: usize,
+        distance: simvec::DistanceMetric,
+    ) -> CollectionConfig {
+        self.inner.default_collection_config(vector_size, distance)
+    }
+
+    fn owns_space_slice_reclaim(&self) -> bool {
+        self.inner.owns_space_slice_reclaim()
+    }
+
     async fn apply_grouped_batch(
         &self,
         upserts: std::collections::HashMap<String, Vec<VectorPoint>>,

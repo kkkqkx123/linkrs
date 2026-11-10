@@ -910,10 +910,31 @@ impl super::SyncManager {
 }
 
 impl super::SyncManager {
+    /// Whether a deployment may use the local fast path at all. Deployment
+    /// shape only: every configured vector target is local and ready. This
+    /// is the assembly-time part of the decision; per-batch intent shape is
+    /// checked separately in `fast_path_eligible`.
+    pub fn fast_path_deployment_ready(&self) -> bool {
+        if self.sqlite_outbox.is_none() {
+            return false;
+        }
+        #[cfg(feature = "vector")]
+        if let Some(coordinator) = self.vector_coordinator.as_ref() {
+            if coordinator.is_disabled_engine() || !coordinator.backend().is_local() {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Whether a committed batch may bypass the durable outbox and apply
     /// directly to the local engines. Requires a configured outbox for the
     /// frontier marker, all-local ready targets, and data-plane intents.
     /// Schema changes and undecodable intents always take the outbox path.
+    /// Cross-engine ordering: the direct apply runs before the frontier
+    /// marker, so a crash between them replays from the marker through the
+    /// regular outbox path with identical idempotency keys and no double
+    /// apply.
     fn fast_path_eligible(&self, intents: &[linkrs_core::wal::OutboxIntent]) -> bool {
         if self.sqlite_outbox.is_none() {
             return false;
@@ -982,10 +1003,11 @@ impl super::SyncManager {
                             Ok(())
                         });
                         if let Err(error) = marker {
-                            log::error!(
-                                "Fast-applied transaction {} at {} but the frontier marker failed: {}",
+                            self.clear_transaction_intents(txn_id);
+                            return Err(SyncError::PersistenceError(format!(
+                                "Fast-applied transaction {} at {} but the frontier marker failed: {}; outbox frontier needs recovery",
                                 txn_id, commit_lsn, error
-                            );
+                            )));
                         }
                     }
                     self.clear_transaction_intents(txn_id);
