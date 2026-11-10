@@ -1,0 +1,12 @@
+Package: linkrs
+Version: 0.1.0
+Title: Graph Database Binding
+Description: Thin R binding over the Linkrs C API (bring your own
+    liblinkrs). Covers databases, sessions, transactions, results, schema,
+    queries and statistics with the same semantics as the Python,
+    JavaScript, Go and Java bindings.
+Authors@R: person("linkrs contributors", email = "linkrs-maintainers@example.com", role = c("aut", "cre"))
+License: Apache-2.0
+Encoding: UTF-8
+Imports: jsonlite
+SystemRequirements: C toolchain; liblinkrs built with the c_api feature

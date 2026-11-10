@@ -642,7 +642,7 @@ fn attach_vector_coordinator(
         info!("Vector collection granularity: {:?}", granularity);
     }
     info!("Vector index sync enabled");
-    let manager = sync_manager.with_vector_coordinator(vector_coordinator);
+    let mut manager = sync_manager.with_vector_coordinator(vector_coordinator);
     // Backend-aware delivery policy: batch / lease / retries / concurrency
     // derived from `VectorConfig` so `manager.rs` does not branch on `is_local`.
     let policy = linkrs_sync::backend::BackendDeliveryPolicy::from_config(_config.vector_config());

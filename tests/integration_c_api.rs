@@ -528,3 +528,29 @@ fn test_c_api_concurrent_sessions() {
     assert_ne!(session2.handle(), session3.handle());
     assert_ne!(session1.handle(), session3.handle());
 }
+
+// ==================== Null-Handle Contract Tests ====================
+//
+// Every handle-releasing entry point must reject null with LINKRS_MISUSE
+// instead of faulting. Foreign-language bindings rely on this contract:
+// a released-then-nulled handle can never reach Rust again, but a
+// programming error must still surface as a catchable status code.
+
+#[test]
+fn test_c_api_null_handle_contract() {
+    use linkrs::api::embedded::c_api;
+    let misuse = linkrs_error_code_t::LINKRS_MISUSE as i32;
+    unsafe {
+        assert_eq!(c_api::database::linkrs_close(ptr::null_mut()), misuse);
+        assert_eq!(c_api::session::linkrs_session_close(ptr::null_mut()), misuse);
+        assert_eq!(c_api::result::linkrs_result_free(ptr::null_mut()), misuse);
+        assert_eq!(c_api::transaction::linkrs_txn_commit(ptr::null_mut()), misuse);
+        assert_eq!(c_api::transaction::linkrs_txn_rollback(ptr::null_mut()), misuse);
+        // Unit-returning releasers tolerate null by doing nothing.
+        c_api::transaction::linkrs_txn_free(ptr::null_mut());
+        assert_eq!(c_api::batch::linkrs_batch_free(ptr::null_mut()), misuse);
+        assert_eq!(c_api::config::linkrs_config_free(ptr::null_mut()), misuse);
+        // Unit-returning releasers must at least tolerate null the same way.
+        c_api::prepared::linkrs_stmt_free(ptr::null_mut());
+    }
+}

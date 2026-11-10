@@ -186,7 +186,9 @@ autobenches = false
 
 [lib]
 name = "linkrs"
-crate-type = ["rlib"]
+# rlib for Rust consumers; cdylib/staticlib so foreign-language bindings
+# can load the C API directly (same shape as the simvec crate).
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [[bin]]
 name = "linkrs-server"

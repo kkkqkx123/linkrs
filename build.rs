@@ -24,10 +24,22 @@ fn main() {
 
     // cbindgen emits per-item warnings for the `feature = "embedded"` gating of
     // the parsed crate; only surface its output when generation actually fails.
-    let output = Command::new("cbindgen")
+    // Air-gapped build machines may not have cbindgen on PATH. The header is
+    // committed, so keep it and continue with a warning instead of failing;
+    // drift is still caught by the header-consistency test.
+    let output = match Command::new("cbindgen")
         .args(["-c", CONFIG, "-o", HEADER, C_API_CRATE])
         .output()
-        .expect("c_api builds require cbindgen; install it with `cargo install cbindgen`");
+    {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "cargo:warning=cbindgen not found; keeping committed {HEADER} without regenerating"
+            );
+            return;
+        }
+        Err(e) => panic!("failed to run cbindgen while generating {HEADER}: {e}"),
+    };
 
     if !output.status.success() {
         eprint!("{}", String::from_utf8_lossy(&output.stdout));

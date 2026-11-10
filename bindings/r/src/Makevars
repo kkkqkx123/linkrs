@@ -1,0 +1,2 @@
+PKG_CPPFLAGS = -I/home/kkkqkx/code/linkrs/include
+PKG_LIBS = -L/home/kkkqkx/code/linkrs/target/debug -llinkrs -Wl,-rpath,/home/kkkqkx/code/linkrs/target/debug
