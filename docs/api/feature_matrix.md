@@ -33,7 +33,7 @@
 | 同步/Outbox | — | ✅ `/sync/*`（status/outbox/diagnostics/dead/requeue/degraded/retention） | ✅ `GetSyncStatus`, `RetryOutbox`, degraded/retention 系列 | — | ✅ 同步方法集（outbox/diagnostics/dead/requeue/degraded/retention） | ✅ `\sync` |
 | 导入/导出 | ⚠️ `export_query_to_file` + `BatchInserter`（文件导入走服务端） | ✅ `/import`, `/export` | ✅ `ImportData`, `ExportData`, `GetImportStatus` | — | ✅ `server_import_file`, `server_export_*` | ✅ `\import --server`, `\export --server` |
 | Web 管理 | — | —（`/api` 挂载 Web 后端，见说明） | — | ✅ `/api/v1/queries|schema|data|graph`（历史/收藏/数据浏览/图查询；执行经 `/v1`） | — | — |
-| C API（FFI） | ⚠️ 嵌入式 API 的 FFI 投影（`c_api` 特性门控，隐含 `embedded`，约 170 个导出符号）：库/会话/结果句柄生命周期（含内存库一键开启）、查询（含位置/命名带参、参数加会话变量联合执行、`validate`/`explain`）、结果（含按名 `bool/float`、行与结果集 JSON 导出）、事务（含配置化开启、事务信息、保存点枚举与按名查找、会话与事务两侧的命名/联合执行、`kill`/`list`/`metrics`）、预编译（含批量绑定、原文回读、参数元信息、批量执行）、会话变量、批量（含多条添加、结果汇总 JSON）、UDF（含聚合、扩展加载/列表/安装）、配置（构造期向量开关 setter 与内存/路径查询 + 运行期 `get/update/reset/bulk`）、迁移（`plan`/`execute`/`rollback`）、版本历史读、结构化 Schema（空间/标签/边类型 `create/drop/list/get`，属性定义走 JSON）、统计（`changes`/`last-id`/`statistics`/`overview`）、hooks（`trace`/`commit`/`rollback`/`update`）/中断（含中断状态查询）、向量/全文/混合搜索（运行时门控，见说明）、结果空值判断、结果句柄直接导出、错误槽（`errcode/errmsg/errstr/offset/extended`）、调用方自驱动的 `busy_handler` + 建议式 `busy_timeout` | — | — | — | — | — |
+| C API（FFI） | ⚠️ 嵌入式 API 的 FFI 投影（`c_api` 特性门控，隐含 `embedded`，172 个导出函数）：库/会话/结果句柄生命周期（含内存库一键开启）、查询（含位置/命名带参、参数加会话变量联合执行、`validate`/`explain`）、结果（含按名 `bool/float`、行与结果集 JSON 导出）、事务（含配置化开启、事务信息、保存点枚举与按名查找、会话与事务两侧的命名/联合执行、`kill`/`list`/`metrics`）、预编译（含批量绑定、原文回读、参数元信息、批量执行）、会话变量、批量（含多条添加、结果汇总 JSON）、UDF（含聚合、扩展加载/列表/安装）、配置（构造期向量开关 setter 与内存/路径查询 + 运行期 `get/update/reset/bulk`）、迁移（`plan`/`execute`/`rollback`）、版本历史读、结构化 Schema（空间/标签/边类型 `create/drop/list/get`，属性定义走 JSON）、统计（`changes`/`last-id`/`statistics`/`overview`）、hooks（`trace`/`commit`/`rollback`/`update`）/中断（含中断状态查询）、向量/全文/混合搜索（运行时门控，见说明）、结果空值判断、结果句柄直接导出、错误槽（`errcode/errmsg/errstr/offset/extended`）、调用方自驱动的 `busy_handler` + 建议式 `busy_timeout` | — | — | — | — | — |
 | 输出/脚本/分页 | — | — | — | — | — | ✅ CLI 本地能力（脚本/变量/pager/输出重定向） |
 
 ## GPUI 桌面客户端
@@ -113,7 +113,7 @@ Schema 级 ER 只读视图（见 `docs/plan/gpui-schema-er-design.md`）、中�
 - 向量（`vector`）与全文（`fulltext`）路由受特性门控编译；未启用特性时对应 HTTP/gRPC/嵌入式能力不可用。
 - Web 列指 Web 后端 `/api/*`（历史/收藏/数据浏览/图数据/Schema 扩展只读查询）；实际查询执行仍经 `/v1`，
   版本/迁移历史在 Web 侧只读。
-- C API（`crates/linkrs-api/src/embedded/c_api/`，`c_api` 特性门控并隐含 `embedded`，约 170 个导出符号）
+- C API（`crates/linkrs-api/src/embedded/c_api/`，`c_api` 特性门控并隐含 `embedded`，172 个导出函数）
   是嵌入式 Rust API 的 FFI 投影，按模块盘点如下：
   库生命周期 `open/open_memory/open_with_config/close/libversion/free[_string]`；
   会话 `session_create/close`、`use_space/current_space`、`set/get_autocommit`、
@@ -149,3 +149,5 @@ Schema 级 ER 只读视图（见 `docs/plan/gpui-schema-er-design.md`）、中�
   `threshold` 为负表示无截断）/全文/混合搜索（请求与结果走 JSON，阻塞式桥接，特性未编译时报未实现错误）、
   `cell_is_null` 空值判断（结果集仍整体物化，不引入游标）、结果句柄直接导出、`checkpoint_on_close` 类型化 setter。
   有意不覆盖用户管理、同步运维、流式/游标、Web 管理。补充设计见 `docs/plan/c_api_supplement_design.md`。
+  分模块文档见 `docs/api/c_api/`，多语言绑定见 `docs/api/bindings/`（Python/JS/Go/Java/R 五端，
+  覆盖库/会话/事务/结果集/模式/查询执行/参数化/校验解释/会话统计，首版排除 UDF、钩子、预编译、批量、向量/全文、迁移、会话变量、逐格访问器）。

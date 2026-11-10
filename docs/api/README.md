@@ -6,6 +6,8 @@
 
 - [功能矩阵](feature_matrix.md)
 - [嵌入式 API](embedded/README.md)
+- [C API（FFI）](c_api/README.md)
+- [多语言绑定](bindings/README.md)
 - [服务端 API](server/README.md)
 - [Web 管理 API](web/README.md)
 - [客户端 API](client/README.md)
@@ -14,6 +16,8 @@
 ## 层级说明
 
 - **嵌入式 Rust API**：进程内数据库访问，适合单机/桌面/测试。
+- **C API（FFI）**：嵌入式 API 的 C 投影（`c_api` 特性，172 个导出函数），多语言绑定的底层。
+- **多语言绑定**：Python/JS/Go/Java/R 五端薄封装，直调动态库。
 - **服务端 HTTP/gRPC API**：网络服务，支持多客户端与管理能力。
 - **Web 管理 API**：挂载于 `/api` 的管理与浏览接口。
 - **客户端 API**：`linkrs-client` 对 HTTP API 的 Rust 封装。

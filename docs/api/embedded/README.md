@@ -4,7 +4,7 @@
 
 Linkrs 的嵌入式 API 允许开发者把数据库直接嵌入到应用程序中使用，适合单机应用、桌面工具和测试环境。
 
-当前仓库只保留 Rust 嵌入式 API，不再维护独立的 C API 实现。
+嵌入式 API 有两层：Rust 原生 API（`GraphDatabase/Session/Transaction`）与其 FFI 投影 C API（172 个导出函数，见 [C API 文档](../c_api/README.md)），后者是全部多语言绑定的底层（见[绑定文档](../bindings/README.md)）。
 
 ## 启用方式
 
@@ -45,4 +45,4 @@ cargo build --features embedded
 
 ## C API 说明
 
-当前仓库不再维护独立的 C API 实现；嵌入式 Rust API 是唯一支持的嵌入式入口。
+C API（`c_api` 特性，隐含 `embedded`）是嵌入式 Rust API 的 FFI 投影，头文件 `include/linkrs.h` 由 cbindgen 生成，详见 [C API 文档](../c_api/README.md)。多语言绑定（Python/JS/Go/Java/R）均构建于其上，见[绑定文档](../bindings/README.md)。
