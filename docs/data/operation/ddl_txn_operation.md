@@ -85,7 +85,7 @@ close() → 释放
 | **事务执行算子** | `crates/linkrs-query/src/executor/streaming/operators/txn_operator.rs` |
 | **事务 spec** | `crates/linkrs-query/src/executor/streaming/operators/spec/txn.rs` |
 | **权限类型** | `crates/linkrs-core/src/permission.rs`（`RoleType`） |
-| **DDL 语句语法** | `docs/release/03_ddl_schema_definition.md`、`docs/release/04_dcl_user_management.md`、`docs/release/06_transaction_management.md` |
+| **DDL 语句语法** | `docs/release/statements/03_ddl_schema_definition.md`、`docs/release/statements/04_dcl_user_management.md`、`docs/release/statements/06_transaction_management.md` |
 
 ---
 

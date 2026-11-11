@@ -338,7 +338,7 @@ CHECKPOINT
 #### 与其他语句的关系
 - 与 `PURGE EXPIRED` 同属维护语句，均经通用查询接口执行、无专用 RPC
 - 过期数据的物理清理见 `PURGE EXPIRED`
-  （`docs/release/03_ddl_schema_definition.md` 第 15 节）
+  （`docs/release/statements/03_ddl_schema_definition.md` 第 15 节）
 
 ---
 

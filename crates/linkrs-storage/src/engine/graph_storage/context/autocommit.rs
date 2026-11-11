@@ -403,6 +403,17 @@ impl AutoCommitBatchWindow {
                     .advance_barriers(linkrs_core::types::CommitLsn::new(durable.as_u64()));
             }
         }
+        // 1b) Table-log sweep: grouped statements defer their per-edge
+        // table-WAL fsyncs, so every armed table log is fsynced once here,
+        // after the global WAL is durable. Without this sweep the group's
+        // "one fsync" would cover only the global log.
+        self.base_ctx
+            .persistent
+            .data_store
+            .for_all_edge_partitions_mut(|_, table| {
+                table.sync_wal_file()?;
+                Ok(())
+            })?;
         // 2) Visibility: commit the shared write timestamp once, in commit
         // order, then publish the merged window write set.
         if let Some(ts) = *self.first_ts.lock() {

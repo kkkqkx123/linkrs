@@ -9,16 +9,16 @@
 
 ## 总体结果
 
-32 个套件中 28 个通过，4 个异常，1 个缺失：
+32 个套件中 31 个通过（含全部回归门 PASS），rollback B4 的 25000 边行因超时未完成（两行有效数据已记录）：
 
-| 状态 | 套件 | 原因 |
+| 状态 | 套件 | 说明 |
 |---|---|---|
-| 通过 | 其余 28 个 | 含回归门全部 PASS |
-| 确定性失败 | crash_recovery_bench | reopen 时 checkpoint rename 失败（源码级问题，与环境无关，QUICK/FULL 均复现） |
-| 确定性失败 | storage_bench | `storage_edge_insert/single` 报 CapacityExceeded（容量配置问题；bulk_load 部分数据有效） |
+| 通过 | 其余 31 个 | 含回归门全部 PASS |
+| 已修复并重跑 | crash_recovery_bench | 同目录并发 flush 的 `*.tmp` 竞态 + checkpoint tmp 目录竞态 + scheduler 自动 checkpoint 与显式 checkpoint 互斥；进程内按目录串行锁 + bench 用 `begin_bulk_load` 会话抑制 trigger；clean reopen 109.6ms，WAL-tail reopen 1143ms，见 `storage.md` |
+| 已修复并重跑 | storage_bench | 单 store 无限增长触发 CapacityExceeded；bench 改为每 100 次轮换 store；全绿（持久单边写 1.94ms/edge），见 `storage.md` |
 | 环境失败→已解决 | hnsw_build_bench | 默认 `ulimit -n 1024` 下 EMFILE；放开到 65536 后 6 项全部完成（1000 点 workers_4 加速 2.4x，2000 点 3.1x），见 `vector.md` |
-| 中断 | rollback_bench | B4 单边持久写约 44ms/edge 过慢 + 他人 buildroot 任务争抢，超时前主动终止，保留 B4 首行部分数据 |
-| 缺失 | fulltext_bench | vendored tantivy 子模块编译失败（E0599，`DynamicColumn::PlainBytes/PlainStr` 缺失），仓库既有状态，非本次引入 |
+| 部分数据 | rollback_bench | B4 5000/10000 边行有效（写入 72/47ms per edge，commit/abort 可忽略）；25000 边行 90 分钟超时未完成（median-of-2 墙钟翻倍 + HDD fsync-bound），见 `storage.md` |
+| 已修复并重跑 | fulltext_bench | tantivy 闭包 patch 扩大到 7 个 crate + receiver 闭包修复 + bench 内嵌 `block_on` 改同步；index 约 1.3s/iter，search 1.7~5.0µs，见 `core-fulltext.md` |
 
 ## 干扰窗口说明
 
@@ -31,6 +31,6 @@
 - `transaction.md`：事务层 2 套件
 - `vector.md`：向量层 9 套件
 - `core-fulltext.md`：serde 与 fulltext 缺失说明
-- 原始日志：`raw-2c9b92f8/`（已 gitignore，含 quick/full 日志、构建日志、criterion 全量明细 556 组 estimates.json、plain-main 的 `results.txt`）
+- 原始日志：`raw-2c9b92f8/`（已 gitignore，含 quick/full 日志、`results/rerun-fix1-2c9b92f8/` 14 套件重跑日志与 RUN_INFO、构建日志、criterion 全量明细 556 组 estimates.json、plain-main 的 `results.txt`）
 
 回归门结论：olap Q1~Q5、traversal 两项阈值全部 PASS。server 二进制端到端测试列为后续阶段，本次未执行。

@@ -1,8 +1,16 @@
 # 存储层基准数据（2c9b92f8，编译服务器 node1）
 
-## storage_bench（部分失败，bulk 数据有效）
+## storage_bench（已修复，全绿）
 
-indexed_bulk_load/5000 中位数 376ms（13.3 Kelem/s），/10000 中位数 1.17s（8.6 Kelem/s）。随后 `storage_edge_insert/single` 报 CapacityExceeded 中断，属容量配置问题（bulk 阶段已把预置空间占满），bulk 段数据有效，单边插入段需修容量配置后重跑。
+首轮 `storage_edge_insert/single` 因单 store 无限增长触发 CapacityExceeded 中断。修复：bench 改为每 100 次插入轮换 store（setup 摊薄，见 bench 内注释）。重跑 exit=0（1802s），全部完成：
+
+- bulk_vertex_insert：1000/10000 分别约 146/146 Kelem/s（规模无关，纯内存路径）。
+- indexed_bulk_load：1000→10000 从 18.3 降至 8.9 Kelem/s（索引维护成本随规模显现）。
+- edge_insert_density：sparse 约 40.1 Kelem/s，dense 约 28.7 Kelem/s。
+- single（持久单边写，HDD fsync-bound）：中位数 1.94ms/edge。
+- scan：cursor 全扫描约 1.47~1.63 Melem/s，顶点扫描约 1.66~1.76 Melem/s；point_lookup 窄表 37.3 Melem/s。
+- churn delete_reinsert_10k：约 9.7 Kelem/s。
+- checkpoint 段：2000 行约 1.9 Kelem/s，10000 行约 12.9 Kelem/s（固定开销主导，小规模反而低）。
 
 ## storage_read_baseline
 
@@ -33,13 +41,20 @@ indexed_bulk_load/5000 中位数 376ms（13.3 Kelem/s），/10000 中位数 1.17
 
 batch_512 写入约 7.9ms；5000 条目顺序重放约 50.6µs。
 
-## crash_recovery_bench（确定性失败）
+## crash_recovery_bench（已修复，全绿）
 
-`clean_checkpoint` 场景 reopen 时 checkpoint rename 失败（`groups_manifest.tmp` 缺失），QUICK 与 FULL 均复现，与环境无关，属源码级问题，需修后重跑。
+首轮两处源码级竞态，均已修复并验证通过（node1 安静窗口，load<0.5）：
 
-## rollback_bench（部分数据 + 被干扰中断）
+1. 同目录并发 flush 的 `*.tmp` 清理/重命名竞态：`compression.rs` 新增进程内按目录串行锁 `with_table_flush_lock`，包装全部 flush 入口。
+2. checkpoint 的 `checkpoint_{seq}.tmp` 目录被并发 checkpoint 或 `open` 时清理删掉：`with_checkpoint_dir_lock` 串行化 checkpoint 执行与 open 期清理；另发现 `populate` 中显式 checkpoint 与后台 scheduler 自动 checkpoint 在同一 coordinator 上互斥（fail-fast "already active"），bench 改用产品自带的 `begin_bulk_load` 会话抑制 trigger（`abandon` 结尾，不引入额外 checkpoint，WAL-tail 场景不受影响）。
 
-B4（5 万顶点）：5000 边行写入 219.8s（约 44ms/edge，持久单边写）、commit 37.9ms、abort 0.5ms。10000 边行进行中因同机 buildroot 争抢（/tmp 所在根分区 util 95%）过慢，31 分钟后主动终止。结论：持久单边写成本极高（与 ingest 单提交 40µs/edge 同量级印证），需在安静窗口重跑完整 B4。
+数据（criterion 中位数，2000 顶点/4000 边）：clean_checkpoint reopen 109.6ms，wal_tail_replay reopen 1143ms（约 10.4x，WAL 重放成本）；plain-main 附带 one-shot：97.1ms / 1602.9ms。
+
+## rollback_bench（B4 两行有效，25000 行超时未完成）
+
+B4（5 万顶点，持久事务单边写，HDD fsync-bound，median-of-2）：5000 边行写入 362.8s（约 72ms/edge）、commit 35.9ms、abort 0.59ms；10000 边行写入 467.4s（约 47ms/edge）、commit 101.9ms、abort 0.79ms。25000 边行未能在 90 分钟超时内完成（median-of-2 使墙钟约翻倍）。结论：abort/commit 相对写入可忽略（<0.1%），写入是 durability-bound；25000 行需更大时间预算或 SSD 环境，暂记为 open。
+
+B4 根因与修复（b4_probe 专项，devs 同机 5000 顶点 / 200 边）：分段计时确认每边 40ms 几乎全是表级 WAL `sync_data`（`wal_append` 中位 39.7ms，其余阶段 <0.1ms），即显式事务 eager apply 的逐边 fsync。修复后显式事务单边 415µs（约 96 倍加速），批量 274µs，自动提交单边 53.4ms（每语句一次提交，正确成本）。回归：`linkrs-storage` lib 1395 + 集成 83（wal_recovery/transaction_isolation/crash 各套件）全绿。B4 全量重跑与默认 5 万顶点 probe 待安静窗口：5 万顶点 setup 在共享宿主上被邻居大构建 IO 拖住（与修复无关，旧二进制同样停滞，顶点自动提交逐次 fsync 属正确成本）。
 
 ## neighbor_batch_bench（目标达成）
 

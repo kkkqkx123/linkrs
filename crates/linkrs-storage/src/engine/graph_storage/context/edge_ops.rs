@@ -50,6 +50,18 @@ struct EdgeLabelLookupCtx<'a> {
     ts: Timestamp,
 }
 
+/// Whether table-WAL fsyncs defer to the commit point: true for
+/// explicit-transaction staging (uncommitted redo needs no durability
+/// barrier) and for group-commit windows (one fsync per group at
+/// `finalize_group`). Auto-commit statements (each its own commit) and
+/// context-free paths keep per-call sync.
+fn defer_edge_wal_sync(ctx: &GraphStorageContext) -> bool {
+    let Some(operation) = ctx.operation_context.as_ref() else {
+        return false;
+    };
+    !operation.auto_commit || ctx.is_group_bound()
+}
+
 impl GraphStorageContext {
     pub fn insert_edge(&self, params: InsertEdgeParams) -> StorageResult<()> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
@@ -123,12 +135,13 @@ impl GraphStorageContext {
                 Ok(table)
             },
             |edge_table| {
-                edge_table.insert_edge(
+                edge_table.insert_edge_with_sync(
                     src_internal,
                     dst_internal,
                     params.rank,
                     params.properties,
                     params.ts,
+                    !defer_edge_wal_sync(self),
                 )?;
                 Ok(edge_table.needs_background_maintenance())
             },
@@ -601,7 +614,13 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_single_edge_table_mut(&key, |edge_table| {
-                edge_table.delete_edge(src_internal, dst_internal, params.rank, ts)
+                edge_table.delete_edge_with_sync(
+                    src_internal,
+                    dst_internal,
+                    params.rank,
+                    ts,
+                    !defer_edge_wal_sync(self),
+                )
             })?;
         if deleted {
             self.mark_edge_modified(params.edge_label);

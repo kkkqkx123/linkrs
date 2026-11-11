@@ -6,6 +6,20 @@ use linkrs_core::types::{EdgeId, Timestamp, VertexId};
 use linkrs_core::{StorageError, StorageResult, Value};
 
 impl EdgeStore {
+    /// Commit-point durability fence: fsync this table's log if one is
+    /// armed. The commit path calls this for every table after the global
+    /// WAL is durable, closing the deferred-sync window opened by staging
+    /// with `wal_sync = false`.
+    pub(crate) fn sync_wal_file(&self) -> StorageResult<()> {
+        if let Some(dir) = self.wal_dir.clone() {
+            crate::edge::edge_table::wal::sync_file(&dir)?;
+        }
+        Ok(())
+    }
+
+    /// `wal_sync = false` defers the table-log fsync to the transaction
+    /// commit point; callers pass false only for explicit-transaction
+    /// staging, where uncommitted redo needs no durability barrier.
     pub fn insert_edge(
         &mut self,
         src: u32,
@@ -13,6 +27,22 @@ impl EdgeStore {
         rank: i64,
         property_values: &[(std::sync::Arc<str>, Value)],
         ts: Timestamp,
+    ) -> StorageResult<()> {
+        self.insert_edge_with_sync(src, dst, rank, property_values, ts, true)
+    }
+
+    /// Single-edge insert with an explicit table-log durability choice.
+    /// `wal_sync = false` defers the fsync to the transaction commit point;
+    /// pass false only for explicit-transaction staging, where uncommitted
+    /// redo needs no durability barrier.
+    pub fn insert_edge_with_sync(
+        &mut self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        property_values: &[(std::sync::Arc<str>, Value)],
+        ts: Timestamp,
+        wal_sync: bool,
     ) -> StorageResult<()> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
@@ -29,7 +59,7 @@ impl EdgeStore {
         // per-step compensation branches here.
         let mut batch = EdgeStagingBatch::new();
         batch.stage_insert(src, dst, rank, property_values, ts);
-        self.commit_staging_batch(batch).map(|_| ())
+        self.commit_staging_batch_with_sync(batch, wal_sync).map(|_| ())
     }
 
     /// Commit many inserts of one edge type in a single staging batch.

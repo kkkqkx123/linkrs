@@ -110,13 +110,55 @@ pub(crate) enum EdgeWalOp {
     },
 }
 
-/// Append `ops` to the table log. The file is fsynced before returning so
-/// a returned commit is durable; commit success and log durability share one
-/// atomic point.
+/// Append `ops` to the table log. When `sync` is set the file is fsynced
+/// before returning so a returned commit is durable; commit success and log
+/// durability share one atomic point. Explicit-transaction staging passes
+/// `sync = false`: uncommitted redo needs no durability barrier (the commit
+/// point fsyncs every touched table log at once), and skipping the per-edge
+/// fsync removes the dominant cost of single-row transactional writes.
 pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
+    append_ops_with_sync(dir, ops, true)
+}
+
+/// Append `ops` to the table log with an explicit durability choice. When
+/// `sync` is set the file is fsynced before returning so a returned commit
+/// is durable; commit success and log durability share one atomic point.
+/// Explicit-transaction staging passes `sync = false`: uncommitted redo
+/// needs no durability barrier (the commit point fsyncs every touched
+/// table log at once), and skipping the per-edge fsync removes the
+/// dominant cost of single-row transactional writes.
+pub(crate) fn append_ops_with_sync(dir: &Path, ops: &[EdgeWalOp], sync: bool) -> StorageResult<()> {
     if ops.is_empty() {
         return Ok(());
     }
+    write_ops(dir, ops)?;
+    if sync {
+        sync_file(dir)?;
+    }
+    Ok(())
+}
+
+/// Fsync the table log file if present. Commit points call this for every
+/// touched table after the global WAL is durable, closing the deferred-sync
+/// window opened by `append_ops` with `sync = false`.
+pub(crate) fn sync_file(dir: &Path) -> StorageResult<()> {
+    let path = wal_path(dir);
+    if !path.exists() {
+        return Ok(());
+    }
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open edge WAL: {}", e)))?;
+    // Append-only redo log: only the data needs a durability barrier, not
+    // file metadata, so `sync_data` avoids the extra metadata flush that
+    // `sync_all` would pay on every commit.
+    file.sync_data()
+        .map_err(|e| StorageError::io_error(format!("Failed to sync edge WAL: {}", e)))?;
+    Ok(())
+}
+
+fn write_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
     std::fs::create_dir_all(dir)?;
     let path = wal_path(dir);
     let mut file = std::fs::OpenOptions::new()
@@ -135,11 +177,6 @@ pub(crate) fn append_ops(dir: &Path, ops: &[EdgeWalOp]) -> StorageResult<()> {
             StorageError::io_error(format!("Failed to write edge WAL entry: {}", e))
         })?;
     }
-    // Append-only redo log: only the data needs a durability barrier, not
-    // file metadata, so `sync_data` avoids the extra metadata flush that
-    // `sync_all` would pay on every commit.
-    file.sync_data()
-        .map_err(|e| StorageError::io_error(format!("Failed to sync edge WAL: {}", e)))?;
     Ok(())
 }
 

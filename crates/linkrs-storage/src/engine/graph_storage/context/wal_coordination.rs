@@ -113,7 +113,22 @@ impl GraphStorageContext {
                 intents,
                 durability,
             ) {
-                Ok(result) => result,
+                Ok(result) => {
+                    // Close the deferred table-log sync window: explicit-txn
+                    // staging skips the per-edge fsync, so every armed table
+                    // log is fsynced once here, after the global WAL commit
+                    // is durable. Skipped for sub-Sync durability, matching
+                    // the global WAL's own guarantee level.
+                    if durability == linkrs_core::types::DurabilityLevel::Sync {
+                        self.persistent.data_store.for_all_edge_partitions_mut(
+                            |_, table| {
+                                table.sync_wal_file()?;
+                                Ok(())
+                            },
+                        )?;
+                    }
+                    result
+                }
                 Err(error) => {
                     self.undo_applied_staging(&applied);
                     return Err(error);

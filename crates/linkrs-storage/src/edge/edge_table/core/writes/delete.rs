@@ -292,12 +292,30 @@ impl EdgeStore {
         self.debug_assert_copies_consistent(edge_id);
     }
 
+    /// `wal_sync = false` defers the table-log fsync to the transaction
+    /// commit point; callers pass false only for explicit-transaction
+    /// staging, where uncommitted redo needs no durability barrier.
     pub fn delete_edge(
         &mut self,
         src: u32,
         dst: u32,
         rank: i64,
         ts: Timestamp,
+    ) -> StorageResult<bool> {
+        self.delete_edge_with_sync(src, dst, rank, ts, true)
+    }
+
+    /// Single-edge delete with an explicit table-log durability choice.
+    /// `wal_sync = false` defers the fsync to the transaction commit point;
+    /// pass false only for explicit-transaction staging, where uncommitted
+    /// redo needs no durability barrier.
+    pub fn delete_edge_with_sync(
+        &mut self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+        wal_sync: bool,
     ) -> StorageResult<bool> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
@@ -307,7 +325,7 @@ impl EdgeStore {
         // write, so the out/in rollback lives in one place.
         let mut batch = EdgeStagingBatch::new();
         batch.stage_delete(src, dst, rank, ts);
-        Ok(self.commit_staging_batch(batch)? > 0)
+        Ok(self.commit_staging_batch_with_sync(batch, wal_sync)? > 0)
     }
 
     /// Delete many edges by key in a single staging commit.

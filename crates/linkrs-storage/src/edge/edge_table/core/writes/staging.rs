@@ -38,7 +38,19 @@ impl EdgeStore {
     ///
     /// Returns the number of net applied entries (inserts plus deletes,
     /// excluding batch-cancelled pairs).
-    pub fn commit_staging_batch(&mut self, mut batch: EdgeStagingBatch) -> StorageResult<usize> {
+    pub fn commit_staging_batch(&mut self, batch: EdgeStagingBatch) -> StorageResult<usize> {
+        self.commit_staging_batch_with_sync(batch, true)
+    }
+
+    /// Staging commit with an explicit table-log durability choice.
+    /// `wal_sync = false` defers the fsync to the transaction commit point;
+    /// pass false only for explicit-transaction staging, where uncommitted
+    /// redo needs no durability barrier.
+    pub fn commit_staging_batch_with_sync(
+        &mut self,
+        mut batch: EdgeStagingBatch,
+        wal_sync: bool,
+    ) -> StorageResult<usize> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
@@ -92,7 +104,7 @@ impl EdgeStore {
                     });
                 }
             }
-            wal::append_ops(&dir, &ops)?;
+            wal::append_ops_with_sync(&dir, &ops, wal_sync)?;
         }
         if order.is_empty() {
             return Ok(0);

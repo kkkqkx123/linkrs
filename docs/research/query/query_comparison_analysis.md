@@ -1,7 +1,7 @@
 # 查询语句对比分析：当前项目 vs ladybug vs neug
 
 > 对比对象：
-> - **当前项目**（linkrs，Rust，Nebula 语句 + Cypher 混合方言）—— 依据 `crates/linkrs-query/**` 与 `docs/release/0x_*.md`
+> - **当前项目**（linkrs，Rust，Nebula 语句 + Cypher 混合方言）—— 依据 `crates/linkrs-query/**` 与 `docs/release/statements/0x_*.md`
 > - **ladybug**（`ref/ladybug`，Kùzu 衍生 openCypher）—— 详见 [ladybug_query_statements.md](./ladybug_query_statements.md)
 > - **neug**（`ref/neug`，openCypher）—— 详见 [neug_query_statements.md](./neug_query_statements.md)
 

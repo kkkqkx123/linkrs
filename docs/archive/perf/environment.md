@@ -34,7 +34,7 @@
 | rustc / cargo | 远端 stable 1.99.1（`~/.cargo/bin`，非登录 shell 需手动加 PATH） |
 | 构建配置 | `.cargo/config.toml` 基线 x86-64 + 运行时分发（本地/远端 CPU 均有 AVX2，自动用上）；无额外 RUSTFLAGS |
 | profile | 无 `[profile.bench]` 覆写，bench 沿用 release 口径（opt-level 3，strip symbols）；dev 仅本地用 |
-| 依赖源 | crates.io 稀疏索引直连；tantivy 六包 patch 到 `crates/tantivy/*` 本地快照（与 crates-io 同版本号、API 更新） |
+| 依赖源 | crates.io 稀疏索引直连；tantivy 七包 patch 到 `crates/tantivy/*` 本地快照（columnar/common/sstable/query-grammar/bitpacker/tokenizer-api，与 crates-io 同版本号、API 更新） |
 | 构建约束 | 编译限定 node0（`taskset -c 0-7,16-23 --jobs 8`），后台落盘日志 |
 
 ## 运行参数
@@ -46,8 +46,10 @@
 | fd 上限 | 非登录 shell 默认 1024（硬上限 1048576）；HNSW 构建类需 `ulimit -n 65536`，已写入运行脚本 |
 | 临时目录 | TempDir 默认走 `/tmp`（根分区 HDD）。根分区被争抢时改设 `TMPDIR=/data/kkkqkx/linkrs/tmp` |
 | 数据集 | 冒烟量级：query/parallel 20k 顶点 60k 边，ingest/rollback 50k 行，crash 2000 顶点，vector 1k~10k 点；公开数据集大规格为后续工作 |
-| 超时保护 | 单套件 `timeout 2400`，超时按中断记录、保留已产出部分 |
+| 超时保护 | 单套件 `timeout 2400`（rollback 重跑用 5400），超时按中断记录、保留已产出部分 |
 
 ## 干扰记录（本轮）
 
 约 14:38（本地时）起同机有 rk3568 buildroot 构建，load 升至 8~14，根分区 util 达 95%。14:38 前完成的 11 个套件为干净数据；之后完成的套件与之共享 CPU/磁盘，criterion 中位数与离群剔除可抑制波动，仍可作回归基线，但不宜与干净窗口数字做小数点级对比。rollback 受影响最大（/tmp 在被争抢的根分区上），已在安静窗口用 TMPDIR 重跑。
+
+重跑轮（UTC 11-10 08:00~11:25）：buildroot 在约 09:55 UTC 再次出现（load 8，持续约 1 小时），storage_bench 后段、wal、rollback 与其重叠；rollback B4 两行（5000/10000）在干扰下完成，25000 行因 90 分钟超时未完成（主因是 HDD fsync-bound 写入过慢，非干扰）。最终 crash_recovery（fix3）与 fulltext（fix2）在约 11:00 UTC 安静窗口完成（load 0.26~0.36），为本轮官方记录数据。

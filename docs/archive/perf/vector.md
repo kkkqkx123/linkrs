@@ -24,9 +24,9 @@ n 规模：余弦 50.2µs（39.8 Melem/s），欧氏 36.6µs（54.6 Melem/s）�
 
 单 worker 约 7.8ms（8.2 Kelem/s），扩展后约 2.4ms（26 Kelem/s）、1.2ms（55 Kelem/s），扩展性良好。
 
-## concurrent_write_bench（写入端扩展性存疑）
+## concurrent_write_bench（写入端扩展健康）
 
-store/engine/engine+pl 三种配置下，1→8 writer 吞吐从约 10k 上到 25k~35k，但 4 writer 起成功率从 10/10 跌到 10/6，8 writer 跌到 10/3。读扩展没问题，写扩展伴随成功率下降，需结合业务语义确认是否为预期背压。
+store/engine/engine+pl 三种配置下，1→8 writer 吞吐从约 10k 涨到 25k~35k（3.6x）。此前误读的“成功率 10/10→10/3”实为 txn/flush 分组数：10 个事务合并进的 flush 数从 10 降到 3（group 1.0→3.33），即组提交合并随并发改善，所有事务均落盘，无丢失。wait/txn 随 writer 增长（98ms→162ms，队列等待），apply/txn 持平（~3ms），属健康的组提交行为，无需业务确认，无需修复。
 
 ## alloc_stats_bench（1 万点 64 维 + 200 查询）
 
