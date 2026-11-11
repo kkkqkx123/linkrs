@@ -14,8 +14,8 @@ linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
 linkrs-query = { version = "0.1.0", path = "../linkrs-query" }
 linkrs-transaction = { version = "0.1.0", path = "../linkrs-transaction" }
 linkrs-sync = { version = "0.1.0", path = "../linkrs-sync" }
-linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext" }
-linkrs-migration = { version = "0.1.0", path = "../linkrs-migration" }
+linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext", optional = true }
+linkrs-migration = { version = "0.1.0", path = "../linkrs-migration", optional = true }
 linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
 serde.workspace = true
 serde_json.workspace = true
@@ -43,10 +43,15 @@ vector-qdrant = [
     "linkrs-query/vector-qdrant",
 ]
 fulltext = [
+    "dep:linkrs-fulltext",
     "linkrs-fulltext/fulltext",
     "linkrs-sync/fulltext",
     "linkrs-query/fulltext",
 ]
+# Online schema migration orchestration (plan generation + fenced execute / rollback).
+# Kept out of the minimal embedded closure; the server enables it unconditionally
+# so its HTTP/gRPC migration handlers keep working without feature flags.
+migration = ["dep:linkrs-migration"]
 c_api = ["embedded"]
 embedded = []
 

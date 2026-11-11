@@ -36,6 +36,9 @@ pub mod busy_handler;
 pub mod config;
 pub mod database;
 pub mod hooks;
+// Migration plan helpers need the optional migration crate; the C API keeps
+// stable symbols and reports "not compiled in" when this is off.
+#[cfg(feature = "migration")]
 pub mod migration;
 pub mod result;
 pub mod session;

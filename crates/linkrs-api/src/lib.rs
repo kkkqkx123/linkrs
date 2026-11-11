@@ -6,6 +6,9 @@
 pub mod api_core;
 
 // Online migration drain fence shared by embedded and server callers.
+// Only compiled when the `migration` feature is on so the minimal embedded
+// closure drops the migration crate entirely.
+#[cfg(feature = "migration")]
 pub mod migration_online;
 
 // Transaction-aware session variable store shared by the server and

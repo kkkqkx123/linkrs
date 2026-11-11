@@ -12,7 +12,7 @@ autobenches = false
 linkrs-core = { version = "0.1.0", path = "../linkrs-core" }
 linkrs-metrics = { version = "0.1.0", path = "../linkrs-metrics" }
 linkrs-storage = { version = "0.1.0", path = "../linkrs-storage" }
-linkrs-migration = { version = "0.1.0", path = "../linkrs-migration" }
+linkrs-migration = { version = "0.1.0", path = "../linkrs-migration", optional = true }
 linkrs-fulltext = { version = "0.1.0", path = "../linkrs-fulltext" }
 linkrs-sync = { version = "0.1.0", path = "../linkrs-sync" }
 serde.workspace = true
@@ -38,6 +38,9 @@ moka.workspace = true
 simvec = { version = "0.1.0", path = "../simvec", optional = true }
 
 [features]
+# Optional to keep the minimal embedded closure free of the migration crate
+# (query itself never references it; planning stays available without it).
+migration = ["dep:linkrs-migration"]
 vector = ["dep:simvec", "linkrs-sync/vector"]
 vector-qdrant = ["vector", "linkrs-sync/vector-qdrant"]
 embedding = ["linkrs-sync/embedding"]

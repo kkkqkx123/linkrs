@@ -9,7 +9,7 @@ use crate::embedded::config::EmbeddedVectorEngine;
 use crate::embedded::result::QueryResult;
 use crate::embedded::session::{GraphDatabaseInner, Session};
 use linkrs_core::Value;
-use linkrs_fulltext::FulltextConfig;
+use linkrs_config::fulltext::FulltextConfig;
 #[cfg(feature = "fulltext")]
 use linkrs_fulltext::FulltextIndexManager;
 use linkrs_metrics::StatsManager;
@@ -880,6 +880,8 @@ impl<S: StorageClient + Clone + Send + Sync + 'static> GraphDatabase<S> {
     }
 
     /// Get transaction manager for online coordination (drain fences, etc).
+    /// Only needed by the optional migration orchestration.
+    #[cfg(feature = "migration")]
     pub(crate) fn txn_manager(&self) -> Arc<TransactionManager> {
         self.inner.txn_manager.clone()
     }

@@ -10,7 +10,7 @@
 //! Batch operations
 //! Error handling
 
-#![cfg(feature = "embedded")]
+#![cfg(feature = "c_api")]
 
 use std::ffi::CString;
 use std::ptr;

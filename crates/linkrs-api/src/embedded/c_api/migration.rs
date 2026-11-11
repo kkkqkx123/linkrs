@@ -1,6 +1,17 @@
-use std::ffi::{c_char, c_int, CStr, CString};
+//! C API migration orchestration.
+//!
+//! The symbols stay declared regardless of features so the committed
+//! `include/linkrs.h` never drifts; without the `migration` feature each
+//! entry point fails with a null return and a "not compiled in" message,
+//! mirroring the fulltext C API.
+
+use std::ffi::{c_char, c_int, CString};
 use std::ptr;
 
+#[cfg(feature = "migration")]
+use std::ffi::CStr;
+
+#[cfg(feature = "migration")]
 use crate::embedded::c_api::database::LinkrsHandle;
 use crate::embedded::c_api::error::set_last_error_message;
 use crate::embedded::c_api::types::linkrs_t;
@@ -42,50 +53,61 @@ pub unsafe extern "C" fn linkrs_migration_execute(
         return ptr::null_mut();
     }
 
-    let plan_str = unsafe {
-        match CStr::from_ptr(plan_json).to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                set_last_error_message("invalid plan_json: not utf8".to_string());
+    #[cfg(not(feature = "migration"))]
+    {
+        let _ = (db, plan_json);
+        set_last_error_message("migration support is not compiled in".to_string());
+        return ptr::null_mut();
+    }
+
+    #[cfg(feature = "migration")]
+    {
+        let plan_str = unsafe {
+            match CStr::from_ptr(plan_json).to_str() {
+                Ok(s) => s,
+                Err(_) => {
+                    set_last_error_message("invalid plan_json: not utf8".to_string());
+                    return ptr::null_mut();
+                }
+            }
+        };
+
+        let plan: linkrs_migration::MigrationPlan = match serde_json::from_str(plan_str) {
+            Ok(p) => p,
+            Err(e) => {
+                set_last_error_message(format!("failed to parse plan json: {}", e));
                 return ptr::null_mut();
             }
-        }
-    };
+        };
 
-    let plan: linkrs_migration::MigrationPlan = match serde_json::from_str(plan_str) {
-        Ok(p) => p,
-        Err(e) => {
-            set_last_error_message(format!("failed to parse plan json: {}", e));
-            return ptr::null_mut();
-        }
-    };
+        let handle = unsafe { &*(db as *mut LinkrsHandle) };
+        let report = match handle.inner.execute_migration_plan_online(
+            &plan,
+            &linkrs_migration::MigrationConfig::default(),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                set_last_error_message(format!("migration failed: {}", e));
+                return ptr::null_mut();
+            }
+        };
 
-    let handle = unsafe { &*(db as *mut LinkrsHandle) };
-    let report = match handle
-        .inner
-        .execute_migration_plan_online(&plan, &linkrs_migration::MigrationConfig::default())
-    {
-        Ok(r) => r,
-        Err(e) => {
-            set_last_error_message(format!("migration failed: {}", e));
-            return ptr::null_mut();
-        }
-    };
+        let errors_json =
+            serde_json::to_string(&report.errors).unwrap_or_else(|_| "[]".to_string());
+        let errors_c = match CString::new(errors_json) {
+            Ok(c) => c.into_raw(),
+            Err(_) => ptr::null_mut(),
+        };
 
-    let errors_json = serde_json::to_string(&report.errors).unwrap_or_else(|_| "[]".to_string());
-    let errors_c = match CString::new(errors_json) {
-        Ok(c) => c.into_raw(),
-        Err(_) => ptr::null_mut(),
-    };
+        let c_report = Box::new(linkrs_migration_report_t {
+            success: if report.success { 1 } else { 0 },
+            steps_completed: report.steps_completed as u64,
+            rows_migrated: report.rows_migrated,
+            errors_json: errors_c,
+        });
 
-    let c_report = Box::new(linkrs_migration_report_t {
-        success: if report.success { 1 } else { 0 },
-        steps_completed: report.steps_completed as u64,
-        rows_migrated: report.rows_migrated,
-        errors_json: errors_c,
-    });
-
-    Box::into_raw(c_report)
+        Box::into_raw(c_report)
+    }
 }
 
 /// Free a migration report returned by `linkrs_migration_execute`.
@@ -127,64 +149,82 @@ pub unsafe extern "C" fn linkrs_migration_plan_json(
         return ptr::null_mut();
     }
 
-    let space_str = unsafe {
-        match CStr::from_ptr(space).to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                set_last_error_message("invalid space".to_string());
-                return ptr::null_mut();
-            }
-        }
-    };
-    let label_str = unsafe {
-        match CStr::from_ptr(label).to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                set_last_error_message("invalid label".to_string());
-                return ptr::null_mut();
-            }
-        }
-    };
-
-    let handle = unsafe { &*(db as *mut LinkrsHandle) };
-    let expand = expand_contract != 0;
-    let plan_res = if is_edge != 0 {
-        handle.inner.generate_edge_migration_plan_with_expand(
-            space_str,
-            label_str,
+    #[cfg(not(feature = "migration"))]
+    {
+        let _ = (
+            db,
+            space,
+            label,
+            is_edge,
             from_version,
             to_version,
-            expand,
-        )
-    } else {
-        handle.inner.generate_vertex_migration_plan_with_expand(
-            space_str,
-            label_str,
-            from_version,
-            to_version,
-            expand,
-        )
-    };
+            expand_contract,
+        );
+        set_last_error_message("migration support is not compiled in".to_string());
+        return ptr::null_mut();
+    }
 
-    let plan = match plan_res {
-        Ok(p) => p,
-        Err(e) => {
-            set_last_error_message(format!("failed to generate plan: {}", e));
-            return ptr::null_mut();
+    #[cfg(feature = "migration")]
+    {
+        let space_str = unsafe {
+            match CStr::from_ptr(space).to_str() {
+                Ok(s) => s,
+                Err(_) => {
+                    set_last_error_message("invalid space".to_string());
+                    return ptr::null_mut();
+                }
+            }
+        };
+        let label_str = unsafe {
+            match CStr::from_ptr(label).to_str() {
+                Ok(s) => s,
+                Err(_) => {
+                    set_last_error_message("invalid label".to_string());
+                    return ptr::null_mut();
+                }
+            }
+        };
+
+        let handle = unsafe { &*(db as *mut LinkrsHandle) };
+        let expand = expand_contract != 0;
+        let plan_res = if is_edge != 0 {
+            handle.inner.generate_edge_migration_plan_with_expand(
+                space_str,
+                label_str,
+                from_version,
+                to_version,
+                expand,
+            )
+        } else {
+            handle.inner.generate_vertex_migration_plan_with_expand(
+                space_str,
+                label_str,
+                from_version,
+                to_version,
+                expand,
+            )
+        };
+
+        let plan = match plan_res {
+            Ok(p) => p,
+            Err(e) => {
+                set_last_error_message(format!("failed to generate plan: {}", e));
+                return ptr::null_mut();
+            }
+        };
+
+        let json = match serde_json::to_string(&plan) {
+            Ok(j) => j,
+            Err(e) => {
+                set_last_error_message(format!("failed to serialize plan: {}", e));
+                return ptr::null_mut();
+            }
+        };
+
+        match CString::new(json) {
+            Ok(c) => c.into_raw(),
+            Err(_) => ptr::null_mut(),
         }
-    };
-
-    let json = match serde_json::to_string(&plan) {
-        Ok(j) => j,
-        Err(e) => {
-            set_last_error_message(format!("failed to serialize plan: {}", e));
-            return ptr::null_mut();
-        }
-    };
-
-    match CString::new(json) {
-        Ok(c) => c.into_raw(),
-        Err(_) => ptr::null_mut(),
     }
 }
 
@@ -215,45 +255,56 @@ pub unsafe extern "C" fn linkrs_migration_rollback(
         return ptr::null_mut();
     }
 
-    let plan_str = unsafe {
-        match CStr::from_ptr(plan_json).to_str() {
-            Ok(s) => s,
-            Err(_) => {
-                set_last_error_message("invalid plan_json: not utf8".to_string());
+    #[cfg(not(feature = "migration"))]
+    {
+        let _ = (db, plan_json);
+        set_last_error_message("migration support is not compiled in".to_string());
+        return ptr::null_mut();
+    }
+
+    #[cfg(feature = "migration")]
+    {
+        let plan_str = unsafe {
+            match CStr::from_ptr(plan_json).to_str() {
+                Ok(s) => s,
+                Err(_) => {
+                    set_last_error_message("invalid plan_json: not utf8".to_string());
+                    return ptr::null_mut();
+                }
+            }
+        };
+
+        let plan: linkrs_migration::MigrationPlan = match serde_json::from_str(plan_str) {
+            Ok(p) => p,
+            Err(e) => {
+                set_last_error_message(format!("failed to parse plan json: {}", e));
                 return ptr::null_mut();
             }
-        }
-    };
+        };
 
-    let plan: linkrs_migration::MigrationPlan = match serde_json::from_str(plan_str) {
-        Ok(p) => p,
-        Err(e) => {
-            set_last_error_message(format!("failed to parse plan json: {}", e));
-            return ptr::null_mut();
-        }
-    };
+        let handle = unsafe { &*(db as *mut LinkrsHandle) };
+        let report = match handle.inner.rollback_migration(&plan) {
+            Ok(r) => r,
+            Err(e) => {
+                set_last_error_message(format!("rollback failed: {}", e));
+                return ptr::null_mut();
+            }
+        };
 
-    let handle = unsafe { &*(db as *mut LinkrsHandle) };
-    let report = match handle.inner.rollback_migration(&plan) {
-        Ok(r) => r,
-        Err(e) => {
-            set_last_error_message(format!("rollback failed: {}", e));
-            return ptr::null_mut();
-        }
-    };
+        let errors_json =
+            serde_json::to_string(&report.errors).unwrap_or_else(|_| "[]".to_string());
+        let errors_c = match CString::new(errors_json) {
+            Ok(c) => c.into_raw(),
+            Err(_) => ptr::null_mut(),
+        };
 
-    let errors_json = serde_json::to_string(&report.errors).unwrap_or_else(|_| "[]".to_string());
-    let errors_c = match CString::new(errors_json) {
-        Ok(c) => c.into_raw(),
-        Err(_) => ptr::null_mut(),
-    };
+        let c_report = Box::new(linkrs_migration_report_t {
+            success: if report.success { 1 } else { 0 },
+            steps_completed: report.steps_completed as u64,
+            rows_migrated: report.rows_migrated,
+            errors_json: errors_c,
+        });
 
-    let c_report = Box::new(linkrs_migration_report_t {
-        success: if report.success { 1 } else { 0 },
-        steps_completed: report.steps_completed as u64,
-        rows_migrated: report.rows_migrated,
-        errors_json: errors_c,
-    });
-
-    Box::into_raw(c_report)
+        Box::into_raw(c_report)
+    }
 }

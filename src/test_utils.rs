@@ -13,7 +13,7 @@ pub mod test_scenario;
 pub mod transaction_helpers;
 pub mod validation_helpers;
 
-#[cfg(feature = "embedded")]
+#[cfg(feature = "c_api")]
 pub mod c_api_helpers;
 
 use crate::core::error::DBError;
